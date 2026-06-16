@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { resolveTurnDisposition } from "../handlers/claude-code-tui/turn-disposition.js";
+import { resolveTuiTurnSettlement } from "../handlers/turn-settlement.js";
 
 const CLEAN = { aborted: false, timedOut: false, turnFailed: false, forwardFailed: false };
 
-describe("resolveTurnDisposition", () => {
-  it("a clean turn reports success, acks, forwards, and goes idle", () => {
-    expect(resolveTurnDisposition(CLEAN)).toEqual({
+describe("resolveTuiTurnSettlement", () => {
+  it("a clean turn reports success, acks, and forwards", () => {
+    expect(resolveTuiTurnSettlement(CLEAN)).toEqual({
       status: "success",
       ack: true,
       forward: true,
-      runtimeState: "idle",
+      action: { kind: "complete", outcome: { status: "success", terminal: true } },
     });
   });
 
@@ -21,50 +21,56 @@ describe("resolveTurnDisposition", () => {
    * the no-ack decision — so the chat got a partial message while the entry
    * stayed un-acked and re-ran on reconnect, double-posting. A timeout must
    * report error, must NOT ack AND must NOT forward (so the redelivered retry
-   * is the single source of output), and must surface an error runtime state.
+   * is the single source of output).
    */
-  it("a timed-out turn reports error, does NOT ack, does NOT forward, and surfaces error state", () => {
-    expect(resolveTurnDisposition({ ...CLEAN, timedOut: true })).toEqual({
+  it("a timed-out turn reports error and does NOT ack or forward", () => {
+    expect(resolveTuiTurnSettlement({ ...CLEAN, timedOut: true })).toEqual({
       status: "error",
       ack: false,
       forward: false,
-      runtimeState: "error",
+      action: { kind: "retry", reason: "turn_timeout" },
     });
   });
 
-  it("a body failure reports error, acks + forwards (clean close, avoid storm), and surfaces error state", () => {
-    expect(resolveTurnDisposition({ ...CLEAN, turnFailed: true })).toEqual({
+  it("a body failure reports error, acks, and forwards (clean close, avoid storm)", () => {
+    expect(resolveTuiTurnSettlement({ ...CLEAN, turnFailed: true })).toEqual({
       status: "error",
       ack: true,
       forward: true,
-      runtimeState: "error",
+      action: {
+        kind: "complete",
+        outcome: { status: "error", terminal: true, completion: "consumed", reason: "provider_clean_error" },
+      },
     });
   });
 
-  it("a forward-only failure reports error and acks but keeps the session idle", () => {
-    expect(resolveTurnDisposition({ ...CLEAN, forwardFailed: true })).toEqual({
+  it("a forward-only failure reports error but still consumes the turn", () => {
+    expect(resolveTuiTurnSettlement({ ...CLEAN, forwardFailed: true })).toEqual({
       status: "error",
       ack: true,
       forward: true,
-      runtimeState: "idle",
+      action: {
+        kind: "complete",
+        outcome: { status: "error", terminal: true, completion: "consumed", reason: "forward_failed" },
+      },
     });
   });
 
   it("an aborted (suspended) turn does NOT ack or forward so it re-runs cleanly on resume", () => {
-    expect(resolveTurnDisposition({ ...CLEAN, aborted: true })).toEqual({
+    expect(resolveTuiTurnSettlement({ ...CLEAN, aborted: true })).toEqual({
       status: "success",
       ack: false,
       forward: false,
-      runtimeState: "idle",
+      action: { kind: "retry", reason: "turn_aborted" },
     });
   });
 
   it("timeout dominates: a timed-out turn that also failed to forward still withholds ack + forward", () => {
-    expect(resolveTurnDisposition({ ...CLEAN, timedOut: true, forwardFailed: true })).toEqual({
+    expect(resolveTuiTurnSettlement({ ...CLEAN, timedOut: true, forwardFailed: true })).toEqual({
       status: "error",
       ack: false,
       forward: false,
-      runtimeState: "error",
+      action: { kind: "retry", reason: "turn_timeout" },
     });
   });
 
@@ -73,8 +79,9 @@ describe("resolveTurnDisposition", () => {
       for (const timedOut of [false, true]) {
         for (const turnFailed of [false, true]) {
           for (const forwardFailed of [false, true]) {
-            const d = resolveTurnDisposition({ aborted, timedOut, turnFailed, forwardFailed });
+            const d = resolveTuiTurnSettlement({ aborted, timedOut, turnFailed, forwardFailed });
             expect(d.ack).toBe(d.forward);
+            expect(d.ack).toBe(d.action.kind === "complete");
           }
         }
       }

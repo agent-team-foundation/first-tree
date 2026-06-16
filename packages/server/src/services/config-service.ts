@@ -195,9 +195,11 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
         `Agent config "${agentId}" version mismatch: expected ${expectedVersion}, got ${current.version}`,
       );
     }
-    // Re-sync `kind` with the authoritative agents.runtime_provider on
-    // every commit so a re-bind to a different provider lands on the
-    // correct discriminator next read.
+    // Re-stamp `kind` from the authoritative agents.runtime_provider on every
+    // commit so the discriminator stays in lockstep with the provider and any
+    // legacy row that predates `kind` is backfilled on its next write. The
+    // provider is fixed for an agent's lifetime (no re-bind), so this can only
+    // ever re-affirm or backfill the value, never switch it.
     const provider = await readRuntimeProviderFor(agentId);
     const merged = applyPatch(current.payload, patch);
     const synced = { ...merged, kind: provider } as AgentRuntimeConfigPayload;

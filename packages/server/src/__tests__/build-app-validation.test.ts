@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../app.js";
@@ -28,7 +31,6 @@ const baseConfig: Config = {
     presenceCleanupSeconds: 60,
     archiveSweepIntervalSeconds: 0,
     archiveMappedIdleSeconds: 60 * 60,
-    archiveUnmappedIdleSeconds: 12 * 60 * 60,
     notificationWebhookUrl: undefined,
   },
   update: {
@@ -151,6 +153,30 @@ describe("buildApp — server secret validation", () => {
       }).rejects.toThrow(/FIRST_TREE_ENCRYPTION_KEY must be 32 bytes/);
     } finally {
       await safeClose(app);
+    }
+  });
+});
+
+describe("buildApp — feedback static fallback boundary", () => {
+  it("does not serve the SPA shell for feedback routes when feedback is not configured", async () => {
+    const webRoot = await mkdtemp(join(tmpdir(), "first-tree-web-"));
+    await writeFile(join(webRoot, "index.html"), "<!doctype html><html><body>App shell</body></html>", "utf8");
+
+    let app: FastifyInstance | undefined;
+    try {
+      app = await buildApp({ ...baseConfig, webDistPath: webRoot });
+
+      const spa = await app.inject({ method: "GET", url: "/workspace/deep-link" });
+      expect(spa.statusCode).toBe(200);
+      expect(spa.body).toContain("App shell");
+
+      const feedback = await app.inject({ method: "POST", url: "/feedback/chat" });
+      expect(feedback.statusCode).toBe(501);
+      expect(feedback.headers["content-type"]).toContain("application/json");
+      expect(feedback.json()).toEqual({ error: "Feedback is not configured" });
+    } finally {
+      await safeClose(app);
+      await rm(webRoot, { recursive: true, force: true });
     }
   });
 });

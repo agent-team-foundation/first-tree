@@ -156,7 +156,10 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
   //
   //   A. Mention propagation (always on when the message has explicit
   //      mentions). Speaker branch: mentioned ∩ chat speakers, sender
-  //      excluded. Watcher branch: watchers whose managed non-human
+  //      excluded, HUMAN targets only — the unread-mention red dot is a
+  //      human-attention signal, so mentioning a non-human agent (a delegate,
+  //      a routed GitHub card target) wakes it via the inbox notify path but
+  //      raises no red dot. Watcher branch: watchers whose managed non-human
   //      agent was mentioned.
   //
   //   B. Agent-final-text bump (only when `bumpForAgentFinalText`).
@@ -192,10 +195,12 @@ export async function applyAfterFanOut(tx: DbLike, input: ApplyAfterFanOutInput)
     branches.push(sql`
       SELECT cm.chat_id, cm.agent_id
         FROM chat_membership cm
+        JOIN agents a ON a.uuid = cm.agent_id
        WHERE cm.chat_id     = ${chatId}
          AND cm.access_mode = 'speaker'
          AND cm.agent_id    IN (${mentionedList})
          AND cm.agent_id   <> ${senderId}
+         AND a.type         = 'human'
     `);
     branches.push(sql`
       SELECT cm.chat_id, cm.agent_id

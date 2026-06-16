@@ -53,11 +53,17 @@ import * as presenceService from "../../services/presence.js";
 import * as sessionEventService from "../../services/session-event.js";
 
 /**
- * Default per-agent in-flight cap when `server.inbox.maxInFlightPerAgent` is
- * unset. Mirrors the schema default so a server running without an explicit
- * `inbox` block still gets reasonable backpressure.
+ * Default per-agent in-flight fuse when `server.inbox.maxInFlightPerAgent` is
+ * unset. Normal delivery fairness is per `(agent, chat)`; this high-water
+ * value bounds pathological recovery storms and badly stalled clients.
  */
-const DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT = 32;
+const DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT = 8192;
+/**
+ * Default per-(agent, chat) fairness window. A long turn may fill its own
+ * chat-local window, but it should not block delivery to the same agent's
+ * other chats.
+ */
+const DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT = 8;
 /**
  * Hard cap on entries scanned in a single backlog drain so a recovering
  * client doesn't trigger an arbitrarily large transaction or burst of
@@ -65,13 +71,16 @@ const DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT = 32;
  * subsequent post-ack drains. Same constant covers both the agent:bound
  * recovery path and the post-ack top-up.
  *
- * Lower than proposal §3.3's 500 on purpose: the actual limit per drain is
- * `min(remainingInFlightBudget, INBOX_BACKLOG_BATCH_LIMIT)`, so with a
- * default cap of 32 the drain SQL never asks for more than ~32 anyway.
  * Subsequent NOTIFYs and post-ack top-ups continue draining without a
  * single-transaction megabatch.
  */
 const INBOX_BACKLOG_BATCH_LIMIT = 50;
+/**
+ * Low-frequency safety net for missed PG NOTIFY events while the WebSocket
+ * remains online. The durable queue is still `inbox_entries`; this only adds a
+ * bounded extra trigger for sockets this server instance already owns.
+ */
+const INBOX_BACKLOG_REPAIR_INTERVAL_MS = 30_000;
 
 const wsMessageSchema = z.object({
   type: z.string(),
@@ -254,6 +263,8 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
     const jwtSecretBytes = new TextEncoder().encode(app.config.secrets.jwtSecret);
 
     const inboxMaxInFlightPerAgent = app.config.inbox?.maxInFlightPerAgent ?? DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT;
+    const inboxMaxInFlightPerAgentChat =
+      app.config.inbox?.maxInFlightPerAgentChat ?? DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT;
 
     // WS upgrade is excluded from HTTP tracing in app.ts via the autotelic
     // plugin's `ignoreRoutes` — fastify hijacks the reply on upgrade, so a
@@ -284,13 +295,23 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         { agentId: string; inboxId: string; organizationId: string; runtimeProvider: string }
       >();
 
+      type InboxInFlightChatBucket = {
+        chatId: string | null;
+        entryIds: Set<number>;
+      };
+      type InboxInFlightOwner = {
+        agentId: string;
+        chatKey: string;
+      };
+
       /**
-       * Per-agent in-flight `inbox:deliver` ids for backpressure. Tracking ids
-       * instead of a scalar counter lets same-socket recovery remove exactly
-       * the reset rows before redelivery, so the cap cannot leak when an entry
-       * is delivered twice on the same connection.
+       * Per-socket in-flight `inbox:deliver` ids for backpressure. Tracking ids
+       * instead of scalar counters lets ACK and same-socket recovery remove
+       * exactly the reset rows before redelivery, so the cap cannot leak when
+       * an entry is delivered twice on the same connection.
        */
-      const inboxInFlightEntryIds = new Map<string, Set<number>>();
+      const inboxInFlightByAgent = new Map<string, Map<string, InboxInFlightChatBucket>>();
+      const inboxInFlightOwnersByEntryId = new Map<number, InboxInFlightOwner>();
       /**
        * Socket-wide inbox operation queue. This is intentionally stronger than
        * per-agent delivery serialization: `inbox:ack` does not carry an
@@ -299,6 +320,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
        * the ACK/recover race.
        */
       let inboxOperationQueue: Promise<void> = Promise.resolve();
+      const lastInboxRepairDrainAtByAgent = new Map<string, number>();
 
       function isAgentStillRoutedHere(agentId: string): boolean {
         return (
@@ -307,22 +329,81 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       }
 
       function inboxInFlightCount(agentId: string): number {
-        return inboxInFlightEntryIds.get(agentId)?.size ?? 0;
+        const byChat = inboxInFlightByAgent.get(agentId);
+        if (!byChat) return 0;
+        let total = 0;
+        for (const bucket of byChat.values()) total += bucket.entryIds.size;
+        return total;
       }
 
-      function addInboxInFlight(agentId: string, entryId: number): void {
-        const current = inboxInFlightEntryIds.get(agentId) ?? new Set<number>();
-        current.add(entryId);
-        inboxInFlightEntryIds.set(agentId, current);
+      function inboxChatKey(chatId: string | null): string {
+        return chatId === null ? "null" : `chat:${chatId}`;
       }
 
-      function removeInboxInFlight(agentId: string, entryIds: readonly number[]): void {
-        const current = inboxInFlightEntryIds.get(agentId);
-        if (!current) return;
-        for (const entryId of entryIds) {
-          current.delete(entryId);
+      function inboxInFlightCountForChat(agentId: string, chatId: string | null): number {
+        return inboxInFlightByAgent.get(agentId)?.get(inboxChatKey(chatId))?.entryIds.size ?? 0;
+      }
+
+      function inboxInFlightChatBudgets(agentId: string): Array<{ chatId: string | null; remaining: number }> {
+        const byChat = inboxInFlightByAgent.get(agentId);
+        if (!byChat) return [];
+        return [...byChat.values()].map((bucket) => ({
+          chatId: bucket.chatId,
+          remaining: Math.max(0, inboxMaxInFlightPerAgentChat - bucket.entryIds.size),
+        }));
+      }
+
+      function logPerChatCaps(agentId: string, inboxId: string, inFlightCount: number): void {
+        const byChat = inboxInFlightByAgent.get(agentId);
+        if (!byChat) return;
+        for (const bucket of byChat.values()) {
+          if (bucket.entryIds.size < inboxMaxInFlightPerAgentChat) continue;
+          app.log.debug(
+            {
+              agentId,
+              inboxId,
+              chatId: bucket.chatId,
+              inFlightCount,
+              chatInFlightCount: bucket.entryIds.size,
+              globalCap: inboxMaxInFlightPerAgent,
+              chatCap: inboxMaxInFlightPerAgentChat,
+            },
+            "inbox push: per-chat cap active, skipping capped chat backlog",
+          );
         }
-        if (current.size === 0) inboxInFlightEntryIds.delete(agentId);
+      }
+
+      function removeInboxInFlight(entryIds: readonly number[]): void {
+        for (const entryId of entryIds) {
+          const owner = inboxInFlightOwnersByEntryId.get(entryId);
+          if (!owner) continue;
+          const byChat = inboxInFlightByAgent.get(owner.agentId);
+          const bucket = byChat?.get(owner.chatKey);
+          bucket?.entryIds.delete(entryId);
+          inboxInFlightOwnersByEntryId.delete(entryId);
+          if (bucket && bucket.entryIds.size === 0) byChat?.delete(owner.chatKey);
+          if (byChat && byChat.size === 0) inboxInFlightByAgent.delete(owner.agentId);
+        }
+      }
+
+      function addInboxInFlight(agentId: string, chatId: string | null, entryId: number): void {
+        removeInboxInFlight([entryId]);
+        const chatKey = inboxChatKey(chatId);
+        const byChat = inboxInFlightByAgent.get(agentId) ?? new Map<string, InboxInFlightChatBucket>();
+        const bucket = byChat.get(chatKey) ?? { chatId, entryIds: new Set<number>() };
+        bucket.entryIds.add(entryId);
+        byChat.set(chatKey, bucket);
+        inboxInFlightByAgent.set(agentId, byChat);
+        inboxInFlightOwnersByEntryId.set(entryId, { agentId, chatKey });
+      }
+
+      function clearInboxInFlightForAgent(agentId: string): void {
+        const byChat = inboxInFlightByAgent.get(agentId);
+        if (!byChat) return;
+        for (const bucket of byChat.values()) {
+          for (const entryId of bucket.entryIds) inboxInFlightOwnersByEntryId.delete(entryId);
+        }
+        inboxInFlightByAgent.delete(agentId);
       }
 
       function chainInboxDelivery(_agentId: string, op: () => Promise<void>): Promise<void> {
@@ -392,18 +473,36 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           chainInboxDelivery(agentId, () => drainBacklogForAgent(agentId, inboxId, { source: "notify", messageId }));
       }
 
+      function maybeRepairInboxBacklog(agentId: string, inboxId: string): void {
+        if (socket.readyState !== socket.OPEN) return;
+        if (!isAgentStillRoutedHere(agentId)) return;
+
+        const now = Date.now();
+        const lastRepairAt = lastInboxRepairDrainAtByAgent.get(agentId) ?? 0;
+        if (now - lastRepairAt < INBOX_BACKLOG_REPAIR_INTERVAL_MS) return;
+        lastInboxRepairDrainAtByAgent.set(agentId, now);
+
+        chainInboxDelivery(agentId, () => drainBacklogForAgent(agentId, inboxId, { source: "repair" })).catch((err) => {
+          app.log.error({ err, agentId, inboxId }, "inbox backlog repair crashed");
+        });
+      }
+
       /**
        * Drain up to `INBOX_BACKLOG_BATCH_LIMIT` pending entries for an agent
-       * over the current WS, capped by the remaining in-flight budget so a
-       * full drain stays within the per-agent backpressure cap (§3.3, §3.5).
+       * over the current WS. Normal scheduling is capped by the per-chat
+       * fairness window; the agent-wide cap is only a high-water fuse.
        *
-       * Used in two places:
+       * Used in four places:
        *   1. Right after `agent:bound` — covers reconnects where NOTIFYs
        *      were dropped while the socket was offline.
        *   2. Right after an `inbox:ack` — top up the in-flight slot just
        *      freed, in case the previous NOTIFY was dropped at-cap.
+       *   3. On `inbox:recover` — reset and redeliver one chat's unacked
+       *      recovery debt.
+       *   4. Low-frequency bound-socket repair — drains durable pending
+       *      notify rows when PG NOTIFY was missed but the socket stayed up.
        *
-       * Delivery operations are serialized per agent, so `slotsFree` and the
+       * Delivery operations are serialized on the socket, so budget checks and the
        * subsequent claim/send loop observe one consistent per-socket in-flight
        * counter. That ordering is part of the ack-through safety contract.
        */
@@ -412,45 +511,93 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         inboxId: string,
         trigger?:
           | { source: "notify"; messageId: string }
-          | { source: "bind" | "ack" }
+          | { source: "bind" | "ack" | "repair" }
           | { source: "recover"; chatId: string },
       ): Promise<void> {
         if (socket.readyState !== socket.OPEN) return;
         if (!isAgentStillRoutedHere(agentId)) return;
         const inFlight = inboxInFlightCount(agentId);
-        const slotsFree = inboxMaxInFlightPerAgent - inFlight;
-        if (slotsFree <= 0) {
-          if (trigger?.source === "notify") {
+        const globalSlotsFree = inboxMaxInFlightPerAgent - inFlight;
+        if (globalSlotsFree <= 0) {
+          app.log.warn(
+            {
+              agentId,
+              inboxId,
+              chatId: trigger?.source === "recover" ? trigger.chatId : null,
+              messageId: trigger?.source === "notify" ? trigger.messageId : undefined,
+              inFlightCount: inFlight,
+              chatInFlightCount:
+                trigger?.source === "recover" ? inboxInFlightCountForChat(agentId, trigger.chatId) : undefined,
+              globalCap: inboxMaxInFlightPerAgent,
+              chatCap: inboxMaxInFlightPerAgentChat,
+            },
+            "inbox push: global in-flight fuse reached, leaving backlog pending",
+          );
+          return;
+        }
+        logPerChatCaps(agentId, inboxId, inFlight);
+
+        const recoverChatId = trigger?.source === "recover" ? trigger.chatId : undefined;
+        const limit =
+          recoverChatId === undefined
+            ? Math.min(globalSlotsFree, INBOX_BACKLOG_BATCH_LIMIT)
+            : Math.min(
+                globalSlotsFree,
+                Math.max(0, inboxMaxInFlightPerAgentChat - inboxInFlightCountForChat(agentId, recoverChatId)),
+                INBOX_BACKLOG_BATCH_LIMIT,
+              );
+        if (limit <= 0) {
+          if (recoverChatId !== undefined) {
             app.log.debug(
               {
                 agentId,
                 inboxId,
-                messageId: trigger.messageId,
+                chatId: recoverChatId,
                 inFlightCount: inFlight,
-                cap: inboxMaxInFlightPerAgent,
+                chatInFlightCount: inboxInFlightCountForChat(agentId, recoverChatId),
+                globalCap: inboxMaxInFlightPerAgent,
+                chatCap: inboxMaxInFlightPerAgentChat,
               },
-              "inbox push: at cap, dropping NOTIFY (will replay via post-ack drain)",
+              "inbox push: recovery chat at per-chat cap, leaving backlog pending",
             );
           }
           return;
         }
-        const limit = Math.min(slotsFree, INBOX_BACKLOG_BATCH_LIMIT);
 
         let entries: InboxEntryWithMessage[];
         try {
           entries =
             trigger?.source === "recover"
               ? await inboxService.claimBacklogForPushForChat(app.db, inboxId, trigger.chatId, limit)
-              : await inboxService.claimBacklogForPush(app.db, inboxId, limit);
+              : await inboxService.claimBacklogForPushFair(app.db, inboxId, {
+                  limit,
+                  defaultPerChatLimit: inboxMaxInFlightPerAgentChat,
+                  chatBudgets: inboxInFlightChatBudgets(agentId),
+                });
         } catch (err) {
-          app.log.error({ err, agentId, inboxId, limit }, "claimBacklogForPush failed");
+          app.log.error({ err, agentId, inboxId, limit }, "claim backlog for WS push failed");
           return;
         }
 
+        if (trigger?.source === "repair" && entries.length > 0) {
+          app.log.info(
+            {
+              source: "repair",
+              agentId,
+              inboxId,
+              drained: entries.length,
+              inFlightCount: inFlight,
+              globalCap: inboxMaxInFlightPerAgent,
+              chatCap: inboxMaxInFlightPerAgentChat,
+            },
+            "inbox backlog repair drained pending notify rows",
+          );
+        }
+
         for (const entry of entries) {
-          addInboxInFlight(agentId, entry.id);
+          addInboxInFlight(agentId, entry.chatId, entry.id);
           if (!sendInboxDeliverFrame(entry)) {
-            removeInboxInFlight(agentId, [entry.id]);
+            removeInboxInFlight([entry.id]);
             // Socket gone mid-drain — stop pushing. Remaining entries stay
             // 'delivered'; the next bind from this client resets them and
             // re-drains.
@@ -862,6 +1009,19 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               }
 
+              // Reject a runtime-provider mismatch BEFORE any first-bind claim.
+              // The claim below is the one-shot NULL → ID that fixes an agent's
+              // client for life (re-bind is removed), so a client running a
+              // different runtime must never be allowed to pin an unbound agent
+              // — otherwise it claims the agent, gets rejected here, and no
+              // other client can recover it (they would only see WRONG_CLIENT).
+              // The client repair path re-fetches authoritative state and
+              // respawns the right handler before retrying the bind.
+              if (bindRequest.runtimeType !== agent.runtimeProvider) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.RUNTIME_PROVIDER_MISMATCH);
+                return;
+              }
+
               // First-bind path: agent.clientId is NULL (e.g. created before
               // the operator brought up a client, or migrated from pre-M1 with
               // no presence record). The race-safe UPDATE returns 0 rows if
@@ -881,15 +1041,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               } else if (!agent.clientUserId || agent.clientUserId !== session.userId) {
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
-                return;
-              }
-
-              // Reject if the connecting client is running a different runtime
-              // provider than the one pinned on the agent. The client repair
-              // path will re-fetch authoritative state and respawn the right
-              // handler before retrying the bind.
-              if (bindRequest.runtimeType !== agent.runtimeProvider) {
-                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.RUNTIME_PROVIDER_MISMATCH);
                 return;
               }
 
@@ -971,14 +1122,20 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
 
               const info = boundAgents.get(agentId);
+              const stillRoutedHere = isAgentStillRoutedHere(agentId);
               if (info) {
                 notifier.unsubscribe(info.inboxId, socket);
               }
 
-              await presenceService.unbindAgent(app.db, agentId);
-              connectionManager.unbindAgentFromClient(agentId);
+              if (stillRoutedHere && clientId) {
+                await presenceService.unbindAgent(app.db, agentId, { expectedClientId: clientId });
+                connectionManager.unbindAgentFromClient(agentId, clientId);
+              } else {
+                app.log.info({ clientId, agentId }, "stale agent:unbind ignored for global binding");
+              }
               boundAgents.delete(agentId);
-              inboxInFlightEntryIds.delete(agentId);
+              lastInboxRepairDrainAtByAgent.delete(agentId);
+              clearInboxInFlightForAgent(agentId);
 
               socket.send(JSON.stringify({ type: "agent:unbound", agentId }));
             } else if (type === "session:state") {
@@ -1211,10 +1368,13 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
               await chainInboxDelivery("__socket", async () => {
                 try {
+                  const routedBoundAgents = [...boundAgents.values()].filter((agent) =>
+                    isAgentStillRoutedHere(agent.agentId),
+                  );
                   const ackResult = await inboxService.ackEntryByIdForBoundAgents(
                     app.db,
                     entryId,
-                    [...boundAgents.values()].map((a) => a.inboxId),
+                    routedBoundAgents.map((a) => a.inboxId),
                   );
                   if (!ackResult.ok) {
                     if (ref) {
@@ -1233,7 +1393,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                         entryId,
                         ref,
                         agentId: null,
-                        boundInboxes: boundAgents.size,
+                        boundInboxes: routedBoundAgents.length,
                         reason: ackResult.reason,
                         ackEvent: "inbox_ack_rejected",
                       },
@@ -1243,7 +1403,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   }
                   // Find the agentId that owns this inbox to decrement the
                   // counter and trigger backlog drain.
-                  const owner = [...boundAgents.values()].find((a) => a.inboxId === ackResult.throughEntry.inboxId);
+                  const owner = routedBoundAgents.find((a) => a.inboxId === ackResult.throughEntry.inboxId);
                   if (ref) {
                     socket.send(
                       JSON.stringify({
@@ -1269,7 +1429,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     "inbox:ack accepted",
                   );
                   if (owner && ackResult.ackedEntryIds.length > 0) {
-                    removeInboxInFlight(owner.agentId, ackResult.ackedEntryIds);
+                    removeInboxInFlight(ackResult.ackedEntryIds);
                     // Slot freed → top up. Cheap when no backlog (single SQL
                     // statement returning 0 rows). Critical when the cap was
                     // hit and queued NOTIFYs got dropped (proposal §3.5).
@@ -1317,7 +1477,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     inboxId: info.inboxId,
                     chatId,
                   });
-                  removeInboxInFlight(agentId, recovered.resetEntryIds);
+                  removeInboxInFlight(recovered.resetEntryIds);
                   socket.send(
                     JSON.stringify({
                       type: "inbox:recover:accepted",
@@ -1349,6 +1509,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     .filter((id) => isAgentStillRoutedHere(id))
                     .map((id) => presenceService.touchAgent(app.db, id)),
                 );
+                for (const info of boundAgents.values()) {
+                  if (isAgentStillRoutedHere(info.agentId)) {
+                    maybeRepairInboxBacklog(info.agentId, info.inboxId);
+                  }
+                }
               }
               socket.send(JSON.stringify({ type: "heartbeat:ack" }));
             }
@@ -1368,7 +1533,9 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           notifier.unsubscribe(info.inboxId, socket);
         }
         boundAgents.clear();
-        inboxInFlightEntryIds.clear();
+        lastInboxRepairDrainAtByAgent.clear();
+        inboxInFlightByAgent.clear();
+        inboxInFlightOwnersByEntryId.clear();
 
         if (clientId) {
           // Reconnect-race guard. A typical `systemctl restart` produces this

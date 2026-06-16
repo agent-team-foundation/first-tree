@@ -1,5 +1,5 @@
 import type { RuntimeState } from "@first-tree/shared";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { serverInstances } from "../db/schema/server-instances.js";
@@ -110,16 +110,26 @@ export async function bindAgent(
     });
 }
 
-export async function unbindAgent(db: Database, agentId: string) {
+export async function unbindAgent(
+  db: Database,
+  agentId: string,
+  opts: { expectedClientId?: string } = {},
+): Promise<number> {
   const now = new Date();
-  await db
+  const where =
+    opts.expectedClientId === undefined
+      ? eq(agentPresence.agentId, agentId)
+      : and(eq(agentPresence.agentId, agentId), eq(agentPresence.clientId, opts.expectedClientId));
+  const updated = await db
     .update(agentPresence)
     .set({
       status: "offline",
       clientId: null,
       ...runtimeFieldsReset(now),
     })
-    .where(eq(agentPresence.agentId, agentId));
+    .where(where)
+    .returning({ agentId: agentPresence.agentId });
+  return updated.length;
 }
 
 /** Set runtime state directly from client-reported value.

@@ -8,7 +8,7 @@ import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
-import type { AudienceTarget } from "../services/github-audience.js";
+import { type AudienceTarget, resolveAudience } from "../services/github-audience.js";
 import { deliverNormalizedEvent } from "../services/github-delivery.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -54,6 +54,7 @@ function makeEvent(opts: {
   rawEventType?: string;
   rawAction?: string;
   title?: string;
+  actorLogin?: string;
 }): NormalizedEvent {
   return {
     source: { kind: "github-app-installation", installationId: 1, organizationId: opts.orgId },
@@ -67,7 +68,7 @@ function makeEvent(opts: {
       title: opts.title ?? "Refactor inbox",
       url: `https://github.com/owner/repo/pull/1`,
     },
-    actor: { githubLogin: "alice", isBot: false },
+    actor: { githubLogin: opts.actorLogin ?? "alice", isBot: false },
     kind: "opened",
     involves: opts.involves ?? [],
     surface: {
@@ -117,6 +118,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -186,6 +188,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -207,6 +210,90 @@ describe("deliverNormalizedEvent", () => {
       .from(inboxEntries)
       .where(and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)));
     expect(delegateEntries).toHaveLength(0);
+  });
+
+  it("echo (#942, S2/D1): suppresses the actor's notify but keeps it addressed — card lands as a silent row", async () => {
+    // The delegate is a live speaker of the bound chat, so it would normally
+    // be woken. When the delegate is ALSO the event's actor (its own GitHub
+    // action, surfaced as `target.actorAgentId`), Stage 3 passes it through
+    // `suppressNotifyAgentIds` (#942, S2/D1): the delegate stays structurally
+    // addressed and the card still lands as a silent `notify=false` row, but
+    // the actor is not woken / red-dotted. With `actorAgentId = null` the same
+    // speaker-delegate IS woken — the two deliveries below pin both sides.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegate,
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
+    await app.db.insert(chatMembership).values([
+      { chatId, agentId: human, role: "owner", accessMode: "speaker", mode: "full", source: "manual" },
+      { chatId, agentId: delegate, role: "member", accessMode: "speaker", mode: "full", source: "manual" },
+    ]);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#205",
+      chatId,
+      boundVia: "direct",
+    });
+    const baseTarget = {
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      kind: "existing",
+      chatId,
+      involveReason: null,
+      involveLogin: null,
+    } satisfies Omit<AudienceTarget, "actorAgentId">;
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#205",
+    });
+
+    // (1) actor === delegate: suppressed from notify but kept addressed →
+    // card written, no wake, yet the actor still gets a silent context row.
+    const echoStats = await deliverNormalizedEvent(app, event, [{ ...baseTarget, actorAgentId: delegate }]);
+    expect(echoStats.delivered).toBe(1);
+    const afterEcho = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)));
+    expect(afterEcho).toHaveLength(0);
+    // The suppressed actor-delegate still receives exactly one silent
+    // (notify=false) row — the card lands as context, it just doesn't wake.
+    const [delegateRow] = await app.db
+      .select({ inboxId: agents.inboxId })
+      .from(agents)
+      .where(eq(agents.uuid, delegate))
+      .limit(1);
+    const delegateInbox = delegateRow?.inboxId ?? "";
+    const delegateSilent = await app.db
+      .select({ notify: inboxEntries.notify })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, delegateInbox), eq(inboxEntries.chatId, chatId)));
+    expect(delegateSilent).toHaveLength(1);
+    expect(delegateSilent[0]?.notify).toBe(false);
+
+    // (2) actor !== delegate (null): the speaker-delegate IS woken.
+    const okStats = await deliverNormalizedEvent(app, event, [{ ...baseTarget, actorAgentId: null }]);
+    expect(okStats.delivered).toBe(1);
+    const afterOk = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)));
+    expect(afterOk.length).toBeGreaterThan(0);
   });
 
   it("refreshes chats.topic to match the current entity title on each subsequent event for a github-bound chat", async () => {
@@ -250,6 +337,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -304,6 +392,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -372,6 +461,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -416,6 +506,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -451,6 +542,7 @@ describe("deliverNormalizedEvent", () => {
       chatId: null,
       involveReason: "review_requested",
       involveLogin: humanName.toLowerCase(),
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -525,6 +617,7 @@ describe("deliverNormalizedEvent", () => {
       chatId: null, // forces the runtime guard to throw
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const ok: AudienceTarget = {
       humanAgentId: goodHuman,
@@ -533,6 +626,7 @@ describe("deliverNormalizedEvent", () => {
       chatId: goodChatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -600,6 +694,7 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
+      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -629,5 +724,132 @@ describe("deliverNormalizedEvent", () => {
     // Other group speakers stay silent (history-only) — exactly the
     // mention-only behaviour for unaddressed participants.
     expect(watcherRow?.notify).toBe(false);
+  });
+
+  it("M2 + echo combined: actor is the represented human, entity bound from two chats — both wake their delegate (regression)", async () => {
+    // Single fixture that lights up BOTH old defects at once — the exact shape
+    // of the multi-human-not-pushed bug, which only manifests when they stack:
+    //   - old M2 (dedup by `humanAgentId`, keep earliest) dropped the LATER
+    //     chat (chatB) — bound_at order is load-bearing;
+    //   - old echo (actor on the human side → drop the whole row) then dropped
+    //     chatA too, since the actor IS chatA's represented human.
+    // Old code → empty audience → both chats silent. This pins the fix end to
+    // end: drives `resolveAudience` → `deliverNormalizedEvent` and asserts both
+    // chats not only re-enter the audience but each delegate (≠ actor) is
+    // actually woken — a pure audience-layer assertion cannot prove the wake.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const humanName = `rep-human-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+    });
+    const da = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-a-${randomUUID().slice(0, 6)}`,
+    });
+    const db = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-b-${randomUUID().slice(0, 6)}`,
+    });
+
+    const chatA = `chat_${randomUUID()}`;
+    const chatB = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values([
+      { id: chatA, organizationId: admin.organizationId, type: "group" },
+      { id: chatB, organizationId: admin.organizationId, type: "group" },
+    ]);
+    // H speaks in both; each chat's delegate is a speaker so it can be woken.
+    await app.db.insert(chatMembership).values([
+      { chatId: chatA, agentId: human, role: "owner", accessMode: "speaker", mode: "full", source: "manual" },
+      { chatId: chatA, agentId: da, role: "member", accessMode: "speaker", mode: "full", source: "manual" },
+      { chatId: chatB, agentId: human, role: "owner", accessMode: "speaker", mode: "full", source: "manual" },
+      { chatId: chatB, agentId: db, role: "member", accessMode: "speaker", mode: "full", source: "manual" },
+    ]);
+    // chatA bound EARLIER, chatB LATER — old dedup-by-human kept chatA, dropped chatB.
+    await app.db.insert(githubEntityChatMappings).values([
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: da,
+        entityType: "pull_request",
+        entityKey: "owner/repo#777",
+        chatId: chatA,
+        boundVia: "human_fallback",
+        boundAt: new Date(Date.now() - 60_000),
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: db,
+        entityType: "pull_request",
+        entityKey: "owner/repo#777",
+        chatId: chatB,
+        boundVia: "agent_declared",
+        boundAt: new Date(),
+      },
+    ]);
+
+    // `synchronize` (not `opened`) so the #766 opened-card carve-out cannot interfere.
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#777",
+      actorLogin: humanName,
+      rawAction: "synchronize",
+    });
+
+    // Stage 2: both chats survive. M2 keeps the (human, chat) pairs distinct;
+    // echo annotates `actorAgentId = H` on every row instead of dropping any.
+    const audience = await resolveAudience(app.db, event, "first-tree");
+    expect(audience).toHaveLength(2);
+    expect(new Set(audience.map((a) => a.chatId))).toEqual(new Set([chatA, chatB]));
+    for (const target of audience) expect(target.actorAgentId).toBe(human);
+
+    // Stage 3: both cards land AND each chat's delegate (≠ actor) is woken.
+    const stats = await deliverNormalizedEvent(app, event, audience);
+    expect(stats.delivered).toBe(2);
+
+    const [daRow] = await app.db.select({ inboxId: agents.inboxId }).from(agents).where(eq(agents.uuid, da)).limit(1);
+    const [dbRow] = await app.db.select({ inboxId: agents.inboxId }).from(agents).where(eq(agents.uuid, db)).limit(1);
+    const [hRow] = await app.db.select({ inboxId: agents.inboxId }).from(agents).where(eq(agents.uuid, human)).limit(1);
+
+    // chatA: card written + Da woken.
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, chatA))).toHaveLength(1);
+    const daWoken = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(
+        and(
+          eq(inboxEntries.chatId, chatA),
+          eq(inboxEntries.notify, true),
+          eq(inboxEntries.inboxId, daRow?.inboxId ?? ""),
+        ),
+      );
+    expect(daWoken.length).toBeGreaterThan(0);
+
+    // chatB: card written + Db woken — chatB is the chat the OLD dedup silently dropped.
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, chatB))).toHaveLength(1);
+    const dbWoken = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(
+        and(
+          eq(inboxEntries.chatId, chatB),
+          eq(inboxEntries.notify, true),
+          eq(inboxEntries.inboxId, dbRow?.inboxId ?? ""),
+        ),
+      );
+    expect(dbWoken.length).toBeGreaterThan(0);
+
+    // The actor (== represented human H) is never woken by its own action.
+    const hWoken = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.notify, true), eq(inboxEntries.inboxId, hRow?.inboxId ?? "")));
+    expect(hWoken).toHaveLength(0);
   });
 });

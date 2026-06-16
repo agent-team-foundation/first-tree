@@ -118,7 +118,7 @@ function makeMessage(id: string, content: string): SessionMessage {
 }
 
 function makeContext(
-  markCompleted: (count?: number) => void,
+  onFinishTurn: (count?: number) => void,
   opts: {
     sendMessage?: SendMessageMock;
     emitEvent?: SessionContext["emitEvent"];
@@ -141,12 +141,12 @@ function makeContext(
     sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
     chatId: "chat-usage-limit",
     log: opts.log ?? (() => {}),
-    touch: () => {},
-    setRuntimeState: () => {},
+    recordProviderActivity: () => {},
     emitEvent: opts.emitEvent ?? (() => {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-usage-limit"),
-    markCompleted,
-    markMessagesCompleted: (messages) => markCompleted(Array.isArray(messages) ? messages.length : 1),
+    finishTurn: async (messages) => {
+      onFinishTurn(Array.isArray(messages) ? messages.length : 1);
+    },
   };
 }
 

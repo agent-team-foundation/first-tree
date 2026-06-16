@@ -6,10 +6,9 @@ import { DenseBadge, type DenseBadgeTone } from "../../../components/ui/dense-ba
 
 /**
  * GitHub section — lists every PR / Issue / Discussion / Commit bound to
- * the current chat via `github_entity_chat_mappings`. Live title + state
- * are fetched per-request by the server from the GitHub REST API and are
- * NOT persisted; rows degrade gracefully (link only) when the GitHub
- * round-trip fails or the org has no installation.
+ * the current chat via `github_entity_chat_mappings`. State comes from the
+ * server's webhook-synced projection; title may be null because the mapping
+ * table does not persist titles, so rows degrade gracefully to link-only.
  *
  * Hidden entirely when the chat has no bindings — empty rails would
  * waste vertical space on chats that aren't sourced from GitHub.
@@ -18,9 +17,8 @@ export function GitHubSection({ chatId }: { chatId: string }) {
   const query = useQuery({
     queryKey: ["chat-right-sidebar", "github-entities", chatId],
     queryFn: () => listChatGithubEntities(chatId),
-    // GitHub live state can drift between sessions; refresh every 60s when
-    // the panel is open, and treat the data as fresh for ~30s so quick
-    // panel toggles do not refetch.
+    // Webhook-synced state can drift while the panel is open; refresh the
+    // cheap DB projection periodically and keep quick panel toggles warm.
     staleTime: 30_000,
     refetchInterval: 60_000,
   });

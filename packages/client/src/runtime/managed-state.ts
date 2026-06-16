@@ -2,15 +2,18 @@
 // agent workspace. Used by the next session start to detect "previously
 // managed but no longer in current config" → delete.
 //
-// Scope is deliberately narrow: a list of source-repo localPaths and a list
-// of skill names. Anything else CLI puts in the workspace (AGENTS.md,
-// .first-tree-workspace/identity.json, .claude/skills symlinks, etc.) is owned by other
-// flows and not tracked here.
+// Scope is deliberately narrow: a list of skill names. Anything else CLI
+// puts in the workspace (AGENTS.md, .first-tree-workspace/identity.json,
+// .claude/skills symlinks, etc.) is owned by other flows and not tracked
+// here. (Source repos and the Context Tree clone are agent-managed; the
+// runtime never deletes a repo clone, so they carry no managed-state entry.
+// A legacy record that still carries the retired `sourceRepos` key reads
+// fine — the reader ignores unknown keys and keeps `schemaVersion` at 1.)
 //
 // Path-level precision: the diff is "prev∖current" → delete. The flip side
-// (paths in `current` and not in `prev`) is handled by the existing
-// installers (`prepareSourceRepos`, `installFirstTreeSkills`) which already
-// (re)materialise everything they expect to be present.
+// (names in `current` and not in `prev`) is handled by the existing
+// installer (`installFirstTreeSkills`), which already (re)materialises
+// everything it expects to be present.
 
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
@@ -47,9 +50,6 @@ export type ManagedState = {
   cliVersion: string | null;
   /** ISO timestamp of the last write. */
   updatedAt: string;
-  /** Source-repo `localPath` names (relative to workspace root) the CLI
-   *  cloned at workspace top level. */
-  sourceRepos: string[];
   /** Skill names currently installed under `.agents/skills/<name>/` (and
    *  symlinked at `.claude/skills/<name>`). */
   skills: string[];
@@ -73,11 +73,10 @@ export function readManagedState(workspacePath: string): ManagedState | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const record = parsed as Record<string, unknown>;
   if (record.schemaVersion !== 1) return null;
-  const sourceRepos = readStringArray(record.sourceRepos);
   const skills = readStringArray(record.skills);
   const cliVersion = typeof record.cliVersion === "string" ? record.cliVersion : null;
   const updatedAt = typeof record.updatedAt === "string" ? record.updatedAt : new Date(0).toISOString();
-  return { schemaVersion: 1, cliVersion, updatedAt, sourceRepos, skills };
+  return { schemaVersion: 1, cliVersion, updatedAt, skills };
 }
 
 function readStringArray(value: unknown): string[] {
@@ -131,7 +130,6 @@ export function updateManagedState(
     schemaVersion: 1,
     cliVersion,
     updatedAt: new Date(0).toISOString(),
-    sourceRepos: [],
     skills: [],
   };
   const next = mutator(current);

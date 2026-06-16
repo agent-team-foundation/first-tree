@@ -3,7 +3,6 @@ import type {
   AgentType,
   AgentVisibility,
   CreateAgent,
-  RebindAgent,
   RuntimeProvider,
   UpdateAgent,
 } from "@first-tree/shared";
@@ -15,9 +14,11 @@ import {
   DEFAULT_RUNTIME_PROVIDER,
   defaultRuntimeConfigPayload,
   isReservedAgentName,
+  runtimeProviderSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
 import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or } from "drizzle-orm";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
@@ -29,7 +30,7 @@ import { users } from "../db/schema/users.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import type { OrgScope } from "../scope/types.js";
 import { uuidv7 } from "../uuid.js";
-import { agentVisibilityCondition } from "./access-control.js";
+import { agentAddressableCondition, agentVisibilityCondition } from "./access-control.js";
 import { resolveDefaultOrgId } from "./organization.js";
 import { recomputeWatchersForAgent } from "./watcher.js";
 
@@ -39,6 +40,7 @@ import { recomputeWatchersForAgent } from "./watcher.js";
  * internal traffic could be routed through a real account.
  */
 const RESERVED_AGENT_NAME_PREFIX = "__";
+type SelectDbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select">;
 
 /**
  * Derive the relative URL clients should use to fetch a manager-uploaded
@@ -125,7 +127,7 @@ function clientCapabilitiesReported(metadata: unknown): boolean {
  * `state: "unauthenticated"`. A `missing` or `error` entry is *reported* but
  * not usable, so we explicitly reject those rather than treating mere key
  * presence as support. Auth state is left to the user to fix at runtime
- * (the re-bind dialog surfaces an `unauthenticated` hint).
+ * (the new-agent dialog surfaces an `unauthenticated` hint).
  */
 function clientSupportsRuntimeProvider(metadata: unknown, provider: RuntimeProvider): boolean {
   if (!metadata || typeof metadata !== "object") return false;
@@ -213,7 +215,7 @@ export function legacyWireAgentType(type: string): "human" | "personal_assistant
  * (e.g. operator overrides for an offline client).
  */
 async function ensureClientSupportsRuntimeProvider(
-  db: Database,
+  db: SelectDbLike,
   clientId: string | null,
   runtimeProvider: RuntimeProvider,
   options: { force?: boolean } = {},
@@ -242,7 +244,7 @@ async function ensureClientSupportsRuntimeProvider(
 }
 
 async function resolveAgentClient(
-  db: Database,
+  db: SelectDbLike,
   data: { clientId?: string; managerId: string; type: string },
 ): Promise<string | null> {
   if (data.type === "human") {
@@ -259,7 +261,7 @@ async function resolveAgentClient(
   const [manager] = await db
     .select({ userId: members.userId })
     .from(members)
-    .where(eq(members.id, data.managerId))
+    .where(and(eq(members.id, data.managerId), eq(members.status, "active")))
     .limit(1);
   if (!manager) {
     throw new BadRequestError(`Manager "${data.managerId}" not found`);
@@ -339,6 +341,12 @@ function assertDelegateMentionAllowed(sourceType: string): void {
   }
 }
 
+function assertNonHumanLifecycleTarget(agent: { type: string }): void {
+  if (agent.type === AGENT_TYPES.HUMAN) {
+    throw new BadRequestError("Human agent lifecycle is managed by member leave/remove/restore.");
+  }
+}
+
 /**
  * Pick the first admin member in the org for internal system agents. Throws
  * if the org has no admin — the caller should surface the error so an admin
@@ -348,7 +356,7 @@ async function resolveFallbackManagerId(db: Database, orgId: string): Promise<st
   const [row] = await db
     .select({ id: members.id })
     .from(members)
-    .where(and(eq(members.organizationId, orgId), eq(members.role, "admin")))
+    .where(and(eq(members.organizationId, orgId), eq(members.role, "admin"), eq(members.status, "active")))
     .orderBy(members.createdAt)
     .limit(1);
   if (!row) {
@@ -402,7 +410,26 @@ export async function createAgent(
   let managerId: string;
 
   if (data.managerId && data.organizationId) {
-    // Branch 2: trust explicit pair (bootstrap / tests).
+    // Branch 2: explicit pair. If the manager row already exists, validate it
+    // like the public API path; if it does not, this is the member bootstrap
+    // path that inserts the human agent before inserting the member row in the
+    // same transaction, so the deferred FK validates it at commit time.
+    const [manager] = await db
+      .select({ id: members.id, organizationId: members.organizationId, status: members.status })
+      .from(members)
+      .where(eq(members.id, data.managerId))
+      .limit(1);
+    if (!manager && data.type !== AGENT_TYPES.HUMAN) {
+      throw new BadRequestError(`Manager "${data.managerId}" not found`);
+    }
+    if (manager) {
+      if (manager.status !== "active") {
+        throw new BadRequestError(`Manager "${data.managerId}" not found`);
+      }
+      if (manager.organizationId !== data.organizationId) {
+        throw new BadRequestError("Manager must belong to the same organization as the agent");
+      }
+    }
     orgId = data.organizationId;
     managerId = data.managerId;
   } else if (data.managerId) {
@@ -410,7 +437,7 @@ export async function createAgent(
     const [manager] = await db
       .select({ id: members.id, organizationId: members.organizationId })
       .from(members)
-      .where(eq(members.id, data.managerId))
+      .where(and(eq(members.id, data.managerId), eq(members.status, "active")))
       .limit(1);
     if (!manager) {
       throw new BadRequestError(`Manager "${data.managerId}" not found`);
@@ -563,14 +590,14 @@ export async function checkAgentNameAvailability(
  * Threading this through `getAgent`, `requireAgentAccess`, and every
  * mutation service is what keeps `runtimeState` on the wire across all
  * single-agent endpoints — see PR #571 review: the previous shape lost
- * the field on `GET /:uuid` and every PATCH/rebind/suspend/reactivate
+ * the field on `GET /:uuid` and every PATCH/suspend/reactivate
  * response, which made management surfaces (Team / Settings) read a
  * fictitious "offline" state.
  *
  * Returns `null` when no row exists (the caller decides whether that's a
  * 404 or an internal invariant violation post-update).
  */
-export async function selectAgentRowWithRuntime(db: Database, uuid: string): Promise<AgentRowWithRuntime | null> {
+export async function selectAgentRowWithRuntime(db: SelectDbLike, uuid: string): Promise<AgentRowWithRuntime | null> {
   const [row] = await db
     .select({
       ...getTableColumns(agents),
@@ -732,9 +759,11 @@ export async function listAgentsForMember(
   cursor?: string,
   type?: string,
   query?: string,
+  addressableOnly = false,
 ) {
   // agentVisibilityCondition already includes org + status + visibility filtering
   const conditions = [agentVisibilityCondition(scope.organizationId, scope.memberId)];
+  if (addressableOnly) conditions.push(agentAddressableCondition());
   if (cursor) conditions.push(lt(agents.createdAt, new Date(cursor)));
   if (type) conditions.push(eq(agents.type, type));
   if (query) {
@@ -815,43 +844,29 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   const agent = await getAgent(db, uuid);
 
   // `clientId` is one-shot via this entry: NULL → ID is allowed (admin
-  // claiming an unbound agent for a known client). Cross-client moves go
-  // through `rebindAgent`, which runs owner / org / capability checks
-  // atomically. ID → null is never allowed.
+  // claiming an unbound agent for a known client). Once bound, an agent's
+  // client is immutable — there is no move/re-bind path. ID → null and
+  // ID → another ID are both rejected.
   if (data.clientId !== undefined) {
     if (data.clientId === null) {
       throw new BadRequestError("clientId cannot be cleared — once bound, an agent stays bound to its client");
     }
     if (agent.clientId !== null && agent.clientId !== data.clientId) {
       throw new BadRequestError(
-        "clientId is immutable through this entry — cross-client moves go through rebindAgent " +
-          "(PATCH /agents/:uuid/rebind), which runs owner / org / capability checks atomically.",
+        "clientId is immutable once set — an agent cannot be moved to another client. " +
+          "Provision a new agent on the target client instead.",
       );
     }
   }
 
   const updates: Partial<typeof agents.$inferInsert> = { updatedAt: new Date() };
   if (data.type !== undefined) {
-    // Closes the type-flip leak: without this guard a PATCH like
-    // `{type: "agent"}` on a human row with a non-null delegateMention
-    // would leave behind `type=agent + delegateMention=<uuid>`, violating
-    // the invariant that only humans carry a delegate. The caller must
-    // either clear delegateMention in the same patch or flip type to human
-    // (no-op for the invariant).
-    if (data.type !== AGENT_TYPES.HUMAN && agent.delegateMention !== null && data.delegateMention !== null) {
-      throw new BadRequestError(
-        "Cannot change type away from `human` while delegateMention is set — clear delegateMention in the same patch.",
-      );
-    }
-    updates.type = data.type;
+    throw new BadRequestError("Agent type is immutable");
   }
   if (data.displayName !== undefined) updates.displayName = data.displayName;
   if (data.delegateMention !== undefined) {
     if (data.delegateMention !== null) {
-      // Effective type honors a same-patch `type` update; without this the
-      // guard would read the stale pre-update value when the caller flips
-      // type → "human" and sets delegateMention in one PATCH.
-      assertDelegateMentionAllowed(data.type ?? agent.type);
+      assertDelegateMentionAllowed(agent.type);
       await validateDelegateMentionTarget(db, data.delegateMention, agent.organizationId);
     }
     updates.delegateMention = data.delegateMention;
@@ -869,7 +884,7 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
     const [manager] = await db
       .select({ id: members.id, organizationId: members.organizationId })
       .from(members)
-      .where(eq(members.id, data.managerId))
+      .where(and(eq(members.id, data.managerId), eq(members.status, "active")))
       .limit(1);
     if (!manager) {
       throw new BadRequestError(`Manager "${data.managerId}" not found`);
@@ -883,6 +898,13 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   // First-set clientId (NULL → ID): validate ownership against the agent's
   // current manager. Reuses the resolveAgentClient ownership check so the
   // semantics match agent creation.
+  //
+  // With re-bind removed, this first bind is the ONLY path an unbound agent
+  // gets a computer, so it must also run the runtime-provider capability gate
+  // — createAgent runs it on the create-with-client path. Without it an agent
+  // could be bound to a client that does not report its provider (e.g. create
+  // an unbound `codex` agent, then bind it to a client reporting codex
+  // missing/error).
   if (data.clientId !== undefined && data.clientId !== null && agent.clientId === null) {
     const resolvedClientId = await resolveAgentClient(db, {
       clientId: data.clientId,
@@ -890,6 +912,13 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
       type: agent.type,
     });
     if (resolvedClientId !== null) {
+      // `agents.runtime_provider` is a text column (typed `string`); narrow it
+      // back to the RuntimeProvider union before the capability check.
+      await ensureClientSupportsRuntimeProvider(
+        db,
+        resolvedClientId,
+        runtimeProviderSchema.parse(agent.runtimeProvider),
+      );
       updates.clientId = resolvedClientId;
     }
   }
@@ -912,65 +941,18 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
 }
 
 /**
- * Atomically re-bind an agent to a new client and/or runtime provider.
- *
- * Validations: agent must exist and not be human; new client must belong to
- * the same owner (manager.userId) and same organization; client must report
- * the requested runtime provider in its capabilities (skipped under `force`).
- *
- * Intended caller: PATCH /agents/:uuid/rebind. The Web "Re-bind"
- * dialog routes both same-client runtime-only switches and cross-client
- * moves through this single entry.
- *
- * NOTE: active sessions on the previous client are not auto-suspended in P1.
- * P3 will wire in cross-service coordination (inbox + presence + session)
- * so the destination client can resume cleanly.
- */
-export async function rebindAgent(db: Database, uuid: string, data: RebindAgent) {
-  const agent = await getAgent(db, uuid);
-  if (agent.type === "human") {
-    throw new BadRequestError("Human agents have no runtime — they cannot be re-bound to a client.");
-  }
-
-  const newClientId = await resolveAgentClient(db, {
-    clientId: data.clientId,
-    managerId: agent.managerId,
-    type: agent.type,
-  });
-  if (newClientId === null) {
-    throw new BadRequestError("Rebind requires a non-null clientId.");
-  }
-
-  await ensureClientSupportsRuntimeProvider(db, newClientId, data.runtimeProvider, { force: data.force });
-
-  const [updated] = await db
-    .update(agents)
-    .set({
-      clientId: newClientId,
-      runtimeProvider: data.runtimeProvider,
-      updatedAt: new Date(),
-    })
-    .where(eq(agents.uuid, uuid))
-    .returning();
-
-  if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
-  const refreshed = await selectAgentRowWithRuntime(db, uuid);
-  if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
-  return refreshed;
-}
-
-/**
  * Reactivate a suspended agent.
  */
 export async function reactivateAgent(db: Database, uuid: string) {
   const [existing] = await db
-    .select({ uuid: agents.uuid, status: agents.status })
+    .select({ uuid: agents.uuid, status: agents.status, type: agents.type })
     .from(agents)
     .where(eq(agents.uuid, uuid))
     .limit(1);
   if (!existing || existing.status === AGENT_STATUSES.DELETED) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
+  assertNonHumanLifecycleTarget(existing);
   if (existing.status !== AGENT_STATUSES.SUSPENDED) {
     throw new BadRequestError("Only suspended agents can be reactivated.");
   }
@@ -992,15 +974,18 @@ export async function reactivateAgent(db: Database, uuid: string) {
  * and every agent-selector-authorised HTTP call.
  */
 export async function suspendAgent(db: Database, uuid: string) {
-  const [agent] = await db
-    .update(agents)
-    .set({ status: AGENT_STATUSES.SUSPENDED, updatedAt: new Date() })
-    .where(and(eq(agents.uuid, uuid), ne(agents.status, AGENT_STATUSES.DELETED)))
-    .returning();
+  const [existing] = await db
+    .select({ uuid: agents.uuid, status: agents.status, type: agents.type })
+    .from(agents)
+    .where(eq(agents.uuid, uuid))
+    .limit(1);
 
-  if (!agent) {
+  if (!existing || existing.status === AGENT_STATUSES.DELETED) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
+  assertNonHumanLifecycleTarget(existing);
+
+  await db.update(agents).set({ status: AGENT_STATUSES.SUSPENDED, updatedAt: new Date() }).where(eq(agents.uuid, uuid));
 
   const refreshed = await selectAgentRowWithRuntime(db, uuid);
   if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
@@ -1013,13 +998,14 @@ export async function suspendAgent(db: Database, uuid: string) {
  */
 export async function deleteAgent(db: Database, uuid: string) {
   const [existing] = await db
-    .select({ uuid: agents.uuid, status: agents.status })
+    .select({ uuid: agents.uuid, status: agents.status, type: agents.type })
     .from(agents)
     .where(eq(agents.uuid, uuid))
     .limit(1);
   if (!existing || existing.status === AGENT_STATUSES.DELETED) {
     throw new NotFoundError(`Agent "${uuid}" not found`);
   }
+  assertNonHumanLifecycleTarget(existing);
   if (existing.status !== AGENT_STATUSES.SUSPENDED) {
     throw new BadRequestError("Only suspended agents can be deleted. Suspend the agent first.");
   }

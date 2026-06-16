@@ -1,11 +1,25 @@
 import type { ComponentProps } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { isNavigableWebHref } from "../../lib/safe-href.js";
 import { cn } from "../../lib/utils.js";
 
 type RehypePlugins = ComponentProps<typeof ReactMarkdown>["rehypePlugins"];
+
+/**
+ * react-markdown's `defaultUrlTransform` sanitizes hrefs and STRIPS any
+ * unrecognized scheme to an empty string before our `a` component override
+ * runs — so a doc-preview `attachment:<uuid>` link (and the `#doc-failed`
+ * failure-chip fragment) would otherwise arrive at the override as `href=""`
+ * and render as dead text. Preserve exactly our two internal href shapes and
+ * delegate everything else to the default transform, so normal external links
+ * keep their full XSS-safety scrubbing (no weakening for `javascript:` etc.).
+ */
+function previewSafeUrlTransform(url: string): string {
+  if (url.startsWith("attachment:") || url.startsWith("#doc-failed")) return url;
+  return defaultUrlTransform(url);
+}
 
 export type MarkdownProps = {
   children: string;
@@ -27,7 +41,13 @@ export function Markdown({ children, className, components, rehypePlugins }: Mar
   return (
     <div
       className={cn(
-        "prose prose-sm max-w-none leading-[1.55] text-[color:inherit]",
+        // `break-words` lets unbreakable runs (bare URLs with embedded
+        // tokens, long file paths) wrap instead of widening the chat
+        // column — an overflowing message otherwise puts a horizontal
+        // scrollbar on the whole timeline, because the scroll container's
+        // `overflow-y: auto` makes the browser compute `overflow-x` as
+        // `auto` too.
+        "prose prose-sm max-w-none break-words leading-[1.55] text-[color:inherit]",
         "prose-headings:text-current prose-p:text-current prose-li:text-current prose-strong:text-current prose-em:text-current prose-blockquote:text-current",
         "prose-p:my-2 prose-headings:mt-3 prose-headings:mb-1.5 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2 prose-blockquote:my-2 prose-hr:my-3",
         "prose-a:text-[color:var(--primary)] prose-a:no-underline hover:prose-a:underline",
@@ -42,6 +62,7 @@ export function Markdown({ children, className, components, rehypePlugins }: Mar
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
         rehypePlugins={rehypePlugins}
+        urlTransform={previewSafeUrlTransform}
         components={{
           a: ({ node, href, children, ...props }) => {
             void node;

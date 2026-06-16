@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createAgent } from "../services/agent.js";
+import { createAgent, getAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import { ackEntryByIdForBoundAgents, pollInbox } from "../services/inbox.js";
 import { listMessages, sendMessage } from "../services/message.js";
@@ -37,11 +37,7 @@ describe("messaging E2E — group-chat mention scenarios", () => {
   it("Case C: group @mention activates only the targeted agent (Mention-filter invariant)", async () => {
     const app = getApp();
     const ctx = await createAdminContext(app, { username: `e2ec-${Date.now()}` });
-    const a1 = await createAgent(app.db, {
-      name: `e2ec-a1-${Date.now()}`,
-      type: "human",
-      managerId: ctx.memberId,
-    });
+    const a1 = await getAgent(app.db, ctx.humanAgentUuid);
     const b1 = await createAgent(app.db, {
       name: `e2ec-b1-${Date.now()}`,
       type: "agent",
@@ -95,11 +91,7 @@ describe("messaging E2E — group-chat mention scenarios", () => {
   it("Case D: b1's reply with explicit @b3 activates b3 (not b2)", async () => {
     const app = getApp();
     const ctx = await createAdminContext(app, { username: `e2ed-${Date.now()}` });
-    const a1 = await createAgent(app.db, {
-      name: `e2ed-a1-${Date.now()}`,
-      type: "human",
-      managerId: ctx.memberId,
-    });
+    const a1 = await getAgent(app.db, ctx.humanAgentUuid);
     const b1 = await createAgent(app.db, {
       name: `e2ed-b1-${Date.now()}`,
       type: "agent",

@@ -27,6 +27,15 @@ export type FieldOptions = {
   prompt?: PromptDef;
 };
 
+export type OptionalGroupOptions = {
+  /**
+   * Relative field paths that activate this optional group when any of them
+   * has an explicit CLI/env/file value. Omit to preserve the default behavior:
+   * any explicit field in the group or its descendants activates the group.
+   */
+  activateBy?: readonly string[];
+};
+
 export type FieldDef<T = unknown> = {
   readonly _tag: "field";
   readonly _type: T;
@@ -37,6 +46,7 @@ export type FieldDef<T = unknown> = {
 export type OptionalGroupDef<T = Record<string, unknown>> = {
   readonly _tag: "optional";
   readonly shape: T;
+  readonly options: OptionalGroupOptions;
 };
 
 /** Infer the resolved config type from a config shape definition. */

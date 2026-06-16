@@ -43,7 +43,7 @@ first-tree
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── org ...                  Organization-level operations
-├── daemon ...               Background daemon (start, stop, status, doctor)
+├── daemon ...               Background daemon (start, stop, status, doctor, probe)
 ├── config ...               View/modify this machine's client.yaml
 └── tree ...                 Validate and browse Context Trees
 ```
@@ -252,38 +252,42 @@ Day-to-day messaging.
 
 ```
 first-tree chat
-├── create [message]                               # create a task chat and write its first message
+├── create [message]                               # create a separate task chat and write its first message
 │     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
 │     --with <name>                                #   context participant; added silently, not woken by the first message
 │     --topic <text> / --description <text>        #   initial chat self-description
-│     --request / --question / --option            #   first message is a tracked ask; exactly one --to human
+│     --request / --subject / --question / --option #  first message is a tracked ask; exactly one --to human
 ├── send <name> [message]                            # recipient is any participant (agent or human)
-│     --request / --question / --option              #   structured ask directed at a human
+│     --request / --subject / --question / --option  #   structured ask directed at a human
 │     --answer <requestId>                           #   resolve a question you asked: body = the answer, clears their red-dot
 │     --close <requestId>                            #   withdraw a question you asked: body = the reason (re-asking opens a NEW question)
 │     --reply-to <messageId>                         #   thread a reply under a message (pure threading; does not resolve a question)
-├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before send
+├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before same-task send
 ├── list
 ├── history <chatId>
-├── set-topic [topic]                                # set/clear topic + description (chat self-description)
-│     --clear                                        #   clear the topic (falls back to auto-derived title)
-│     --description <text> / --clear-description     #   set/clear the running work-state summary
+├── update                                           # update topic and/or description (each independently)
+│     --topic <text> / --clear-topic                 #   set/clear the short display label
+│     --description <text> / --clear-description      #   set/clear the work summary + status report (Markdown; `-` = read from stdin/heredoc)
 │     --chat <chatId> / --agent <name>               #   target another chat / the named agent
+├── set-topic [topic]                                # [DEPRECATED — use `update`] hidden alias
 └── open <agent-name>                                # interactive REPL
 ```
 
 ```bash
-# Split off a new task chat and write the first message. --to recipients are
-# mentioned and woken; --with participants are added for context but receive only
-# silent initial history. This is not an empty-chat tool.
+# Split off separate work into a new task chat and write the first message.
+# --to recipients are mentioned and woken; --with participants are added for
+# context but receive only silent initial history. This is not an empty-chat or
+# same-task handoff tool.
 first-tree chat create "Please review the rollout plan." --to code-agent --with reviewer-agent \
   --topic "rollout review" \
   --description "reviewing rollout plan; waiting on code-agent"
 
 # Start a new task chat with a tracked question. The first request must target
-# exactly one human.
+# exactly one human. The message body is the background/context; --subject is
+# the dock/card headline (≤80 chars), and --question is only the ask (≤200 chars).
 first-tree chat create --to alice --request \
   "Migration 0021 drops the legacy column — irreversible." \
+  --subject "Migration gate" \
   --question "Ship the destructive migration?" \
   --option "Ship" --option "Hold"
 
@@ -293,12 +297,31 @@ first-tree chat send code-agent "ship the PR"
 # Stdin (multiline, markdown, special chars)
 echo "long body" | first-tree chat send code-agent -f markdown
 
+# Inline bodies must carry REAL newlines. A one-line quoted body written with
+# `\n` escapes — chat send code-agent "line1\n\n**title**" — is rejected
+# BEFORE anything is sent (ESCAPED_NEWLINES, exit 2): shells do not expand
+# `\n` inside quotes, so the literal backslash-n would be stored and the
+# message would render as one long unformatted line. The error prints a
+# copyable heredoc retry form on stderr; resend via stdin:
+cat <<'EOF' | first-tree chat send code-agent -f markdown
+first line
+
+**second** line
+EOF
+# Stdin bodies are never checked — piping is also the escape hatch for
+# intentionally sending literal `\n` text.
+
 # Ask a human a tracked question (red-dot until answered). --request must
-# target a single human; the body carries context, --question carries the ask.
+# target a single human; the body carries context, --subject is the headline
+# (≤80 chars), and --question carries only the ask (≤200 chars).
 first-tree chat send alice --request \
   "Migration 0021 drops the legacy column — irreversible." \
+  --subject "Migration gate" \
   --question "Ship the destructive migration?" \
   --option "Ship" --option "Hold"
+
+# If --question exceeds 200 chars, the CLI exits with QUESTION_TOO_LONG.
+# If --subject exceeds 80 chars, the CLI exits with SUBJECT_TOO_LONG.
 
 # Thread a reply under a message (pure threading; does NOT resolve a question)
 first-tree chat send alice --reply-to <messageId> "Holding — will split the migration."
@@ -309,7 +332,8 @@ first-tree chat send alice "Ship it — go ahead with migration 0021." --answer 
 # Withdraw an open question you asked (body = the reason; re-asking opens a NEW question, never auto-supersedes)
 first-tree chat send alice "Superseded — splitting the migration first." --close <requestId>
 
-# Pull a non-member into the current chat first, then send normally.
+# Pull a non-member into the current chat first, then send normally. Use this
+# for same-task stage / role handoffs.
 first-tree chat invite code-agent
 first-tree chat send code-agent "now we can talk"
 
@@ -317,17 +341,32 @@ first-tree chat send code-agent "now we can talk"
 first-tree chat list
 first-tree chat history <chatId>
 
-# Self-description: a short topic label + a longer running work summary,
-# both set through set-topic. Agents read descriptions via `chat list` to
-# self-locate across threads (see the agent briefing's "Chat Topic & Description").
-# Owner-gated: the chat's creator may set topic/description, and when no agent
-# owner is present (human-created chats — Web / GitHub-sourced — or the creator
-# left) every worker agent counts as the owner; a non-owner agent in a chat
-# whose agent creator is still present is refused with 403.
-first-tree chat set-topic "review PR #916"
-first-tree chat set-topic --description "reviewing PR #916; addressing review findings, re-verifying"
-first-tree chat set-topic "ship plan" --description "drafting; waiting on QA"
-first-tree chat set-topic --clear-description
+# Self-description: a short topic label + a work summary + status report,
+# updated independently through `chat update` (topic and description each on
+# their own). The description carries task background + plan + progress, renders
+# as Markdown, and shows at the top of the chat's right sidebar; agents also read
+# it via `chat list` to self-locate (see the agent briefing's "Chat Topic &
+# Description"). Keep blockers / decisions OUT of it — raise `chat send <human>
+# --request` for those. Owner-gated: the chat's creator may update it, and when
+# no agent owner is present (human-created chats — Web / GitHub-sourced — or the
+# creator left) every worker agent counts as the owner; a non-owner agent in a
+# chat whose agent creator is still present is refused with 403.
+first-tree chat update --topic "review PR #916"
+first-tree chat update --description "Reviewing PR #916. **Plan:** address review findings, re-verify. **Progress:** 2/3 findings fixed."
+first-tree chat update --topic "ship plan" --description "Drafting; next: hand to QA."
+first-tree chat update --clear-description
+# A one-line --description whose newlines are written as literal `\n` is rejected
+# before the write: shell quotes do not expand `\n`, so it would persist and
+# render as one long line with visible `\n` tokens. For a multi-line description
+# pass real newlines — either an ANSI-C $'...' string, or `--description -` to
+# read it from stdin/heredoc:
+cat <<'EOF' | first-tree chat update --description -
+Reviewing PR #916.
+
+**Plan:** address review findings, re-verify.
+**Progress:** 2/3 findings fixed.
+EOF
+# `chat set-topic` still works as a deprecated alias.
 
 # Interactive
 first-tree chat open code-agent
@@ -341,7 +380,9 @@ environment. The recipient must be a participant of that chat; if not,
 `chat create` is different: it creates a new task chat and writes the first
 message in one command. Use it to split genuinely new work into a fresh chat.
 Use `chat send` for replies/status in the current chat, and `chat invite` when
-you want to add a non-member to the current chat before sending there.
+you want to add a non-member to the current chat before sending there. A
+same-task handoff, such as architect to developer or developer to reviewer,
+stays in the current chat; invite the next agent and send the handoff there.
 
 Task creation is intentionally not idempotent. There is no operation id, and
 the CLI does not automatically retry a create request. If the command reports
@@ -358,11 +399,12 @@ effective sender so the first message can wake the agent normally.
 
 GitHub entity attention for the current chat. `follow` wires an entity's
 webhook event stream into the chat (one routing line, chat-scoped);
-`unfollow` declares the task's attention over and severs every line wired
-into the chat for that entity, however it was created. Creating a PR or
-issue never follows it automatically — declare the dependency explicitly,
-immediately after creation. Decision guidance (when to follow / not
-follow / unfollow, 409 handling) lives in the `first-tree-github` skill.
+`unfollow` explicitly stops this chat from tracking the entity and severs
+every line wired into the chat for that entity, however it was created.
+Creating a PR or issue never follows it automatically — declare the
+dependency explicitly, immediately after creation. Decision guidance
+(when to follow / not follow / unfollow, 409 handling) lives in the
+`first-tree-github` skill.
 
 ```
 first-tree github
@@ -414,7 +456,8 @@ first-tree daemon
 ├── stop
 ├── restart
 ├── status
-└── doctor
+├── doctor
+└── probe [--no-upload] [--json]
 ```
 
 | Subcommand | Purpose |
@@ -423,7 +466,19 @@ first-tree daemon
 | `stop` | Stop the service (preserves auto-start; bring it back with `start`). |
 | `restart` | Restart the service. |
 | `status` | Local service state + server binding + auth health. Runs in well under a second. |
-| `doctor` | Walk Node version, config, server reachability, WS, agent registrations, and the installed service file; report each step. |
+| `doctor` | Walk Node version, config, server reachability, WS, agent registrations, the installed service file, **and the runtime providers** — each step reported. The runtime-provider rows run the real launch-verified probe (a 1-turn model call for `claude-code`, a `codex doctor` handshake for `codex`), so `doctor` makes live provider calls; it is a deliberate diagnostic, not a hot path. |
+| `probe` | Launch-probe the local runtime providers on demand and upload the result to the server (`PATCH /clients/:id/capabilities`). This is the manual refresh for a client's advertised capabilities after a provider is installed / logged in. Each probe really launches its provider. `--no-upload` runs a **credentials-free local-only** diagnostic (probe + print, no server auth needed). `--json` (or the global `--json`) emits the capability snapshot as the machine-readable `{ ok, data }` envelope on stdout. |
+
+**Capability refresh timing.** The daemon launch-probes runtime providers at
+startup and re-probes automatically on every WebSocket reconnect. A full real
+re-probe of all providers runs only when there is no prior snapshot or one is
+older than 24h; otherwise each provider is re-validated individually — a
+still-launchable, still-logged-in provider keeps its prior `ok` for free
+(resolve + auth re-checked, no session smoke re-run), a provider that lost its
+binary or login downgrades, and a non-ok provider is fully re-probed so it can
+recover. So a machine missing an optional provider (e.g. no tmux for
+`claude-code-tui`) does not re-smoke its healthy providers on every reconnect.
+`daemon probe` is the manual, on-demand path between those automatic refreshes.
 
 The top-level `first-tree status` is the cross-subsystem overview that
 calls `daemon status` internally and adds server/auth/agent rows.
@@ -518,7 +573,7 @@ Most environment variables use the `FIRST_TREE_` prefix.
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `FIRST_TREE_HOME` | Override the CLI home directory for config, data, and Context Tree mirrors. | Channel-dependent: `~/.first-tree` (prod), `~/.first-tree-staging` (staging), `~/.first-tree-dev` (dev). |
+| `FIRST_TREE_HOME` | Override the CLI home directory for config, data, and agent workspaces. | Channel-dependent: `~/.first-tree` (prod), `~/.first-tree-staging` (staging), `~/.first-tree-dev` (dev). |
 | `FIRST_TREE_SERVER_URL` | Server URL (alternative to the connect token's `iss` claim). | — |
 | `FIRST_TREE_LOG_LEVEL` | Log level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`). | `info` |
 | `FIRST_TREE_JSON` | JSON output mode (equivalent to `--json`). | — |
@@ -635,10 +690,10 @@ Old per-route rate-limit env vars are no longer read.
 | `FIRST_TREE_WS_MAX_PAYLOAD` | `262144` (256 KiB) |
 | `FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS` | `300` (set `0` to disable) |
 | `FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` | `3600` |
-| `FIRST_TREE_ARCHIVE_UNMAPPED_IDLE_SECONDS` | `43200` |
 
-`FIRST_TREE_ARCHIVE_UNMAPPED_IDLE_SECONDS` applies only to chats with no
-GitHub mapping and no human owner.
+`FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS` is the GitHub-source archive idle
+threshold. Mapped chats also require all bound entities to be closed/merged;
+source=github chats with no mapping use the same idle threshold.
 
 **Observability:**
 
@@ -665,11 +720,12 @@ See [observability.md](observability.md) for the full config reference, backend 
 │       └── <name>/
 │           └── agent.yaml                         # agentId + runtime
 ├── data/
-│   ├── context-tree-repos/                        # server-managed read-only Context Tree mirrors
+│   ├── context-tree-repos/                        # legacy shared Context Tree pool (retained for old installs; new clones live per-agent)
 │   ├── sessions/                                  # per-agent session registry
 │   └── workspaces/
 │       └── <agent-name>/                          # per-agent home (cwd is shared across chats)
-│           └── worktrees/                         # ad-hoc agent-spawned worktrees
+│           ├── context-tree/                      # agent-managed Context Tree clone (agent clones/pulls it per its briefing)
+│           └── worktrees/                         # per-task worktrees the agent creates and cleans up
 └── logs/                                          # daemon stderr / stdout (macOS)
 ```
 

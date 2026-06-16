@@ -48,7 +48,7 @@ export function registerGithubFollowCommand(github: Command): void {
         const hint =
           status === "created"
             ? "Now following — every event on it will wake the wiring agent in this chat. " +
-              `Unfollow when the task's attention span closes: \`${channelConfig.binName} github unfollow ${wired.entityKey}\`.`
+              `If the human asks this chat to stop tracking it later: \`${channelConfig.binName} github unfollow ${wired.entityKey}\`.`
             : status === "rebound"
               ? "Line moved — events now route into this chat (the previous chat goes quiet)."
               : "Already following in this chat — idempotent success, do not retry.";

@@ -10,6 +10,7 @@ import type {
 } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
+import type { DeliveryDecision, DeliveryWork } from "../runtime/inbox-delivery-coordinator.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { recordingLogger, silentLogger } from "./_logger-helpers.js";
@@ -33,12 +34,14 @@ type SessionRecord = {
 type SessionManagerInternals = {
   sessions: Map<string, SessionRecord>;
   evictedMappings: Map<string, { claudeSessionId: string; lastActivity: number }>;
-  // entryId tracking moved out of PendingMessage and into a per-chat
-  // FIFO (`inFlightEntries`) per the in-flight message recovery PR.
-  pendingQueue: Array<{ message: SessionMessage; chatId: string }>;
-  inFlightEntries: Map<string, Array<{ entryId: number; messageId: string; dedupKey: string }>>;
+  pendingQueue: Array<{ message: SessionMessage | null; chatId: string; deliveryKind: string }>;
+  inboxDelivery: {
+    receive(entry: InboxEntryWithMessage): DeliveryDecision;
+    markOwned(work: DeliveryWork): boolean;
+    markProcessingStarted(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void;
+  };
   _activeCount: number;
-  acquireActiveSlot(chatId: string, message: SessionMessage): boolean;
+  acquireActiveSlot(chatId: string, message: SessionMessage | null): boolean;
   routeMessage(chatId: string, message: SessionMessage): Promise<void>;
   resumeSession(entry: SessionRecord, message: SessionMessage | null | undefined): Promise<void>;
   runRetry(chatId: string): Promise<void>;
@@ -48,7 +51,6 @@ type SessionManagerInternals = {
   notifySessionState(chatId: string, state: SessionState): void;
   reaffirmRuntimeStates(): void;
   persistRegistry(): void;
-  drainAllInFlightEntries(chatId: string): void;
 };
 
 type TestRuntimeState = RuntimeState;
@@ -77,7 +79,7 @@ function handler(overrides: Partial<AgentHandler> = {}): AgentHandler {
   return {
     start: vi.fn().mockResolvedValue("session-id"),
     resume: vi.fn().mockResolvedValue("session-id"),
-    inject: vi.fn(),
+    inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -197,6 +199,19 @@ function makeMessage(chatId: string): SessionMessage {
   };
 }
 
+function messageFromEntry(entry: InboxEntryWithMessage): SessionMessage {
+  return {
+    inboxEntryId: entry.id,
+    id: entry.message.id,
+    chatId: entry.chatId ?? entry.message.chatId,
+    senderId: entry.message.senderId,
+    format: entry.message.format,
+    content: entry.message.content as string,
+    metadata: entry.message.metadata,
+    precedingMessages: entry.message.precedingMessages ?? [],
+  };
+}
+
 function makeSessionRecord(chatId: string, overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
     chatId,
@@ -248,7 +263,11 @@ describe("SessionManager edge coverage", () => {
   });
 
   it("handles suspend, terminate, pending-queue cleanup, ack failures, and quiet-gate snapshots", async () => {
-    const first = handler();
+    const first = handler({
+      async start() {
+        return "idle-log-session";
+      },
+    });
     const ackEntry = vi
       .fn<(entryId: number) => Promise<void>>()
       .mockResolvedValueOnce(undefined)
@@ -277,11 +296,14 @@ describe("SessionManager edge coverage", () => {
     // Same-socket recovery fail-closed: suspending clears unfinished local
     // entries and newer same-chat input asks the server to reset/redeliver
     // before the handler resumes.
-    expect(internals(sm).inFlightEntries.has("chat-active")).toBe(false);
-    expect(recoverChat).toHaveBeenCalledTimes(2);
+    expect(recoverChat).toHaveBeenCalledTimes(1);
     expect(ackEntry).not.toHaveBeenCalledWith(2);
 
-    internals(sm).pendingQueue.push({ chatId: "chat-queued", message: makeMessage("chat-queued") });
+    internals(sm).pendingQueue.push({
+      chatId: "chat-queued",
+      message: makeMessage("chat-queued"),
+      deliveryKind: "fresh",
+    });
     internals(sm).evictedMappings.set("chat-queued", { claudeSessionId: "queued-session", lastActivity: 1 });
     expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queued")).toBe(true);
 
@@ -332,7 +354,12 @@ describe("SessionManager edge coverage", () => {
     expect(sm.getEvictedChatIds()).toContain("chat-500");
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-500" }));
-    expect(resumed.resume).toHaveBeenCalledWith(expect.anything(), "persisted-500", expect.anything());
+    expect(resumed.resume).toHaveBeenCalledWith(
+      expect.anything(),
+      "persisted-500",
+      expect.anything(),
+      expect.anything(),
+    );
 
     internals(sm).evictedMappings.set("chat-extra", { claudeSessionId: "evicted-extra", lastActivity: 2_000 });
     internals(sm).persistRegistry();
@@ -352,7 +379,7 @@ describe("SessionManager edge coverage", () => {
         model: "opus",
         mcpServers: [],
         env: [],
-        gitRepos: [{ url: "https://github.com/acme/project.git", localPath: "src/project" }],
+        gitRepos: [{ url: "https://github.com/acme/project.git", localPath: "project" }],
         resourceSkills: [],
         reasoningEffort: "",
       },
@@ -368,7 +395,7 @@ describe("SessionManager edge coverage", () => {
       async start(_message, ctx) {
         captured = ctx;
         ctx.log("started");
-        ctx.touch();
+        ctx.recordProviderActivity();
         return "session-context";
       },
     });
@@ -385,9 +412,12 @@ describe("SessionManager edge coverage", () => {
     if (!ctx) throw new Error("context was not captured");
 
     const env = ctx.buildAgentEnv({ PATH: "/usr/bin" });
-    expect(env.FIRST_TREE_DOC_BASE).toBe(join(workspaceRoot, "src/project"));
+    // Single source repo "project" → its clone lives under the `source-repos/`
+    // layer, so the narrow doc base and the agentHome-relative repo path both
+    // carry the `source-repos/` prefix.
+    expect(env.FIRST_TREE_DOC_BASE).toBe(join(workspaceRoot, "source-repos", "project"));
     expect(env.FIRST_TREE_DOC_AGENT_HOME).toBe(workspaceRoot);
-    expect(env.FIRST_TREE_DOC_REPO_LOCAL_PATH).toBe("src/project");
+    expect(env.FIRST_TREE_DOC_REPO_LOCAL_PATH).toBe("source-repos/project");
     expect(env.FIRST_TREE_WORKSPACES_ROOT).toBe(tmpdir());
     expect(env.FIRST_TREE_AGENT_SLUG).toBe(workspaceRoot.split("/").at(-1));
 
@@ -497,7 +527,7 @@ describe("SessionManager edge coverage", () => {
     await sm.shutdown();
   });
 
-  it("queues admin resume when no active slot can be acquired", async () => {
+  it("queues admin resume as a control item when no active slot can be acquired", async () => {
     const record = makeSessionRecord("chat-queued-resume", { status: "suspended" });
     const sm = makeManager({ concurrency: 1 });
     internals(sm).sessions.set("chat-queued-resume", record);
@@ -505,7 +535,217 @@ describe("SessionManager edge coverage", () => {
 
     await internals(sm).resumeSession(record, null);
 
-    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queued-resume")).toBe(true);
+    expect(
+      internals(sm).pendingQueue.some(
+        (item) => item.chatId === "chat-queued-resume" && item.message === null && item.deliveryKind === "control",
+      ),
+    ).toBe(true);
+    await sm.shutdown();
+  });
+
+  it("does not let message-less resume preempt an unrelated working session", async () => {
+    const workingSuspend = vi.fn().mockResolvedValue(undefined);
+    const working = makeSessionRecord("chat-working", {
+      status: "active",
+      lastActivity: 1,
+      handler: handler({ suspend: workingSuspend }),
+    });
+    const pausedResume = vi.fn().mockResolvedValue("resumed-paused");
+    const paused = makeSessionRecord("chat-paused", {
+      status: "suspended",
+      handler: handler({ resume: pausedResume }),
+    });
+    const sm = makeManager({ concurrency: 1 });
+    internals(sm).sessions.set("chat-working", working);
+    internals(sm).sessions.set("chat-paused", paused);
+    internals(sm)._activeCount = 1;
+
+    const workingEntry = mockEntry({ id: 99, chatId: "chat-working" });
+    const decision = internals(sm).inboxDelivery.receive(workingEntry);
+    expect(decision.kind).toBe("deliver");
+    if (decision.kind === "deliver") {
+      internals(sm).inboxDelivery.markOwned(decision.work);
+      internals(sm).inboxDelivery.markProcessingStarted("chat-working", messageFromEntry(workingEntry));
+    }
+
+    await sm.handleCommand("chat-paused", "session:resume");
+
+    expect(workingSuspend).not.toHaveBeenCalled();
+    expect(pausedResume).not.toHaveBeenCalled();
+    expect(
+      internals(sm).pendingQueue.some(
+        (item) => item.chatId === "chat-paused" && item.message === null && item.deliveryKind === "control",
+      ),
+    ).toBe(true);
+    await sm.shutdown();
+  });
+
+  it("drains same-chat buffered delivery after explicit resume at the concurrency limit", async () => {
+    const resume = vi.fn().mockResolvedValue("resumed-paused");
+    const inject = vi.fn().mockReturnValue({ kind: "owned", mode: "queued" });
+    const paused = makeSessionRecord("chat-paused", {
+      status: "suspended",
+      claudeSessionId: "old-paused-session",
+      handler: handler({ resume, inject }),
+    });
+    const sm = makeManager({ concurrency: 1 });
+    internals(sm).sessions.set("chat-paused", paused);
+
+    await sm.handleCommand("chat-paused", "session:suspend");
+
+    const entry = mockEntry({ id: 101, chatId: "chat-paused" });
+    await sm.dispatch(entry);
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-paused" && item.message)).toBe(true);
+
+    await sm.handleCommand("chat-paused", "session:resume");
+    await Promise.resolve();
+
+    expect(resume).toHaveBeenCalledWith(undefined, "old-paused-session", expect.anything());
+    expect(inject).toHaveBeenCalledWith(
+      expect.objectContaining({ inboxEntryId: 101, chatId: "chat-paused" }),
+      expect.anything(),
+    );
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-paused")).toBe(false);
+    expect(sm.activeCount).toBe(1);
+    await sm.shutdown();
+  });
+
+  it("queues recovery redelivery instead of preempting a working session", async () => {
+    const working = handler({
+      async start(message, ctx) {
+        ctx.markMessagesConsumed(message);
+        return "working-session";
+      },
+    });
+    const recovered = handler();
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeManager({
+      concurrency: 1,
+      handlers: [working, recovered],
+      recoverChat,
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-working", messageId: "msg-working" }));
+    internals(sm).evictedMappings.set("chat-recovery", { claudeSessionId: "old-recovery", lastActivity: 1 });
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery" }));
+    expect(recoverChat).toHaveBeenCalledWith("chat-recovery");
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery" }));
+
+    expect(working.suspend).not.toHaveBeenCalled();
+    expect(recovered.start).not.toHaveBeenCalled();
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-recovery")).toBe(true);
+
+    await sm.shutdown();
+  });
+
+  it("keeps the recovery window open across multiple queued recovered frames", async () => {
+    const working = handler({
+      async start(message, ctx) {
+        ctx.markMessagesConsumed(message);
+        return "working-session";
+      },
+    });
+    const recovered = handler();
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeManager({
+      concurrency: 1,
+      handlers: [working, recovered],
+      recoverChat,
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-working", messageId: "msg-working" }));
+    internals(sm).evictedMappings.set("chat-recovery", { claudeSessionId: "old-recovery", lastActivity: 1 });
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery-1" }));
+    expect(recoverChat).toHaveBeenCalledTimes(1);
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery-1" }));
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-recovery", messageId: "msg-recovery-2" }));
+
+    expect(recoverChat).toHaveBeenCalledTimes(1);
+    expect(recovered.start).not.toHaveBeenCalled();
+    expect(internals(sm).pendingQueue.filter((item) => item.chatId === "chat-recovery")).toHaveLength(2);
+
+    await sm.shutdown();
+  });
+
+  it("does not let a queued recovery steal a slot released for fresh preemption", async () => {
+    const lifecycles: Array<{ chatId: string; phase: "start" | "resume" }> = [];
+    const makeTrackedHandler = () =>
+      handler({
+        async start(message, ctx) {
+          lifecycles.push({ chatId: message.chatId, phase: "start" });
+          if (message.chatId === "chat-working") ctx.markMessagesConsumed(message);
+          return `session-${message.chatId}`;
+        },
+        async resume(message) {
+          lifecycles.push({ chatId: message?.chatId ?? "", phase: "resume" });
+          return `session-${message?.chatId ?? "unknown"}`;
+        },
+      });
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeManager({
+      concurrency: 1,
+      handlers: [makeTrackedHandler(), makeTrackedHandler(), makeTrackedHandler()],
+      recoverChat,
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-working", messageId: "msg-working" }));
+    internals(sm).evictedMappings.set("chat-recovery", { claudeSessionId: "old-recovery", lastActivity: 1 });
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery", messageId: "msg-recovery" }));
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-recovery")).toBe(true);
+
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-fresh", messageId: "msg-fresh" }));
+
+    expect(sm.activeCount).toBe(1);
+    expect(lifecycles).toEqual([
+      { chatId: "chat-working", phase: "start" },
+      { chatId: "chat-fresh", phase: "start" },
+    ]);
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-recovery")).toBe(true);
+
+    await sm.shutdown();
+  });
+
+  it("marks queued inbox work for recovery when pending drain routing fails", async () => {
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    let firstContext: SessionContext | undefined;
+    let firstMessage: SessionMessage | undefined;
+    let factoryCalls = 0;
+    const sm = makeManager({
+      ackEntry,
+      recoverChat,
+      concurrency: 1,
+      maxSessions: 1,
+      handlerFactory: () => {
+        factoryCalls++;
+        if (factoryCalls > 1) throw new Error("handler factory unavailable");
+        return handler({
+          async start(message, ctx) {
+            firstMessage = message;
+            firstContext = ctx;
+            ctx.markMessagesConsumed(message);
+            return "session-chat-working";
+          },
+        });
+      },
+    });
+
+    await sm.dispatch(mockEntry({ id: 10, chatId: "chat-working", messageId: "msg-working" }));
+    await sm.dispatch(mockEntry({ id: 11, chatId: "chat-queued", messageId: "msg-queued" }));
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queued")).toBe(true);
+    if (!firstContext || !firstMessage) throw new Error("first context missing");
+
+    await firstContext.finishTurn(firstMessage, { status: "success", terminal: true });
+
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-queued"));
+    expect(ackEntry).toHaveBeenCalledWith(10);
+    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-queued")).toBe(false);
+
     await sm.shutdown();
   });
 
@@ -704,7 +944,12 @@ describe("SessionManager edge coverage", () => {
 
     await internals(sm).runRetry("chat-retry-from-evicted");
 
-    expect(resumeFails.resume).toHaveBeenCalledWith(expect.anything(), "evicted-session", expect.anything());
+    expect(resumeFails.resume).toHaveBeenCalledWith(
+      expect.anything(),
+      "evicted-session",
+      expect.anything(),
+      expect.anything(),
+    );
     expect(retrying.retryAttempt).toBeGreaterThan(1);
     await sm.shutdown();
   });
@@ -768,7 +1013,7 @@ describe("SessionManager edge coverage", () => {
   it("covers drainPendingQueue return and edge branches", async () => {
     const sm = makeManager({ concurrency: 1, handlers: [handler()] });
 
-    internals(sm).pendingQueue.push({ chatId: "chat-held", message: makeMessage("chat-held") });
+    internals(sm).pendingQueue.push({ chatId: "chat-held", message: makeMessage("chat-held"), deliveryKind: "fresh" });
     internals(sm)._activeCount = 1;
     internals(sm).drainPendingQueue();
     expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-held")).toBe(true);
@@ -779,7 +1024,11 @@ describe("SessionManager edge coverage", () => {
     expect(internals(sm).sessions.has("chat-held")).toBe(true);
 
     const emptyShift = internals(makeManager());
-    emptyShift.pendingQueue.push({ chatId: "chat-empty-shift", message: makeMessage("chat-empty-shift") });
+    emptyShift.pendingQueue.push({
+      chatId: "chat-empty-shift",
+      message: makeMessage("chat-empty-shift"),
+      deliveryKind: "fresh",
+    });
     emptyShift.pendingQueue.shift = () => undefined;
     emptyShift.drainPendingQueue();
     await (emptyShift as unknown as SessionManager).shutdown();
@@ -793,7 +1042,11 @@ describe("SessionManager edge coverage", () => {
         throw new Error("factory failed during drain");
       },
     });
-    internals(sm).pendingQueue.push({ chatId: "chat-drain", message: makeMessage("chat-drain") });
+    internals(sm).pendingQueue.push({
+      chatId: "chat-drain",
+      message: makeMessage("chat-drain"),
+      deliveryKind: "fresh",
+    });
     internals(sm).drainPendingQueue();
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
@@ -909,14 +1162,15 @@ describe("SessionManager edge coverage", () => {
     await stringFailure.shutdown();
   });
 
-  it("reports runtime snapshots only for active sessions and ignores inactive runtime writes", async () => {
+  it("reports runtime snapshots only for active sessions and ignores inactive provider activity", async () => {
     const runtimeChanges: RuntimeState[] = [];
     let captured: SessionContext | undefined;
     const sm = makeManager({
       handlers: [
         handler({
-          async start(_message, ctx) {
+          async start(message, ctx) {
             captured = ctx;
+            ctx.markMessagesConsumed(message);
             return "runtime-session";
           },
         }),
@@ -926,10 +1180,11 @@ describe("SessionManager edge coverage", () => {
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-runtime" }));
-    expect(sm.getSessionRuntimeStates()).toEqual([{ chatId: "chat-runtime", runtimeState: "idle" }]);
+    expect(sm.getSessionRuntimeStates()).toEqual([{ chatId: "chat-runtime", runtimeState: "working" }]);
     if (!captured) throw new Error("context was not captured");
+    runtimeChanges.length = 0;
     await sm.handleCommand("chat-runtime", "session:suspend");
-    captured.setRuntimeState("working");
+    captured.recordProviderActivity();
     expect(runtimeChanges).not.toContain("working");
 
     internals(sm).reaffirmRuntimeStates();
@@ -939,7 +1194,15 @@ describe("SessionManager edge coverage", () => {
   it("uses idle fallback in evictIdle logging when no runtime state was recorded", async () => {
     vi.useFakeTimers({ now: 100_000 });
     const log = recordingLogger();
-    const first = handler();
+    let captured: SessionContext | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const first = handler({
+      async start(message, ctx) {
+        capturedMessage = message;
+        captured = ctx;
+        return "idle-log-session";
+      },
+    });
     const sm = new SessionManager({
       session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 1, reconcile_interval_seconds: 300 },
       concurrency: 5,
@@ -960,6 +1223,8 @@ describe("SessionManager edge coverage", () => {
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-idle-log" }));
+    if (!capturedMessage) throw new Error("message was not captured");
+    await captured?.finishTurn(capturedMessage, { status: "success", terminal: true });
     vi.advanceTimersByTime(2_000);
 
     vi.advanceTimersByTime(10_000);

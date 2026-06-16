@@ -60,12 +60,13 @@
  *     post-commit audience-cache invalidation.
  */
 
-import { AGENT_VISIBILITY } from "@first-tree/shared";
+import { AGENT_STATUSES, AGENT_TYPES, AGENT_VISIBILITY } from "@first-tree/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
+import { members } from "../db/schema/members.js";
 import { BadRequestError, CallerNotSpeakerError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { applyMembershipWrite } from "./participant-mode.js";
 
@@ -206,8 +207,12 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
       organizationId: agents.organizationId,
       visibility: agents.visibility,
       managerId: agents.managerId,
+      status: agents.status,
+      type: agents.type,
+      memberStatus: members.status,
     })
     .from(agents)
+    .leftJoin(members, eq(members.agentId, agents.uuid))
     .where(inArray(agents.uuid, distinctTargets));
   if (targetRows.length !== distinctTargets.length) {
     const foundSet = new Set(targetRows.map((r) => r.uuid));
@@ -217,6 +222,12 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
   const crossOrg = targetRows.filter((t) => t.organizationId !== chat.organizationId);
   if (crossOrg.length > 0) {
     throw new BadRequestError(`Cross-organization participant rejected: ${crossOrg.map((t) => t.uuid).join(", ")}`);
+  }
+  const inactiveTargets = targetRows.filter(
+    (t) => t.status !== AGENT_STATUSES.ACTIVE || (t.type === AGENT_TYPES.HUMAN && t.memberStatus !== "active"),
+  );
+  if (inactiveTargets.length > 0) {
+    throw new BadRequestError(`Inactive participant rejected: ${inactiveTargets.map((t) => t.uuid).join(", ")}`);
   }
 
   // 4. Owner-exclusive for private targets. The caller's owning member

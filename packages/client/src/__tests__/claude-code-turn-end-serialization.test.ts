@@ -120,8 +120,7 @@ describe("claude-code handler — turn_end serialization (race guard)", () => {
       sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
       chatId: "chat-1",
       log: () => {},
-      touch: () => {},
-      setRuntimeState: () => {},
+      recordProviderActivity: () => {},
       emitEvent: (e: SessionEvent) => {
         emitted.push({ kind: e.kind, at: Date.now() - start });
       },

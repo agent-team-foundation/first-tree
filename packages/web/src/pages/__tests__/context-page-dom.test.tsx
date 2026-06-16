@@ -167,13 +167,18 @@ describe("ContextPage DOM behavior", () => {
   it("renders live preview, selects change groups, expands IO, and navigates accessible chats", async () => {
     vi.setSystemTime(new Date("2026-05-28T12:15:00.000Z"));
     const { ContextPage } = await import("../context.js");
-    const events = Array.from({ length: 12 }, (_, index) => ioEvent(index + 1));
+    // 22 events so the 20-row default still leaves rows behind "Show all".
+    const events = Array.from({ length: 22 }, (_, index) => ioEvent(index + 1));
     const liveSnapshot = snapshot({
       contextStatus: { label: "Needs attention", detail: "Tree sync is stale.", severity: "warning" },
       summary: { addedCount: 2, editedCount: 8, removedCount: 1, changedNodeCount: 3 },
       io: {
         ...MOCK_CONTEXT_SNAPSHOT.io,
         recentEvents: events,
+        // This case exercises the reads stream + pagination; writes are covered
+        // by the dedicated write-feed test below.
+        writes: [],
+        writesTotal: 0,
       },
     });
 
@@ -194,8 +199,8 @@ describe("ContextPage DOM behavior", () => {
     expect(container.textContent).toContain("qa.bot-2");
     expect(container.textContent).toContain("#chat-3");
 
-    await click(buttonByText(container, "Show all 12"));
-    expect(container.textContent).toContain("#hat-12");
+    await click(buttonByText(container, "Show all 22"));
+    expect(container.textContent).toContain("#hat-21");
 
     await click(buttonByText(container, "Nova"));
     expect(container.querySelector(".context-network-card.is-live")?.textContent).toContain("Nova");
@@ -234,6 +239,9 @@ describe("ContextPage DOM behavior", () => {
         },
         agents: [],
         recentEvents: [],
+        writes: [],
+        writesTotal: 0,
+        skipped: { windowDays: 7, totalEventCount: 0, reasons: [] },
       },
       nodes: MOCK_CONTEXT_SNAPSHOT.nodes.map((node) => ({ ...node, changeType: null, changedAtCommit: null })),
       updates: [],
@@ -246,6 +254,54 @@ describe("ContextPage DOM behavior", () => {
     // snapshot shows the header LIVE chip even with zero reads/writes / no
     // events (the streaming IO feed is what hides when empty).
     expect(container.textContent).toContain("LIVE");
+    await act(async () => root.unmount());
+  });
+
+  it("renders git-derived writes (PR, risk, attribution) and filters reads vs writes", async () => {
+    vi.setSystemTime(new Date("2026-05-28T12:15:00.000Z"));
+    const { ContextPage } = await import("../context.js");
+    // MOCK_CONTEXT_SNAPSHOT.io carries 3 sample writes + 3 reads.
+    const { container, root } = await renderDom(<ContextPage previewSnapshot={snapshot()} />);
+
+    const feed = container.querySelector(".context-usage-feed");
+    expect(feed).not.toBeNull();
+
+    // Default All: both a write row and a read row are present.
+    const writeRows = () => [...container.querySelectorAll(".context-usage-feed-row.is-write")];
+    const readRows = () =>
+      [...container.querySelectorAll(".context-usage-feed-row")].filter((row) => !row.classList.contains("is-write"));
+    expect(writeRows().length).toBeGreaterThan(0);
+    expect(readRows().length).toBeGreaterThan(0);
+
+    // Agent-attributed write carries the PR chip as a real GitHub link + summary.
+    const prLinks = [...container.querySelectorAll<HTMLAnchorElement>("a.context-usage-feed-pr")];
+    const pr514 = prLinks.find((link) => link.textContent === `#${514}`);
+    expect(pr514).toBeDefined();
+    expect(pr514?.getAttribute("href")).toContain("/pull/514");
+    expect(container.textContent).toContain("record team deletion semantics");
+
+    // Unmatched git author (a PR merge) is shown honestly as the git author,
+    // with the high-risk badge on the removal.
+    expect(container.textContent).toContain("yuezengwu");
+    expect(container.textContent).toContain("git author");
+    expect(container.querySelector(".context-usage-feed-risk.is-high")).not.toBeNull();
+
+    // Root write (empty node path) renders a friendly label, never a blank target.
+    const rootWriteRow = writeRows().find((row) => row.textContent?.includes("refresh the root index"));
+    expect(rootWriteRow).toBeDefined();
+    expect(rootWriteRow?.querySelector(".context-usage-feed-node")).toBeNull();
+    expect(rootWriteRow?.textContent).toContain("the Context Tree");
+
+    // Filter → Writes: only write rows remain.
+    await click(buttonByText(container, "Writes"));
+    expect(readRows().length).toBe(0);
+    expect(writeRows().length).toBeGreaterThan(0);
+
+    // Filter → Reads: writes disappear, PR chip gone.
+    await click(buttonByText(container, "Reads"));
+    expect(writeRows().length).toBe(0);
+    expect(container.querySelector("a.context-usage-feed-pr")).toBeNull();
+
     await act(async () => root.unmount());
   });
 

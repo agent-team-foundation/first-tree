@@ -9,11 +9,14 @@
  *
  * Behaviour:
  *
- *   - PR `closed` + merged   → `entity_state = 'merged'`
- *   - PR `closed` + un-merged → `entity_state = 'closed'`
- *   - PR `reopened`          → `entity_state = 'open'`
- *   - Issue `closed`         → `entity_state = 'closed'`
- *   - Issue `reopened`       → `entity_state = 'open'`
+ *   - PR `opened/reopened` while draft → `entity_state = 'draft'`
+ *   - PR `opened/reopened` otherwise   → `entity_state = 'open'`
+ *   - PR `converted_to_draft`          → `entity_state = 'draft'`
+ *   - PR `ready_for_review`            → `entity_state = 'open'`
+ *   - PR `closed` + merged             → `entity_state = 'merged'`
+ *   - PR `closed` + un-merged          → `entity_state = 'closed'`
+ *   - Issue `opened/reopened`          → `entity_state = 'open'`
+ *   - Issue `closed`                   → `entity_state = 'closed'`
  *
  * Idempotent under webhook retries: writes are scoped to
  * `(organization_id, entity_type, entity_key)`, the mapping table's natural
@@ -24,7 +27,13 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 
-export type EntityState = "open" | "closed" | "merged";
+export type EntityState = "open" | "draft" | "closed" | "merged";
+
+export type EntityStateSeed = {
+  entityType: "pull_request" | "issue";
+  entityKey: string;
+  state: EntityState;
+};
 
 export type SetEntityStateInput = {
   organizationId: string;

@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { AddParticipant, LegacyCreateChat, SendMessage } from "@first-tree/shared";
+import {
+  type AddParticipant,
+  AGENT_STATUSES,
+  AGENT_TYPES,
+  type LegacyCreateChat,
+  type SendMessage,
+} from "@first-tree/shared";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -7,8 +13,9 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { users } from "../db/schema/users.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
-import { agentAvatarImageUrl } from "./agent.js";
+import { resolveAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { resolveChatTitle } from "./me-chat.js";
 import { preflightMessageSendIntent, type SendIntentParticipant, sendMessage } from "./message.js";
@@ -71,6 +78,7 @@ type AgentIdentityForCreate = {
   organizationId: string;
   type: string;
   status: string;
+  memberStatus: string | null;
   visibility: string;
   managerId: string;
 };
@@ -128,10 +136,13 @@ async function createLegacyEmptyChat(
       id: agents.uuid,
       organizationId: agents.organizationId,
       type: agents.type,
+      status: agents.status,
+      memberStatus: members.status,
       visibility: agents.visibility,
       managerId: agents.managerId,
     })
     .from(agents)
+    .leftJoin(members, eq(members.agentId, agents.uuid))
     .where(inArray(agents.uuid, [...allParticipantIds]));
 
   if (existingAgents.length !== allParticipantIds.size) {
@@ -150,6 +161,12 @@ async function createLegacyEmptyChat(
   const crossOrg = existingAgents.filter((a) => a.organizationId !== orgId);
   if (crossOrg.length > 0) {
     throw new BadRequestError(`Cross-organization chat not allowed: ${crossOrg.map((a) => a.id).join(", ")}`);
+  }
+  const inactive = existingAgents.filter(
+    (a) => a.status !== AGENT_STATUSES.ACTIVE || (a.type === AGENT_TYPES.HUMAN && a.memberStatus !== "active"),
+  );
+  if (inactive.length > 0) {
+    throw new BadRequestError(`Cannot create chat with inactive participant "${inactive[0]?.id}".`);
   }
 
   // Owner-exclusive rule for private targets (RFC §4.5, shared-owner
@@ -361,10 +378,12 @@ async function loadAgentsForCreate(db: Database, agentIds: readonly string[]): P
       organizationId: agents.organizationId,
       type: agents.type,
       status: agents.status,
+      memberStatus: members.status,
       visibility: agents.visibility,
       managerId: agents.managerId,
     })
     .from(agents)
+    .leftJoin(members, eq(members.agentId, agents.uuid))
     .where(inArray(agents.uuid, distinct));
   if (rows.length !== distinct.length) {
     const found = new Set(rows.map((a) => a.id));
@@ -419,11 +438,15 @@ function validateCreateParticipants(input: {
     throw new BadRequestError(`Creator agent "${input.caller.id}" is not in organization "${input.organizationId}"`);
   }
   if (input.requireActive) {
-    const inactive = input.participants.filter((a) => a.status !== "active");
+    const inactive = input.participants.filter(
+      (a) => a.status !== AGENT_STATUSES.ACTIVE || (a.type === AGENT_TYPES.HUMAN && a.memberStatus !== "active"),
+    );
     if (inactive.length > 0) {
       const first = inactive[0];
+      if (!first) throw new Error("Unexpected: inactive participant list is empty");
+      const status = first.type === AGENT_TYPES.HUMAN && first.memberStatus !== "active" ? "removed" : first.status;
       throw new BadRequestError(
-        `Cannot create task chat with inactive participant "${first?.displayName ?? first?.id}" (${first?.status}).`,
+        `Cannot create task chat with inactive participant "${first.displayName ?? first.id}" (${status}).`,
       );
     }
   }
@@ -492,9 +515,12 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
       type: agents.type,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      userAvatarUrl: users.avatarUrl,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 
   // Compute server-resolved `title` + `firstMessagePreview` so the agent
@@ -527,7 +553,12 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
     displayName: p.displayName,
     type: p.type,
     avatarColorToken: p.avatarColorToken ?? null,
-    avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
+    avatarImageUrl: resolveAvatarImageUrl({
+      uuid: p.agentId,
+      type: p.type,
+      avatarImageUpdatedAt: p.avatarImageUpdatedAt,
+      userAvatarUrl: p.userAvatarUrl,
+    }),
   }));
 
   // Match the chatDetailSchema wire contract — the chat-first workspace
@@ -611,11 +642,28 @@ export async function listChatParticipantsWithNames(db: Database, chatId: string
       type: agents.type,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      userAvatarUrl: users.avatarUrl,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-  return rows;
+  return rows.map((r) => ({
+    agentId: r.agentId,
+    role: r.role,
+    joinedAt: r.joinedAt,
+    name: r.name,
+    displayName: r.displayName,
+    type: r.type,
+    avatarColorToken: r.avatarColorToken,
+    avatarImageUrl: resolveAvatarImageUrl({
+      uuid: r.agentId,
+      type: r.type,
+      avatarImageUpdatedAt: r.avatarImageUpdatedAt,
+      userAvatarUrl: r.userAvatarUrl,
+    }),
+  }));
 }
 
 export async function assertParticipant(db: Database, chatId: string, agentId: string): Promise<void> {

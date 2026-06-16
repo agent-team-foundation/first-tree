@@ -1,6 +1,5 @@
-import type { MeChatRow } from "@first-tree/shared";
+import type { Agent, MeChatRow } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { LayoutDashboard } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { listMeChats } from "../../../api/me-chats.js";
@@ -20,13 +19,6 @@ import {
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { formatRowTime } from "../../../lib/utils.js";
 
-const STATIC_ROUTES = [
-  { path: "/", label: "Workspace" },
-  { path: "/context", label: "Context" },
-  { path: "/team", label: "Team" },
-  { path: "/settings", label: "Settings" },
-];
-
 /**
  * Empty-query chat count. With no query the palette is a "go back to
  * what I was just doing" surface (Slack/Linear-style recents), not a
@@ -40,6 +32,11 @@ const RECENT_CHAT_LIMIT = 12;
  *  conversation rail's default disc. */
 const ROW_AVATAR_SIZE = 24;
 
+type CommandPaletteDemoData = {
+  chats: MeChatRow[];
+  agents: Agent[];
+};
+
 /**
  * Topbar "Jump to…" palette.
  *
@@ -48,8 +45,9 @@ const ROW_AVATAR_SIZE = 24;
  *   - Chats: `/me/chats` (default engagement, server-paged). Replaces the
  *     prior per-agent `/agents/:uuid/sessions` fan-out, which issued one
  *     request per managed agent.
- *   - Agents: `useOrgAgents` (`/agents?limit=100`), the same cache used by
- *     the participant picker and identity maps.
+ *   - Teammates: `useOrgAgents` (`/agents?limit=100`, no type filter — the
+ *     roster carries human members and agents alike), the same cache used
+ *     by the participant picker and identity maps.
  *
  * Filtering is handled by `cmdk`. Each item splits its searchable text
  * between `value` (primary identity: visible title + a uniquifying id —
@@ -58,7 +56,16 @@ const ROW_AVATAR_SIZE = 24;
  * above `keywords` matches, so a title hit ranks ahead of a
  * participant-name hit without any custom filter.
  */
-export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function CommandPalette({
+  open,
+  onOpenChange,
+  demoData,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** DEV preview injection. Production callers leave this undefined. */
+  demoData?: CommandPaletteDemoData;
+}) {
   const navigate = useNavigate();
   const { agentId: selfAgentId } = useAuth();
 
@@ -70,10 +77,10 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     if (!open) setSearch("");
   }, [open]);
 
-  const { data: orgAgents } = useOrgAgents();
-  const agents = orgAgents?.items ?? [];
+  const { data: orgAgents, isLoading: orgAgentsLoading } = useOrgAgents({ enabled: demoData === undefined });
+  const agents = demoData?.agents ?? orgAgents?.items ?? [];
 
-  const { data: chatsResp, isLoading: chatsLoading } = useQuery({
+  const { data: chatsResp, isLoading: queryChatsLoading } = useQuery({
     // Prefix-aligned with conversations-page invalidations
     // (`["me", "chats"]` is the family every chat mutation invalidates —
     // new-chat-draft, row-engagement-menu, etc.) so creating / archiving
@@ -85,25 +92,28 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
     // an old conversation is a common reason to open the palette.
     queryKey: ["me", "chats", "palette"],
     queryFn: () => listMeChats({ limit: 100, engagement: "all" }),
-    enabled: open,
+    enabled: open && demoData === undefined,
     staleTime: 30_000,
   });
+  const chatsLoading = demoData === undefined && queryChatsLoading;
+  const agentsLoading = demoData === undefined && orgAgentsLoading;
 
   // Most-recently-active first, regardless of the API's order — recency
   // is the palette's organizing principle (jump back to live work).
   // Never-messaged chats (null lastMessageAt) sink to the end.
   const chats = useMemo(() => {
-    const rows = chatsResp?.rows ?? [];
+    const rows = demoData?.chats ?? chatsResp?.rows ?? [];
     return [...rows].sort((a, b) => {
       if (a.lastMessageAt === b.lastMessageAt) return 0;
       if (a.lastMessageAt === null) return 1;
       if (b.lastMessageAt === null) return -1;
       return a.lastMessageAt < b.lastMessageAt ? 1 : -1;
     });
-  }, [chatsResp]);
+  }, [chatsResp, demoData]);
 
   const browsing = search.trim().length === 0;
   const visibleChats = browsing ? chats.slice(0, RECENT_CHAT_LIMIT) : chats;
+  const paletteLoading = chatsLoading || agentsLoading;
 
   const go = (url: string) => {
     onOpenChange(false);
@@ -112,9 +122,9 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
-      <CommandInput placeholder="Jump to chat or agent…" value={search} onValueChange={setSearch} />
+      <CommandInput placeholder="Jump to chat or teammate…" value={search} onValueChange={setSearch} />
       <CommandList>
-        <CommandEmpty>No results</CommandEmpty>
+        {!paletteLoading && <CommandEmpty>No results</CommandEmpty>}
 
         {chatsLoading && (
           <CommandLoading>
@@ -139,8 +149,10 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 
         {agents.length > 0 && (
           <>
-            <CommandSeparator />
-            <CommandGroup heading="Agents">
+            {visibleChats.length > 0 && <CommandSeparator />}
+            {/* "Teammates", not "Agents" — the unfiltered roster carries
+                human members and agents alike, and both are jumpable. */}
+            <CommandGroup heading="Teammates">
               {agents.map((a) => (
                 <CommandItem
                   key={a.uuid}
@@ -163,16 +175,6 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             </CommandGroup>
           </>
         )}
-
-        <CommandSeparator />
-        <CommandGroup heading="Pages">
-          {STATIC_ROUTES.map((r) => (
-            <CommandItem key={r.path} value={r.label} onSelect={() => go(r.path)}>
-              <LayoutDashboard className="mr-2 h-4 w-4 shrink-0 opacity-70" />
-              <span>{r.label}</span>
-            </CommandItem>
-          ))}
-        </CommandGroup>
       </CommandList>
       <div className="text-caption text-muted-foreground flex items-center gap-3 border-t px-3 py-1.5">
         <KeyHint keys="↑↓" label="navigate" />

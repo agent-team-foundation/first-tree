@@ -26,17 +26,39 @@ type SinkFixtures = {
   trigger: Trigger | null;
   sendMessage?: ReturnType<typeof vi.fn>;
   getSelfFence?: () => Promise<SelfFence | null>;
+  /** Defaults to a real org id so doc capture is enabled when a self-fence is
+   *  also provided. Pass `null` to disable capture. */
+  orgId?: string | null;
 };
+
+const FAKE_ORG_ID = "11111111-1111-4111-8111-111111111111";
+
+function fakeUploadId(seq: number): string {
+  return `00000000-0000-4000-8000-${seq.toString(16).padStart(12, "0")}`;
+}
 
 function buildSink(fx: SinkFixtures) {
   const sendMessage = fx.sendMessage ?? vi.fn().mockResolvedValue(undefined);
   const logs: string[] = [];
 
   let trigger = fx.trigger;
+  let seq = 0;
+  // Stub the SDK upload the sink calls during doc capture; mints deterministic
+  // uuid-shaped ids so the rewritten `attachment:<id>` links are assertable.
+  const uploadAttachment = vi.fn(
+    async (o: { bytes: Uint8Array | Buffer; mimeType: string; filename: string; orgId: string }) => {
+      seq += 1;
+      const bytes = Buffer.from(o.bytes);
+      return { id: fakeUploadId(seq), mimeType: o.mimeType, filename: o.filename, sizeBytes: bytes.byteLength };
+    },
+  );
   const sdk = {
     serverUrl: "http://test",
     sendMessage,
+    uploadAttachment,
   } as unknown as FirstTreeHubSDK;
+
+  const orgId = fx.orgId === undefined ? FAKE_ORG_ID : fx.orgId;
 
   const sink = createResultSink({
     sdk,
@@ -56,9 +78,10 @@ function buildSink(fx: SinkFixtures) {
     },
     log: (msg) => logs.push(msg),
     getSelfFence: fx.getSelfFence,
+    getOrgId: async () => orgId,
   });
 
-  return { sink, sendMessage, logs };
+  return { sink, sendMessage, uploadAttachment, logs };
 }
 
 describe("createResultSink — forwardResult enrichment", () => {
@@ -116,7 +139,7 @@ describe("createResultSink — forwardResult enrichment", () => {
     expect(body.metadata?.mentions).toBeUndefined();
   });
 
-  describe("inline snapshot variant", () => {
+  describe("attachment-ref capture variant", () => {
     let worktree: string;
 
     beforeAll(async () => {
@@ -125,8 +148,6 @@ describe("createResultSink — forwardResult enrichment", () => {
       await writeFile(join(worktree, "api.md"), "# api\n", "utf8");
       await mkdir(join(worktree, "docs"), { recursive: true });
       await writeFile(join(worktree, "docs", "intro.md"), "# intro\n", "utf8");
-      // For symlink escape test: a "public" link whose realpath actually lives
-      // inside `.agent/`.
       await mkdir(join(worktree, ".agent"), { recursive: true });
       await writeFile(join(worktree, ".agent", "secret.md"), "# secret\n", "utf8");
       await symlink(join(worktree, ".agent", "secret.md"), join(worktree, "public.md"));
@@ -136,8 +157,8 @@ describe("createResultSink — forwardResult enrichment", () => {
       await rm(worktree, { recursive: true, force: true });
     });
 
-    it("emits kind=snapshot when basePath resolves and the text references a real .md", async () => {
-      const { sink, sendMessage } = buildSink({
+    it("attaches an AttachmentRef and rewrites to an attachment link when a real .md is referenced", async () => {
+      const { sink, sendMessage, uploadAttachment } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
         getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
       });
@@ -145,26 +166,20 @@ describe("createResultSink — forwardResult enrichment", () => {
       await sink("see [design](design.md)");
 
       const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: {
-          documentContext?: {
-            kind?: string;
-            docs?: Array<{ path: string; content: string; size: number; sha256: string }>;
-          };
-        };
+        content?: string;
+        metadata?: { attachments?: Array<{ kind: string; source?: { path: string }; sha256?: string; size: number }> };
       };
-      expect(body.metadata?.documentContext?.kind).toBe("snapshot");
-      expect(body.metadata?.documentContext?.docs).toHaveLength(1);
-      const [doc] = body.metadata?.documentContext?.docs ?? [];
-      expect(doc?.path).toBe("design.md");
-      expect(doc?.content).toBe("# design\n\nbody.\n");
-      expect(doc?.size).toBe(16);
-      expect(doc?.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(body.metadata?.attachments).toHaveLength(1);
+      const [ref] = body.metadata?.attachments ?? [];
+      expect(ref?.kind).toBe("document");
+      expect(ref?.source?.path).toBe("design.md");
+      expect(ref?.size).toBe(16);
+      expect(ref?.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(body.content).toBe(`see [design](attachment:${fakeUploadId(1)})`);
+      expect(uploadAttachment).toHaveBeenCalledTimes(1);
     });
 
-    it("emits kind=snapshot for a bare `.md` mention (no inline markdown link wrapping)", async () => {
-      // Web-side `linkifyMarkdownDocPaths` wraps the same bare token as
-      // `[design.md](design.md)` before rendering — both sides must produce
-      // the same canonical key so the click hits the snapshot in cache.
+    it("captures a bare `.md` mention and rewrites it to an explicit attachment link", async () => {
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
         getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
@@ -173,27 +188,30 @@ describe("createResultSink — forwardResult enrichment", () => {
       await sink("created design.md just now");
 
       const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: { documentContext?: { kind?: string; docs?: Array<{ path: string }> } };
+        content?: string;
+        metadata?: { attachments?: Array<{ source?: { path: string } }> };
       };
-      expect(body.metadata?.documentContext?.kind).toBe("snapshot");
-      expect(body.metadata?.documentContext?.docs?.map((d) => d.path)).toEqual(["design.md"]);
+      expect(body.metadata?.attachments?.map((a) => a.source?.path)).toEqual(["design.md"]);
+      expect(body.content).toBe(`created [design.md](attachment:${fakeUploadId(1)}) just now`);
     });
 
-    it("strips :line[:col] from bare paths so snapshot keys match what the click handler resolves", async () => {
-      const { sink, sendMessage } = buildSink({
+    it("disables capture (no attachments) when the org id is unresolvable", async () => {
+      const { sink, sendMessage, uploadAttachment } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
         getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
+        orgId: null,
       });
 
-      await sink("see docs/intro.md:42:1 for details");
+      await sink("see [design](design.md)");
 
-      const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: { documentContext?: { kind?: string; docs?: Array<{ path: string }> } };
-      };
-      expect(body.metadata?.documentContext?.docs?.map((d) => d.path)).toEqual(["docs/intro.md"]);
+      const body = sendMessage.mock.calls[0]?.[1] as { content?: string; metadata?: unknown };
+      expect(body.metadata).toBeUndefined();
+      // Body untouched — the mention stays plain text.
+      expect(body.content).toBe("see [design](design.md)");
+      expect(uploadAttachment).not.toHaveBeenCalled();
     });
 
-    it("rejects dotfiles / hidden dirs and attaches NO documentContext when no docs survive", async () => {
+    it("rejects dotfiles / hidden dirs and attaches no metadata when nothing survives", async () => {
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
         getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
@@ -201,13 +219,8 @@ describe("createResultSink — forwardResult enrichment", () => {
 
       await sink("hidden: [secret](.agent/secret.md)");
 
-      const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: { documentContext?: unknown };
-      };
-      // The hidden path is rejected, leaving zero snapshots — and we no longer
-      // emit the legacy `kind:"path"` fallback (which would leak the worktree
-      // absolute path into history), so there is no documentContext at all.
-      expect(body.metadata?.documentContext).toBeUndefined();
+      const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { attachments?: unknown } };
+      expect(body.metadata?.attachments).toBeUndefined();
     });
 
     it("emits failedMentions for unresolved bare doc mentions", async () => {
@@ -224,9 +237,7 @@ describe("createResultSink — forwardResult enrichment", () => {
       expect(body.metadata?.documentContext?.failedMentions).toEqual([{ raw: "docs/missing.md", reason: "missing" }]);
     });
 
-    it("stores canonical workspace-relative paths so web cache lookup matches", async () => {
-      // `./docs/intro.md` and `docs/intro.md` should both store as `docs/intro.md`,
-      // matching what `docPreviewPathFromHref` produces for a click.
+    it("stores canonical workspace-relative source paths", async () => {
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
         getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
@@ -235,19 +246,12 @@ describe("createResultSink — forwardResult enrichment", () => {
       await sink("see [a](./docs/intro.md) and [b](./other/../docs/intro.md)");
 
       const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: {
-          documentContext?: {
-            docs?: Array<{ path: string }>;
-          };
-        };
+        metadata?: { attachments?: Array<{ source?: { path: string } }> };
       };
-      const paths = body.metadata?.documentContext?.docs?.map((d) => d.path) ?? [];
-      expect(paths).toEqual(["docs/intro.md"]);
+      expect(body.metadata?.attachments?.map((a) => a.source?.path)).toEqual(["docs/intro.md"]);
     });
 
     it("rejects symlinks whose realpath crosses into a hidden directory", async () => {
-      // public.md is a symlink → .agent/secret.md. Link-path segments alone
-      // would pass; realpath-relative segments must fail.
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
         getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
@@ -255,28 +259,14 @@ describe("createResultSink — forwardResult enrichment", () => {
 
       await sink("see [public](public.md)");
 
-      const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: { documentContext?: unknown };
-      };
-      // Symlink target is rejected → zero snapshots → no documentContext (the
-      // legacy kind:"path" fallback that leaked the worktree path is gone).
-      expect(body.metadata?.documentContext).toBeUndefined();
+      const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { attachments?: unknown } };
+      expect(body.metadata?.attachments).toBeUndefined();
     });
 
-    it("stores size that matches Buffer.byteLength(content, utf8) so server validation never rejects a malformed-UTF-8 file", async () => {
-      // Reviewer-flagged regression: when a `.md` file contains invalid
-      // UTF-8 bytes, `buf.toString("utf8")` substitutes U+FFFD, so the raw
-      // byte length drifts from the re-encoded byte length. If runtime
-      // ships raw bytes as `size` but server recomputes from `content`,
-      // sendMessage fails with BadRequestError("size does not match
-      // content"). Pin runtime + server to the SAME algorithm so a
-      // broken-encoding markdown file degrades to a preview-with-FFFD
-      // rather than a hard send failure.
-      const malformed = Buffer.concat([
-        Buffer.from("# title\n", "utf8"),
-        Buffer.from([0xff, 0xfe, 0xfd]), // invalid UTF-8 bytes
-      ]);
+    it("ref size matches Buffer.byteLength(content, utf8) for a malformed-UTF-8 file (server size check)", async () => {
+      const malformed = Buffer.concat([Buffer.from("# title\n", "utf8"), Buffer.from([0xff, 0xfe, 0xfd])]);
       await writeFile(join(worktree, "broken.md"), malformed);
+      const expectedSize = Buffer.byteLength(Buffer.from(malformed).toString("utf8"), "utf8");
 
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
@@ -286,25 +276,14 @@ describe("createResultSink — forwardResult enrichment", () => {
       await sink("see [broken](broken.md)");
 
       const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: {
-          documentContext?: {
-            docs?: Array<{ path: string; content: string; size: number }>;
-          };
-        };
+        metadata?: { attachments?: Array<{ source?: { path: string }; size: number }> };
       };
-      const [doc] = body.metadata?.documentContext?.docs ?? [];
-      expect(doc?.path).toBe("broken.md");
-      // The cardinal invariant: declared size MUST equal the server's
-      // recomputation of Buffer.byteLength(content, "utf8").
-      expect(doc?.size).toBe(Buffer.byteLength(doc?.content ?? "", "utf8"));
+      const [ref] = body.metadata?.attachments ?? [];
+      expect(ref?.source?.path).toBe("broken.md");
+      expect(ref?.size).toBe(expectedSize);
     });
 
-    it("ignores external-link hrefs (https / mailto / scheme-relative) even when a matching file exists on disk", async () => {
-      // Defence in depth: if an agent emits `[doc](https://x.com/api.md)` and
-      // the workspace happens to contain `https:/x.com/api.md`, the runtime
-      // must NOT canonicalise the URL into a workspace path. We pre-create
-      // that exact path to prove the guard is structural and not just
-      // accidentally-by-missing-file.
+    it("ignores external-link hrefs even when a matching file exists on disk", async () => {
       await mkdir(join(worktree, "https:", "x.com"), { recursive: true });
       await writeFile(join(worktree, "https:", "x.com", "api.md"), "# evil\n", "utf8");
 
@@ -315,12 +294,8 @@ describe("createResultSink — forwardResult enrichment", () => {
 
       await sink("see [evil](https://x.com/api.md) and [also](//x.com/a.md) and [mail](mailto:a@b.md)");
 
-      const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: { documentContext?: unknown };
-      };
-      // None of the three hrefs is a workspace path → zero snapshots → no
-      // documentContext (no legacy kind:"path" fallback).
-      expect(body.metadata?.documentContext).toBeUndefined();
+      const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { attachments?: unknown } };
+      expect(body.metadata?.attachments).toBeUndefined();
     });
 
     it("ignores escaped link `\\[...](path.md)` and image link `![alt](path.md)`", async () => {
@@ -331,17 +306,11 @@ describe("createResultSink — forwardResult enrichment", () => {
 
       await sink("escaped: \\[design](design.md) and image: ![diagram](api.md)");
 
-      const body = sendMessage.mock.calls[0]?.[1] as {
-        metadata?: { documentContext?: unknown };
-      };
-      // Neither escaped nor image triggers snapshot emission → zero snapshots
-      // → no documentContext (no legacy kind:"path" fallback).
-      expect(body.metadata?.documentContext).toBeUndefined();
+      const body = sendMessage.mock.calls[0]?.[1] as { metadata?: { attachments?: unknown } };
+      expect(body.metadata?.attachments).toBeUndefined();
     });
 
-    it("sends content with referenced docs rewritten to explicit links (Option R wiring)", async () => {
-      // The sink must forward `rewrittenText`, not the agent's original body, so
-      // web renders a native link whose href is the snapshot key.
+    it("forwards the rewritten body (not the original) so web renders the attachment link", async () => {
       const { sink, sendMessage } = buildSink({
         trigger: { messageId: "m1", senderId: "agent-peer" },
         getSelfFence: vi.fn().mockResolvedValue({ agentHome: worktree } satisfies SelfFence),
@@ -351,12 +320,9 @@ describe("createResultSink — forwardResult enrichment", () => {
       await sink(`done — wrote ${abs} for review`);
 
       const [, body] = sendMessage.mock.calls[0] ?? [];
-      const sent = body as {
-        content?: string;
-        metadata?: { documentContext?: { docs?: Array<{ path: string }> } };
-      };
-      expect(sent.content).toBe("done — wrote [design.md](design.md) for review");
-      expect(sent.metadata?.documentContext?.docs?.map((d) => d.path)).toEqual(["design.md"]);
+      const sent = body as { content?: string; metadata?: { attachments?: Array<{ source?: { path: string } }> } };
+      expect(sent.content).toBe(`done — wrote [design.md](attachment:${fakeUploadId(1)}) for review`);
+      expect(sent.metadata?.attachments?.map((a) => a.source?.path)).toEqual(["design.md"]);
     });
   });
 

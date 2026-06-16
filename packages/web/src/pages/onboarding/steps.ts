@@ -156,7 +156,7 @@ export type OnboardingGateFacts = {
    * through create-agent for that org.
    */
   currentOrgReady: boolean;
-  onboardingDismissedAt: string | null;
+  onboardingSuppressedAt: string | null;
 };
 
 /**
@@ -172,13 +172,14 @@ export type OnboardingGateFacts = {
  *      already-onboarded user still get walked through create-agent when
  *      they join a brand-new or all-private org.
  *
- * A user who explicitly dismissed onboarding ("finish later") is never
- * bounced. Note there is deliberately no account-level "completed" escape
- * hatch anymore — readiness is always evaluated against the current org.
+ * A membership that already suppressed auto-open (finish later, invitee skip,
+ * or normal completion) is never bounced. Note there is deliberately no
+ * account-level "completed" escape hatch anymore — readiness is always
+ * evaluated against the current org.
  */
 export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
   if (!facts.meLoaded) return false;
-  if (facts.onboardingDismissedAt) return false;
+  if (facts.onboardingSuppressedAt) return false;
   // A null step means /me hasn't reported one (e.g. a transient failure after
   // meLoaded flipped) — don't bounce on incomplete data.
   if (facts.onboardingStep === null) return false;
@@ -197,7 +198,7 @@ export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
  * an org without a usable agent, is allowed to stay and work through the
  * wizard (including a "finish later"-dismissed user who deliberately
  * returned via "Resume"). Mirror image of `shouldEnterOnboarding` minus the
- * dismiss escape hatch, so the two can't fight over the same user.
+ * suppress escape hatch, so the two can't fight over the same user.
  */
 export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
   if (!facts.meLoaded) return false;

@@ -181,20 +181,31 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
 
   const completeAndEnterChat = useCallback(
     async (chatId: string) => {
-      // Hide the inline workspace stepper AND stamp the terminal flag, then
-      // land in the freshly-created chat. Both writes are idempotent and
-      // already flip optimistic client state, so run them in parallel and
+      // Stamp the terminal flag, then land in the freshly-created chat. The
+      // write is idempotent and already flips optimistic client state, so
       // never let a transient failure strand the user — always navigate.
+      //
+      // Deliberately NOT `dismissOnboarding()`: completion now writes a
+      // membership-scoped suppress stamp with reason="completed". Reusing the
+      // finish-later path here would blur the reason semantics that keep new
+      // memberships eligible for first-need onboarding.
       clearPersistedStep(path);
       // Clear the per-tab agent-uuid stash now that the kickoff has resolved and
       // used it — so a later same-tab onboarding/recovery in a DIFFERENT org
       // can't read a stale cross-org agent (the org filter in
       // resolveOnboardingAgent only catches that when the org id is known).
       writeOnboardingAgentUuid(null);
-      await Promise.allSettled([dismissOnboarding(), markOnboardingCompleted()]);
+      try {
+        await markOnboardingCompleted();
+      } catch {
+        // Intentionally swallowed: the completion stamp is best-effort at
+        // this point. The API helper already catches its own failures, but
+        // keep the always-navigate invariant local to this flow rather than
+        // depending on a callee's error handling.
+      }
       navigate(`/?c=${encodeURIComponent(chatId)}`);
     },
-    [path, dismissOnboarding, markOnboardingCompleted, navigate],
+    [path, markOnboardingCompleted, navigate],
   );
 
   const finishLater = useCallback(async () => {

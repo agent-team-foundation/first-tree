@@ -65,7 +65,7 @@ export function ReasoningEffortSection({
   const presetOptions = EFFORT_OPTIONS_BY_PROVIDER[provider];
 
   const items = useMemo<SelectOption[]>(() => {
-    // Surface an unrecognized stored value (e.g. after a provider rebind) so
+    // Surface an unrecognized stored value (e.g. a provider-specific effort) so
     // the dropdown still shows the current selection instead of silently
     // snapping to the first option.
     if (value !== "" && !presetOptions.some((o) => o.value === value)) {

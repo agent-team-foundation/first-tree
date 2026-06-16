@@ -6,6 +6,7 @@ export {
   type BriefingFingerprint,
   findAssembledBriefingFingerprint,
 } from "./agent-briefing-guard.js";
+export { canonicalGitRepoUrl } from "./canonical-git-repo-url.js";
 // -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
 export {
@@ -60,8 +61,6 @@ export {
   legacyWireAgentTypeSchema,
   listAgentsQuerySchema,
   RESERVED_AGENT_NAMES,
-  type RebindAgent,
-  rebindAgentSchema,
   type UpdateAgent,
   updateAgentSchema,
 } from "./schemas/agent.js";
@@ -96,6 +95,7 @@ export {
   type McpSseServer,
   type McpStdioServer,
   mcpServerSchema,
+  normalizeRepoLocalPath,
   PROMPT_APPEND_MAX_LENGTH,
   type PromptConfig,
   type PromptSection,
@@ -134,6 +134,16 @@ export {
   type UploadAttachmentResponse,
   uploadAttachmentResponseSchema,
 } from "./schemas/attachment.js";
+export {
+  ATTACHMENT_KINDS,
+  type AttachmentKind,
+  type AttachmentRef,
+  attachmentKindSchema,
+  attachmentRefSchema,
+  attachmentRefsFromMetadata,
+  isAttachmentRef,
+  MAX_MESSAGE_ATTACHMENT_REFS,
+} from "./schemas/attachment-ref.js";
 export {
   type ConnectTokenExchange,
   type ConnectTokenResponse,
@@ -232,10 +242,14 @@ export {
   CAPABILITY_STATES,
   type CapabilityAuthMethod,
   type CapabilityEntry,
+  type CapabilityProbeKind,
+  type CapabilityRuntimeSource,
   type CapabilityState,
   type ClientCapabilities,
   capabilityAuthMethodSchema,
   capabilityEntrySchema,
+  capabilityProbeKindSchema,
+  capabilityRuntimeSourceSchema,
   capabilityStateSchema,
   clientCapabilitiesSchema,
   type UpdateClientCapabilities,
@@ -261,6 +275,9 @@ export {
   type ContextTreeIoAgentSummary,
   type ContextTreeIoBucket,
   type ContextTreeIoEvent,
+  type ContextTreeIoSkipBreakdown,
+  type ContextTreeIoSkipReason,
+  type ContextTreeIoSkipSummary,
   type ContextTreeIoSource,
   type ContextTreeIoSummary,
   type ContextTreeIoTargetKind,
@@ -275,6 +292,7 @@ export {
   type ContextTreeUpdate,
   type ContextTreeUsageEvent,
   type ContextTreeUsageSummary,
+  type ContextTreeWriteEvent,
   contextTreeChangeSchema,
   contextTreeChangeTypeSchema,
   contextTreeEdgeKindSchema,
@@ -283,6 +301,9 @@ export {
   contextTreeIoAgentSummarySchema,
   contextTreeIoBucketSchema,
   contextTreeIoEventSchema,
+  contextTreeIoSkipBreakdownSchema,
+  contextTreeIoSkipReasonSchema,
+  contextTreeIoSkipSummarySchema,
   contextTreeIoSourceSchema,
   contextTreeIoSummarySchema,
   contextTreeIoTargetKindSchema,
@@ -297,6 +318,7 @@ export {
   contextTreeUpdateSchema,
   contextTreeUsageEventSchema,
   contextTreeUsageSummarySchema,
+  contextTreeWriteEventSchema,
   type InitializeContextTreeRequest,
   type InitializeContextTreeResponse,
   initializeContextTreeRequestSchema,
@@ -435,18 +457,15 @@ export {
   type GetMeDocResponse,
   getMeDocResponseSchema,
   getMeDocSchema,
-  MAX_DOC_SNAPSHOT_BYTES,
-  MAX_DOC_SNAPSHOTS_PER_MESSAGE,
   MAX_FAILED_DOC_MENTION_RAW_LEN,
   MAX_FAILED_DOC_MENTIONS_PER_MESSAGE,
-  MAX_TOTAL_DOC_SNAPSHOT_BYTES,
-  type SnapshotDoc,
-  snapshotDocSchema,
   type WorkspaceDocRef,
   workspaceDocRefSchema,
 } from "./schemas/me-doc.js";
 export {
+  type CompleteOnboarding,
   type CreateOrgFromMe,
+  completeOnboardingSchema,
   createOrgFromMeSchema,
   type MeMembership,
   meMembershipSchema,
@@ -744,6 +763,7 @@ export {
 } from "./schemas/user.js";
 export { type WebhookSource, webhookSourceSchema } from "./schemas/webhook-source.js";
 export {
+  SOURCE_REPOS_DIRNAME,
   WORKSPACE_MANIFEST_FILENAME,
   WORKSPACE_STATE_DIRNAME,
   type WorkspaceManifest,

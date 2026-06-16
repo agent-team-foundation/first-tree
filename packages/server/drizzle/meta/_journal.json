@@ -435,6 +435,34 @@
       "when": 1781162100000,
       "tag": "0061_backfill_legacy_discussion_entity_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1781253930999,
+      "tag": "0062_clear_onboarding_dismiss_completion_artifact",
+      "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1781265181404,
+      "tag": "0063_flat_omega_flight",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1781575626795,
+      "tag": "0064_superb_betty_brant",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1781592028868,
+      "tag": "0065_outgoing_penance",
+      "breakpoints": true
     }
   ]
 }

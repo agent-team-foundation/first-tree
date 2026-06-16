@@ -88,7 +88,6 @@ function createContext(overrides: Partial<AgentDetailContext> = {}): AgentDetail
     boundClientLabel: "gandy-macbook",
     setupRuntimeProvider: "claude-code",
     onOpenBindDialog: () => undefined,
-    onOpenRebindDialog: () => undefined,
     bindClientPending: false,
     saveIdentity: async () => undefined,
     refreshAgent: async () => undefined,

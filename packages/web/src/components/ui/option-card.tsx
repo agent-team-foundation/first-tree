@@ -11,8 +11,8 @@ import { cn } from "../../lib/utils.js";
  *
  * Design language (DESIGN.md §2 near-monochrome, §13 a11y):
  *   - Selected and unselected share the SAME faint `border-border` hairline —
- *     selection is signalled by a *filled* neutral dot + a very light ink
- *     tint, not by a heavier/darker border.
+ *     selection is signalled by a *filled* neutral dot + a light ink tint
+ *     (~10%) + medium label weight, not by a heavier/darker border.
  *   - The real `<input>` is `sr-only`; the custom dot is the visual. Keyboard
  *     focus deepens the card's own border to `--ring` via `:focus-within`
  *     (a single line — no ringed second frame), matching `Input`.
@@ -28,7 +28,10 @@ const optionCardVariants = cva(
         pill: "items-center gap-2 px-3 py-1.5",
       },
       selected: {
-        true: "bg-foreground/5",
+        // Tint at 10% + medium label weight: clearly apart from the unselected
+        // hover wash (accent/30) at a glance, still neutral-ink per §7 — the
+        // border stays the same hairline, selection never colors it.
+        true: "bg-foreground/10 font-medium",
         false: "hover:bg-accent/30",
       },
       disabled: {
@@ -71,7 +74,7 @@ export function OptionCard({
           checked ? "border-foreground" : "border-border-strong",
         )}
       >
-        {checked && <span className="h-1.5 w-1.5 rounded-full bg-foreground" />}
+        {checked && <span className="h-2 w-2 rounded-full bg-foreground" />}
       </span>
       {children}
     </label>

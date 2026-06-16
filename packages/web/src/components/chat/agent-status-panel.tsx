@@ -1,8 +1,8 @@
 import { type AgentChatStatus, type ChatParticipantDetail, compareMainStatus } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Pause } from "lucide-react";
+import { Loader2, Pause, Play } from "lucide-react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
-import { suspendSession } from "../../api/sessions.js";
+import { resumeSession, suspendSession } from "../../api/sessions.js";
 import { viewOf } from "../../lib/agent-status-view.js";
 import { toneOf } from "../../lib/tones.js";
 import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
@@ -88,6 +88,10 @@ export function canPauseStatus(status: AgentChatStatus | null): boolean {
   return status?.main === "working" && status.engagement === "active";
 }
 
+export function canResumeStatus(status: AgentChatStatus | null): boolean {
+  return status?.engagement === "suspended";
+}
+
 function AgentStatusRow({
   chatId,
   agent,
@@ -110,9 +114,18 @@ function AgentStatusRow({
       queryClient.invalidateQueries({ queryKey: ["activity"] });
     },
   });
+  const resumeMut = useMutation({
+    mutationFn: () => resumeSession(agent.agentId, chatId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: chatAgentStatusQueryKey(chatId) });
+      queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["activity"] });
+    },
+  });
 
   const view = status ? viewOf(status.main) : null;
   const showPause = canManage && canPauseStatus(status);
+  const showResume = canManage && canResumeStatus(status);
 
   return (
     <div
@@ -169,6 +182,7 @@ function AgentStatusRow({
       </div>
 
       {showPause ? <PauseButton onClick={() => suspendMut.mutate()} isPending={suspendMut.isPending} /> : null}
+      {showResume ? <ResumeButton onClick={() => resumeMut.mutate()} isPending={resumeMut.isPending} /> : null}
     </div>
   );
 }
@@ -286,6 +300,34 @@ function PauseButton({ onClick, isPending }: { onClick: () => void; isPending: b
         <Pause className="h-3 w-3" aria-hidden="true" fill="currentColor" strokeWidth={0} />
       )}
       {isPending ? "Pausing" : "Pause"}
+    </button>
+  );
+}
+
+function ResumeButton({ onClick, isPending }: { onClick: () => void; isPending: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={isPending}
+      aria-label={isPending ? "Resuming agent" : "Resume agent"}
+      title="Resume this agent in this chat"
+      className="text-label inline-flex shrink-0 items-center transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--fg-2)]"
+      style={{
+        gap: "var(--sp-1)",
+        padding: "var(--sp-0_5) var(--sp-2_25)",
+        borderRadius: "var(--radius-input)",
+        border: "var(--hairline) solid var(--border)",
+        background: isPending ? "var(--bg-sunken)" : "transparent",
+        color: "var(--fg-3)",
+      }}
+    >
+      {isPending ? (
+        <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+      ) : (
+        <Play className="h-3 w-3" aria-hidden="true" fill="currentColor" strokeWidth={0} />
+      )}
+      {isPending ? "Resuming" : "Resume"}
     </button>
   );
 }

@@ -46,7 +46,10 @@ vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
 vi.mock("../commands/_shared/resolve-agent.js", () => ({ resolveAgent: resolveAgentMock }));
 vi.mock("../commands/_shared/local-agent.js", () => localAgentMocks);
 vi.mock("../core/doc-capture.js", () => docCaptureMock);
-vi.mock("../commands/chat/_shared/io.js", () => ioMocks);
+vi.mock("../commands/chat/_shared/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/chat/_shared/io.js")>()),
+  readStdin: ioMocks.readStdin,
+}));
 vi.mock("../cli/output.js", () => outputMocks);
 vi.mock("../core/output.js", () => ({
   print: { line: printLineMock, result: outputMocks.success, fail: outputMocks.fail },
@@ -188,6 +191,44 @@ describe("chat command behavior", () => {
     });
   });
 
+  it("passes --subject through as the request's dock/card headline", async () => {
+    const sdk = localAgentMocks.createSdk();
+    await runChat([
+      "send",
+      "nova",
+      "Rollout is at 5% and error rate is flat for 24h.",
+      "--request",
+      "--subject",
+      "Rollout gate",
+      "--question",
+      "Ship to 20%?",
+      "--option",
+      "yes",
+    ]);
+
+    expect(sdk.sendMessage).toHaveBeenCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        format: "request",
+        metadata: expect.objectContaining({
+          request: expect.objectContaining({ subject: "Rollout gate" }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects an over-long --question — the wall of text belongs in the body", async () => {
+    await expect(
+      runChat(["send", "nova", "body context", "--request", "--question", "x".repeat(201)]),
+    ).rejects.toMatchObject({ code: "QUESTION_TOO_LONG", exitCode: 2 });
+  });
+
+  it("rejects an over-long --subject — it is a headline, not a summary", async () => {
+    await expect(
+      runChat(["send", "nova", "body context", "--request", "--subject", "s".repeat(81), "--question", "Ship?"]),
+    ).rejects.toMatchObject({ code: "SUBJECT_TOO_LONG", exitCode: 2 });
+  });
+
   it("creates task chats with first-message routing and silent context participants", async () => {
     docCaptureMock.captureOutboundDocs.mockResolvedValueOnce({
       content: "see docs/plan.md",
@@ -213,7 +254,10 @@ describe("chat command behavior", () => {
       "markdown",
     ]);
 
-    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith("see docs/plan.md");
+    expect(docCaptureMock.captureOutboundDocs).toHaveBeenCalledWith(
+      "see docs/plan.md",
+      expect.objectContaining({ sdk }),
+    );
     expect(sdk.createTaskChat).toHaveBeenCalledWith({
       mode: "task",
       initialRecipientAgentIds: [],
@@ -244,6 +288,8 @@ describe("chat command behavior", () => {
       "--agent",
       "worker",
       "--request",
+      "--subject",
+      "Rollout gate",
       "--question",
       "Ship to 20%?",
       "--option",
@@ -261,6 +307,7 @@ describe("chat command behavior", () => {
           content: "stdin message",
           metadata: {
             request: {
+              subject: "Rollout gate",
               questions: [
                 {
                   id: "q1",
@@ -284,6 +331,12 @@ describe("chat command behavior", () => {
       code: "REQUEST_NEEDS_QUESTION",
       exitCode: 2,
     });
+    await expect(
+      runChat(["create", "body", "--request", "--to", "nova", "--question", "x".repeat(201)]),
+    ).rejects.toMatchObject({ code: "QUESTION_TOO_LONG", exitCode: 2 });
+    await expect(
+      runChat(["create", "body", "--request", "--to", "nova", "--subject", "s".repeat(81), "--question", "Ship?"]),
+    ).rejects.toMatchObject({ code: "SUBJECT_TOO_LONG", exitCode: 2 });
   });
 
   it("validates chat create input and treats uncertain create outcomes as non-retryable", async () => {
@@ -353,6 +406,103 @@ describe("chat command behavior", () => {
       exitCode: 2,
     });
     await expect(runChat(["set-topic"])).rejects.toMatchObject({ code: "NOTHING_TO_UPDATE", exitCode: 2 });
+  });
+
+  it("updates topic and description independently via `chat update`", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    await runChat(["update", "--topic", "  Launch plan  ", "--chat", "chat-1", "--agent", "nova"]);
+    expect(localAgentMocks.createSdk).toHaveBeenCalledWith("nova");
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-1", { topic: "Launch plan" });
+
+    await runChat(["update", "--clear-topic"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-env", { topic: null });
+
+    await runChat(["update", "--description", "  reviewing PR #42  ", "--chat", "chat-1"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-1", { description: "reviewing PR #42" });
+
+    await runChat(["update", "--clear-description"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-env", { description: null });
+
+    await runChat(["update", "--topic", "Launch plan", "--description", "drafting steps"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-env", {
+      topic: "Launch plan",
+      description: "drafting steps",
+    });
+
+    await expect(runChat(["update", "--topic", "x", "--clear-topic"])).rejects.toMatchObject({
+      code: "CONFLICTING_ARGS",
+      exitCode: 2,
+    });
+    await expect(runChat(["update", "--description", "x", "--clear-description"])).rejects.toMatchObject({
+      code: "CONFLICTING_ARGS",
+      exitCode: 2,
+    });
+    await expect(runChat(["update", "--topic", "   "])).rejects.toMatchObject({ code: "EMPTY_TOPIC", exitCode: 2 });
+    await expect(runChat(["update", "--description", "   "])).rejects.toMatchObject({
+      code: "EMPTY_DESCRIPTION",
+      exitCode: 2,
+    });
+    await expect(runChat(["update"])).rejects.toMatchObject({ code: "NOTHING_TO_UPDATE", exitCode: 2 });
+
+    delete process.env.FIRST_TREE_CHAT_ID;
+    await expect(runChat(["update", "--topic", "Launch"])).rejects.toMatchObject({
+      code: "NO_CHAT_CONTEXT",
+      exitCode: 2,
+    });
+  });
+
+  it("guards --description against literal \\n escapes on update and create, with a stdin escape hatch", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    // update: a one-line description whose newlines are literal `\n` escapes is
+    // rejected before any write, with a copyable heredoc hint on stderr.
+    await expect(
+      runChat(["update", "--description", "line1\\n\\n**title**\\nline3", "--chat", "chat-1"]),
+    ).rejects.toMatchObject({ code: "ESCAPED_NEWLINES", exitCode: 2 });
+    expect(sdk.updateChat).not.toHaveBeenCalled();
+    const updateHint = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(updateHint).toContain("chat update --description -");
+
+    // Narrow by design: a single escaped `\n` in prose stays writable.
+    await runChat(["update", "--description", "see `\\n` in the logs", "--chat", "chat-1"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-1", { description: "see `\\n` in the logs" });
+
+    // `--description -` reads the description from stdin (real newlines) and
+    // skips the guard — the escape hatch for an intentional literal `\n` body.
+    ioMocks.readStdin.mockResolvedValueOnce("first line\n\n**second** line");
+    await runChat(["update", "--description", "-", "--chat", "chat-1"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-1", { description: "first line\n\n**second** line" });
+
+    // `--description -` with no piped stdin (TTY) is a usage error, not a write.
+    ioMocks.readStdin.mockResolvedValueOnce(null);
+    await expect(runChat(["update", "--description", "-", "--chat", "chat-1"])).rejects.toMatchObject({
+      code: "NO_STDIN",
+      exitCode: 2,
+    });
+
+    // The deprecated `set-topic` / `rename` alias is also a description write
+    // entry point, so it inherits the same guard and `--description -` hatch.
+    await expect(runChat(["set-topic", "--description", "x\\ny\\nz", "--chat", "chat-1"])).rejects.toMatchObject({
+      code: "ESCAPED_NEWLINES",
+      exitCode: 2,
+    });
+    await expect(runChat(["rename", "Launch", "--description", "x\\ny\\nz", "--chat", "chat-1"])).rejects.toMatchObject(
+      { code: "ESCAPED_NEWLINES", exitCode: 2 },
+    );
+    ioMocks.readStdin.mockResolvedValueOnce("alpha\n\nbeta");
+    await runChat(["set-topic", "--description", "-", "--chat", "chat-1"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-1", { description: "alpha\n\nbeta" });
+
+    // create: the same inline guard fires before the chat is created; its hint
+    // points at ANSI-C `$'...'` quoting (stdin is taken by the first message).
+    printLineMock.mockClear();
+    await expect(
+      runChat(["create", "--to", "nova", "hello", "--description", "alpha\\nbeta\\ngamma"]),
+    ).rejects.toMatchObject({ code: "ESCAPED_NEWLINES", exitCode: 2 });
+    expect(sdk.createTaskChat).not.toHaveBeenCalled();
+    const createHint = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(createHint).toContain("$'first line");
   });
 
   it("opens an interactive chat, polls, sends input, handles send failures, and closes cleanly", async () => {

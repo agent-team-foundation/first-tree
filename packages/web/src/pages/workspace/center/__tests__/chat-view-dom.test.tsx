@@ -4,7 +4,7 @@ import type { Agent, ChatDetail, ChatParticipantDetail } from "@first-tree/share
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useNavigate } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../../api/activity.js";
 import type { MessageWithDelivery, PaginatedMessages } from "../../../../api/chats.js";
@@ -16,6 +16,10 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const activityMocks = vi.hoisted(() => ({
   listClients: vi.fn(),
+}));
+
+const markdownMocks = vi.hoisted(() => ({
+  render: vi.fn(),
 }));
 
 const agentStatusMocks = vi.hoisted(() => ({
@@ -108,21 +112,40 @@ vi.mock("../../../../auth/auth-context.js", () => ({
   useAuth: () => authMock.value,
 }));
 
+vi.mock("../../../../components/ui/markdown.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../components/ui/markdown.js")>();
+  return {
+    ...actual,
+    Markdown: (props: import("../../../../components/ui/markdown.js").MarkdownProps) => {
+      markdownMocks.render(props.children);
+      return actual.Markdown(props);
+    },
+  };
+});
+
+function resolveAgentIdentityForTest(id: string | null | undefined) {
+  if (!id) return null;
+  return {
+    name: AGENT_SLUGS[id] ?? id,
+    displayName: AGENT_NAMES[id] ?? id,
+    avatarImageUrl: null,
+    avatarColorToken: id === "agent-1" ? "hue-2" : null,
+  };
+}
+
+function resolveAgentNameForTest(id: string | null | undefined): string {
+  return id ? (AGENT_NAMES[id] ?? id) : "unknown";
+}
+
+function resolveAgentSlugForTest(slug: string | null | undefined): string | null {
+  if (!slug) return null;
+  return Object.entries(AGENT_SLUGS).find(([, value]) => value === slug)?.[0] ?? null;
+}
+
 vi.mock("../../../../lib/use-agent-name-map.js", () => ({
-  useAgentIdentityMap: () => (id: string | null | undefined) => {
-    if (!id) return null;
-    return {
-      name: AGENT_SLUGS[id] ?? id,
-      displayName: AGENT_NAMES[id] ?? id,
-      avatarImageUrl: null,
-      avatarColorToken: id === "agent-1" ? "hue-2" : null,
-    };
-  },
-  useAgentNameMap: () => (id: string | null | undefined) => (id ? (AGENT_NAMES[id] ?? id) : "unknown"),
-  useAgentSlugToIdMap: () => (slug: string | null | undefined) => {
-    if (!slug) return null;
-    return Object.entries(AGENT_SLUGS).find(([, value]) => value === slug)?.[0] ?? null;
-  },
+  useAgentIdentityMap: () => resolveAgentIdentityForTest,
+  useAgentNameMap: () => resolveAgentNameForTest,
+  useAgentSlugToIdMap: () => resolveAgentSlugForTest,
 }));
 
 vi.mock("../../../../lib/use-org-agents.js", () => ({
@@ -249,9 +272,19 @@ const BASE_MESSAGES = messages([
     createdAt: "2026-05-28T11:55:00.000Z",
     metadata: {
       mentions: ["agent-1"],
+      attachments: [
+        {
+          attachmentId: "00000000-0000-4000-8000-000000000001",
+          kind: "document",
+          mimeType: "text/markdown",
+          filename: "plan.md",
+          size: 21,
+          sha256: "a".repeat(64),
+          source: { path: "docs/plan.md" },
+        },
+      ],
       documentContext: {
         kind: "snapshot",
-        docs: [{ path: "docs/plan.md", content: "# Plan\nShip carefully.", sha256: "sha", size: 21 }],
         failedMentions: [{ raw: "secrets.env", reason: "hidden-segment" }],
       },
     },
@@ -264,9 +297,19 @@ const BASE_MESSAGES = messages([
     createdAt: "2026-05-28T11:56:00.000Z",
     deliveryStatus: "acked",
     metadata: {
+      attachments: [
+        {
+          attachmentId: "00000000-0000-4000-8000-000000000001",
+          kind: "document",
+          mimeType: "text/markdown",
+          filename: "plan.md",
+          size: 21,
+          sha256: "a".repeat(64),
+          source: { path: "docs/plan.md" },
+        },
+      ],
       documentContext: {
         kind: "snapshot",
-        docs: [{ path: "docs/plan.md", content: "# Plan\nShip carefully.", sha256: "sha", size: 21 }],
         failedMentions: [{ raw: "secrets.env", reason: "hidden-segment" }],
       },
     },
@@ -469,7 +512,7 @@ function seedChat(
 async function renderDom(
   element: ReactElement,
   seed?: (queryClient: QueryClient) => void,
-  route = "/?docChat=chat-1&docAgent=agent-1&docPath=docs/plan.md",
+  route = "/?docChat=chat-1&docMsg=msg-1&docAttachment=00000000-0000-4000-8000-000000000001",
 ): Promise<{ container: HTMLElement; queryClient: QueryClient; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -652,6 +695,24 @@ afterEach(() => {
 });
 
 describe("ChatView", () => {
+  it("uses matching initial chat detail without an immediate detail refetch", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const initialChatDetail = chatDetail({ title: "Initial detail title", topic: "Initial detail title" });
+
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" initialChatDetail={initialChatDetail} />,
+      (queryClient) => {
+        queryClient.removeQueries({ queryKey: ["chat-detail", "chat-1"], exact: true });
+      },
+      "/",
+    );
+
+    await waitForText(container, "Initial detail title");
+    expect(chatMocks.getChat).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
   it("renders timeline chrome, sidebar controls, rename, restore, and read-only join states", async () => {
     const { ChatView } = await import("../chat-view.js");
     localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
@@ -709,6 +770,109 @@ describe("ChatView", () => {
     await act(async () => readOnly.root.unmount());
 
     await act(async () => root.unmount());
+  });
+
+  it("does not re-render old message markdown when the composer draft changes", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const page = messages([
+      message({
+        id: "stable-markdown",
+        senderId: "agent-1",
+        content: "Stable **markdown** body for render isolation.",
+        source: "api",
+        createdAt: "2026-05-28T12:00:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (queryClient) => seedChat(queryClient, chatDetail(), page),
+      "/",
+    );
+
+    await waitForText(container, "Stable");
+    await flush();
+    markdownMocks.render.mockClear();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    await setValue(textarea, "typing in the composer");
+
+    expect(markdownMocks.render).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
+  it("does not re-render an old request markdown body when request state changes", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const request = message({
+      id: "req-render",
+      senderId: "agent-1",
+      format: "request",
+      content: "Lifecycle **body** stays memoized.",
+      metadata: {
+        mentions: ["human-agent-self"],
+        request: {
+          subject: "Render isolation",
+          questions: [{ id: "q1", prompt: "Proceed?", kind: "single", options: ["Yes"], required: true }],
+        },
+      },
+      source: "api",
+      createdAt: "2026-05-28T12:00:00.000Z",
+    });
+    const answer = message({
+      id: "req-answer",
+      senderId: "human-agent-self",
+      format: "card",
+      content: { resolved: true },
+      metadata: { resolves: { request: "req-render", kind: "answered" } },
+      inReplyTo: "req-render",
+      source: "web",
+      createdAt: "2026-05-28T12:01:00.000Z",
+    });
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), messages([request])),
+      "/",
+    );
+
+    await waitForText(container, "Lifecycle");
+    await waitForText(container, "Awaiting your answer");
+    await flush();
+    markdownMocks.render.mockClear();
+
+    await act(async () => {
+      queryClient.setQueryData(["chat-messages", "chat-1"], messages([request, answer]));
+    });
+    await flush();
+
+    await waitForText(container, "RESOLVED");
+    expect(markdownMocks.render).not.toHaveBeenCalledWith("Lifecycle **body** stays memoized.");
+    await act(async () => root.unmount());
+  });
+
+  // R3: opening an attachment preview (new `docChat` + `docAttachment` params)
+  // collapses the right sidebar so the preview rail gets the slot, then restores
+  // it when the preview params clear. Keys on the new params — before the fix
+  // `hasDocPreview` still read the legacy `docPath`, so the collapse never fired.
+  it("collapses the right sidebar while an attachment preview is open, restores after", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
+
+    // With no doc-preview params the sidebar is open → Participants visible.
+    const open = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, undefined, "/");
+    await waitForText(open.container, "Participants");
+    await act(async () => open.root.unmount());
+
+    // With the attachment-preview params present the sidebar collapses →
+    // Participants no longer rendered even though localStorage says "open".
+    const preview = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      undefined,
+      "/?docChat=chat-1&docMsg=msg-1&docAttachment=00000000-0000-4000-8000-000000000001",
+    );
+    await waitForText(preview.container, "Launch planning");
+    await flush();
+    expect(preview.container.textContent).not.toContain("Participants");
+    await act(async () => preview.root.unmount());
   });
 
   it("sends text, blocks unaddressed image sends, then sends uploaded image batches", async () => {
@@ -800,14 +964,159 @@ describe("ChatView", () => {
     await waitForText(container, "Awaiting your answer");
     await waitForCondition(() => textarea.value === "", "Expected late request dock to clear auto-primed @");
 
+    // Decoupled: clicking an option highlights the pill but does NOT fill the
+    // composer — the draft stays empty (the auto-primed @ has been cleared).
     await click(optionByText(container, "Blue-green"));
-    expect(textarea.value).toBe("Blue-green");
+    expect(textarea.value).toBe("");
     await click(container.querySelector('button[aria-label="Send"]'));
-    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected clean option send");
-    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Blue-green", ["agent-1"], {
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected option answer send");
+    // Sending merges the selection into a canonical line and resolves.
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Deploy color? → Blue-green", ["agent-1"], {
       inReplyTo: "req-1",
       resolves: { request: "req-1", kind: "answered" },
     });
+
+    await act(async () => root.unmount());
+  });
+
+  it("resolves an options-only answer via Enter while focus is off the composer", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const dockMessages = messages([
+      message({
+        id: "req-enter",
+        senderId: "agent-1",
+        format: "request",
+        content: "Pick the deploy color.",
+        metadata: {
+          mentions: ["human-agent-self"],
+          request: {
+            subject: "Deploy",
+            questions: [
+              {
+                id: "q1",
+                prompt: "Deploy color?",
+                kind: "single",
+                options: ["Blue-green", "Rolling update"],
+                required: true,
+              },
+            ],
+          },
+        },
+        createdAt: "2026-05-28T12:00:00.000Z",
+      }),
+    ]);
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), messages([])),
+      "/",
+    );
+
+    await act(async () => {
+      queryClient.setQueryData(["chat-messages", "chat-1"], dockMessages);
+    });
+    await flush();
+    await waitForText(container, "Awaiting your answer");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+
+    // Enter is dispatched on the focused option radio (a composer-footer
+    // descendant) and bubbles to the footer-scoped backstop — mirroring the
+    // real focus path after a pill click, and proving the listener is scoped to
+    // the composer subtree rather than `window`.
+    const optionRadio = () => {
+      const radio = optionByText(container, "Blue-green")?.querySelector<HTMLInputElement>('input[type="radio"]');
+      if (!radio) throw new Error("Option radio missing");
+      return radio;
+    };
+    const pressEnterOnRadio = async () => {
+      await act(async () => {
+        const radio = optionRadio();
+        radio.focus();
+        radio.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      });
+    };
+
+    // No answer yet → Enter must be a no-op (the backstop isn't bound while the
+    // question is unresolvable, so a focused-but-unselected radio sends nothing).
+    await pressEnterOnRadio();
+    await flush();
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
+    // Pick an option and type nothing — focus stays on the radio, off the
+    // composer. This is the exact path that previously left Enter dead: the
+    // composer's own keydown never fired, so the dock's "↵ Send" promise was
+    // broken for the no-typing answer.
+    await click(optionByText(container, "Blue-green"));
+    expect(textarea.value).toBe("");
+    expect(document.activeElement).not.toBe(textarea);
+
+    await pressEnterOnRadio();
+    await waitForCondition(
+      () => chatMocks.sendChatMessage.mock.calls.length > 0,
+      "Expected Enter to resolve the options-only answer",
+    );
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Deploy color? → Blue-green", ["agent-1"], {
+      inReplyTo: "req-enter",
+      resolves: { request: "req-enter", kind: "answered" },
+    });
+
+    await act(async () => root.unmount());
+  });
+
+  it("enables Send and resolves when an option question is answered with free text (no option picked)", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const dockMessages = messages([
+      message({
+        id: "req-opt",
+        senderId: "agent-1",
+        format: "request",
+        content: "Pick the deploy color.",
+        metadata: {
+          mentions: ["human-agent-self"],
+          request: {
+            subject: "Deploy",
+            questions: [
+              {
+                id: "q1",
+                prompt: "Deploy color?",
+                kind: "single",
+                options: ["Blue-green", "Rolling update"],
+                required: true,
+              },
+            ],
+          },
+        },
+        createdAt: "2026-05-28T12:00:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), dockMessages),
+      "/",
+    );
+
+    await waitForText(container, "Awaiting your answer");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+
+    // No option picked + empty composer → Send disabled.
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled).toBe(true);
+
+    // Typing a free-text answer (without picking an option) must enable Send —
+    // this was the reported bug.
+    await setValue(textarea, "Neither — let's hold the deploy");
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled).toBe(false);
+
+    // ...and sending resolves the question with the free text as the answer.
+    await click(container.querySelector('button[aria-label="Send"]'));
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected free-text answer send");
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith(
+      "chat-1",
+      "Deploy color? → Neither — let's hold the deploy",
+      ["agent-1"],
+      { inReplyTo: "req-opt", resolves: { request: "req-opt", kind: "answered" } },
+    );
 
     await act(async () => root.unmount());
   });
@@ -859,7 +1168,7 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  it("threads docked attachment replies under the live request without a visible @mention", async () => {
+  it("resolves a blocking free-text question via a text reply; an attached image is not sent while blocked", async () => {
     const { ChatView } = await import("../chat-view.js");
     const dockMessages = messages([
       message({
@@ -887,21 +1196,22 @@ describe("ChatView", () => {
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Composer textarea missing");
     await setValue(textarea, "Screenshot evidence attached");
+    // While a question blocks me there is no image/judge reply path — the send
+    // is the answer and it resolves via a text reply. An attached image is left
+    // pending (not sent) so it can be sent normally once the block lifts.
     const file = new File(["abc"], "evidence.png", { type: "image/png" });
     const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
     if (!fileInput) throw new Error("File input missing");
     await changeFiles(fileInput, [file]);
     await click(container.querySelector('button[aria-label="Send"]'));
-    await waitForCondition(() => chatMocks.sendFileMessageBatch.mock.calls.length > 0, "Expected image send");
-    expect(chatMocks.sendFileMessageBatch).toHaveBeenCalledWith(
+    await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected text resolve send");
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith(
       "chat-1",
-      {
-        caption: "Screenshot evidence attached",
-        attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "evidence.png", size: 3 }],
-      },
-      { mentions: ["agent-1"] },
-      { inReplyTo: "req-file" },
+      "Evidence? → Screenshot evidence attached",
+      ["agent-1"],
+      { inReplyTo: "req-file", resolves: { request: "req-file", kind: "answered" } },
     );
+    expect(chatMocks.sendFileMessageBatch).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });
@@ -971,5 +1281,199 @@ describe("ChatView", () => {
     expect(anchorHrefs).toContain("https://example.com/guide");
 
     await act(async () => root.unmount());
+  });
+
+  // Requirement D — the right rail's DescriptionSection auto-opens for chats
+  // that have a description, when the user has no stored rail preference.
+  describe("description-driven right-rail default", () => {
+    const SIDEBAR_KEY = "first-tree:chat-right-sidebar:open:v1";
+    // Distinct from BASE_MESSAGES' "Description"-free body so the assertion
+    // can't accidentally match unrelated chrome.
+    const DESCRIPTION_MD = "Status: shipping **DescBody** soon.";
+
+    function sidebarOpen(container: ParentNode): boolean {
+      return container.querySelector('aside[aria-label="Chat details"]') !== null;
+    }
+
+    it("auto-opens the rail and renders the DescriptionSection markdown when a chat HAS a description and no stored preference", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const withDescription = chatDetail({ description: DESCRIPTION_MD });
+      chatMocks.getChat.mockResolvedValue(withDescription);
+      const { container, root } = await renderDom(
+        <ChatView agentId="agent-1" chatId="chat-1" />,
+        (queryClient) => seedChat(queryClient, withDescription),
+        "/",
+      );
+
+      await waitForCondition(() => sidebarOpen(container), "Expected rail to auto-open for a chat with a description");
+      const aside = container.querySelector('aside[aria-label="Chat details"]');
+      if (!aside) throw new Error("Sidebar aside missing");
+      // DescriptionSection eyebrow + markdown body (bold renders as <strong>).
+      expect(aside.textContent).toContain("Description");
+      expect(aside.textContent).toContain("shipping");
+      expect([...aside.querySelectorAll("strong")].some((el) => el.textContent === "DescBody")).toBe(true);
+
+      await act(async () => root.unmount());
+    });
+
+    it("keeps the rail collapsed when a chat has NO description and no stored preference", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const noDescription = chatDetail({ description: null });
+      chatMocks.getChat.mockResolvedValue(noDescription);
+      const { container, root } = await renderDom(
+        <ChatView agentId="agent-1" chatId="chat-1" />,
+        (queryClient) => seedChat(queryClient, noDescription),
+        "/",
+      );
+
+      await waitForText(container, "Launch planning");
+      // Give the description-default effect a chance to (not) fire.
+      await flush();
+      expect(sidebarOpen(container)).toBe(false);
+
+      await act(async () => root.unmount());
+    });
+
+    // The actual regression: ChatView is NOT remounted on chat switch (the
+    // chat-detail query just refetches by chatId). The old once-per-mount guard
+    // applied the default only to the FIRST chat — a second chat with a
+    // description stayed collapsed. The per-chat-keyed fix must auto-open the
+    // second chat too.
+    it("auto-opens the rail for a SECOND chat after switching chatId on a mounted ChatView", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      // First chat: no description → rail stays collapsed.
+      const first = chatDetail({ id: "chat-1", description: null });
+      const second = chatDetail({
+        id: "chat-2",
+        title: "Second chat",
+        topic: "Second chat",
+        description: DESCRIPTION_MD,
+      });
+      chatMocks.getChat.mockImplementation((id: string) => Promise.resolve(id === "chat-2" ? second : first));
+
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      const queryClient = createClient();
+      seedChat(queryClient, first);
+      seedChat(queryClient, second);
+
+      const renderAt = async (chatId: string): Promise<void> => {
+        await act(async () => {
+          root.render(
+            <MemoryRouter initialEntries={["/"]}>
+              <QueryClientProvider client={queryClient}>
+                <ToastProvider>
+                  <ChatView agentId="agent-1" chatId={chatId} />
+                </ToastProvider>
+              </QueryClientProvider>
+            </MemoryRouter>,
+          );
+        });
+        await flush();
+      };
+
+      await renderAt("chat-1");
+      await waitForText(container, "Launch planning");
+      await flush();
+      expect(sidebarOpen(container)).toBe(false);
+
+      // Switch to the second chat WITHOUT remounting (same root, new chatId).
+      await renderAt("chat-2");
+      await waitForCondition(
+        () => sidebarOpen(container),
+        "Expected rail to auto-open for the SECOND chat after a chatId switch (regression: once-per-mount guard)",
+      );
+      const aside = container.querySelector('aside[aria-label="Chat details"]');
+      expect(aside?.textContent).toContain("DescBody");
+
+      await act(async () => root.unmount());
+    });
+
+    it("does not auto-open when the user has an explicit stored 'closed' preference, even with a description", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      localStorage.setItem(SIDEBAR_KEY, "0");
+      const withDescription = chatDetail({ description: DESCRIPTION_MD });
+      chatMocks.getChat.mockResolvedValue(withDescription);
+      const { container, root } = await renderDom(
+        <ChatView agentId="agent-1" chatId="chat-1" />,
+        (queryClient) => seedChat(queryClient, withDescription),
+        "/",
+      );
+
+      await waitForText(container, "Launch planning");
+      await flush();
+      expect(sidebarOpen(container)).toBe(false);
+
+      await act(async () => root.unmount());
+    });
+
+    // The doc-preview-deep-link regression: a described chat entered while a
+    // doc-preview already owns the right rail (params present on first mount)
+    // must STILL auto-open its DescriptionSection once the preview closes. The
+    // pre-fix ordering marked the chat "applied" before the `hasDocPreview`
+    // bail, so closing the preview hit the per-chat guard and the rail never
+    // opened. The fix bails WITHOUT marking, so the preview-close re-run applies
+    // the default. ChatView must NOT remount across the close — navigation is
+    // driven through the live router so `descriptionDefaultChatRef` survives.
+    it("auto-opens a described chat's rail after a doc-preview deep link closes (no remount)", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const withDescription = chatDetail({ description: DESCRIPTION_MD });
+      chatMocks.getChat.mockResolvedValue(withDescription);
+
+      // Capture the live router's navigate so the test can clear the
+      // doc-preview params on the SAME mounted tree (simulating the preview
+      // closing) without remounting ChatView.
+      let navigate: ((to: string) => void) | null = null;
+      function NavProbe(): null {
+        navigate = useNavigate();
+        return null;
+      }
+
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      const queryClient = createClient();
+      seedChat(queryClient, withDescription);
+
+      // First mount carries doc-preview params → `hasDocPreview` is true, so the
+      // auto-open is suppressed and (crucially) the chat is NOT marked applied.
+      await act(async () => {
+        root.render(
+          <MemoryRouter
+            initialEntries={["/?docChat=chat-1&docMsg=msg-1&docAttachment=00000000-0000-4000-8000-000000000001"]}
+          >
+            <QueryClientProvider client={queryClient}>
+              <ToastProvider>
+                <NavProbe />
+                <ChatView agentId="agent-1" chatId="chat-1" />
+              </ToastProvider>
+            </QueryClientProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flush();
+      await waitForText(container, "Launch planning");
+      await flush();
+      // Preview owns the rail → DescriptionSection / chat-details aside hidden.
+      expect(sidebarOpen(container)).toBe(false);
+
+      // Close the preview by clearing the doc params on the live router. This
+      // flips `hasDocPreview` to false and re-runs the auto-open effect WITHOUT
+      // remounting ChatView.
+      if (!navigate) throw new Error("NavProbe did not capture navigate");
+      await act(async () => {
+        navigate?.("/");
+      });
+      await waitForCondition(
+        () => sidebarOpen(container),
+        "Expected the described chat's rail to auto-open after the doc-preview closed (regression: mark-before-docPreview-guard)",
+      );
+      const aside = container.querySelector('aside[aria-label="Chat details"]');
+      expect(aside?.textContent).toContain("Description");
+      expect([...(aside?.querySelectorAll("strong") ?? [])].some((el) => el.textContent === "DescBody")).toBe(true);
+
+      await act(async () => root.unmount());
+    });
   });
 });

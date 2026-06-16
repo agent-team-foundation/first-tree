@@ -6,7 +6,7 @@ export function registerChatInviteCommand(chat: Command): void {
   chat
     .command("invite <agentName>")
     .description(
-      "Invite an agent into the caller's current chat (the chat identified by FIRST_TREE_CHAT_ID). Use before `chat send <agentName>` when the recipient is not yet a member.",
+      "Invite an agent into the caller's current chat (the chat identified by FIRST_TREE_CHAT_ID). Use this for same-task handoffs before `chat send <agentName>` when the recipient is not yet a member.",
     )
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (agentName: string, options: { agent?: string }) => {

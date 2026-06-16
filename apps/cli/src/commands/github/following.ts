@@ -12,7 +12,7 @@ export function registerGithubFollowingCommand(github: Command): void {
   github
     .command("following")
     .description(
-      "List the GitHub entities whose events route into the current chat (live title/state included). " +
+      "List the GitHub entities whose events route into the current chat. " +
         "Run this before following when unsure — re-following an already-wired entity is a no-op.",
     )
     .option("--chat <chatId>", "Target chat (default: the session's FIRST_TREE_CHAT_ID)")

@@ -29,7 +29,6 @@ const agentMocks = vi.hoisted(() => ({
   listAgents: vi.fn(),
   listAllAgents: vi.fn(),
   reactivateAgent: vi.fn(),
-  rebindAgent: vi.fn(),
   suspendAgent: vi.fn(),
   testAgentConnection: vi.fn(),
   updateAgent: vi.fn(),
@@ -343,12 +342,6 @@ function exactButtonByText(container: ParentNode, text: string): HTMLButtonEleme
   return [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === text) ?? null;
 }
 
-function lastExactButtonByText(container: ParentNode, text: string): HTMLButtonElement | null {
-  return (
-    [...container.querySelectorAll("button")].reverse().find((button) => button.textContent?.trim() === text) ?? null
-  );
-}
-
 async function chooseSelectOption(trigger: Element | null, optionText: string): Promise<void> {
   await click(trigger);
   await click(buttonByText(document.body, optionText));
@@ -382,7 +375,6 @@ beforeEach(() => {
       lastSeenAt: NOW,
     },
   });
-  agentMocks.rebindAgent.mockResolvedValue(agent({ clientId: "client-2", runtimeProvider: "codex" }));
   // Use mockResolvedValue (persistent), not ...Once: the page shell now also
   // observes agent-resources (to badge Tools & skills), so the query can be
   // fetched more than once per render (a stale-time refetch fires when the tab's
@@ -929,7 +921,7 @@ describe("AgentDetailPage", () => {
     await act(async () => root.unmount());
   });
 
-  it("binds unclaimed agents and rebinds bound agents", async () => {
+  it("binds unclaimed agents", async () => {
     const { RuntimeTab } = await import("../runtime-tab.js");
     agentConfigMocks.getAgentClientStatus.mockResolvedValueOnce({
       online: false,
@@ -952,29 +944,6 @@ describe("AgentDetailPage", () => {
     await waitForCondition(() => agentMocks.updateAgent.mock.calls.length > 0, "Expected bind mutation");
     expect(agentMocks.updateAgent).toHaveBeenCalledWith("agent-1", { clientId: "client-1" });
     await act(async () => first.root.unmount());
-
-    const second = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
-    await waitForText(second.container, "Execution");
-    expect(second.container.textContent).toContain("Execution");
-    expect(second.container.textContent).toContain("Model settings");
-    await click(exactButtonByText(second.container, "Re-bind"));
-    await waitForText(document.body, "Current binding:");
-    expect(document.body.textContent).toContain("Current binding:");
-    await chooseSelectOption(document.body.querySelector('button[aria-label="Computer"]'), "alice-linux");
-    await click(
-      [...document.body.querySelectorAll("label")].find((label) => label.textContent?.includes("Claude Code (TUI)")) ??
-        null,
-    );
-    await click(document.body.querySelector<HTMLInputElement>('input[type="checkbox"]'));
-    await click(lastExactButtonByText(document.body, "Re-bind"));
-    await waitForCondition(() => agentMocks.rebindAgent.mock.calls.length > 0, "Expected re-bind mutation");
-    expect(agentMocks.rebindAgent).toHaveBeenCalledWith("agent-1", {
-      clientId: "client-2",
-      runtimeProvider: "claude-code-tui",
-      force: true,
-    });
-
-    await act(async () => second.root.unmount());
   });
 
   it("renders load failures and profile lifecycle actions", async () => {
@@ -1031,5 +1000,18 @@ describe("AgentDetailPage", () => {
     expect(agentMocks.deleteAgent).toHaveBeenCalledWith("agent-1");
 
     await act(async () => toDelete.root.unmount());
+  });
+
+  it("does not render agent lifecycle danger controls for human agents", async () => {
+    const { ProfileTab } = await import("../profile-tab.js");
+
+    agentMocks.getAgent.mockResolvedValueOnce(agent({ type: "human" }));
+    const view = await renderDom("/agents/agent-1/profile", <ProfileTab />);
+    await waitForText(view.container, "Identity");
+    expect(view.container.textContent).not.toContain("Agent lifecycle");
+    expect(view.container.textContent).not.toContain("Deletion");
+    expect(view.container.querySelector('button[aria-label="Suspend"]')).toBeNull();
+
+    await act(async () => view.root.unmount());
   });
 });

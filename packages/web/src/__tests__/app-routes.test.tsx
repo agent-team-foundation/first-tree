@@ -72,6 +72,9 @@ vi.mock("../pages/agent-detail/profile-tab.js", () => ({ ProfileTab: () => <div>
 vi.mock("../pages/agent-detail/runtime-tab.js", () => ({ RuntimeTab: () => <div>runtime tab</div> }));
 vi.mock("../pages/agent-detail/prompt-tab.js", () => ({ PromptTab: () => <div>prompt tab</div> }));
 vi.mock("../pages/agent-detail/resources-tab.js", () => ({ ResourcesTab: () => <div>resources tab</div> }));
+vi.mock("../pages/command-palette-preview.js", () => ({
+  CommandPalettePreviewPage: () => <div>command palette preview</div>,
+}));
 vi.mock("../pages/styleguide-preview.js", () => ({ StyleguidePreviewPage: () => <div>styleguide preview</div> }));
 
 let root: Root | null = null;
@@ -139,5 +142,9 @@ describe("App routes", () => {
     document.body.innerHTML = "";
 
     expect(await renderAppAt("/preview/styleguide")).toContain("styleguide preview");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/preview/command-palette")).toContain("command palette preview");
   });
 });

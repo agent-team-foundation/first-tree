@@ -169,7 +169,7 @@ describe("api wrapper paths", () => {
     await agentConfig.getAgentClientStatus("agent/id");
     await agentStatus.fetchChatAgentStatuses("chat/id");
 
-    await agents.listAgents({ limit: 10, cursor: "next", type: "agent", query: "nova" });
+    await agents.listAgents({ limit: 10, cursor: "next", type: "agent", query: "nova", addressableOnly: true });
     await agents.listAllAgents({ limit: 5, cursor: "older" });
     await agents.listManagedAgents();
     await agents.getAgent("agent/id");
@@ -177,7 +177,6 @@ describe("api wrapper paths", () => {
     await agents.createAgent({ name: "nova", type: "agent", displayName: "Nova" });
     await agents.checkAgentNameAvailability("name with spaces");
     await agents.updateAgent("agent/id", { displayName: "New" });
-    await agents.rebindAgent("agent/id", { clientId: "client-2", runtimeProvider: "claude-code" });
     await agents.deleteAgent("agent/id");
     await agents.deleteAgentAvatar("agent/id");
     await agents.suspendAgent("agent/id");
@@ -259,19 +258,18 @@ describe("api wrapper paths", () => {
     await sessions.getSession("agent/id", "chat/id");
     await sessions.listSessionEvents("agent/id", "chat/id", { limit: 30, cursor: 5, direction: "asc" });
     await sessions.suspendSession("agent/id", "chat/id");
+    await sessions.resumeSession("agent/id", "chat/id");
     await sessions.terminateSession("agent/id", "chat/id");
 
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent/id/config");
     expect(apiMock.post).toHaveBeenCalledWith("/agents/agent/id/config/dry-run", { payload: { gitRepos: [] } });
     expect(apiMock.get).toHaveBeenCalledWith("/chats/chat/id/agent-status");
-    expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents?limit=10&cursor=next&type=agent&query=nova");
+    expect(apiMock.get).toHaveBeenCalledWith(
+      "/orgs/current/agents?limit=10&cursor=next&type=agent&query=nova&addressableOnly=true",
+    );
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/all?limit=5&cursor=older");
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent%2Fid/skills");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/names/name%20with%20spaces/availability");
-    expect(apiMock.patch).toHaveBeenCalledWith("/agents/agent%2Fid/rebind", {
-      clientId: "client-2",
-      runtimeProvider: "claude-code",
-    });
     expect(apiMock.post).toHaveBeenCalledWith("/chats/chat%2Fid/messages", {
       format: "text",
       content: "hello",

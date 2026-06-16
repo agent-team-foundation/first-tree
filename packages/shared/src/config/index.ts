@@ -43,6 +43,7 @@ export type {
   InferConfig,
   InitConfigOptions,
   OptionalGroupDef,
+  OptionalGroupOptions,
   PromptChoice,
   PromptDef,
   ResolvedFieldInfo,

@@ -15,6 +15,7 @@ import type {
   ContextTreeSummary,
   ContextTreeUpdate,
   ContextTreeUsageSummary,
+  ContextTreeWriteEvent,
 } from "@first-tree/shared";
 import { defaultDataDir } from "@first-tree/shared/config";
 import matter from "gray-matter";
@@ -76,11 +77,12 @@ type DiffEntry = {
   changedAt: string | null;
   changedBy: string | null;
   summary: string | null;
+  prNumber: number | null;
 };
 
 type DiffEntryInput = Pick<DiffEntry, "type" | "path">;
 
-type ChangeMetadata = Pick<DiffEntry, "commit" | "changedAt" | "changedBy" | "summary">;
+type ChangeMetadata = Pick<DiffEntry, "commit" | "changedAt" | "changedBy" | "summary" | "prNumber">;
 
 type DiffReadResult = {
   entries: DiffEntry[];
@@ -175,6 +177,11 @@ export async function getContextTreeSnapshot(
     const nodesWithGhosts = addRemovedGhostNodes(nodes, changes);
     const summary = summarizeChanges(changes);
     const updates = buildUpdates(changes, nodesWithGhosts);
+    // Git-derived writes are cacheable with the rest of the snapshot — they
+    // depend only on the repo's git history, not on the viewer or any DB
+    // state. The route enriches them with session-telemetry agent attribution
+    // (which is viewer-dependent) after this cached snapshot is read.
+    const writes = buildWriteEvents(changes, nodesWithGhosts);
     const statusWarning = statusWarningFromResolved(resolved.staleReason, diffResult.truncated);
 
     const snapshot: ContextTreeSnapshot = {
@@ -186,7 +193,7 @@ export async function getContextTreeSnapshot(
       contextStatus: contextStatus(statusWarning),
       summary,
       usage: emptyUsageSummary(window),
-      io: emptyIoSummary(window),
+      io: { ...emptyIoSummary(window), writes, writesTotal: writes.length },
       updates,
       nodes: nodesWithGhosts,
       edges: tree.edges,
@@ -497,6 +504,9 @@ function emptyIoSummary(window: ContextTreeSnapshotWindow): ContextTreeIoSummary
     },
     agents: [],
     recentEvents: [],
+    writes: [],
+    writesTotal: 0,
+    skipped: { windowDays: WINDOW_DAYS[window], totalEventCount: 0, reasons: [] },
   };
 }
 
@@ -856,11 +866,13 @@ async function readChangeMetadataByPath(
     const fields = header.split("\x00");
     const commit = fields[0];
     if (!commit || !isSafeCommit(commit)) continue;
+    const rawSubject = fields[3] ?? null;
     const metadata: ChangeMetadata = {
       commit,
       changedAt: fields[1] && fields[1].length > 0 ? fields[1] : null,
       changedBy: fields[2] && fields[2].length > 0 ? fields[2] : null,
-      summary: cleanCommitSubject(fields[3] ?? null),
+      summary: cleanCommitSubject(rawSubject),
+      prNumber: parsePrNumber(rawSubject),
     };
     for (const changedPath of changedPaths) {
       if (!metadataByPath.has(changedPath)) metadataByPath.set(changedPath, metadata);
@@ -874,11 +886,27 @@ async function readChangeMetadataByPath(
 }
 
 function fallbackChangeMetadata(headCommit: string): ChangeMetadata {
-  return { commit: headCommit, changedAt: null, changedBy: null, summary: null };
+  return { commit: headCommit, changedAt: null, changedBy: null, summary: null, prNumber: null };
 }
 
 function isSafeCommit(value: string): boolean {
   return /^[0-9a-f]{40}$/i.test(value);
+}
+
+// Extract the PR number from a commit subject, covering both GitHub merge
+// styles:
+//   - squash / rebase: trailing "(#514)", e.g. "feat: record … (#514)"
+//   - merge commit:     leading "Merge pull request #514 from …"
+// For the squash form we take the LAST "(#N)" so an inline issue reference
+// earlier in the subject doesn't win over the real PR id.
+function parsePrNumber(subject: string | null): number | null {
+  if (!subject) return null;
+  const mergeCommit = subject.match(/^Merge pull request #(\d+)\b/i)?.[1];
+  const squash = [...subject.matchAll(/\(#(\d+)\)/g)].at(-1)?.[1];
+  const raw = mergeCommit ?? squash;
+  if (!raw) return null;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function cleanCommitSubject(subject: string | null): string | null {
@@ -904,6 +932,7 @@ function buildChanges(entries: DiffEntry[], tree: TreeBuildResult): ContextTreeC
       changedAt: entry.changedAt,
       changedBy: entry.changedBy,
       summary: entry.summary,
+      prNumber: entry.prNumber,
     };
   });
 }
@@ -989,6 +1018,45 @@ function buildUpdates(changes: ContextTreeChange[], nodes: ContextTreeNode[]): C
 
   updates.sort((a, b) => updateRank(a) - updateRank(b) || a.path.localeCompare(b.path));
   return updates;
+}
+
+// Git-derived write rows for the IO feed. One row per changed node in the
+// window, carrying the landed commit / PR / risk / summary. Agent attribution
+// is left null here — git only knows the *committer* (`changedBy`), not which
+// agent authored the change. The route reconciles these against session write
+// telemetry (which does carry agent identity) before the feed is served; see
+// reconcileContextTreeWrites. `nodes` should include removed ghosts so deleted
+// nodes still resolve a title.
+function buildWriteEvents(changes: ContextTreeChange[], nodes: ContextTreeNode[]): ContextTreeWriteEvent[] {
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const events = changes.map((change): ContextTreeWriteEvent => {
+    const node = change.nodeId ? nodeById.get(change.nodeId) : undefined;
+    const nodePath = node?.path ?? stripMarkdownExtension(change.path);
+    return {
+      id: `${change.commit ?? "uncommitted"}:${change.path}`,
+      nodeId: change.nodeId,
+      nodePath,
+      title: node?.title ?? titleFromPath(nodePath),
+      changeType: change.type,
+      summary: change.summary,
+      riskLevel: riskLevelForChange(change.type, node?.kind),
+      authorName: change.changedBy,
+      agentId: null,
+      agentName: null,
+      agentAvatarColorToken: null,
+      commit: change.commit,
+      prNumber: change.prNumber,
+      createdAt: change.changedAt,
+    };
+  });
+  events.sort((a, b) => writeEventTimeKey(b) - writeEventTimeKey(a));
+  return events;
+}
+
+function writeEventTimeKey(event: ContextTreeWriteEvent): number {
+  if (!event.createdAt) return 0;
+  const parsed = Date.parse(event.createdAt);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function changeSummaryForUpdate(change: ContextTreeChange, node: ContextTreeNode | undefined): string {
@@ -1151,6 +1219,8 @@ function toPosix(path: string): string {
 
 export const contextTreeSnapshotTestInternals = {
   addRemovedGhostNodes,
+  buildWriteEvents,
+  parsePrNumber,
   buildTreeFromRawFiles(files: Array<{ relativePath: string; raw: string }>): TreeBuildResult {
     return buildTree(files.map((file) => ({ relativePath: file.relativePath, parsed: parseMarkdown(file.raw) })));
   },

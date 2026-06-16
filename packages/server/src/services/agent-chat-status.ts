@@ -494,14 +494,6 @@ export function computeErrored(session: RuntimeSessionRow, presenceRuntimeState:
  * (the union may also contain a pending non-speaker, which this surface omits).
  */
 export async function getChatAgentStatuses(db: Database, chatId: string): Promise<AgentChatStatus[]> {
-  const speakerRows = await db
-    .select({ agentId: chatMembership.agentId })
-    .from(chatMembership)
-    .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
-    .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker"), ne(agents.type, "human")));
-  const speakerIds = new Set(speakerRows.map((r) => r.agentId));
-  if (speakerIds.size === 0) return [];
-
   const byChat = await resolveAgentChatStatuses(db, [chatId], { withTurnText: true });
-  return (byChat.get(chatId) ?? []).filter((s) => speakerIds.has(s.agentId));
+  return byChat.get(chatId) ?? [];
 }

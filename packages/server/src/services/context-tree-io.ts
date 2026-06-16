@@ -3,9 +3,14 @@ import {
   type ContextTreeIoAction,
   type ContextTreeIoBucket,
   type ContextTreeIoEvent,
+  type ContextTreeIoSkipBreakdown,
+  type ContextTreeIoSkipReason,
+  type ContextTreeIoSkipSummary,
   type ContextTreeIoSource,
   type ContextTreeIoSummary,
   type ContextTreeIoTargetKind,
+  type ContextTreeWriteEvent,
+  canonicalGitRepoUrl,
   classifyShellCommandIo,
   contextTreeIoSourceSchema,
   type SessionEvent,
@@ -30,6 +35,8 @@ const CONTEXT_TREE_IO_FEED_LIMIT = 50;
 const CLAUDE_READ_TOOLS = new Set(["Read", "NotebookRead", "Grep", "Glob"]);
 const CLAUDE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const log = createLogger("ContextTreeIo");
+const GIT_STATUS_DELTA_REF_ORIGIN = "git_status_delta";
+const GIT_STATUS_DELTA_DERIVATION: EventIoDerivation = { action: "write", source: "git_status_delta" };
 
 export type ContextTreeIoViewer = {
   humanAgentId: string;
@@ -70,19 +77,8 @@ type NormalizedFileRef = {
 type NormalizedFileRefRecord = {
   normalized: NormalizedFileRef;
   sourceIndex: number;
+  derivation: EventIoDerivation;
 };
-
-export type ContextTreeIoSkipReason =
-  | "no_org_context_tree_binding"
-  | "event_kind_not_io"
-  | "status_not_ok"
-  | "unsupported_tool"
-  | "unsupported_shell_command"
-  | "no_tool_file_refs"
-  | "ref_schema_invalid"
-  | "ref_repo_mismatch"
-  | "ref_path_invalid"
-  | "chat_not_in_org";
 
 export type ContextTreeIoDecision =
   | {
@@ -114,34 +110,6 @@ type InternalContextTreeIoDecision =
       recordable: false;
       reason: ContextTreeIoSkipReason;
     };
-
-function canonicalRepoUrl(value: string | null | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-
-  const scpLike = /^(?:[^@/\s]+@)?([^:]+):(.+)$/.exec(trimmed);
-  if (scpLike && !trimmed.includes("://")) {
-    const host = scpLike[1];
-    const rawPath = scpLike[2];
-    if (!host || !rawPath) return null;
-    const path = normalizeRepoPath(rawPath);
-    return path ? `${host.toLowerCase()}/${path}` : null;
-  }
-
-  try {
-    const url = new URL(trimmed);
-    const path = normalizeRepoPath(url.pathname);
-    return path ? `${url.hostname.toLowerCase()}/${path}` : null;
-  } catch {
-    return null;
-  }
-}
-
-function normalizeRepoPath(rawPath: string): string | null {
-  let path = rawPath.replace(/^\/+/, "").replace(/\/+$/, "");
-  if (path.endsWith(".git")) path = path.slice(0, -4);
-  return path.length > 0 ? path : null;
-}
 
 function normalizeTargetPath(rawPath: string, targetKind: ContextTreeIoTargetKind): string | null {
   const trimmed = rawPath.trim().replaceAll("\\", "/");
@@ -236,8 +204,8 @@ function normalizeFileRef(
   const parsed = toolFileRefSchema.safeParse(ref);
   if (!parsed.success) return { ok: false, reason: "ref_schema_invalid" };
 
-  const expectedRepo = canonicalRepoUrl(bindingRepo);
-  const reportedRepo = canonicalRepoUrl(parsed.data.repoUrl);
+  const expectedRepo = canonicalGitRepoUrl(bindingRepo);
+  const reportedRepo = canonicalGitRepoUrl(parsed.data.repoUrl);
   if (!expectedRepo || !reportedRepo || expectedRepo !== reportedRepo) {
     return { ok: false, reason: "ref_repo_mismatch" };
   }
@@ -255,6 +223,7 @@ function normalizeFileRef(
       targetKind,
       targetPath,
       metadata: {
+        ...(parsed.data.metadata ?? {}),
         origin: parsed.data.origin,
         ...(parsed.data.localPath ? { localPath: parsed.data.localPath } : {}),
       },
@@ -271,21 +240,27 @@ function buildContextTreeIoDecision(input: {
 }): InternalContextTreeIoDecision {
   if (!input.bindingRepo) return { recordable: false, reason: "no_org_context_tree_binding" };
 
-  const derivation = deriveEventIo(input.event, input.runtimeProvider);
-  if (typeof derivation === "string") return { recordable: false, reason: derivation };
-
   const refs = extractFileRefs(input.event, input.bindingRepo, input.bindingBranch);
+  const hasGitStatusDeltaRef = refs.some(({ ref }) => ref.origin === GIT_STATUS_DELTA_REF_ORIGIN);
+  const derivation = deriveEventIo(input.event, input.runtimeProvider);
+  const baseDerivation = typeof derivation === "string" ? null : derivation;
+  const derivationSkipReason = typeof derivation === "string" ? derivation : null;
+  if (!baseDerivation && !hasGitStatusDeltaRef) {
+    return { recordable: false, reason: derivationSkipReason ?? "unsupported_tool" };
+  }
   if (refs.length === 0) return { recordable: false, reason: "no_tool_file_refs" };
 
   const normalizedRefs: NormalizedFileRefRecord[] = [];
   let firstRejectedReason: ContextTreeIoSkipReason | null = null;
   for (const { ref, sourceIndex } of refs) {
+    const refDerivation = ref.origin === GIT_STATUS_DELTA_REF_ORIGIN ? GIT_STATUS_DELTA_DERIVATION : baseDerivation;
+    if (!refDerivation) continue;
     const normalized = normalizeFileRef(ref, input.bindingRepo, input.bindingBranch);
     if (!normalized.ok) {
       firstRejectedReason ??= normalized.reason;
       continue;
     }
-    normalizedRefs.push({ normalized: normalized.normalized, sourceIndex });
+    normalizedRefs.push({ normalized: normalized.normalized, sourceIndex, derivation: refDerivation });
   }
 
   if (normalizedRefs.length === 0) {
@@ -293,11 +268,26 @@ function buildContextTreeIoDecision(input: {
   }
   if (input.chatInOrg === false) return { recordable: false, reason: "chat_not_in_org" };
 
-  return { recordable: true, derivation, refs: normalizedRefs };
+  return { recordable: true, derivation: baseDerivation ?? GIT_STATUS_DELTA_DERIVATION, refs: normalizedRefs };
 }
 
 function toolNameOf(event: SessionEvent): string | null {
   return event.kind === "tool_call" ? event.payload.name : null;
+}
+
+function incrementCount(map: Map<string, number>, key: string): void {
+  map.set(key, (map.get(key) ?? 0) + 1);
+}
+
+function sortedCountEntries(
+  map: Map<string, number>,
+  keyName: "runtimeProvider" | "toolName",
+): Array<{ runtimeProvider: string; eventCount: number } | { toolName: string; eventCount: number }> {
+  return [...map.entries()]
+    .sort(([leftKey, leftCount], [rightKey, rightCount]) => rightCount - leftCount || leftKey.localeCompare(rightKey))
+    .map(([key, eventCount]) => ({ [keyName]: key, eventCount })) as Array<
+    { runtimeProvider: string; eventCount: number } | { toolName: string; eventCount: number }
+  >;
 }
 
 export function explainContextTreeIoDecision(input: ExplainContextTreeIoDecisionInput): ContextTreeIoDecision {
@@ -315,6 +305,98 @@ export function explainContextTreeIoDecision(input: ExplainContextTreeIoDecision
     chatInOrg: input.chatInOrg,
   });
   return decision.recordable ? { recordable: true } : { recordable: false, reason: decision.reason };
+}
+
+export async function summarizeContextTreeIoSkippedEvents(
+  db: Database,
+  organizationId: string,
+  windowDays: number,
+): Promise<ContextTreeIoSkipSummary> {
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const binding = await getOrgContextTree(db, organizationId);
+  const bindingBranch = binding.branch ?? "main";
+  const rows = await db
+    .select({
+      id: sessionEvents.id,
+      agentId: sessionEvents.agentId,
+      chatId: sessionEvents.chatId,
+      kind: sessionEvents.kind,
+      payload: sessionEvents.payload,
+      runtimeProvider: agents.runtimeProvider,
+      chatOrganizationId: chats.organizationId,
+    })
+    .from(sessionEvents)
+    .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
+    .leftJoin(chats, eq(chats.id, sessionEvents.chatId))
+    .where(
+      and(
+        eq(agents.organizationId, organizationId),
+        gte(sessionEvents.createdAt, since),
+        or(eq(sessionEvents.kind, "context_tree_usage"), eq(sessionEvents.kind, "tool_call")),
+      ),
+    );
+
+  const byReason = new Map<
+    ContextTreeIoSkipReason,
+    {
+      eventCount: number;
+      agentIds: Set<string>;
+      runtimeProviders: Map<string, number>;
+      toolNames: Map<string, number>;
+    }
+  >();
+
+  for (const row of rows) {
+    const parsed = sessionEventSchema.safeParse({ kind: row.kind, payload: row.payload });
+    const event = parsed.success ? parsed.data : null;
+    const decision = event
+      ? buildContextTreeIoDecision({
+          event,
+          runtimeProvider: row.runtimeProvider,
+          bindingRepo: binding.repo,
+          bindingBranch,
+          chatInOrg: row.chatOrganizationId === organizationId,
+        })
+      : ({ recordable: false, reason: "event_kind_not_io" } as const);
+    if (decision.recordable) continue;
+
+    const bucket = byReason.get(decision.reason) ?? {
+      eventCount: 0,
+      agentIds: new Set<string>(),
+      runtimeProviders: new Map<string, number>(),
+      toolNames: new Map<string, number>(),
+    };
+    bucket.eventCount += 1;
+    bucket.agentIds.add(row.agentId);
+    incrementCount(bucket.runtimeProviders, row.runtimeProvider);
+    const toolName = event ? toolNameOf(event) : null;
+    if (toolName) incrementCount(bucket.toolNames, toolName);
+    byReason.set(decision.reason, bucket);
+  }
+
+  const reasons = [...byReason.entries()]
+    .sort(
+      ([leftReason, left], [rightReason, right]) =>
+        right.eventCount - left.eventCount || leftReason.localeCompare(rightReason),
+    )
+    .map(
+      ([reason, bucket]): ContextTreeIoSkipBreakdown => ({
+        reason,
+        eventCount: bucket.eventCount,
+        agentCount: bucket.agentIds.size,
+        runtimeProviders: sortedCountEntries(bucket.runtimeProviders, "runtimeProvider") as Array<{
+          runtimeProvider: string;
+          eventCount: number;
+        }>,
+        toolNames: sortedCountEntries(bucket.toolNames, "toolName") as Array<{ toolName: string; eventCount: number }>,
+      }),
+    );
+
+  return {
+    windowDays,
+    totalEventCount: reasons.reduce((sum, row) => sum + row.eventCount, 0),
+    reasons,
+  };
 }
 
 export async function recordFromSessionEvent(db: Database, input: RecordContextTreeIoInput): Promise<void> {
@@ -369,7 +451,7 @@ export async function recordFromSessionEvent(db: Database, input: RecordContextT
 
   const createdAt = new Date(input.sessionEvent.createdAt);
   const rows = [];
-  for (const { normalized, sourceIndex } of decision.refs) {
+  for (const { normalized, sourceIndex, derivation } of decision.refs) {
     rows.push({
       id: `${input.sessionEvent.id}:${sourceIndex}`,
       organizationId: input.organizationId,
@@ -378,8 +460,8 @@ export async function recordFromSessionEvent(db: Database, input: RecordContextT
       sourceSessionEventId: input.sessionEvent.id,
       sourceIndex,
       runtimeProvider: input.runtimeProvider,
-      action: decision.derivation.action,
-      source: decision.derivation.source,
+      action: derivation.action,
+      source: derivation.source,
       treeRepoUrl: normalized.treeRepoUrl,
       treeBranch: normalized.treeBranch,
       targetKind: normalized.targetKind,
@@ -519,6 +601,175 @@ async function accessibleChatIdSet(db: Database, viewer: ContextTreeIoViewer, ch
   return accessible;
 }
 
+type ReconcileTelemetryWrite = {
+  agentId: string;
+  agentName: string;
+  agentAvatarColorToken: string | null;
+  createdAtMs: number;
+  createdAtIso: string;
+  // Human-facing node path (case preserved) for telemetry-only rows.
+  displayPath: string;
+};
+
+// Sentinel key for the root node. The root's git node path is "" and its file
+// path is "NODE.md"; both must collapse to the SAME key (root is the tree's
+// highest-signal node, so a root edit must reconcile, not split into two rows).
+// A non-empty sentinel also keeps root out of the "skip empty key" path.
+const ROOT_NODE_KEY = "<root>";
+
+// Human-facing node path: strip a leading slash, the `.md` suffix, and a
+// trailing `NODE` segment (so `members/x/NODE.md` → `members/x`, `NODE.md` and
+// `/` → "" for root). Case preserved — used for display, not matching.
+function displayNodePath(path: string | null): string {
+  if (!path) return "";
+  return path
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "")
+    .replace(/\.md$/i, "")
+    .replace(/(^|\/)NODE$/i, "");
+}
+
+// Normalize a tree path to a stable per-node key so git paths and telemetry
+// paths compare equal: `system/x.md`, `/system/x`, `system/x/NODE.md` all map
+// to `system/x`; `NODE.md`, ``, and `/` all map to ROOT_NODE_KEY.
+function normalizeNodeKey(path: string | null): string {
+  const display = displayNodePath(path);
+  return display === "" ? ROOT_NODE_KEY : display.toLowerCase();
+}
+
+function titleFromNodePath(path: string): string {
+  const last = path.split("/").filter(Boolean).at(-1);
+  if (!last) return "Context Tree";
+  return last.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function writeSortKey(event: ContextTreeWriteEvent): number {
+  if (!event.createdAt) return 0;
+  const parsed = Date.parse(event.createdAt);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/**
+ * Reconcile git-derived writes (complete, including PR merges, but lacking
+ * agent identity — git only knows the committer) with session write telemetry
+ * (which carries the agent that authored the change). Produces one row per
+ * changed node for the window:
+ *
+ *   - git write + matching telemetry → agent-attributed, with commit / PR / risk
+ *   - git write, no telemetry match   → honest git author + commit / PR (a human
+ *     or a GitHub merge identity; we do not invent an agent)
+ *   - telemetry write, no git commit  → in-flight agent write (no commit / PR)
+ *
+ * Dedupe key is the normalized node path within the window, so a worktree edit
+ * and the PR merge that lands it collapse into a single row instead of double-
+ * counting. Reuses the already-computed git `writes`; the only added cost is
+ * one indexed telemetry query, so the snapshot's git cache stays untouched.
+ */
+export async function reconcileContextTreeWrites(
+  db: Database,
+  organizationId: string,
+  windowDays: number,
+  gitWrites: ContextTreeWriteEvent[],
+): Promise<ContextTreeWriteEvent[]> {
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  const sinceIso = since.toISOString();
+  await backfillContextTreeIoSessionEvents(db, organizationId, since);
+
+  const writeRows = await db.execute<{
+    agent_id: string;
+    agent_name: string;
+    agent_avatar_color_token: string | null;
+    target_path: string;
+    created_at: Date | string;
+  }>(sql`
+    ${allEventsSql(organizationId, sinceIso)}
+    SELECT
+      all_events.agent_id,
+      all_events.agent_name,
+      all_events.agent_avatar_color_token,
+      all_events.target_path,
+      all_events.created_at
+    FROM all_events
+    WHERE all_events.action = 'write'
+    ORDER BY all_events.created_at ASC
+  `);
+
+  const telemetryByKey = new Map<string, ReconcileTelemetryWrite[]>();
+  for (const row of writeRows) {
+    const key = normalizeNodeKey(row.target_path);
+    const iso = isoOrNull(row.created_at);
+    const createdAtMs = iso ? Date.parse(iso) : Number.NaN;
+    const list = telemetryByKey.get(key) ?? [];
+    list.push({
+      agentId: row.agent_id,
+      agentName: row.agent_name,
+      agentAvatarColorToken: row.agent_avatar_color_token,
+      createdAtMs: Number.isNaN(createdAtMs) ? 0 : createdAtMs,
+      createdAtIso: iso ?? new Date().toISOString(),
+      displayPath: displayNodePath(row.target_path),
+    });
+    telemetryByKey.set(key, list);
+  }
+
+  const reconciled: ContextTreeWriteEvent[] = [];
+  // Process git writes oldest-first so each landed commit consumes only the
+  // telemetry that preceded IT; a later in-flight edit on the same node stays
+  // available for the telemetry-only pass instead of being attached to (and
+  // then hidden behind) an older commit.
+  const gitWritesOldestFirst = [...gitWrites].sort((a, b) => writeSortKey(a) - writeSortKey(b));
+  for (const write of gitWritesOldestFirst) {
+    const key = normalizeNodeKey(write.nodePath);
+    const rows = telemetryByKey.get(key) ?? [];
+    const commitMs = write.createdAt ? Date.parse(write.createdAt) : Number.NaN;
+    // Only telemetry at or before the landing commit can be the edit that
+    // commit captured. When the git timestamp is missing, treat every row as a
+    // candidate (we can't order them). A write with no qualifying telemetry
+    // keeps its honest git author and consumes nothing.
+    const matched = Number.isNaN(commitMs) ? rows : rows.filter((r) => r.createdAtMs <= commitMs);
+    if (matched.length === 0) {
+      reconciled.push(write);
+      continue;
+    }
+    const attribution = matched.reduce((best, c) => (c.createdAtMs >= best.createdAtMs ? c : best));
+    reconciled.push({
+      ...write,
+      agentId: attribution.agentId,
+      agentName: attribution.agentName,
+      agentAvatarColorToken: attribution.agentAvatarColorToken,
+    });
+    // Leave later (post-commit) telemetry for the telemetry-only pass.
+    telemetryByKey.set(key, Number.isNaN(commitMs) ? [] : rows.filter((r) => r.createdAtMs > commitMs));
+  }
+
+  // Telemetry-only writes: a node an agent wrote that has no matching landed
+  // commit in the window (typically an in-flight worktree edit). One row per
+  // node, attributed, with no commit / PR.
+  for (const rows of telemetryByKey.values()) {
+    if (rows.length === 0) continue;
+    const latest = rows.reduce((best, c) => (c.createdAtMs >= best.createdAtMs ? c : best));
+    reconciled.push({
+      id: `telemetry:${latest.displayPath}:${latest.createdAtIso}`,
+      nodeId: null,
+      nodePath: latest.displayPath,
+      title: titleFromNodePath(latest.displayPath),
+      changeType: "edited",
+      summary: null,
+      riskLevel: "low",
+      authorName: null,
+      agentId: latest.agentId,
+      agentName: latest.agentName,
+      agentAvatarColorToken: latest.agentAvatarColorToken,
+      commit: null,
+      prNumber: null,
+      createdAt: latest.createdAtIso,
+    });
+  }
+
+  reconciled.sort((a, b) => writeSortKey(b) - writeSortKey(a));
+  return reconciled;
+}
+
 export async function summarizeContextTreeIo(
   db: Database,
   organizationId: string,
@@ -617,6 +868,7 @@ export async function summarizeContextTreeIo(
       all_events.created_at
     FROM all_events
     LEFT JOIN chats c ON c.id = all_events.chat_id AND c.organization_id = ${organizationId}
+    WHERE all_events.action = 'read'
     ORDER BY all_events.created_at DESC
     LIMIT ${CONTEXT_TREE_IO_FEED_LIMIT}
   `);
@@ -644,6 +896,7 @@ export async function summarizeContextTreeIo(
       createdAt: isoOrNull(row.created_at) ?? new Date().toISOString(),
     };
   });
+  const skipped = await summarizeContextTreeIoSkippedEvents(db, organizationId, windowDays);
 
   return {
     windowDays,
@@ -659,5 +912,30 @@ export async function summarizeContextTreeIo(
       lastWriteAt: isoOrNull(row.last_write_at),
     })),
     recentEvents,
+    // Writes are git-derived, not telemetry-derived. This service owns reads +
+    // the summary buckets + the per-agent table; `buildContextTreeIoSummary`
+    // fills `writes` via reconcileContextTreeWrites against the git history.
+    writes: [],
+    writesTotal: 0,
+    skipped,
   };
+}
+
+/**
+ * Full IO summary for a snapshot route: telemetry-sourced reads / summary /
+ * agents / skipped, plus git-derived writes (the snapshot's `io.writes`)
+ * reconciled against write telemetry for agent attribution. Both the org-scoped
+ * and the user-primary-org snapshot routes go through here so the write feed
+ * never silently empties on one of them.
+ */
+export async function buildContextTreeIoSummary(
+  db: Database,
+  organizationId: string,
+  windowDays: number,
+  gitWrites: ContextTreeWriteEvent[],
+  viewer?: ContextTreeIoViewer,
+): Promise<ContextTreeIoSummary> {
+  const io = await summarizeContextTreeIo(db, organizationId, windowDays, viewer);
+  const writes = await reconcileContextTreeWrites(db, organizationId, windowDays, gitWrites);
+  return { ...io, writes, writesTotal: writes.length };
 }

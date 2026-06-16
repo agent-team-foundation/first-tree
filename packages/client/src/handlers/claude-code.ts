@@ -22,25 +22,28 @@ import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { type PredeclaredSourceRepo, writeAgentBriefing } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { resolveContextTreeRelativePath, toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import {
-  canonicalizeFsPath,
-  contextTreeRelativePathOf,
-  toolFileRefsFromShellCommand,
-} from "../runtime/context-tree-file-refs.js";
+  type ContextTreeGitWriteTracker,
+  createContextTreeGitWriteTracker,
+} from "../runtime/context-tree-git-status.js";
 import { classify } from "../runtime/error-taxonomy.js";
-import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
-import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
+import {
+  type AgentHandler,
+  type DeliveryToken,
+  deliveryTokenFromSessionContext,
+  type HandlerFactory,
+  type SessionContext,
+  type SessionMessage,
+} from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
-import {
-  currentSourceRepoNamesFromPayload,
-  prepareSourceRepos as prepareSourceReposShared,
-  releaseSourceReposForSession,
-} from "../runtime/source-repos.js";
+import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
+import { consumedErrorOutcome } from "./turn-settlement.js";
 
 const MAX_RETRIES = 2;
 
@@ -370,12 +373,16 @@ function toolFileRef(toolName: string, input: unknown, contextTree?: ContextTree
   if (!TREE_READ_TOOL_NAMES.has(toolName) && !TREE_WRITE_TOOL_NAMES.has(toolName)) return null;
   const filePath = readFilePathArg(input);
   if (filePath === null) return null;
-  // Canonicalize both sides so a symlinked tree path (W1 cloud layout) still
-  // maps. Relative paths keep the fail-safe null mapping — canonicalizing
-  // them would resolve against the daemon's cwd and risk mis-attribution.
+  // Containment (canonical, symlink-safe) or repo identity (tree PR
+  // worktrees — any checkout whose origin remote IS the Context Tree repo).
+  // Relative paths keep the fail-safe null mapping — canonicalizing them
+  // would resolve against the daemon's cwd and risk mis-attribution.
   const repoRelativePath =
-    contextTree?.path && isAbsolute(filePath)
-      ? treeNodePathOf(canonicalizeFsPath(filePath), canonicalizeFsPath(contextTree.path))
+    contextTree && isAbsolute(filePath)
+      ? resolveContextTreeRelativePath(filePath, {
+          contextTreePath: contextTree.path,
+          contextTreeRepoUrl: contextTree.repoUrl,
+        })
       : null;
   return {
     origin: "tool_arg",
@@ -423,7 +430,12 @@ function searchToolFileRef(
   if (rawPath === null) return null;
   if (!isAbsolute(rawPath) && !cwd) return null;
   const absolutePath = isAbsolute(rawPath) ? resolve(rawPath) : resolve(cwd ?? "", rawPath);
-  const repoRelativePath = contextTree?.path ? contextTreeRelativePathOf(absolutePath, contextTree.path) : null;
+  const repoRelativePath = contextTree
+    ? resolveContextTreeRelativePath(absolutePath, {
+        contextTreePath: contextTree.path,
+        contextTreeRepoUrl: contextTree.repoUrl,
+      })
+    : null;
   return {
     origin: "tool_arg",
     localPath: absolutePath,
@@ -484,7 +496,7 @@ export type ToolCallProcessor = {
 export function createToolCallProcessor(
   emit: (event: SessionEvent) => void,
   contextTree?: ContextTreeBinding,
-  options: { cwd?: string | null } = {},
+  options: { cwd?: string | null; gitWriteTracker?: ContextTreeGitWriteTracker } = {},
 ): ToolCallProcessor {
   type Pending = { toolUseId: string; name: string; args: unknown; startedAt: number };
   const pending = new Map<string, Pending>();
@@ -496,7 +508,17 @@ export function createToolCallProcessor(
     const durationMs = Date.now() - entry.startedAt;
     const previewRaw = extractToolResultText(block.content);
     const resultPreview = previewRaw.length > 0 ? previewRaw.slice(0, TOOL_RESULT_PREVIEW_LIMIT) : undefined;
+    if (status === "error") options.gitWriteTracker?.captureBaseline();
     const refs = status === "ok" ? toolFileRefs(entry.name, entry.args, contextTree, options.cwd) : [];
+    const gitStatusRefs =
+      status === "ok"
+        ? (options.gitWriteTracker?.refsForSuccessfulToolCall({
+            toolName: entry.name,
+            toolUseId: entry.toolUseId,
+            existingRefs: refs,
+          }) ?? [])
+        : [];
+    const allRefs = [...refs, ...gitStatusRefs];
 
     emit({
       kind: "tool_call",
@@ -507,7 +529,7 @@ export function createToolCallProcessor(
         status,
         durationMs,
         ...(resultPreview !== undefined ? { resultPreview } : {}),
-        ...(refs.length > 0 ? { toolFileRefs: refs } : {}),
+        ...(allRefs.length > 0 ? { toolFileRefs: allRefs } : {}),
       },
     });
 
@@ -521,6 +543,7 @@ export function createToolCallProcessor(
       if (type === "assistant") {
         for (const block of extractContentBlocks(message)) {
           if (isToolUseBlock(block)) {
+            options.gitWriteTracker?.captureBaseline();
             pending.set(block.id, {
               toolUseId: block.id,
               name: block.name,
@@ -650,7 +673,6 @@ export function isSameModelFamily(a: string, b: string): boolean {
 export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
-  const gitMirrorManager = (config.gitMirrorManager as GitMirrorManager | undefined) ?? null;
   // Pre-resolved by registerBuiltinHandlers at process start. Undefined =
   // defer to the SDK's bundled native binary (see claude-executable.ts for
   // why we can't always rely on it).
@@ -670,33 +692,22 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let appliedModel = "";
   let appliedPayload: AgentRuntimeConfigPayload | null = null;
   /**
-   * On-demand worktrees materialised for this session — each entry `rm -rf`'d on
-   * shutdown via `removeSourceRepo`. INVARIANT: only ever push paths under
-   * `<agentHome>/worktrees/` here. NEVER push a predeclared source-repo path —
-   * those are agent-scoped persistent clones shared across chats, and cleanup
-   * would delete another chat's checkout. (Currently nothing pushes here.)
-   */
-  const ownedWorktrees: Array<{ clonePath: string }> = [];
-  /**
    * Latest chat-context snapshot for the active session. Used to build the
    * per-turn system-prompt block injected via `systemPrompt.append`. Cleared
    * when the session ends or `start()` runs for a fresh session.
    */
   let chatContextForPrompt: ChatContext | undefined;
-  const queuedInjectedMessages: SessionMessage[] = [];
-  const pendingAckMessages: SessionMessage[] = [];
+  const queuedInjectedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
+  const pendingAckMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
   let injectDrainInProgress = false;
   /**
-   * Predeclared source repos materialised by `prepareSourceRepos`. Surfaced in
-   * the per-turn prompt block so the LLM knows the absolute paths without
-   * having to discover them.
-   */
-  /**
-   * Predeclared source repos materialised at `<agentHome>/<localPath>/` by
-   * `prepareSourceRepos`. Surfaced in the per-chat system-prompt block so
-   * the LLM knows their absolute paths. NOT to be confused with on-demand
-   * worktrees the agent itself creates under `<agentHome>/worktrees/<name>/`
-   * — those are runtime-opaque (created by the agent, not by First Tree).
+   * Predeclared source repos the agent config declares at
+   * `<agentHome>/source-repos/<localPath>/`. Pure declaration (`declaredSourceRepos`) —
+   * the agent itself clones/refreshes them per its briefing protocol.
+   * Surfaced in the briefing so the LLM knows the absolute paths and
+   * upstream coordinates. NOT to be confused with on-demand worktrees the
+   * agent creates under `<agentHome>/worktrees/<name>/` — those are
+   * runtime-opaque (created and cleaned up by the agent, not by First Tree).
    */
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
   /**
@@ -904,42 +915,45 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Single helper for "turn closed → ack the pending inbox message AND
+   * Single helper for "turn closed → finish the pending inbox message AND
    * drop the replay stash". The two operations are paired everywhere a
    * turn finishes (success / sniff-permanent / forward-error / no-result /
    * non-success subtype / MAX_RETRIES / respawn-fail) — folding them into
    * one call keeps the invariant "stash lives only as long as the turn
    * still might need a replay" enforced in one place. Use the raw
-   * `markMessagesCompleted(message)` directly for per-message terminal
+   * `finishTurn(message, ...)` directly for per-message terminal
    * failures (e.g. inject's `toSDKUserMessage` catch) where the semantics is
    * "commit this single inbox message, NOT close the active SDK turn".
    */
-  function ackTurnClose(sessionCtx: SessionContext): void {
-    const message = pendingAckMessages.shift();
-    if (message) {
-      sessionCtx.markMessagesCompleted(message);
-    } else {
-      sessionCtx.markCompleted();
+  async function ackTurnClose(
+    status: "success" | "error",
+    reason: Parameters<typeof consumedErrorOutcome>[0] = "provider_clean_error",
+  ): Promise<void> {
+    const pending = pendingAckMessages.shift();
+    if (pending) {
+      const outcome = status === "success" ? { status, terminal: true } : consumedErrorOutcome(reason);
+      await pending.token.complete(pending.message, outcome);
     }
-    markCurrentPendingMessageConsumed(sessionCtx);
+    markCurrentPendingMessageProcessingStarted();
     stashedSdkMessage = null;
   }
 
-  function pushPendingAckMessage(message: SessionMessage, sessionCtx: SessionContext): void {
+  function pushPendingAckMessage(message: SessionMessage, token: DeliveryToken): void {
     const wasEmpty = pendingAckMessages.length === 0;
-    pendingAckMessages.push(message);
-    if (wasEmpty) sessionCtx.markMessagesConsumed(message);
+    pendingAckMessages.push({ message, token });
+    if (wasEmpty) token.processingStarted(message);
   }
 
-  function markCurrentPendingMessageConsumed(sessionCtx: SessionContext): void {
+  function markCurrentPendingMessageProcessingStarted(): void {
     const current = pendingAckMessages[0];
-    if (current) sessionCtx.markMessagesConsumed(current);
+    if (current) current.token.processingStarted(current.message);
   }
 
   async function pushInjectedMessage(
     message: SessionMessage,
     sessionCtx: SessionContext,
     sessionId: string,
+    token: DeliveryToken,
   ): Promise<void> {
     try {
       await maybeSwitchConfig(sessionCtx);
@@ -951,15 +965,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
       stashedSdkMessage = sdkMsg;
       inputController?.push(sdkMsg);
-      pushPendingAckMessage(message, sessionCtx);
+      pushPendingAckMessage(message, token);
     } catch (err) {
       sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
-      // `toSDKUserMessage` failed before the SDK ever saw the
-      // message, so no `result` event will ever fire to pair this
-      // entry with an SDK result. Ack here — re-handling on
-      // redelivery would re-hit the same conversion error
-      // (permanent failure semantics, design §4).
-      sessionCtx.markMessagesCompleted(message);
+      // The SDK has not seen this input yet, so there is no durable terminal
+      // evidence. Keep it recoverable instead of ACKing through `complete`.
+      token.retry(message, "claude_inject_format_failed");
     }
   }
 
@@ -974,9 +985,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           ctx === sessionCtx &&
           claudeSessionId === sessionId
         ) {
-          const message = queuedInjectedMessages.shift();
-          if (!message) continue;
-          await pushInjectedMessage(message, sessionCtx, sessionId);
+          const queued = queuedInjectedMessages.shift();
+          if (!queued) continue;
+          try {
+            await pushInjectedMessage(queued.message, sessionCtx, sessionId, queued.token);
+          } catch (err) {
+            sessionCtx.log(`inject drain failed: ${err instanceof Error ? err.message : String(err)}`);
+            queued.token.retry(queued.message, "claude_inject_drain_failed");
+          }
         }
       } finally {
         injectDrainInProgress = false;
@@ -985,6 +1001,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         }
       }
     })();
+  }
+
+  function retryBufferedMessages(reason: string): void {
+    const queued = queuedInjectedMessages.splice(0);
+    for (const item of queued) {
+      item.token.retry(item.message, reason);
+    }
+    const pending = pendingAckMessages.splice(0);
+    for (const item of pending) {
+      item.token.retry(item.message, reason);
+    }
   }
 
   /**
@@ -1145,7 +1172,15 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         repoUrl: contextTreeRepoUrl,
         branch: contextTreeBranch,
       },
-      { cwd },
+      {
+        cwd,
+        gitWriteTracker: createContextTreeGitWriteTracker({
+          contextTreePath,
+          contextTreeRepoUrl,
+          contextTreeBranch,
+          log: (message) => sessionCtx.log(message),
+        }),
+      },
     );
     // Auth-failure hint emission flag. Set when we detect a typed
     // `authentication_failed` on assistant / auth_status messages. Consulted
@@ -1167,11 +1202,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         if (!currentQuery) return;
 
         try {
-          sessionCtx.setRuntimeState("working");
-
           for await (const message of currentQuery) {
             // Every message refreshes lastActivity to prevent idle timeout
-            sessionCtx.touch();
+            sessionCtx.recordProviderActivity();
 
             toolCallProcessor.onMessage(message);
 
@@ -1249,7 +1282,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // Permanent stream API failure — ack so the server
                     // doesn't redeliver a message that would just produce
                     // the same error. Retry was exhausted upstream.
-                    ackTurnClose(sessionCtx);
+                    await ackTurnClose("error", "stream_api_error_posted");
                   } else {
                     // Genuine success — reset retry budget for the next turn.
                     // Do NOT reset on the sniff-hit branches above: a wrapped
@@ -1266,7 +1299,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       sessionCtx.log("Result forwarded to chat");
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                       // Turn closed cleanly — drain in-flight inbox entries.
-                      ackTurnClose(sessionCtx);
+                      await ackTurnClose("success");
                     } catch (err) {
                       const reason = err instanceof Error ? err.message : String(err);
                       sessionCtx.log(`Failed to forward result: ${reason}`);
@@ -1291,7 +1324,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       // counter when an unrelated future stream error
                       // fires.
                       retryCount = 0;
-                      ackTurnClose(sessionCtx);
+                      await ackTurnClose("error", "forward_failed");
                     }
                   }
                 } else {
@@ -1299,7 +1332,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                   // Same reset rationale as the forward-success branch above.
                   retryCount = 0;
                   sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
-                  ackTurnClose(sessionCtx);
+                  await ackTurnClose("success");
                 }
               } else {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
@@ -1316,9 +1349,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                 // SDK reported a turn-level error (non-success subtype):
                 // redelivery would just hit the same error — ack.
-                ackTurnClose(sessionCtx);
+                await ackTurnClose("error", "provider_clean_error");
               }
-              sessionCtx.setRuntimeState("idle");
               // Reset the auth-hint flag only on a SUCCESSFUL result. This
               // gives a clean slate for the next turn once auth is clearly
               // working, while suppressing a duplicate hint when the next
@@ -1330,7 +1362,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               }
             }
           }
-          sessionCtx.setRuntimeState("idle");
           return;
         } catch (err) {
           // Process crash, OOM, or unexpected termination
@@ -1356,9 +1387,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // would just go quiet.
             //
             // Wrap the emits so a broken `onSessionEvent` callback can't
-            // short-circuit the `setRuntimeState("error")` call below —
-            // if that one is skipped the SessionManager keeps the slot
-            // counted as `working` and never reclaims it.
+            // short-circuit turn cleanup below.
             try {
               const preview = errMsg.slice(0, 800);
               const reason = claudeSessionId
@@ -1371,13 +1400,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 `Failed to emit retry-exhaustion error event: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
               );
             }
-            sessionCtx.setRuntimeState("error");
             // Ack the in-flight entry for this turn. Without this the row
             // stays `delivered` server-side forever: the in-process
             // Deduplicator collapses every bind-reset replay so the entry
             // never re-dispatches and never gets acked. Per design §4
             // "permanent → ack".
-            ackTurnClose(sessionCtx);
+            await ackTurnClose("error", "retry_exhausted_notice_posted");
             return;
           }
 
@@ -1410,11 +1438,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           } catch (resumeErr) {
             const resumeMsg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr);
             sessionCtx.log(`Auto-resume failed: ${resumeMsg}`);
-            // Mirror the MAX_RETRIES branch above: leaving runtimeState at
-            // `working` would block the SessionManager's idle-suspend grace
-            // window from ever firing on this session, so the slot would
-            // never be reclaimed. Wrap the emits defensively so the
-            // setRuntimeState call still runs if the callback throws.
+            // Mirror the MAX_RETRIES branch above and close the turn
+            // deterministically so the slot can be reclaimed.
             try {
               sessionCtx.emitEvent({
                 kind: "error",
@@ -1426,11 +1451,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 `Failed to emit auto-resume error event: ${emitErr instanceof Error ? emitErr.message : String(emitErr)}`,
               );
             }
-            sessionCtx.setRuntimeState("error");
             // Same reasoning as the MAX_RETRIES branch above — without this
             // ack the row would loop in `delivered` forever, deduped on every
             // bind-reset replay. Per design §4 "permanent → ack".
-            ackTurnClose(sessionCtx);
+            await ackTurnClose("error", "auto_resume_failed_notice_posted");
             return;
           }
         }
@@ -1445,78 +1469,16 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
   const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
-  // `agentName` is the operator-chosen stable identifier (`config.yaml`'s
-  // `agents.<name>` key). Carried through to the per-session bootstrap so a
-  // single agent's multi-chat workspaces share the same workspace identity
-  // instead of churning a new id per chat.
-  const agentName = (config.agentName as string | undefined) ?? null;
 
   /**
-   * Materialise the runtime config's `gitRepos` as **predeclared source
-   * repos** at the **top level** of the agent home (`<cwd>/<localPath>/`),
-   * NOT under `<cwd>/worktrees/`. Per the 2026-05-22 redesign, the
-   * `worktrees/` subdirectory is reserved entirely for agent-on-demand
-   * worktrees the LLM creates per task — the runtime never pre-creates any.
-   *
-   * Idempotent across sessions: with the per-agent-home model the checkout
-   * is **shared** across every chat for this agent. First call clones the
-   * repo as a standalone clone; subsequent calls fetch and — when the
-   * checkout is clean and not in use by another live session — bring it to
-   * the latest default branch. A dirty or in-use checkout is left at its
-   * current commit, so pending state the LLM left behind survives.
-   *
-   * Concurrency: the manager serialises per clone path so two sessions
-   * starting at the same time don't race a clone / update for the same path.
-   * See proposals/agent-session-cwd-redesign.20260519.md §⑧ R1.
-   *
-   * Side effect: refreshes `sourceReposForPrompt` so the unified briefing
-   * builder (`runtime/agent-briefing.ts` → `## Source Repositories`) can
-   * list absolute paths + upstream coordinates for the LLM.
-   *
-   * Fail-fast semantics per PRD D10/D13/D14: any failure aborts the session
-   * and the error bubbles up to the caller (SessionManager).
+   * Derive the prompt-facing source-repo list from the runtime config's
+   * `gitRepos` — pure declaration, no git. The agent itself clones and
+   * refreshes `<cwd>/source-repos/<localPath>/` per the protocol in its
+   * briefing; the `worktrees/` subdirectory stays reserved for the per-task worktrees the
+   * agent creates and cleans up on its own.
    */
-  async function prepareSourceRepos(
-    workspace: string,
-    payload: AgentRuntimeConfigPayload | undefined,
-    sessionCtx: SessionContext,
-  ): Promise<void> {
-    // Delegates to the shared helper (runtime/source-repos.ts) so the SDK and
-    // TUI handlers share one worktree-lock / Hub-marker implementation rather
-    // than each carrying its own source-repo invariant.
-    //
-    // `payloadResolved` distinguishes "agent config truly says zero repos"
-    // from "we couldn't reach the cache/server and `payload` is undefined".
-    // Without this gate, a cache miss would compute an empty current-repo
-    // set and the state-reconcile path would `rm` every previously-managed
-    // clone. See `PrepareSourceReposParams.payloadResolved`.
-    sourceReposForPrompt = await prepareSourceReposShared({
-      workspace,
-      payload,
-      sessionCtx,
-      gitMirrorManager,
-      agentName,
-      payloadResolved: payload !== undefined,
-    });
-  }
-
-  /** Tear down all worktrees this session owns; best-effort. */
-  async function cleanupGitWorktrees(sessionCtx: SessionContext): Promise<void> {
-    // Drop this session's live-use references on shared source-repo checkouts so
-    // a later session is free to bring them to the latest default branch.
-    releaseSourceReposForSession(sessionCtx);
-    if (!gitMirrorManager) return;
-    while (ownedWorktrees.length > 0) {
-      const entry = ownedWorktrees.pop();
-      if (!entry) continue;
-      try {
-        await gitMirrorManager.removeSourceRepo(entry);
-      } catch (err) {
-        sessionCtx.log(
-          `Git: removeSourceRepo(${entry.clonePath}) failed — ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
+  function declareSourceRepos(workspace: string, payload: AgentRuntimeConfigPayload | undefined): void {
+    sourceReposForPrompt = declaredSourceRepos(workspace, payload);
   }
 
   /**
@@ -1589,6 +1551,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       workspacePath: workspace,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
+      contextTreeRepoUrl,
+      contextTreeBranch,
     });
   }
 
@@ -1633,7 +1597,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   const handler: AgentHandler = {
-    async start(message, sessionCtx) {
+    async start(message, sessionCtx, token) {
+      const hasExplicitDeliveryToken = token !== undefined;
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       ctx = sessionCtx;
       claudeSessionId = randomUUID();
       // Per agent-session-cwd-redesign: cwd is per-agent, shared by every
@@ -1650,10 +1616,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
       const chatContext = await fetchChatContextOrLog(sessionCtx);
       chatContextForPrompt = chatContext;
-      // Materialise gitRepos under `<cwd>/<localPath>/` before computing the
-      // briefing so the source-repo list reflects what the agent will see on
-      // disk. Failures here abort session creation (D10/D13).
-      await prepareSourceRepos(cwd, payload, sessionCtx);
+      // Declare gitRepos coordinates before computing the briefing so the
+      // source-repo list names the paths + upstreams the agent manages.
+      declareSourceRepos(cwd, payload);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = currentBriefing(sessionCtx, cwd, payload);
@@ -1676,14 +1641,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       stashedSdkMessage = sdkMsg;
       spawnQuery(claudeSessionId, sessionCtx);
       inputController?.push(sdkMsg);
-      pushPendingAckMessage(message, sessionCtx);
+      pushPendingAckMessage(message, deliveryToken);
       scheduleInjectedMessagesDrain(sessionCtx, claudeSessionId);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
-      return claudeSessionId;
+      return hasExplicitDeliveryToken
+        ? { sessionId: claudeSessionId, route: { kind: "owned", mode: "processing" } }
+        : claudeSessionId;
     },
 
-    async resume(message, sessionId, sessionCtx) {
+    async resume(message, sessionId, sessionCtx, token) {
+      const hasExplicitDeliveryToken = token !== undefined;
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       ctx = sessionCtx;
       claudeSessionId = sessionId;
       retryCount = 0;
@@ -1709,7 +1678,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
         const chatContext = await fetchChatContextOrLog(sessionCtx);
         chatContextForPrompt = chatContext;
-        // Intentionally NOT calling ensureAgentBootstrap / prepareSourceRepos /
+        // Intentionally NOT calling ensureAgentBootstrap / declareSourceRepos /
         // markWorkspaceInitComplete here — those write the new
         // `.first-tree-workspace/` agent-home layout, which would pollute the
         // legacy chat dir's v1.x `.agent/` and `<localPath>/` source repos.
@@ -1722,11 +1691,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // would only see the stale v1.x stable CLAUDE.md, dropping the
         // current `prompt.append`, resource-skill briefing, and Current Chat
         // Context the previous per-turn SDK append used to deliver.
-        // `sourceReposForPrompt` stays `[]` here on purpose: we don't run
-        // `prepareSourceRepos` against the legacy cwd, so the briefing's
-        // Source Repositories section is omitted for legacy resumes. The
-        // agent still finds the v1.x checkouts at their original `<localPath>/`
-        // — just without a top-level enumeration in the prompt.
+        // `sourceReposForPrompt` stays `[]` here on purpose: the declared
+        // paths are derived against the agent home, not the legacy cwd, so
+        // the briefing's Source Repositories section is omitted for legacy
+        // resumes. The agent still finds the v1.x checkouts at their
+        // original `<localPath>/` — just without a top-level enumeration in
+        // the prompt.
         writeAgentBriefing(legacyCwd, currentBriefing(sessionCtx, legacyCwd, payload));
         // Same convert-stash-then-spawn ordering as `start()` so a stream
         // error fired on the first turn of the resumed session can replay
@@ -1739,11 +1709,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         spawnQuery(sessionId, sessionCtx, sessionId);
         if (sdkMsg) {
           inputController?.push(sdkMsg);
-          if (message) pushPendingAckMessage(message, sessionCtx);
+          if (message) pushPendingAckMessage(message, deliveryToken);
         }
         scheduleInjectedMessagesDrain(sessionCtx, sessionId);
         sessionCtx.log(`Session resumed at legacy cwd (${sessionId})`);
-        return sessionId;
+        return hasExplicitDeliveryToken
+          ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+          : sessionId;
       }
 
       // Normal new-design resume path: cwd is the agent home.
@@ -1756,7 +1728,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
       const chatContext = await fetchChatContextOrLog(sessionCtx);
       chatContextForPrompt = chatContext;
-      await prepareSourceRepos(cwd, payload, sessionCtx);
+      declareSourceRepos(cwd, payload);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = currentBriefing(sessionCtx, cwd, payload);
@@ -1783,11 +1755,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         spawnQuery(freshSessionId, sessionCtx);
         if (freshSdkMsg) {
           inputController?.push(freshSdkMsg);
-          if (message) pushPendingAckMessage(message, sessionCtx);
+          if (message) pushPendingAckMessage(message, deliveryToken);
         }
         scheduleInjectedMessagesDrain(sessionCtx, freshSessionId);
         sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
-        return freshSessionId;
+        return hasExplicitDeliveryToken
+          ? { sessionId: freshSessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+          : freshSessionId;
       }
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
@@ -1799,23 +1773,27 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       spawnQuery(sessionId, sessionCtx, sessionId);
       if (resumeSdkMsg) {
         inputController?.push(resumeSdkMsg);
-        if (message) pushPendingAckMessage(message, sessionCtx);
+        if (message) pushPendingAckMessage(message, deliveryToken);
       }
       scheduleInjectedMessagesDrain(sessionCtx, sessionId);
 
       sessionCtx.log(`Session resumed (${sessionId})`);
-      return sessionId;
+      return hasExplicitDeliveryToken
+        ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+        : sessionId;
     },
 
-    inject(message) {
+    inject(message, token) {
       if (!claudeSessionId || !ctx) {
         ctx?.log("inject() called but no active session — dropping message");
-        return;
+        return { kind: "rejected", reason: "no_active_session", retryable: true };
       }
       const sessionCtx = ctx;
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       const sid = claudeSessionId;
-      queuedInjectedMessages.push(message);
+      queuedInjectedMessages.push({ message, token: deliveryToken });
       scheduleInjectedMessagesDrain(sessionCtx, sid);
+      return { kind: "owned", mode: "queued" };
     },
 
     async suspend() {
@@ -1842,26 +1820,21 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // be moot. Resume goes through `handler.resume(message, sessionId)`
       // which re-stashes from its own argument.
       stashedSdkMessage = null;
-      queuedInjectedMessages.length = 0;
-      pendingAckMessages.length = 0;
+      retryBufferedMessages("claude_suspend_before_terminal");
       injectDrainInProgress = false;
     },
 
     async shutdown() {
-      const sessionCtx = ctx;
       await handler.suspend();
       // Per agent-session-cwd-redesign: cwd is the per-agent home — shared
       // by every chat. shutdown() of ONE chat must NOT remove it (would
-      // wipe persistent state and worktrees other chats are using). The
-      // legacy `rmSync(cwd)` is therefore deleted.
+      // wipe persistent state and worktrees other chats are using).
       //
-      // Source repos materialised by `prepareSourceRepos` are agent-scoped
-      // shared resources, so we also no longer call cleanupGitWorktrees on
-      // shutdown — those checkouts are explicit operator-managed state (see
-      // proposals/agent-session-cwd-redesign §⑤). On-demand worktrees the
-      // agent itself created under `<cwd>/worktrees/<name>/` are also
-      // intentionally left alone — the agent owns their lifecycle.
-      if (sessionCtx) await cleanupGitWorktrees(sessionCtx);
+      // Source repos and the Context Tree clone are agent-managed state
+      // (the agent clones / refreshes them per its briefing protocol), and
+      // on-demand worktrees under `<cwd>/worktrees/<name>/` live until the
+      // agent itself removes them when the task closes (e.g. on PR merge) —
+      // the runtime touches none of them on shutdown.
       cwd = null;
     },
   };

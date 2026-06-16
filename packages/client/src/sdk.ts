@@ -389,7 +389,7 @@ export class FirstTreeHubSDK {
     );
   }
 
-  /** List the GitHub entities currently wired into a chat (live title/state included). */
+  /** List the GitHub entities currently wired into a chat. */
   async listChatGithubEntities(chatId: string): Promise<ChatGithubEntityListResponse> {
     return this.requestJson<ChatGithubEntityListResponse>(`/api/v1/agent/chats/${chatId}/github-entities`);
   }
@@ -399,10 +399,16 @@ export class FirstTreeHubSDK {
    * (pass at least one):
    * - `topic` — the human-readable label rendered by `resolveChatTitle` and
    *   shown in the workspace chat list.
-   * - `description` — a running summary of the chat's work + current state,
-   *   surfaced to the agent each turn and via `chat list`.
+   * - `description` — the chat's work summary + status report: task
+   *   background + plan + progress, serving both self-location (agent /
+   *   teammate) and a human-facing status report. May use Markdown. Max
+   *   1500 chars; surfaced to the agent each turn and via `chat list`.
+   *   Keep blockers / decisions out of it — those go to a `--request`.
    * Pass either field as `null` to clear it (a cleared `topic` makes the title
    * fall back to first-message preview / participant names).
+   *
+   * `chat update` (CLI) is the user-facing entry point for this; the
+   * `set-topic` command is a retained deprecated alias.
    *
    * Auth: caller must count as the chat's owner (server-side `assertOwner`
    * gate) — either the creator, or any worker agent when no agent owner is

@@ -22,6 +22,12 @@ import { MENTION_REGEX, openQuestionRequestSchema, requestResolutionSchema } fro
  */
 export type RequestState = "open" | "discussing" | "resolved" | "closed";
 
+export type RequestLifecycleProjection = {
+  state: RequestState;
+  selections: Record<string, string>;
+  closeReason: string | null;
+};
+
 /** Read the resolved `@`-mention uuids from a message's metadata. */
 export function readMentions(metadata: Record<string, unknown> | null | undefined): string[] {
   const raw = metadata?.mentions;
@@ -74,19 +80,44 @@ export function readResolution(metadata: Record<string, unknown> | null | undefi
  * the card.
  */
 export function deriveRequestState(request: Message, thread: readonly Message[]): RequestState {
+  return deriveRequestLifecycleProjection(request, thread).state;
+}
+
+export function deriveRequestLifecycleProjection(
+  request: Message,
+  thread: readonly Message[],
+): RequestLifecycleProjection {
   const targets = readMentions(request.metadata);
   const canResolve = (senderId: string): boolean => senderId === request.senderId || targets.includes(senderId);
   let discussing = false;
   for (const m of thread) {
     const res = readResolution(m.metadata);
     if (res && res.request === request.id && canResolve(m.senderId)) {
-      return res.kind === "answered" ? "resolved" : "closed";
+      if (res.kind === "answered") {
+        const payload = readRequestPayload(request.metadata);
+        return {
+          state: "resolved",
+          selections: payload ? recoverAnswerSelections(m.content, payload.questions) : {},
+          closeReason: null,
+        };
+      }
+      return { state: "closed", selections: {}, closeReason: res.reason ?? null };
     }
     // A threaded reply that is NOT a resolution is a "chat about this"
     // discussion turn — the question is being clarified, not answered.
     if (m.id !== request.id && m.inReplyTo === request.id) discussing = true;
   }
-  return discussing ? "discussing" : "open";
+  return { state: discussing ? "discussing" : "open", selections: {}, closeReason: null };
+}
+
+export function deriveRequestLifecycleProjectionMap(
+  thread: readonly Message[],
+): Map<string, RequestLifecycleProjection> {
+  const byRequestId = new Map<string, RequestLifecycleProjection>();
+  for (const m of thread) {
+    if (m.format === "request") byRequestId.set(m.id, deriveRequestLifecycleProjection(m, thread));
+  }
+  return byRequestId;
 }
 
 /**
@@ -95,19 +126,7 @@ export function deriveRequestState(request: Message, thread: readonly Message[])
  * the close carried no reason. Used for the closed card's copy.
  */
 export function readCloseReason(request: Message, thread: readonly Message[]): string | null {
-  const targets = readMentions(request.metadata);
-  for (const m of thread) {
-    const res = readResolution(m.metadata);
-    if (
-      res &&
-      res.request === request.id &&
-      res.kind === "closed" &&
-      (m.senderId === request.senderId || targets.includes(m.senderId))
-    ) {
-      return res.reason ?? null;
-    }
-  }
-  return null;
+  return deriveRequestLifecycleProjection(request, thread).closeReason;
 }
 
 /** Viewer is "related" to a request iff they are the asker or the single target. */
@@ -210,6 +229,97 @@ export function buildAnswerDraft(payload: OpenQuestionRequest, selections: Recor
  */
 export function allRequiredSelected(payload: OpenQuestionRequest, selections: Record<string, string>): boolean {
   return payload.questions.every((q) => !q.required || (q.kind === "single" && Boolean(selections[q.prompt])));
+}
+
+/**
+ * The request the viewer is BLOCKED on: the OLDEST (FIFO) `open` or
+ * `discussing` `format="request"` directed at the viewer. The blocking UI pins
+ * this one, hides every timeline item after it, and only lifts once it
+ * resolves — then the next-oldest unresolved question becomes the block.
+ * Returns `null` when nothing needs the viewer's answer. Watchers /
+ * non-targets never block (they aren't in `metadata.mentions`).
+ *
+ * Oldest-first is the deliberate contrast with `findDockableRequest`'s
+ * newest-first scan: a block is a queue the human works front-to-back, so the
+ * earliest unanswered question must come up first.
+ */
+export function findBlockingRequest(thread: readonly Message[], viewerAgentId: string | null): Message | null {
+  if (!viewerAgentId) return null;
+  // `thread` is oldest-first; walk forward so the earliest live question wins.
+  for (const m of thread) {
+    if (m.format !== "request") continue;
+    if (!readMentions(m.metadata).includes(viewerAgentId)) continue;
+    // Skip a request whose structured payload doesn't parse: it has no usable
+    // answer surface (the dock renders nothing), so blocking on it would hide
+    // the timeline with no way to answer. Skipping lets the next parseable live
+    // question become the block instead of stranding the viewer.
+    if (!readRequestPayload(m.metadata)) continue;
+    const st = deriveRequestState(m, thread);
+    if (st === "open" || st === "discussing") return m;
+  }
+  return null;
+}
+
+/**
+ * Whether the viewer has answered enough to send, treating the blocking
+ * surface's two answer channels as equals. Free text alone is a complete answer
+ * to the whole request — typing an answer resolves the question even for an
+ * option (single-select) question, so the human is never forced to pick a
+ * listed option. Absent free text, every required question must be answered by
+ * its own option selection. Drives the send button's enabled state.
+ */
+export function allRequiredAnswered(
+  payload: OpenQuestionRequest,
+  selections: Record<string, string>,
+  freeText: string,
+): boolean {
+  // Any free text is itself the answer — enable send (it stands in as the
+  // answer for every question via `buildResolveAnswer`).
+  if (freeText.trim().length > 0) return true;
+  // No free text: each required question needs an option pick. A required
+  // free-text question is unsatisfied here, since it has no free text.
+  return payload.questions.every((q) => !q.required || (q.kind === "single" && Boolean(selections[q.prompt])));
+}
+
+/**
+ * Build the resolving reply's content from the two answer channels — option
+ * `selections` (keyed by prompt) and the composer's `freeText`. Emits one
+ * canonical `"<prompt> → <answer>"` line per question — the same shape
+ * `recoverAnswerSelections` parses back for the resolved card's echo — using
+ * the selection for single-select questions and the free text for free-text
+ * questions. When the request carries no free-text question but the viewer
+ * typed an extra note (`allowExtra`), the note is appended as a trailing line.
+ *
+ * This makes the blocking dock send byte-identical to the inline
+ * `RequestCard` answer block, so both surfaces resolve and echo the same way.
+ */
+export function buildResolveAnswer(
+  payload: OpenQuestionRequest,
+  selections: Record<string, string>,
+  freeText: string,
+): string {
+  const note = freeText.trim();
+  const lines = payload.questions
+    .map((q) => ({
+      q,
+      // An option question is answered by its selection; if none was picked the
+      // free text stands in as the answer (so free-text-only answers an option
+      // question too). A free-text question is answered by the free text.
+      answer: q.kind === "single" ? (selections[q.prompt] ?? note) : note,
+    }))
+    // Drop optional questions the viewer left unanswered through both channels —
+    // otherwise the resolving content carries `"<prompt> → —"` placeholder lines
+    // the resolved card would echo as the "answer". Required questions are
+    // always answered by the send gate, so they survive.
+    .filter(({ q, answer }) => q.required || answer.length > 0)
+    .map(({ q, answer }) => `${q.prompt} → ${answer || "—"}`);
+  // The note is used as an answer for any question lacking an option selection
+  // (a free-text question, or an option question answered by free text), so only
+  // append it as a standalone trailing note when every question was answered by
+  // its own selection.
+  const noteConsumed = payload.questions.some((q) => !selections[q.prompt]);
+  if (note && !noteConsumed) lines.push(note);
+  return lines.join("\n");
 }
 
 /**

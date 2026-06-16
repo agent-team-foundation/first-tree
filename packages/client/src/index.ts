@@ -19,16 +19,20 @@ export type { AgentSlotConfig } from "./runtime/agent-slot.js";
 export { AgentSlot } from "./runtime/agent-slot.js";
 export type { ContextTreeBinding } from "./runtime/bootstrap.js";
 export {
-  contextTreeCloneDir,
   ensureWorkspaceRuntimeDir,
   migrateLegacyRuntimeLayout,
-  syncAgentContextTree,
-  syncContextTree,
+  resolveAgentContextTreeBinding,
 } from "./runtime/bootstrap.js";
 // Capabilities
 export { probeClaudeCodeCapability } from "./runtime/capabilities/claude-code.js";
 export { probeCodexCapability } from "./runtime/capabilities/codex.js";
-export { probeCapabilities } from "./runtime/capabilities/index.js";
+export {
+  probeCapabilities,
+  REPROBE_MAX_AGE_MS,
+  reprobeOnReconnect,
+  revalidateCapabilities,
+  shouldFullReprobe,
+} from "./runtime/capabilities/index.js";
 export type {
   AdoptOptions,
   ChildCategory,
@@ -47,8 +51,6 @@ export type { SelfFence, WorkspaceFence } from "./runtime/doc-snapshots.js";
 export { buildMessageDocumentSnapshots } from "./runtime/doc-snapshots.js";
 export type { Classification, ErrorKind, ErrorSource, RetryStrategy } from "./runtime/error-taxonomy.js";
 export { clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./runtime/error-taxonomy.js";
-export type { GitMirrorManager, GitMirrorManagerOptions } from "./runtime/git-mirror-manager.js";
-export { createGitMirrorManager, GitMirrorError } from "./runtime/git-mirror-manager.js";
 export type {
   AgentHandler,
   HandlerConfig,

@@ -169,24 +169,198 @@ export type WaitForReadyInput = {
   name: string;
   timeoutMs?: number;
   pollIntervalMs?: number;
+  /**
+   * Deadline granted *after* we auto-select "Resume from summary". Claude then
+   * generates the summary (an LLM round-trip over the whole session) before it
+   * reaches the ready surface, which routinely exceeds the normal `timeoutMs`
+   * start window. Without a fresh, longer deadline a large session would answer
+   * the menu and still time out, re-deadlocking on the next resume attempt.
+   */
+  summaryReadyTimeoutMs?: number;
+  /** Test seams; default to the real tmux helpers (capturePane / sendKey). */
+  capture?: (sessionName: string) => Promise<string>;
+  send?: (sessionName: string, key: string) => Promise<void>;
 };
 
 /**
- * Poll capture-pane until both the bypass-permissions marker and a `❯`
- * input prompt line are visible. Resolves on success, throws on timeout.
+ * Claude Code 2.1.170 may show a one-time workspace trust dialog before the
+ * normal TUI surface when a fresh agent workspace has never been opened by the
+ * local user. First Tree creates and owns these agent workspaces; without
+ * acknowledging this dialog the handler never reaches the ready marker.
+ */
+export function isWorkspaceTrustPrompt(pane: string): boolean {
+  return (
+    pane.includes("Quick safety check:") &&
+    pane.includes("Yes, I trust this folder") &&
+    pane.includes("Enter to confirm")
+  );
+}
+
+/**
+ * Claude Code shows a one-time "resume strategy" menu before the normal TUI
+ * surface when resuming a large / old session — e.g. "This session is 2h 41m
+ * old and 119.5k tokens. … We recommend resuming from a summary." with options
+ * `1. Resume from summary (recommended)` / `2. Resume full session as-is` /
+ * `3. Don't ask me again`. The detached runtime has no human to answer it, so
+ * without acknowledging this menu the handler never reaches the ready marker
+ * and the session start times out, looping forever on every resume attempt.
+ * We match on the two stable option labels plus the confirm footer so the
+ * normal ready surface never trips it.
+ */
+export function isResumeSummaryPrompt(pane: string): boolean {
+  return (
+    pane.includes("Resume from summary") && pane.includes("Resume full session") && pane.includes("Enter to confirm")
+  );
+}
+
+/**
+ * `--dangerously-skip-permissions` makes Claude Code show a one-time
+ * Bypass-Permissions warning ("Yes, I accept" / "No, exit") before the ready
+ * surface unless the HOME already accepted it (a settings flag or a prior
+ * interactive accept). First Tree sets that flag nowhere, so a fresh HOME (new
+ * machine / cloud agent) hits this modal and deadlocks like the trust dialog.
+ *
+ * Match the full warning title AND both option labels: the captured pane also
+ * contains prior transcript on resume, so a loose "Bypass Permissions mode"
+ * match could fire on conversation text and inject a stray keystroke. The full
+ * title + both options is a live-modal shape that ordinary prose won't satisfy
+ * (and `waitForReady` checks the ready surface first regardless).
+ */
+export function isBypassPermissionsWarning(pane: string): boolean {
+  return (
+    pane.includes("WARNING: Claude Code running in Bypass Permissions mode") &&
+    pane.includes("Yes, I accept") &&
+    pane.includes("No, exit")
+  );
+}
+
+/**
+ * Claude Code drops into an interactive login wall when credentials are missing
+ * or expired — a login-method selector the detached runtime cannot answer (a
+ * human must re-authenticate in a browser). waitForReady throws
+ * {@link ClaudeTuiLoginRequiredError} on sight; the taxonomy classifies it
+ * `permanent` so the session stops the otherwise-infinite retry loop and
+ * surfaces to an operator instead of silently spamming retries.
+ *
+ * Match ONLY the live selector (its title AND an option label), never loose
+ * "run /login" / OAuth phrasing: that text routinely appears in ordinary
+ * transcript content (a resumed pane re-renders prior conversation), and a
+ * false positive here is irreversible — it marks a healthy session permanent.
+ * Under-detecting (a non-selector auth failure falls back to the normal
+ * retry + ready-timeout path) is the safe direction.
+ */
+export function isClaudeLoginWall(pane: string): boolean {
+  return (
+    pane.includes("Select login method") &&
+    (pane.includes("Login with Claude account") || pane.includes("Sign in with your Anthropic account"))
+  );
+}
+
+/**
+ * Thrown by {@link waitForReady} when the TUI is parked on an unanswerable
+ * login / re-auth wall. The `name` is the classification contract: the error
+ * taxonomy maps it to a `permanent` `claude_login_required` so SessionManager
+ * stops retrying and surfaces the session as errored.
+ */
+export class ClaudeTuiLoginRequiredError extends Error {
+  constructor(sessionName: string) {
+    super(`claude TUI requires re-authentication (run /login) — session=${sessionName}`);
+    this.name = "ClaudeTuiLoginRequiredError";
+  }
+}
+
+/** True iff the pane shows the loaded ready surface (marker + `❯` input line). */
+function isReadySurface(pane: string): boolean {
+  return pane.includes(READY_MARKER) && pane.split("\n").some((line) => USER_RE.test(line));
+}
+
+/**
+ * Poll capture-pane until the bypass-permissions marker and a `❯` input prompt
+ * line are visible. Resolves on success, throws on timeout.
+ *
+ * The ready surface is checked FIRST every poll. A loaded TUI always shows the
+ * marker + input prompt, and on resume the captured pane ALSO re-renders prior
+ * transcript -- which can quote modal/login strings. Checking ready first means
+ * a healthy session is never mistaken for a modal (no stray keystroke) or for
+ * the login wall (no false permanent failure) just because its visible history
+ * mentions those words.
+ *
+ * Only before the ready surface exists do we handle the one-time interactive
+ * prompts instead of deadlocking on them:
+ * - the workspace trust prompt (acknowledged with Enter);
+ * - the bypass-permissions warning (accept option 1, "Yes, I accept");
+ * - the large-session "resume strategy" menu (select option 1, "Resume from
+ *   summary", so over-threshold sessions resume from a summary).
+ * The login wall is NOT keystroke-answerable, so it throws
+ * {@link ClaudeTuiLoginRequiredError} (classified `permanent`) to stop the
+ * retry loop and surface to an operator rather than time out forever.
  */
 export async function waitForReady(input: WaitForReadyInput): Promise<void> {
   const timeoutMs = input.timeoutMs ?? 30_000;
   const pollIntervalMs = input.pollIntervalMs ?? 250;
+  const summaryReadyTimeoutMs = input.summaryReadyTimeoutMs ?? 120_000;
+  const capture = input.capture ?? capturePane;
+  const send = input.send ?? sendKey;
   const started = Date.now();
-  while (Date.now() - started < timeoutMs) {
-    const pane = await capturePane(input.name);
-    if (pane.includes(READY_MARKER) && pane.split("\n").some((line) => USER_RE.test(line))) {
+  let deadline = started + timeoutMs;
+  let acceptedWorkspaceTrust = false;
+  let acceptedBypassWarning = false;
+  let acceptedResumeSummary = false;
+  while (Date.now() < deadline) {
+    // The TUI prints U+00A0 (NBSP) inside its chrome (see tui-markers.ts);
+    // normalize to ASCII space once so every substring match below is robust
+    // to that, regardless of which gaps Claude renders as NBSP.
+    const pane = (await capture(input.name)).replace(/\u00A0/g, " ");
+    // Ready wins over every modal/login check below -- see the function doc:
+    // a ready pane can also show prior transcript that quotes those strings.
+    if (isReadySurface(pane)) {
       return;
+    }
+    // Not ready yet. An unanswerable login wall can't be keystroked away; fail
+    // fast and let the taxonomy mark it permanent so we stop retrying forever.
+    if (isClaudeLoginWall(pane)) {
+      throw new ClaudeTuiLoginRequiredError(input.name);
+    }
+    if (!acceptedWorkspaceTrust && isWorkspaceTrustPrompt(pane)) {
+      acceptedWorkspaceTrust = true;
+      await send(input.name, "Enter");
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      continue;
+    }
+    if (!acceptedBypassWarning && isBypassPermissionsWarning(pane)) {
+      acceptedBypassWarning = true;
+      // Accept by selecting option 1 ("Yes, I accept") explicitly by number.
+      // We must NOT rely on Enter hitting the default highlight here: if the
+      // modal ever defaulted to "No, exit", a bare Enter would QUIT claude.
+      // "1" pins the affirmative option; if number-select is unsupported it is
+      // ignored and Enter falls on the default (the affirmative option 1, as
+      // with the trust dialog).
+      await send(input.name, "1");
+      await new Promise((r) => setTimeout(r, 100));
+      await send(input.name, "Enter");
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      continue;
+    }
+    if (!acceptedResumeSummary && isResumeSummaryPrompt(pane)) {
+      acceptedResumeSummary = true;
+      // Select option 1 ("Resume from summary") explicitly by its number rather
+      // than relying on Enter hitting the default highlight: it pins the
+      // over-threshold path to a summary even if a future build reorders or
+      // re-highlights the menu. (If number-select is unsupported, the "1" is
+      // ignored and Enter still falls on the recommended default -- option 1.)
+      await send(input.name, "1");
+      await new Promise((r) => setTimeout(r, 100));
+      await send(input.name, "Enter");
+      // Summary generation needs a fresh, longer window than a normal start,
+      // or a large session answers the menu and still times out.
+      deadline = Date.now() + summaryReadyTimeoutMs;
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      continue;
     }
     await new Promise((r) => setTimeout(r, pollIntervalMs));
   }
-  throw new Error(`claude TUI did not become ready within ${timeoutMs}ms (session=${input.name})`);
+  const waitedMs = Date.now() - started;
+  throw new Error(`claude TUI did not become ready within ${waitedMs}ms (session=${input.name})`);
 }
 
 /**

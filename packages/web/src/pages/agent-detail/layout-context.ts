@@ -39,7 +39,6 @@ export type AgentDetailContext = {
   boundClientLabel: string | null;
   setupRuntimeProvider: RuntimeProvider;
   onOpenBindDialog: () => void;
-  onOpenRebindDialog: () => void;
   bindClientPending: boolean;
 
   // Identity / Appearance (PATCH /agents/:uuid via dialog — bypasses SaveBar)

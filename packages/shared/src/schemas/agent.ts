@@ -148,7 +148,9 @@ export const createAgentSchema = z.object({
 export type CreateAgent = z.infer<typeof createAgentSchema>;
 
 export const updateAgentSchema = z.object({
-  type: agentTypeSchema.optional(),
+  // Agent kind is established at creation. Human mirrors are owned by the
+  // member lifecycle, so generic PATCH must not support human <-> agent flips.
+  type: z.never().optional(),
   /**
    * Phase 2 of the agent-naming refactor promoted `displayName` to NOT NULL
    * at the DB level, so null is no longer an accepted update — clearing the
@@ -165,8 +167,8 @@ export const updateAgentSchema = z.object({
   /**
    * One-shot bind. NULL → ID still allowed (admin claims an unbound agent for
    * a known client). ID → another ID and ID → null are rejected at the
-   * service layer; cross-client moves go through `rebindAgent`, which runs
-   * owner / org / capability checks atomically.
+   * service layer — once bound, an agent's client is immutable (there is no
+   * move/re-bind path; provision a new agent instead).
    */
   clientId: z.string().min(1).max(100).nullable().optional(),
   /**
@@ -176,20 +178,6 @@ export const updateAgentSchema = z.object({
   avatarColorToken: avatarColorTokenSchema.nullable().optional(),
 });
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
-
-/**
- * Service-level rebind input. Admin / owner re-binds an agent to a new
- * client and/or a new runtime provider in one atomic operation.
- *
- * `force` bypasses the capability-match check (e.g. when the client is
- * offline and capabilities are stale).
- */
-export const rebindAgentSchema = z.object({
-  clientId: z.string().min(1).max(100),
-  runtimeProvider: runtimeProviderSchema,
-  force: z.boolean().optional(),
-});
-export type RebindAgent = z.infer<typeof rebindAgentSchema>;
 
 export const agentSchema = z.object({
   uuid: z.string(),
@@ -311,5 +299,13 @@ export type AgentPinnedMessage = z.infer<typeof agentPinnedMessageSchema>;
 export const listAgentsQuerySchema = paginationQuerySchema.extend({
   type: agentTypeSchema.optional(),
   query: z.string().trim().max(60).optional(),
+  addressableOnly: z
+    .preprocess((value) => {
+      if (value === undefined || value === "") return undefined;
+      if (value === true || value === "true" || value === "1") return true;
+      if (value === false || value === "false" || value === "0") return false;
+      return value;
+    }, z.boolean().optional())
+    .default(false),
 });
 export type ListAgentsQuery = z.infer<typeof listAgentsQuerySchema>;

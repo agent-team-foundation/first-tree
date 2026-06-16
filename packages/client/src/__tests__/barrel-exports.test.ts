@@ -18,8 +18,7 @@ describe("public barrel exports", () => {
 
     expect(runtime.AgentSlot).toBeDefined();
     expect(runtime.AgentRuntime).toBeDefined();
-    expect(runtime.createGitMirrorManager).toBeDefined();
-    expect(runtime.hashUrl).toBeDefined();
+    expect(runtime.resolveAgentContextTreeBinding).toBeDefined();
     expect(runtime.registerShutdownHook).toBeDefined();
   });
 

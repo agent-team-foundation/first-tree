@@ -26,16 +26,22 @@ agent) goes through explicit `chat send`. C6 flipped accordingly (was
 the agent's output stream is its reasoning trace and must not be suppressed
 for chat-related reasons.
 
-**Open-question lifecycle (current contract — "chat about this"):** An open
-question is a `format="request"` message — an agent asking a single human — and
-it raises a tracked red dot (`open_request_count`) on the human target.
-`inReplyTo` is now **pure threading**: a plain reply threads under the question
-(a "chat about this" discussion) and leaves it **OPEN**. Resolution is
-**explicit**, carried by `metadata.resolves = {request: <requestId>, kind:
-"answered" | "closed", reason?}`, and **only** that field drives the red-dot −1.
-It is written by the human's web UI on a clean answer (`kind="answered"`), or by
-the asking agent via `first-tree chat send ... --answer <requestId>` / `first-tree chat send ... --close <requestId>`. Authz:
-only the target human or the asking agent may resolve. See C8 for the full flow.
+**Open-question lifecycle (current contract — blocking ask):** An open question
+is a `format="request"` message — an agent asking a single human — and it raises
+a tracked red dot (`open_request_count`) on the human target AND **blocks that
+chat for them**: the web UI pins the question and hides every message after it
+until they answer (several open asks are worked oldest-first / FIFO; the block is
+viewer-local, so other participants keep the full timeline). **Any answer
+resolves it** — the human picking an option OR typing free text both write
+`metadata.resolves = {request: <requestId>, kind: "answered" | "closed",
+reason?}`, the only field that drives the red-dot −1 (and unblocks the chat).
+There is no human-side "discuss without resolving"; an agent may still thread a
+non-resolving follow-up. The asking agent can also resolve from the CLI
+(`first-tree chat send ... --answer <requestId>`) or withdraw a moot question
+(`first-tree chat send ... --close <requestId>`). Authz: only the target human
+or the asking agent may resolve. Authoring: **prefer a free-text question (omit
+`--option`); add `--option` only when every option is a short, single-meaning,
+mutually-exclusive pick.** See C8 for the full flow.
 
 ## How to run
 
@@ -69,7 +75,7 @@ Outcome vocabulary (`assert` references these):
 | C5 | Stay silent on re-delivered / no-op messages | `86e05523` / `69c60d85` / `7a4051ab` | guard (anti over-correction) | `NO_SEND` |
 | C6 | Plain status reply to a human | `96fc8b00` (#852) | positive (plan A) | `SEND(human)`, `¬REQUEST` |
 | C7 | A request cannot target an agent — reach agents with plain send | real QA `pr860-real-runtime-agent-qa` | guard (constraint) | `SEND(agent)`, `¬REQUEST(agent)` |
-| C8 | "Chat about this": discuss under a question, then resolve explicitly | open-question lifecycle contract | positive (lifecycle) | reply ⇒ stays open; `RESOLVE(request)` clears dot |
+| C8 | Answering a blocking question — option or free text both resolve | open-question lifecycle contract | positive (lifecycle) | human answer ⇒ `RESOLVE(answered)` clears dot + unblocks |
 
 ---
 
@@ -84,7 +90,7 @@ Outcome vocabulary (`assert` references these):
   first-tree-staging chat send yuezengwu --request \
     "Tree drift on system/cloud/chat/workspace-conversations.md (owners: baixiaohang, yuezengwu). The Engagement paragraph would change one sentence to match the new archive policy." \
     --question "Open a tree PR to edit this owned node?" \
-    --option "Approve" --option "Discuss first"
+    --option "Approve" --option "Hold"
   ```
 - **assert:** `REQUEST(human=yuezengwu)` is emitted before any tree-PR creation; the ask is NOT left only in the turn's reasoning trace.
 
@@ -156,26 +162,25 @@ Outcome vocabulary (`assert` references these):
 - **Expected (new contract):** to reach an agent, use plain `SEND(agent)` — `chat send <agent> "..."`. Reserve `--request`/`--question` for the agent→human direction.
 - **assert:** `¬REQUEST(agent)` (a `--request` aimed at an agent is a contract violation, not just suboptimal) ∧ `SEND(agent)` for agent-to-agent work. Complements C4.
 
-## C8 — "Chat about this": discuss under a question, then resolve explicitly  *(positive — lifecycle)*
+## C8 — Answering a blocking question: option or free text both resolve  *(positive — lifecycle)*
 
-- **Source:** "chat about this" feature contract (open-question lifecycle). Generalizes the C1–C3 ask path through its full life: ask → discuss → resolve.
-- **Situation:** The agent asked a human a tracked question via `--request` (e.g. C1's "Open a tree PR to edit this owned node?"), so a red dot (`open_request_count`) is live on the human. The human, instead of picking an option, **replies under the question** — *"先别开 PR,这个 Engagement 段落的措辞我想再讨论一下"* — threading a "chat about this" discussion. More turns may follow on either side.
-- **Decision point:** Does a plain reply on the thread clear the question, and how does it finally get resolved?
+- **Source:** open-question lifecycle (blocking ask). Generalizes the C1–C3 ask path through its full life: ask → block → answer (resolve).
+- **Situation:** The agent asked a human a tracked question via `--request` (e.g. C1's "Open a tree PR to edit this owned node?"), so a red dot (`open_request_count`) is live on the human and that chat is **blocked** for them — the UI pins the question and hides everything after it. The human answers: either picks an option, or types free text (e.g. *"先别开 PR,先按 archive-policy PR 处理"*).
+- **Decision point:** What does the human's answer do, and how else can the question be resolved?
 - **Behavior (current contract):**
-  - A plain reply only **threads** (`inReplyTo` = pure threading). The question stays **OPEN** and the red dot does **not** clear — discussion, by either party, never resolves. (Changed from the old model, where any reply by the asker to its own request closed it.)
-  - Resolution is **explicit**, via `metadata.resolves = {request: <requestId>, kind: "answered" | "closed", reason?}`, and **only** that field drives the red-dot −1:
-    - Human's web UI writes it on a clean answer (`kind="answered"`).
-    - The **asking agent** resolves it from the discussion via the new CLI:
-      ```bash
-      # agreement reached in the thread → resolve as answered
-      first-tree chat send yuezengwu "Reworded the Engagement paragraph as discussed; opening the tree PR now." --answer <requestId>
-      # decided not to proceed → withdraw the question
-      first-tree chat send yuezengwu "Dropping the edit — handling it in the separate archive-policy PR instead." --close <requestId>
-      ```
+  - **Any human answer resolves it.** Picking an option OR typing free text both attach `metadata.resolves` (kind="answered"), clear the red dot, and unblock the chat. There is no human-side "reply without resolving" — the blocking answer surface always resolves. If the human's answer is a pushback rather than a decision, that pushback **is** the (free-text) answer; the agent reads it and **re-asks** if it still needs a decision.
+  - `metadata.resolves = {request: <requestId>, kind: "answered" | "closed", reason?}` is the **only** field that drives the red-dot −1. Besides the human's web answer, the **asking agent** can resolve from the CLI:
+    ```bash
+    # answered out-of-band → resolve as answered
+    first-tree chat send yuezengwu "Reworded the Engagement paragraph as discussed; opening the tree PR now." --answer <requestId>
+    # decided not to proceed → withdraw the question
+    first-tree chat send yuezengwu "Dropping the edit — handling it in the separate archive-policy PR instead." --close <requestId>
+    ```
+  - An agent's bare threaded follow-up (`inReplyTo`, no `resolves`) adds context without resolving — `inReplyTo` is pure threading.
   - **Authz:** only the target human or the asking agent may resolve.
   - **Invalid resolves fail loud (no silent write).** The server rejects the whole send — message included, via tx rollback — when `resolves.request` does not exist in this chat (stale/bogus id), points at a non-`request` message, or the sender is neither the target nor the asker. No "answered"/"closed" message with a dangling `metadata.resolves`/`inReplyTo` ever lands in history. Re-resolving an already-resolved question stays a **soft success** (threads as confirmation, idempotent counter), so the human-answers-while-agent-closes race never errors either side.
-  - **Re-asking opens a NEW, independent question** — it never auto-supersedes the old one. (Changed from the old model, where a request-shaped reply replaced the parent.) If after closing one question the agent needs a fresh decision, it fires another `--request`, raising a new red dot; the closed one stays closed.
-- **assert:** a plain reply under the question is `¬RESOLVE` and the dot stays up; the dot clears **only** on an explicit `resolves` write — human-UI `answered`, or asking-agent `first-tree chat send ... --answer <requestId>` / `first-tree chat send ... --close <requestId>`; a re-ask is a new `REQUEST(human)`, `¬supersede` of the prior question.
+  - **Re-asking opens a NEW, independent question** — it never auto-supersedes the old one; the new question raises a fresh red dot and a fresh block.
+- **assert:** the human's answer (option or free text) is a `RESOLVE(answered)` that clears the dot and unblocks; an agent's bare threaded follow-up is `¬RESOLVE`; a re-ask is a new `REQUEST(human)`, `¬supersede` of the prior question.
 
 ---
 
@@ -184,7 +189,7 @@ Outcome vocabulary (`assert` references these):
 | Decision-guide branch | Positive (do it) | Guard (don't over-do it) |
 |---|---|---|
 | Ask a human (`--request`) | C1, C2, C3, C8 (ask phase) | C5 (no spurious ask), C6 (no escalation from informational reply), C7 (never at an agent) |
-| Resolve a question (`RESOLVE`) | C8 (`chat send ... --answer` / `chat send ... --close`, or human-UI answer) | C8 (a plain reply must NOT resolve; a re-ask must NOT supersede) |
-| Reach a human plain (`SEND(human)`) | C6, C8 (discussion threads under the question) | C5 (no courtesy send) |
+| Resolve a question (`RESOLVE`) | C8 (human answer = option/free text; or `chat send ... --answer` / `--close`) | C8 (an agent's bare follow-up must NOT resolve; a re-ask must NOT supersede) |
+| Reach a human plain (`SEND(human)`) | C6, C8 (agent follow-up context under a question) | C5 (no courtesy send) |
 | Reach an agent (`SEND(agent)`) | C4 | C5 (no courtesy ping), C7 (plain send, not `--request`) |
 | Fire no `chat send` (`NO_SEND`) | C5 | — |

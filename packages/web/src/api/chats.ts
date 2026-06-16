@@ -44,9 +44,8 @@ export function getChatTokenUsage(chatId: string): Promise<ChatTokenUsage> {
 }
 
 /**
- * List the GitHub entities bound to this chat. Server fetches live state
- * from GitHub on every request — nothing is cached server-side — so the
- * client should rely on React Query's `staleTime` to keep this gentle.
+ * List the GitHub entities bound to this chat. The server reads its local
+ * mapping projection only; state freshness comes from GitHub webhooks.
  */
 export function listChatGithubEntities(chatId: string): Promise<ChatGithubEntityListResponse> {
   return api.get<ChatGithubEntityListResponse>(`/chats/${encodeURIComponent(chatId)}/github-entities`);

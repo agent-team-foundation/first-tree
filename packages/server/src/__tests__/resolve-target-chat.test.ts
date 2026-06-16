@@ -110,6 +110,64 @@ describe("resolveTargetChat", () => {
     });
   });
 
+  it("seeds state when the current webhook creates a matching mapping", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedDelegate(app, admin.organizationId, admin.memberId, `dlg-${randomUUID().slice(0, 6)}`);
+
+    const result = await resolveTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      entity: pr50,
+      relatedEntities: [],
+      eventType: "pull_request",
+      action: "opened",
+      entityStateSeed: { entityType: "pull_request", entityKey: "owner/repo#50", state: "draft" },
+    });
+
+    const [mapping] = await app.db
+      .select({ entityState: githubEntityChatMappings.entityState })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.chatId, result.chatId))
+      .limit(1);
+    expect(mapping?.entityState).toBe("draft");
+  });
+
+  it("does not apply a related entity's state seed to the new mapping", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedDelegate(app, admin.organizationId, admin.memberId, `dlg-${randomUUID().slice(0, 6)}`);
+
+    const issueResolved = await resolveTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      entity: issue42,
+      relatedEntities: [],
+      eventType: "issues",
+      action: "opened",
+    });
+    const prResolved = await resolveTargetChat(app.db, {
+      organizationId: admin.organizationId,
+      humanAgentId: admin.humanAgentUuid,
+      delegateAgentId: delegate,
+      entity: pr50,
+      relatedEntities: [issue42],
+      eventType: "pull_request",
+      action: "opened",
+      entityStateSeed: { entityType: "issue", entityKey: "owner/repo#42", state: "closed" },
+    });
+
+    expect(prResolved.chatId).toBe(issueResolved.chatId);
+    const [prMapping] = await app.db
+      .select({ entityState: githubEntityChatMappings.entityState })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#50"))
+      .limit(1);
+    expect(prMapping?.entityState).toBe("open");
+  });
+
   it("reuses the existing chat on a direct re-hit", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

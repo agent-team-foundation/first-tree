@@ -8,26 +8,36 @@ import type {
   SessionEvent,
   SessionState,
 } from "@first-tree/shared";
-import { deriveRepoLocalPath, isImageBatchRefContent, isImageRefContent } from "@first-tree/shared";
+import {
+  deriveRepoLocalPath,
+  isImageBatchRefContent,
+  isImageRefContent,
+  SOURCE_REPOS_DIRNAME,
+} from "@first-tree/shared";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
 import { buildAgentEnv, createParticipantCache, formatInboundContent, resolveSenderLabel } from "./agent-io.js";
-import { type ContextTreeBinding, syncAgentContextTree } from "./bootstrap.js";
+import { type ContextTreeBinding, resolveAgentContextTreeBinding } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
 import { reresolveUnboundTree } from "./context-tree-rebind.js";
-import { Deduplicator } from "./deduplicator.js";
 import type { SelfFence } from "./doc-snapshots.js";
 import { type Classification, clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./error-taxonomy.js";
 import type {
   AgentHandler,
   AgentIdentity,
+  DeliveryToken,
   HandlerConfig,
   HandlerFactory,
+  HandlerRouteReceipt,
+  ResumeResult,
   SessionContext,
   SessionMessage,
+  StartResult,
+  TurnOutcome,
 } from "./handler.js";
 import { findImagePath, writeImage } from "./image-store.js";
+import { InboxDeliveryCoordinator } from "./inbox-delivery-coordinator.js";
 import { redactErrorPreview } from "./redact-error-preview.js";
 import { createResultSink, type Trigger } from "./result-sink.js";
 import { SessionRegistry } from "./session-registry.js";
@@ -67,6 +77,13 @@ type SessionEntry = {
   /** Original message used to bootstrap this session, replayed on retry. */
   startMessage: SessionMessage | null;
   /**
+   * Messages that arrived while start/resume is in transient retry. They must
+   * not replace `startMessage`: the older accepted inbox entry is still ahead
+   * of them in the ACK prefix, so retry consumes the original trigger first and
+   * injects these only after the handler is live again.
+   */
+  retryQueuedMessages: SessionMessage[];
+  /**
    * When we entered transient-retry mode this is set to the evicted mapping
    * captured at startNewSession time. Lets a retry re-use the same resume
    * path (handler.resume) instead of regressing to handler.start.
@@ -75,8 +92,19 @@ type SessionEntry = {
 };
 
 type PendingMessage = {
-  message: SessionMessage;
+  message: SessionMessage | null;
   chatId: string;
+  deliveryKind: SlotDeliveryKind;
+};
+
+type SlotDeliveryKind = "fresh" | "recovery" | "control";
+
+type SessionCommandType = "session:suspend" | "session:resume" | "session:terminate";
+
+type ManualPauseGuard = {
+  generation: number;
+  pausedAfterEntryId: number | null;
+  createdAt: number;
 };
 
 /**
@@ -86,9 +114,9 @@ type PendingMessage = {
  * Two layouts coexist after the per-agent-home redesign (#506) and its
  * legacy-resume hotfix (#530):
  *  - NEW chats run cwd = the per-agent home (`<workspaceRoot>` itself, see
- *    `acquireAgentHome`), with predeclared source repos materialised at the
- *    TOP LEVEL (`<workspaceRoot>/<localPath>`). No `<workspaceRoot>/<chatId>/`
- *    dir is ever created.
+ *    `acquireAgentHome`), with predeclared source repos materialised under the
+ *    `source-repos/` dir (`<workspaceRoot>/source-repos/<localPath>`). No
+ *    `<workspaceRoot>/<chatId>/` dir is ever created.
  *  - LEGACY chats (created before #506) keep their original per-chat cwd
  *    `<workspaceRoot>/<chatId>/`, with their own v1.x layout (source repos at
  *    `<workspaceRoot>/<chatId>/<localPath>`); #530 resumes them in place.
@@ -145,17 +173,30 @@ export function resolveSessionDocRoot(workspaceRoot: string, chatId: string): st
  * a doc the agent wrote in the workspace could never be previewed.
  *
  * Resolution:
- *  - exactly one repo → that repo's worktree, the unambiguous markdown-link
- *    root. The worktree is materialised at `<sessionRoot>/<localPath>`, so the
- *    base MUST be that ABSOLUTE path. Returning a bare relative `localPath`
- *    (the old behaviour) made the runtime resolve it against its own
- *    `process.cwd()` — the launch dir, not the session workspace — so it
- *    silently failed to find any doc and cloud preview was dead.
+ *  - exactly one repo → that source repo's clone, the unambiguous markdown-link
+ *    root, as an ABSOLUTE path. Returning a bare relative `localPath` (the old
+ *    behaviour) made the runtime resolve it against its own `process.cwd()` —
+ *    the launch dir, not the session workspace — so cloud preview was dead.
+ *    The `source-repos/` layer applies ONLY to the new agent-home layout
+ *    (`sessionRoot === workspaceRoot`): the clone is at
+ *    `<workspaceRoot>/source-repos/<localPath>`. A legacy pre-#506 per-chat
+ *    session (`sessionRoot` is `<workspaceRoot>/<chatId>`, NOT the agent home)
+ *    keeps its prior flat base `<sessionRoot>/<localPath>` — that layout never
+ *    had a `source-repos/` layer, so prepending one would point preview at a
+ *    directory that does not exist.
  *  - zero or multiple repos → the session doc root.
  */
-export function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload, sessionRoot: string): string {
+export function documentBasePathFromRuntimeConfig(
+  payload: AgentRuntimeConfigPayload,
+  sessionRoot: string,
+  workspaceRoot: string,
+): string {
   const localPath = singleRepoLocalPathFromPayload(payload);
-  return localPath ? join(sessionRoot, localPath) : sessionRoot;
+  if (!localPath) return sessionRoot;
+  // New agent-home layout only: source clones live under `source-repos/`.
+  return sessionRoot === workspaceRoot
+    ? join(sessionRoot, SOURCE_REPOS_DIRNAME, localPath)
+    : join(sessionRoot, localPath);
 }
 
 /**
@@ -186,10 +227,21 @@ export function singleRepoLocalPathFromPayload(payload: AgentRuntimeConfigPayloa
  * itself, not the narrower source-repo top — so on-demand `worktrees/<task>/`
  * checkouts (PR #498's idiom) also resolve.
  */
-export function selfFenceFromRuntimeConfig(payload: AgentRuntimeConfigPayload | null, sessionRoot: string): SelfFence {
+export function selfFenceFromRuntimeConfig(
+  payload: AgentRuntimeConfigPayload | null,
+  sessionRoot: string,
+  workspaceRoot: string,
+): SelfFence {
   if (!payload) return { agentHome: sessionRoot };
-  const singleRepoLocalPath = singleRepoLocalPathFromPayload(payload);
-  return singleRepoLocalPath ? { agentHome: sessionRoot, singleRepoLocalPath } : { agentHome: sessionRoot };
+  const name = singleRepoLocalPathFromPayload(payload);
+  if (!name) return { agentHome: sessionRoot };
+  // `singleRepoLocalPath` is the source repo's path RELATIVE to `agentHome`
+  // (the snapshot pipeline resolves it as `resolve(agentHome, …)`). The
+  // `source-repos/` layer applies ONLY to the new agent-home layout
+  // (`sessionRoot === workspaceRoot`); a legacy pre-#506 per-chat session keeps
+  // its prior flat relative path `<name>`, matching `documentBasePathFromRuntimeConfig`.
+  const singleRepoLocalPath = sessionRoot === workspaceRoot ? `${SOURCE_REPOS_DIRNAME}/${name}` : name;
+  return { agentHome: sessionRoot, singleRepoLocalPath };
 }
 
 function repoLocalPath(repo: GitRepo): string {
@@ -222,8 +274,8 @@ type SessionManagerConfig = {
    * Resolver for the agent's Context Tree binding, used to lazily upgrade a
    * tree-LESS slot to tree-bound at session start (new-tree onboarding sets the
    * org `context_tree` only after the slot starts). Defaults to a live
-   * `syncAgentContextTree(sdk)`; injected as a stub in tests to avoid spawning
-   * real git.
+   * `resolveAgentContextTreeBinding(sdk, workspaceRoot)` — pure config
+   * resolution, no git; injected as a stub in tests to avoid the HTTP probe.
    */
   resolveContextTreeBinding?: () => Promise<ContextTreeBinding | null>;
   /** Callback when a session state changes (per-session granularity). */
@@ -259,7 +311,7 @@ const MAX_EVICTED_MAPPINGS = 500;
 
 /**
  * Minimum spacing between lazy Context-Tree re-resolutions for a slot that is
- * currently tree-LESS. Caps the per-new-session git + HTTP probe for a
+ * currently tree-LESS. Caps the per-new-session HTTP probe for a
  * permanently-tree-less agent at once per minute, while still picking up a tree
  * configured later within this window. Tree-BOUND slots never reach this gate
  * (they exit on the cheap already-bound check).
@@ -291,13 +343,29 @@ function previousAvailable(entry: SessionEntry): boolean {
   return Boolean(entry.claudeSessionId) || Boolean(entry.retryFromEvicted?.claudeSessionId);
 }
 
-type TrackedInFlightEntry = {
-  entryId: number;
-  messageId: string;
-  dedupKey: string;
-  accepted: boolean;
-  consumed: boolean;
-};
+function normalizeStartReceipt(result: StartResult): {
+  sessionId: string;
+  route: Extract<HandlerRouteReceipt, { kind: "owned" }>;
+} {
+  if (typeof result === "string") {
+    return { sessionId: result, route: { kind: "owned", mode: "queued" } };
+  }
+  return result;
+}
+
+function normalizeResumeReceipt(result: ResumeResult): {
+  sessionId: string;
+  route: Extract<HandlerRouteReceipt, { kind: "owned" }> | null;
+} {
+  if (typeof result === "string") {
+    return { sessionId: result, route: { kind: "owned", mode: "queued" } };
+  }
+  return result;
+}
+
+function normalizeRouteReceipt(receipt: HandlerRouteReceipt | undefined): HandlerRouteReceipt {
+  return receipt ?? { kind: "rejected", reason: "missing_route_receipt", retryable: true };
+}
 
 /**
  * Encode a resilience event into the closed `error` event payload by
@@ -314,9 +382,9 @@ export class SessionManager {
   private readonly sessions = new Map<string, SessionEntry>();
   private readonly evictedMappings = new Map<string, { claudeSessionId: string; lastActivity: number }>();
   private readonly config: SessionManagerConfig;
+  private readonly inboxDelivery: InboxDeliveryCoordinator;
   /** Last lazy Context-Tree re-resolution attempt (epoch ms); see `TREE_RERESOLVE_INTERVAL_MS`. */
   private lastTreeResolveAttemptAt = 0;
-  private readonly deduplicator = new Deduplicator(1000);
   /**
    * Current trigger (messageId + senderId) per chat — the message that kicked
    * off the current or most-recent turn. Read by `forwardResult` (via the
@@ -326,41 +394,15 @@ export class SessionManager {
    */
   private readonly currentTrigger = new Map<string, Trigger>();
   private readonly registry: SessionRegistry | null;
-  /**
-   * In-flight inbox entries per chat — delivered entries that this process
-   * has handed toward a handler and has not yet committed. Completion is
-   * identity based: handlers report the concrete SessionMessage or fused
-   * batch they actually consumed, and the runtime sends one ack-through for
-   * that batch's last inbox entry.
-   *
-   * Kept here (not on `SessionEntry`) because dispatch may push an entryId
-   * before any session record exists for the chat (`startNewSession` runs
-   * `routeMessage` first), and the queue must survive a session being
-   * suspended / evicted between dispatch and markCompleted.
-   *
-   * Sized small in practice: usually 1, briefly up to N when several
-   * messages land while a turn is mid-flight. Entries that were delivered
-   * but only queued inside a handler remain tracked until the handler's
-   * actual consuming turn calls `markMessagesCompleted`.
-   * See
-   * docs/inflight-message-recovery-design.md §4.
-   */
-  private readonly inFlightEntries = new Map<string, TrackedInFlightEntry[]>();
-  /**
-   * Per-chat admission barrier. It serializes the pre-handler admission phase
-   * only: config refresh, eager asset fetch, marking the entry accepted, and
-   * invoking `routeMessage()`. It deliberately does NOT wait for the handler's
-   * turn promise to settle, so A2 can still be appended/injected while A1's
-   * attempt is running; it just cannot overtake A1 before A1 reaches handler
-   * membership.
-   */
-  private readonly admissionQueues = new Map<string, Promise<void>>();
-  private readonly recoveringChats = new Map<string, Promise<void>>();
-  private readonly recoveryActivationReady = new Set<string>();
-  private readonly requiresInboxRecovery = new Set<string>();
   private readonly pendingQueue: PendingMessage[] = [];
   private readonly lastReportedStates = new Map<string, SessionState>();
   private readonly sessionRuntimeStates = new Map<string, RuntimeState>();
+  private readonly manualPauseGuards = new Map<string, ManualPauseGuard>();
+  private manualPauseGeneration = 0;
+  /** Cache of chatId → organizationId, resolved via `getChatDetail`. A chat's
+   *  org is immutable, so this is a cheap permanent memo that keeps doc-capture
+   *  uploads off the hot path after the first lookup. */
+  private readonly chatOrgIds = new Map<string, string>();
   private lastReportedRuntimeState: RuntimeState | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private runtimeReaffirmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -368,10 +410,16 @@ export class SessionManager {
 
   constructor(config: SessionManagerConfig) {
     this.config = config;
+    this.inboxDelivery = new InboxDeliveryCoordinator({
+      ackEntry: config.ackEntry,
+      recoverChat: config.recoverChat,
+      onWorkChanged: (chatId) => this.projectSessionRuntime(chatId),
+      log: config.log,
+    });
     this.registry = config.registryPath ? new SessionRegistry(config.registryPath) : null;
     this.idleTimer = setInterval(() => this.evictIdle(), 10_000);
     // Independent of `evictIdle` (which early-continues on freshly-active
-    // sessions): re-affirm working / blocked / error sessions so the
+    // sessions): re-affirm working / error sessions so the
     // server-side `runtime_state_at` stays inside the freshness window.
     // Jittered setTimeout (rearmed each tick) instead of setInterval so
     // many clients don't align on the same instant.
@@ -391,7 +439,7 @@ export class SessionManager {
 
   /**
    * Dispatch an inbox entry. ACK is deferred until the handler reports a
-   * completed turn via `ctx.markMessagesCompleted(...)`.
+   * completed turn via `ctx.finishTurn(...)`.
    *
    * Delayed ACK semantics (post inflight-message-recovery): the entry stays
    * `delivered` server-side until forwardResult succeeds (or the handler
@@ -408,109 +456,106 @@ export class SessionManager {
   async dispatch(entry: InboxEntryWithMessage): Promise<void> {
     const chatId = entry.chatId ?? entry.message.chatId;
     const messageId = entry.message.id;
+    const isRecoveryRedelivery = this.inboxDelivery.takeRecoveryActivationReady(chatId);
 
-    if (this.shouldRecoverBeforeDispatch(chatId)) {
-      await this.recoverChatBeforeDispatch(chatId, entry.id, messageId);
+    if (
+      !isRecoveryRedelivery &&
+      this.inboxDelivery.shouldRecoverBeforeDispatch(
+        chatId,
+        this.hasHealthyLiveHandler(chatId) || this.hasPendingTransientRetry(chatId),
+        this.hasLocalSessionRecord(chatId),
+      )
+    ) {
+      await this.inboxDelivery.recoverIfNeeded(chatId, `before_dispatch:${entry.id}:${messageId}`);
       return;
     }
 
-    // 1. Deduplication — key by (chatId, messageId). Dedup is now only an
-    // in-process duplicate-injection guard for entries still tracked by the
-    // active local turn/batch. It must not independently re-ack: ack-through
-    // can commit older delivered prefix rows, so only a concrete successful
-    // turn completion may send the cursor.
-    const dedupKey = `${chatId}:${messageId}`;
-    if (this.deduplicator.isDuplicate(dedupKey)) {
-      const queue = this.inFlightEntries.get(chatId);
-      const stillInFlight = queue ? queue.some((tracked) => tracked.entryId === entry.id) : false;
-      this.config.log.debug({ chatId, messageId, entryId: entry.id, stillInFlight }, "duplicate message observed");
-      if (stillInFlight) return;
-      this.config.log.debug(
-        { chatId, messageId, entryId: entry.id },
-        "duplicate key is not tied to an active entry; reprocessing redelivery",
-      );
-    }
-
-    // Track before routing. The handler (or teardown path) commits by
-    // message identity once work is complete; nothing acks until then.
-    const queue = this.inFlightEntries.get(chatId);
-    const tracked = { entryId: entry.id, messageId, dedupKey, accepted: false, consumed: false };
-    if (queue) queue.push(tracked);
-    else this.inFlightEntries.set(chatId, [tracked]);
+    const decision = this.inboxDelivery.receive(entry);
+    if (decision.kind !== "deliver") return;
+    const { work } = decision;
+    const message = this.extractMessage(entry);
 
     let routePromise: Promise<void> | undefined;
-    await this.withAdmissionBarrier(chatId, async () => {
-      if (!this.isTrackedEntry(chatId, entry.id)) return;
+    try {
+      await this.inboxDelivery.runAdmission(work, async () => {
+        if (!this.inboxDelivery.hasEntry(work)) return;
 
-      // 2. Step 4: refresh runtime config if the message brought a newer
-      // version. This is the *only* trigger for active-session re-config —
-      // matches PRD §7.2. Failures are logged but do not block delivery on
-      // M1: handler integration in Step 6 will decide whether to use the
-      // stale config or hold the message until the server recovers.
-      if (this.config.agentConfigCache) {
-        try {
-          await this.config.agentConfigCache.refreshIfNewer(
-            this.config.agentIdentity.agentId,
-            entry.message.configVersion,
-          );
-        } catch (err) {
-          this.config.log.warn(
-            {
-              chatId,
-              agentId: this.config.agentIdentity.agentId,
-              incomingVersion: entry.message.configVersion,
-              err,
-            },
-            "config version mismatch — skipping refresh",
-          );
+        // 2. Step 4: refresh runtime config if the message brought a newer
+        // version. This is the *only* trigger for active-session re-config —
+        // matches PRD §7.2. Failures are logged but do not block delivery on
+        // M1: handler integration in Step 6 will decide whether to use the
+        // stale config or hold the message until the server recovers.
+        if (this.config.agentConfigCache) {
+          try {
+            await this.config.agentConfigCache.refreshIfNewer(
+              this.config.agentIdentity.agentId,
+              entry.message.configVersion,
+            );
+          } catch (err) {
+            this.config.log.warn(
+              {
+                chatId,
+                agentId: this.config.agentIdentity.agentId,
+                incomingVersion: entry.message.configVersion,
+                err,
+              },
+              "config version mismatch — skipping refresh",
+            );
+          }
         }
-      }
 
-      if (!this.isTrackedEntry(chatId, entry.id)) return;
+        if (!this.inboxDelivery.hasEntry(work)) return;
 
-      // Note: the "mention_only" filter now lives on the server (see
-      // services/message.ts sendMessage fan-out). If an entry reaches dispatch
-      // we assume server already decided we should handle it — this avoids a
-      // double-guard that drifted between server / client in early M1.
+        // Note: the "mention_only" filter now lives on the server (see
+        // services/message.ts sendMessage fan-out). If an entry reaches dispatch
+        // we assume server already decided we should handle it — this avoids a
+        // double-guard that drifted between server / client in early M1.
 
-      // 4. Extract message content (handler does not see inbox metadata)
-      const message = this.extractMessage(entry);
+        // 4b. Pull any referenced image bytes to local disk before the handler
+        // renders. Bytes live in the server's `attachments` object store (uploaded
+        // by the sender); each client fetches once and caches under the chat's
+        // images dir. Best-effort — a failed fetch leaves the handler to surface a
+        // "not available on this device" placeholder for that ref.
+        await this.ensureImagesLocal(message);
 
-      // 4b. Pull any referenced image bytes to local disk before the handler
-      // renders. Bytes live in the server's `attachments` object store (uploaded
-      // by the sender); each client fetches once and caches under the chat's
-      // images dir. Best-effort — a failed fetch leaves the handler to surface a
-      // "not available on this device" placeholder for that ref.
-      await this.ensureImagesLocal(message);
-
-      if (!this.markTrackedEntryAccepted(chatId, entry.id)) return;
-
-      // 4c. Lazily resolve a tree-LESS Context Tree binding before routing this
-      // message to a (possibly new) session. The binding is frozen at
-      // `AgentSlot.start()`, but the new-tree onboarding flow sets the org
-      // `context_tree` only afterwards — without this the fresh agent would
-      // never pick up its tree until a daemon restart. Done INSIDE the
-      // admission barrier so the `handlerConfig` patch lands before routing and
-      // a same-chat follow-up can't race a half-resolved binding, and only when
-      // no live session exists for this chat (a start / resume, never an inject
-      // into an active turn). No-op + no network once bound.
-      if (!this.hasHealthyLiveHandler(chatId)) {
-        await this.ensureContextTreeBinding();
-      }
-
-      // 5. Route by session state. ACK no longer happens inside route — the
-      // entry sits in `inFlightEntries` until the handler completes the
-      // concrete message/batch it actually consumed. Do not await inside the
-      // admission barrier: for Codex/TUI, route promises can span the whole
-      // turn, but same-chat later messages must still be able to append once
-      // this entry has reached handler membership.
-      routePromise = this.routeMessage(chatId, message).catch((err) => {
-        if (this.isTrackedEntry(chatId, entry.id)) {
-          this.clearInFlightForRecovery(chatId, "route_message_failed");
+        // 4c. Lazily resolve a tree-LESS Context Tree binding before routing this
+        // message to a (possibly new) session. The binding is frozen at
+        // `AgentSlot.start()`, but the new-tree onboarding flow sets the org
+        // `context_tree` only afterwards — without this the fresh agent would
+        // never pick up its tree until a daemon restart. Done INSIDE the
+        // admission barrier so the `handlerConfig` patch lands before routing and
+        // a same-chat follow-up can't race a half-resolved binding, and only when
+        // no live session exists for this chat (a start / resume, never an inject
+        // into an active turn). No-op + no network once bound.
+        if (!this.hasHealthyLiveHandler(chatId)) {
+          await this.ensureContextTreeBinding();
         }
-        throw err;
+
+        if (this.shouldBufferForManualPause(chatId)) {
+          this.bufferForManualPause(chatId, message, isRecoveryRedelivery ? "recovery" : "fresh");
+          return;
+        }
+
+        // 5. Route by session state. ACK no longer happens inside route — the
+        // entry sits in the coordinator ledger until the handler completes the
+        // concrete message/batch it actually consumed. Do not await inside the
+        // admission barrier: for Codex/TUI, route promises can span the whole
+        // turn, but same-chat later messages must still be able to append once
+        // this entry has reached handler membership.
+        const deliveryKind: SlotDeliveryKind = isRecoveryRedelivery ? "recovery" : "fresh";
+        routePromise = this.routeMessage(chatId, message, deliveryKind).catch((err) => {
+          if (this.inboxDelivery.hasEntry(work)) {
+            this.inboxDelivery.retryTurn(chatId, message, "route_message_failed");
+          }
+          throw err;
+        });
       });
-    });
+    } catch (err) {
+      if (this.inboxDelivery.hasEntry(work)) {
+        this.inboxDelivery.retryTurn(chatId, message, "admission_failed");
+      }
+      throw err;
+    }
 
     if (routePromise) await routePromise;
   }
@@ -553,17 +598,32 @@ export class SessionManager {
   }
 
   /** Handle a server-issued session command. Terminate drops all local state without reporting back. */
-  async handleCommand(chatId: string, command: "session:suspend" | "session:terminate"): Promise<void> {
+  async handleCommand(chatId: string, command: SessionCommandType): Promise<void> {
     if (command === "session:suspend") {
+      this.setManualPauseGuard(chatId);
       const session = this.sessions.get(chatId);
       if (session?.status === "active") {
         this.config.log.info({ chatId }, "suspend command received");
         this.suspendSession(session);
       }
+      this.projectSessionRuntime(chatId);
+      return;
+    }
+
+    if (command === "session:resume") {
+      this.clearManualPauseGuard(chatId);
+      const session = this.sessions.get(chatId);
+      if (session && session.status !== "active") {
+        this.config.log.info({ chatId }, "resume command received");
+        await this.resumeSession(session, undefined, "fresh");
+      }
+      this.projectSessionRuntime(chatId);
+      this.drainPendingQueue();
       return;
     }
 
     if (command === "session:terminate") {
+      this.clearManualPauseGuard(chatId);
       const session = this.sessions.get(chatId);
       const hadMapping = this.evictedMappings.has(chatId);
       if (!session && !hadMapping) return;
@@ -588,12 +648,9 @@ export class SessionManager {
         if (this.pendingQueue[i]?.chatId === chatId) this.pendingQueue.splice(i, 1);
       }
 
-      // Terminate is operator-intent — ack every queued in-flight entry
-      // so the server doesn't redeliver them on the next bind. Server-side
-      // pushed messages get silently dropped here; this is the documented
-      // terminate semantics (operator chose to wipe this chat's session,
-      // anything mid-flight is collateral).
-      this.drainAllInFlightEntries(chatId);
+      // Terminate is operator intent: accepted delivery work can be drained,
+      // but coordinator keeps any uncommitted tail as recovery debt.
+      await this.inboxDelivery.drainForTerminate(chatId);
 
       this.recomputeRuntimeState();
       this.persistRegistry();
@@ -714,7 +771,7 @@ export class SessionManager {
   /**
    * Compatibility hook for AgentSlot's bind listener. Bind-time recovery is
    * now server-driven; chat-scoped same-socket recovery is requested lazily
-   * by `dispatch` when no healthy live handler exists.
+   * by `dispatch` when a locally held chat has no healthy live handler.
    */
   noteBindRecoveryComplete(): void {
     // Intentionally no-op.
@@ -722,95 +779,158 @@ export class SessionManager {
 
   // ---- Internal -----------------------------------------------------------
 
-  private async withAdmissionBarrier(chatId: string, op: () => Promise<void>): Promise<void> {
-    const prev = this.admissionQueues.get(chatId) ?? Promise.resolve();
-    const next = prev.then(op, op);
-    this.admissionQueues.set(chatId, next);
-    const cleanup = () => {
-      if (this.admissionQueues.get(chatId) === next) this.admissionQueues.delete(chatId);
-    };
-    void next.then(cleanup, cleanup);
-    await next;
-  }
-
-  private isTrackedEntry(chatId: string, entryId: number): boolean {
-    return this.inFlightEntries.get(chatId)?.some((tracked) => tracked.entryId === entryId) ?? false;
-  }
-
-  private markTrackedEntryAccepted(chatId: string, entryId: number): boolean {
-    const tracked = this.inFlightEntries.get(chatId)?.find((entry) => entry.entryId === entryId);
-    if (!tracked) return false;
-    tracked.accepted = true;
-    return true;
-  }
-
   private hasHealthyLiveHandler(chatId: string): boolean {
     const entry = this.sessions.get(chatId);
     return entry?.status === "active" && entry.suspending === null;
   }
 
-  private shouldRecoverBeforeDispatch(chatId: string): boolean {
-    if (this.recoveryActivationReady.has(chatId)) {
-      this.recoveryActivationReady.delete(chatId);
+  private hasPendingTransientRetry(chatId: string): boolean {
+    const entry = this.sessions.get(chatId);
+    return Boolean(entry && entry.retryAttempt > 0);
+  }
+
+  private hasLocalSessionRecord(chatId: string): boolean {
+    return this.sessions.has(chatId) || this.evictedMappings.has(chatId);
+  }
+
+  private setManualPauseGuard(chatId: string): void {
+    this.manualPauseGuards.set(chatId, {
+      generation: ++this.manualPauseGeneration,
+      pausedAfterEntryId: this.inboxDelivery.latestEntryId(chatId),
+      createdAt: Date.now(),
+    });
+  }
+
+  private clearManualPauseGuard(chatId: string): void {
+    this.manualPauseGuards.delete(chatId);
+  }
+
+  private shouldBufferForManualPause(chatId: string): boolean {
+    return this.manualPauseGuards.has(chatId);
+  }
+
+  private bufferForManualPause(chatId: string, message: SessionMessage, deliveryKind: SlotDeliveryKind): void {
+    if (
+      message.inboxEntryId !== undefined &&
+      this.pendingQueue.some((queued) => queued.message?.inboxEntryId === message.inboxEntryId)
+    ) {
+      return;
+    }
+    const guard = this.manualPauseGuards.get(chatId);
+    this.config.log.info(
+      { chatId, entryId: message.inboxEntryId, deliveryKind, pauseGeneration: guard?.generation },
+      "manual pause guard buffered inbox delivery",
+    );
+    this.pendingQueue.push({ message, chatId, deliveryKind });
+    this.projectSessionRuntime(chatId);
+  }
+
+  private errorCompletionRetryReason(outcome: TurnOutcome): string | null {
+    if (outcome.status === "success") return null;
+    if (outcome.completion === "consumed") return null;
+    if (outcome.errorKind === "deterministic") return "complete_requires_terminal_rejected";
+    if (outcome.errorKind === "transient") return "complete_transient_error_requires_retry";
+    if (outcome.errorKind === "unknown") return "complete_unknown_error_requires_retry";
+    return "complete_error_missing_classification";
+  }
+
+  private warnRejectedErrorCompletion(chatId: string, outcome: TurnOutcome, reason: string): void {
+    if (outcome.status !== "error") return;
+    this.config.log.warn(
+      {
+        chatId,
+        errorKind: outcome.errorKind,
+        completion: outcome.completion,
+        reason,
+      },
+      "delivery error completion is not ACK-eligible; retrying instead",
+    );
+  }
+
+  private async completeDeliveryTurn(
+    chatId: string,
+    messages: SessionMessage | readonly SessionMessage[],
+    outcome: TurnOutcome,
+  ): Promise<void> {
+    const retryReason = this.errorCompletionRetryReason(outcome);
+    if (retryReason) {
+      this.warnRejectedErrorCompletion(chatId, outcome, retryReason);
+      this.inboxDelivery.retryTurn(chatId, messages, retryReason);
+      this.projectSessionRuntime(chatId);
+      return;
+    }
+    await this.inboxDelivery.finishTurn(chatId, messages, outcome);
+    this.projectSessionRuntime(chatId);
+  }
+
+  private createDeliveryToken(chatId: string): DeliveryToken {
+    let terminalReported = false;
+    const claimTerminal = (action: string): boolean => {
+      if (!terminalReported) {
+        terminalReported = true;
+        return true;
+      }
+      this.config.log.warn({ chatId, action }, "delivery token terminal outcome ignored after prior outcome");
+      return false;
+    };
+    return {
+      processingStarted: (messages) => {
+        if (terminalReported) return;
+        this.inboxDelivery.markProcessingStarted(chatId, messages);
+        this.projectSessionRuntime(chatId);
+      },
+      complete: async (messages, outcome) => {
+        if (!claimTerminal("complete")) return;
+        await this.completeDeliveryTurn(chatId, messages, outcome);
+      },
+      retry: (messages, reason) => {
+        if (!claimTerminal("retry")) return;
+        this.inboxDelivery.retryTurn(chatId, messages, reason);
+        this.projectSessionRuntime(chatId);
+      },
+      terminalRejected: async (messages, reason, evidence) => {
+        if (!claimTerminal("terminalRejected")) return;
+        await this.inboxDelivery.terminalRejected(chatId, messages, reason, evidence);
+        this.projectSessionRuntime(chatId);
+      },
+    };
+  }
+
+  private markRouteOwned(chatId: string, message: SessionMessage, receipt: HandlerRouteReceipt): boolean {
+    if (receipt.kind === "rejected") {
+      this.config.log.warn(
+        { chatId, messageId: message.id, entryId: message.inboxEntryId, reason: receipt.reason },
+        "handler rejected inbox delivery before custody",
+      );
+      this.inboxDelivery.retryTurn(chatId, message, `handler_rejected:${receipt.reason}`);
       return false;
     }
-    if (this.requiresInboxRecovery.has(chatId)) return true;
-    return Boolean(this.config.recoverChat) && !this.hasHealthyLiveHandler(chatId);
+    if (message.inboxEntryId === undefined) return true;
+    const owned = this.inboxDelivery.markOwned({ chatId, messageId: message.id, entryId: message.inboxEntryId });
+    if (owned && receipt.mode === "processing") {
+      this.inboxDelivery.markProcessingStarted(chatId, message);
+    }
+    this.projectSessionRuntime(chatId);
+    return owned;
   }
 
-  private async recoverChatBeforeDispatch(chatId: string, entryId: number, messageId: string): Promise<void> {
-    const existing = this.recoveringChats.get(chatId);
-    if (existing) {
-      await existing;
+  private async routeMessage(
+    chatId: string,
+    message: SessionMessage,
+    deliveryKind: SlotDeliveryKind = "fresh",
+  ): Promise<void> {
+    if (this.shouldBufferForManualPause(chatId)) {
+      this.bufferForManualPause(chatId, message, deliveryKind);
       return;
-    }
-    const recoverChat = this.config.recoverChat;
-    if (!recoverChat) {
-      this.config.log.error(
-        { chatId, entryId, messageId },
-        "chat requires inbox recovery but no recoverChat callback is configured; deferring dispatch",
-      );
-      return;
-    }
-
-    let recovery: Promise<void>;
-    recovery = recoverChat(chatId)
-      .then(() => {
-        this.requiresInboxRecovery.delete(chatId);
-        this.recoveryActivationReady.add(chatId);
-        this.config.log.debug({ chatId, entryId, messageId }, "chat inbox recovery accepted before dispatch");
-      })
-      .catch((err) => {
-        this.config.log.warn({ chatId, entryId, messageId, err }, "chat inbox recovery failed before dispatch");
-      })
-      .finally(() => {
-        if (this.recoveringChats.get(chatId) === recovery) this.recoveringChats.delete(chatId);
-      });
-    this.recoveringChats.set(chatId, recovery);
-    await recovery;
-  }
-
-  private async routeMessage(chatId: string, message: SessionMessage): Promise<void> {
-    // Record the trigger BEFORE dispatching to any handler path (start /
-    // resume / inject) so the resultSink constructed in buildSessionContext
-    // sees the right messageId+senderId when this turn eventually produces a
-    // reply. The sink clears it on forward so an intervening inject() can
-    // overwrite it without the in-flight reply stealing the new trigger.
-    if (message.id) {
-      this.currentTrigger.set(chatId, { messageId: message.id, senderId: message.senderId });
     }
 
     const existing = this.sessions.get(chatId);
 
-    // Transient retry path: an earlier handler.start / handler.resume failed
-    // with a classified-transient error and we kept the entry around. A new
-    // user message is a strong signal the user is waiting — replace the
-    // stored startMessage so the retry uses the fresher content, then fire
-    // an immediate retry. The new entry sits alongside any prior entries in
-    // `inFlightEntries[chatId]`; the retry's eventual forwardResult commits
-    // the concrete message/batch it consumed.
+    // Transient retry path: keep the original start/resume message at the head
+    // of the provider retry. Newer messages sit later in the inbox ACK prefix,
+    // so they are queued and injected only after retry succeeds.
     if (existing && existing.retryAttempt > 0) {
-      existing.startMessage = message;
+      existing.retryQueuedMessages.push(message);
       this.triggerImmediateRetry(chatId);
       return;
     }
@@ -818,30 +938,30 @@ export class SessionManager {
     if (existing) {
       switch (existing.status) {
         case "active":
-          existing.handler.inject(message);
+          this.setCurrentTrigger(chatId, message);
+          if (
+            !this.markRouteOwned(
+              chatId,
+              message,
+              normalizeRouteReceipt(existing.handler.inject(message, this.createDeliveryToken(chatId))),
+            )
+          ) {
+            return;
+          }
           existing.lastActivity = Date.now();
-          // Re-arm the working-grace guard in `evictIdle`. Without this, a
-          // turn that ends with `setRuntimeState("idle")` (claude-code.ts on
-          // every result message) leaves the next inject-triggered turn
-          // observable as `idle` — and a long-thinking turn that produces
-          // no SDK messages for `idle_timeout` (300s default) trips
-          // evictIdle's suspend path even though the agent is actively
-          // working. Setting `working` here puts the session under the
-          // `idle_timeout + working_grace_seconds` umbrella until the next
-          // result flips it back.
-          this.setSessionRuntimeState(chatId, "working");
+          this.projectSessionRuntime(chatId);
           this.config.log.debug({ chatId }, "message injected");
           return;
 
         case "suspended":
         case "evicted":
-          await this.resumeSession(existing, message);
+          await this.resumeSession(existing, message, deliveryKind);
           return;
       }
     }
 
     // No existing session — create new
-    await this.startNewSession(chatId, message);
+    await this.startNewSession(chatId, message, deliveryKind);
   }
 
   /**
@@ -860,7 +980,7 @@ export class SessionManager {
     // Already bound — cheapest exit (no clock read, no resolver, no network).
     if (typeof cfg.contextTreePath === "string" && cfg.contextTreePath.length > 0) return;
     // Tree-less: rate-limit re-resolution so a permanently-tree-less agent (the
-    // common case) doesn't spawn git + an HTTP GET on EVERY new session for the
+    // common case) doesn't fire an HTTP GET on EVERY new session for the
     // slot's whole life. A tree configured later is still picked up within
     // TREE_RERESOLVE_INTERVAL_MS on the next new session.
     const now = Date.now();
@@ -869,7 +989,10 @@ export class SessionManager {
 
     const resolve =
       this.config.resolveContextTreeBinding ??
-      (() => syncAgentContextTree(this.config.sdk, (msg) => this.config.log.info(msg)));
+      (() =>
+        resolveAgentContextTreeBinding(this.config.sdk, this.config.handlerConfig.workspaceRoot, (msg) =>
+          this.config.log.info(msg),
+        ));
     const binding = await reresolveUnboundTree(cfg.contextTreePath, resolve);
     if (!binding) return;
     cfg.contextTreePath = binding.path;
@@ -881,12 +1004,17 @@ export class SessionManager {
     );
   }
 
-  private async startNewSession(chatId: string, message: SessionMessage): Promise<void> {
-    // Enforce concurrency limit
-    if (!this.acquireActiveSlot(chatId, message)) return;
+  private async startNewSession(
+    chatId: string,
+    message: SessionMessage,
+    deliveryKind: SlotDeliveryKind,
+  ): Promise<void> {
+    // Enforce max_sessions before active-slot preemption so a full pool of
+    // working sessions queues instead of first suspending a working victim.
+    if (!this.evictIfNeeded(chatId, message, deliveryKind)) return;
 
-    // Enforce max_sessions (evict LRU)
-    this.evictIfNeeded();
+    // Enforce concurrency limit
+    if (!this.acquireActiveSlot(chatId, message, deliveryKind)) return;
 
     // Check for prior evicted session mapping
     const evicted = this.evictedMappings.get(chatId);
@@ -912,6 +1040,7 @@ export class SessionManager {
       lastRetryReason: null,
       lastRetryRawError: null,
       startMessage: message,
+      retryQueuedMessages: [],
       retryFromEvicted: evicted ?? null,
     };
 
@@ -919,29 +1048,24 @@ export class SessionManager {
     this._activeCount++;
     if (evicted) this.evictedMappings.delete(chatId);
 
-    // Report `active` BEFORE invoking handler.start / handler.resume. Handlers
-    // can call `ctx.setRuntimeState("working")` synchronously inside start()
-    // (claude-code does; codex always does — its handler awaits the whole
-    // turn before returning, so the initial working AND final idle reports
-    // both fire from inside start()). Those `session:runtime` frames are
-    // active-gated on the server, so they would be dropped if the
-    // `session:state active` write hadn't landed yet — leaving the composite
-    // stuck at `ready` until a reaffirm (or never, for short turns). The
-    // server's `upsertSessionState` short-circuits same-state reports, and
-    // `notifySessionState` here additionally dedupes against the last
-    // reported value, so doing it before AND after is harmless if a future
-    // refactor adds a second site. Failure path replaces this `active` with
-    // `errored` in the catch below (different state → goes through).
+    // Report `active` before runtime projection. `session:runtime` frames are
+    // active-gated on the server, so the state row must exist before a fresh
+    // delivery projects this chat to working.
     this.notifySessionState(chatId, "active");
+    this.projectSessionRuntime(chatId, { drainPendingOnIdle: false });
     try {
+      this.setCurrentTrigger(chatId, message);
+      const token = this.createDeliveryToken(chatId);
       if (evicted) {
-        const sessionId = await handler.resume(message, evicted.claudeSessionId, ctx);
-        entry.claudeSessionId = sessionId;
-        this.config.log.info({ chatId, sessionId }, "session resumed from eviction");
+        const receipt = normalizeResumeReceipt(await handler.resume(message, evicted.claudeSessionId, ctx, token));
+        entry.claudeSessionId = receipt.sessionId;
+        if (receipt.route) this.markRouteOwned(chatId, message, receipt.route);
+        this.config.log.info({ chatId, sessionId: entry.claudeSessionId }, "session resumed from eviction");
       } else {
-        const sessionId = await handler.start(message, ctx);
-        entry.claudeSessionId = sessionId;
-        this.config.log.info({ chatId, sessionId }, "session created");
+        const receipt = normalizeStartReceipt(await handler.start(message, ctx, token));
+        entry.claudeSessionId = receipt.sessionId;
+        this.markRouteOwned(chatId, message, receipt.route);
+        this.config.log.info({ chatId, sessionId: entry.claudeSessionId }, "session created");
       }
       this.persistRegistry();
     } catch (err) {
@@ -958,7 +1082,7 @@ export class SessionManager {
         // Permanent / degraded failure: tear down (legacy F2 path) and ack
         // every in-flight entry so the server doesn't redeliver a message
         // that would just re-hit the same permanent failure.
-        this.drainAllInFlightEntries(chatId);
+        await this.inboxDelivery.drainForTerminate(chatId);
         this.sessions.delete(chatId);
         this.sessionRuntimeStates.delete(chatId);
         this.recomputeRuntimeState();
@@ -967,36 +1091,30 @@ export class SessionManager {
     }
   }
 
-  private async resumeSession(entry: SessionEntry, message: SessionMessage | null | undefined): Promise<void> {
+  private async resumeSession(
+    entry: SessionEntry,
+    message: SessionMessage | null | undefined,
+    deliveryKind: SlotDeliveryKind = "fresh",
+  ): Promise<void> {
     // Wait for in-flight suspension to complete before resuming
     if (entry.suspending) {
       await entry.suspending;
     }
 
-    // For admin-triggered resume (no message), synthesize a minimal stub for slot acquisition only
-    const slotMessage: SessionMessage = message ?? {
-      id: "",
-      chatId: entry.chatId,
-      senderId: "",
-      format: "text",
-      content: "",
-      metadata: {},
-    };
-
-    // Enforce concurrency limit
-    if (!this.acquireActiveSlot(entry.chatId, slotMessage)) return;
+    // Admin-triggered resume has no provider input. It may use idle capacity,
+    // but it must not preempt unrelated working turns.
+    const slotKind: SlotDeliveryKind = message ? deliveryKind : "control";
+    if (!this.acquireActiveSlot(entry.chatId, message ?? null, slotKind)) return;
 
     const ctx = this.buildSessionContext(entry.chatId);
     entry.status = "active";
     this._activeCount++;
     entry.lastActivity = Date.now();
 
-    // Same rationale as `startNewSession`: report `active` BEFORE invoking
-    // the handler so any synchronous `ctx.setRuntimeState("working")` inside
-    // handler.resume() lands on a server row that is already active-gated.
-    // Failure path overrides with `errored` in the catch below.
     this.notifySessionState(entry.chatId, "active");
+    this.projectSessionRuntime(entry.chatId, { drainPendingOnIdle: false });
     try {
+      if (message) this.setCurrentTrigger(entry.chatId, message);
       // Mirror the pattern in `startNewSession` (line 449): the handler may
       // return a DIFFERENT sessionId than the one passed in — e.g. when the
       // claude-code handler detects a stale SDK transcript and falls
@@ -1006,8 +1124,13 @@ export class SessionManager {
       // assignment back, a fresh-start fallback would persist the OLD id,
       // and the next suspend→resume cycle would re-trigger the same
       // missing-transcript fallback ad infinitum.
-      const resumedSessionId = await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx);
-      entry.claudeSessionId = resumedSessionId;
+      const token = message ? this.createDeliveryToken(entry.chatId) : undefined;
+      const resumeResult = token
+        ? await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx, token)
+        : await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx);
+      const receipt = normalizeResumeReceipt(resumeResult);
+      entry.claudeSessionId = receipt.sessionId;
+      if (message && receipt.route) this.markRouteOwned(entry.chatId, message, receipt.route);
       this.config.log.info({ chatId: entry.chatId, sessionId: entry.claudeSessionId }, "session resumed");
       this.persistRegistry();
     } catch (err) {
@@ -1020,7 +1143,7 @@ export class SessionManager {
         classification,
       });
       if (!handled) {
-        this.drainAllInFlightEntries(entry.chatId);
+        await this.inboxDelivery.drainForTerminate(entry.chatId);
         this.sessions.delete(entry.chatId);
         this.sessionRuntimeStates.delete(entry.chatId);
         this.recomputeRuntimeState();
@@ -1086,6 +1209,7 @@ export class SessionManager {
       this._activeCount--;
       entry.status = "suspended";
       this.sessionRuntimeStates.delete(chatId);
+      this.projectSessionRuntime(chatId);
       this.recomputeRuntimeState();
 
       this.config.log.info(
@@ -1134,7 +1258,9 @@ export class SessionManager {
 
     // Permanent / degraded — legacy F2 signalling (server state + structured
     // error event), then let caller tear down.
+    entry.status = "errored";
     this.notifySessionState(chatId, "errored");
+    this.projectSessionRuntime(chatId);
     try {
       // Same `safe in logs but NOT chat` boundary as the transient `rawError`
       // path above: the error message can legitimately echo back a git remote
@@ -1165,6 +1291,17 @@ export class SessionManager {
     const entry = this.sessions.get(chatId);
     if (!entry) return;
     if (entry.status === "active") return; // racing inject already revived it
+    if (this.shouldBufferForManualPause(chatId)) {
+      const nextDelay = 5_000;
+      entry.retryNextAt = Date.now() + nextDelay;
+      entry.retryTimer = setTimeout(() => {
+        entry.retryTimer = null;
+        this.runRetry(chatId).catch((err) => {
+          this.config.log.warn({ chatId, err }, "paused session retry rearm failed");
+        });
+      }, nextDelay);
+      return;
+    }
 
     this.config.log.info(
       {
@@ -1196,7 +1333,7 @@ export class SessionManager {
     // Enforce concurrency limit before claiming the slot. If we cannot, the
     // entry stays in transient-retry state and a future retry / message will
     // try again.
-    if (!this.acquireActiveSlot(chatId, entry.startMessage ?? buildEmptySessionMessage(chatId))) {
+    if (!this.acquireActiveSlot(chatId, entry.startMessage ?? buildEmptySessionMessage(chatId), "recovery")) {
       // Couldn't get a slot — re-arm the timer with a short delay.
       const nextDelay = 5_000;
       entry.retryNextAt = Date.now() + nextDelay;
@@ -1222,17 +1359,25 @@ export class SessionManager {
     const ctx = this.buildSessionContext(chatId);
 
     this.notifySessionState(chatId, "active");
+    this.projectSessionRuntime(chatId, { drainPendingOnIdle: false });
     try {
       const resumeMessage = entry.startMessage ?? null;
       const previousSessionId = entry.claudeSessionId || entry.retryFromEvicted?.claudeSessionId || "";
+      if (resumeMessage) this.setCurrentTrigger(chatId, resumeMessage);
+      const token = resumeMessage ? this.createDeliveryToken(chatId) : undefined;
       if (previousSessionId) {
-        const sid = await newHandler.resume(resumeMessage ?? undefined, previousSessionId, ctx);
-        entry.claudeSessionId = sid;
+        const resumeResult = token
+          ? await newHandler.resume(resumeMessage ?? undefined, previousSessionId, ctx, token)
+          : await newHandler.resume(resumeMessage ?? undefined, previousSessionId, ctx);
+        const receipt = normalizeResumeReceipt(resumeResult);
+        entry.claudeSessionId = receipt.sessionId;
+        if (resumeMessage && receipt.route) this.markRouteOwned(chatId, resumeMessage, receipt.route);
       } else {
         // No resume key yet — fall back to fresh start.
         const message = resumeMessage ?? buildEmptySessionMessage(chatId);
-        const sid = await newHandler.start(message, ctx);
-        entry.claudeSessionId = sid;
+        const receipt = normalizeStartReceipt(await newHandler.start(message, ctx, this.createDeliveryToken(chatId)));
+        entry.claudeSessionId = receipt.sessionId;
+        this.markRouteOwned(chatId, message, receipt.route);
       }
       const totalAttempts = entry.retryAttempt;
       entry.retryAttempt = 0;
@@ -1260,6 +1405,7 @@ export class SessionManager {
       } catch (emitErr) {
         this.config.log.warn({ chatId, emitErr }, "resilience retry_succeeded emit failed");
       }
+      this.drainRetryQueuedMessages(entry);
       this.persistRegistry();
     } catch (err) {
       const classification = classify(err, { source: "session" });
@@ -1271,7 +1417,7 @@ export class SessionManager {
         classification,
       });
       if (!handled) {
-        this.drainAllInFlightEntries(chatId);
+        await this.inboxDelivery.drainForTerminate(chatId);
         this.sessions.delete(chatId);
         this.sessionRuntimeStates.delete(chatId);
         this.recomputeRuntimeState();
@@ -1289,6 +1435,7 @@ export class SessionManager {
   private triggerImmediateRetry(chatId: string): void {
     const entry = this.sessions.get(chatId);
     if (!entry || entry.retryAttempt === 0) return;
+    if (this.shouldBufferForManualPause(chatId)) return;
     if (entry.retryTimer) {
       clearTimeout(entry.retryTimer);
       entry.retryTimer = null;
@@ -1296,51 +1443,155 @@ export class SessionManager {
     void this.runRetry(chatId);
   }
 
-  /**
-   * Try to acquire an active slot. If at concurrency limit:
-   * 1. Suspend the least-recently-active session to free a slot
-   * 2. If no candidates, queue the message
-   *
-   * Returns true if slot acquired, false if queued. The in-flight entryId
-   * is tracked separately in `inFlightEntries` (populated at dispatch),
-   * so the queue doesn't carry inbox metadata.
-   */
-  private acquireActiveSlot(chatId: string, message: SessionMessage): boolean {
-    if (this._activeCount < this.config.concurrency) return true;
+  private drainRetryQueuedMessages(entry: SessionEntry): void {
+    if (entry.retryQueuedMessages.length === 0) return;
 
-    // Find least-recently-active session (excluding the target chat)
-    let oldestActive: SessionEntry | null = null;
-    for (const session of this.sessions.values()) {
-      if (session.status !== "active") continue;
-      if (session.chatId === chatId) continue;
-      if (!oldestActive || session.lastActivity < oldestActive.lastActivity) {
-        oldestActive = session;
+    const queued = entry.retryQueuedMessages.splice(0);
+    for (const message of queued) {
+      if (this.shouldBufferForManualPause(entry.chatId)) {
+        this.bufferForManualPause(entry.chatId, message, "recovery");
+        continue;
+      }
+      this.setCurrentTrigger(entry.chatId, message);
+      try {
+        if (
+          !this.markRouteOwned(
+            entry.chatId,
+            message,
+            normalizeRouteReceipt(entry.handler.inject(message, this.createDeliveryToken(entry.chatId))),
+          )
+        ) {
+          continue;
+        }
+        entry.lastActivity = Date.now();
+      } catch (err) {
+        this.config.log.warn({ chatId: entry.chatId, messageId: message.id, err }, "retry queued inject failed");
+        this.inboxDelivery.retryTurn(entry.chatId, message, "retry_queued_inject_failed");
+        break;
       }
     }
+    this.projectSessionRuntime(entry.chatId);
+  }
 
-    if (oldestActive) {
-      this.config.log.info({ chatId: oldestActive.chatId }, "session preempted for concurrency");
-      this.suspendSession(oldestActive);
+  private setCurrentTrigger(chatId: string, message: SessionMessage): void {
+    if (!message.id) return;
+    this.currentTrigger.set(chatId, { messageId: message.id, senderId: message.senderId });
+  }
+
+  /**
+   * Try to acquire an active slot. If at concurrency limit:
+   * 1. Suspend the least-recently-active idle session to free a slot.
+   * 2. For fresh external input only, preempt the least-recently-active
+   *    working session as a last resort and force recovery for its work.
+   * 3. Queue recovery/internal traffic instead of displacing working sessions.
+   *
+   * Returns true if slot acquired, false if queued. The in-flight entryId
+   * is tracked separately in `InboxDeliveryCoordinator` (populated at dispatch),
+   * so the queue doesn't carry inbox metadata.
+   */
+  private acquireActiveSlot(
+    chatId: string,
+    message: SessionMessage | null,
+    deliveryKind: SlotDeliveryKind = "fresh",
+  ): boolean {
+    if (this._activeCount < this.config.concurrency) return true;
+
+    const idleVictim = this.findOldestActiveSession(
+      (session) => session.chatId !== chatId && !this.inboxDelivery.hasProcessingOwnedWork(session.chatId),
+    );
+    if (idleVictim) {
+      this.config.log.info(
+        { chatId: idleVictim.chatId, requesterChatId: chatId },
+        "idle session yielded for concurrency",
+      );
+      this.emitResilienceEvent(idleVictim.chatId, "resilience.session.preempted", {
+        reason: "concurrency_idle_yield",
+        requesterChatId: chatId,
+      });
+      this.suspendSession(idleVictim, { reason: "concurrency_idle_yield", ackConsumedPrefix: true, drainQueue: false });
       return true;
     }
 
-    // All active sessions are busy — queue. The inbox entry stays in
-    // `inFlightEntries[chatId]` until the eventual turn finishes.
-    this.config.log.info({ chatId }, "concurrency limit reached, queuing");
-    this.pendingQueue.push({ message, chatId });
+    const workingVictim =
+      deliveryKind === "fresh" ? this.findOldestActiveSession((session) => session.chatId !== chatId) : null;
+    if (workingVictim) {
+      this.config.log.info(
+        { chatId: workingVictim.chatId, requesterChatId: chatId },
+        "working session preempted for fresh input",
+      );
+      this.emitResilienceEvent(workingVictim.chatId, "resilience.session.preempted", {
+        reason: "concurrency_preempted",
+        requesterChatId: chatId,
+      });
+      this.suspendSession(workingVictim, {
+        reason: "concurrency_preempted",
+        ackConsumedPrefix: false,
+        drainQueue: false,
+      });
+      return true;
+    }
+
+    this.queueForSlot(chatId, message, deliveryKind, "concurrency_limit");
     return false;
   }
 
-  private suspendSession(entry: SessionEntry): void {
-    this.ackConsumedInFlightForSuspend(entry.chatId);
-    this.clearInFlightForRecovery(entry.chatId, "session_suspended_unconsumed_tail");
+  private findOldestActiveSession(eligible: (session: SessionEntry) => boolean): SessionEntry | null {
+    let oldest: SessionEntry | null = null;
+    for (const session of this.sessions.values()) {
+      if (session.status !== "active") continue;
+      if (!eligible(session)) continue;
+      if (!oldest || session.lastActivity < oldest.lastActivity) oldest = session;
+    }
+    return oldest;
+  }
+
+  private queueForSlot(
+    chatId: string,
+    message: SessionMessage | null,
+    deliveryKind: SlotDeliveryKind,
+    reason: "concurrency_limit" | "max_sessions_all_working",
+  ): void {
+    this.config.log.info({ chatId, deliveryKind, reason }, "session slot unavailable, queuing");
+    this.emitResilienceEvent(chatId, "resilience.session.queued", { reason, deliveryKind });
+    this.pendingQueue.push({ message, chatId, deliveryKind });
+  }
+
+  private emitResilienceEvent(chatId: string, eventName: string, payload: Record<string, unknown>): void {
+    try {
+      this.config.onSessionEvent?.(chatId, {
+        kind: "error",
+        payload: {
+          source: "runtime",
+          message: encodeResilienceMessage(eventName, payload),
+        },
+      });
+    } catch (err) {
+      this.config.log.warn({ chatId, eventName, err }, "resilience event emit failed");
+    }
+  }
+
+  private suspendSession(
+    entry: SessionEntry,
+    opts: { reason: string; ackConsumedPrefix: boolean; drainQueue?: boolean } = {
+      reason: "session_suspended",
+      ackConsumedPrefix: true,
+      drainQueue: true,
+    },
+  ): void {
+    const prepare = opts.ackConsumedPrefix
+      ? this.inboxDelivery.prepareSuspend(entry.chatId, opts.reason)
+      : Promise.resolve(this.inboxDelivery.prepareEvict(entry.chatId, opts.reason));
     entry.status = "suspended";
     this._activeCount--;
     // Clear per-session runtime state on suspend
     this.sessionRuntimeStates.delete(entry.chatId);
     this.recomputeRuntimeState();
-    entry.suspending = entry.handler
-      .suspend()
+    entry.suspending = prepare
+      .then(() => entry.handler.suspend())
+      .catch((err) => {
+        this.config.log.warn({ chatId: entry.chatId, err }, "suspend preparation error");
+      })
+      .then(() => undefined)
       .catch((err) => {
         this.config.log.warn({ chatId: entry.chatId, err }, "suspend error");
       })
@@ -1350,39 +1601,98 @@ export class SessionManager {
     this.persistRegistry();
     this.notifySessionState(entry.chatId, "suspended");
 
-    // Drain pending queue
-    this.drainPendingQueue();
+    if (opts.drainQueue !== false) this.drainPendingQueue();
   }
 
   private drainPendingQueue(): void {
     if (this.pendingQueue.length === 0) return;
-    if (this._activeCount >= this.config.concurrency) return;
-
-    const next = this.pendingQueue.shift();
+    const nextIndex = this.pendingQueue.findIndex((queued) => !this.shouldBufferForManualPause(queued.chatId));
+    if (nextIndex < 0) return;
+    const next = this.pendingQueue[nextIndex];
     if (!next) return;
-    // Route asynchronously — the in-flight entryId for this message is
-    // already in `inFlightEntries[chatId]` from the original `dispatch`.
-    this.routeMessage(next.chatId, next.message).catch((err) => {
-      this.config.log.warn({ chatId: next.chatId, err }, "pending drain error");
+    const existing = this.sessions.get(next.chatId);
+    if (existing?.status === "active") {
+      this.pendingQueue.splice(nextIndex, 1);
+      if (!next.message) {
+        this.drainPendingQueue();
+        return;
+      }
+      this.routeMessage(next.chatId, next.message, next.deliveryKind).catch((err) => {
+        const hasInboxEntryId = next.message?.inboxEntryId !== undefined;
+        this.config.log.warn({ chatId: next.chatId, hasInboxEntryId, err }, "pending drain error");
+        if (next.message && hasInboxEntryId) {
+          this.inboxDelivery.retryTurn(next.chatId, next.message, "pending_drain_failed");
+        } else {
+          this.pendingQueue.unshift(next);
+        }
+      });
+      return;
+    }
+    if (
+      this._activeCount >= this.config.concurrency &&
+      !this.findOldestActiveSession(
+        (session) => session.chatId !== next.chatId && !this.inboxDelivery.hasProcessingOwnedWork(session.chatId),
+      )
+    ) {
+      return;
+    }
+
+    this.pendingQueue.splice(nextIndex, 1);
+    if (!next.message) {
+      const session = this.sessions.get(next.chatId);
+      if (session && session.status !== "active") {
+        this.resumeSession(session, undefined, next.deliveryKind).catch((err) => {
+          this.config.log.warn({ chatId: next.chatId, err }, "pending resume drain error");
+          this.pendingQueue.unshift(next);
+        });
+      }
+      return;
+    }
+    // Route asynchronously — the delivery work is already tracked by the
+    // coordinator from the original `dispatch`.
+    const message = next.message;
+    this.routeMessage(next.chatId, message, next.deliveryKind).catch((err) => {
+      const hasInboxEntryId = message.inboxEntryId !== undefined;
+      this.config.log.warn({ chatId: next.chatId, hasInboxEntryId, err }, "pending drain error");
+      if (hasInboxEntryId) {
+        this.inboxDelivery.retryTurn(next.chatId, message, "pending_drain_failed");
+      } else {
+        this.pendingQueue.unshift(next);
+      }
     });
   }
 
-  private evictIfNeeded(): void {
+  private evictIfNeeded(chatId?: string, message?: SessionMessage, deliveryKind: SlotDeliveryKind = "fresh"): boolean {
     const { max_sessions } = this.config.session;
-    if (this.sessions.size < max_sessions) return;
+    if (this.sessions.size < max_sessions) return true;
 
-    // Single pass: find LRU session, preferring non-active over active
-    let candidate: { key: string; session: SessionEntry } | null = null;
+    // Prefer non-active sessions, then idle active sessions. Working active
+    // sessions are not memory-management victims: dropping them silently loses
+    // replies/tool side effects unless their work is explicitly recovered.
+    let nonActiveCandidate: { key: string; session: SessionEntry } | null = null;
+    let idleActiveCandidate: { key: string; session: SessionEntry } | null = null;
     for (const [key, session] of this.sessions) {
-      if (!candidate) {
-        candidate = { key, session };
+      if (session.status !== "active") {
+        if (!nonActiveCandidate || session.lastActivity < nonActiveCandidate.session.lastActivity) {
+          nonActiveCandidate = { key, session };
+        }
         continue;
       }
-      const preferNonActive = session.status !== "active" && candidate.session.status === "active";
-      const sameCategory = (session.status === "active") === (candidate.session.status === "active");
-      if (preferNonActive || (sameCategory && session.lastActivity < candidate.session.lastActivity)) {
-        candidate = { key, session };
+      if (!this.inboxDelivery.hasProcessingOwnedWork(key)) {
+        if (!idleActiveCandidate || session.lastActivity < idleActiveCandidate.session.lastActivity) {
+          idleActiveCandidate = { key, session };
+        }
       }
+    }
+
+    const candidate = nonActiveCandidate ?? idleActiveCandidate;
+    if (!candidate) {
+      if (chatId && message) {
+        this.queueForSlot(chatId, message, deliveryKind, "max_sessions_all_working");
+      } else {
+        this.config.log.info({ maxSessions: max_sessions }, "max_sessions reached with no idle eviction candidate");
+      }
+      return false;
     }
 
     if (candidate) {
@@ -1412,14 +1722,11 @@ export class SessionManager {
       // overwrites before the handler runs), but since `terminate` already
       // cleans the same maps we keep the two paths symmetric.
       this.currentTrigger.delete(candidate.key);
-      // Drop local in-flight tracking too — the handler is gone, so no
-      // markCompleted will ever fire. The server-side entries stay
-      // `delivered`; a later chat recovery or bind reset redelivers them
-      // against a fresh session.
-      this.clearInFlightForRecovery(candidate.key, "session_evicted");
+      this.inboxDelivery.prepareEvict(candidate.key, "session_evicted");
       this.recomputeRuntimeState();
       this.persistRegistry();
     }
+    return true;
   }
 
   /**
@@ -1428,28 +1735,12 @@ export class SessionManager {
    * Invariants this routine relies on:
    *   1. `lastActivity` is monotonic per session and is bumped by every
    *      inbound activity — `dispatch` (new chat / resume), `inject`
-   *      (mid-turn message), and the handler's `touch()` on each SDK event.
-   *   2. `runtimeState` reflects what the agent is currently doing as best
-   *      the runtime can tell:
-   *        - `working` — a turn is in flight. Set by the handler at the top
-   *          of its consume loop AND by `SessionManager` on every `inject`
-   *          (because the handler can't observe inject from inside the SDK
-   *          for-await — see #536). Cleared back to `idle` on each
-   *          `result` message from the SDK.
-   *        - `blocked` — only reachable if a handler chooses to set it
-   *          explicitly. The runtime no longer auto-migrates `working` →
-   *          `blocked` on inactivity: with reasoning models a 2-minute
-   *          quiet stretch is normal deep-thinking, not a stuck process,
-   *          and the auto-migration was producing false-positive UI
-   *          warnings. State kept as a semantic slot for future use
-   *          (e.g. if/when the SDK transport exposes a real stuck signal).
-   *        - `idle` — no work in flight.
-   *      If you add a new way to wake the session up, you MUST also set
-   *      `runtimeState` to `working` from that path, or this guard will
-   *      treat the chat as idle and reap it.
-   *   3. `working_grace_seconds` is an UPPER bound on how long a `working`
-   *      / `blocked` chat can hold a slot past `idle_timeout` — defends
-   *      against a stuck handler that never flips back to `idle`.
+   *      (mid-turn message), and the handler's provider-activity callback.
+   *   2. The coordinator is the source of truth for unsettled delivery work.
+   *      Delivery/commit debt does not make a provider busy; only
+   *      processing-owned work gets working grace.
+   *   3. `working_grace_seconds` is an UPPER bound on how long processing
+   *      work can hold a slot past `idle_timeout`.
    */
   private evictIdle(): void {
     const timeoutMs = this.config.session.idle_timeout * 1000;
@@ -1462,20 +1753,15 @@ export class SessionManager {
       if (inactiveMs <= timeoutMs) continue;
 
       const currentState = this.sessionRuntimeStates.get(session.chatId);
+      const hasProcessingWork = this.inboxDelivery.hasProcessingOwnedWork(session.chatId);
 
-      // Hard cap: regardless of `runtimeState`, once we are past
+      // Hard cap: regardless of unsettled work, once we are past
       // `idle_timeout + working_grace_seconds` the slot MUST be reclaimed.
       // Anything else means a stuck handler can hold a slot forever just
-      // by never flipping `runtimeState` back to `idle`.
+      // by never closing the delivery work.
       const pastHardCap = inactiveMs >= timeoutMs + workingGraceMs;
 
-      // `lastActivity` is bumped per inbound SDK message/event (handler
-      // `touch()`), so a long thinking turn or a single very large message
-      // looks identical to "session has been idle" here. Without this
-      // exemption the runtime suspends the SDK transport mid-thinking and
-      // the work is lost. The hard cap above bounds the worst case.
-      const stillProgressing = currentState === "working" || currentState === "blocked";
-      if (stillProgressing && !pastHardCap) {
+      if (hasProcessingWork && !pastHardCap) {
         this.config.log.info(
           {
             chatId: session.chatId,
@@ -1483,7 +1769,7 @@ export class SessionManager {
             inactiveSec: Math.round(inactiveMs / 1000),
             graceSec: this.config.session.working_grace_seconds,
           },
-          "session idle threshold reached but still working — skipping suspend",
+          "session idle threshold reached but provider work is still processing — skipping suspend",
         );
         continue;
       }
@@ -1519,127 +1805,6 @@ export class SessionManager {
     this.config.onStateChange(chatId, state);
   }
 
-  private ackThroughTrackedEntry(chatId: string, throughEntryId: number): void {
-    const queue = this.inFlightEntries.get(chatId);
-    if (!queue || queue.length === 0) return;
-    const index = queue.findIndex((tracked) => tracked.entryId === throughEntryId);
-    if (index < 0) {
-      this.config.log.warn({ chatId, throughEntryId }, "attempt completion ignored for untracked inbox entry");
-      return;
-    }
-
-    const committed = queue.splice(0, index + 1);
-    for (const tracked of committed) {
-      this.deduplicator.drop(tracked.dedupKey);
-    }
-    if (queue.length === 0) this.inFlightEntries.delete(chatId);
-
-    this.config.ackEntry(throughEntryId).catch((err) => {
-      this.config.log.warn({ chatId, entryId: throughEntryId, err }, "ACK-through failed, continuing");
-    });
-  }
-
-  private ackOldestTrackedEntry(chatId: string): void {
-    const entryId = this.inFlightEntries.get(chatId)?.[0]?.entryId;
-    if (entryId !== undefined) this.ackThroughTrackedEntry(chatId, entryId);
-  }
-
-  private clearInFlightForRecovery(chatId: string, reason: string): void {
-    const queue = this.inFlightEntries.get(chatId);
-    if (!queue || queue.length === 0) return;
-    this.inFlightEntries.delete(chatId);
-    this.deduplicator.dropByPrefix(`${chatId}:`);
-    this.requiresInboxRecovery.add(chatId);
-    this.config.log.warn(
-      { chatId, reason, entryIds: queue.map((entry) => entry.entryId) },
-      "cleared local in-flight inbox entries; waiting for recovery redelivery",
-    );
-  }
-
-  private ackConsumedInFlightForSuspend(chatId: string): void {
-    const queue = this.inFlightEntries.get(chatId);
-    if (!queue || queue.length === 0) return;
-
-    let consumedPrefixCount = 0;
-    for (const tracked of queue) {
-      if (!tracked.consumed) break;
-      consumedPrefixCount++;
-    }
-    if (consumedPrefixCount === 0) return;
-
-    const lastConsumed = queue[consumedPrefixCount - 1];
-    if (lastConsumed) this.ackThroughTrackedEntry(chatId, lastConsumed.entryId);
-  }
-
-  private markMessagesConsumed(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void {
-    const queue = this.inFlightEntries.get(chatId);
-    if (!queue || queue.length === 0) return;
-    const batch = Array.isArray(messages) ? messages : [messages];
-    const consumedIds = new Set<number>();
-    for (const message of batch) {
-      if (message.chatId === chatId && message.inboxEntryId !== undefined) consumedIds.add(message.inboxEntryId);
-    }
-    if (consumedIds.size === 0) return;
-    for (const tracked of queue) {
-      if (consumedIds.has(tracked.entryId)) tracked.consumed = true;
-    }
-  }
-
-  private markMessagesCompleted(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void {
-    const batch = Array.isArray(messages) ? messages : [messages];
-    let throughEntryId: number | undefined;
-    for (const message of batch) {
-      if (message.chatId !== chatId) continue;
-      if (message.inboxEntryId !== undefined) throughEntryId = message.inboxEntryId;
-    }
-    if (throughEntryId === undefined) {
-      this.config.log.warn({ chatId }, "attempt completion ignored because no inboxEntryId was provided");
-      return;
-    }
-    this.ackThroughTrackedEntry(chatId, throughEntryId);
-  }
-
-  private markMessagesRetryable(
-    chatId: string,
-    messages: SessionMessage | readonly SessionMessage[],
-    reason: string,
-  ): void {
-    const batch = Array.isArray(messages) ? messages : [messages];
-    const hasTrackedMessage = batch.some(
-      (message) =>
-        message.chatId === chatId &&
-        message.inboxEntryId !== undefined &&
-        (this.inFlightEntries.get(chatId) ?? []).some((entry) => entry.entryId === message.inboxEntryId),
-    );
-    if (!hasTrackedMessage) return;
-    this.clearInFlightForRecovery(chatId, reason);
-  }
-
-  /**
-   * Drain every in-flight entry for this chat and ack them all. Used by
-   * the runtime on `session:terminate` (operator intent — every queued
-   * entry is doomed) and on permanent `handler.start` / `handler.resume`
-   * failure (re-handling on redelivery would re-hit the same permanent
-   * error, so acking avoids a loop). NOT to be called from handlers — the
-   * per-turn pairing path is `markMessagesCompleted(messageOrBatch)`.
-   */
-  private drainAllInFlightEntries(chatId: string): void {
-    const queue = this.inFlightEntries.get(chatId);
-    if (!queue || queue.length === 0) return;
-    let acceptedPrefixCount = 0;
-    for (const tracked of queue) {
-      if (!tracked.accepted) break;
-      acceptedPrefixCount++;
-    }
-    if (acceptedPrefixCount > 0) {
-      const lastAccepted = queue[acceptedPrefixCount - 1];
-      if (lastAccepted) this.ackThroughTrackedEntry(chatId, lastAccepted.entryId);
-    }
-    if (this.inFlightEntries.has(chatId)) {
-      this.clearInFlightForRecovery(chatId, "drain_unaccepted_remainder");
-    }
-  }
-
   private buildSessionContext(chatId: string): SessionContext {
     const sessionLog = this.config.log.child({ chatId });
     // Runtime-facing string log (handler + result-sink expect a simple
@@ -1670,10 +1835,13 @@ export class SessionManager {
     // kept emitting the OLD source-repo-top semantics so a stale pre-fix
     // `chat send` binary inherited from this process still snapshots like it
     // used to — see `agent-io.ts` for the wire-compat plumbing.
-    const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
+    const workspaceRoot = this.config.handlerConfig.workspaceRoot;
+    const sessionRoot = resolveSessionDocRoot(workspaceRoot, chatId);
     const cachedPayload = this.config.agentConfigCache?.get(this.config.agentIdentity.agentId)?.payload ?? null;
-    const selfFence = selfFenceFromRuntimeConfig(cachedPayload, sessionRoot);
-    const docBase = cachedPayload ? documentBasePathFromRuntimeConfig(cachedPayload, sessionRoot) : sessionRoot;
+    const selfFence = selfFenceFromRuntimeConfig(cachedPayload, sessionRoot, workspaceRoot);
+    const docBase = cachedPayload
+      ? documentBasePathFromRuntimeConfig(cachedPayload, sessionRoot, workspaceRoot)
+      : sessionRoot;
 
     const forwardResult = createResultSink({
       sdk: this.config.sdk,
@@ -1685,6 +1853,7 @@ export class SessionManager {
       },
       log,
       getSelfFence: () => this.resolveSelfFence(log, chatId),
+      getOrgId: () => this.resolveChatOrgId(log, chatId),
       workspacesRoot,
       selfSlug,
     });
@@ -1707,30 +1876,25 @@ export class SessionManager {
       sdk: this.config.sdk,
       log,
       chatId,
-      touch: () => {
+      recordProviderActivity: () => {
         const entry = this.sessions.get(chatId);
         if (entry && entry.status === "active") {
           entry.lastActivity = Date.now();
         }
       },
-      setRuntimeState: (state) => {
-        this.setSessionRuntimeState(chatId, state);
-      },
       emitEvent: (event) => {
         this.config.onSessionEvent?.(chatId, event);
       },
       forwardResult,
-      markCompleted: () => {
-        this.ackOldestTrackedEntry(chatId);
-      },
       markMessagesConsumed: (messages) => {
-        this.markMessagesConsumed(chatId, messages);
+        this.inboxDelivery.markProcessingStarted(chatId, messages);
       },
-      markMessagesCompleted: (messages) => {
-        this.markMessagesCompleted(chatId, messages);
+      finishTurn: (messages, outcome) => {
+        return this.completeDeliveryTurn(chatId, messages, outcome);
       },
-      markMessagesRetryable: (messages, reason) => {
-        this.markMessagesRetryable(chatId, messages, reason);
+      retryTurn: (messages, reason) => {
+        this.inboxDelivery.retryTurn(chatId, messages, reason);
+        this.projectSessionRuntime(chatId);
       },
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),
@@ -1743,11 +1907,12 @@ export class SessionManager {
     // the per-agent home for new chats, the legacy `<workspaceRoot>/<chatId>/`
     // dir for pre-#506 chats. See `resolveSessionDocRoot` (read-only existsSync;
     // no acquire* side effects on every outbound message).
-    const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
+    const workspaceRoot = this.config.handlerConfig.workspaceRoot;
+    const sessionRoot = resolveSessionDocRoot(workspaceRoot, chatId);
     if (!this.config.agentConfigCache) return { agentHome: sessionRoot };
     try {
       const { payload } = await this.config.agentConfigCache.refreshIfNewer(this.config.agentIdentity.agentId, 0);
-      return selfFenceFromRuntimeConfig(payload, sessionRoot);
+      return selfFenceFromRuntimeConfig(payload, sessionRoot, workspaceRoot);
     } catch (err) {
       log(
         `document preview self-fence: config unavailable, using agent home only: ${err instanceof Error ? err.message : String(err)}`,
@@ -1756,18 +1921,53 @@ export class SessionManager {
     }
   }
 
-  /** Update per-session runtime state and recompute aggregate. Only active sessions may update. */
-  private setSessionRuntimeState(chatId: string, state: RuntimeState): void {
+  /**
+   * Resolve the organization id a chat belongs to, for doc-capture uploads
+   * (`POST /orgs/:orgId/attachments`). Cached permanently (a chat's org never
+   * changes). Returns `null` when the lookup fails so the sink degrades doc
+   * mentions to plain text instead of blocking the message.
+   */
+  private async resolveChatOrgId(log: (msg: string) => void, chatId: string): Promise<string | null> {
+    const cached = this.chatOrgIds.get(chatId);
+    if (cached) return cached;
+    try {
+      const detail = await this.config.sdk.getChatDetail(chatId);
+      const orgId = detail.organizationId;
+      if (typeof orgId === "string" && orgId.length > 0) {
+        this.chatOrgIds.set(chatId, orgId);
+        return orgId;
+      }
+      return null;
+    } catch (err) {
+      log(
+        `doc capture: org lookup failed, doc mentions stay plain text: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  private projectSessionRuntime(chatId: string, opts: { drainPendingOnIdle?: boolean } = {}): void {
     const session = this.sessions.get(chatId);
-    if (!session || session.status !== "active") return;
+    const state = this.projectedRuntimeState(chatId, session ?? null);
+    if (!state) {
+      if (this.sessionRuntimeStates.delete(chatId)) this.recomputeRuntimeState();
+      return;
+    }
+    const previous = this.sessionRuntimeStates.get(chatId);
+    if (previous === state) return;
     this.sessionRuntimeStates.set(chatId, state);
-    // Per-chat D-axis report: the authoritative source the server-side
-    // composite reads. Fire before recomputing the agent-global aggregate
-    // so a single state change drops one frame on each wire (the per-chat
-    // and the agent-global one), in that order — making it harmless if
-    // either consumer races the other.
     this.config.onSessionRuntimeChange?.(chatId, state);
     this.recomputeRuntimeState();
+    if (state === "idle" && opts.drainPendingOnIdle !== false && this.pendingQueue.length > 0) {
+      this.drainPendingQueue();
+    }
+  }
+
+  private projectedRuntimeState(chatId: string, session: SessionEntry | null): RuntimeState | null {
+    if (!session) return null;
+    if (session.status === "errored") return "error";
+    if (session.status !== "active") return null;
+    return this.inboxDelivery.hasProcessingOwnedWork(chatId) ? "working" : "idle";
   }
 
   /**
@@ -1781,9 +1981,9 @@ export class SessionManager {
   private reaffirmRuntimeStates(): void {
     if (!this.config.onSessionRuntimeChange) return;
     for (const [chatId, session] of this.sessions) {
-      if (session.status !== "active") continue;
+      if (session.status !== "active" && session.status !== "errored") continue;
       const state = this.sessionRuntimeStates.get(chatId);
-      if (state === "working" || state === "blocked" || state === "error") {
+      if (state === "working" || state === "error") {
         this.config.onSessionRuntimeChange(chatId, state);
       }
     }
@@ -1799,8 +1999,9 @@ export class SessionManager {
   getSessionRuntimeStates(): Array<{ chatId: string; runtimeState: RuntimeState }> {
     const out: Array<{ chatId: string; runtimeState: RuntimeState }> = [];
     for (const [chatId, session] of this.sessions) {
-      if (session.status !== "active") continue;
-      out.push({ chatId, runtimeState: this.sessionRuntimeStates.get(chatId) ?? "idle" });
+      const runtimeState = this.projectedRuntimeState(chatId, session);
+      if (!runtimeState) continue;
+      out.push({ chatId, runtimeState });
     }
     return out;
   }

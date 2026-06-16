@@ -29,6 +29,8 @@ export const FAKE_CLAUDE_TUI_EXECUTABLE = resolve(PACKAGE_E2E_ROOT, "src/mocks/f
 export type FakeTuiAgentKnobs = {
   /** Canned reply override (FAKE_TUI_REPLY). */
   reply?: string;
+  /** Delay before advertising ready (FAKE_TUI_READY_DELAY_MS). */
+  readyDelayMs?: number;
   /** Pre-emit delay (FAKE_TUI_DELAY_MS). */
   delayMs?: number;
   /** Never paint the ready marker (FAKE_TUI_FAIL_READY=1). */
@@ -48,6 +50,12 @@ export type CreateTuiAgentInput = {
   displayName?: string;
   /** Behaviour knobs forwarded to the fake-tui binary via per-agent env. */
   knobs?: FakeTuiAgentKnobs;
+  /**
+   * Real-provider parity uses the product path: create the agent already bound
+   * to the client. Fake TUI tests can opt into patching env first so the first
+   * pinned-frame config load cannot miss fake-only knobs like readyDelayMs.
+   */
+  bindMode?: "at-create" | "after-env-patch";
   /** Optional override of where the fake-tui side-channel log lands. */
   logPath?: string;
 };
@@ -87,6 +95,7 @@ function knobsToEnvEntries(knobs: FakeTuiAgentKnobs, logPath: string): Array<{ k
   const env: Array<{ key: string; value: string }> = [];
   env.push({ key: "FAKE_TUI_LOG_PATH", value: logPath });
   if (knobs.reply !== undefined) env.push({ key: "FAKE_TUI_REPLY", value: knobs.reply });
+  if (knobs.readyDelayMs !== undefined) env.push({ key: "FAKE_TUI_READY_DELAY_MS", value: String(knobs.readyDelayMs) });
   if (knobs.delayMs !== undefined) env.push({ key: "FAKE_TUI_DELAY_MS", value: String(knobs.delayMs) });
   if (knobs.failReady) env.push({ key: "FAKE_TUI_FAIL_READY", value: "1" });
   if (knobs.hang) env.push({ key: "FAKE_TUI_HANG", value: "1" });
@@ -105,6 +114,7 @@ function knobsToEnvEntries(knobs: FakeTuiAgentKnobs, logPath: string): Array<{ k
 export async function createTuiAgent(input: CreateTuiAgentInput): Promise<TuiAgentFixture> {
   const creds = readCredentialsOrThrow(input.handle);
   const knobs = input.knobs ?? {};
+  const bindMode = input.bindMode ?? "at-create";
   const agentName = `tui-${randomBytes(3).toString("hex")}`;
   const logPath = input.logPath ?? defaultLogPath(input.handle, agentName);
   mkdirSync(dirname(logPath), { recursive: true });
@@ -117,7 +127,7 @@ export async function createTuiAgent(input: CreateTuiAgentInput): Promise<TuiAge
     name: agentName,
     type: "agent",
     displayName: input.displayName ?? `TUI fixture ${agentName}`,
-    clientId: creds.clientId,
+    ...(bindMode === "at-create" ? { clientId: creds.clientId } : {}),
     runtimeProvider: "claude-code-tui",
   });
   let created: { uuid: string } | null = null;
@@ -155,6 +165,14 @@ export async function createTuiAgent(input: CreateTuiAgentInput): Promise<TuiAge
     agentId: created.uuid,
     envEntries: knobsToEnvEntries(knobs, logPath),
   });
+  if (bindMode === "after-env-patch") {
+    await bindAgentToClient({
+      handle: input.handle,
+      accessToken: creds.accessToken,
+      agentId: created.uuid,
+      clientId: creds.clientId,
+    });
+  }
 
   const chatRes = await fetch(`${input.handle.serverBaseUrl}/api/v1/orgs/${creds.organizationId}/chats`, {
     method: "POST",
@@ -291,6 +309,22 @@ async function patchAgentRuntimeEnv(input: {
   });
   if (patchRes.status !== 200) {
     throw new Error(`patch runtime env failed: ${patchRes.status} ${await patchRes.text()}`);
+  }
+}
+
+async function bindAgentToClient(input: {
+  handle: CurrentRunHandle;
+  accessToken: string;
+  agentId: string;
+  clientId: string;
+}): Promise<void> {
+  const res = await fetch(`${input.handle.serverBaseUrl}/api/v1/agents/${input.agentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${input.accessToken}` },
+    body: JSON.stringify({ clientId: input.clientId }),
+  });
+  if (res.status !== 200) {
+    throw new Error(`bind tui agent to client failed: ${res.status} ${await res.text()}`);
   }
 }
 

@@ -123,7 +123,7 @@ export type BoundAgent = {
 };
 
 export type SessionCommand = {
-  type: "session:suspend" | "session:terminate";
+  type: "session:suspend" | "session:resume" | "session:terminate";
   agentId: string;
   chatId: string;
 };
@@ -530,7 +530,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
    */
   sendInboxAck(entryId: number, agentId?: string): Promise<void> {
     if (!this.serverSupportsInboxAckConfirm) {
-      this.sendLegacyInboxAck(entryId);
+      this.sendLegacyInboxAck(entryId, agentId);
       return Promise.resolve();
     }
 
@@ -591,15 +591,24 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     return pending.promise;
   }
 
-  private sendLegacyInboxAck(entryId: number): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+  private canSendClientFrame(): boolean {
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN && this.registered;
+  }
+
+  private canSendAgentFrame(agentId?: string): boolean {
+    return this.canSendClientFrame() && (agentId === undefined || this.socketBoundAgentIds.has(agentId));
+  }
+
+  private sendLegacyInboxAck(entryId: number, agentId?: string): void {
+    const ws = this.ws;
+    if (!this.canSendAgentFrame(agentId) || !ws) {
       this.wsLogger.warn(
-        { entryId, connectionState: this.inboxAckConnectionState() },
-        "inbox:ack dropped — socket not OPEN",
+        { entryId, agentId, connectionState: this.inboxAckConnectionState() },
+        "inbox:ack dropped — socket not ready",
       );
       return;
     }
-    this.ws.send(JSON.stringify({ type: "inbox:ack", entryId }));
+    ws.send(JSON.stringify({ type: "inbox:ack", entryId }));
     this.wsLogger.debug(
       {
         entryId,
@@ -652,7 +661,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
 
     if (!this.serverSupportsInboxAckConfirm) {
-      this.sendLegacyInboxAck(pending.entryId);
+      this.sendLegacyInboxAck(pending.entryId, pending.agentId);
       this.resolvePendingInboxAck(pending, "legacy_fallback");
       return;
     }
@@ -856,22 +865,23 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   }
 
   async unbindAgent(agentId: string): Promise<void> {
+    const shouldNotifyServer = this.canSendAgentFrame(agentId);
     this.desiredBindings.delete(agentId);
     this.boundAgents.delete(agentId);
     this.socketBoundAgentIds.delete(agentId);
     this.rejectPendingInboxAcksForAgent(agentId, "agent_unbound");
     this.rejectPendingInboxRecoversForAgent(agentId, "agent_unbound");
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!shouldNotifyServer || !this.ws) return;
     this.ws.send(JSON.stringify({ type: "agent:unbind", agentId }));
   }
 
   reportSessionState(agentId: string, chatId: string, state: SessionState): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.canSendAgentFrame(agentId) || !this.ws) return;
     this.ws.send(JSON.stringify({ type: "session:state", agentId, chatId, state }));
   }
 
   reportRuntimeState(agentId: string, runtimeState: RuntimeState): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.canSendAgentFrame(agentId) || !this.ws) return;
     this.ws.send(JSON.stringify({ type: "runtime:state", agentId, runtimeState }));
   }
 
@@ -884,19 +894,19 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
    * admin overview / fault notification path until that consumer migrates.
    */
   reportSessionRuntime(agentId: string, chatId: string, runtimeState: RuntimeState): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.canSendAgentFrame(agentId) || !this.ws) return;
     this.ws.send(JSON.stringify({ type: "session:runtime", agentId, chatId, runtimeState }));
   }
 
   reportSessionEvent(agentId: string, chatId: string, event: SessionEvent): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.canSendAgentFrame(agentId) || !this.ws) return;
     const sanitized = sanitizeSessionEventForTransport(event);
     this.ws.send(JSON.stringify({ type: "session:event", agentId, chatId, event: sanitized }));
   }
 
   /** Ask the server which of the supplied chatIds the client should drop. */
   sendSessionReconcile(agentId: string, chatIds: string[]): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.canSendAgentFrame(agentId) || !this.ws) return;
     this.ws.send(JSON.stringify({ type: "session:reconcile", agentId, chatIds }));
   }
 
@@ -1362,7 +1372,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       return;
     }
 
-    if (type === "session:suspend" || type === "session:terminate") {
+    if (type === "session:suspend" || type === "session:resume" || type === "session:terminate") {
       const agentId = msg.agentId as string;
       const chatId = msg.chatId as string;
       if (agentId && chatId) {

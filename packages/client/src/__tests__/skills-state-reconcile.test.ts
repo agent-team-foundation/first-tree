@@ -70,7 +70,6 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
       schemaVersion: 1,
       cliVersion: "test",
       updatedAt: new Date(0).toISOString(),
-      sourceRepos: [],
       skills: [...TREE_SKILL_NAMES, "legacy-foo", "legacy-bar"],
     });
 
@@ -102,7 +101,6 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
       schemaVersion: 1,
       cliVersion: "test",
       updatedAt: new Date(0).toISOString(),
-      sourceRepos: [],
       skills: [...TREE_SKILL_NAMES], // does NOT include "my-custom"
     });
 

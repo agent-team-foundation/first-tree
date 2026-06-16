@@ -3,6 +3,7 @@ import type {
   ContextTreeIoEvent,
   ContextTreeNode,
   ContextTreeSnapshot,
+  ContextTreeWriteEvent,
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
@@ -259,7 +260,11 @@ function ContextSignal({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   );
 }
 
-const CONTEXT_USAGE_FEED_DEFAULT_LIMIT = 10;
+// Initial rows shown before "Show all". 20 (not 10) because the feed defaults
+// to All, where the ~13:1 read:write volume means a 10-row window is almost
+// entirely reads; 20 rows reliably surfaces recent writes without forcing the
+// Writes filter. The full list (reads ≤50 + writes ≤200) is one click away.
+const CONTEXT_USAGE_FEED_DEFAULT_LIMIT = 20;
 // Re-render every 30s so "Xm ago" labels tick without a fresh server roundtrip.
 // Pairs with the 20s snapshot refetch above — together they keep the feed
 // feeling like a live stream even when no new events arrive.
@@ -269,15 +274,75 @@ const CONTEXT_USAGE_TIME_TICK_MS = 30_000;
 // React re-renders for an unrelated reason).
 const CONTEXT_USAGE_FRESH_MS = 1_200;
 
+// The feed is one chronological agent-action stream: telemetry reads
+// (best-effort, live) interleaved with git-derived writes (complete, including
+// PR merges, reconciled to an agent when possible). A [All / Reads / Writes]
+// filter lets a viewer isolate writes — without it the ~13:1 read:write volume
+// would bury writes in the most-recent rows (the bug issue 1071 fixes).
+type ContextFeedFilter = "all" | "reads" | "writes";
+
+type ContextFeedItem =
+  | { kind: "read"; id: string; timeMs: number; read: ContextTreeIoEvent }
+  | { kind: "write"; id: string; timeMs: number; write: ContextTreeWriteEvent };
+
+const CONTEXT_FEED_FILTERS: ReadonlyArray<{ key: ContextFeedFilter; label: string }> = [
+  { key: "all", label: "All" },
+  { key: "writes", label: "Writes" },
+  { key: "reads", label: "Reads" },
+];
+
+function feedTimeMs(value: string | null): number {
+  if (!value) return 0;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function buildContextFeedItems(snapshot: ContextTreeSnapshot): ContextFeedItem[] {
+  const reads: ContextFeedItem[] = snapshot.io.recentEvents.map((read) => ({
+    kind: "read",
+    id: `read:${read.id}`,
+    timeMs: feedTimeMs(read.createdAt),
+    read,
+  }));
+  const writes: ContextFeedItem[] = snapshot.io.writes.map((write) => ({
+    kind: "write",
+    id: `write:${write.id}`,
+    timeMs: feedTimeMs(write.createdAt),
+    write,
+  }));
+  return [...writes, ...reads].sort((a, b) => b.timeMs - a.timeMs);
+}
+
+// Build a `…/pull/N` link from the bound context-tree repo, accepting both a
+// full git URL (`https://github.com/org/repo.git`, `git@github.com:org/repo`)
+// and a bare `org/repo` slug. Returns null when the repo can't be parsed, so
+// the PR still renders as inert `#N` text rather than a broken link.
+function githubPrUrl(repo: string | null, prNumber: number): string | null {
+  if (!repo) return null;
+  const slug =
+    repo.match(/github\.com[/:]+([^/]+\/[^/]+?)(?:\.git)?$/i)?.[1] ??
+    repo.match(/^([\w.-]+\/[\w.-]+?)(?:\.git)?$/)?.[1];
+  return slug ? `https://github.com/${slug}/pull/${prNumber}` : null;
+}
+
 function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
   const navigate = useNavigate();
+  const [filter, setFilter] = useState<ContextFeedFilter>("all");
   const [showAll, setShowAll] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [freshIds, setFreshIds] = useState<Set<string>>(() => new Set());
-  // Tracks the previous event-id set across renders so we can diff for
+  // Tracks the previous item-id set across renders so we can diff for
   // arrivals on each snapshot refresh without re-flashing on every render.
   const seenIdsRef = useRef<Set<string>>(new Set());
-  const events = snapshot.io.recentEvents;
+
+  const items = useMemo(() => buildContextFeedItems(snapshot), [snapshot]);
+  const filtered = useMemo(
+    () =>
+      items.filter((item) =>
+        filter === "all" ? true : filter === "writes" ? item.kind === "write" : item.kind === "read",
+      ),
+    [items, filter],
+  );
 
   // Tick the displayed `Xm ago` labels every 30s. Cheap — only forces a
   // re-render of this subtree.
@@ -286,18 +351,18 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
     return () => clearInterval(handle);
   }, []);
 
-  // On every snapshot change, diff against the previously-seen event ids.
+  // On every snapshot change, diff against the previously-seen item ids.
   // Anything new gets the `fresh` className for one animation cycle, then is
   // removed so a later unrelated re-render does not retrigger the flash.
   useEffect(() => {
-    const currentIds = new Set(events.map((event) => event.id));
+    const currentIds = new Set(items.map((item) => item.id));
     const seen = seenIdsRef.current;
     const newlyArrived = new Set<string>();
     for (const id of currentIds) {
       if (!seen.has(id)) newlyArrived.add(id);
     }
     seenIdsRef.current = currentIds;
-    // First mount has no "fresh" — every event is just history. Only after
+    // First mount has no "fresh" — every item is just history. Only after
     // the seen set has been populated once do new ids count as arrivals.
     if (seen.size === 0 || newlyArrived.size === 0) return;
     setFreshIds((prev) => {
@@ -314,77 +379,211 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
       });
     }, CONTEXT_USAGE_FRESH_MS);
     return () => clearTimeout(handle);
-  }, [events]);
+  }, [items]);
 
-  if (events.length === 0) return null;
+  if (items.length === 0) return null;
 
-  const visible = showAll ? events : events.slice(0, CONTEXT_USAGE_FEED_DEFAULT_LIMIT);
-  const remaining = events.length - visible.length;
+  const visible = showAll ? filtered : filtered.slice(0, CONTEXT_USAGE_FEED_DEFAULT_LIMIT);
+  const remaining = filtered.length - visible.length;
 
   return (
-    <section className="context-usage-feed" aria-label="Recent Context Tree IO">
+    <section className="context-usage-feed" aria-label="Recent Context Tree agent activity">
       <div className="context-usage-feed-header">
         <span className="context-usage-feed-live-dot" aria-hidden="true" />
         <span className="context-usage-feed-live-label">LIVE</span>
-        <span className="context-usage-feed-live-sublabel">· explicit read/write activity</span>
+        <span className="context-usage-feed-live-sublabel">· agent activity on the tree</span>
+        <fieldset className="context-usage-feed-filter" aria-label="Filter agent activity">
+          {CONTEXT_FEED_FILTERS.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              className={
+                filter === option.key ? "context-usage-feed-filter-btn is-active" : "context-usage-feed-filter-btn"
+              }
+              aria-pressed={filter === option.key}
+              onClick={() => {
+                setFilter(option.key);
+                setShowAll(false);
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </fieldset>
       </div>
       <ul className="context-usage-feed-list">
-        {visible.map((event) => {
-          // Pin chatId to a local const so the truthiness narrow survives
-          // into the onClick closure — `event.chatId` is `string | null` and
-          // TS does not preserve the narrow across a function boundary.
-          const chatId = event.chatId;
-          const isFresh = freshIds.has(event.id);
-          const hue = resolveAvatarHue(event.agentAvatarColorToken, event.agentId);
-          return (
-            <li key={event.id} className={isFresh ? "context-usage-feed-row is-fresh" : "context-usage-feed-row"}>
-              <span className="context-usage-feed-dot" aria-hidden="true" />
-              <Identicon seed={event.agentId} size={22} color={hue} className="context-usage-feed-avatar" />
-              <span className="context-usage-feed-text">
-                <span className="context-usage-feed-agent">{event.agentName}</span>
-                <span className="context-usage-feed-action">{event.action === "write" ? " wrote " : " read "}</span>
-                {event.targetPath !== "/" ? (
-                  <span className="context-usage-feed-node" title={event.targetPath}>
-                    {event.targetPath}
-                  </span>
-                ) : (
-                  <span className="context-usage-feed-action">the Context Tree</span>
-                )}
-                {chatId ? (
-                  <>
-                    <span className="context-usage-feed-action"> in </span>
-                    {event.viewerCanAccess ? (
-                      <button
-                        type="button"
-                        className="context-usage-feed-chat"
-                        onClick={() => navigate(`/?c=${encodeURIComponent(chatId)}`)}
-                      >
-                        {chatLabel(event)}
-                      </button>
-                    ) : (
-                      // Org-wide the label is visible, but a non-member must not
-                      // be able to navigate into a chat the server would 404 —
-                      // render inert text instead of a link. See
-                      // summarizeContextTreeUsage / viewerCanAccess.
-                      <span className="context-usage-feed-chat is-static" title="No access to this chat">
-                        {chatLabel(event)}
-                      </span>
-                    )}
-                  </>
-                ) : null}
-              </span>
-              <span className="context-usage-feed-time">{relativeTimeLabel(event.createdAt, now)}</span>
-            </li>
-          );
-        })}
+        {visible.map((item) =>
+          item.kind === "write" ? (
+            <WriteFeedRow
+              key={item.id}
+              write={item.write}
+              now={now}
+              fresh={freshIds.has(item.id)}
+              repo={snapshot.repo}
+            />
+          ) : (
+            <ReadFeedRow key={item.id} event={item.read} now={now} fresh={freshIds.has(item.id)} navigate={navigate} />
+          ),
+        )}
       </ul>
       {remaining > 0 ? (
         <button type="button" className="context-usage-feed-more" onClick={() => setShowAll(true)}>
-          Show all {events.length} ›
+          Show all {filtered.length} ›
         </button>
       ) : null}
     </section>
   );
+}
+
+function ReadFeedRow({
+  event,
+  now,
+  fresh,
+  navigate,
+}: {
+  event: ContextTreeIoEvent;
+  now: number;
+  fresh: boolean;
+  navigate: ReturnType<typeof useNavigate>;
+}) {
+  // Pin chatId to a local const so the truthiness narrow survives into the
+  // onClick closure — `event.chatId` is `string | null`.
+  const chatId = event.chatId;
+  const hue = resolveAvatarHue(event.agentAvatarColorToken, event.agentId);
+  return (
+    <li className={fresh ? "context-usage-feed-row is-fresh" : "context-usage-feed-row"}>
+      <span className="context-usage-feed-dot" aria-hidden="true" />
+      <Identicon seed={event.agentId} size={22} color={hue} className="context-usage-feed-avatar" />
+      <span className="context-usage-feed-text">
+        <span className="context-usage-feed-agent">{event.agentName}</span>
+        <span className="context-usage-feed-action"> read </span>
+        {event.targetPath !== "/" ? (
+          <span className="context-usage-feed-node" title={event.targetPath}>
+            {event.targetPath}
+          </span>
+        ) : (
+          <span className="context-usage-feed-action">the Context Tree</span>
+        )}
+        {chatId ? (
+          <>
+            <span className="context-usage-feed-action"> in </span>
+            {event.viewerCanAccess ? (
+              <button
+                type="button"
+                className="context-usage-feed-chat"
+                onClick={() => navigate(`/?c=${encodeURIComponent(chatId)}`)}
+              >
+                {chatLabel(event)}
+              </button>
+            ) : (
+              // Org-wide the label is visible, but a non-member must not be able
+              // to navigate into a chat the server would 404 — render inert text
+              // instead of a link. See summarizeContextTreeUsage / viewerCanAccess.
+              <span className="context-usage-feed-chat is-static" title="No access to this chat">
+                {chatLabel(event)}
+              </span>
+            )}
+          </>
+        ) : null}
+      </span>
+      <span className="context-usage-feed-time">{relativeTimeLabel(event.createdAt, now)}</span>
+    </li>
+  );
+}
+
+function writeVerb(changeType: ContextTreeChangeType): string {
+  if (changeType === "added") return " added ";
+  if (changeType === "removed") return " removed ";
+  return " wrote ";
+}
+
+function WriteFeedRow({
+  write,
+  now,
+  fresh,
+  repo,
+}: {
+  write: ContextTreeWriteEvent;
+  now: number;
+  fresh: boolean;
+  repo: string | null;
+}) {
+  // Reconciled to an agent when telemetry matched; otherwise the git author
+  // (a human or a GitHub merge identity) — shown honestly, not faked as an agent.
+  const attributed = write.agentId !== null;
+  const displayName = write.agentName ?? write.authorName ?? "unknown";
+  const hue = attributed ? resolveAvatarHue(write.agentAvatarColorToken, write.agentId ?? displayName) : undefined;
+  const prUrl = write.prNumber !== null ? githubPrUrl(repo, write.prNumber) : null;
+  const rowClass = ["context-usage-feed-row", "is-write", fresh ? "is-fresh" : ""].filter(Boolean).join(" ");
+  return (
+    <li className={rowClass}>
+      <span className="context-usage-feed-write-icon" aria-hidden="true">
+        ✎
+      </span>
+      {attributed ? (
+        <Identicon
+          seed={write.agentId ?? displayName}
+          size={22}
+          color={hue ?? "var(--avatar-hue-0)"}
+          className="context-usage-feed-avatar"
+        />
+      ) : (
+        // Git author (no agent matched): keep an honest neutral initials marker,
+        // never a generated identicon that would read as a first-tree agent.
+        <span className="context-usage-feed-avatar is-git" aria-hidden="true">
+          {agentInitials(displayName)}
+        </span>
+      )}
+      <span className="context-usage-feed-text">
+        <span className="context-usage-feed-agent">{displayName}</span>
+        <span className="context-usage-feed-action">{writeVerb(write.changeType)}</span>
+        {write.nodePath ? (
+          <span className="context-usage-feed-node" title={write.nodePath}>
+            {write.nodePath}
+          </span>
+        ) : (
+          // Root node writes carry an empty node path (the root's tree path is
+          // ""); render the same friendly label reads use for the repo root.
+          <span className="context-usage-feed-action">the Context Tree</span>
+        )}
+        {write.summary ? <span className="context-usage-feed-summary"> — {write.summary}</span> : null}
+        {write.prNumber !== null ? (
+          prUrl ? (
+            <a className="context-usage-feed-pr" href={prUrl} target="_blank" rel="noreferrer">
+              #{write.prNumber}
+            </a>
+          ) : (
+            <span className="context-usage-feed-pr is-static">#{write.prNumber}</span>
+          )
+        ) : null}
+        {write.riskLevel !== "low" ? (
+          <span className={`context-usage-feed-risk is-${write.riskLevel}`}>{write.riskLevel}</span>
+        ) : null}
+        {!attributed ? (
+          <span className="context-usage-feed-unmatched" title="No agent matched — showing the git author">
+            git author
+          </span>
+        ) : null}
+      </span>
+      <span className="context-usage-feed-time">{write.createdAt ? relativeTimeLabel(write.createdAt, now) : ""}</span>
+    </li>
+  );
+}
+
+/**
+ * Two-letter initials for a git author with no matched agent (the only
+ * remaining non-identicon avatar — agents use <Identicon>). Handles
+ * space/kebab/snake/dot separators ("gandy-coder" → "GC"), falling back to the
+ * first two characters for single tokens. Always uppercase.
+ */
+function agentInitials(name: string): string {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return "??";
+  const tokens = trimmed.split(/[\s._-]+/).filter((part) => part.length > 0);
+  if (tokens.length >= 2) {
+    return `${tokens[0]?.[0] ?? ""}${tokens[1]?.[0] ?? ""}`.toUpperCase();
+  }
+  return trimmed.slice(0, 2).toUpperCase();
 }
 
 function chatLabel(event: ContextTreeIoEvent): string {

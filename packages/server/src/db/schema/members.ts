@@ -22,11 +22,20 @@ export const members = pgTable(
     /** "admin" | "member" */
     role: text("role").notNull(),
     /**
-     * "active" | "left". Soft-delete marker. Members who leave a team have
-     * their row flipped to "left" rather than deleted, so historical chats /
-     * agent ownership references stay intact. The auth middleware refuses
-     * tokens that resolve to a "left" member; the join-by-invite flow flips
-     * a previously-"left" row back to "active".
+     * Per-membership onboarding auto-open suppressor. A user completing or
+     * hiding onboarding in one org must not suppress setup for another org.
+     */
+    onboardingSuppressedAt: timestamp("onboarding_suppressed_at", { withTimezone: true }),
+    /** "finish_later" | "completed" | "invitee_skip"; NULL iff onboardingSuppressedAt is NULL. */
+    onboardingSuppressedReason: text("onboarding_suppressed_reason"),
+    /** Audit stamp for completing this membership's onboarding journey. */
+    onboardingCompletedAt: timestamp("onboarding_completed_at", { withTimezone: true }),
+    /**
+     * "active" | "left" | "removed". Soft-delete marker. Members who leave
+     * or are removed from a team keep their row so historical chats / agent
+     * ownership references stay intact. Auth only accepts "active" rows.
+     * Invite rejoin restores "left"; admin restore can restore "left" or
+     * "removed".
      */
     status: text("status").notNull().default("active"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -64,14 +64,6 @@ const ComposeStatusBarPreviewPage = import.meta.env.DEV
     )
   : null;
 
-const ChatDescriptionPreviewPage = import.meta.env.DEV
-  ? lazy(() =>
-      import("./pages/chat-description-preview.js").then((module) => ({
-        default: module.ChatDescriptionPreviewPage,
-      })),
-    )
-  : null;
-
 const RequestDockPreviewPage = import.meta.env.DEV
   ? lazy(() =>
       import("./pages/request-dock-preview.js").then((module) => ({
@@ -94,6 +86,16 @@ const ResourcesPreviewPage = import.meta.env.DEV
 
 const AgentDetailPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/agent-detail-preview.js").then((module) => ({ default: module.AgentDetailPreviewPage })))
+  : null;
+
+const CommandPalettePreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/command-palette-preview.js").then((module) => ({ default: module.CommandPalettePreviewPage })),
+    )
+  : null;
+
+const UserMenuPreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/user-menu-preview.js").then((module) => ({ default: module.UserMenuPreviewPage })))
   : null;
 
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
@@ -158,22 +160,32 @@ export function App() {
                   }
                 />
               ) : null}
-              {ChatDescriptionPreviewPage ? (
-                <Route
-                  path="/preview/chat-description"
-                  element={
-                    <Suspense fallback={null}>
-                      <ChatDescriptionPreviewPage />
-                    </Suspense>
-                  }
-                />
-              ) : null}
               {RequestDockPreviewPage ? (
                 <Route
                   path="/preview/request-dock"
                   element={
                     <Suspense fallback={null}>
                       <RequestDockPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {CommandPalettePreviewPage ? (
+                <Route
+                  path="/preview/command-palette"
+                  element={
+                    <Suspense fallback={null}>
+                      <CommandPalettePreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {UserMenuPreviewPage ? (
+                <Route
+                  path="/preview/user-menu"
+                  element={
+                    <Suspense fallback={null}>
+                      <UserMenuPreviewPage />
                     </Suspense>
                   }
                 />

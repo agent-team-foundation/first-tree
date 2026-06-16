@@ -63,9 +63,10 @@ prompt:
 | Target in this chat | What to do |
 |---|---|
 | **human** — plain reply / status | `chat send <name> "..."` — every reply directed at a human in this chat goes through `chat send`. |
-| **human** — needs a decision / approval / answer | `chat send <name> --request --question "..."` — a tracked ask (red-dot / open-request count). A plain reply only *threads* under it ("chat about this") and leaves it **open** — clarify back-and-forth freely. Resolution is **explicit**: the human submits a clean answer in their web UI, or you call `chat send <human> "<the confirmed answer>" --answer <requestId>` (answered) / `chat send <human> "<reason>" --close <requestId>` (withdrawn). Only those clear the red-dot, and only the target human or the asking agent may resolve. Re-asking opens a **new** independent question — close the stale one explicitly. See `references/agent-communication.md`. |
+| **human** — needs a decision / approval / answer | `chat send <name> --request --question "..."` — a tracked ask (red-dot / open-request count) that **blocks that chat for the human**: their UI pins it and hides every message after it until they answer (several open asks clear oldest-first). **Any answer resolves it** — picking an option OR typing free text both clear the red-dot and unblock. **Prefer a free-text question (omit `--option`); add `--option` only when every option is a short, single-meaning, mutually-exclusive pick** — dense option lists are hard to choose from. If their answer pushes back or you need more, re-ask (a new request → a new block). You can also resolve from the CLI — `chat send <human> "<answer>" --answer <requestId>` — or withdraw a moot one with `chat send <human> "<reason>" --close <requestId>` (only the target human or the asking agent may resolve). See `references/agent-communication.md`. |
 | **agent** — make them act | `chat send <name> "..."` — agents only act on explicit `chat send`. |
-| **new task / offshoot** — needs its own conversation boundary | `chat create --to <name> "..."` — creates a new task chat and writes the first message. `--to` recipients are mentioned and woken; `--with` participants are added silently for context. Use this only for real task splits, not courtesy acknowledgements or empty chats. |
+| **agent not in this chat, same task** — stage / role handoff | `chat invite <name>`, then `chat send <name> "..."` — keep the task in the current chat and add the agent as a participant before waking them. |
+| **new task / offshoot** — needs its own conversation boundary | `chat create --to <name> "..."` — creates a new task chat and writes the first message. `--to` recipients are mentioned and woken; `--with` participants are added silently for context. Use this only for real task splits, not same-task stage handoffs, courtesy acknowledgements, or empty chats. |
 
 After an agent handoff, continue only independent work. If their reply is
 the only remaining input, end the turn and wait to be woken; do not poll
@@ -190,13 +191,14 @@ WS=$(find_workspace_root) || { echo "No First Tree workspace at or above cwd"; }
 cat "$WS/.first-tree/workspace.json"
 ```
 
-The manifest is `{ tree: "<dir>", sources: ["<dir>", ...] }`. Resolve:
+The manifest is `{ tree: "<dir>", sources: ["<dir>", ...], sourcesRoot?: "source-repos" }`. Resolve:
 
 | Field | What you're looking at | Where to go next |
 |---|---|---|
 | `<workspace-root>` | absolute path to the workspace dir | OK to proceed; all sub-skills assume cwd is at or under this path. |
-| `tree` | the tree subdirectory name (sibling of source repos under workspace root) | Use `<workspace-root>/<tree>` for any tree read. |
-| `sources` | bound source repo subdirectory names | Each is a sibling of the tree under the workspace root. |
+| `tree` | the tree subdirectory name (an immediate child of the workspace root) | Use `<workspace-root>/<tree>` for any tree read. |
+| `sources` | bound source repo subdirectory names | Each lives under `sourcesRoot`: `<workspace-root>/<sourcesRoot>/<name>`. |
+| `sourcesRoot` | directory holding the source clones (the runtime writes `"source-repos"`) | Optional — if absent, the manifest is a legacy flat one and sources sit directly at `<workspace-root>/<name>`. |
 
 If no `workspace.json` is found at or above cwd, the workspace is
 unbound. Binding a workspace to a tree is an operator action taken
@@ -205,17 +207,26 @@ gap to a human instead of trying to self-bind.
 
 ### 2. Tree HEAD freshness
 
-The tree lives at `<workspaceRoot>/<manifest.tree>` — a git repo. Verify
-it is not stale:
+The tree lives at `<workspaceRoot>/<manifest.tree>` — a git repo you
+maintain yourself (the runtime never runs git on it).
 
-```bash
-git -C <workspaceRoot>/<manifest.tree> fetch origin
-git -C <workspaceRoot>/<manifest.tree> log -1 --since=24h --oneline
-```
+If that path **does not exist**, the workspace is agent-managed and
+materialising the tree is your job: follow the **Tree Location** block
+in your `AGENTS.md` / `CLAUDE.md` briefing to clone the upstream tree
+repo into the path (the briefing carries the upstream URL, branch, and
+a ready `git clone` command). If the path exists as a **symlink**
+(legacy shared-pool layout), remove only the symlink and clone per the
+briefing.
 
-If `log` is empty (no commit in 24h) or the local HEAD is behind
-`origin/main`, `git pull` before reading any tree content. Stale tree
-content is the #1 source of advice that conflicts with current decisions.
+Once the directory exists you do **not** need a manual fetch/pull:
+`first-tree tree tree` (the reader command, see `first-tree-read`)
+runs `git pull --ff-only` on the context repo before every listing, so
+freshness is a built-in tool guarantee rather than a step you have to
+remember. It degrades to the local copy with a warning when the remote
+is unreachable (offline / missing credentials → report to a human and
+read local), and `--no-pull` opts out for a deliberately stable
+snapshot. Stale tree content is the #1 source of advice that conflicts
+with current decisions, so let the default pull run.
 
 ### 3. Source vs. workspace vs. tree role-fork
 
@@ -224,7 +235,10 @@ which are computable from `workspaceRoot` + `cwd`:
 
 - **Tree** — `cwd` resolves to or under `<workspaceRoot>/<manifest.tree>`.
   Use this for direct tree reads / writes.
-- **Source** — `cwd` resolves to or under one of `<workspaceRoot>/<manifest.sources[i]>`.
+- **Source** — `cwd` resolves to or under one of the source clones at
+  `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>` (i.e.
+  `<workspaceRoot>/source-repos/<name>`; a legacy flat manifest without
+  `sourcesRoot` keeps them at `<workspaceRoot>/<name>`).
   Use this for source-side tasks.
 - **Workspace** — `cwd` is `<workspaceRoot>` itself, or sits outside any
   declared tree / source. Use this when the task spans multiple sources

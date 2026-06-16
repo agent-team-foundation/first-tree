@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { ServiceUnavailableError } from "../errors.js";
 import { requireAgentAccess, requireChatAccess } from "../scope/require-resource.js";
 import * as agentService from "../services/agent.js";
 import { sendToAgent } from "../services/connection-manager.js";
@@ -63,6 +64,23 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       chatId: request.params.chatId,
       state: result.state,
       transitioned: result.transitioned,
+    });
+  });
+
+  app.post<{ Params: { uuid: string; chatId: string } }>("/:uuid/sessions/:chatId/resume", async (request, reply) => {
+    const { agent } = await requireAgentAccess(request, app.db, "manage");
+    const session = await sessionService.getSession(app.db, agent.uuid, request.params.chatId);
+    if (session.state === "suspended") {
+      const delivered = sendToAgent(agent.uuid, { type: "session:resume", chatId: request.params.chatId });
+      if (!delivered) {
+        throw new ServiceUnavailableError("Resume command was not delivered because the agent client is disconnected");
+      }
+    }
+    return reply.status(200).send({
+      agentId: agent.uuid,
+      chatId: request.params.chatId,
+      state: session.state,
+      transitioned: false,
     });
   });
 

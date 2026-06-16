@@ -1,5 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
   existsSync,
   lstatSync,
@@ -16,59 +15,24 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
-import { defaultDataDir } from "@first-tree/shared/config";
-import type { ContextTreeConfig } from "../sdk.js";
-import { type AccessTokenProvider, FirstTreeHubSDK } from "../sdk.js";
+import type { FirstTreeHubSDK } from "../sdk.js";
 import { getCliBinding } from "./cli-binding.js";
 import { installCoreSkills as installCoreSkillsImpl, installFirstTreeSkills } from "./first-tree-skills/installer.js";
-import { httpsToSshBaseRewrite } from "./git-mirror-manager.js";
 import type { AgentIdentity } from "./handler.js";
-
-/**
- * Promisified `execFile` used by the Context Tree sync path. The sync path
- * runs at startup while N agents are concurrently issuing `agent:bind` and
- * `/api/v1/agent/config` requests; `execFileSync` froze the event loop for the
- * full duration of `git pull` (~7s on a typical home connection), which made
- * `AbortSignal.timeout(5_000)` on those in-flight HTTP calls fire spuriously —
- * server-side traces showed the requests completing in <10ms — and stretched
- * boot to ≈7s × N because each blocking pull also stalled the dedup window in
- * {@link withContextTreeSyncLock}: only the very first slot to reach the lock
- * collapsed onto the leader's promise, every later slot arrived after the
- * leader's pull had already resolved and acquired a fresh lock of its own.
- * Async exec lets the event loop keep servicing HTTP responses, lets all N
- * slots reach the lock during the leader's pull, and collapses startup to a
- * single shared sync (~10s total instead of ~7s × N).
- */
-const execFileAsync = promisify(execFile);
-
-/**
- * `execFile` defaults `maxBuffer` to 1MB; once child output exceeds that it
- * rejects with `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` and the whole sync path
- * falls through. `git clone` of a small Context Tree is typically harmless,
- * but the verbose / progress lines of an unusually large or slow clone (or a
- * future debug flag) can creep past the default. Reserve 10MB on the three
- * clone call sites — cheap defence against a rare but high-blast-radius
- * failure mode, since hitting it cascades into the SSH-fallback and
- * re-clone branches and finally leaves the agent with no Context Tree.
- */
-const GIT_CLONE_MAX_BUFFER = 10 * 1024 * 1024;
-
-// Function rather than top-level const: see CLI's `channel-env.ts`
-// history note — locking a path at module load re-introduces the bundle
-// eval-order foot-gun the resolver function-ization fixed.
-function contextTreeReposDir(): string {
-  return join(defaultDataDir(), "context-tree-repos");
-}
-
-const contextTreeSyncLocks = new Map<string, Promise<ContextTreeBinding | null>>();
+import { CONTEXT_TREE_DIRNAME } from "./workspace-manifest.js";
 
 /**
  * Resolved Context Tree binding the runtime threads through every layer:
- * the local checkout path AND the upstream coordinates. The URL is
- * surfaced in the agent briefing so the LLM can reference the upstream
- * repo when describing the tree to humans, even though Client-side
- * read-only sync only needs the local path.
+ * the agent-local checkout path AND the upstream coordinates.
+ *
+ * Per the agent-managed-repos design the runtime performs **no git
+ * operations** on this path — the agent itself clones and refreshes
+ * `<agentHome>/context-tree` following the protocol injected into its
+ * briefing (clone-if-missing; `git pull --ff-only` before every tree
+ * read). The runtime only *names* the path (briefing, workspace manifest,
+ * identity.json) and *observes* it read-only (`git rev-parse` HEAD-drift
+ * detection in `agent-bootstrap.ts`). The upstream URL and branch are
+ * surfaced in the briefing so the agent knows what to clone.
  */
 export type ContextTreeBinding = {
   path: string;
@@ -76,226 +40,44 @@ export type ContextTreeBinding = {
   branch: string;
 };
 
-export function contextTreeCloneDir(repo: string, branch: string): string {
-  const digest = createHash("sha256").update(`${repo}\0${branch}`).digest("hex");
-  return join(contextTreeReposDir(), digest);
-}
-
 /**
- * Convert a plain HTTPS git URL to its scp-like SSH counterpart for fallback
- * cloning. Delegates the host parsing + safety rules (reject embedded
- * credentials, reject non-default ports) to `httpsToSshBaseRewrite` in
- * git-mirror-manager — keeps a single source of truth for URL rewriting.
- * Returns null when no portable mapping exists.
- */
-function toSshGitUrl(httpsRepo: string): string | null {
-  const rewrite = httpsToSshBaseRewrite(httpsRepo);
-  if (!rewrite) return null;
-  // `rewrite.httpsBase` is the `https://<host>/` prefix; replace it with the
-  // matching `git@<host>:` to produce a full SSH URL for the same path.
-  if (!httpsRepo.startsWith(rewrite.httpsBase)) return null;
-  return rewrite.sshBase + httpsRepo.slice(rewrite.httpsBase.length);
-}
-
-/**
- * De-dup concurrent Context Tree syncs for the same clone dir: when an
- * in-flight sync exists for `key`, share its settled result instead of
- * queueing another `git pull` round-trip. Once the in-flight promise
- * settles, the slot is cleared — subsequent calls trigger a fresh sync.
+ * Resolve the Context Tree binding for the authenticated runtime agent —
+ * pure configuration resolution, no filesystem or git side effects.
  *
- * The old implementation chained callers (`prev.then(fn)`), so N agents
- * sharing one Context Tree (the common case) cost N×git-pull at startup
- * — observed as ~7s per extra agent. With dedup, those N calls collapse
- * to a single shared sync. Each server `agent:bind` still resyncs the tree
- * once per process restart (the first caller's pull), which is the
- * contract `syncAgentContextTree` advertises.
+ * Uses the SDK's agent-scoped `/api/v1/agent/context-tree/info` route, so
+ * the binding follows the agent's own organization rather than the
+ * caller's default organization. The local path is fixed at
+ * `<workspaceRoot>/context-tree`: the agent maintains its own clone there
+ * (one clone per agent home — the shared `<dataDir>/context-tree-repos/`
+ * pool is retired; existing pool checkouts are left on disk untouched for
+ * the operator to clean up, and a legacy `context-tree` symlink into the
+ * pool keeps working for reads until the agent replaces it per its
+ * briefing protocol).
  *
- * Exported for direct unit-testing; not re-exported from `src/index.ts`.
+ * Returns `null` when no tree is configured or the server is unreachable
+ * (graceful degradation — the agent starts tree-less).
  */
-export function withContextTreeSyncLock(
-  key: string,
-  fn: () => Promise<ContextTreeBinding | null>,
-): Promise<ContextTreeBinding | null> {
-  const inFlight = contextTreeSyncLocks.get(key);
-  if (inFlight) return inFlight;
-  const next = fn().finally(() => {
-    if (contextTreeSyncLocks.get(key) === next) {
-      contextTreeSyncLocks.delete(key);
-    }
-  });
-  contextTreeSyncLocks.set(key, next);
-  return next;
-}
-
-async function resolveContextTreeBinding(
-  fetchConfig: () => Promise<ContextTreeConfig>,
+export async function resolveAgentContextTreeBinding(
+  sdk: FirstTreeHubSDK,
+  workspaceRoot: string,
   log: (msg: string) => void,
 ): Promise<ContextTreeBinding | null> {
-  // 1. Check git is available
   try {
-    await execFileAsync("git", ["--version"]);
-  } catch {
-    log("Context Tree sync skipped: git is not installed");
-    return null;
-  }
-
-  // 2. Fetch repo config from server
-  let repo: string;
-  let branch: string;
-  try {
-    const config = await fetchConfig();
+    const config = await sdk.getAgentContextTreeConfig();
     if (!config.repo) {
-      log("Context Tree sync skipped: not configured on server");
+      log("Context Tree binding skipped: not configured on server");
       return null;
     }
-    repo = config.repo;
-    branch = config.branch ?? "main";
+    return {
+      path: join(workspaceRoot, CONTEXT_TREE_DIRNAME),
+      repoUrl: config.repo,
+      branch: config.branch ?? "main",
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log(`Context Tree sync skipped: failed to fetch config from server (${msg})`);
+    log(`Context Tree binding skipped: failed to fetch config from server (${msg})`);
     return null;
   }
-
-  const cloneDir = contextTreeCloneDir(repo, branch);
-  return withContextTreeSyncLock(cloneDir, () => syncContextTreeRepo(repo, branch, cloneDir, log));
-}
-
-async function syncContextTreeRepo(
-  repo: string,
-  branch: string,
-  cloneDir: string,
-  log: (msg: string) => void,
-): Promise<ContextTreeBinding | null> {
-  // 3. Clone or pull
-  try {
-    if (existsSync(join(cloneDir, ".git"))) {
-      // Ensure we're on the expected branch before pulling
-      const { stdout: headRef } = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
-        cwd: cloneDir,
-        encoding: "utf-8",
-        timeout: 5_000,
-      });
-      if (headRef.trim() !== branch) {
-        await execFileAsync("git", ["checkout", branch], {
-          cwd: cloneDir,
-          timeout: 10_000,
-        });
-        log(`Context Tree switched to branch ${branch}`);
-      }
-
-      // Pull latest changes
-      await execFileAsync("git", ["pull", "--ff-only"], {
-        cwd: cloneDir,
-        timeout: 30_000,
-      });
-      log(`Context Tree updated (pull)`);
-    } else {
-      // First clone
-      mkdirSync(cloneDir, { recursive: true });
-      await execFileAsync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
-        timeout: 60_000,
-        maxBuffer: GIT_CLONE_MAX_BUFFER,
-      });
-      log(`Context Tree cloned from ${repo} (branch: ${branch})`);
-    }
-    return { path: cloneDir, repoUrl: repo, branch };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log(`Context Tree sync failed: ${msg}`);
-    log("Check that git credentials (SSH key or credential helper) are configured for this repo");
-
-    // First-time HTTPS clone is the common failure case in headless service
-    // envs (systemd / launchd) — no TTY for git's credential prompt, so HTTPS
-    // auth exits with "could not read Username". If the configured URL is
-    // HTTPS, retry once with the SSH counterpart before giving up. Many
-    // operators have SSH keys configured even when credential helpers aren't.
-    // Pull failures (existing .git present) skip this — the existing remote
-    // is whatever clone last succeeded; switching it mid-flight is messier
-    // than letting the "use existing clone" fallback below take over.
-    const sshRepo = !existsSync(join(cloneDir, ".git")) ? toSshGitUrl(repo) : null;
-    if (sshRepo) {
-      log(`Retrying Context Tree clone via SSH: ${sshRepo}`);
-      try {
-        rmSync(cloneDir, { recursive: true, force: true });
-        mkdirSync(cloneDir, { recursive: true });
-        await execFileAsync("git", ["clone", "--branch", branch, "--single-branch", sshRepo, cloneDir], {
-          timeout: 60_000,
-          maxBuffer: GIT_CLONE_MAX_BUFFER,
-        });
-        log("Context Tree cloned via SSH fallback");
-        // Report the SSH URL as ground truth — `git remote get-url origin`
-        // on this checkout will be the SSH form, and downstream consumers
-        // (telemetry, future tree wiring) should match the actual remote
-        // rather than the configured-but-unusable HTTPS.
-        return { path: cloneDir, repoUrl: sshRepo, branch };
-      } catch (sshErr) {
-        const sshMsg = sshErr instanceof Error ? sshErr.message : String(sshErr);
-        log(`Context Tree SSH fallback also failed: ${sshMsg}`);
-      }
-    }
-
-    // If pull failed due to diverged history, try re-clone.
-    // Only re-clone when the error indicates a non-recoverable git state.
-    // For transient errors (network, auth), preserve existing clone.
-    const isGitStateError =
-      msg.includes("cannot fast-forward") || msg.includes("not possible to fast-forward") || msg.includes("CONFLICT");
-
-    if (isGitStateError && existsSync(join(cloneDir, ".git"))) {
-      log("Diverged history detected, attempting fresh clone...");
-      try {
-        rmSync(cloneDir, { recursive: true, force: true });
-        mkdirSync(cloneDir, { recursive: true });
-        await execFileAsync("git", ["clone", "--branch", branch, "--single-branch", repo, cloneDir], {
-          timeout: 60_000,
-          maxBuffer: GIT_CLONE_MAX_BUFFER,
-        });
-        log("Context Tree re-cloned successfully");
-        return { path: cloneDir, repoUrl: repo, branch };
-      } catch {
-        log("Context Tree re-clone also failed, continuing without context");
-      }
-    }
-
-    // Return existing clone path if available (preserves local work on transient errors)
-    if (existsSync(join(cloneDir, ".git"))) {
-      log("Using existing Context Tree clone despite sync failure");
-      return { path: cloneDir, repoUrl: repo, branch };
-    }
-
-    return null;
-  }
-}
-
-/**
- * Sync the user-scoped Context Tree checkout.
- *
- * Fetches the legacy `/api/v1/context-tree/info` binding, which resolves
- * against the caller's current default organization. Clones on first run,
- * pulls on subsequent runs, using a hashed local checkout per `(repo, branch)`.
- * Returns the binding on success, null on failure (graceful degradation).
- */
-export async function syncContextTree(
-  serverUrl: string,
-  getAccessToken: AccessTokenProvider,
-  log: (msg: string) => void,
-  userAgent?: string,
-): Promise<ContextTreeBinding | null> {
-  const sdk = new FirstTreeHubSDK({ serverUrl, getAccessToken, userAgent });
-  return resolveContextTreeBinding(() => sdk.getContextTreeConfig(), log);
-}
-
-/**
- * Sync the Context Tree checkout for the authenticated runtime agent.
- *
- * Uses the SDK's agent-scoped `/api/v1/agent/context-tree/info` route, so the
- * binding follows the agent's own organization rather than the caller's
- * default organization. Local checkouts are still isolated per `(repo, branch)`.
- */
-export async function syncAgentContextTree(
-  sdk: FirstTreeHubSDK,
-  log: (msg: string) => void,
-): Promise<ContextTreeBinding | null> {
-  return resolveContextTreeBinding(() => sdk.getAgentContextTreeConfig(), log);
 }
 
 /**
@@ -372,52 +154,12 @@ export function ensureClaudeMdSymlink(workspacePath: string): void {
 }
 
 /**
- * Path to the cached Context-Tree HEAD inside the agent home. Used by the
- * handler to detect upstream Tree commit drift between session starts and
- * trigger a fresh `installFirstTreeIntegration` (proposals/agent-session-
- * cwd-redesign.20260519.md §⑤.3).
- */
-export const CONTEXT_TREE_HEAD_REL = join(FIRST_TREE_RUNTIME_DIR, "context-tree-head");
-
-/**
- * Best-effort read of the Context Tree's current HEAD commit. Returns `null`
- * when the path is missing or `git rev-parse` fails (e.g. detached worktree
- * with no commits) — drift detection is "fail open" in that case: callers
- * treat null as "unknown" and skip the drift-driven re-bootstrap.
- */
-export function readContextTreeHead(contextTreePath: string | null): string | null {
-  if (!contextTreePath || !existsSync(join(contextTreePath, ".git"))) return null;
-  try {
-    return execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: contextTreePath,
-      encoding: "utf-8",
-      timeout: 5_000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-/** Read the cached HEAD value, if any. */
-export function readCachedContextTreeHead(workspacePath: string): string | null {
-  const path = join(workspacePath, CONTEXT_TREE_HEAD_REL);
-  if (!existsSync(path)) return null;
-  try {
-    return readFileSync(path, "utf-8").trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * Per-agent-home pin file for the CLI version that performed the last
- * bootstrap. Distinct from {@link CONTEXT_TREE_HEAD_REL}: this drifts when
- * the operator upgrades the CLI binary (a new shipped skills
- * payload typically ships with it), even if the Context Tree HEAD is
- * unchanged. Without this trigger, agent homes silently keep stale
- * `.agents/skills/*` after an upgrade until the Context Tree
- * happens to move.
+ * bootstrap. The bundled skills payload ships with the CLI binary, so this
+ * version is the content drift key: when the operator upgrades the CLI, the
+ * next session re-runs the slow bootstrap and refreshes
+ * `.agents/skills/*`. Without this trigger, agent homes would silently
+ * keep stale skill payloads after an upgrade.
  */
 export const BUNDLED_CLI_VERSION_REL = join(FIRST_TREE_RUNTIME_DIR, "cli-version");
 
@@ -531,14 +273,6 @@ export function writeBundledCliVersion(workspacePath: string, version: string | 
   const path = join(workspacePath, BUNDLED_CLI_VERSION_REL);
   ensureWorkspaceRuntimeDir(workspacePath);
   writeFileSync(path, version, "utf-8");
-}
-
-/** Persist the current HEAD value alongside the sentinel. */
-export function writeContextTreeHead(workspacePath: string, head: string | null): void {
-  const path = join(workspacePath, CONTEXT_TREE_HEAD_REL);
-  if (head === null) return;
-  ensureWorkspaceRuntimeDir(workspacePath);
-  writeFileSync(path, head, "utf-8");
 }
 
 function lstatIfExists(path: string) {
@@ -785,40 +519,24 @@ export function installCoreSkills(options: InstallCoreSkillsOptions): boolean {
 }
 
 /**
- * One predeclared source repository the handler checked out at the **top
- * level** of the agent home before the agent ran (e.g. `<agentHome>/<localPath>/`).
- * Surfaced in the per-chat system prompt so the LLM knows the absolute
- * path and upstream coordinates.
+ * One predeclared source repository the agent config declares under the agent
+ * home's `source-repos/` directory (e.g. `<agentHome>/source-repos/<localPath>/`).
+ * Pure declaration — the agent itself clones/refreshes it per its briefing
+ * protocol (the runtime never runs git on it). Surfaced in the per-chat system
+ * prompt so the LLM knows the absolute path and upstream coordinates.
  *
  * Note: the old "PredeclaredWorktree" model put these under
- * `<agentHome>/worktrees/<name>/`. Per the 2026-05-22 redesign, source
- * checkouts sit at the top level so the `worktrees/` subdir is reserved
- * **entirely** for agent-on-demand worktrees the LLM creates per task.
+ * `<agentHome>/worktrees/<name>/`. Source clones now sit under `source-repos/`
+ * so the `worktrees/` subdir is reserved **entirely** for agent-on-demand
+ * worktrees the LLM creates per task.
  */
 export type PredeclaredSourceRepo = {
-  /** Absolute path on the host filesystem (top level of the agent home). */
+  /** Absolute path on the host filesystem (under the agent home's `source-repos/` dir). */
   absolutePath: string;
   url: string;
   ref?: string;
   branch?: string;
 };
-
-/**
- * A First Tree-managed worktree has a `.git` FILE (not directory) pointing back at
- * the bare mirror — `git worktree add` produces this shape. Used by the
- * source-repo reuse decision in both handlers to distinguish "checkout we
- * created earlier" from "operator dropped an unrelated directory in the
- * way".
- */
-export function isHubWorktreeMarker(path: string): boolean {
-  const gitMarker = join(path, ".git");
-  if (!existsSync(gitMarker)) return false;
-  try {
-    return statSync(gitMarker).isFile();
-  } catch {
-    return false;
-  }
-}
 
 /**
  * Field-by-field equality for the identity record both handlers write into

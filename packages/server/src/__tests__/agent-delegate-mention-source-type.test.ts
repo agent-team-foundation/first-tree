@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { BadRequestError } from "../errors.js";
@@ -40,6 +41,7 @@ async function seedTargetHuman(
 
 describe("agent service — delegateMention source-type guard", () => {
   const getApp = useTestApp();
+  const unsafeUpdate = (data: unknown): Parameters<typeof updateAgent>[2] => data as Parameters<typeof updateAgent>[2];
 
   it("createAgent rejects delegateMention on a non-human (agent) source", async () => {
     const app = getApp();
@@ -111,10 +113,10 @@ describe("agent service — delegateMention source-type guard", () => {
     expect(updated.delegateMention).toBeNull();
   });
 
-  it("updateAgent honors a same-patch type → human flip alongside delegateMention", async () => {
-    // Same-patch type change must apply before the guard reads it, otherwise
-    // an admin promoting a row to human and setting its delegate in one
-    // PATCH would 400 even though the post-patch state is valid.
+  it("updateAgent rejects promoting a non-human row to human alongside delegateMention", async () => {
+    // `type` is immutable after create; human mirrors are owned by member
+    // lifecycle, not by the generic agent patch path. Cast through the service
+    // type to simulate an internal caller that bypasses the public schema.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const target = await seedTargetHuman(app, admin.organizationId, admin.memberId);
@@ -129,55 +131,79 @@ describe("agent service — delegateMention source-type guard", () => {
       managerId: admin.memberId,
     });
 
-    const updated = await updateAgent(app.db, sourceUuid, {
+    await expect(
+      updateAgent(
+        app.db,
+        sourceUuid,
+        unsafeUpdate({
+          type: "human",
+          delegateMention: target,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  it("updateAgent rejects demoting a human row even when the same patch clears delegateMention", async () => {
+    // This is the human-mirror lifecycle guard: allowing `{ type: "agent" }`
+    // would let a caller bypass direct human suspend/delete protection.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const target = await seedTargetHuman(app, admin.organizationId, admin.memberId);
+    await updateAgent(app.db, admin.humanAgentUuid, { delegateMention: target });
+
+    await expect(
+      updateAgent(
+        app.db,
+        admin.humanAgentUuid,
+        unsafeUpdate({
+          type: "agent",
+          delegateMention: null,
+        }),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestError);
+
+    const [row] = await app.db
+      .select({ type: agents.type, delegateMention: agents.delegateMention })
+      .from(agents)
+      .where(eq(agents.uuid, admin.humanAgentUuid))
+      .limit(1);
+    expect(row).toEqual({
       type: "human",
       delegateMention: target,
     });
-    expect(updated.type).toBe("human");
-    expect(updated.delegateMention).toBe(target);
   });
 
-  it("updateAgent rejects when a same-patch type flip targets a non-human type alongside delegateMention", async () => {
+  it("updateAgent rejects demoting a human row without a same-patch delegate clear", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const target = await seedTargetHuman(app, admin.organizationId, admin.memberId);
+    await updateAgent(app.db, admin.humanAgentUuid, { delegateMention: target });
+
+    await expect(
+      updateAgent(
+        app.db,
+        admin.humanAgentUuid,
+        unsafeUpdate({
+          type: "agent",
+        }),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestError);
+  });
+
+  it("updateAgent rejects demoting a human row alongside a new delegateMention", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const target = await seedTargetHuman(app, admin.organizationId, admin.memberId);
 
     await expect(
-      updateAgent(app.db, admin.humanAgentUuid, {
-        type: "agent",
-        delegateMention: target,
-      }),
+      updateAgent(
+        app.db,
+        admin.humanAgentUuid,
+        unsafeUpdate({
+          type: "agent",
+          delegateMention: target,
+        }),
+      ),
     ).rejects.toBeInstanceOf(BadRequestError);
-  });
-
-  it("updateAgent rejects flipping type away from human when delegateMention is set (no same-patch clear)", async () => {
-    // The type-flip leak: without a guard on the `type` write itself,
-    // `{type: "agent"}` alone (no delegateMention field) would
-    // silently leave behind a non-human row carrying a delegate uuid —
-    // violating the invariant the source-type guard is meant to enforce.
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const target = await seedTargetHuman(app, admin.organizationId, admin.memberId);
-    // Seed a human source with delegateMention set.
-    await updateAgent(app.db, admin.humanAgentUuid, { delegateMention: target });
-
-    await expect(updateAgent(app.db, admin.humanAgentUuid, { type: "agent" })).rejects.toBeInstanceOf(BadRequestError);
-  });
-
-  it("updateAgent accepts flipping type away from human when the same patch clears delegateMention", async () => {
-    // Companion to the leak guard above: the patch is well-formed when it
-    // clears the field in the same write. This is the ops-side recovery
-    // path — change the agent's role and scrub the delegate together.
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const target = await seedTargetHuman(app, admin.organizationId, admin.memberId);
-    await updateAgent(app.db, admin.humanAgentUuid, { delegateMention: target });
-
-    const updated = await updateAgent(app.db, admin.humanAgentUuid, {
-      type: "agent",
-      delegateMention: null,
-    });
-    expect(updated.type).toBe("agent");
-    expect(updated.delegateMention).toBeNull();
   });
 });

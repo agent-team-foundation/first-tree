@@ -1,13 +1,13 @@
 /**
  * Unit tests for the chat auto-archive sweeper (`sweepChatArchive`). Covers
- * the two routes the sweeper owns:
+ * the two GitHub-source branches the sweeper owns:
  *
- *   Route A — chats with GitHub mappings: archive when every mapped entity
- *             is terminal AND `last_message_at` is older than the mapped
- *             idle threshold.
- *   Route B — chats with no GitHub mapping and no human owner: archive
- *             (chat, user) pairs with no unread mentions AND
- *             `last_message_at` older than the unmapped idle threshold.
+ *   Mapped branch — source=github chats with GitHub mappings: archive when
+ *                   every mapped entity is terminal AND `last_message_at` is
+ *                   older than the GitHub idle threshold.
+ *   No-mapping branch — source=github chats with no GitHub mapping: archive
+ *                       acknowledged (chat, user) pairs after the same idle
+ *                       threshold.
  *
  * Also asserts the shared per-user safety guards: deleted-sticky and
  * already-archived rows are never touched; sweeps are idempotent.
@@ -26,6 +26,11 @@ import { createMeChat } from "../services/me-chat.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
+type ChatMetadata = Record<string, unknown>;
+
+function githubMetadata(key = `owner/repo#${randomUUID().slice(0, 8)}`): ChatMetadata {
+  return { source: "github", entityType: "pull_request", entityKey: key };
+}
 
 async function seedHumanAgent(app: App, orgId: string, memberId: string): Promise<string> {
   const uuid = randomUUID();
@@ -55,13 +60,19 @@ async function seedDelegateAgent(app: App, orgId: string, memberId: string): Pro
   return uuid;
 }
 
-async function seedChat(app: App, orgId: string, lastMessageAt: Date | null): Promise<string> {
+async function seedChat(
+  app: App,
+  orgId: string,
+  lastMessageAt: Date | null,
+  metadata: ChatMetadata = githubMetadata(),
+): Promise<string> {
   const chatId = `chat_${randomUUID()}`;
   await app.db.insert(chats).values({
     id: chatId,
     organizationId: orgId,
     type: "direct",
     lastMessageAt,
+    metadata,
   });
   return chatId;
 }
@@ -89,7 +100,7 @@ const HOURS = 60 * 60;
 const longAgo = () => new Date(Date.now() - 48 * HOURS * 1000);
 const recent = () => new Date(Date.now() - 5 * 60 * 1000);
 
-describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
+describe("sweepChatArchive — mapped source=github branch", () => {
   const getApp = useTestApp();
 
   it("archives a chat when every mapped entity is terminal and idle > threshold", async () => {
@@ -112,6 +123,78 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
     const result = await sweepChatArchive(app.db);
 
     expect(result.mappedRowsArchived).toBe(1);
+    expect(await getEngagement(app, chatId, human)).toBe("archived");
+  });
+
+  it("does not archive mapped chats unless their source is github", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+    const manualChatId = await seedChat(app, admin.organizationId, longAgo(), {});
+    const agentChatId = await seedChat(app, admin.organizationId, longAgo(), { source: "agent" });
+    await app.db.insert(githubEntityChatMappings).values([
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "pull_request",
+        entityKey: "owner/repo#manual",
+        chatId: manualChatId,
+        boundVia: "human_declared",
+        entityState: "merged",
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "pull_request",
+        entityKey: "owner/repo#agent",
+        chatId: agentChatId,
+        boundVia: "agent_declared",
+        entityState: "merged",
+      },
+    ]);
+
+    const result = await sweepChatArchive(app.db);
+
+    expect(result.mappedRowsArchived).toBe(0);
+    expect(await getEngagement(app, manualChatId, human)).toBeNull();
+    expect(await getEngagement(app, agentChatId, human)).toBeNull();
+  });
+
+  it("does not archive mapped chats while any request in the chat is still open", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#open-request",
+      chatId,
+      boundVia: "direct",
+      entityState: "merged",
+    });
+    await app.db.insert(chatUserState).values({
+      chatId,
+      agentId: human,
+      engagementStatus: "active",
+      unreadMentionCount: 0,
+      openRequestCount: 1,
+    });
+
+    const blocked = await sweepChatArchive(app.db);
+    expect(blocked.mappedRowsArchived).toBe(0);
+    expect(await getEngagement(app, chatId, human)).toBe("active");
+
+    await app.db.update(chatUserState).set({ openRequestCount: 0 }).where(eq(chatUserState.chatId, chatId));
+
+    const unblocked = await sweepChatArchive(app.db);
+    expect(unblocked.mappedRowsArchived).toBe(1);
     expect(await getEngagement(app, chatId, human)).toBe("archived");
   });
 
@@ -249,6 +332,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
       organizationId: admin.organizationId,
       type: "direct",
       lastMessageAt: longAgo(),
+      metadata: githubMetadata("owner/repo#parent"),
     });
     // Sub-chat: same shape, but parent_chat_id set. Matches the schema's
     // historical-only scaffolding scenario.
@@ -259,6 +343,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
       type: "direct",
       parentChatId,
       lastMessageAt: longAgo(),
+      metadata: githubMetadata("owner/repo#11"),
     });
     await app.db.insert(githubEntityChatMappings).values({
       organizationId: admin.organizationId,
@@ -353,7 +438,7 @@ describe("sweepChatArchive — Route A (chats with GitHub mappings)", () => {
   });
 });
 
-describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
+describe("sweepChatArchive — no-mapping source=github branch", () => {
   const getApp = useTestApp();
 
   async function seedReadAcknowledgement(app: App, chatId: string, agentId: string): Promise<void> {
@@ -366,7 +451,7 @@ describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
     });
   }
 
-  it("archives a chat once it has been idle past the unmapped threshold and user has acknowledged read", async () => {
+  it("archives a source=github chat with no mappings once it is idle and the user has acknowledged read", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
@@ -378,6 +463,24 @@ describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
 
     expect(result.unmappedRowsArchived).toBeGreaterThanOrEqual(1);
     expect(await getEngagement(app, chatId, human)).toBe("archived");
+  });
+
+  it("does not archive no-mapping chats unless their source is github", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const manualChatId = await seedChat(app, admin.organizationId, longAgo(), {});
+    const agentChatId = await seedChat(app, admin.organizationId, longAgo(), { source: "agent" });
+    await addHumanMember(app, manualChatId, human);
+    await addHumanMember(app, agentChatId, human);
+    await seedReadAcknowledgement(app, manualChatId, human);
+    await seedReadAcknowledgement(app, agentChatId, human);
+
+    const result = await sweepChatArchive(app.db);
+
+    expect(result.unmappedRowsArchived).toBe(0);
+    expect(await getEngagement(app, manualChatId, human)).toBe("active");
+    expect(await getEngagement(app, agentChatId, human)).toBe("active");
   });
 
   it("does not archive a user who has never opened the chat (last_read_at IS NULL)", async () => {
@@ -416,6 +519,32 @@ describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
     expect(await getEngagement(app, chatId, human)).toBe("active");
   });
 
+  it("does not archive no-mapping source=github chats while any request in the chat is still open", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const chatId = await seedChat(app, admin.organizationId, longAgo());
+    await addHumanMember(app, chatId, human);
+    await app.db.insert(chatUserState).values({
+      chatId,
+      agentId: human,
+      engagementStatus: "active",
+      unreadMentionCount: 0,
+      openRequestCount: 1,
+      lastReadAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    });
+
+    const blocked = await sweepChatArchive(app.db);
+    expect(blocked.unmappedRowsArchived).toBe(0);
+    expect(await getEngagement(app, chatId, human)).toBe("active");
+
+    await app.db.update(chatUserState).set({ openRequestCount: 0 }).where(eq(chatUserState.chatId, chatId));
+
+    const unblocked = await sweepChatArchive(app.db);
+    expect(unblocked.unmappedRowsArchived).toBe(1);
+    expect(await getEngagement(app, chatId, human)).toBe("archived");
+  });
+
   it("does not archive a recently active chat", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -445,18 +574,18 @@ describe("sweepChatArchive — Route B (chats with no GitHub mapping)", () => {
     expect(await getEngagement(app, chatId, admin.humanAgentUuid)).toBe("active");
   });
 
-  it("does not archive chats that have GitHub mappings (Route A's responsibility)", async () => {
+  it("does not archive chats that have GitHub mappings (mapped branch responsibility)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
     const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
     const chatId = await seedChat(app, admin.organizationId, longAgo());
     await addHumanMember(app, chatId, human);
-    // Make the user a Route-B-eligible candidate so the assertion only
-    // succeeds because the mapping presence excludes the chat from Route B.
+    // Make the user a no-mapping-branch eligible candidate so the assertion
+    // only succeeds because mapping presence excludes the chat from this branch.
     await seedReadAcknowledgement(app, chatId, human);
-    // Mapping with an open entity → Route A should NOT fire either, and
-    // Route B must skip this chat entirely.
+    // Mapping with an open entity -> mapped branch should NOT fire either, and
+    // the no-mapping branch must skip this chat entirely.
     await app.db.insert(githubEntityChatMappings).values({
       organizationId: admin.organizationId,
       humanAgentId: human,
@@ -514,5 +643,26 @@ describe("sweepChatArchive — thresholds", () => {
 
     const after = await sweepChatArchive(app.db, { mappedIdleSeconds: 10 * 60 });
     expect(after.mappedRowsArchived).toBe(1);
+  });
+
+  it("uses mappedIdleSeconds for the no-mapping source=github branch too", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const chatId = await seedChat(app, admin.organizationId, new Date(Date.now() - 30 * 60 * 1000));
+    await addHumanMember(app, chatId, human);
+    await app.db.insert(chatUserState).values({
+      chatId,
+      agentId: human,
+      engagementStatus: "active",
+      unreadMentionCount: 0,
+      lastReadAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    });
+
+    const before = await sweepChatArchive(app.db);
+    expect(before.unmappedRowsArchived).toBe(0);
+
+    const after = await sweepChatArchive(app.db, { mappedIdleSeconds: 10 * 60 });
+    expect(after.unmappedRowsArchived).toBe(1);
   });
 });

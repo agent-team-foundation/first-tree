@@ -207,10 +207,12 @@ export const serverConfigSchema = defineConfig({
   }),
   inbox: optional({
     /**
-     * Backpressure cap on per-agent in-flight (un-acked) `inbox:deliver`
-     * frames. Once reached the server stops pushing for that agent until an
-     * ack arrives — leftover entries stay `pending` in the DB and get
-     * replayed via the post-ack backlog scan. See proposal §3.5.
+     * High-water fuse on per-agent in-flight (un-acked) `inbox:deliver`
+     * frames. Normal fairness is enforced per `(agent, chat)` below; this
+     * agent-wide value exists only to bound pathological recovery storms or a
+     * badly stalled client. Once reached the server stops pushing for that
+     * agent until an ack arrives — leftover entries stay `pending` in the DB
+     * and get replayed via later backlog scans.
      *
      * The WS data plane is the only delivery path on this server build. The
      * legacy `new_message` doorbell + HTTP poll fallback was removed in
@@ -220,31 +222,42 @@ export const serverConfigSchema = defineConfig({
      * read `server:welcome.capabilities.wsInboxDeliver` to skip their own
      * poll path on bootstrap.
      */
-    maxInFlightPerAgent: field(z.number().int().min(1).max(1024).default(32), {
+    maxInFlightPerAgent: field(z.number().int().min(1).max(65_536).default(8192), {
       env: "FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT",
     }),
-  }),
-  feedback: optional({
     /**
-     * GitHub repo where feedback issues are filed (owner/name).
-     * HEARBACK_FEEDBACK_REPO is distinct from FIRST_TREE_GITHUB_* vars so
-     * the feedback token can be scoped narrowly (issues:write on a single repo)
-     * without widening First Tree's Context Tree access.
+     * Fairness window for one agent in one chat. A stuck or very long turn may
+     * fill this chat-local window, but it must not consume delivery capacity
+     * for the same agent's other chats.
      */
-    repo: field(z.string(), { env: "HEARBACK_FEEDBACK_REPO" }),
-    githubToken: field(z.string(), { env: "HEARBACK_GITHUB_TOKEN", secret: true }),
-    llm: optional({
-      apiKey: field(z.string(), { env: "LLM_API_KEY", secret: true }),
-      baseUrl: field(z.string().optional(), { env: "LLM_BASE_URL" }),
-      model: field(z.string().optional(), { env: "LLM_MODEL" }),
+    maxInFlightPerAgentChat: field(z.number().int().min(1).max(1024).default(8), {
+      env: "FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT",
     }),
-    /**
-     * Trust x-forwarded-for for rate-limit attribution. Default false; set true
-     * when First Tree sits behind a proxy you control (CDN, ingress). Otherwise
-     * clients can spoof the header and bypass per-ip limits.
-     */
-    trustProxyHeaders: field(z.boolean().default(false), { env: "HEARBACK_TRUST_PROXY_HEADERS" }),
   }),
+  feedback: optional(
+    {
+      /**
+       * GitHub repo where feedback issues are filed (owner/name).
+       * HEARBACK_FEEDBACK_REPO is distinct from FIRST_TREE_GITHUB_* vars so
+       * the feedback token can be scoped narrowly (issues:write on a single repo)
+       * without widening First Tree's Context Tree access.
+       */
+      repo: field(z.string(), { env: "HEARBACK_FEEDBACK_REPO" }),
+      githubToken: field(z.string(), { env: "HEARBACK_GITHUB_TOKEN", secret: true }),
+      llm: optional({
+        apiKey: field(z.string(), { env: "LLM_API_KEY", secret: true }),
+        baseUrl: field(z.string().optional(), { env: "LLM_BASE_URL" }),
+        model: field(z.string().optional(), { env: "LLM_MODEL" }),
+      }),
+      /**
+       * Trust x-forwarded-for for rate-limit attribution. Default false; set true
+       * when First Tree sits behind a proxy you control (CDN, ingress). Otherwise
+       * clients can spoof the header and bypass per-ip limits.
+       */
+      trustProxyHeaders: field(z.boolean().default(false), { env: "HEARBACK_TRUST_PROXY_HEADERS" }),
+    },
+    { activateBy: ["repo", "githubToken"] },
+  ),
   observability: {
     logging: {
       level: field(logLevelSchema.default("info"), {
@@ -358,9 +371,9 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_ARCHIVE_SWEEP_INTERVAL_SECONDS",
     }),
     /**
-     * Idle threshold for chats bound to GitHub PRs/Issues. Once every
-     * bound entity is closed/merged AND the chat has been silent this
-     * long, the sweeper flips every mapped human's view to `archived`.
+     * Idle threshold for source=github chats. Mapped chats require every bound
+     * entity to be closed/merged; no-mapping source=github chats use this same
+     * threshold as an orphan/no-binding cleanup.
      */
     archiveMappedIdleSeconds: field(
       z.coerce
@@ -370,21 +383,6 @@ export const serverConfigSchema = defineConfig({
         .default(60 * 60),
       {
         env: "FIRST_TREE_ARCHIVE_MAPPED_IDLE_SECONDS",
-      },
-    ),
-    /**
-     * Idle threshold for chats with no GitHub mapping and no human owner.
-     * Per (chat, user) — users with unread mentions are skipped; users
-     * without an unread stay archived after this much silence.
-     */
-    archiveUnmappedIdleSeconds: field(
-      z.coerce
-        .number()
-        .int()
-        .positive()
-        .default(12 * 60 * 60),
-      {
-        env: "FIRST_TREE_ARCHIVE_UNMAPPED_IDLE_SECONDS",
       },
     ),
     /**

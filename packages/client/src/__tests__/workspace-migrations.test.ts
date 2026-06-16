@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -18,12 +17,6 @@ import {
   MIGRATIONS_REGISTRY,
   type Migration,
 } from "../runtime/workspace-migrations.js";
-
-function initRepo(path: string, originUrl: string): void {
-  mkdirSync(path, { recursive: true });
-  execFileSync("git", ["init", "-b", "main"], { cwd: path, stdio: "ignore" });
-  execFileSync("git", ["remote", "add", "origin", originUrl], { cwd: path, stdio: "ignore" });
-}
 
 describe("workspace-migrations registry", () => {
   let workspace: string;
@@ -83,8 +76,7 @@ describe("workspace-migrations registry", () => {
         schemaVersion: 1,
         cliVersion: "test",
         updatedAt: new Date().toISOString(),
-        sourceRepos: ["first-tree"],
-        skills: [],
+        skills: ["first-tree"],
       }),
     );
 
@@ -110,25 +102,20 @@ describe("workspace-migrations registry", () => {
     expect(existsSync(join(userUuidDir, "user-data.json"))).toBe(true);
   });
 
-  it("v1-uuid-snapshots leaves a UUID-named directory that's currently in source_repos config (PR #869 P0)", () => {
+  it("v1-uuid-snapshots leaves a UUID-named directory that's currently in source-repo config (PR #869 P0)", () => {
     // Edge case: agent config has a `gitRepos.localPath` shaped like a UUID.
     // The migration must NOT delete it even when it has a top-level
-    // AGENTS.md (e.g. the cloned repo happens to ship one).
+    // AGENTS.md (e.g. the cloned repo happens to ship one) — the live
+    // `currentSourceRepoNames` set spares any UUID dir still in config.
     const uuidRepo = join(workspace, "fedcba98-7654-4321-9abc-def012345678");
     mkdirSync(uuidRepo);
     writeFileSync(join(uuidRepo, "AGENTS.md"), "# this repo happens to ship AGENTS.md\n");
-    writeFileSync(
-      join(workspace, ".first-tree-workspace", "managed.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        cliVersion: "test",
-        updatedAt: new Date().toISOString(),
-        sourceRepos: ["fedcba98-7654-4321-9abc-def012345678"],
-        skills: [],
-      }),
-    );
 
-    applyPendingMigrations(workspace, () => {});
+    // Resolved config (non-null) so the migration RUNS rather than deferring;
+    // the UUID dir is spared because it's the agent's current source repo.
+    applyPendingMigrations(workspace, () => {}, {
+      currentSourceRepoNames: new Set(["fedcba98-7654-4321-9abc-def012345678"]),
+    });
 
     expect(existsSync(uuidRepo)).toBe(true);
   });
@@ -146,100 +133,6 @@ describe("workspace-migrations registry", () => {
     for (const d of dirs) {
       expect(existsSync(join(workspace, d))).toBe(true);
     }
-  });
-
-  it("v1-retired-source-repo-first-tree-hub removes a `first-tree-hub/` with a broken `.git` pointer (PR #869 P0)", () => {
-    // Reproduces the real-world shape code-reviewer flagged: `.git` is a
-    // pointer file (not a directory), and its target gitdir has been
-    // deleted, so `git config --get remote.origin.url` exits 128 and the
-    // origin-URL-based `v1-orphan-ft-clones` sweep cannot match.
-    const target = join(workspace, "first-tree-hub");
-    mkdirSync(target);
-    writeFileSync(join(target, ".git"), "gitdir: /tmp/does-not-exist/worktrees/first-tree-hub\n");
-
-    // Authoritative empty set → not deferred → broken-pointer check fires
-    // and removes the clone. Without an explicit set, the migration defers
-    // (round-4 P0 protection).
-    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
-
-    expect(existsSync(target)).toBe(false);
-  });
-
-  it("v1-retired-source-repo-first-tree-hub DEFERS on first cache-miss start when no managed state exists (PR #869 baixiaohang round-4 follow-on)", () => {
-    // Mirrors the v1-orphan-ft-clones / v1-uuid-snapshots defer paths: if
-    // the caller can't prove first-tree-hub is absent from current config,
-    // leave it alone and retry next session.
-    const target = join(workspace, "first-tree-hub");
-    mkdirSync(target);
-    writeFileSync(join(target, ".git"), "gitdir: /tmp/does-not-exist/worktrees/first-tree-hub\n");
-
-    const result = applyPendingMigrations(workspace, () => {});
-
-    expect(existsSync(target)).toBe(true);
-    expect(result.deferred).toContain("v1-retired-source-repo-first-tree-hub");
-  });
-
-  it("v1-retired-source-repo-first-tree-hub does NOT remove `first-tree-hub/` if it's still in current source_repos", () => {
-    const target = join(workspace, "first-tree-hub");
-    mkdirSync(target);
-    writeFileSync(join(target, ".git"), "gitdir: /tmp/somewhere\n");
-    writeFileSync(
-      join(workspace, ".first-tree-workspace", "managed.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        cliVersion: "test",
-        updatedAt: new Date().toISOString(),
-        sourceRepos: ["first-tree-hub"],
-        skills: [],
-      }),
-    );
-
-    applyPendingMigrations(workspace, () => {});
-
-    expect(existsSync(target)).toBe(true);
-  });
-
-  it("v1-retired-source-repo-first-tree-hub does NOT remove a plain directory named `first-tree-hub/` with no `.git`", () => {
-    // A user could legitimately create a folder named first-tree-hub for
-    // notes or scratch. Require the `.git` proof before deleting.
-    const target = join(workspace, "first-tree-hub");
-    mkdirSync(target);
-    writeFileSync(join(target, "user-notes.md"), "# my notes\n");
-
-    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
-
-    expect(existsSync(target)).toBe(true);
-    expect(existsSync(join(target, "user-notes.md"))).toBe(true);
-  });
-
-  it("v1-retired-source-repo-first-tree-hub defers to v1-orphan-ft-clones when `.git` is a healthy directory (PR #869 code-reviewer follow-up)", () => {
-    // A healthy clone — `.git` is a real directory. The retired-hub migration
-    // must NOT bypass the dirty / ahead / worktree guards; v1-orphan-ft-clones
-    // owns that path. Combined with the dirty payload below, this confirms
-    // the safety guards still apply.
-    const target = join(workspace, "first-tree-hub");
-    initRepo(target, "https://github.com/agent-team-foundation/first-tree-hub");
-    writeFileSync(join(target, "dirty.txt"), "uncommitted user work\n");
-
-    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
-
-    expect(existsSync(target)).toBe(true);
-    expect(existsSync(join(target, "dirty.txt"))).toBe(true);
-  });
-
-  it("v1-retired-source-repo-first-tree-hub does NOT delete when `.git` pointer target still exists (live linked checkout)", () => {
-    // A `.git` pointer file whose target IS on disk is a live linked
-    // checkout (`git worktree add`-style). Must not delete.
-    const target = join(workspace, "first-tree-hub");
-    mkdirSync(target);
-    const livePointerTarget = join(workspace, "fake-gitdir");
-    mkdirSync(livePointerTarget);
-    writeFileSync(join(target, ".git"), `gitdir: ${livePointerTarget}\n`);
-
-    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
-
-    expect(existsSync(target)).toBe(true);
-    expect(existsSync(join(target, ".git"))).toBe(true);
   });
 
   it("does not touch <ws>/.first-tree/ (active W1 binding state — migration withdrawn)", () => {
@@ -266,21 +159,6 @@ describe("workspace-migrations registry", () => {
     expect(readFileSync(whitepaper, "utf-8")).toBe("# User's own document\n");
   });
 
-  it("v1-orphan-ft-clones holds back dirty clones via the shared safety guards", () => {
-    const orphan = join(workspace, "first-tree-hub");
-    initRepo(orphan, "https://github.com/agent-team-foundation/first-tree-hub");
-    // Stage an unpushed dirty change so `git status --porcelain` reports
-    // something — the safety guards should refuse to delete.
-    writeFileSync(join(orphan, "dirty.txt"), "uncommitted work\n");
-
-    // Pass an authoritative empty set so the migration runs (rather than
-    // deferring on unknown config) and we actually exercise the dirty guard.
-    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
-
-    expect(existsSync(join(orphan, ".git"))).toBe(true);
-    expect(existsSync(join(orphan, "dirty.txt"))).toBe(true);
-  });
-
   it("v1-whitepaper-symlink removes WHITEPAPER.md at workspace root", () => {
     const whitepaper = join(workspace, "WHITEPAPER.md");
     // Symlink target need not resolve; the migration just unlinks.
@@ -289,93 +167,6 @@ describe("workspace-migrations registry", () => {
     applyPendingMigrations(workspace, () => {});
 
     expect(existsSync(whitepaper)).toBe(false);
-  });
-
-  it("v1-orphan-ft-clones removes a clone whose origin is agent-team-foundation/* and not in current source repos", () => {
-    initRepo(join(workspace, "first-tree-hub"), "https://github.com/agent-team-foundation/first-tree-hub");
-    // The authoritative current set comes from the caller's ctx — an
-    // explicit empty Set says "config genuinely has zero repos", which lets
-    // the migration treat every FT-origin clone as orphaned.
-    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
-
-    expect(existsSync(join(workspace, "first-tree-hub"))).toBe(false);
-  });
-
-  it("v1-orphan-ft-clones leaves a clone in current source_repos alone", () => {
-    initRepo(join(workspace, "first-tree"), "https://github.com/agent-team-foundation/first-tree");
-
-    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set(["first-tree"]) });
-
-    expect(existsSync(join(workspace, "first-tree", ".git"))).toBe(true);
-  });
-
-  it("v1-orphan-ft-clones leaves non-FT-origin clones alone", () => {
-    initRepo(join(workspace, "user-side-clone"), "https://github.com/some-other-org/their-repo");
-
-    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
-
-    expect(existsSync(join(workspace, "user-side-clone", ".git"))).toBe(true);
-  });
-
-  it("v1-orphan-ft-clones skips dotfile-prefixed entries and worktrees/notes", () => {
-    initRepo(join(workspace, "worktrees"), "https://github.com/agent-team-foundation/anything");
-    initRepo(join(workspace, "notes"), "https://github.com/agent-team-foundation/anything");
-    initRepo(join(workspace, ".some-hidden"), "https://github.com/agent-team-foundation/anything");
-
-    applyPendingMigrations(workspace, () => {}, { currentSourceRepoNames: new Set() });
-
-    expect(existsSync(join(workspace, "worktrees", ".git"))).toBe(true);
-    expect(existsSync(join(workspace, "notes", ".git"))).toBe(true);
-    expect(existsSync(join(workspace, ".some-hidden", ".git"))).toBe(true);
-  });
-
-  it("v1-orphan-ft-clones DEFERS when the live config is unresolved AND state has no source repos (PR #869 baixiaohang round-3 P0)", () => {
-    // The regression code-reviewer flagged: on a legacy workspace's first
-    // upgraded start with a cache-miss, ctx.currentSourceRepoNames is null
-    // AND `.agent/managed.json` has not been written yet by a resolved
-    // `prepareSourceRepos` run, so the persisted set is also empty. The
-    // migration must defer and leave the clone untouched, not treat the
-    // empty-fallback as "config truly has no repos".
-    initRepo(join(workspace, "first-tree"), "https://github.com/agent-team-foundation/first-tree");
-    const logs: string[] = [];
-
-    const result = applyPendingMigrations(workspace, (msg) => logs.push(msg));
-
-    expect(existsSync(join(workspace, "first-tree", ".git"))).toBe(true);
-    expect(result.deferred).toContain("v1-orphan-ft-clones");
-    // Marker MUST NOT record the deferred id — the next resolved session
-    // gets another shot.
-    const markerPath = join(workspace, MIGRATIONS_APPLIED_REL);
-    if (existsSync(markerPath)) {
-      const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { applied: string[] };
-      expect(marker.applied).not.toContain("v1-orphan-ft-clones");
-    }
-    expect(logs.some((l) => l.includes("v1-orphan-ft-clones deferred"))).toBe(true);
-  });
-
-  it("v1-orphan-ft-clones STILL DEFERS when ctx is null even if persisted state is non-empty (PR #869 baixiaohang round-5 P0)", () => {
-    // Same regression as the UUID test above: previous "graceful fallback to
-    // persisted state" path was racy — a fresh web-console add could be
-    // misidentified as orphan if cache missed before the new repo's name
-    // landed in `managed.json`. Defer instead and retry next resolved session.
-    initRepo(join(workspace, "first-tree-hub"), "https://github.com/agent-team-foundation/first-tree-hub");
-    initRepo(join(workspace, "first-tree"), "https://github.com/agent-team-foundation/first-tree");
-    writeFileSync(
-      join(workspace, ".first-tree-workspace", "managed.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        cliVersion: "test",
-        updatedAt: new Date().toISOString(),
-        sourceRepos: ["first-tree"],
-        skills: [],
-      }),
-    );
-
-    const result = applyPendingMigrations(workspace, () => {});
-
-    expect(result.deferred).toContain("v1-orphan-ft-clones");
-    expect(existsSync(join(workspace, "first-tree", ".git"))).toBe(true);
-    expect(existsSync(join(workspace, "first-tree-hub"))).toBe(true);
   });
 
   it("v1-orphan-skills removes hardcoded legacy skill payloads + matching .claude symlinks", () => {

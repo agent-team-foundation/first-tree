@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfig } from "@first-tree/shared";
@@ -9,23 +9,23 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
  * Phase-E专项 e2e for the 2026-05-22 agent cwd redesign.
  *
  * Drives real `createClaudeCodeHandler.start()` / `.resume()` against a real
- * temp filesystem + real GitMirrorManager + fixture bare repo. The Claude
- * SDK is the ONLY mock — we capture the `query()` options so we can assert
- * the system-prompt block the handler actually sends.
+ * temp filesystem + fixture bare repo. The Claude SDK is the ONLY mock — we
+ * capture the `query()` options so we can assert the system-prompt block the
+ * handler actually sends.
  *
- * Covers the 7 invariants the proposal's §⑦ T1–T9 + this round's redesign
- * leave open after unit tests:
+ * Under the agent-managed-repos refactor the runtime never materialises
+ * source repos on disk — declared `gitRepos` only surface in the briefing
+ * (E1/E5, which covered the clone/update machinery, were removed with it).
  *
- *   E1  Predeclared repos land at `<agentHome>/<localPath>` (TOP LEVEL),
- *       not under `worktrees/`.
+ * Surviving invariants:
+ *
  *   E2  `worktrees/` subdir is NOT pre-created by `start()` — reserved
  *       for the agent's on-demand worktrees.
- *   E3  Second chat on same agent skips bootstrap (sentinel guard) and
- *       reuses the source repo without re-creating it.
- *   E4  System prompt contains "Source Repositories" + "Creating Worktrees
- *       On Demand"; does NOT contain legacy "Predeclared worktrees".
- *   E5  Concurrent two-chat start mutex serialises filesystem writes —
- *       no race throws or missing checkouts.
+ *   E3  Second chat on same agent skips bootstrap (sentinel guard); the
+ *       runtime never clones declared repos onto disk.
+ *   E4  Briefing contains "Source Repositories (agent-managed, bare)" +
+ *       "Worktrees (how you read AND write a bare source repo)"; does NOT
+ *       contain legacy "Predeclared worktrees".
  *   E6  `.first-tree-workspace/identity.json` carries agent-level stable fields only —
  *       no `chatId` / `chatContext`.
  *   E7  Legacy `<chatId>/` directories that pre-date the redesign are
@@ -55,7 +55,6 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import { IDENTITY_JSON_REL } from "../runtime/bootstrap.js";
-import { createGitMirrorManager, type GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type { SessionContext } from "../runtime/handler.js";
 import { INIT_COMPLETE_SENTINEL_REL } from "../runtime/workspace.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
@@ -117,8 +116,7 @@ function buildSessionCtx(chatId: string): SessionContext {
     sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
     chatId,
     log: () => {},
-    touch: () => {},
-    setRuntimeState: () => {},
+    recordProviderActivity: () => {},
     emitEvent: () => {},
     ...mockCtxPlumbing({ sendMessage }, chatId),
   };
@@ -136,87 +134,60 @@ function makeMessage(chatId: string, id: string) {
 }
 
 describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
-  it("E1: predeclared repo materialises at <agentHome>/<localPath>/ (top-level)", async () => {
-    capturedSdkOptions.length = 0;
-    const dataDir = mkdtempSync(join(tmpdir(), "ftt-e1-"));
-    const workspaceRoot = join(dataDir, "workspaces", "agent-1");
-    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir, cloneTimeoutMs: 60_000 });
-
-    const cache = buildCache([{ url: fixtureBareRepo, localPath: "repos/first-tree" }]);
-    await cache.refresh(AGENT_ID);
-
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
-    const ctx = buildSessionCtx("chat-e1");
-    await handler.start(makeMessage("chat-e1", "msg-1"), ctx);
-
-    // Predeclared repo at TOP LEVEL — `<agentHome>/<localPath>/`.
-    const topLevel = join(workspaceRoot, "repos", "first-tree");
-    expect(existsSync(topLevel)).toBe(true);
-    expect(existsSync(join(topLevel, "README.md"))).toBe(true);
-    // A worktree-style checkout has a `.git` FILE (not directory).
-    expect(existsSync(join(topLevel, ".git"))).toBe(true);
-
-    await handler.shutdown();
-    rmSync(dataDir, { recursive: true, force: true });
-  });
-
   it("E2: worktrees/ subdir is NOT pre-created by start()", async () => {
     capturedSdkOptions.length = 0;
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-e2-"));
     const workspaceRoot = join(dataDir, "workspaces", "agent-1");
-    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir, cloneTimeoutMs: 60_000 });
 
-    const cache = buildCache([{ url: fixtureBareRepo, localPath: "repos/first-tree" }]);
+    const cache = buildCache([{ url: fixtureBareRepo, localPath: "first-tree" }]);
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
     await handler.start(makeMessage("chat-e2", "msg-1"), buildSessionCtx("chat-e2"));
 
     // `worktrees/` subdir is reserved for agent's on-demand worktrees only;
     // runtime must never pre-create it. Use both negation forms (the subdir
-    // itself + the old-design-style path) to lock down regression risk.
+    // itself + a per-repo path) to lock down regression risk.
     expect(existsSync(join(workspaceRoot, "worktrees"))).toBe(false);
-    expect(existsSync(join(workspaceRoot, "worktrees", "repos", "first-tree"))).toBe(false);
+    expect(existsSync(join(workspaceRoot, "worktrees", "first-tree"))).toBe(false);
 
     await handler.shutdown();
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("E3: second chat on same agent reuses checkout and skips bootstrap (sentinel guard)", async () => {
+  it("E3: second chat on same agent skips bootstrap (sentinel guard); declared repos are never cloned by the runtime", async () => {
     capturedSdkOptions.length = 0;
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-e3-"));
     const workspaceRoot = join(dataDir, "workspaces", "agent-1");
-    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir, cloneTimeoutMs: 60_000 });
 
     const cache = buildCache([{ url: fixtureBareRepo, localPath: "repo-a" }]);
     await cache.refresh(AGENT_ID);
 
     // First chat — full bootstrap path.
-    const h1 = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
+    const h1 = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
     await h1.start(makeMessage("chat-A", "msg-A1"), buildSessionCtx("chat-A"));
 
     const sourceRepoPath = join(workspaceRoot, "repo-a");
     const sentinelPath = join(workspaceRoot, INIT_COMPLETE_SENTINEL_REL);
     expect(existsSync(sentinelPath)).toBe(true);
-    expect(existsSync(sourceRepoPath)).toBe(true);
+    // Agent-managed repos: the runtime declares the repo in the briefing but
+    // performs NO git materialisation — nothing lands on disk.
+    expect(existsSync(sourceRepoPath)).toBe(false);
 
-    // The standalone clone has a real `.git` DIRECTORY (not a worktree pointer
-    // file). Drop a marker INSIDE the clone — a re-clone on chat 2 would wipe
-    // the directory and take the marker with it; reuse must preserve it.
-    expect(statSync(join(sourceRepoPath, ".git")).isDirectory()).toBe(true);
-    const reuseMarker = join(sourceRepoPath, ".reuse-marker");
+    // Drop a marker in the agent home — the second chat's start must reuse
+    // the bootstrapped home (sentinel guard), not wipe and rebuild it.
+    const reuseMarker = join(workspaceRoot, ".reuse-marker");
     writeFileSync(reuseMarker, "chat-A");
     await h1.shutdown();
 
     // Second chat — different chatId, same workspaceRoot.
-    const h2 = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
+    const h2 = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
     await h2.start(makeMessage("chat-B", "msg-B1"), buildSessionCtx("chat-B"));
 
-    // The source repo AND the in-clone marker must survive (the clone was
-    // reused, not re-cloned a second time).
-    expect(existsSync(sourceRepoPath)).toBe(true);
+    // The marker must survive, the repo must still not be materialised.
     expect(existsSync(reuseMarker)).toBe(true);
     expect(readFileSync(reuseMarker, "utf-8")).toBe("chat-A");
+    expect(existsSync(sourceRepoPath)).toBe(false);
     // Sentinel re-written is fine (idempotent) — the body's `completedAt`
     // refreshes — but the file must still exist.
     expect(existsSync(sentinelPath)).toBe(true);
@@ -229,12 +200,11 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     capturedSdkOptions.length = 0;
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-e4-"));
     const workspaceRoot = join(dataDir, "workspaces", "agent-1");
-    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir, cloneTimeoutMs: 60_000 });
 
     const cache = buildCache([{ url: fixtureBareRepo, localPath: "lib" }]);
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
     await handler.start(makeMessage("chat-e4", "msg-e4"), buildSessionCtx("chat-e4"));
 
     // Per the unified-briefing redesign the SDK no longer carries a
@@ -253,13 +223,15 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     // new `# Working in First Tree` umbrella, etc.)
     expect(briefing).toContain("# Working in First Tree");
     expect(briefing).toContain("## Working Directory");
-    expect(briefing).toContain("## Source Repositories");
-    expect(briefing).toContain("## Worktrees");
-    expect(briefing).toContain("git worktree add");
+    expect(briefing).toContain("## Source Repositories (agent-managed, bare)");
+    expect(briefing).toContain("## Worktrees (how you read AND write a bare source repo)");
+    expect(briefing).toContain("worktree add");
     expect(briefing).toContain("No worktrees are pre-created");
 
-    // Top-level path of predeclared repo surfaces in the briefing.
-    expect(briefing).toContain(join(workspaceRoot, "lib"));
+    // The declared repo surfaces in the briefing under `source-repos/` even
+    // though the runtime never materialises it on disk.
+    expect(briefing).toContain(join(workspaceRoot, "source-repos", "lib"));
+    expect(existsSync(join(workspaceRoot, "source-repos", "lib"))).toBe(false);
 
     // Legacy wording from the previous design MUST be gone.
     expect(briefing).not.toContain("Predeclared worktrees");
@@ -278,48 +250,15 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     rmSync(dataDir, { recursive: true, force: true });
   });
 
-  it("E5: concurrent two-chat start on the same agent serialises via per-path mutex", async () => {
-    capturedSdkOptions.length = 0;
-    const dataDir = mkdtempSync(join(tmpdir(), "ftt-e5-"));
-    const workspaceRoot = join(dataDir, "workspaces", "agent-1");
-    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir, cloneTimeoutMs: 60_000 });
-
-    const cache = buildCache([{ url: fixtureBareRepo, localPath: "shared-lib" }]);
-    await cache.refresh(AGENT_ID);
-
-    const h1 = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
-    const h2 = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
-
-    // Fire both starts in parallel; mutex must serialise the worktree-add.
-    await Promise.all([
-      h1.start(makeMessage("chat-X", "msg-X"), buildSessionCtx("chat-X")),
-      h2.start(makeMessage("chat-Y", "msg-Y"), buildSessionCtx("chat-Y")),
-    ]);
-
-    // Both sessions land on the same shared source repo.
-    const sourceRepoPath = join(workspaceRoot, "shared-lib");
-    expect(existsSync(sourceRepoPath)).toBe(true);
-    expect(existsSync(join(sourceRepoPath, ".git"))).toBe(true);
-    expect(existsSync(join(sourceRepoPath, "README.md"))).toBe(true);
-
-    // No worktrees/ subdir was pre-created — even with two concurrent starts
-    // racing, neither went down the legacy path.
-    expect(existsSync(join(workspaceRoot, "worktrees"))).toBe(false);
-
-    await Promise.all([h1.shutdown(), h2.shutdown()]);
-    rmSync(dataDir, { recursive: true, force: true });
-  });
-
   it("E6: identity.json carries agent-level stable fields only (no chatId / chatContext)", async () => {
     capturedSdkOptions.length = 0;
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-e6-"));
     const workspaceRoot = join(dataDir, "workspaces", "agent-1");
-    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir });
 
     const cache = buildCache([]);
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
     await handler.start(makeMessage("chat-e6", "msg-e6"), buildSessionCtx("chat-e6"));
 
     const identityPath = join(workspaceRoot, IDENTITY_JSON_REL);
@@ -342,7 +281,6 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     capturedSdkOptions.length = 0;
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-e7-"));
     const workspaceRoot = join(dataDir, "workspaces", "agent-1");
-    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir });
 
     // Simulate a v1.x-era residual directory inside the agent home.
     const legacyChatDir = join(workspaceRoot, "legacy-chat-id-019d");
@@ -353,7 +291,7 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const cache = buildCache([]);
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
     await handler.start(makeMessage("chat-e7", "msg-e7"), buildSessionCtx("chat-e7"));
 
     // Fresh session creates agent home + new layout.
@@ -379,12 +317,11 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     capturedSdkOptions.length = 0;
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-e8-"));
     const workspaceRoot = join(dataDir, "workspaces", "agent-1");
-    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir });
 
     const cache = buildCache([]);
     await cache.refresh(AGENT_ID);
 
-    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
     // No transcript exists anywhere under `~/.claude/projects/<encoded-cwd>/`.
     const staleSessionId = "72a19485-ca9e-4bc3-9add-a57e8314e5c3";
     const returnedSessionId = await handler.resume(
@@ -417,7 +354,6 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "ftt-e9-"));
     const workspaceRoot = join(dataDir, "workspaces", "agent-1");
     const chatId = "chat-e9";
-    const gitMirrorManager: GitMirrorManager = createGitMirrorManager({ dataDir });
 
     // Simulate the v1.x layout that pre-existed on disk before the upgrade.
     const legacyCwd = join(workspaceRoot, chatId);
@@ -440,7 +376,7 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
       const cache = buildCache([]);
       await cache.refresh(AGENT_ID);
 
-      const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache, gitMirrorManager });
+      const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
       const returnedSessionId = await handler.resume(
         makeMessage(chatId, "msg-e9"),
         legacySessionId,

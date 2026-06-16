@@ -1,9 +1,4 @@
-import {
-  agentPinnedMessageSchema,
-  rebindAgentSchema,
-  updateAgentSchema,
-  updateAgentSkillsSchema,
-} from "@first-tree/shared";
+import { agentPinnedMessageSchema, updateAgentSchema, updateAgentSkillsSchema } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, ForbiddenError } from "../errors.js";
@@ -122,15 +117,6 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     if (before && before.clientId === null && agent.clientId !== null) {
       notifyClientAgentPinned(agent);
     }
-    const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
-    return serializeAgent(agent, userAvatarUrl);
-  });
-
-  app.patch<{ Params: { uuid: string } }>("/:uuid/rebind", { config: { otelRecordBody: true } }, async (request) => {
-    await requireAgentAccess(request, app.db, "manage");
-    const body = rebindAgentSchema.parse(request.body);
-    const agent = await agentService.rebindAgent(app.db, request.params.uuid, body);
-    notifyClientAgentPinned(agent);
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
     return serializeAgent(agent, userAvatarUrl);
   });

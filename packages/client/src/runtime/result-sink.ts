@@ -1,4 +1,4 @@
-import { documentContextSchema } from "@first-tree/shared";
+import { type AttachmentRef, documentContextSchema } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { buildMessageDocumentSnapshots, type SelfFence } from "./doc-snapshots.js";
 import type { AgentIdentity } from "./handler.js";
@@ -68,6 +68,15 @@ export type ResultSinkDeps = {
    */
   getSelfFence?: () => Promise<SelfFence | null>;
   /**
+   * Resolve the organization id the doc captures upload under. Uploads are
+   * org-scoped (`POST /orgs/:orgId/attachments`); the chat lives in exactly one
+   * org, so the sink resolves it from the chat (cached). Returning `null` (org
+   * unresolvable) disables doc capture for the turn — the message still goes
+   * out, mentions just stay plain text. Returned via a callback so the lookup
+   * (and its cache) lives with the runtime, not the sink.
+   */
+  getOrgId?: () => Promise<string | null>;
+  /**
    * Shared `workspaces/` common root (parent of every `<agentSlug>/<chatId>`).
    * Set alongside `selfSlug` to enable cross-agent doc snapshots: an absolute
    * `.md` path that realpaths into ANOTHER agent's workspace under this root
@@ -91,20 +100,17 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
     const metadata: Record<string, unknown> = {};
     let content = text;
     const selfFence = await deps.getSelfFence?.();
-    if (selfFence) {
-      // Embed the inline-snapshot variant only. This is the cloud-friendly
-      // form: web gets the bytes straight from the message, no second server
-      // round-trip and no dependency on the server having access to the
-      // agent's local workspace filesystem (see proposal §核心设计).
-      //
-      // We deliberately do NOT fall back to the legacy `kind:"path"` variant.
-      // It carries the agent host's local absolute workspace path into
-      // immutable chat history (a cloud-topology leak), and is dead in the
-      // cloud anyway since the server can't read the agent's disk. Any real,
-      // referenced `.md` is already captured as a snapshot above; a message
-      // with no resolvable doc simply carries no documentContext. (Historical
-      // messages may still hold `kind:"path"`; the web reader keeps handling
-      // them for back-compat — this only stops emitting new ones.)
+    // Doc capture needs both the resolvable self-fence AND an org to upload the
+    // bytes under. With either missing we skip capture entirely — the message
+    // still goes out, doc mentions just stay plain text.
+    const orgId = selfFence ? await deps.getOrgId?.() : null;
+    if (selfFence && orgId) {
+      // Capture referenced docs as generic attachment refs: upload the bytes to
+      // the org blob store, store an `AttachmentRef` in `metadata.attachments[]`,
+      // and rewrite each resolved mention into `[display](attachment:<id>)`.
+      // Web fetches the bytes on demand from `GET /attachments/:id`. Bytes never
+      // travel in the message (cloud-friendly; the server can't read the agent's
+      // disk). See proposal §5.
       try {
         // Enable cross-agent resolution only when the runtime supplied the
         // shared common root + this agent's slug; otherwise fall back to the
@@ -113,39 +119,34 @@ export function createResultSink(deps: ResultSinkDeps): ResultSink {
           deps.workspacesRoot && deps.selfSlug
             ? { workspacesRoot: deps.workspacesRoot, chatId: deps.chatId, selfSlug: deps.selfSlug }
             : undefined;
-        const { docs, skipped, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
+        const { refs, skipped, rewrittenText, failedMentions } = await buildMessageDocumentSnapshots(
           text,
           selfFence,
+          { uploader: deps.sdk, orgId },
           fence,
         );
-        // Validate BEFORE committing the rewritten body: `rewrittenText`
-        // contains explicit `[display](key)` links that only make sense paired
-        // with their snapshots. If schema validation throws, the catch must
-        // leave `content` as the ORIGINAL text — otherwise we'd ship explicit
-        // links with no matching snapshot (dead links), breaking the
-        // "rewritten ⇔ snapshotted" invariant (codex review finding).
-        //
-        // failedMentions enables the inert-chip UI on web: with ZERO
-        // snapshots but ≥1 failure we still attach the documentContext so the
-        // chat-view can render disabled chips + reason tooltips. Schema's
-        // refinement rejects empty docs + empty failedMentions, so we only
-        // attach when at least one is populated.
-        if (docs.length > 0 || failedMentions.length > 0) {
-          const payload: { kind: "snapshot"; docs: typeof docs; failedMentions?: typeof failedMentions } = {
-            kind: "snapshot",
-            docs,
-          };
-          if (failedMentions.length > 0) payload.failedMentions = failedMentions;
-          metadata.documentContext = documentContextSchema.parse(payload);
+        // The rewritten body's `attachment:<id>` links only make sense paired
+        // with their refs. `buildMessageDocumentSnapshots` only rewrites spans
+        // whose upload succeeded, so `rewrittenText` and `refs` are always
+        // consistent here.
+        if (refs.length > 0) {
+          const attachments: AttachmentRef[] = refs;
+          metadata.attachments = attachments;
+        }
+        // failedMentions enables the inert-chip UI on web: attach the
+        // documentContext snapshot roster only when ≥1 failure is present (the
+        // schema rejects an empty roster).
+        if (failedMentions.length > 0) {
+          metadata.documentContext = documentContextSchema.parse({ kind: "snapshot", failedMentions });
         }
         content = rewrittenText;
         if (skipped > 0) {
-          deps.log(`doc snapshot: skipped ${skipped} unresolvable link(s)`);
+          deps.log(`doc capture: skipped ${skipped} unresolvable / failed link(s)`);
         }
       } catch (err) {
-        // Snapshot build failure must never block message delivery — log and
-        // attach no documentContext so the message still goes out (verbatim).
-        deps.log(`doc snapshot: build failed, no documentContext attached: ${(err as Error).message}`);
+        // Capture failure must never block message delivery — log and attach no
+        // attachment metadata so the message still goes out (verbatim).
+        deps.log(`doc capture: build failed, no attachments attached: ${(err as Error).message}`);
       }
     }
 

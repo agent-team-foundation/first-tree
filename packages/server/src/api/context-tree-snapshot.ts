@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { resolveOrgViewer } from "../scope/require-resource.js";
 import { requireUser } from "../scope/require-user.js";
-import { summarizeContextTreeIo } from "../services/context-tree-io.js";
+import { buildContextTreeIoSummary } from "../services/context-tree-io.js";
 import {
   type ContextTreeBinding,
   contextTreeSnapshotWindowDays,
@@ -44,8 +44,18 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
     const usage = orgId
       ? await summarizeContextTreeUsage(app.db, orgId, contextTreeSnapshotWindowDays(window), viewer ?? undefined)
       : snapshot.usage;
+    // With an org: telemetry reads + git-derived writes reconciled for agent
+    // attribution. Without one: keep the snapshot's git-derived io.writes as-is
+    // (no telemetry to reconcile against). Same path as the org-scoped route so
+    // writes never silently empty here. See buildContextTreeIoSummary.
     const io = orgId
-      ? await summarizeContextTreeIo(app.db, orgId, contextTreeSnapshotWindowDays(window), viewer ?? undefined)
+      ? await buildContextTreeIoSummary(
+          app.db,
+          orgId,
+          contextTreeSnapshotWindowDays(window),
+          snapshot.io.writes,
+          viewer ?? undefined,
+        )
       : snapshot.io;
     return contextTreeSnapshotSchema.parse({ ...snapshot, usage, io });
   });

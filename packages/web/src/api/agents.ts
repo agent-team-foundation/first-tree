@@ -1,4 +1,4 @@
-import type { Agent, AgentSkills, CreateAgent, RebindAgent, UpdateAgent } from "@first-tree/shared";
+import type { Agent, AgentSkills, CreateAgent, UpdateAgent } from "@first-tree/shared";
 import { ApiError, api, getStoredTokens, withOrg } from "./client.js";
 
 type PaginatedAgents = {
@@ -13,12 +13,15 @@ export function listAgents(params?: {
   /** Case-insensitive substring match against `name` + `displayName`.
    *  Whitespace is trimmed server-side; pass a non-empty string. */
   query?: string;
+  /** Restrict to identities that can be added to a new chat participant set. */
+  addressableOnly?: boolean;
 }): Promise<PaginatedAgents> {
   const qs = new URLSearchParams();
   if (params?.limit) qs.set("limit", String(params.limit));
   if (params?.cursor) qs.set("cursor", params.cursor);
   if (params?.type) qs.set("type", params.type);
   if (params?.query) qs.set("query", params.query);
+  if (params?.addressableOnly) qs.set("addressableOnly", "true");
   const query = qs.toString();
   return api.get<PaginatedAgents>(withOrg(`/agents${query ? `?${query}` : ""}`));
 }
@@ -109,16 +112,6 @@ export function checkAgentNameAvailability(name: string): Promise<AgentNameAvail
 
 export function updateAgent(uuid: string, data: UpdateAgent): Promise<Agent> {
   return api.patch<Agent>(`/agents/${encodeURIComponent(uuid)}`, data);
-}
-
-/**
- * Re-bind an agent to a new client and/or a new runtime provider. The server
- * runs owner / org / capability checks atomically; pass `force: true` to
- * bypass the capability match (e.g. when the destination client is offline
- * and `clients.metadata.capabilities` is stale).
- */
-export function rebindAgent(uuid: string, data: RebindAgent): Promise<Agent> {
-  return api.patch<Agent>(`/agents/${encodeURIComponent(uuid)}/rebind`, data);
 }
 
 export function deleteAgent(uuid: string): Promise<void> {

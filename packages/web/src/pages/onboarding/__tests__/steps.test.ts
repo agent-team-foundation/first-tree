@@ -115,7 +115,7 @@ describe("shouldEnterOnboarding", () => {
     meLoaded: true,
     onboardingStep: "connect" as const,
     currentOrgReady: false,
-    onboardingDismissedAt: null,
+    onboardingSuppressedAt: null,
   };
   it("redirects a fresh incomplete user (no computer yet → connect)", () => {
     expect(shouldEnterOnboarding(base)).toBe(true);
@@ -140,8 +140,18 @@ describe("shouldEnterOnboarding", () => {
   it("does not redirect on a transient /me failure (null step)", () => {
     expect(shouldEnterOnboarding({ ...base, onboardingStep: null })).toBe(false);
   });
-  it("does not redirect a dismissed user (they chose to hide it)", () => {
-    expect(shouldEnterOnboarding({ ...base, onboardingDismissedAt: "2026-05-22T00:00:00Z" })).toBe(false);
+  it("does not redirect when the current membership already suppressed auto-open", () => {
+    expect(shouldEnterOnboarding({ ...base, onboardingSuppressedAt: "2026-05-22T00:00:00Z" })).toBe(false);
+  });
+  it("redirects an account-completed user when this membership has not suppressed auto-open", () => {
+    expect(
+      shouldEnterOnboarding({
+        ...base,
+        onboardingStep: "completed",
+        currentOrgReady: false,
+        onboardingSuppressedAt: null,
+      }),
+    ).toBe(true);
   });
 });
 
@@ -166,7 +176,7 @@ describe("shouldLeaveOnboarding", () => {
     meLoaded: true,
     onboardingStep: "connect" as const,
     currentOrgReady: false,
-    onboardingDismissedAt: null,
+    onboardingSuppressedAt: null,
   };
   it("leaves once connected AND the current org has a usable agent", () => {
     expect(shouldLeaveOnboarding({ ...base, onboardingStep: "completed", currentOrgReady: true })).toBe(true);
@@ -181,7 +191,11 @@ describe("shouldLeaveOnboarding", () => {
   });
   it("does not strand a merely-dismissed user who returned via Resume into an unready org", () => {
     expect(
-      shouldLeaveOnboarding({ ...base, onboardingStep: "create_agent", onboardingDismissedAt: "2026-05-22T00:00:00Z" }),
+      shouldLeaveOnboarding({
+        ...base,
+        onboardingStep: "create_agent",
+        onboardingSuppressedAt: "2026-05-22T00:00:00Z",
+      }),
     ).toBe(false);
   });
   it("waits for /me before deciding", () => {

@@ -1,15 +1,19 @@
 import type { MessageFormat } from "@first-tree/shared";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
+import { channelConfig } from "../../core/channel.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
+import { print } from "../../core/output.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
-import { readStdin } from "./_shared/io.js";
+import { looksLikeEscapedNewlineBody, readStdin } from "./_shared/io.js";
+import { buildRequestMetadata } from "./_shared/request.js";
 
 interface SendOptions {
   format: MessageFormat;
   metadata?: string;
   agent?: string;
   request?: boolean;
+  subject?: string;
   question?: string;
   option?: string[];
   replyTo?: string;
@@ -39,7 +43,11 @@ export function registerChatSendCommand(chat: Command): void {
       "Send as an open question (format=request) directed at a single human <name>. The message body carries the " +
         "background/context; --question carries only the ask",
     )
-    .option("--question <text>", "The question prompt — just the ask, no background (with --request)")
+    .option(
+      "--subject <text>",
+      "Short headline for the request, shown in the answer dock/card header (with --request, ≤80 chars)",
+    )
+    .option("--question <text>", "The question prompt — just the ask, no background (with --request, ≤200 chars)")
     .option("--option <opt>", "An answer option for the question; repeatable (with --request)", collectOption, [])
     .option(
       "--answer <requestId>",
@@ -81,6 +89,35 @@ export function registerChatSendCommand(chat: Command): void {
           );
         }
 
+        // Reject an inline body whose newlines are the two-character escape
+        // `\n` — shell quotes do not expand it, so the row would render as
+        // one long unformatted line. Stdin bodies are never checked: piping
+        // is both the fix and the escape hatch for intentional literal `\n`.
+        if (inlineBody !== undefined && looksLikeEscapedNewlineBody(inlineBody)) {
+          // The copyable retry form goes through `print.line` — plain
+          // multi-line stderr text (silenced in --json mode). The fail
+          // envelope below stays a single-line JSON object per the
+          // Print-layer contract; embedding the heredoc example there would
+          // itself arrive `\n`-escaped, which is exactly this bug.
+          print.line(
+            "chat send: the message body arrived with literal \\n escapes — shell quotes do not expand \\n, " +
+              "so it would render as one long unformatted line. Resend with real newlines via stdin:\n\n" +
+              `  cat <<'EOF' | ${channelConfig.binName} chat send <name> -f markdown\n` +
+              "  first line\n" +
+              "\n" +
+              "  **second** line\n" +
+              "  EOF\n\n" +
+              "(stdin is not checked — pipe the body if the literal \\n text is intentional.)\n\n",
+          );
+          fail(
+            "ESCAPED_NEWLINES",
+            'Inline message body contains literal "\\n" escapes and no real newlines — it would render as one ' +
+              "long unformatted line. Resend the body via stdin/heredoc with real newlines (copyable form " +
+              "printed above; stdin is not checked, so it also sends intentional literal \\n text).",
+            2,
+          );
+        }
+
         const content = inlineBody ?? (await readStdin());
         const isRequest = options.request === true;
         // Every send needs a body. For a request the split is: the body carries
@@ -113,25 +150,8 @@ export function registerChatSendCommand(chat: Command): void {
           if (!target) {
             fail("REQUEST_NEEDS_TARGET", "--request must be directed at a single human member.", 2);
           }
-          if (!options.question) {
-            fail("REQUEST_NEEDS_QUESTION", "--request needs --question <text>.", 2);
-          }
-          const opts = options.option ?? [];
           format = "request";
-          metadata = {
-            ...(metadata ?? {}),
-            request: {
-              questions: [
-                {
-                  id: "q1",
-                  prompt: options.question,
-                  kind: opts.length > 0 ? "single" : "free",
-                  options: opts,
-                  required: true,
-                },
-              ],
-            },
-          };
+          metadata = buildRequestMetadata(metadata, options);
         }
 
         // --answer / --close fold open-question resolution into `send`: they
@@ -156,13 +176,19 @@ export function registerChatSendCommand(chat: Command): void {
 
         const sdk = createSdk(options.agent);
 
-        // L3: snapshot any `.md` this message references, exactly like the
-        // runtime's result-sink does for final-text — closing the biggest
-        // doc-preview gap. Pure pass-through outside an agent session.
-        const captured = await captureOutboundDocs(content ?? "");
-        const outboundMetadata = captured.documentContext
-          ? { ...(metadata ?? {}), documentContext: captured.documentContext }
-          : metadata;
+        // L3: capture any `.md` this message references, exactly like the
+        // runtime's result-sink does for final-text — uploading to the org
+        // attachment store and attaching generic refs. Pure pass-through
+        // outside an agent session.
+        const captured = await captureOutboundDocs(content ?? "", { sdk, chatId });
+        const outboundMetadata =
+          captured.attachments || captured.documentContext
+            ? {
+                ...(metadata ?? {}),
+                ...(captured.attachments ? { attachments: captured.attachments } : {}),
+                ...(captured.documentContext ? { documentContext: captured.documentContext } : {}),
+              }
+            : metadata;
 
         // `--reply-to` threads explicitly; `--answer`/`--close` thread under the
         // question they resolve. Either way `inReplyTo` is pure threading.

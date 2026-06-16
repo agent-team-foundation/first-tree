@@ -6,6 +6,7 @@ import {
   configureClientLoggerForService,
   discoverClaudeCodeSkills,
   probeCapabilities,
+  reprobeOnReconnect,
 } from "@first-tree/client";
 import {
   agentConfigSchema,
@@ -44,6 +45,15 @@ import {
 } from "../../core/index.js";
 import { print } from "../../core/output.js";
 import { isWslDbusOvermount } from "./_shared/wsl-dbus.js";
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  return `{${Object.entries(value)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+    .join(",")}}`;
+}
 
 export function registerDaemonStartCommand(daemon: Command): void {
   daemon
@@ -243,6 +253,50 @@ export function registerDaemonStartCommand(daemon: Command): void {
           runtime.addAgent(name, agentConfig);
         }
 
+        let lastUploadedCapabilitiesJson: string | null = null;
+        const uploadCapabilitiesIfChanged = async (capabilities: Awaited<ReturnType<typeof probeCapabilities>>) => {
+          const nextJson = stableJson(capabilities);
+          if (lastUploadedCapabilitiesJson === nextJson) return false;
+          const accessToken = await ensureFreshAccessToken();
+          await uploadClientCapabilities({
+            serverUrl: config.server.url,
+            accessToken,
+            clientId: config.client.id,
+            capabilities,
+          });
+          lastUploadedCapabilitiesJson = nextJson;
+          return true;
+        };
+
+        // Re-probe runtime-provider capabilities on each WS reconnect. The
+        // startup probe goes stale while the daemon runs (a provider gets
+        // installed / logged in / removed), and there is otherwise no refresh
+        // until a restart. On reconnect we conditionally re-probe — a full real
+        // smoke only when the last result was non-ok or older than the TTL,
+        // else a free resolve+auth re-validate — then re-upload. Guarded against
+        // overlap; never throws into the connection.
+        let reprobeInFlight = false;
+        runtime.onReconnect(() => {
+          void (async () => {
+            if (reprobeInFlight) return;
+            reprobeInFlight = true;
+            try {
+              const { capabilities, mode } = await reprobeOnReconnect(probedCapabilities ?? {});
+              probedCapabilities = capabilities;
+              const uploaded = await uploadCapabilitiesIfChanged(capabilities);
+              print.status(
+                "•",
+                `runtime capabilities re-probed on reconnect (${mode})${uploaded ? " and uploaded" : "; unchanged, upload skipped"}`,
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              print.status("⚠️", `reconnect capability re-probe skipped: ${msg}`);
+            } finally {
+              reprobeInFlight = false;
+            }
+          })();
+        });
+
         await runtime.start();
 
         // Post-register capabilities upload — the `clients` row only exists
@@ -251,13 +305,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // moves on; agents still bind, and a subsequent restart retries.
         if (probedCapabilities) {
           try {
-            const accessToken = await ensureFreshAccessToken();
-            await uploadClientCapabilities({
-              serverUrl: config.server.url,
-              accessToken,
-              clientId: config.client.id,
-              capabilities: probedCapabilities,
-            });
+            await uploadCapabilitiesIfChanged(probedCapabilities);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             print.status("⚠️", `capabilities upload skipped: ${msg}`);

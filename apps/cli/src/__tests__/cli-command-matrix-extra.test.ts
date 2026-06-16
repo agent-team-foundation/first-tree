@@ -320,6 +320,12 @@ describe("agent admin and local commands", () => {
       "https://hub.example/api/v1/agents/agent-1/sessions/chat-1/suspend",
       expect.objectContaining({ method: "POST" }),
     );
+    cliFetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
+    await runAgent(["session", "resume", "nova", "chat-1"]);
+    expect(cliFetchMock).toHaveBeenLastCalledWith(
+      "https://hub.example/api/v1/agents/agent-1/sessions/chat-1/resume",
+      expect.objectContaining({ method: "POST" }),
+    );
     cliFetchMock.mockResolvedValueOnce(jsonResponse("denied", false, 403));
     await expect(runAgent(["session", "terminate", "nova", "chat-1"])).rejects.toMatchObject({
       code: "SESSION_CMD_ERROR",

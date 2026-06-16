@@ -5,30 +5,50 @@ import {
   type SessionEvent,
   type ToolFileRef,
 } from "@first-tree/shared";
-import { Codex, type Input, type Thread, type ThreadItem, type ThreadOptions, type Usage } from "@openai/codex-sdk";
+import {
+  Codex,
+  type CodexOptions,
+  type Input,
+  type Thread,
+  type ThreadItem,
+  type ThreadOptions,
+  type Usage,
+} from "@openai/codex-sdk";
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
-import { contextTreeRelativePathOf, toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
+import {
+  createCodexClientWithBinaryFallback,
+  formatCodexBinaryMissingMessage,
+  isCodexBinaryMissingError,
+} from "../runtime/codex-binary.js";
+import {
+  type ContextTreeAttribution,
+  resolveContextTreeRelativePath,
+  toolFileRefsFromShellCommand,
+} from "../runtime/context-tree-file-refs.js";
+import {
+  type ContextTreeGitWriteTracker,
+  createContextTreeGitWriteTracker,
+} from "../runtime/context-tree-git-status.js";
 import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
-import type { GitMirrorManager } from "../runtime/git-mirror-manager.js";
 import type {
   AgentHandler,
   AgentIdentity,
+  DeliveryToken,
   HandlerFactory,
   SessionContext,
   SessionMessage,
+  TurnConsumedErrorReason,
 } from "../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
-import {
-  currentSourceRepoNamesFromPayload,
-  prepareSourceRepos as prepareSourceReposShared,
-  releaseSourceReposForSession,
-} from "../runtime/source-repos.js";
+import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { formatAuthHint, isCodexAuthError } from "./auth-error-hint.js";
+import { resolveTurnSettlement } from "./turn-settlement.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -40,8 +60,6 @@ type CodexConfigObject = { [key: string]: CodexConfigValue };
 
 const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 const RESULT_PREVIEW_LIMIT = 400;
-
-type Worktree = { clonePath: string };
 
 /**
  * Turn-level retry budget for transient codex failures.
@@ -201,6 +219,15 @@ export function isTransientCodexErrorMessage(message: string): boolean {
   );
 }
 
+type CodexFailureKind = "deterministic" | "transient" | "unknown";
+type CodexTerminalFailure = { kind: CodexFailureKind; message: string };
+
+function classifyCodexFailure(message: string): CodexFailureKind {
+  if (isCodexAuthError(message)) return "deterministic";
+  if (isTransientCodexErrorMessage(message)) return "transient";
+  return "unknown";
+}
+
 /**
  * Tracks whether re-running this turn would double-emit a chat-visible item.
  * `reasoning` and the bare `error` item are presence-only / diagnostic and
@@ -296,12 +323,12 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   for (const repo of payload.gitRepos) {
     const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
     if (!localPath) continue;
-    // Per agent-session-cwd-redesign (2026-05-22 redesign): predeclared
-    // source repos live at the TOP LEVEL of the agent home — no `worktrees/`
-    // prefix. Codex's sandbox `workingDirectory` already covers `<cwd>` and
-    // everything under it (including agent-on-demand `worktrees/<name>/`),
-    // so this entry is technically redundant; we keep it for parity with
-    // earlier behavior + to make the allowlist explicit for ops.
+    // Predeclared source repos live under the agent home's `source-repos/`
+    // directory (`<cwd>/source-repos/<localPath>`, via resolveGitRepoTargetPath)
+    // — no `worktrees/` prefix. Codex's sandbox `workingDirectory` already
+    // covers `<cwd>` and everything under it (including `source-repos/` and
+    // agent-on-demand `worktrees/<name>/`), so this entry is technically
+    // redundant; we keep it for parity + to make the allowlist explicit for ops.
     additionalDirectories.push(resolveGitRepoTargetPath(workspaceCwd, localPath));
   }
   // Only pin a model when the operator explicitly set one in the agent
@@ -357,14 +384,13 @@ export function buildCodexAgentBriefing(
 
 function contextTreeTargetPathOf(
   filePath: string,
-  contextTreePath: string | null,
+  attribution: ContextTreeAttribution,
   workspaceCwd: string,
 ): string | null {
-  if (!contextTreePath) return null;
   const absolutePath = isAbsolute(filePath) ? resolve(filePath) : resolve(workspaceCwd, filePath);
-  // Canonical comparison so a symlink alias of the tree (W1 cloud layout's
-  // `<workspace>/context-tree` link) maps the same as the real clone path.
-  const rel = contextTreeRelativePathOf(absolutePath, contextTreePath);
+  // Containment (canonical, symlink-safe) or repo identity (tree PR
+  // worktrees — any checkout whose origin remote IS the Context Tree repo).
+  const rel = resolveContextTreeRelativePath(absolutePath, attribution);
   return rel === null || rel === "/" ? null : rel;
 }
 
@@ -406,7 +432,11 @@ export function toolFileRefsFromCodexFileChange(input: {
     const fileKey = isAbsolute(filePath) ? filePath : resolve(input.workspaceCwd, filePath);
     if (seen.has(fileKey)) continue;
     seen.add(fileKey);
-    const repoRelativePath = contextTreeTargetPathOf(filePath, input.contextTreePath, input.workspaceCwd);
+    const repoRelativePath = contextTreeTargetPathOf(
+      filePath,
+      { contextTreePath: input.contextTreePath, contextTreeRepoUrl: input.contextTreeRepoUrl },
+      input.workspaceCwd,
+    );
     refs.push({
       origin: "file_change",
       localPath: filePath,
@@ -421,6 +451,37 @@ export function toolFileRefsFromCodexFileChange(input: {
     });
   }
   return refs;
+}
+
+export function appendGitStatusDeltaRefs(input: {
+  existingRefs?: readonly ToolFileRef[];
+  gitWriteTracker?: ContextTreeGitWriteTracker | null;
+  toolName: string;
+  toolUseId: string;
+}): ToolFileRef[] | undefined {
+  const existingRefs = [...(input.existingRefs ?? [])];
+  const gitStatusRefs =
+    input.gitWriteTracker?.refsForSuccessfulToolCall({
+      toolName: input.toolName,
+      toolUseId: input.toolUseId,
+      existingRefs,
+    }) ?? [];
+  const refs = [...existingRefs, ...gitStatusRefs];
+  return refs.length > 0 ? refs : undefined;
+}
+
+export function toolFileRefsForTerminalCodexTool(input: {
+  status: "ok" | "error" | "pending";
+  existingRefs?: readonly ToolFileRef[];
+  gitWriteTracker?: ContextTreeGitWriteTracker | null;
+  toolName: string;
+  toolUseId: string;
+}): ToolFileRef[] | undefined {
+  if (input.status !== "ok") {
+    if (input.status === "error") input.gitWriteTracker?.captureBaseline();
+    return undefined;
+  }
+  return appendGitStatusDeltaRefs(input);
 }
 
 /**
@@ -444,11 +505,9 @@ export function toolFileRefsFromCodexFileChange(input: {
 export const createCodexHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
-  const gitMirrorManager = (config.gitMirrorManager as GitMirrorManager | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
   const contextTreeBranch = (config.contextTreeBranch as string | undefined) ?? null;
-  const agentName = (config.agentName as string | undefined) ?? null;
 
   let cwd: string | null = null;
   let codex: Codex | null = null;
@@ -471,13 +530,19 @@ export const createCodexHandler: HandlerFactory = (config) => {
   let currentAbort: AbortController | null = null;
   let currentTurnPromise: Promise<void> | null = null;
   let ctx: SessionContext | null = null;
+  const gitWriteTracker = createContextTreeGitWriteTracker({
+    contextTreePath,
+    contextTreeRepoUrl,
+    contextTreeBranch,
+    log: (message) => ctx?.log(message),
+  });
   let drainScheduled = false;
   let drainInProgress = false;
-  const queuedMessages: SessionMessage[] = [];
-  const ownedWorktrees: Worktree[] = [];
+  const queuedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
   /**
-   * Predeclared source repos materialised by `prepareSourceRepos`. Surfaced
-   * in the per-session AGENTS.md so the LLM knows the absolute paths.
+   * Predeclared source repos the agent config declares — pure declaration
+   * (`declaredSourceRepos`), no git. Surfaced in the per-session AGENTS.md
+   * so the LLM knows the absolute paths and upstream coordinates.
    */
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
 
@@ -527,6 +592,21 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return cfg;
   }
 
+  function createCodexClient(options: CodexOptions, sessionCtx: SessionContext): Codex {
+    const resolved = createCodexClientWithBinaryFallback<CodexOptions, Codex>(
+      options,
+      (nextOptions) => new Codex(nextOptions),
+      { log: (message) => sessionCtx.log(message) },
+    );
+    return resolved.client;
+  }
+
+  function formatCodexSdkError(message: string): string {
+    if (isCodexAuthError(message)) return formatAuthHint("codex", message);
+    if (isCodexBinaryMissingError(message)) return formatCodexBinaryMissingMessage(message);
+    return message;
+  }
+
   function buildBriefing(
     sessionCtx: SessionContext,
     payload: AgentRuntimeConfigPayload,
@@ -540,6 +620,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
       workspacePath: workspaceCwd,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
+      contextTreeRepoUrl,
+      contextTreeBranch,
     });
   }
 
@@ -560,29 +642,15 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return sessionCtx.formatInboundContent(message).then((text) => text);
   }
 
-  async function prepareSourceRepos(
-    payload: AgentRuntimeConfigPayload,
-    workspaceCwd: string,
-    sessionCtx: SessionContext,
-    payloadResolved: boolean,
-  ): Promise<void> {
-    // Delegate to the shared helper (runtime/source-repos.ts) so the
-    // standalone-clone materialisation + per-clone lock + decision-B in-use
-    // refcount stay in one place across the SDK, TUI, and codex handlers. The
-    // returned list feeds the per-session AGENTS.md "Source Repositories" block
-    // on the next `buildAgentBriefing` call.
-    //
-    // `payloadResolved` is forwarded so the shared helper can decide whether
-    // its empty `gitRepos: []` is authoritative — see
-    // `PrepareSourceReposParams.payloadResolved` and PR #869 P0-2.
-    sourceReposForPrompt = await prepareSourceReposShared({
-      workspace: workspaceCwd,
-      payload,
-      sessionCtx,
-      gitMirrorManager,
-      agentName,
-      payloadResolved,
-    });
+  /**
+   * Derive the prompt-facing source-repo list from the runtime config's
+   * `gitRepos` — pure declaration, no git. The agent itself clones and
+   * refreshes `<workspaceCwd>/source-repos/<localPath>/` per the protocol in
+   * its briefing. The list feeds the per-session AGENTS.md "Source
+   * Repositories" block on the next `buildAgentBriefing` call.
+   */
+  function declareSourceRepos(payload: AgentRuntimeConfigPayload, workspaceCwd: string): void {
+    sourceReposForPrompt = declaredSourceRepos(workspaceCwd, payload);
   }
 
   function emitToolCall(
@@ -635,7 +703,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
             : item.status === "failed"
               ? ("error" as const)
               : ("pending" as const);
-        const toolFileRefs =
+        const shellRefs =
           status === "ok" && cwd
             ? toolFileRefsFromShellCommand({
                 command: item.command,
@@ -645,6 +713,13 @@ export const createCodexHandler: HandlerFactory = (config) => {
                 contextTreeBranch,
               })
             : undefined;
+        const toolFileRefs = toolFileRefsForTerminalCodexTool({
+          status,
+          existingRefs: shellRefs,
+          gitWriteTracker,
+          toolName: "command",
+          toolUseId: item.id,
+        });
         emitToolCall(sessionCtx, {
           toolUseId: item.id,
           name: "command",
@@ -657,7 +732,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       }
       case "file_change": {
         const status = item.status === "completed" ? ("ok" as const) : ("error" as const);
-        const toolFileRefs =
+        const fileChangeRefs =
           status === "ok" && cwd
             ? toolFileRefsFromCodexFileChange({
                 changes: item.changes,
@@ -667,6 +742,13 @@ export const createCodexHandler: HandlerFactory = (config) => {
                 contextTreeBranch,
               })
             : undefined;
+        const toolFileRefs = toolFileRefsForTerminalCodexTool({
+          status,
+          existingRefs: fileChangeRefs,
+          gitWriteTracker,
+          toolName: "file_change",
+          toolUseId: item.id,
+        });
         emitToolCall(sessionCtx, {
           toolUseId: item.id,
           name: "file_change",
@@ -730,7 +812,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
         // because your refresh token was revoked. Please log out and sign in
         // again." — opaque to a First Tree user. Reframe at the boundary so
         // the next step (run `codex login` in their own terminal) is obvious.
-        const message = isCodexAuthError(item.message) ? formatAuthHint("codex", item.message) : item.message;
+        const message = formatCodexSdkError(item.message);
         sessionCtx.emitEvent({
           kind: "error",
           payload: { source: "tool", message },
@@ -750,26 +832,27 @@ export const createCodexHandler: HandlerFactory = (config) => {
    * fuses queued messages into one input. Completion acks through the last
    * consumed message id instead of shifting a count from SessionManager state.
    */
-  async function runTurn(input: Input, sessionCtx: SessionContext, messages: readonly SessionMessage[]): Promise<void> {
+  async function runTurn(
+    input: Input,
+    sessionCtx: SessionContext,
+    messages: readonly SessionMessage[],
+    token: DeliveryToken,
+  ): Promise<void> {
     const activeThread = thread;
-    if (!activeThread) return;
+    if (!activeThread) {
+      token.retry(messages, "codex_missing_thread");
+      return;
+    }
 
-    sessionCtx.markMessagesConsumed(messages);
+    token.processingStarted(messages);
     const abort = new AbortController();
     currentAbort = abort;
-    sessionCtx.setRuntimeState("working");
+    gitWriteTracker.captureBaseline();
 
-    // Emit exactly one `turn_end` per turn, after `forwardResult` resolves —
-    // mirrors claude-code so admin events + completion bookkeeping reflect
-    // actual delivery, not just SDK turn termination. `turn.completed` /
-    // `turn.failed` only flip the local status here; the emit happens below.
-    //
-    // `userVisibleEmitted` gates the retry path: once we've emitted an
-    // assistant_text / tool_call to the chat, re-running the turn would
-    // double-render those items, so we stop retrying even if the SDK
-    // surfaces a transient `turn.failed`.
     let finalResponse = "";
-    let turnFailed = false;
+    const providerCompletedBox: { value: boolean } = { value: false };
+    const diagnosticErrorEmittedBox: { value: boolean } = { value: false };
+    const terminalFailureBox: { value: CodexTerminalFailure | null } = { value: null };
     let userVisibleEmitted = false;
     // Wrapper object so TS doesn't narrow `lastUsage` to `null` based on the
     // synchronous initializer (assignments live inside the IIFE below, which
@@ -781,7 +864,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
         // Reset per-attempt; finalResponse intentionally persists across
         // attempts only because we abort retries the moment any user-visible
         // item is emitted, so it is empty whenever a retry runs.
-        turnFailed = false;
+        providerCompletedBox.value = false;
+        diagnosticErrorEmittedBox.value = false;
+        terminalFailureBox.value = null;
         let retryRequested = false;
         let retryDelay = 0;
         let retryReason = "";
@@ -801,7 +886,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
             const streamed = await activeThread.runStreamed(input, { signal: attemptAbort.signal });
             for await (const event of streamed.events) {
               if (attemptAbort.signal.aborted) break;
-              sessionCtx.touch();
+              sessionCtx.recordProviderActivity();
               if (event.type === "thread.started") {
                 threadId = event.thread_id;
               } else if (event.type === "turn.started") {
@@ -818,6 +903,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
                 // Capture usage for the post-turn metrics log; `turn_end` is
                 // still emitted after forwardResult below.
                 usageBox.value = event.usage;
+                providerCompletedBox.value = true;
               } else if (event.type === "turn.failed") {
                 if (
                   !userVisibleEmitted &&
@@ -829,10 +915,11 @@ export const createCodexHandler: HandlerFactory = (config) => {
                   retryReason = `turn.failed (transient): ${event.error.message}`;
                   break;
                 }
-                turnFailed = true;
-                const message = isCodexAuthError(event.error.message)
-                  ? formatAuthHint("codex", event.error.message)
-                  : event.error.message;
+                terminalFailureBox.value = {
+                  kind: classifyCodexFailure(event.error.message),
+                  message: event.error.message,
+                };
+                const message = formatCodexSdkError(event.error.message);
                 sessionCtx.emitEvent({
                   kind: "error",
                   payload: { source: "sdk", message },
@@ -844,10 +931,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
                   retryReason = `stream error (transient): ${event.message}`;
                   break;
                 }
-                turnFailed = true;
-                const message = isCodexAuthError(event.message)
-                  ? formatAuthHint("codex", event.message)
-                  : event.message;
+                diagnosticErrorEmittedBox.value = true;
+                const message = formatCodexSdkError(event.message);
                 sessionCtx.emitEvent({
                   kind: "error",
                   payload: { source: "sdk", message },
@@ -862,8 +947,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
               retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
               retryReason = `runStreamed threw (transient): ${msg}`;
             } else {
-              turnFailed = true;
-              const message = isCodexAuthError(msg) ? formatAuthHint("codex", msg) : msg;
+              terminalFailureBox.value = { kind: classifyCodexFailure(msg), message: msg };
+              const message = formatCodexSdkError(msg);
               sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message } });
             }
           }
@@ -914,8 +999,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
     // Match @openai/codex-sdk's Thread.run() success semantics: when a turn
     // emits several non-empty agent_message items, finalResponse is the latest
     // one. Earlier agent_message items remain live assistant_text progress
-    // events only. If the turn failed, do not forward partial text as a final
-    // chat message.
+    // events only. If the provider never completes successfully, do not
+    // forward partial text as a final chat message.
     const accumulated = finalResponse;
 
     // Codex reports CUMULATIVE thread usage on `turn.completed`; convert it to
@@ -958,18 +1043,21 @@ export const createCodexHandler: HandlerFactory = (config) => {
       perTurnUsage.cached_input_tokens === 0 &&
       perTurnUsage.output_tokens === 0 &&
       perTurnUsage.reasoning_output_tokens === 0;
-    const usageLimitEmptyTurn = !turnFailed && accumulated.trim().length === 0 && zeroTokenDelta;
+    const failure = terminalFailureBox.value;
+    const providerCompleted = providerCompletedBox.value;
+    const completedSuccessfully = providerCompleted && failure === null;
+    const usageLimitEmptyTurn = completedSuccessfully && accumulated.trim().length === 0 && zeroTokenDelta;
 
     let forwardFailed = false;
+    let retryReason: string | null = null;
+    let consumedErrorReason: TurnConsumedErrorReason | null = null;
     if (usageLimitEmptyTurn) {
       // Layer 2 (observability): emit an error event + warn-level log so the
       // daemon log and admin event stream record a real failure instead of a
-      // phantom `turn_end: success`. Mirrors the existing `turnFailed`
-      // treatment — runtime state still goes `idle` below so a later message
-      // can retry once the limit resets. We do NOT auto-redeliver THIS message
-      // (markMessagesCompleted still runs below); auto-redelivery is tracked
-      // separately (see #971 discussion) because it needs a reset-aware
-      // trigger + loop guard that the SDK's missing `rate_limits` can't supply.
+      // phantom `turn_end: success`. Runtime state still goes idle after the
+      // visible notice is delivered; auto-redelivery is tracked separately
+      // (see #971 discussion) because it needs a reset-aware trigger + loop
+      // guard that the SDK's missing `rate_limits` can't supply.
       sessionCtx.emitEvent({
         kind: "error",
         payload: {
@@ -988,14 +1076,16 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // no reply, rather than having to dig through codex rollout files.
       try {
         await sessionCtx.forwardResult(USAGE_LIMIT_NOTICE);
+        consumedErrorReason = "usage_limit_notice_posted";
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         sessionCtx.emitEvent({
           kind: "error",
           payload: { source: "runtime", message: `usage-limit notice delivery failed: ${msg}` },
         });
+        retryReason = "codex_usage_limit_notice_delivery_failed";
       }
-    } else if (!turnFailed && accumulated.trim()) {
+    } else if (completedSuccessfully && accumulated.trim()) {
       try {
         await sessionCtx.forwardResult(accumulated);
       } catch (err) {
@@ -1006,9 +1096,23 @@ export const createCodexHandler: HandlerFactory = (config) => {
           payload: { source: "runtime", message: `forwardResult failed: ${msg}` },
         });
       }
+    } else if (failure !== null) {
+      retryReason = `codex_${failure.kind}_failure`;
+      sessionCtx.log(
+        `codex turn did not complete successfully; scheduling recovery (${failure.kind}): ${failure.message}`,
+      );
+    } else if (!providerCompleted) {
+      retryReason = diagnosticErrorEmittedBox.value
+        ? "codex_stream_ended_after_diagnostic_error"
+        : "codex_stream_ended_without_completion";
+      sessionCtx.log(`codex stream ended without turn.completed; scheduling recovery (${retryReason})`);
     }
 
-    const succeeded = !turnFailed && !forwardFailed && !usageLimitEmptyTurn;
+    const settlement = resolveTurnSettlement({
+      retryReason,
+      consumedErrorReason,
+      forwardFailed,
+    });
 
     // Emit `token_usage` just before `turn_end` so the wire-order matches the
     // claude-code handler (consumers can group all usage events for a turn
@@ -1036,14 +1140,13 @@ export const createCodexHandler: HandlerFactory = (config) => {
     }
     sessionCtx.emitEvent({
       kind: "turn_end",
-      payload: { status: succeeded ? "success" : "error" },
+      payload: { status: settlement.status },
     });
-    sessionCtx.setRuntimeState("idle");
-    // Ack the entries this turn consumed. All four turn outcomes (success,
-    // silent / no-text, SDK turn.failed, forwardResult failure) are
-    // terminal for this turn — redelivery would either replay an already-
-    // delivered reply or re-hit the same failure.
-    sessionCtx.markMessagesCompleted(messages);
+    if (settlement.action.kind === "complete") {
+      await token.complete(messages, settlement.action.outcome);
+    } else {
+      token.retry(messages, settlement.action.reason);
+    }
 
     // Structured usage / timing log — emitted via `sessionCtx.log` rather
     // than a new SessionEvent kind so we stay inside the codex handler
@@ -1058,7 +1161,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
           `input_tokens=${Math.max(0, perTurnUsage.input_tokens - perTurnUsage.cached_input_tokens)} ` +
           `cached_input_tokens=${perTurnUsage.cached_input_tokens} ` +
           `output_tokens=${perTurnUsage.output_tokens} reasoning_output_tokens=${perTurnUsage.reasoning_output_tokens} ` +
-          `status=${succeeded ? "success" : "error"}`,
+          `status=${settlement.status}`,
       );
     }
 
@@ -1080,31 +1183,50 @@ export const createCodexHandler: HandlerFactory = (config) => {
       const drained = queuedMessages.splice(0);
       const sessionCtx = ctx;
       drainInProgress = true;
-      void mergeAndRun(drained, sessionCtx).finally(() => {
-        drainInProgress = false;
-        scheduleQueuedMessagesDrain();
-      });
+      void mergeAndRun(drained, sessionCtx)
+        .catch((err) => {
+          sessionCtx.log(`codex queued turn failed: ${err instanceof Error ? err.message : String(err)}`);
+          for (const queued of drained) queued.token.retry(queued.message, "codex_queued_turn_failed");
+        })
+        .finally(() => {
+          drainInProgress = false;
+          scheduleQueuedMessagesDrain();
+        });
     });
   }
 
-  async function mergeAndRun(drained: SessionMessage[], sessionCtx: SessionContext): Promise<void> {
+  async function mergeAndRun(
+    drained: Array<{ message: SessionMessage; token: DeliveryToken }>,
+    sessionCtx: SessionContext,
+  ): Promise<void> {
     const inputs: string[] = [];
-    for (const m of drained) {
+    const messages = drained.map((entry) => entry.message);
+    const token = drained[0]?.token;
+    if (!token) return;
+    let hadFormatFailure = false;
+    for (const m of messages) {
       try {
         inputs.push(await sessionCtx.formatInboundContent(m));
       } catch (err) {
+        hadFormatFailure = true;
         sessionCtx.log(`codex inject formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    if (inputs.length === 0) {
-      // Every fused message failed `formatInboundContent` — semantically a
-      // permanent failure for this batch (redelivery would re-hit the same
-      // format errors). Ack the entries so they don't leak in
-      // `inFlightEntries` and pile up server-side as `delivered` rows.
-      sessionCtx.markMessagesCompleted(drained);
+    if (hadFormatFailure || inputs.length === 0) {
+      // The provider has not seen this exact batch, so there is no durable
+      // terminal evidence for any failed entry. Keep the whole batch recoverable
+      // rather than ACKing a gap or delivering a partial fused prompt.
+      for (const queued of drained) queued.token.retry(queued.message, "codex_queued_turn_format_failed");
       return;
     }
-    await runTurn(inputs.join("\n\n"), sessionCtx, drained);
+    await runTurn(inputs.join("\n\n"), sessionCtx, messages, token);
+  }
+
+  function retryQueuedMessages(reason: string): void {
+    const drained = queuedMessages.splice(0);
+    for (const queued of drained) {
+      queued.token.retry(queued.message, reason);
+    }
   }
 
   /**
@@ -1140,7 +1262,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
   }
 
   return {
-    async start(message, sessionCtx) {
+    async start(message, sessionCtx, token) {
+      const hasExplicitDeliveryToken = token !== undefined;
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       ctx = sessionCtx;
       // Per agent-session-cwd-redesign: cwd is the per-agent home, shared
       // by every chat session for this agent.
@@ -1171,15 +1295,15 @@ export const createCodexHandler: HandlerFactory = (config) => {
       const chatContext = await fetchChatContextOrLog(sessionCtx);
 
       // gitRepos first so the per-chat briefing can list the predeclared
-      // worktree paths the agent should know about.
-      await prepareSourceRepos(payload, cwd, sessionCtx, payloadResolved);
+      // source-repo paths the agent should know about.
+      declareSourceRepos(payload, cwd);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, payloadResolved);
       markWorkspaceInitComplete(cwd);
 
-      codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
+      codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
       currentModel = payload.model || "";
       // Brand-new thread: the first `turn.completed` cumulative IS turn 1, so
@@ -1190,7 +1314,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       threadIsFresh = true;
 
       const input = await toCodexInput(message, sessionCtx);
-      await runTurn(input, sessionCtx, [message]);
+      await runTurn(input, sessionCtx, [message], deliveryToken);
 
       // Codex assigns thread_id via `thread.started` during the first turn;
       // fall back to whatever `Thread` exposes if the event was missed.
@@ -1200,10 +1324,14 @@ export const createCodexHandler: HandlerFactory = (config) => {
       if (!threadId) {
         throw new Error("codex did not assign a thread id during the first turn");
       }
-      return threadId;
+      return hasExplicitDeliveryToken
+        ? { sessionId: threadId, route: { kind: "owned", mode: "processing" } }
+        : threadId;
     },
 
-    async resume(message, sessionId, sessionCtx) {
+    async resume(message, sessionId, sessionCtx, token) {
+      const hasExplicitDeliveryToken = token !== undefined;
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       ctx = sessionCtx;
       cwd = acquireAgentHome(workspaceRoot);
 
@@ -1230,14 +1358,14 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // `<binName> tree skill install` shell-out.
       const chatContext = await fetchChatContextOrLog(sessionCtx);
 
-      await prepareSourceRepos(payload, cwd, sessionCtx, resumePayloadResolved);
+      declareSourceRepos(payload, cwd);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
       const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resumePayloadResolved);
       markWorkspaceInitComplete(cwd);
 
-      codex = new Codex({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) });
+      codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
       // Footgun F2: resumeThread does NOT inherit first-call ThreadOptions —
       // re-pass them every time.
       thread = codex.resumeThread(sessionId, buildCodexThreadOptions(payload, cwd));
@@ -1246,23 +1374,28 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
       if (message) {
         const input = await toCodexInput(message, sessionCtx);
-        await runTurn(input, sessionCtx, [message]);
+        await runTurn(input, sessionCtx, [message], deliveryToken);
       }
-      return sessionId;
+      return hasExplicitDeliveryToken
+        ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+        : sessionId;
     },
 
-    inject(message) {
+    inject(message, token) {
       // Fire-and-forget — Codex turns are run-to-completion, so the message
       // is buffered and drained on the next available turn. Queue every
       // inject instead of only mid-turn injects so the async gap before
       // `runTurn()` sets `currentTurnPromise` cannot start parallel turns
       // and desynchronise completion from the messages actually consumed.
-      if (!ctx) return;
-      queuedMessages.push(message);
+      if (!ctx) return { kind: "rejected", reason: "no_active_context", retryable: true };
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(ctx);
+      queuedMessages.push({ message, token: deliveryToken });
       scheduleQueuedMessagesDrain();
+      return { kind: "owned", mode: "queued" };
     },
 
     async suspend() {
+      retryQueuedMessages("codex_suspend_before_terminal");
       currentAbort?.abort();
       try {
         await currentTurnPromise;
@@ -1276,6 +1409,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
     },
 
     async shutdown() {
+      retryQueuedMessages("codex_shutdown_before_terminal");
       // suspend() releases the active turn. Per agent-session-cwd-redesign
       // we no longer rm the cwd or auto-remove predeclared worktrees — both
       // are agent-scoped persistent resources shared across chats.
@@ -1290,24 +1424,11 @@ export const createCodexHandler: HandlerFactory = (config) => {
       thread = null;
       codex = null;
 
-      // Only session-private worktrees (currently none — predeclared ones
-      // intentionally skip `ownedWorktrees.push`) get torn down here. Future
-      // ad-hoc worktree creation sites can opt in by pushing to
-      // `ownedWorktrees`.
-      if (ctx) releaseSourceReposForSession(ctx);
-      if (gitMirrorManager) {
-        for (const wt of ownedWorktrees) {
-          try {
-            await gitMirrorManager.removeSourceRepo({ clonePath: wt.clonePath });
-          } catch (err) {
-            ctx?.log(
-              `codex worktree cleanup failed (${wt.clonePath}): ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        }
-        ownedWorktrees.length = 0;
-      }
-
+      // Source repos, the Context Tree clone, and on-demand worktrees under
+      // `<cwd>/worktrees/<name>/` are all agent-managed state — the agent
+      // creates, refreshes, and removes them per its briefing protocol; the
+      // runtime touches none of them on shutdown.
+      //
       // cwd points at the persistent agent home — NO rmSync. The legacy
       // behaviour that wiped per-chat workspaces went away with the cwd
       // model change.

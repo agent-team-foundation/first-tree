@@ -21,7 +21,7 @@ import { createLogger, messageAttrs, withSpan } from "../observability/index.js"
 import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
-import { validateDocumentContext } from "./doc-snapshots.js";
+import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
 
 const log = createLogger("message");
 
@@ -128,6 +128,22 @@ export type SendMessageOptions = {
    */
   addressedToAgentIds?: readonly string[];
   /**
+   * Agent IDs to **exclude from the notify (wake) set** even when they would
+   * otherwise be woken via `metadata.mentions` or `addressedToAgentIds`.
+   * Generic trusted-delivery capability, decoupled from `senderId`: the
+   * suppressed agent still receives a `notify=false` inbox row (the message
+   * still lands in history / replays as context), it is simply not woken.
+   *
+   * Today's caller is `github-delivery.deliverNormalizedEvent`, which passes
+   * the event's actor agent so an agent is never woken by its own GitHub
+   * action (echo suppression) — without binding that exclusion to `senderId`
+   * (the actor is frequently not a speaker of the target chat, so it must not
+   * be the chat-local sender). See `system/cloud/github/github-entity-chat-binding.md`
+   * S2. `purpose === "agent-final-text"` still forces silent for everyone;
+   * this only narrows the notify set within the non-silenced branch.
+   */
+  suppressNotifyAgentIds?: readonly string[];
+  /**
    * Trusted-internal opt-in for writing `metadata.systemSender`. The web UI
    * uses that key to re-attribute a row to a synthetic "GitHub" sender
    * (avatar + name override) instead of the row's actual `senderId`. To
@@ -185,10 +201,7 @@ export function preflightMessageSendIntent(input: {
   }
 
   const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
-  validateDocumentContext(incomingMeta, {
-    chatId,
-    participantSlugs: new Set(participants.map((p) => p.name?.toLowerCase()).filter((n): n is string => Boolean(n))),
-  });
+  validateDocumentContext(incomingMeta);
   if (incomingMeta.resolves !== undefined && !requestResolutionSchema.safeParse(incomingMeta.resolves).success) {
     throw new BadRequestError(
       'Malformed "metadata.resolves": expected {request: <messageId>, kind: "answered"|"closed", reason?}.',
@@ -414,6 +427,14 @@ async function sendMessageInner(
     });
     const { content: outboundContent, metadata: metadataToStore, mentionedAgentIds: mergedMentions } = prepared;
 
+    // 2b. Validate generic attachment refs (`metadata.attachments[]`) against
+    //     the blob store: each referenced attachment must exist and its
+    //     declared mime/size must match the stored row. Async (DB lookup), so
+    //     it runs here rather than in the sync preflight. Byte integrity is
+    //     checked client-side at render via `ref.sha256`; uploader != sender by
+    //     design (see validateMessageAttachmentRefs).
+    await validateMessageAttachmentRefs(tx, metadataToStore);
+
     // 3. Store the message (with merged metadata + normalised content).
     // UUID v7 per the "UUID v7 as Message ID" architecture rule in
     // CLAUDE.md — time-ordered so message id lex order matches creation
@@ -453,6 +474,11 @@ async function sendMessageInner(
     //      nobody is woken.
     const mentionSet = new Set(mergedMentions);
     const addressedSet = new Set(options.addressedToAgentIds ?? []);
+    // Generic echo / wake-exclusion: agents here still get a `notify=false`
+    // inbox row (message lands), they are just not woken. Decoupled from
+    // `senderId` so a non-member actor can be excluded without being made the
+    // chat-local sender. See SendMessageOptions.suppressNotifyAgentIds.
+    const suppressNotifySet = new Set(options.suppressNotifyAgentIds ?? []);
     // Build a single fan-out structure that carries agentId alongside the
     // inbox row. agentId is needed by the post-tx session-activation step
     // (Step 1b) but is not part of the inbox_entries schema — it's stripped
@@ -463,7 +489,10 @@ async function sendMessageInner(
       .map((p) => ({
         agentId: p.agentId,
         inboxId: p.inboxId,
-        notify: !prepared.forceSilentFanOut && (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)),
+        notify:
+          !prepared.forceSilentFanOut &&
+          (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)) &&
+          !suppressNotifySet.has(p.agentId),
       }));
 
     if (fanout.length > 0) {

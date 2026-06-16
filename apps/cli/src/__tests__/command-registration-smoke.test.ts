@@ -78,10 +78,20 @@ describe("CLI command registration", () => {
       "status",
       "workspace",
     ]);
-    expect(subcommands(root, "chat")).toEqual(["create", "history", "invite", "list", "open", "send", "set-topic"]);
+    expect(subcommands(root, "chat")).toEqual([
+      "create",
+      "history",
+      "invite",
+      "list",
+      "open",
+      "send",
+      "set-topic",
+      "update",
+    ]);
     expect(subcommands(root, "daemon")).toEqual([
       "doctor",
       "home-info",
+      "probe",
       "refresh-unit",
       "restart",
       "start",
@@ -99,7 +109,7 @@ describe("CLI command registration", () => {
 
     const agent = command(root, "agent");
     expect(subcommands(agent, "bind")).toEqual(["client"]);
-    expect(subcommands(agent, "session")).toEqual(["list", "suspend", "terminate"]);
+    expect(subcommands(agent, "session")).toEqual(["list", "resume", "suspend", "terminate"]);
     expect(subcommands(agent, "workspace")).toEqual(["clean"]);
 
     const tree = command(root, "tree");
@@ -127,7 +137,7 @@ describe("CLI command registration", () => {
       "--type",
     ]);
     expect(optionNames(command(command(root, "daemon"), "start"))).toEqual(["--foreground", "--no-interactive"]);
-    expect(optionNames(command(command(root, "tree"), "tree"))).toEqual(["--level", "--pattern"]);
+    expect(optionNames(command(command(root, "tree"), "tree"))).toEqual(["--level", "--no-pull", "--pattern"]);
   });
 
   it("exposes help for the Context Tree browser command", () => {

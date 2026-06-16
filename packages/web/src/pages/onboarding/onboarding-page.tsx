@@ -38,7 +38,7 @@ export function OnboardingPage() {
     leaveDecision.current = shouldLeaveOnboarding({
       meLoaded,
       onboardingStep,
-      onboardingDismissedAt,
+      onboardingSuppressedAt: onboardingDismissedAt,
       currentOrgReady: currentOrgHasUsableAgent,
     });
   }

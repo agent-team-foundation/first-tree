@@ -82,6 +82,7 @@ import { type BackgroundTasks, createBackgroundTasks } from "./services/backgrou
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
 import { createCommandVersionPoller } from "./services/command-version-poller.js";
 import { createConfigService } from "./services/config-service.js";
+import { repairMembershipHumanMirrors } from "./services/membership.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 import { ensureDefaultOrganization } from "./services/organization.js";
 import { createPulseAggregator } from "./services/pulse-aggregator.js";
@@ -623,6 +624,9 @@ export async function buildApp(config: Config) {
           return reply.status(404).send({ error: "Not found" });
         }
         const requestPath = request.url.split("?")[0] ?? request.url;
+        if (requestPath.startsWith("/feedback/")) {
+          return reply.status(501).send({ error: "Feedback is not configured" });
+        }
         if (requestPath.startsWith("/assets/") || extname(requestPath).length > 0) {
           return reply.status(404).send({ error: "Not found" });
         }
@@ -653,11 +657,15 @@ export async function buildApp(config: Config) {
       .notifyChatMessage(chatId, messageId)
       .catch((err) => createLogger("chat-message-kick").warn({ err, chatId, messageId }, "chat:message kick failed"));
   });
-
   // Start notifier and background tasks on server start.
   app.addHook("onReady", async () => {
     // Ensure the default organization exists (idempotent)
     await ensureDefaultOrganization(db);
+    const mirrorRepair = await repairMembershipHumanMirrors(db);
+    const repaired = mirrorRepair.activeMirrorsRepaired + mirrorRepair.inactiveMirrorsRepaired;
+    if (repaired > 0) {
+      app.log.info({ ...mirrorRepair }, "membership human mirrors repaired");
+    }
     await backfillResourcesPhase1(db).catch((err) => {
       app.log.warn({ err }, "resources phase1 backfill failed");
     });

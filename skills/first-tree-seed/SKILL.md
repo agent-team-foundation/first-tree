@@ -80,10 +80,43 @@ refuses; route subsequent work through `first-tree-context` or
    one-line explanation pointing at `first-tree-context` /
    `first-tree-sync`. Do **not** prompt the user to clear the tree
    yourself; deleting nodes is human-owned.
-3. **All declared sources present on disk.**
-   `<workspaceRoot>/<manifest.sources[i]>` exists for every entry.
-   A missing source means the workspace is half-provisioned; surface
-   to the user and stop. Do not seed from a partial workspace.
+3. **All declared sources present on disk.** Each source clone lives at
+   `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>` — the
+   runtime writes `sourcesRoot: "source-repos"`, so the path is
+   `<workspaceRoot>/source-repos/<name>` (a legacy flat manifest omits
+   `sourcesRoot` and keeps sources at `<workspaceRoot>/<name>`). That path
+   must exist for every entry (each is a **bare** clone — see *Materialize
+   source read worktrees* below). A missing source means the workspace is
+   half-provisioned; surface to the user and stop. Do not seed from a
+   partial workspace.
+
+### Materialize source read worktrees
+
+Under the agent-managed repo model the declared sources are **bare**
+clones (a git object store, no working tree) — you cannot `ls` or read
+files at the clone path directly. Resolve each source's bare-clone path
+from the manifest's `sourcesRoot` (do NOT hard-code it — the field is
+optional):
+
+- `sourcesRoot` present (current manifests, value `source-repos`):
+  `<source-clone>` = `<workspaceRoot>/<sourcesRoot>/<source>`
+  (e.g. `<workspaceRoot>/source-repos/<source>`)
+- `sourcesRoot` absent (legacy flat manifest):
+  `<source-clone>` = `<workspaceRoot>/<source>`
+
+Before any structural read, materialize one read worktree per source off
+its latest default branch, following the **Worktrees** protocol in your
+`AGENTS.md` / `CLAUDE.md` briefing:
+
+```bash
+# for each <source> in manifest.sources, with <source-clone> resolved as above:
+git -C <source-clone> fetch origin
+git -C <source-clone> worktree add <workspaceRoot>/worktrees/seed-<source> origin/main
+```
+
+Every "read every bound source" / Tier 0–2 scan in Phase 1 operates on
+these read worktrees, not the bare clone paths. Remove them
+(`git -C <source-clone> worktree remove <path>`) once both PRs are open.
 
 ## The Two Phases
 
@@ -125,7 +158,7 @@ tier left a specific question unanswered.
 
 | Tier | Action                                                                                                                                                                                                                                                                                                            | Cost                  | Yields                                                                                  |
 | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------- |
-| 0    | Filesystem walk over every bound source: **one listing pass per source** (a single `find`-style enumeration, depth-capped at 3–4 levels on huge repos), not repeated re-walks. List directories and well-known meta files. Filter out build artefacts (`node_modules`, `dist`, `build`, `.next`, `.turbo`, `.venv`, `target`, `.git`). Count file extensions, package boundaries, presence of `docs/`, `infra/`, `terraform/`, `k8s/`, `.github/workflows/`. | seconds, even on 10k+ files | monorepo shape, package boundaries, docs hierarchy, ops signals, file-type distribution |
+| 0    | Filesystem walk over every bound source's read worktree (see *Materialize source read worktrees*): **one listing pass per source** (a single `find`-style enumeration, depth-capped at 3–4 levels on huge repos), not repeated re-walks. List directories and well-known meta files. Filter out build artefacts (`node_modules`, `dist`, `build`, `.next`, `.turbo`, `.venv`, `target`, `.git`). Count file extensions, package boundaries, presence of `docs/`, `infra/`, `terraform/`, `k8s/`, `.github/workflows/`. | seconds, even on 10k+ files | monorepo shape, package boundaries, docs hierarchy, ops signals, file-type distribution |
 | 1    | First-line / first-paragraph reads of meta files surfaced by Tier 0: top `README.md`, every `packages/*/README.md`, `docs/*.md` first H1, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CLAUDE.md`, `SECURITY.md`, `package.json` description fields, `gh repo view --json description,topics,homepageUrl` (skip silently on **any** failure — 4xx, missing token, no network, no `gh` binary; READMEs are the fallback). | 1–3 min total across all sources | one-sentence description per observed concept; product positioning; ops/contrib focus   |
 | 2    | Surgical content read of a **specific** file that Tier 0+1 left ambiguous (e.g. `packages/foo/` exists, README is empty → read `packages/foo/src/index.ts` head 30 lines). Triggered per uncertainty, not as a blanket sweep.                                                                                       | 1–3 min per question, 0 if not needed | answer one structural question |
 

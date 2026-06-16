@@ -82,7 +82,10 @@ function CreateForm({ onDone }: { onDone: () => void }) {
       // freshly created org so the user lands in it.
       await selectOrganization(res.organization.id);
       onDone();
-      navigate("/", { replace: true });
+      // A newly created team starts a fresh setup lifecycle. Enter the
+      // onboarding route directly so account-level dismissals from another
+      // team cannot strand the user on an empty workspace.
+      navigate("/onboarding", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create team");
     } finally {
@@ -143,7 +146,10 @@ function JoinForm({ onDone }: { onDone: () => void }) {
       // a stale one (and so we never write `undefined` into the token store).
       await selectOrganization(res.organizationId);
       onDone();
-      navigate("/", { replace: true });
+      // A joined team may still need this member's computer/agent setup.
+      // `/onboarding` bounces back to the workspace when the selected org is
+      // already ready, so mature teams are not held in the flow.
+      navigate("/onboarding", { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to join team");
     } finally {

@@ -1,6 +1,6 @@
 import type { SessionEvent, SessionState } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentHandler, HandlerFactory } from "../runtime/handler.js";
+import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { silentLogger } from "./_logger-helpers.js";
@@ -52,6 +52,7 @@ function makeSessionManager(opts: {
   onStateChange?: (chatId: string, state: SessionState) => void;
   onSessionEvent?: (chatId: string, event: SessionEvent) => void;
   sdk?: FirstTreeHubSDK;
+  recoverChat?: (chatId: string) => Promise<void>;
 }) {
   const factory: HandlerFactory = () => {
     const next = opts.handlers.shift();
@@ -77,6 +78,7 @@ function makeSessionManager(opts: {
     ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
     onStateChange: opts.onStateChange,
     onSessionEvent: opts.onSessionEvent,
+    recoverChat: opts.recoverChat,
   });
 }
 
@@ -93,7 +95,7 @@ function failingHandler(): AgentHandler {
   return {
     start: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("git worktree add failed: branch already in use")),
     resume: vi.fn(),
-    inject: vi.fn(),
+    inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
   };
@@ -103,7 +105,7 @@ function workingHandler(sessionId = "session-after-recovery"): AgentHandler {
   return {
     start: vi.fn().mockResolvedValue(sessionId),
     resume: vi.fn().mockResolvedValue(sessionId),
-    inject: vi.fn(),
+    inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
   };
@@ -189,9 +191,11 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const failing = failingHandler();
     const working = workingHandler("session-after-recovery");
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
     const sm = makeSessionManager({
       handlers: [failing, working],
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
+      recoverChat,
     });
 
     // First dispatch: fails. Now reports `active` (pre-start) then `errored`
@@ -201,8 +205,9 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
       { chatId: "chat-recover", state: "active" },
       { chatId: "chat-recover", state: "errored" },
     ]);
+    expect(recoverChat).toHaveBeenCalledWith("chat-recover");
 
-    // Second dispatch: routes as a fresh start (no `existing` entry).
+    // Second dispatch after accepted recovery can route as a fresh start.
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recover" }));
 
     // The recovered session emits `active` (notifySessionState dedupes against
@@ -222,12 +227,14 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const failing = failingHandler();
     const working = workingHandler("session-after-broken-emit");
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
     const sm = makeSessionManager({
       handlers: [failing, working],
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
       onSessionEvent: () => {
         throw new Error("event sink down");
       },
+      recoverChat,
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-emit-throw" }));
@@ -235,10 +242,10 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
       { chatId: "chat-emit-throw", state: "active" },
       { chatId: "chat-emit-throw", state: "errored" },
     ]);
+    expect(recoverChat).toHaveBeenCalledWith("chat-emit-throw");
 
-    // The next dispatch must route through `startNewSession` (no stale entry
-    // left behind by the throwing emit) — verified by the fresh handler's
-    // `start` being called and the state moving back to active.
+    // After accepted recovery, the next dispatch routes through
+    // `startNewSession` (no stale entry left behind by the throwing emit).
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-emit-throw" }));
     expect(working.start).toHaveBeenCalledTimes(1);
     expect(stateChanges.at(-1)).toEqual({ chatId: "chat-emit-throw", state: "active" });
@@ -292,6 +299,8 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
     const events: Array<{ chatId: string; event: SessionEvent }> = [];
     const { sdk, sendMessage } = mockSdk();
     const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let chatBContext: SessionContext | undefined;
+    let chatBMessage: SessionMessage | undefined;
     const handlerA: AgentHandler = {
       start: vi.fn().mockResolvedValue("session-A"),
       resume: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("git mirror fetch failed: connection refused")),
@@ -299,8 +308,14 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
       suspend: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn().mockResolvedValue(undefined),
     };
+    const handlerB = workingHandler("session-B");
+    handlerB.start = vi.fn(async (message, ctx) => {
+      chatBMessage = message;
+      chatBContext = ctx;
+      return "session-B";
+    });
     const sm = makeSerializedManager({
-      handlerQueue: [handlerA, workingHandler("session-B")],
+      handlerQueue: [handlerA, handlerB],
       sdk,
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
       onSessionEvent: (chatId, event) => events.push({ chatId, event }),
@@ -309,13 +324,14 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
 
     const chatAStart = mockEntry({ id: 1, chatId: "chat-A" });
     const chatBStart = mockEntry({ id: 2, chatId: "chat-B" });
-    const chatAResume = mockEntry({ id: 3, chatId: "chat-A" });
-    await sm.dispatch(chatAStart); // asks for recovery
-    await sm.dispatch(chatAStart); // redelivery starts chat-A
-    await sm.dispatch(chatBStart); // asks for recovery
-    await sm.dispatch(chatBStart); // redelivery starts chat-B and preempts chat-A
-    await sm.dispatch(chatAResume); // asks for recovery of chat-A's unacked tail
-    await sm.dispatch(chatAResume); // redelivery resumes chat-A → throws
+    await sm.dispatch(chatAStart); // starts chat-A
+    await sm.dispatch(chatBStart); // starts chat-B and preempts chat-A
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-A"));
+    await new Promise((resolve) => setImmediate(resolve));
+    await sm.dispatch(chatAStart); // recovery redelivery queues behind working chat-B
+    if (!chatBContext || !chatBMessage) throw new Error("chat-B context missing");
+    await chatBContext.finishTurn(chatBMessage, { status: "success", terminal: true });
+    await vi.waitFor(() => expect(handlerA.resume).toHaveBeenCalledTimes(1));
 
     const chatAStates = stateChanges.filter((c) => c.chatId === "chat-A").map((c) => c.state);
     expect(chatAStates.at(-1)).toBe("errored");
@@ -346,6 +362,8 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
   it("allows the next inbound message for the same chat to start a fresh session after a resume failure", async () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let chatBContext: SessionContext | undefined;
+    let chatBMessage: SessionMessage | undefined;
     const handlerA: AgentHandler = {
       start: vi.fn().mockResolvedValue("session-A"),
       resume: vi.fn().mockRejectedValue(new FakeClientUserMismatchError("resume blew up")),
@@ -353,28 +371,35 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
       suspend: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn().mockResolvedValue(undefined),
     };
+    const handlerB = workingHandler("session-B");
+    handlerB.start = vi.fn(async (message, ctx) => {
+      chatBMessage = message;
+      chatBContext = ctx;
+      return "session-B";
+    });
     const handlerARecovery = workingHandler("session-A-fresh");
     const sm = makeSerializedManager({
-      handlerQueue: [handlerA, workingHandler("session-B"), handlerARecovery],
+      handlerQueue: [handlerA, handlerB, handlerARecovery],
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
       recoverChat,
     });
 
     const chatAStart = mockEntry({ id: 1, chatId: "chat-A" });
     const chatBStart = mockEntry({ id: 2, chatId: "chat-B" });
-    const chatAResume = mockEntry({ id: 3, chatId: "chat-A" });
     const chatARecovery = mockEntry({ id: 4, chatId: "chat-A" });
     await sm.dispatch(chatAStart);
-    await sm.dispatch(chatAStart);
     await sm.dispatch(chatBStart);
-    await sm.dispatch(chatBStart);
-    await sm.dispatch(chatAResume);
-    await sm.dispatch(chatAResume); // resume → errored
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-A"));
+    await new Promise((resolve) => setImmediate(resolve));
+    await sm.dispatch(chatAStart); // recovery redelivery queues behind working chat-B
+    if (!chatBContext || !chatBMessage) throw new Error("chat-B context missing");
+    await chatBContext.finishTurn(chatBMessage, { status: "success", terminal: true });
+    await vi.waitFor(() => expect(handlerA.resume).toHaveBeenCalledTimes(1)); // resume → errored
+    await vi.waitFor(() => expect(sm.getSessionStates().some((session) => session.chatId === "chat-A")).toBe(false));
 
     // A fresh inbound for chat-A should route as start (entry was dropped
     // on resume failure — the resume catch tears down the same way the
     // start catch does, so there's no "stuck suspended" entry blocking it).
-    await sm.dispatch(chatARecovery);
     await sm.dispatch(chatARecovery);
     expect(handlerARecovery.start).toHaveBeenCalledTimes(1);
     expect(stateChanges.filter((c) => c.chatId === "chat-A").at(-1)?.state).toBe("active");

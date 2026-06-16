@@ -36,7 +36,11 @@ let fixture: TuiAgentFixture;
 
 beforeAll(async () => {
   handle = await setupOwnTuiWorld();
-  fixture = await createTuiAgent({ handle, displayName: "tui-tmux-lifecycle agent" });
+  fixture = await createTuiAgent({
+    handle,
+    displayName: "tui-tmux-lifecycle agent",
+    bindMode: "after-env-patch",
+  });
 }, 120_000);
 
 afterAll(async () => {

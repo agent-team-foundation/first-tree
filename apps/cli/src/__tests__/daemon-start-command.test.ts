@@ -9,6 +9,7 @@ const clientMocks = vi.hoisted(() => ({
   configureClientLoggerForService: vi.fn(),
   discoverClaudeCodeSkills: vi.fn(),
   probeCapabilities: vi.fn(),
+  reprobeOnReconnect: vi.fn(),
 }));
 
 const coreMocks = vi.hoisted(() => ({
@@ -79,6 +80,7 @@ let runtimeInstance: {
   addAgent: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
   watchAgentsDir: ReturnType<typeof vi.fn>;
+  onReconnect: ReturnType<typeof vi.fn>;
 };
 
 beforeEach(() => {
@@ -99,6 +101,10 @@ beforeEach(() => {
   stderrSpy.mockClear();
 
   clientMocks.probeCapabilities.mockResolvedValue({ "claude-code": { state: "ok" } });
+  clientMocks.reprobeOnReconnect.mockResolvedValue({
+    capabilities: { "claude-code": { state: "ok" } },
+    mode: "revalidate",
+  });
   clientMocks.discoverClaudeCodeSkills.mockResolvedValue([{ name: "review", description: "Review code." }]);
   coreMocks.loadCredentials.mockReturnValue({ refreshToken: "refresh" });
   coreMocks.isServiceSupported.mockReturnValue(false);
@@ -127,6 +133,7 @@ beforeEach(() => {
     watchAgentsDir: vi.fn(() => {
       throw new Error("stop after watch");
     }),
+    onReconnect: vi.fn(),
   };
   coreMocks.ClientRuntime.mockImplementation(() => runtimeInstance);
 });
@@ -156,6 +163,12 @@ async function runStart(args: string[] = []): Promise<unknown> {
 
 function output(): string {
   return stderrSpy.mock.calls.map((call) => String(call[0])).join("");
+}
+
+async function flushAsync(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe("daemon start command", () => {
@@ -261,6 +274,31 @@ describe("daemon start command", () => {
     );
     expect(runtimeInstance.watchAgentsDir).toHaveBeenCalledWith(join(home, "config", "agents"));
     expect(output()).toContain("Error: stop after watch");
+  });
+
+  it("re-probes on reconnect but skips uploading unchanged capabilities", async () => {
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+    expect(coreMocks.uploadClientCapabilities).toHaveBeenCalledTimes(1);
+
+    const reconnect = runtimeInstance.onReconnect.mock.calls[0]?.[0];
+    if (typeof reconnect !== "function") throw new Error("Reconnect callback was not registered");
+
+    reconnect();
+    await flushAsync();
+    expect(clientMocks.reprobeOnReconnect).toHaveBeenCalledTimes(1);
+    expect(coreMocks.uploadClientCapabilities).toHaveBeenCalledTimes(1);
+
+    clientMocks.reprobeOnReconnect.mockResolvedValueOnce({
+      capabilities: { codex: { state: "missing" } },
+      mode: "full",
+    });
+    reconnect();
+    await flushAsync();
+    expect(clientMocks.reprobeOnReconnect).toHaveBeenCalledTimes(2);
+    expect(coreMocks.uploadClientCapabilities).toHaveBeenCalledTimes(2);
+    expect(coreMocks.uploadClientCapabilities).toHaveBeenLastCalledWith(
+      expect.objectContaining({ clientId: "client_1234abcd", capabilities: { codex: { state: "missing" } } }),
+    );
   });
 
   it("skips skill upload for stale local aliases that are not pinned to this client", async () => {

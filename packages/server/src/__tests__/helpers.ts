@@ -6,6 +6,7 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll } from "vitest";
 import { buildApp } from "../app.js";
 import type { Config } from "../config.js";
+import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
@@ -59,6 +60,7 @@ export type CreateTestAppOptions = {
   channel?: Config["channel"];
   commandVersion?: string;
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
+  inbox?: Partial<NonNullable<Config["inbox"]>>;
   allowedOrganizationId?: string;
   /**
    * Drop `oauth.githubApp.slug` from the test config. Used by the
@@ -128,6 +130,9 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     },
     trustProxy: false,
     rateLimit: { ...baseRateLimit, ...opts.rateLimit },
+    ...(opts.inbox !== undefined
+      ? { inbox: { maxInFlightPerAgent: 8192, maxInFlightPerAgentChat: 8, ...opts.inbox } }
+      : {}),
     observability: {
       logging: { level: "error", format: "json", bridgeToSpanLevel: "off" },
     },
@@ -139,7 +144,6 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       // timer would only add nondeterminism.
       archiveSweepIntervalSeconds: 0,
       archiveMappedIdleSeconds: 60 * 60,
-      archiveUnmappedIdleSeconds: 12 * 60 * 60,
       notificationWebhookUrl: undefined,
     },
     update: {
@@ -201,13 +205,27 @@ export async function createTestAgent(
   });
 
   const type = opts.type ?? "agent";
-  const agent = await createAgent(app.db, {
-    name: opts.name ?? `test-agent-${crypto.randomUUID().slice(0, 8)}`,
-    type,
-    displayName: opts.displayName ?? "Test Agent",
-    managerId: admin.memberId,
-    ...(type === "human" ? {} : { clientId }),
-  });
+  const agent =
+    type === "human"
+      ? (
+          await app.db
+            .update(agents)
+            .set({
+              name: opts.name ?? `test-human-${crypto.randomUUID().slice(0, 8)}`,
+              displayName: opts.displayName ?? "Test Human",
+              updatedAt: new Date(),
+            })
+            .where(eq(agents.uuid, admin.humanAgentUuid))
+            .returning()
+        )[0]
+      : await createAgent(app.db, {
+          name: opts.name ?? `test-agent-${crypto.randomUUID().slice(0, 8)}`,
+          type,
+          displayName: opts.displayName ?? "Test Agent",
+          managerId: admin.memberId,
+          clientId,
+        });
+  if (!agent) throw new Error("test agent setup failed");
 
   // `token` is kept as an alias for the user's JWT so the large body of
   // pre-unified-token tests still compiles; those tests will additionally
@@ -219,6 +237,7 @@ export async function createTestAgent(
     token: admin.accessToken,
     clientId,
     memberId: admin.memberId,
+    humanAgentUuid: admin.humanAgentUuid,
     userId: member.userId,
     organizationId: member.organizationId,
     /** Agent-scoped request — adds `Authorization` + `x-agent-id` headers. */

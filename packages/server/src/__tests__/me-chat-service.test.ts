@@ -23,8 +23,9 @@
  * See first-tree-context:agent-hub/web-console.md for the contract under test.
  */
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { users } from "../db/schema/users.js";
 import { applyAfterFanOut } from "../services/chat-projection.js";
 import {
   addMeChatParticipants,
@@ -68,6 +69,126 @@ describe("chat-first workspace service layer", () => {
       participantIds: [peer.agent.uuid],
     });
     expect(a.chatId).not.toBe(b.chatId);
+  });
+
+  it("listMeChats: resolves human external avatars while leaving agent avatars null without an upload", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const teammate = await createTestAdmin(app);
+    const bot = await createTestAgent(app, { name: "avatar-list-bot", displayName: "Avatar List Bot" });
+    const teammateAvatar = "https://avatars.githubusercontent.com/u/12345?v=4";
+    await app.db.update(users).set({ avatarUrl: teammateAvatar }).where(eq(users.id, teammate.userId));
+
+    const { chatId } = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [teammate.humanAgentUuid, bot.agent.uuid],
+    });
+
+    const list = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+    });
+    const row = list.rows.find((r) => r.chatId === chatId);
+    expect(row).toBeDefined();
+    const participantsById = new Map((row?.participants ?? []).map((p) => [p.agentId, p]));
+
+    expect(participantsById.get(teammate.humanAgentUuid)?.avatarImageUrl).toBe(teammateAvatar);
+    expect(participantsById.get(bot.agent.uuid)?.avatarImageUrl).toBeNull();
+  });
+
+  it("listMeChats: reuses speaker participants for participantCount", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const peerA = await createTestAgent(app, { name: "participant-count-a" });
+    const peerB = await createTestAgent(app, { name: "participant-count-b" });
+
+    const { chatId } = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [peerA.agent.uuid, peerB.agent.uuid],
+    });
+
+    const list = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+    });
+    const row = list.rows.find((r) => r.chatId === chatId);
+    expect(row?.participants.map((p) => p.agentId).sort()).toEqual(
+      [owner.humanAgentUuid, peerA.agent.uuid, peerB.agent.uuid].sort(),
+    );
+    expect(row?.participantCount).toBe(row?.participants.length);
+  });
+
+  it("listMeChats: only reports explicit mention attention while the mention is unread", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "explicit-mention-peer" });
+
+    const { chatId } = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    await sendMessage(app.db, chatId, peer.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "Please look",
+      metadata: { mentions: [owner.humanAgentUuid] },
+    });
+
+    const before = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+    });
+    expect(before.rows.find((r) => r.chatId === chatId)).toMatchObject({
+      unreadMentionCount: 1,
+      chatHasExplicitMentionToMe: true,
+    });
+
+    await markMeChatRead(app.db, chatId, owner.humanAgentUuid);
+    const after = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+    });
+    expect(after.rows.find((r) => r.chatId === chatId)).toMatchObject({
+      unreadMentionCount: 0,
+      chatHasExplicitMentionToMe: false,
+    });
+  });
+
+  it("listMeChats: keeps topic titles and still falls back to first message when topic is missing", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: "title-fallback-peer" });
+
+    const topicChat = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [peer.agent.uuid],
+      topic: "Pinned topic",
+    });
+    const untitledChat = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+    await sendMessage(
+      app.db,
+      topicChat.chatId,
+      owner.humanAgentUuid,
+      { source: "api", format: "text", content: "This must not replace the topic" },
+      { allowRecipientlessSend: true },
+    );
+    await sendMessage(
+      app.db,
+      untitledChat.chatId,
+      owner.humanAgentUuid,
+      { source: "api", format: "text", content: "Fallback title from first message" },
+      { allowRecipientlessSend: true },
+    );
+
+    const list = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+    });
+    expect(list.rows.find((r) => r.chatId === topicChat.chatId)?.title).toBe("Pinned topic");
+    expect(list.rows.find((r) => r.chatId === untitledChat.chatId)?.title).toBe("Fallback title from first message");
   });
 
   it("watcher rows: managed agent's chat creates a subscription, not a participant", async () => {

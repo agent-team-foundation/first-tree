@@ -1,5 +1,7 @@
 import {
   addMeChatParticipantsSchema,
+  CHAT_ENGAGEMENT_STATUSES,
+  type ChatEngagementStatus,
   followGithubEntityRequestSchema,
   paginationQuerySchema,
   patchChatEngagementSchema,
@@ -10,18 +12,20 @@ import { and, desc, eq, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
+import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
+import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { users } from "../db/schema/users.js";
 import { BadRequestError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
-import { agentAvatarImageUrl } from "../services/agent.js";
+import { resolveAvatarImageUrl } from "../services/agent.js";
 import { getChatAgentStatuses } from "../services/agent-chat-status.js";
 import { ensureParticipant, leaveChat } from "../services/chat.js";
 import { declareEntityFollow, listChatGithubEntities, removeEntityFollow } from "../services/github-entity-follow.js";
 import {
   addMeChatParticipants,
-  getCallerEngagement,
   joinMeChat,
   leaveMeChat,
   markMeChatRead,
@@ -67,9 +71,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         type: agents.type,
         avatarColorToken: agents.avatarColorToken,
         avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+        userAvatarUrl: users.avatarUrl,
       })
       .from(chatMembership)
       .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+      .leftJoin(members, eq(members.agentId, agents.uuid))
+      .leftJoin(users, eq(users.id, members.userId))
       .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.accessMode, "speaker")));
 
     const firstMsgRows = (await app.db.execute<{ content: unknown }>(sql`
@@ -85,25 +92,41 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       displayName: p.displayName,
       type: p.type,
       avatarColorToken: p.avatarColorToken ?? null,
-      avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
+      avatarImageUrl: resolveAvatarImageUrl({
+        uuid: p.agentId,
+        type: p.type,
+        avatarImageUpdatedAt: p.avatarImageUpdatedAt,
+        userAvatarUrl: p.userAvatarUrl,
+      }),
     }));
     const title = resolveChatTitle(chat.topic, firstMessagePreview, participantsForTitle, scope.humanAgentId);
 
-    const engagementStatus = await getCallerEngagement(app.db, chat.id, scope.humanAgentId);
-
-    // Caller's own membership row — drives speaker-vs-watcher UI on the
-    // chat detail page without forcing the client to round-trip through
-    // `/orgs/:orgId/chats`. `null` when the caller reaches the chat via
-    // supervision (managed agent is a speaker) rather than direct
-    // membership; that's the same null-shape `MeChatRow` carries when
-    // listChats filters to supervised-only rows.
-    const [callerMembership] = await app.db
-      .select({ accessMode: chatMembership.accessMode })
-      .from(chatMembership)
-      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, scope.humanAgentId)))
-      .limit(1);
-    const viewerMembershipKind: "participant" | "watching" | null = callerMembership
-      ? callerMembership.accessMode === "speaker"
+    const [callerState] = await app.db.execute<{
+      engagement_status: ChatEngagementStatus | null;
+      access_mode: "speaker" | "watcher" | null;
+    }>(sql`
+      SELECT
+        (
+          SELECT ${chatUserState.engagementStatus}
+            FROM ${chatUserState}
+           WHERE ${chatUserState.chatId} = ${chat.id}
+             AND ${chatUserState.agentId} = ${scope.humanAgentId}
+           LIMIT 1
+        ) AS engagement_status,
+        (
+          SELECT ${chatMembership.accessMode}
+            FROM ${chatMembership}
+           WHERE ${chatMembership.chatId} = ${chat.id}
+             AND ${chatMembership.agentId} = ${scope.humanAgentId}
+           LIMIT 1
+        ) AS access_mode
+    `);
+    const engagementStatus = callerState?.engagement_status ?? CHAT_ENGAGEMENT_STATUSES.ACTIVE;
+    // Caller's own membership row drives speaker-vs-watcher UI. `null` means
+    // the caller reaches the chat through supervision rather than direct
+    // membership.
+    const viewerMembershipKind: "participant" | "watching" | null = callerState?.access_mode
+      ? callerState.access_mode === "speaker"
         ? "participant"
         : "watching"
       : null;
@@ -125,7 +148,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         type: p.type,
         joinedAt: p.joinedAt.toISOString(),
         avatarColorToken: p.avatarColorToken ?? null,
-        avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
+        avatarImageUrl: resolveAvatarImageUrl({
+          uuid: p.agentId,
+          type: p.type,
+          avatarImageUpdatedAt: p.avatarImageUpdatedAt,
+          userAvatarUrl: p.userAvatarUrl,
+        }),
       })),
     };
   });
@@ -156,23 +184,16 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * List GitHub entities bound to this chat. Reads the binding rows from
-   * `github_entity_chat_mappings`, then fetches the live `title` / `state`
-   * for each from the GitHub REST API at request time — nothing is
-   * persisted. Per the right-sidebar plan, we deliberately did NOT add
-   * cached columns; freshness wins over a low-cost cache.
+   * `github_entity_chat_mappings` and projects lifecycle state from the
+   * webhook-synced `entity_state` column. The route deliberately does not
+   * mint GitHub tokens or call GitHub; `title` remains nullable because the
+   * mapping table does not persist titles.
    *
-   * Returns an empty list when the chat has no bindings. When the org
-   * has no GitHub App installation (or token mint fails), rows are
-   * still returned with `title: null` and `state: null` so the row
-   * remains a working link to GitHub.
+   * Returns an empty list when the chat has no bindings.
    */
   app.get<{ Params: { chatId: string } }>("/:chatId/github-entities", async (request) => {
-    const { chat, scope } = await requireChatAccess(request, app.db);
-    return listChatGithubEntities(
-      app.db,
-      { appCredentials: app.config.oauth?.githubApp },
-      { chatId: chat.id, organizationId: scope.organizationId },
-    );
+    const { chat } = await requireChatAccess(request, app.db);
+    return listChatGithubEntities(app.db, { chatId: chat.id });
   });
 
   /**

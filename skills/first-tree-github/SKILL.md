@@ -1,9 +1,9 @@
 ---
 name: first-tree-github
-version: 0.1.0
+version: 0.1.1
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: "Follow / unfollow a GitHub entity (PR, Issue, Discussion, Commit) so its webhook events route into the current chat. Use IMMEDIATELY after you create a PR or issue through any path (`gh pr create`, curl, GitHub MCP, the web UI) — creation never follows for you; when the user asks to watch / track / follow / 关注 / 盯着 a PR or issue; when your current task is blocked on an upstream entity's progress; or when the task no longer concerns a followed entity and its events should stop (unfollow / 取消关注 / stop watching)."
+description: "Follow / unfollow a GitHub entity (PR, Issue, Discussion, Commit) so its webhook events route into the current chat. Following your own just-created PR or issue is the DEFAULT: use IMMEDIATELY after you create one through any path (`gh pr create`, curl, GitHub MCP, the web UI) — creation never follows for you. Also use when the user asks to watch / track / follow / 关注 / 盯着 a PR or issue; when your current task is blocked on an upstream entity's progress; or to unfollow when the user explicitly asks to stop tracking (unfollow / 取消关注 / stop watching). Do not proactively unfollow merely because a PR or Issue completed, merged, or closed."
 ---
 
 # First Tree — Follow a GitHub Entity
@@ -31,12 +31,12 @@ GitHub MCP, the web UI — wires anything for you. If the task depends on
 what you just created, declaring that dependency is YOUR job, immediately
 after creation.
 
-**Unfollowing declares the task's attention span over:** the task this
-chat carries is no longer concerned with the entity. It disconnects
-**all** lines wired into this chat for that entity, no matter how they
-were created — explicit follow, a mention, or a `Fixes #N` link. Think
-of follow/unfollow as the opening and closing bracket of the task's
-attention on the entity.
+**Unfollowing is an explicit stop-tracking action:** use it when the
+human asks this chat to stop receiving the entity's events. It
+disconnects **all** lines wired into this chat for that entity, no
+matter how they were created — explicit follow, a mention, or a
+`Fixes #N` link. It is not a completion ritual: do not proactively
+unfollow merely because a PR or Issue completed, merged, or closed.
 
 ## Commands
 
@@ -55,9 +55,12 @@ is for terminal / cross-chat use.
 
 **Follow when — the task acquires a dependency on the entity:**
 
-1. You just created a PR / Issue — through ANY path. Follow it in the
-   same breath as creation; the `opened` webhook is already racing you
-   (see the `409` row below for when it wins).
+1. You just created a PR / Issue — through ANY path. **This is the
+   default, not a judgment call:** follow it in the same breath as
+   creation; the `opened` webhook is already racing you (see the `409`
+   row below for when it wins). The only reason to skip is that the
+   entity is clearly unrelated to this chat's task ("Do NOT follow"
+   rule 3 below).
 2. The user asks you to track / watch an entity.
 3. Your current task is blocked on an upstream entity and you need its
    progress signals (review submitted, CI finished, merged).
@@ -72,16 +75,16 @@ is for terminal / cross-chat use.
    event costs a wake for you and attention for the human — wire the
    stream into the chat whose task actually needs it.
 
-**Unfollow when — the task's attention span on the entity closes:**
+**Unfollow when — the human explicitly asks this chat to stop tracking:**
 
-1. The dependency is resolved: upstream merged / closed and the
-   follow-ups no longer affect this task.
-2. The task's scope has moved on and you no longer act on the entity's
-   events.
-3. The human asks to stop.
+1. The human asks to stop, unfollow, unsubscribe, cancel watching, or
+   otherwise end this chat's GitHub event stream for the entity.
 
-If you find yourself ignoring a followed entity's events turn after
-turn, that is the signal to close the bracket — unfollow.
+Do **not** proactively unfollow just because the PR or Issue is merged,
+closed, completed, or no longer the main active task. Terminal entities
+are still followable because review aftermath, reopenings, CI reruns,
+post-merge comments, and follow-up decisions can matter to the chat
+that did the work.
 
 ## Error contract
 
