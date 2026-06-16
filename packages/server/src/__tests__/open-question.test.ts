@@ -26,9 +26,10 @@ import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
  *     not auto-supersede the one it threads under.
  *   - An invalid `resolves` target FAILS LOUD: the whole send is rejected
  *     (tx rollback, no message row) when the request id is missing from this
- *     chat, points at a non-request message, or the sender is neither the
- *     target nor the asker. Re-resolving an already-resolved question stays
- *     a soft success (idempotent counter).
+ *     chat, points at a non-request message, or the sender is not the target
+ *     human (resolution is human-only — an agent, including the asker, cannot
+ *     resolve). Re-resolving an already-resolved question stays a soft success
+ *     (idempotent counter).
  *
  * No lifecycle state is stored on the message — these tests pin the counter,
  * which is the only persisted signal.

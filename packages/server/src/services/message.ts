@@ -628,17 +628,18 @@ async function sendMessageInner(
       }
       // Idempotency: only the FIRST resolution decrements (exclude the row we
       // just inserted). A prior resolution is any other message in this chat
-      // whose `metadata.resolves.request` points at the same question — but
-      // ONLY from an authorized resolver (the target or the asker). Without
-      // the sender scope, any participant could pre-write a stray
-      // `metadata.resolves` for this question (which itself never decrements,
-      // being unauthorized) and have it count as a "prior", permanently
-      // blocking the legitimate resolution from clearing the red dot.
-      // (Unauthorized resolves are rejected above nowadays, but rows written
-      // before that gate existed may still be present — keep the scope.)
-      // A re-resolve of an already-resolved question stays a soft success:
-      // it threads as a confirmation and simply skips the decrement, so the
-      // human-answers-while-agent-closes race never errors either side.
+      // whose `metadata.resolves.request` points at the same question, from a
+      // sender in the resolver scope. The scope is the target human (the only
+      // authorized resolver now) PLUS the asker — the asker is kept ONLY to
+      // recognize legacy pre-gate rows it may have written back when an agent
+      // could resolve; it can no longer write a NEW resolution (the authz above
+      // rejects it). The scope matters because, without it, any participant
+      // could pre-write a stray `metadata.resolves` (itself never decrementing,
+      // being unauthorized) that would count as a "prior" and permanently block
+      // the legitimate resolution from clearing the red dot. A re-resolve of an
+      // already-resolved question stays a soft success: it threads as a
+      // confirmation and simply skips the decrement, so a duplicate human answer
+      // never errors.
       const resolvers = [target, parent.senderId];
       const priors = await tx
         .select({ id: messages.id })

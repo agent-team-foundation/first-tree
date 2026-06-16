@@ -53,10 +53,10 @@ export const MESSAGE_FORMATS = {
    * answered/closed only by a later message carrying `metadata.resolves` (see
    * `requestResolutionSchema`), which drives `chat_user_state.open_request_count`
    * down. The target's answer ALWAYS resolves it — picking an option OR typing
-   * free text both write `resolves` (kind="answered"). `inReplyTo` itself is
-   * pure threading and never changes a question's lifecycle; the asking agent
-   * may still thread a follow-up that adds context without resolving, but the
-   * human cannot (their answer is a resolution).
+   * free text both write `resolves` (kind="answered"). Resolution is human-only:
+   * only the target may resolve, and an agent cannot post a non-ask follow-up to
+   * the human at all (a plain agent→human send is rejected). `inReplyTo` itself
+   * is pure threading and never changes a question's lifecycle.
    */
   REQUEST: "request",
 } as const;
