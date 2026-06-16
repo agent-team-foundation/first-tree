@@ -1107,7 +1107,8 @@ describe("web DOM interaction coverage", () => {
     });
     authMock.value = { ...authMock.value, isAuthenticated: false };
     const local = await renderDom(<LoginPage />, "/login", undefined);
-    await waitForText("Sign in with GitHub", local.container);
+    await waitForText("Continue with GitHub", local.container);
+    await waitForText("only your GitHub identity", local.container);
     await waitForText("Dev: skip GitHub", local.container);
     expect(local.container.querySelector<HTMLAnchorElement>('a[href="/api/v1/auth/github/start"]')).toBeTruthy();
     await unmountRoot(local.root);
