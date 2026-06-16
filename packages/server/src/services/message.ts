@@ -128,6 +128,22 @@ export type SendMessageOptions = {
    */
   addressedToAgentIds?: readonly string[];
   /**
+   * Agent IDs to **exclude from the notify (wake) set** even when they would
+   * otherwise be woken via `metadata.mentions` or `addressedToAgentIds`.
+   * Generic trusted-delivery capability, decoupled from `senderId`: the
+   * suppressed agent still receives a `notify=false` inbox row (the message
+   * still lands in history / replays as context), it is simply not woken.
+   *
+   * Today's caller is `github-delivery.deliverNormalizedEvent`, which passes
+   * the event's actor agent so an agent is never woken by its own GitHub
+   * action (echo suppression) — without binding that exclusion to `senderId`
+   * (the actor is frequently not a speaker of the target chat, so it must not
+   * be the chat-local sender). See `system/cloud/github/github-entity-chat-binding.md`
+   * S2. `purpose === "agent-final-text"` still forces silent for everyone;
+   * this only narrows the notify set within the non-silenced branch.
+   */
+  suppressNotifyAgentIds?: readonly string[];
+  /**
    * Trusted-internal opt-in for writing `metadata.systemSender`. The web UI
    * uses that key to re-attribute a row to a synthetic "GitHub" sender
    * (avatar + name override) instead of the row's actual `senderId`. To
@@ -458,6 +474,11 @@ async function sendMessageInner(
     //      nobody is woken.
     const mentionSet = new Set(mergedMentions);
     const addressedSet = new Set(options.addressedToAgentIds ?? []);
+    // Generic echo / wake-exclusion: agents here still get a `notify=false`
+    // inbox row (message lands), they are just not woken. Decoupled from
+    // `senderId` so a non-member actor can be excluded without being made the
+    // chat-local sender. See SendMessageOptions.suppressNotifyAgentIds.
+    const suppressNotifySet = new Set(options.suppressNotifyAgentIds ?? []);
     // Build a single fan-out structure that carries agentId alongside the
     // inbox row. agentId is needed by the post-tx session-activation step
     // (Step 1b) but is not part of the inbox_entries schema — it's stripped
@@ -468,7 +489,10 @@ async function sendMessageInner(
       .map((p) => ({
         agentId: p.agentId,
         inboxId: p.inboxId,
-        notify: !prepared.forceSilentFanOut && (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)),
+        notify:
+          !prepared.forceSilentFanOut &&
+          (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)) &&
+          !suppressNotifySet.has(p.agentId),
       }));
 
     if (fanout.length > 0) {

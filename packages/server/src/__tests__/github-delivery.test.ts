@@ -212,12 +212,13 @@ describe("deliverNormalizedEvent", () => {
     expect(delegateEntries).toHaveLength(0);
   });
 
-  it("echo (#942): excludes the actor from addressing — card still written, actor not woken", async () => {
+  it("echo (#942, S2/D1): suppresses the actor's notify but keeps it addressed — card lands as a silent row", async () => {
     // The delegate is a live speaker of the bound chat, so it would normally
     // be woken. When the delegate is ALSO the event's actor (its own GitHub
-    // action, surfaced as `target.actorAgentId`), #942 excludes it from
-    // `addressedToAgentIds`: the card still lands (public record) but the
-    // actor is not woken / red-dotted. With `actorAgentId = null` the same
+    // action, surfaced as `target.actorAgentId`), Stage 3 passes it through
+    // `suppressNotifyAgentIds` (#942, S2/D1): the delegate stays structurally
+    // addressed and the card still lands as a silent `notify=false` row, but
+    // the actor is not woken / red-dotted. With `actorAgentId = null` the same
     // speaker-delegate IS woken — the two deliveries below pin both sides.
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -261,7 +262,8 @@ describe("deliverNormalizedEvent", () => {
       entityKey: "owner/repo#205",
     });
 
-    // (1) actor === delegate: excluded from addressing → card written, no wake.
+    // (1) actor === delegate: suppressed from notify but kept addressed →
+    // card written, no wake, yet the actor still gets a silent context row.
     const echoStats = await deliverNormalizedEvent(app, event, [{ ...baseTarget, actorAgentId: delegate }]);
     expect(echoStats.delivered).toBe(1);
     const afterEcho = await app.db
@@ -269,6 +271,20 @@ describe("deliverNormalizedEvent", () => {
       .from(inboxEntries)
       .where(and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)));
     expect(afterEcho).toHaveLength(0);
+    // The suppressed actor-delegate still receives exactly one silent
+    // (notify=false) row — the card lands as context, it just doesn't wake.
+    const [delegateRow] = await app.db
+      .select({ inboxId: agents.inboxId })
+      .from(agents)
+      .where(eq(agents.uuid, delegate))
+      .limit(1);
+    const delegateInbox = delegateRow?.inboxId ?? "";
+    const delegateSilent = await app.db
+      .select({ notify: inboxEntries.notify })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, delegateInbox), eq(inboxEntries.chatId, chatId)));
+    expect(delegateSilent).toHaveLength(1);
+    expect(delegateSilent[0]?.notify).toBe(false);
 
     // (2) actor !== delegate (null): the speaker-delegate IS woken.
     const okStats = await deliverNormalizedEvent(app, event, [{ ...baseTarget, actorAgentId: null }]);
