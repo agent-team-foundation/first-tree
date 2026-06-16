@@ -1,5 +1,21 @@
 # Communication Behavior — Test Use Cases
 
+> **HISTORICAL — documents the pre-`chat ask` contract; NOT the current one.**
+> The cases below model the earlier communication surface: asking humans with
+> `chat send --request --question --option`, resolving with `chat send
+> --answer/--close`, replying to humans with a plain `chat send`, and treating
+> the output stream as the agent's reasoning trace. That model has been
+> **superseded**. Today agent→human splits into three intent-specific channels:
+> `chat ask` (a tracked question — the message **body is the ask**, `--options`
+> as a JSON array, resolve with `--answer`; there is no `--close`),
+> `chat update --description` (progress / status), and `chat send` is
+> **agent-directed only** — the server **rejects** a plain agent→human send. This
+> file is retained for historical reference and is **not** authoritative.
+> The current contract lives in `packages/client/src/runtime/agent-briefing.ts`
+> (Communication / Asking Humans), `skills/first-tree/SKILL.md` +
+> `references/agent-communication.md`, and the Context Tree node
+> `system/cloud/chat/messaging.md`.
+
 Behavioral use cases for the **agent ↔ teammate communication contract**
 (`chat send` as the only delivery path agents rely on; `--request` /
 `--question` for asking humans; output stream outside `chat send` is the

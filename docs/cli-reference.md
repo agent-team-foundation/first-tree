@@ -264,7 +264,7 @@ first-tree chat
 │     --options <json>                               #   2–4 answer options {label (1–5 words), description, preview?}; omit for free-text
 │     --multi-select                                 #   allow picking more than one option (requires --options)
 │     --answer <requestId>                           #   resolve a question you asked: body = the confirmed answer, clears their red-dot
-│     --reply-to <messageId>                         #   thread a reply under a message (pure threading; does not resolve a question)
+│     --reply-to <messageId>                         #   ask a NEW question threaded under <messageId> (opens a tracked question; use --answer to resolve)
 ├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before same-task send
 ├── list
 ├── history <chatId>
@@ -324,8 +324,11 @@ first-tree chat ask alice \
 # Free-text ask (no options)
 first-tree chat ask alice "What rollback window do you want before we ship 0021?"
 
-# Thread a reply under a message (pure threading; does NOT resolve a question)
-first-tree chat ask alice --reply-to <messageId> "Adding context — the column is unused since 0019."
+# Ask a follow-up question threaded under an earlier message. This still opens a
+# NEW tracked question (a fresh red-dot + block); threading does NOT turn it into
+# a non-blocking context note, and it does not resolve the message it threads
+# under — use --answer for that.
+first-tree chat ask alice --reply-to <messageId> "Follow-up: also drop the legacy index in the same migration?"
 
 # Resolve an open question you asked the human (marks answered, clears their
 # red-dot; body = the confirmed answer). There is no --close: a moot question is

@@ -44,7 +44,9 @@ export function registerChatAskCommand(chat: Command): void {
     )
     .option(
       "--reply-to <messageId>",
-      "Thread a reply under a message — sets inReplyTo (pure threading; does NOT resolve a question)",
+      "Ask a NEW question threaded under <messageId> (sets inReplyTo). Like any ask it opens a tracked " +
+        "question and blocks the human — threading does NOT make it a non-blocking context note, and it does " +
+        "not resolve the message it threads under. To resolve a question, use --answer.",
     )
     .action(async (name: string | undefined, message: string | undefined, options: AskOptions) => {
       try {
@@ -139,8 +141,10 @@ export function registerChatAskCommand(chat: Command): void {
               }
             : metadata;
 
-        // `--reply-to` threads explicitly; `--answer` threads under the question
-        // it resolves. Either way `inReplyTo` is pure threading.
+        // `--reply-to` threads a FRESH ask under an arbitrary message; `--answer`
+        // threads the resolution under the question it resolves. `inReplyTo` is
+        // pure threading either way — a `--reply-to` ask (no `--answer`) is still
+        // a `format="request"` send, so it opens its own tracked question.
         const inReplyTo = options.replyTo ?? resolveId;
 
         const result = await sdk.sendMessage(chatId, {

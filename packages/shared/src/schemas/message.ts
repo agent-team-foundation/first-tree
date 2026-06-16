@@ -119,15 +119,16 @@ export type AskRequest = z.infer<typeof askRequestSchema>;
  *   - the human's web UI on ANY answer — picking an option OR typing free text
  *     both attach `resolves` (kind="answered"); the blocking answer surface has
  *     no "reply without resolving" path, so every human answer resolves, or
- *   - the asking agent via `chat send --answer`/`--close` (resolve on the
- *     human's behalf when answered out-of-band, or withdraw a moot question).
- * A bare threaded reply with no `resolves` (e.g. the asking agent adding
- * context) leaves the question open.
+ *   - the asking agent via `chat ask --answer` (resolve on the human's behalf
+ *     when the answer arrived out-of-band).
+ * A bare threaded reply that carries no `resolves` does not resolve — `inReplyTo`
+ * is pure threading.
  *
- *   - kind="answered" — the question is answered. The readable
- *     `"<prompt> → <answer>"` lines stay in the message `content`.
- *   - kind="closed"   — the question is withdrawn / superseded; `reason`
- *     optionally explains why.
+ *   - kind="answered" — the question is answered. The readable answer stays in
+ *     the message `content`.
+ *   - kind="closed"   — the question is withdrawn. Retained as a server-honored
+ *     resolution kind for compatibility; no current CLI flag produces it (the
+ *     agent surface resolves only by answering). `reason` optionally explains why.
  *
  * Server-opaque except for the `open_request_count` counter, whose −1 keys
  * off `resolves.request`. The web parses it with `safeParse`.

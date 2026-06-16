@@ -226,6 +226,21 @@ describe("chat command behavior", () => {
     await expect(runChat(["ask", "nova"])).rejects.toMatchObject({ code: "ASK_NEEDS_BODY", exitCode: 2 });
   });
 
+  it("chat ask --reply-to (no --answer) opens a NEW threaded question, not a resolution", async () => {
+    const sdk = localAgentMocks.createSdk();
+    await runChat(["ask", "nova", "Follow-up: also drop the legacy index?", "--reply-to", "msg-7"]);
+    const [, payload] = sdk.sendMessage.mock.calls.at(-1) ?? [];
+    // It is a fresh tracked ask (format=request) threaded under msg-7 …
+    expect(payload).toMatchObject({
+      format: "request",
+      content: "Follow-up: also drop the legacy index?",
+      inReplyTo: "msg-7",
+      metadata: expect.objectContaining({ request: {} }),
+    });
+    // … and explicitly NOT a resolution — threading does not resolve anything.
+    expect(payload?.metadata).not.toHaveProperty("resolves");
+  });
+
   it("chat ask validates --options: bad JSON, count, label length, and multi-select without options", async () => {
     await expect(runChat(["ask", "nova", "body", "--options", "{nope"])).rejects.toMatchObject({
       code: "INVALID_OPTIONS",
