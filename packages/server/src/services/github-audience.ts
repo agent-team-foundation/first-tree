@@ -38,7 +38,7 @@ export function evaluateDelegateTarget(
  *                       for echo suppression at the notification layer: the
  *                       card still lands in every mapped chat (the public
  *                       record of what happened), but the actor is excluded
- *                       from the notify/addressing fan-out so agents aren't
+ *                       from notify only (Stage 3 passes its id to `suppressNotifyAgentIds` while it stays structurally addressed) so agents aren't
  *                       woken by their own actions. See #942.
  *   - `our-app-bot`   — actor is `<app-slug>[bot]`. The event is a downstream
  *                       effect of First Tree's own outbound write. `kind: "existing"`
