@@ -26,7 +26,7 @@ import {
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
-import { AVATAR_HUE_COUNT, AVATAR_HUE_HEX, FG_ON_VIVID_HEX } from "../../lib/avatar-hues.js";
+import { AVATAR_HUE_COUNT, avatarHueColor, fgOnVividColor } from "../../lib/avatar-hues.js";
 import { useAgentIdentityMap } from "../../lib/use-agent-name-map.js";
 import { AvatarPreview } from "./appearance-section.js";
 
@@ -83,20 +83,22 @@ async function resizeToSquareWebp(file: File): Promise<Blob> {
  * palette to match <Identicon>: the hue fills the tile, near-white blocks on
  * top. Rendered full-bleed so the image path (which clips to a circle) only
  * trims hue-coloured corners, never a block. Integer geometry avoids seams.
+ * Colours are resolved from the live CSS tokens (see avatar-hues), so the baked
+ * image matches the previewed candidate and never drifts from index.css.
  */
-async function bakeIdenticonWebp(seed: string, hueHex: string): Promise<Blob> {
+async function bakeIdenticonWebp(seed: string, hueIdx: number): Promise<Blob> {
   const size = AVATAR_TARGET_SIZE;
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas 2D context is unavailable in this browser.");
-  ctx.fillStyle = hueHex;
+  ctx.fillStyle = avatarHueColor(hueIdx);
   ctx.fillRect(0, 0, size, size);
   const cells = identiconCells(seed, PIXEL_GRID);
   const block = Math.floor(size / (PIXEL_GRID + 1));
   const margin = Math.round((size - block * PIXEL_GRID) / 2);
-  ctx.fillStyle = FG_ON_VIVID_HEX;
+  ctx.fillStyle = fgOnVividColor();
   for (let y = 0; y < PIXEL_GRID; y++) {
     const row = cells[y];
     if (!row) continue;
@@ -260,7 +262,7 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
     setUploading(true);
     const uuid = agent.uuid;
     try {
-      const blob = await bakeIdenticonWebp(candidate.seed, AVATAR_HUE_HEX[candidate.hueIdx] ?? FG_ON_VIVID_HEX);
+      const blob = await bakeIdenticonWebp(candidate.seed, candidate.hueIdx);
       await uploadAgentAvatar(uuid, blob);
       await onRefresh?.();
       setPixelCandidates([]);
