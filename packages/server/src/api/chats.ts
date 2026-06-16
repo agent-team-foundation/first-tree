@@ -1,5 +1,7 @@
 import {
   addMeChatParticipantsSchema,
+  CHAT_ENGAGEMENT_STATUSES,
+  type ChatEngagementStatus,
   followGithubEntityRequestSchema,
   paginationQuerySchema,
   patchChatEngagementSchema,
@@ -10,6 +12,7 @@ import { and, desc, eq, lt, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
+import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
@@ -23,7 +26,6 @@ import { ensureParticipant, leaveChat } from "../services/chat.js";
 import { declareEntityFollow, listChatGithubEntities, removeEntityFollow } from "../services/github-entity-follow.js";
 import {
   addMeChatParticipants,
-  getCallerEngagement,
   joinMeChat,
   leaveMeChat,
   markMeChatRead,
@@ -99,21 +101,32 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     }));
     const title = resolveChatTitle(chat.topic, firstMessagePreview, participantsForTitle, scope.humanAgentId);
 
-    const engagementStatus = await getCallerEngagement(app.db, chat.id, scope.humanAgentId);
-
-    // Caller's own membership row — drives speaker-vs-watcher UI on the
-    // chat detail page without forcing the client to round-trip through
-    // `/orgs/:orgId/chats`. `null` when the caller reaches the chat via
-    // supervision (managed agent is a speaker) rather than direct
-    // membership; that's the same null-shape `MeChatRow` carries when
-    // listChats filters to supervised-only rows.
-    const [callerMembership] = await app.db
-      .select({ accessMode: chatMembership.accessMode })
-      .from(chatMembership)
-      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, scope.humanAgentId)))
-      .limit(1);
-    const viewerMembershipKind: "participant" | "watching" | null = callerMembership
-      ? callerMembership.accessMode === "speaker"
+    const [callerState] = await app.db.execute<{
+      engagement_status: ChatEngagementStatus | null;
+      access_mode: "speaker" | "watcher" | null;
+    }>(sql`
+      SELECT
+        (
+          SELECT ${chatUserState.engagementStatus}
+            FROM ${chatUserState}
+           WHERE ${chatUserState.chatId} = ${chat.id}
+             AND ${chatUserState.agentId} = ${scope.humanAgentId}
+           LIMIT 1
+        ) AS engagement_status,
+        (
+          SELECT ${chatMembership.accessMode}
+            FROM ${chatMembership}
+           WHERE ${chatMembership.chatId} = ${chat.id}
+             AND ${chatMembership.agentId} = ${scope.humanAgentId}
+           LIMIT 1
+        ) AS access_mode
+    `);
+    const engagementStatus = callerState?.engagement_status ?? CHAT_ENGAGEMENT_STATUSES.ACTIVE;
+    // Caller's own membership row drives speaker-vs-watcher UI. `null` means
+    // the caller reaches the chat through supervision rather than direct
+    // membership.
+    const viewerMembershipKind: "participant" | "watching" | null = callerState?.access_mode
+      ? callerState.access_mode === "speaker"
         ? "participant"
         : "watching"
       : null;

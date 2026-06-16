@@ -65,6 +65,35 @@ describe("PATCH /clients/:clientId/capabilities", () => {
     expect(caps.codex?.sdkVersion).toBeNull();
   });
 
+  it("accepts repeated identical snapshots as a no-op while preserving sibling metadata", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    const capabilities = {
+      "claude-code": makeEntry("ok"),
+      codex: makeEntry("missing"),
+    };
+
+    await app.db
+      .update(clients)
+      .set({ metadata: { siblingKey: "preserve-me", capabilities } })
+      .where(eq(clients.id, ctx.clientId));
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/clients/${ctx.clientId}/capabilities`,
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+      payload: { capabilities },
+    });
+    expect(res.statusCode).toBe(204);
+
+    const [row] = await app.db
+      .select({ metadata: clients.metadata })
+      .from(clients)
+      .where(eq(clients.id, ctx.clientId))
+      .limit(1);
+    expect(row?.metadata).toEqual({ siblingKey: "preserve-me", capabilities });
+  });
+
   it("rejects an invalid capability state with 400", async () => {
     const app = getApp();
     const ctx = await createAdminContext(app);
