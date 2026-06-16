@@ -10,6 +10,12 @@ import { TeamSetupModal } from "./team-setup-modal.js";
 
 const COLLAPSED_TEAM_LIMIT = 5;
 
+// Marketing site — where an explicit sign-out lands the browser, so the user
+// leaves the app on the parent brand surface rather than an app route (which
+// would just bounce back through the login page). Mirrors `PARENT_URL` in
+// layout.tsx / footer.tsx.
+const PARENT_URL = "https://first-tree.ai";
+
 /**
  * Right-side user menu. Avatar trigger; dropdown nests team switching,
  * admin team management, Create / Join entry points, and sign-out.
@@ -247,6 +253,10 @@ export function UserMenu() {
                 onClick={() => {
                   setOpen(false);
                   logout();
+                  // Leave the app on the marketing site rather than an app
+                  // route — `logout()` clears local auth state, so staying in
+                  // the SPA would just redirect to the login page.
+                  window.location.href = PARENT_URL;
                 }}
                 className="flex w-full items-center gap-2 px-4 py-1.5 text-left text-body hover:bg-accent transition-colors"
                 style={{ color: "var(--fg)" }}
