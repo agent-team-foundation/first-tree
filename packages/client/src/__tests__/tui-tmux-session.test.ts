@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  ClaudeTuiLoginRequiredError,
   deriveSessionName,
   isBypassPermissionsWarning,
   isClaudeLoginWall,
   isResumeSummaryPrompt,
   isWorkspaceTrustPrompt,
   ownedSessionPrefix,
+  waitForReady,
 } from "../handlers/claude-code-tui/tmux-session.js";
 
 const CID = "client_abcd1234";
@@ -161,6 +163,13 @@ describe("isBypassPermissionsWarning", () => {
 
     expect(isBypassPermissionsWarning(pane)).toBe(false);
   });
+
+  it("does not fire on transcript text that merely mentions bypass mode", () => {
+    // Lacks the full warning title + both option labels of the live modal.
+    expect(isBypassPermissionsWarning('we discussed Bypass Permissions mode and the "Yes, I accept" option')).toBe(
+      false,
+    );
+  });
 });
 
 describe("isClaudeLoginWall", () => {
@@ -175,9 +184,11 @@ describe("isClaudeLoginWall", () => {
     expect(isClaudeLoginWall(pane)).toBe(true);
   });
 
-  it("detects a 'run /login' re-auth prompt", () => {
-    expect(isClaudeLoginWall("OAuth refresh token is no longer valid; run /login to re-authenticate")).toBe(true);
-    expect(isClaudeLoginWall("Not authenticated. Please run /login and try again.")).toBe(true);
+  it("does NOT fire on loose 'run /login' / OAuth transcript text (no live selector)", () => {
+    // These strings routinely appear in ordinary conversation; a false positive
+    // here marks a healthy session permanent. Only the live selector counts.
+    expect(isClaudeLoginWall("OAuth refresh token is no longer valid; run /login to re-authenticate")).toBe(false);
+    expect(isClaudeLoginWall("Not authenticated. Please run /login and try again.")).toBe(false);
   });
 
   it("does not fire on the normal ready surface", () => {
@@ -187,5 +198,80 @@ describe("isClaudeLoginWall", () => {
 `;
 
     expect(isClaudeLoginWall(pane)).toBe(false);
+  });
+});
+
+describe("waitForReady ordering (transcript safety)", () => {
+  // A ready pane whose visible transcript quotes EVERY modal/login string.
+  const readyPaneQuotingPrompts = [
+    "⏺ Recap of this chat: it mentions run /login and Select login method,",
+    "  the option Login with Claude account, plus the modal title",
+    "  WARNING: Claude Code running in Bypass Permissions mode with options",
+    '  "Yes, I accept" / "No, exit".',
+    '❯ Try "edit <filepath> to..."',
+    "⏵⏵ bypass permissions on (shift+tab to cycle)",
+  ].join("\n");
+
+  it("the detectors WOULD fire on that transcript, so ready-first ordering is load-bearing", () => {
+    expect(isClaudeLoginWall(readyPaneQuotingPrompts)).toBe(true);
+    expect(isBypassPermissionsWarning(readyPaneQuotingPrompts)).toBe(true);
+  });
+
+  it("returns ready with no keystroke and no throw despite the quoted prompts", async () => {
+    const sent: string[] = [];
+    await expect(
+      waitForReady({
+        name: "ftth-test",
+        timeoutMs: 1_000,
+        pollIntervalMs: 1,
+        capture: async () => readyPaneQuotingPrompts,
+        send: async (_name, key) => {
+          sent.push(key);
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(sent).toEqual([]);
+  });
+
+  it("throws ClaudeTuiLoginRequiredError on a live (non-ready) login selector", async () => {
+    const loginPane =
+      "\n Select login method:\n\n ❯ 1. Login with Claude account\n   2. Login with Claude Console (API)\n";
+    const sent: string[] = [];
+    await expect(
+      waitForReady({
+        name: "ftth-test",
+        timeoutMs: 1_000,
+        pollIntervalMs: 1,
+        capture: async () => loginPane,
+        send: async (_name, key) => {
+          sent.push(key);
+        },
+      }),
+    ).rejects.toBeInstanceOf(ClaudeTuiLoginRequiredError);
+    expect(sent).toEqual([]);
+  });
+
+  it("accepts a live bypass modal by sending '1' then Enter, then reaches ready", async () => {
+    const modalPane = [
+      " WARNING: Claude Code running in Bypass Permissions mode",
+      " ❯ 1. Yes, I accept",
+      "   2. No, exit",
+      " Enter to confirm · Esc to cancel",
+    ].join("\n");
+    const readyPane = "❯ ready\n⏵⏵ bypass permissions on (shift+tab to cycle)";
+    let polls = 0;
+    const sent: string[] = [];
+    await expect(
+      waitForReady({
+        name: "ftth-test",
+        timeoutMs: 2_000,
+        pollIntervalMs: 1,
+        capture: async () => (polls++ === 0 ? modalPane : readyPane),
+        send: async (_name, key) => {
+          sent.push(key);
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(sent).toEqual(["1", "Enter"]);
   });
 });

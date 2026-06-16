@@ -177,6 +177,9 @@ export type WaitForReadyInput = {
    * the menu and still time out, re-deadlocking on the next resume attempt.
    */
   summaryReadyTimeoutMs?: number;
+  /** Test seams; default to the real tmux helpers (capturePane / sendKey). */
+  capture?: (sessionName: string) => Promise<string>;
+  send?: (sessionName: string, key: string) => Promise<void>;
 };
 
 /**
@@ -211,34 +214,45 @@ export function isResumeSummaryPrompt(pane: string): boolean {
 }
 
 /**
- * `--dangerously-skip-permissions` makes Claude Code show a one-time "Bypass
- * Permissions mode" warning ("Yes, I accept" / "No, exit") before the ready
- * surface unless the HOME has already accepted it (a settings flag or a prior
- * interactive accept). First Tree never sets that flag, so a fresh HOME (new
- * machine / cloud agent) hits this modal and deadlocks exactly like the trust
- * dialog. Distinct from the READY_MARKER ("bypass permissions on") by the
- * "mode" wording plus the accept option.
+ * `--dangerously-skip-permissions` makes Claude Code show a one-time
+ * Bypass-Permissions warning ("Yes, I accept" / "No, exit") before the ready
+ * surface unless the HOME already accepted it (a settings flag or a prior
+ * interactive accept). First Tree sets that flag nowhere, so a fresh HOME (new
+ * machine / cloud agent) hits this modal and deadlocks like the trust dialog.
+ *
+ * Match the full warning title AND both option labels: the captured pane also
+ * contains prior transcript on resume, so a loose "Bypass Permissions mode"
+ * match could fire on conversation text and inject a stray keystroke. The full
+ * title + both options is a live-modal shape that ordinary prose won't satisfy
+ * (and `waitForReady` checks the ready surface first regardless).
  */
 export function isBypassPermissionsWarning(pane: string): boolean {
-  return pane.includes("Bypass Permissions mode") && pane.includes("Yes, I accept");
+  return (
+    pane.includes("WARNING: Claude Code running in Bypass Permissions mode") &&
+    pane.includes("Yes, I accept") &&
+    pane.includes("No, exit")
+  );
 }
 
 /**
- * Claude Code drops into an interactive login / re-auth wall when credentials
- * are missing or expired (OAuth refresh token revoked, API key invalid, …) —
- * a login-method selector or a "run /login" prompt. Unlike the trust / resume
- * / bypass modals this is NOT answerable by keystroke (it needs a human to
- * re-authenticate in a browser), so waitForReady throws
- * {@link ClaudeTuiLoginRequiredError} on sight; the error taxonomy classifies
- * it `permanent` so the session stops the otherwise-infinite transient retry
- * loop and surfaces to an operator instead of silently spamming retries.
+ * Claude Code drops into an interactive login wall when credentials are missing
+ * or expired — a login-method selector the detached runtime cannot answer (a
+ * human must re-authenticate in a browser). waitForReady throws
+ * {@link ClaudeTuiLoginRequiredError} on sight; the taxonomy classifies it
+ * `permanent` so the session stops the otherwise-infinite retry loop and
+ * surfaces to an operator instead of silently spamming retries.
+ *
+ * Match ONLY the live selector (its title AND an option label), never loose
+ * "run /login" / OAuth phrasing: that text routinely appears in ordinary
+ * transcript content (a resumed pane re-renders prior conversation), and a
+ * false positive here is irreversible — it marks a healthy session permanent.
+ * Under-detecting (a non-selector auth failure falls back to the normal
+ * retry + ready-timeout path) is the safe direction.
  */
 export function isClaudeLoginWall(pane: string): boolean {
   return (
-    pane.includes("Select login method") ||
-    pane.includes("Login with Claude account") ||
-    pane.includes("OAuth refresh token is no longer valid") ||
-    /\brun \/login\b/i.test(pane)
+    pane.includes("Select login method") &&
+    (pane.includes("Login with Claude account") || pane.includes("Sign in with your Anthropic account"))
   );
 }
 
@@ -255,16 +269,29 @@ export class ClaudeTuiLoginRequiredError extends Error {
   }
 }
 
+/** True iff the pane shows the loaded ready surface (marker + `❯` input line). */
+function isReadySurface(pane: string): boolean {
+  return pane.includes(READY_MARKER) && pane.split("\n").some((line) => USER_RE.test(line));
+}
+
 /**
- * Poll capture-pane until both the bypass-permissions marker and a `❯`
- * input prompt line are visible. Resolves on success, throws on timeout.
- * One-time interactive prompts can precede the ready surface; the detached
- * runtime handles each instead of deadlocking on it:
+ * Poll capture-pane until the bypass-permissions marker and a `❯` input prompt
+ * line are visible. Resolves on success, throws on timeout.
+ *
+ * The ready surface is checked FIRST every poll. A loaded TUI always shows the
+ * marker + input prompt, and on resume the captured pane ALSO re-renders prior
+ * transcript -- which can quote modal/login strings. Checking ready first means
+ * a healthy session is never mistaken for a modal (no stray keystroke) or for
+ * the login wall (no false permanent failure) just because its visible history
+ * mentions those words.
+ *
+ * Only before the ready surface exists do we handle the one-time interactive
+ * prompts instead of deadlocking on them:
  * - the workspace trust prompt (acknowledged with Enter);
  * - the bypass-permissions warning (accept option 1, "Yes, I accept");
  * - the large-session "resume strategy" menu (select option 1, "Resume from
  *   summary", so over-threshold sessions resume from a summary).
- * The login / re-auth wall is NOT keystroke-answerable, so it throws
+ * The login wall is NOT keystroke-answerable, so it throws
  * {@link ClaudeTuiLoginRequiredError} (classified `permanent`) to stop the
  * retry loop and surface to an operator rather than time out forever.
  */
@@ -272,6 +299,8 @@ export async function waitForReady(input: WaitForReadyInput): Promise<void> {
   const timeoutMs = input.timeoutMs ?? 30_000;
   const pollIntervalMs = input.pollIntervalMs ?? 250;
   const summaryReadyTimeoutMs = input.summaryReadyTimeoutMs ?? 120_000;
+  const capture = input.capture ?? capturePane;
+  const send = input.send ?? sendKey;
   const started = Date.now();
   let deadline = started + timeoutMs;
   let acceptedWorkspaceTrust = false;
@@ -281,15 +310,20 @@ export async function waitForReady(input: WaitForReadyInput): Promise<void> {
     // The TUI prints U+00A0 (NBSP) inside its chrome (see tui-markers.ts);
     // normalize to ASCII space once so every substring match below is robust
     // to that, regardless of which gaps Claude renders as NBSP.
-    const pane = (await capturePane(input.name)).replace(/\u00A0/g, " ");
-    // An unanswerable login / re-auth wall can't be keystroked away; fail fast
-    // and let the taxonomy mark it permanent so we stop retrying forever.
+    const pane = (await capture(input.name)).replace(/\u00A0/g, " ");
+    // Ready wins over every modal/login check below -- see the function doc:
+    // a ready pane can also show prior transcript that quotes those strings.
+    if (isReadySurface(pane)) {
+      return;
+    }
+    // Not ready yet. An unanswerable login wall can't be keystroked away; fail
+    // fast and let the taxonomy mark it permanent so we stop retrying forever.
     if (isClaudeLoginWall(pane)) {
       throw new ClaudeTuiLoginRequiredError(input.name);
     }
     if (!acceptedWorkspaceTrust && isWorkspaceTrustPrompt(pane)) {
       acceptedWorkspaceTrust = true;
-      await sendKey(input.name, "Enter");
+      await send(input.name, "Enter");
       await new Promise((r) => setTimeout(r, pollIntervalMs));
       continue;
     }
@@ -301,9 +335,9 @@ export async function waitForReady(input: WaitForReadyInput): Promise<void> {
       // "1" pins the affirmative option; if number-select is unsupported it is
       // ignored and Enter falls on the default (the affirmative option 1, as
       // with the trust dialog).
-      await sendKey(input.name, "1");
+      await send(input.name, "1");
       await new Promise((r) => setTimeout(r, 100));
-      await sendKey(input.name, "Enter");
+      await send(input.name, "Enter");
       await new Promise((r) => setTimeout(r, pollIntervalMs));
       continue;
     }
@@ -313,18 +347,15 @@ export async function waitForReady(input: WaitForReadyInput): Promise<void> {
       // than relying on Enter hitting the default highlight: it pins the
       // over-threshold path to a summary even if a future build reorders or
       // re-highlights the menu. (If number-select is unsupported, the "1" is
-      // ignored and Enter still falls on the recommended default — option 1.)
-      await sendKey(input.name, "1");
+      // ignored and Enter still falls on the recommended default -- option 1.)
+      await send(input.name, "1");
       await new Promise((r) => setTimeout(r, 100));
-      await sendKey(input.name, "Enter");
+      await send(input.name, "Enter");
       // Summary generation needs a fresh, longer window than a normal start,
       // or a large session answers the menu and still times out.
       deadline = Date.now() + summaryReadyTimeoutMs;
       await new Promise((r) => setTimeout(r, pollIntervalMs));
       continue;
-    }
-    if (pane.includes(READY_MARKER) && pane.split("\n").some((line) => USER_RE.test(line))) {
-      return;
     }
     await new Promise((r) => setTimeout(r, pollIntervalMs));
   }
