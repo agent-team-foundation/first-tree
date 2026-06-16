@@ -695,6 +695,24 @@ afterEach(() => {
 });
 
 describe("ChatView", () => {
+  it("uses matching initial chat detail without an immediate detail refetch", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const initialChatDetail = chatDetail({ title: "Initial detail title", topic: "Initial detail title" });
+
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" initialChatDetail={initialChatDetail} />,
+      (queryClient) => {
+        queryClient.removeQueries({ queryKey: ["chat-detail", "chat-1"], exact: true });
+      },
+      "/",
+    );
+
+    await waitForText(container, "Initial detail title");
+    expect(chatMocks.getChat).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
   it("renders timeline chrome, sidebar controls, rename, restore, and read-only join states", async () => {
     const { ChatView } = await import("../chat-view.js");
     localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");

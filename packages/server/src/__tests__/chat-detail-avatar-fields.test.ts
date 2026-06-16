@@ -1,9 +1,11 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
 import { users } from "../db/schema/users.js";
+import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
-import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
+import { createAdminContext, createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
  * Regression: the chat-detail surface used to drop the manager-configured
@@ -119,6 +121,41 @@ describe("chat-detail wire shape — participant avatar fields", () => {
     expect(body.participants.find((p) => p.agentId === teammate.humanAgentUuid)?.avatarImageUrl).toBe(
       `/api/v1/agents/${teammate.humanAgentUuid}/avatar?v=${uploadedAt.getTime()}`,
     );
+  });
+
+  it("admin GET /chats/:chatId returns active/null caller state for supervisor access without direct membership", async () => {
+    const app = getApp();
+    const supervisor = await createAdminContext(app);
+    const owner = await createTestAdmin(app);
+    const managed = await createAgent(app.db, {
+      name: `detail-managed-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Managed Detail Bot",
+      managerId: supervisor.memberId,
+      organizationId: supervisor.organizationId,
+      clientId: supervisor.clientId,
+    });
+
+    const chat = await createChat(app.db, owner.humanAgentUuid, {
+      type: "group",
+      participantIds: [managed.uuid],
+    });
+    await app.db
+      .delete(chatMembership)
+      .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.agentId, supervisor.humanAgentUuid)));
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/chats/${chat.id}`,
+      headers: { authorization: `Bearer ${supervisor.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      engagementStatus: string;
+      viewerMembershipKind: string | null;
+    };
+    expect(body.engagementStatus).toBe("active");
+    expect(body.viewerMembershipKind).toBeNull();
   });
 
   it("agent GET /agent/chats/:chatId returns avatarColorToken + avatarImageUrl", async () => {

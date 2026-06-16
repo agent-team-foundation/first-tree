@@ -1,4 +1,4 @@
-import { pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
+import { index, pgTable, primaryKey, text, timestamp } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { chats } from "./chats.js";
 
@@ -36,5 +36,8 @@ export const agentChatSessions = pgTable(
     runtimeStateAt: timestamp("runtime_state_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [primaryKey({ columns: [table.agentId, table.chatId] })],
+  (table) => [
+    primaryKey({ columns: [table.agentId, table.chatId] }),
+    index("idx_agent_chat_sessions_chat_agent").on(table.chatId, table.agentId),
+  ],
 );
