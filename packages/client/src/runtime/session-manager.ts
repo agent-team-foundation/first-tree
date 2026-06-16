@@ -1475,10 +1475,6 @@ export class SessionManager {
         { chatId: idleVictim.chatId, requesterChatId: chatId },
         "idle session yielded for concurrency",
       );
-      this.emitResilienceEvent(idleVictim.chatId, "resilience.session.preempted", {
-        reason: "concurrency_idle_yield",
-        requesterChatId: chatId,
-      });
       this.suspendSession(idleVictim, { reason: "concurrency_idle_yield", ackConsumedPrefix: true, drainQueue: false });
       return true;
     }
