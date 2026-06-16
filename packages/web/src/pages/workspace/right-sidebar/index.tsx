@@ -136,13 +136,14 @@ export function ChatRightSidebar({
         />
       )}
       {/* Key the sections that hold local fold state (Participants' "Show all",
-          Summary's "Show more") by chatId. ChatView is NOT remounted on chat
-          switch — it refetches by chatId — so without this the expanded/showAll
-          UI state would leak from one chat into the next. The rail shell itself
-          is intentionally NOT keyed: its width is a global preference. */}
+          Summary's "Show more") by chatId so it resets on chat switch — ChatView
+          is NOT remounted on switch, it refetches by chatId. The keys MUST be
+          per-section-unique (not the bare chatId on both), or the two siblings
+          collide on the same key and React duplicates/omits them. The rail shell
+          itself is intentionally NOT keyed: its width is a global preference. */}
       <div className="flex-1 overflow-y-auto">
         <ParticipantsSection
-          key={chatId}
+          key={`participants:${chatId}`}
           chatId={chatId}
           participants={participants}
           participantsLoading={participantsLoading}
@@ -150,7 +151,7 @@ export function ChatRightSidebar({
           onAdded={onAdded}
           readOnly={readOnly}
         />
-        <DescriptionSection key={chatId} description={description} capped={summaryCapped} />
+        <DescriptionSection key={`summary:${chatId}`} description={description} capped={summaryCapped} />
         <GitHubSection chatId={chatId} />
       </div>
     </aside>
