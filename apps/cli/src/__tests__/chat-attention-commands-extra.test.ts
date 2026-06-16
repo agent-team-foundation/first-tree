@@ -481,6 +481,19 @@ describe("chat command behavior", () => {
       exitCode: 2,
     });
 
+    // The deprecated `set-topic` / `rename` alias is also a description write
+    // entry point, so it inherits the same guard and `--description -` hatch.
+    await expect(runChat(["set-topic", "--description", "x\\ny\\nz", "--chat", "chat-1"])).rejects.toMatchObject({
+      code: "ESCAPED_NEWLINES",
+      exitCode: 2,
+    });
+    await expect(runChat(["rename", "Launch", "--description", "x\\ny\\nz", "--chat", "chat-1"])).rejects.toMatchObject(
+      { code: "ESCAPED_NEWLINES", exitCode: 2 },
+    );
+    ioMocks.readStdin.mockResolvedValueOnce("alpha\n\nbeta");
+    await runChat(["set-topic", "--description", "-", "--chat", "chat-1"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-1", { description: "alpha\n\nbeta" });
+
     // create: the same inline guard fires before the chat is created; its hint
     // points at ANSI-C `$'...'` quoting (stdin is taken by the first message).
     printLineMock.mockClear();

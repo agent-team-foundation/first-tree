@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
+import { guardInlineDescription, readStdin } from "./_shared/io.js";
 import { applyChatUpdate } from "./update.js";
 
 type Options = {
@@ -67,7 +68,26 @@ async function run(topicArg: string | undefined, options: Options): Promise<void
   if (options.clearDescription === true) {
     body.description = null;
   } else if (options.description !== undefined) {
-    const trimmed = options.description.trim();
+    // Same authoring-surface guard as `chat update`: `--description -` reads
+    // real newlines from stdin (guard skipped — the escape hatch), any other
+    // value is guarded against the literal `\n` shape before the write.
+    let resolved: string;
+    if (options.description === "-") {
+      const piped = await readStdin();
+      if (piped === null) {
+        fail(
+          "NO_STDIN",
+          "`--description -` reads the description from stdin, but stdin is a TTY (nothing piped). " +
+            "Pipe it: `cat <<'EOF' | … chat update --description -` … `EOF`.",
+          2,
+        );
+      }
+      resolved = piped;
+    } else {
+      guardInlineDescription(options.description, { supportsStdin: true });
+      resolved = options.description;
+    }
+    const trimmed = resolved.trim();
     if (trimmed.length === 0) {
       fail("EMPTY_DESCRIPTION", "Description cannot be empty. Use --clear-description to unset.", 2);
     }
