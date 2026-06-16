@@ -1357,6 +1357,8 @@ export function ChatView({
     enabled: !!chatId,
     refetchInterval: 5_000,
   });
+  const chatActiveTokens = chatTokenUsage ? chatTokenUsage.inputTokens + chatTokenUsage.outputTokens : 0;
+  const chatProcessedTokens = chatTokenUsage ? chatActiveTokens + chatTokenUsage.cachedInputTokens : 0;
 
   /** Org-wide agent list, consumed by `managedByMeMap` for picker
    *  grouping and by the identity-map hooks (`useAgentIdentityMap` etc.)
@@ -3328,13 +3330,13 @@ export function ChatView({
                   </div>
                 ) : (
                   <>
-                    {chatTokenUsage && chatTokenUsage.totalTokens > 0 ? (
+                    {chatTokenUsage && chatProcessedTokens > 0 ? (
                       <div
                         className="mono text-caption"
                         style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
-                        title={`input ${chatTokenUsage.inputTokens.toLocaleString()} · cached ${chatTokenUsage.cachedInputTokens.toLocaleString()} · output ${chatTokenUsage.outputTokens.toLocaleString()}`}
+                        title={`active ${chatActiveTokens.toLocaleString()} · input ${chatTokenUsage.inputTokens.toLocaleString()} · cached ${chatTokenUsage.cachedInputTokens.toLocaleString()} · output ${chatTokenUsage.outputTokens.toLocaleString()} · processed ${chatProcessedTokens.toLocaleString()}`}
                       >
-                        {formatTokenCount(chatTokenUsage.totalTokens)} tokens used in this chat
+                        {formatTokenCount(chatActiveTokens)} active tokens in this chat
                       </div>
                     ) : null}
                     <ComposeStatusBar

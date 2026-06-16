@@ -611,14 +611,15 @@ function UsageCell({ usage }: { usage: PreviewUsage | null }) {
       </span>
     );
   }
-  const totalTokens = usage.inputTokens + usage.cachedInputTokens + usage.outputTokens;
+  const activeTokens = usage.inputTokens + usage.outputTokens;
+  const processedTokens = activeTokens + usage.cachedInputTokens;
   return (
     <span
       className="text-caption mono truncate"
       style={{ color: "var(--fg-2)" }}
-      title={`Input ${usage.inputTokens.toLocaleString()} · Cached ${usage.cachedInputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · ${usage.turns} turns`}
+      title={`Active ${activeTokens.toLocaleString()} · Input ${usage.inputTokens.toLocaleString()} · Cached ${usage.cachedInputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · Processed ${processedTokens.toLocaleString()} · ${usage.turns} usage events`}
     >
-      {formatCompactCount(totalTokens)}
+      {formatCompactCount(activeTokens)}
       <span style={{ color: "var(--fg-4)" }}>{` · ${formatCompactCount(usage.turns)}t`}</span>
     </span>
   );
@@ -1093,7 +1094,7 @@ function agentMetaLine(agent: PreviewAgent, isMine: boolean, usage: PreviewUsage
   const owner = isMine ? "You" : (MEMBERS[agent.managerId]?.displayName ?? "—");
   const usageStr =
     usage && usage.turns > 0
-      ? `${formatCompactCount(usage.inputTokens + usage.cachedInputTokens + usage.outputTokens)} · ${formatCompactCount(usage.turns)}t`
+      ? `${formatCompactCount(usage.inputTokens + usage.outputTokens)} · ${formatCompactCount(usage.turns)}t`
       : "—";
   return `${owner} · ${agent.runtimeProvider} · ${usageStr}`;
 }
