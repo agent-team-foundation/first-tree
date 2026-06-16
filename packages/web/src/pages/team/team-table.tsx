@@ -547,17 +547,18 @@ function UsageCell({ usage, loading }: { usage: UsageByAgentRow | null; loading:
       </div>
     );
   }
-  const totalTokens = usage.inputTokens + usage.cachedInputTokens + usage.outputTokens;
+  const activeTokens = usage.inputTokens + usage.outputTokens;
+  const processedTokens = activeTokens + usage.cachedInputTokens;
   // Show only the token magnitude — the turn count was dropped from the cell (it
-  // crowded the column and truncated); turns remain in the hover title for the
-  // rare case someone wants the breakdown.
+  // crowded the column and truncated); usage events remain in the hover title
+  // for the rare case someone wants the breakdown.
   return (
     <div
       className="text-caption mono truncate"
       style={{ color: "var(--fg-2)", textAlign: "right" }}
-      title={`Input ${usage.inputTokens.toLocaleString()} · Cached ${usage.cachedInputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · ${usage.turns} turns`}
+      title={`Active ${activeTokens.toLocaleString()} · Input ${usage.inputTokens.toLocaleString()} · Cached ${usage.cachedInputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · Processed ${processedTokens.toLocaleString()} · ${usage.turns} usage events`}
     >
-      {formatCompactCount(totalTokens)}
+      {formatCompactCount(activeTokens)}
     </div>
   );
 }
@@ -1068,10 +1069,7 @@ function agentMetaLine(
   usage: UsageByAgentRow | null,
 ): string {
   const owner = isSelf ? "You" : (managerLabel ?? "—");
-  // Token magnitude only — turns were dropped from the Usage display.
-  const usageStr =
-    usage && usage.turns > 0
-      ? formatCompactCount(usage.inputTokens + usage.cachedInputTokens + usage.outputTokens)
-      : "—";
+  // Token magnitude only — usage events were dropped from the Usage display.
+  const usageStr = usage && usage.turns > 0 ? formatCompactCount(usage.inputTokens + usage.outputTokens) : "—";
   return `${owner} · ${provider} · ${usageStr}`;
 }
