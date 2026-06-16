@@ -861,6 +861,91 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("resolves an options-only answer via Enter while focus is off the composer", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const dockMessages = messages([
+      message({
+        id: "req-enter",
+        senderId: "agent-1",
+        format: "request",
+        content: "Pick the deploy color.",
+        metadata: {
+          mentions: ["human-agent-self"],
+          request: {
+            subject: "Deploy",
+            questions: [
+              {
+                id: "q1",
+                prompt: "Deploy color?",
+                kind: "single",
+                options: ["Blue-green", "Rolling update"],
+                required: true,
+              },
+            ],
+          },
+        },
+        createdAt: "2026-05-28T12:00:00.000Z",
+      }),
+    ]);
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), messages([])),
+      "/",
+    );
+
+    await act(async () => {
+      queryClient.setQueryData(["chat-messages", "chat-1"], dockMessages);
+    });
+    await flush();
+    await waitForText(container, "Awaiting your answer");
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+
+    // Enter is dispatched on the focused option radio (a composer-footer
+    // descendant) and bubbles to the footer-scoped backstop — mirroring the
+    // real focus path after a pill click, and proving the listener is scoped to
+    // the composer subtree rather than `window`.
+    const optionRadio = () => {
+      const radio = optionByText(container, "Blue-green")?.querySelector<HTMLInputElement>('input[type="radio"]');
+      if (!radio) throw new Error("Option radio missing");
+      return radio;
+    };
+    const pressEnterOnRadio = async () => {
+      await act(async () => {
+        const radio = optionRadio();
+        radio.focus();
+        radio.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      });
+    };
+
+    // No answer yet → Enter must be a no-op (the backstop isn't bound while the
+    // question is unresolvable, so a focused-but-unselected radio sends nothing).
+    await pressEnterOnRadio();
+    await flush();
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
+    // Pick an option and type nothing — focus stays on the radio, off the
+    // composer. This is the exact path that previously left Enter dead: the
+    // composer's own keydown never fired, so the dock's "↵ Send" promise was
+    // broken for the no-typing answer.
+    await click(optionByText(container, "Blue-green"));
+    expect(textarea.value).toBe("");
+    expect(document.activeElement).not.toBe(textarea);
+
+    await pressEnterOnRadio();
+    await waitForCondition(
+      () => chatMocks.sendChatMessage.mock.calls.length > 0,
+      "Expected Enter to resolve the options-only answer",
+    );
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Deploy color? → Blue-green", ["agent-1"], {
+      inReplyTo: "req-enter",
+      resolves: { request: "req-enter", kind: "answered" },
+    });
+
+    await act(async () => root.unmount());
+  });
+
   it("enables Send and resolves when an option question is answered with free text (no option picked)", async () => {
     const { ChatView } = await import("../chat-view.js");
     const dockMessages = messages([
