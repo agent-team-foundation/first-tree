@@ -181,7 +181,8 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       try {
         await listenClient`SELECT pg_notify(${INBOX_CHANNEL}, ${`${inboxId}:${messageId}`})`;
       } catch {
-        // fire-and-forget: notification loss is acceptable, polling covers it
+        // Fire-and-forget: durable inbox rows are repaired by bound WS backlog
+        // drains if this volatile NOTIFY hint is missed.
       }
     },
 
