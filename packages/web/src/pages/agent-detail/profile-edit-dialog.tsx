@@ -287,7 +287,9 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
         <DialogHeader>
           <DialogTitle>Edit profile</DialogTitle>
           <DialogDescription>
-            Avatar changes (image or pixel avatar) save immediately. Other details save when you click Save.
+            {isHuman
+              ? "Avatar changes (image) save immediately. Other details save when you click Save."
+              : "Avatar changes (image or pixel avatar) save immediately. Other details save when you click Save."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-5">
@@ -393,43 +395,50 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
             </p>
             {imageError && <p className="text-body text-destructive">{imageError}</p>}
           </div>
-          <div className="space-y-2">
-            <Label>Pixel avatar</Label>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={rollPixelCandidates}
-                disabled={uploading || saving}
-              >
-                {pixelCandidates.length ? "Shuffle" : "Generate"}
-              </Button>
-              {pixelCandidates.map((candidate, index) => (
-                <button
-                  key={candidate.seed}
+          {/* Pixel avatars are a non-human-agent identity. Human agents
+              represent real people and use their GitHub avatar (resolved
+              server-side via the backing user's avatar URL), so the
+              pixel-avatar generator is hidden for them — offering it would let
+              a baked identicon override the GitHub avatar. */}
+          {!isHuman && (
+            <div className="space-y-2">
+              <Label>Pixel avatar</Label>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
                   type="button"
-                  onClick={() => applyPixelAvatar(candidate)}
+                  variant="outline"
+                  size="sm"
+                  onClick={rollPixelCandidates}
                   disabled={uploading || saving}
-                  aria-label={`Use pixel avatar ${index + 1}`}
-                  title="Use this pixel avatar"
-                  className="rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1"
-                  style={{
-                    display: "inline-flex",
-                    padding: 0,
-                    border: "none",
-                    background: "transparent",
-                    cursor: "pointer",
-                  }}
                 >
-                  <Identicon seed={candidate.seed} size={40} color={`var(--avatar-hue-${candidate.hueIdx})`} />
-                </button>
-              ))}
+                  {pixelCandidates.length ? "Shuffle" : "Generate"}
+                </Button>
+                {pixelCandidates.map((candidate, index) => (
+                  <button
+                    key={candidate.seed}
+                    type="button"
+                    onClick={() => applyPixelAvatar(candidate)}
+                    disabled={uploading || saving}
+                    aria-label={`Use pixel avatar ${index + 1}`}
+                    title="Use this pixel avatar"
+                    className="rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1"
+                    style={{
+                      display: "inline-flex",
+                      padding: 0,
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Identicon seed={candidate.seed} size={40} color={`var(--avatar-hue-${candidate.hueIdx})`} />
+                  </button>
+                ))}
+              </div>
+              <p className="text-caption text-muted-foreground">
+                Generate five random pixel avatars and click one to use it. It saves as the avatar image immediately.
+              </p>
             </div>
-            <p className="text-caption text-muted-foreground">
-              Generate five random pixel avatars and click one to use it. It saves as the avatar image immediately.
-            </p>
-          </div>
+          )}
           <div className="space-y-2">
             <Label>Color</Label>
             <div className="flex flex-wrap gap-2">

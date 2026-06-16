@@ -362,6 +362,35 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     await act(async () => root.unmount());
   });
 
+  it("offers the pixel-avatar generator only for non-human agents (humans use their GitHub avatar)", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+
+    // Non-human agent: pixel avatar is its identity, so the generator shows.
+    const nonHuman = await renderDom(
+      <ProfileEditDialog agent={agent({ type: "agent" })} open onOpenChange={vi.fn()} onSave={vi.fn()} />,
+    );
+    expect(document.body.textContent).toContain("Pixel avatar");
+    expect(buttonByText(document.body, "Generate")).not.toBeNull();
+    await act(async () => nonHuman.root.unmount());
+
+    // Human agent: pixel avatars are reserved for non-human agents, so the
+    // generator is hidden — humans fall back to their GitHub avatar.
+    document.body.innerHTML = "";
+    const human = await renderDom(
+      <ProfileEditDialog
+        agent={agent({ uuid: "human-1", name: "bestony", displayName: "Bestony", type: "human" })}
+        open
+        onOpenChange={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+    expect(document.body.textContent).not.toContain("Pixel avatar");
+    expect(buttonByText(document.body, "Generate")).toBeNull();
+    // The custom-image upload path stays available to humans.
+    expect(buttonByText(document.body, "Upload image")).not.toBeNull();
+    await act(async () => human.root.unmount());
+  });
+
   it("edits human visibility + delegate, and disables visibility for non-owners", async () => {
     const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
     const human = agent({
