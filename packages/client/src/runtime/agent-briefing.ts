@@ -829,12 +829,11 @@ everyone (reading a description to self-locate needs no ownership).
    fallback ("first 50 chars of the first message" / "alice, bob-bot")
    is rarely distinctive — naming the chat is a cheap win.
 
-   **Once set, treat the topic as a stable anchor — do not rename it
-   casually.** Users and agents locate a specific chat by its topic, so a
-   chat that keeps changing names becomes hard to find again. Rename only
-   when the topic is genuinely wrong or misleading because the chat's
-   subject itself changed — never to track progress or reflect a passing
-   focus. Progress belongs in the description, not the topic.
+   **Once set, leave the topic unchanged.** Users and agents locate a
+   specific chat by its topic, so a stable topic helps humans find the chat
+   again quickly. Do not rename an existing topic to track progress, reflect
+   a passing focus, or restate a changed subject. Progress and current scope
+   belong in the description, not the topic.
 
 2. **(Owner) Description → keep it current as a status report.** The
    description is **meant to move with the work**, but refresh it only on

@@ -758,6 +758,10 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toMatch(/status report/);
     expect(briefing).toMatch(/deprecated alias/);
     expect(briefing).toMatch(/Self-locate/);
+    expect(briefing).toContain("Once set, leave the topic unchanged");
+    expect(briefing).toContain("stable topic helps humans find the chat");
+    expect(briefing).not.toContain("Rename only");
+    expect(briefing).not.toContain("subject itself changed");
     // The Chat Topic block points at the Current Chat Context block at the
     // BOTTOM of the briefing (not "above" as in the pre-restructure
     // copy).
