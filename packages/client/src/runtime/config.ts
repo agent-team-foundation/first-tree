@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { DEFAULT_AGENT_CONCURRENCY, DEFAULT_AGENT_MAX_SESSIONS } from "@first-tree/shared/config";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
@@ -18,7 +19,7 @@ import { z } from "zod";
 const sessionConfigSchema = z
   .object({
     idle_timeout: z.number().int().positive().default(300),
-    max_sessions: z.number().int().positive().default(10),
+    max_sessions: z.number().int().positive().default(DEFAULT_AGENT_MAX_SESSIONS),
     /**
      * Upper bound on how long `working` / `blocked` may keep a session
      * alive past `idle_timeout` before force-suspend. See `evictIdle` in
@@ -35,7 +36,7 @@ const agentSlotConfigSchema = z
     agentId: z.string().min(1),
     type: z.string().min(1),
     session: sessionConfigSchema.prefault({}),
-    concurrency: z.number().int().positive().default(5),
+    concurrency: z.number().int().positive().default(DEFAULT_AGENT_CONCURRENCY),
   })
   .passthrough();
 

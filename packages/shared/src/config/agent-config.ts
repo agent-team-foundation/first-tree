@@ -2,6 +2,9 @@ import { z } from "zod";
 import { defineConfig, field } from "./schema.js";
 import type { InferConfig } from "./types.js";
 
+export const DEFAULT_AGENT_CONCURRENCY = 99;
+export const DEFAULT_AGENT_MAX_SESSIONS = 99;
+
 /**
  * Agent config layout on disk: `$FIRST_TREE_HOME/config/agents/<name>/agent.yaml`.
  *
@@ -16,10 +19,10 @@ export const agentConfigSchema = defineConfig({
   agentId: field(z.string().min(1)),
   /** Runtime handler type (e.g. "claude-code"). NOT the agent business type. */
   runtime: field(z.string().default("claude-code")),
-  concurrency: field(z.number().int().positive().default(5)),
+  concurrency: field(z.number().int().positive().default(DEFAULT_AGENT_CONCURRENCY)),
   session: {
     idle_timeout: field(z.number().int().positive().default(300)),
-    max_sessions: field(z.number().int().positive().default(10)),
+    max_sessions: field(z.number().int().positive().default(DEFAULT_AGENT_MAX_SESSIONS)),
     // Upper bound on how long a session may stay `working`/`blocked` past
     // `idle_timeout` before the runtime force-suspends it. Protects long
     // thinking / large message generation from idle eviction while still

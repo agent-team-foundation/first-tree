@@ -1,4 +1,4 @@
-import type { AgentRuntimeConfig } from "@first-tree/shared";
+import type { AgentRuntimeConfig, SessionEvent } from "@first-tree/shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
@@ -107,6 +107,7 @@ function createSessionManager(opts: {
   log?: pino.Logger;
   agentConfigCache?: AgentConfigCache;
   recoverChat?: (chatId: string) => Promise<void>;
+  onSessionEvent?: (chatId: string, event: SessionEvent) => void;
 }) {
   const handler = opts.handler ?? createMockHandler();
   const factory: HandlerFactory = opts.handlerFactory ?? (() => handler);
@@ -139,6 +140,7 @@ function createSessionManager(opts: {
     ackEntry: opts.ackEntry ?? mockAckEntry(),
     recoverChat: opts.recoverChat,
     agentConfigCache: opts.agentConfigCache,
+    onSessionEvent: opts.onSessionEvent,
   });
 }
 
@@ -962,6 +964,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
 
   it("uses an idle active session before preempting a working session for concurrency", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const events: Array<{ chatId: string; event: SessionEvent }> = [];
     const handlers = new Map<string, AgentHandler>();
     const contexts = new Map<string, SessionContext>();
     const messages = new Map<string, SessionMessage>();
@@ -981,6 +984,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const sm = createSessionManager({
       ackEntry,
       handlerFactory: factory,
+      onSessionEvent: (chatId, event) => events.push({ chatId, event }),
       concurrency: 2,
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
     });
@@ -998,6 +1002,16 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     expect(handlers.get("chat-working")?.suspend).not.toHaveBeenCalled();
     expect(handlers.has("chat-new")).toBe(true);
     expect(ackEntry).toHaveBeenCalledWith(2);
+    expect(
+      events.some(
+        ({ chatId, event }) =>
+          chatId === "chat-idle" &&
+          event.kind === "error" &&
+          event.payload.source === "runtime" &&
+          event.payload.message.includes("resilience.session.preempted:") &&
+          event.payload.message.includes("concurrency_idle_yield"),
+      ),
+    ).toBe(false);
 
     await sm.shutdown();
   });

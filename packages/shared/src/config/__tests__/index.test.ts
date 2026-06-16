@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentConfigSchema } from "../agent-config.js";
+import { agentConfigSchema, DEFAULT_AGENT_CONCURRENCY, DEFAULT_AGENT_MAX_SESSIONS } from "../agent-config.js";
 import { clientConfigSchema, getClientConfig, updatePolicySchema } from "../client-config.js";
 import * as config from "../index.js";
 import { loadAgents } from "../loader.js";
@@ -25,6 +25,8 @@ import { getConfig, resetConfig } from "../singleton.js";
 describe("config barrel", () => {
   it("re-exports config schemas and helpers from the public entry point", () => {
     expect(config.agentConfigSchema).toBe(agentConfigSchema);
+    expect(config.DEFAULT_AGENT_CONCURRENCY).toBe(DEFAULT_AGENT_CONCURRENCY);
+    expect(config.DEFAULT_AGENT_MAX_SESSIONS).toBe(DEFAULT_AGENT_MAX_SESSIONS);
     expect(config.clientConfigSchema).toBe(clientConfigSchema);
     expect(config.getClientConfig).toBe(getClientConfig);
     expect(config.updatePolicySchema).toBe(updatePolicySchema);
