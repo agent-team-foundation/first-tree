@@ -452,6 +452,46 @@ describe("chat command behavior", () => {
     });
   });
 
+  it("guards --description against literal \\n escapes on update and create, with a stdin escape hatch", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    // update: a one-line description whose newlines are literal `\n` escapes is
+    // rejected before any write, with a copyable heredoc hint on stderr.
+    await expect(
+      runChat(["update", "--description", "line1\\n\\n**title**\\nline3", "--chat", "chat-1"]),
+    ).rejects.toMatchObject({ code: "ESCAPED_NEWLINES", exitCode: 2 });
+    expect(sdk.updateChat).not.toHaveBeenCalled();
+    const updateHint = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(updateHint).toContain("chat update --description -");
+
+    // Narrow by design: a single escaped `\n` in prose stays writable.
+    await runChat(["update", "--description", "see `\\n` in the logs", "--chat", "chat-1"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-1", { description: "see `\\n` in the logs" });
+
+    // `--description -` reads the description from stdin (real newlines) and
+    // skips the guard — the escape hatch for an intentional literal `\n` body.
+    ioMocks.readStdin.mockResolvedValueOnce("first line\n\n**second** line");
+    await runChat(["update", "--description", "-", "--chat", "chat-1"]);
+    expect(sdk.updateChat).toHaveBeenLastCalledWith("chat-1", { description: "first line\n\n**second** line" });
+
+    // `--description -` with no piped stdin (TTY) is a usage error, not a write.
+    ioMocks.readStdin.mockResolvedValueOnce(null);
+    await expect(runChat(["update", "--description", "-", "--chat", "chat-1"])).rejects.toMatchObject({
+      code: "NO_STDIN",
+      exitCode: 2,
+    });
+
+    // create: the same inline guard fires before the chat is created; its hint
+    // points at ANSI-C `$'...'` quoting (stdin is taken by the first message).
+    printLineMock.mockClear();
+    await expect(
+      runChat(["create", "--to", "nova", "hello", "--description", "alpha\\nbeta\\ngamma"]),
+    ).rejects.toMatchObject({ code: "ESCAPED_NEWLINES", exitCode: 2 });
+    expect(sdk.createTaskChat).not.toHaveBeenCalled();
+    const createHint = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(createHint).toContain("$'first line");
+  });
+
   it("opens an interactive chat, polls, sends input, handles send failures, and closes cleanly", async () => {
     const emitter = new EventEmitter() as EventEmitter & { prompt: () => void };
     emitter.prompt = vi.fn();

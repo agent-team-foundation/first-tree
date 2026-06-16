@@ -1,4 +1,6 @@
 import { fail } from "../../../cli/output.js";
+import { channelConfig } from "../../../core/channel.js";
+import { print } from "../../../core/output.js";
 
 const MAX_STDIN_BYTES = 5 * 1024 * 1024;
 
@@ -45,6 +47,64 @@ export function looksLikeEscapedNewlineBody(body: string): boolean {
   if (body.includes("\n")) return false;
   const escapes = body.match(/\\n/g);
   return (escapes?.length ?? 0) >= 2;
+}
+
+/**
+ * Guard an inline `--description` (chat update / create) exactly the way
+ * `chat send` guards a message body. A chat description is authored markdown,
+ * surfaced verbatim in the chat sidebar and in every agent's prompt. When its
+ * newlines arrive as literal `\n` escapes — a one-line
+ * `chat update --description "line1\n\nline2"` whose shell quotes never expand
+ * `\n` — the stored value differs from the intended markdown structure and
+ * renders as one long line with visible `\n` tokens. The correction belongs
+ * before the write, not in UI rendering, so reject the malformed value here
+ * with a copyable fix instead of persisting it.
+ *
+ * `supportsStdin` selects the escape hatch the hint offers: `chat update` has
+ * no message body, so it can take the description from stdin via
+ * `--description -`; `chat create` already consumes stdin for its initial
+ * message, so it points to ANSI-C `$'...\n...'` quoting instead. Detection is
+ * shared with the send-body guard (`looksLikeEscapedNewlineBody`): narrow by
+ * design, so prose that merely mentions `\n` once stays writable.
+ */
+export function guardInlineDescription(value: string, opts: { supportsStdin: boolean }): void {
+  if (!looksLikeEscapedNewlineBody(value)) return;
+  const bin = channelConfig.binName;
+  // The copyable retry form goes through `print.line` — plain multi-line
+  // stderr text (silenced in --json mode). The fail envelope below stays a
+  // single-line JSON object per the Print-layer contract; embedding the
+  // heredoc example there would itself arrive `\n`-escaped, the exact bug.
+  if (opts.supportsStdin) {
+    print.line(
+      "chat update: --description arrived with literal \\n escapes — shell quotes do not expand \\n, " +
+        "so it would render as one long unformatted line in the chat sidebar. Resend with real newlines " +
+        "via stdin:\n\n" +
+        `  cat <<'EOF' | ${bin} chat update --description -\n` +
+        "  first line\n" +
+        "\n" +
+        "  **second** line\n" +
+        "  EOF\n\n" +
+        "(or pass an ANSI-C quoted string: --description $'first line\\n\\n**second** line'. " +
+        "stdin is not checked — pipe the body if literal \\n text is intentional.)\n\n",
+    );
+  } else {
+    print.line(
+      "chat create: --description arrived with literal \\n escapes — shell quotes do not expand \\n, " +
+        "so it would render as one long unformatted line in the chat sidebar. Pass real newlines via an " +
+        "ANSI-C quoted string instead:\n\n" +
+        "  --description $'first line\\n\\n**second** line'\n\n",
+    );
+  }
+  fail(
+    "ESCAPED_NEWLINES",
+    'Inline --description contains literal "\\n" escapes and no real newlines — it would render as one ' +
+      "long unformatted line in the chat sidebar. " +
+      (opts.supportsStdin
+        ? "Resend the description via stdin (`--description -`) with real newlines, or use an ANSI-C $'...' " +
+          "string (copyable forms printed above)."
+        : "Use an ANSI-C $'...\\n...' string with real newlines (copyable form printed above)."),
+    2,
+  );
 }
 
 export function parseLimit(value: string, max: number): number {

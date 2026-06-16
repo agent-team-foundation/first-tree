@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
+import { guardInlineDescription, readStdin } from "./_shared/io.js";
 
 type Options = {
   chat?: string;
@@ -91,7 +92,28 @@ async function run(options: Options): Promise<void> {
   if (options.clearDescription === true) {
     body.description = null;
   } else if (options.description !== undefined) {
-    const trimmed = options.description.trim();
+    // `--description -` reads the description from stdin (heredoc): real
+    // newlines survive and the escaped-newline guard is intentionally skipped,
+    // so it doubles as the escape hatch for an intentional literal `\n` body.
+    // Any other value is an inline string the shell did not expand, so guard
+    // it against the literal `\n` shape before persisting.
+    let resolved: string;
+    if (options.description === "-") {
+      const piped = await readStdin();
+      if (piped === null) {
+        fail(
+          "NO_STDIN",
+          "`--description -` reads the description from stdin, but stdin is a TTY (nothing piped). " +
+            "Pipe it: `cat <<'EOF' | … chat update --description -` … `EOF`.",
+          2,
+        );
+      }
+      resolved = piped;
+    } else {
+      guardInlineDescription(options.description, { supportsStdin: true });
+      resolved = options.description;
+    }
+    const trimmed = resolved.trim();
     if (trimmed.length === 0) {
       fail("EMPTY_DESCRIPTION", "Description cannot be empty. Use --clear-description to unset.", 2);
     }
@@ -108,7 +130,11 @@ export function registerChatUpdateCommand(chat: Command): void {
     .option("--chat <chatId>", "Target chat id (default: FIRST_TREE_CHAT_ID)")
     .option("--topic <text>", "Set the chat's short display label")
     .option("--clear-topic", "Clear the topic (falls back to auto-derived title)")
-    .option("--description <text>", "Set the chat's work summary + status report (Markdown supported)")
+    .option(
+      "--description <text>",
+      "Set the chat's work summary + status report (Markdown supported). Pass `-` to read it from stdin/heredoc " +
+        "when the body has real newlines (avoids literal \\n escapes).",
+    )
     .option("--clear-description", "Clear the description (sets it to null)")
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (options: Options) => {
