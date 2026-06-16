@@ -39,9 +39,9 @@ export const MESSAGE_FORMATS = {
   FILE: "file",
   /**
    * Open question — an "ask" directed at a single human (the sole entry in
-   * `metadata.mentions`). The narrative/context lives in the message body
-   * (`content`); the specific question + optional subject live in
-   * `metadata.request`. No lifecycle state is stored on the message.
+   * `metadata.mentions`). The ask itself is the message body (`content`);
+   * `metadata.request` carries only the answer affordance (optional `options`
+   * + `multiSelect`). No lifecycle state is stored on the message.
    *
    * BLOCKING: while such a question is unresolved, the web UI blocks that chat
    * for the target human — it pins the question and hides every message after
@@ -53,10 +53,13 @@ export const MESSAGE_FORMATS = {
    * answered/closed only by a later message carrying `metadata.resolves` (see
    * `requestResolutionSchema`), which drives `chat_user_state.open_request_count`
    * down. The target's answer ALWAYS resolves it — picking an option OR typing
-   * free text both write `resolves` (kind="answered"). `inReplyTo` itself is
-   * pure threading and never changes a question's lifecycle; the asking agent
-   * may still thread a follow-up that adds context without resolving, but the
-   * human cannot (their answer is a resolution).
+   * free text both write `resolves` (kind="answered"). NEW resolutions are
+   * human-only — the server accepts a `resolves` write only from the target, and
+   * an agent cannot post a non-ask follow-up to the human (a plain agent→human
+   * send is rejected). Lifecycle readers additionally honor a legacy
+   * asker-authored resolution row (written before the refinement) for
+   * backward-compat. `inReplyTo` itself is pure threading and never changes a
+   * question's lifecycle.
    */
   REQUEST: "request",
 } as const;
@@ -65,54 +68,73 @@ export const messageFormatSchema = z.enum(["text", "markdown", "card", "referenc
 export type MessageFormat = z.infer<typeof messageFormatSchema>;
 
 /**
- * One question inside a `format="request"` message. A request can carry
- * several questions answered together in one reply.
- *   - `kind="single"` — pick exactly one of `options`.
- *   - `kind="free"`   — free-text answer (options ignored).
+ * One answer option on an ask. Options come 2–4 at a time, or are omitted
+ * entirely for a free-text answer.
  */
-export const openQuestionItemSchema = z.object({
-  id: z.string().min(1),
-  prompt: z.string().min(1),
-  kind: z.enum(["single", "free"]).default("single"),
-  options: z.array(z.string().min(1)).default([]),
-  required: z.boolean().default(true),
+export const askOptionSchema = z.object({
+  /**
+   * 1–5 words. Hard-capped: a label longer than five words is a description,
+   * not a label — put the explanation in `description`.
+   */
+  label: z
+    .string()
+    .min(1)
+    .refine(
+      (s) => {
+        const words = s.trim().split(/\s+/).filter(Boolean).length;
+        return words >= 1 && words <= 5;
+      },
+      { message: "label must be 1–5 words" },
+    ),
+  /** Explains the option's meaning / trade-off. */
+  description: z.string().min(1),
+  /** Optional mockup / code snippet rendered when the option is focused. */
+  preview: z.string().optional(),
 });
-export type OpenQuestionItem = z.infer<typeof openQuestionItemSchema>;
+export type AskOption = z.infer<typeof askOptionSchema>;
 
 /**
- * Shape of `metadata.request` on a `format="request"` message: the long
- * narrative/decision context lives in the message body (`content`); this
- * carries the structured ask. Server-opaque (the send path validates only
- * the single-human-target rule, not this payload) — the web parses it with
- * `safeParse` to render the answer block, mirroring how `githubEventCardSchema`
- * gates card rendering. See proposals/group-chat-unified-send §D1.
+ * Shape of `metadata.request` on a `format="request"` message. The ask itself
+ * is the message body (`content`); this payload carries only the answer
+ * affordance:
+ *   - omit `options` → free-text answer.
+ *   - 2–4 `options` → a choice; `multiSelect` toggles single vs. multiple.
+ * Server-opaque (the send path validates only the single-human-target rule,
+ * not this payload) — the web parses it with `safeParse` to render the answer
+ * block, mirroring how `githubEventCardSchema` gates card rendering.
  */
-export const openQuestionRequestSchema = z.object({
-  subject: z.string().optional(),
-  questions: z.array(openQuestionItemSchema).min(1),
-  /** Allow a free-text addition alongside option questions. */
-  allowExtra: z.boolean().default(false),
-});
-export type OpenQuestionRequest = z.infer<typeof openQuestionRequestSchema>;
+export const askRequestSchema = z
+  .object({
+    options: z.array(askOptionSchema).min(2).max(4).optional(),
+    multiSelect: z.boolean().default(false),
+  })
+  .refine((r) => r.options !== undefined || r.multiSelect === false, {
+    message: "multiSelect requires options",
+  });
+export type AskRequest = z.infer<typeof askRequestSchema>;
 
 /**
  * Explicit lifecycle signal carried in `metadata.resolves` on a reply to a
  * `format="request"` message. This is the ONLY thing that answers or closes
  * an open question — `inReplyTo` no longer does (it is pure threading now).
  *
- * Written by:
- *   - the human's web UI on ANY answer — picking an option OR typing free text
- *     both attach `resolves` (kind="answered"); the blocking answer surface has
- *     no "reply without resolving" path, so every human answer resolves, or
- *   - the asking agent via `chat send --answer`/`--close` (resolve on the
- *     human's behalf when answered out-of-band, or withdraw a moot question).
- * A bare threaded reply with no `resolves` (e.g. the asking agent adding
- * context) leaves the question open.
+ * Written ONLY by the target human's web answer — picking an option OR typing
+ * free text both attach `resolves` (kind="answered"); the blocking answer
+ * surface has no "reply without resolving" path, so every human answer resolves.
+ * An agent (including the asker) **cannot** write a resolution: the server
+ * authorizes a NEW resolution only from the question's target, so an agent
+ * answers nothing and closes nothing. (Pre-refinement history may still hold
+ * asker-authored resolution rows from when an agent could resolve; readers and
+ * the idempotency scan honor those for backward-compat, but no new ones can be
+ * written.) A bare threaded reply that carries no `resolves` does not resolve —
+ * `inReplyTo` is pure threading.
  *
- *   - kind="answered" — the question is answered. The readable
- *     `"<prompt> → <answer>"` lines stay in the message `content`.
- *   - kind="closed"   — the question is withdrawn / superseded; `reason`
- *     optionally explains why.
+ *   - kind="answered" — the question is answered. The readable answer stays in
+ *     the message `content`.
+ *   - kind="closed"   — the question is withdrawn. Retained as a server-honored
+ *     resolution kind for compatibility; no current surface produces it (the
+ *     human web answer only ever writes "answered"). `reason` optionally explains
+ *     why.
  *
  * Server-opaque except for the `open_request_count` counter, whose −1 keys
  * off `resolves.request`. The web parses it with `safeParse`.

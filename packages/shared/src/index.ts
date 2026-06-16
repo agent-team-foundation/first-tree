@@ -496,6 +496,10 @@ export {
   updateMyProfileSchema,
 } from "./schemas/member.js";
 export {
+  type AskOption,
+  type AskRequest,
+  askOptionSchema,
+  askRequestSchema,
   type ClientMessage,
   clientMessageSchema,
   MESSAGE_FORMATS,
@@ -508,10 +512,6 @@ export {
   messagePurposeSchema,
   messageSchema,
   messageSourceSchema,
-  type OpenQuestionItem,
-  type OpenQuestionRequest,
-  openQuestionItemSchema,
-  openQuestionRequestSchema,
   type ParticipantMode,
   type PrecedingMessage,
   participantModeSchema,

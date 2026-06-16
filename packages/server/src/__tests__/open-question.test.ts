@@ -18,17 +18,18 @@ import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
  *       +1  a FRESH request (format=request) → target human.
  *       -1  an EXPLICIT resolution: a message carrying
  *           `metadata.resolves = {request, kind}` pointed at the question,
- *           from the target (answered) or the asking agent (answered/closed).
- *           Idempotent and floored at zero.
+ *           ONLY from the target human (the web answer). An agent — including
+ *           the asker — cannot resolve. Idempotent and floored at zero.
  *   - `inReplyTo` is pure threading and NEVER resolves: a "chat about this"
  *     discussion reply leaves the question open. Re-asking (a new
  *     `format=request`) opens a second independent question (+1) — it does
  *     not auto-supersede the one it threads under.
  *   - An invalid `resolves` target FAILS LOUD: the whole send is rejected
  *     (tx rollback, no message row) when the request id is missing from this
- *     chat, points at a non-request message, or the sender is neither the
- *     target nor the asker. Re-resolving an already-resolved question stays
- *     a soft success (idempotent counter).
+ *     chat, points at a non-request message, or the sender is not the target
+ *     human (resolution is human-only — an agent, including the asker, cannot
+ *     resolve). Re-resolving an already-resolved question stays a soft success
+ *     (idempotent counter).
  *
  * No lifecycle state is stored on the message — these tests pin the counter,
  * which is the only persisted signal.
@@ -108,6 +109,66 @@ describe("open-question (format=request) + open_request_count", () => {
         metadata: { mentions: [other.uuid] }, // `other` is an agent, not a human
       }),
     ).rejects.toThrow(/human/i);
+  });
+
+  it("rejects an agent's plain (non-request) message addressed to a human — `chat send` is agent-directed", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, other, chat } = await setup(app, uid);
+
+    // Agent → human as a plain message has no channel: it must fail loud and
+    // point at `chat ask` / `chat update --description`.
+    await expect(
+      sendMessage(app.db, chat.id, asker.agent.uuid, {
+        source: "api",
+        format: "text",
+        content: "quick update for you",
+        metadata: { mentions: [human.uuid] },
+      }),
+    ).rejects.toThrow(/cannot `chat send` a human/i);
+
+    // Mixed mention (agent + human) in a non-text format is still rejected — a
+    // human is addressed, and the rule does not depend on the message format.
+    await expect(
+      sendMessage(app.db, chat.id, asker.agent.uuid, {
+        source: "api",
+        format: "markdown",
+        content: "**fyi** both",
+        metadata: { mentions: [other.uuid, human.uuid] },
+      }),
+    ).rejects.toThrow(/cannot `chat send` a human/i);
+
+    // The rejected send leaves nothing in history (tx rollback).
+    const stray = await app.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(and(eq(messages.chatId, chat.id), eq(messages.senderId, asker.agent.uuid)));
+    expect(stray).toHaveLength(0);
+
+    // The same intent as an ASK (format=request) is allowed.
+    await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "need a quick decision",
+      metadata: { mentions: [human.uuid], request: { question: "ok to ship?" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Agent → agent plain message is unaffected.
+    await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "ping",
+      metadata: { mentions: [other.uuid] },
+    });
+
+    // A HUMAN sender addressing anyone is unaffected (the rule is agent-only).
+    await sendMessage(app.db, chat.id, human.uuid, {
+      source: "web",
+      format: "text",
+      content: "hi team",
+      metadata: { mentions: [other.uuid] },
+    });
   });
 
   it("an explicit answer resolution decrements the count; further resolutions are no-ops", async () => {
@@ -218,7 +279,8 @@ describe("open-question (format=request) + open_request_count", () => {
 
   it("re-asking (a new format=request) opens a SECOND independent question (+1, no auto-supersede)", async () => {
     // Under the explicit-resolution model a new request never auto-closes the
-    // one it threads under — superseding is now an explicit `chat send --close`.
+    // one it threads under — both stay open and the human works them
+    // oldest-first (re-asking opens a new, independent question).
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, chat } = await setup(app, uid);
@@ -243,7 +305,10 @@ describe("open-question (format=request) + open_request_count", () => {
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(2);
   });
 
-  it("the asking agent closes via an explicit resolves(closed) (clears the target's count)", async () => {
+  it("the asking agent CANNOT resolve its own question — resolution is human-only", async () => {
+    // The asker raises the question but can neither answer nor close it; only
+    // the target human resolves (in the web UI). Both shapes of an asker-sent
+    // resolution are refused, and the open count stays up.
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, chat } = await setup(app, uid);
@@ -252,42 +317,87 @@ describe("open-question (format=request) + open_request_count", () => {
       source: "api",
       format: "request",
       content: "ratio?",
-      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+      metadata: { mentions: [human.uuid], request: {} },
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // The ASKER explicitly closes (chat send --close) → resolves(closed) → -1.
-    await sendMessage(
-      app.db,
-      chat.id,
-      asker.agent.uuid,
-      {
-        source: "api",
-        format: "text",
-        content: "Never mind — resolved this offline.",
-        metadata: { resolves: { request: question.id, kind: "closed", reason: "resolved offline" } },
-      },
-      { allowRecipientlessSend: true },
-    );
-    expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
+    // Recipientless asker resolution (the old "resolve on the human's behalf"
+    // shape) is refused by the resolution authz — only the target may resolve.
+    await expect(
+      sendMessage(
+        app.db,
+        chat.id,
+        asker.agent.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: "Going with 20%.",
+          metadata: { resolves: { request: question.id, kind: "answered" } },
+        },
+        { allowRecipientlessSend: true },
+      ),
+    ).rejects.toThrow(/only the question's target may resolve/i);
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // A second close is a no-op — floored at zero.
+    // Addressing the human does not help — the agent→human send guard refuses a
+    // non-ask agent→human send before authz even runs.
+    await expect(
+      sendMessage(app.db, chat.id, asker.agent.uuid, {
+        source: "api",
+        format: "text",
+        content: "Going with 20%.",
+        metadata: { mentions: [human.uuid], resolves: { request: question.id, kind: "answered" } },
+      }),
+    ).rejects.toThrow(/cannot .*send.* a human/i);
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+  });
+
+  it("the target human resolves their own question (web answer) → clears the count", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: {} },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // The human's web answer carries the resolution; senderId === target → allowed.
     await sendMessage(
       app.db,
       chat.id,
-      asker.agent.uuid,
+      human.uuid,
       {
-        source: "api",
+        source: "web",
         format: "text",
-        content: "(still closed)",
-        metadata: { resolves: { request: question.id, kind: "closed" } },
+        content: "Going with 20%.",
+        inReplyTo: question.id,
+        metadata: { resolves: { request: question.id, kind: "answered" } },
       },
       { allowRecipientlessSend: true },
     );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
   });
 
-  it("a resolves from neither the target nor the asker is REJECTED (unauthorized, fail loud)", async () => {
+  it("a plain agent→human send WITHOUT a resolution is still rejected (guard intact)", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    await expect(
+      sendMessage(app.db, chat.id, asker.agent.uuid, {
+        source: "api",
+        format: "text",
+        content: "just pinging you",
+        metadata: { mentions: [human.uuid] },
+      }),
+    ).rejects.toThrow(/cannot .*send.* a human/i);
+  });
+
+  it("a resolves from anyone other than the target is REJECTED (unauthorized, fail loud)", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, other, chat } = await setup(app, uid);
@@ -300,7 +410,8 @@ describe("open-question (format=request) + open_request_count", () => {
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // `other` (an unrelated participant) tries to resolve — must fail loud.
+    // `other` (an unrelated participant, not the target human) tries to resolve
+    // — must fail loud.
     await expect(
       sendMessage(
         app.db,
@@ -310,11 +421,11 @@ describe("open-question (format=request) + open_request_count", () => {
           source: "api",
           format: "text",
           content: "I'll close this",
-          metadata: { resolves: { request: question.id, kind: "closed" } },
+          metadata: { resolves: { request: question.id, kind: "answered" } },
         },
         { allowRecipientlessSend: true },
       ),
-    ).rejects.toThrow(/target or the asking agent/i);
+    ).rejects.toThrow(/only the question's target may resolve/i);
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
     // The rejected send must not leave a message in history (tx rollback).
@@ -441,8 +552,9 @@ describe("open-question (format=request) + open_request_count", () => {
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // Authorized sender, valid request id, but bogus `kind` — must fail loud,
-    // not land as ordinary metadata (which would poison the priors scan).
+    // Valid request id but a bogus `kind` — must fail loud on the schema parse
+    // (before any authz), not land as ordinary metadata (which would poison the
+    // priors scan).
     await expect(
       sendMessage(
         app.db,
@@ -481,13 +593,14 @@ describe("open-question (format=request) + open_request_count", () => {
       .where(and(eq(messages.chatId, chat.id), sql`${messages.metadata} ? 'resolves'`));
     expect(stray).toHaveLength(0);
 
-    // The legitimate resolution still works and clears the count.
+    // The legitimate resolution (from the target human) still works and clears
+    // the count.
     await sendMessage(
       app.db,
       chat.id,
-      asker.agent.uuid,
+      human.uuid,
       {
-        source: "api",
+        source: "web",
         format: "text",
         content: "confirmed: 5%",
         metadata: { resolves: { request: question.id, kind: "answered" } },
@@ -510,9 +623,10 @@ describe("open-question (format=request) + open_request_count", () => {
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // A pre-validation row from an AUTHORIZED sender with a malformed kind:
-    // matches the priors scan on `resolves ->> 'request'` + sender, but is
-    // not a schema-valid resolution — it must not count as a "prior".
+    // A pre-validation row whose sender is in the priors-scan scope (the asker,
+    // kept in scope for legacy rows) with a malformed kind: it matches the priors
+    // scan on `resolves ->> 'request'` + sender, but is not a schema-valid
+    // resolution — it must not count as a "prior".
     await app.db.insert(messages).values({
       id: crypto.randomUUID(),
       chatId: chat.id,
@@ -523,12 +637,13 @@ describe("open-question (format=request) + open_request_count", () => {
       source: "api",
     });
 
+    // The target human's legitimate resolution still decrements past it.
     await sendMessage(
       app.db,
       chat.id,
-      asker.agent.uuid,
+      human.uuid,
       {
-        source: "api",
+        source: "web",
         format: "text",
         content: "confirmed: 5%",
         metadata: { resolves: { request: question.id, kind: "answered" } },
@@ -624,7 +739,7 @@ describe("open-question (format=request) + open_request_count", () => {
     // desync it, so edits touching `request` are rejected.
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
-    const { asker, human, chat } = await setup(app, uid);
+    const { asker, human, other, chat } = await setup(app, uid);
 
     const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
       source: "api",
@@ -632,11 +747,13 @@ describe("open-question (format=request) + open_request_count", () => {
       content: "ratio?",
       metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
     });
+    // A plain agent message must target an agent (`other`); agent→human plain is
+    // rejected. Recipient identity is irrelevant to this format-edit check.
     const { message: plain } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
       source: "api",
       format: "text",
       content: "fyi",
-      metadata: { mentions: [human.uuid] },
+      metadata: { mentions: [other.uuid] },
     });
 
     await expect(editMessage(app.db, chat.id, question.id, asker.agent.uuid, { format: "text" })).rejects.toThrow(

@@ -23,7 +23,7 @@ arms — pick the right one before acting:
 
 | Arm | What it does | Sub-skills |
 |---|---|---|
-| **Workspace collaboration** | How agents talk to each other inside a shared workspace (`chat create`, `chat send`, `chat invite`, `chat list`, `chat history`). | This skill (canonical rules + `references/agent-communication.md`) |
+| **Workspace collaboration** | How agents talk to each other (and ask humans) inside a shared workspace (`chat create`, `chat send`, `chat ask`, `chat invite`, `chat list`, `chat history`). | This skill (canonical rules + `references/agent-communication.md`) |
 | **Context management** | Authoring, maintaining, and reading a Context Tree — the shared knowledge repo | `first-tree-read` · `first-tree-context` (write operating guide) · `first-tree-sync` |
 
 If your task touches both arms, do the workspace ops first (so you can ask
@@ -51,7 +51,7 @@ Agents (and with humans in your chat) over the messaging surface.
 These rules govern every in-chat turn — read them once, follow them
 always. They are canonical here so every agent that loads this entry
 skill sees them, even before deciding whether the task is workspace or
-context. The full `chat create` / `chat send` / `chat invite` CLI mechanics live in
+context. The full `chat create` / `chat send` / `chat ask` / `chat invite` CLI mechanics live in
 [`references/agent-communication.md`](references/agent-communication.md);
 this section is the *behavior contract*.
 
@@ -62,8 +62,8 @@ prompt:
 
 | Target in this chat | What to do |
 |---|---|
-| **human** — plain reply / status | `chat send <name> "..."` — every reply directed at a human in this chat goes through `chat send`. |
-| **human** — needs a decision / approval / answer | `chat send <name> --request --question "..."` — a tracked ask (red-dot / open-request count) that **blocks that chat for the human**: their UI pins it and hides every message after it until they answer (several open asks clear oldest-first). **Any answer resolves it** — picking an option OR typing free text both clear the red-dot and unblock. **Prefer a free-text question (omit `--option`); add `--option` only when every option is a short, single-meaning, mutually-exclusive pick** — dense option lists are hard to choose from. If their answer pushes back or you need more, re-ask (a new request → a new block). You can also resolve from the CLI — `chat send <human> "<answer>" --answer <requestId>` — or withdraw a moot one with `chat send <human> "<reason>" --close <requestId>` (only the target human or the asking agent may resolve). See `references/agent-communication.md`. |
+| **human** — progress / status | `chat update --description "..."` — the rolling status report a human follows. |
+| **human** — needs a decision / approval / answer | `chat ask <name> "<background + the question>"` — a tracked ask (red-dot / open-request count) that **blocks that chat for the human**: their UI pins it and hides every message after it until they answer (several open asks clear oldest-first). The message **body IS the ask**. **Any answer resolves it** — picking an option OR typing free text both clear the red-dot and unblock. **Prefer a free-text question (omit `--options`); add 2–4 `--options` (JSON `{label, description, preview?}`, plus `--multi-select` to allow more than one) only when every option is a short, single-meaning, mutually-exclusive pick** — dense option lists are hard to choose from. If their answer pushes back or you need more, re-ask (a new `chat ask` → a new block). You can ONLY ask — the human resolves in the web UI; an agent cannot mark a question answered or close it (there is no resolve command). See `references/agent-communication.md`. **Reserve this for a genuine user decision you cannot settle from the request / code / a reasonable default — never a progress or "can I continue?" / "plan ready?" check (decide and report via `chat update --description`).** |
 | **agent** — make them act | `chat send <name> "..."` — agents only act on explicit `chat send`. |
 | **agent not in this chat, same task** — stage / role handoff | `chat invite <name>`, then `chat send <name> "..."` — keep the task in the current chat and add the agent as a participant before waking them. |
 | **new task / offshoot** — needs its own conversation boundary | `chat create --to <name> "..."` — creates a new task chat and writes the first message. `--to` recipients are mentioned and woken; `--with` participants are added silently for context. Use this only for real task splits, not same-task stage handoffs, courtesy acknowledgements, or empty chats. |
@@ -76,31 +76,11 @@ status or escalate on delayed replies alone.
 retry create requests. If the result is uncertain, inspect `chat list` or
 the Web UI before trying again.
 
-Your output stream is your reasoning trace — think, plan, and narrate
-there freely as you work. It runs on a separate channel from `chat send`.
-The table above is silent on output streaming on purpose: only the
-actions in the table reach a teammate.
-
-(Transitional system behavior: a non-empty final output is currently
-mirrored into chat history as a silent `agent-final-text` row that does
-NOT wake other agents. The mirror is on the runtime-retirement track
-(first-tree#941); the future direction is two fully decoupled channels
-with no mirror at all. Today the mirror is not a reach path — `chat
-send` is.)
-
 ### Don't fire a courtesy chat send
 
-Your output stream is your reasoning trace — use it freely. What this
-section prescribes is the *send* side: not every wake-up needs a `chat
-send` back. A courteous "got it" echoed between two agents is how loops
-start — when there is nothing new for any teammate, finish reasoning and
-end the turn without firing `chat send`.
-
-(The runtime's empty-output guard at `result-sink.ts` is a safety belt
-that skips delivery on a literally empty turn; it is not a directive to
-produce empty output. The transitional output-stream mirror is described
-above under §Decision guide — it does not change what this section
-prescribes about the *send* side.)
+Not every wake-up needs a `chat send` back. A courteous "got it" echoed
+between two agents is how loops start — when there is nothing new for any
+teammate, end the turn without firing `chat send`.
 
 ### Channel-binary substitution
 
@@ -274,5 +254,5 @@ and `docs/onboarding-guide.md`.
 
 ## References
 
-- [`references/agent-communication.md`](references/agent-communication.md) — full `chat create` / `chat send` / `chat invite` CLI mechanics (task chat creation / markdown / stdin / content-formatting / reaching non-members / mention resolution)
+- [`references/agent-communication.md`](references/agent-communication.md) — full `chat create` / `chat send` / `chat ask` / `chat invite` CLI mechanics (task chat creation / asking humans / markdown / stdin / content-formatting / reaching non-members / mention resolution)
 - `scripts/quick_validate.py` — skill frontmatter sanity check (used by `pnpm validate:skill`)

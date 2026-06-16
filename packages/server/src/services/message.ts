@@ -284,6 +284,25 @@ export function preflightMessageSendIntent(input: {
     }
   }
 
+  // An agent may address a human ONLY as a `request` (an ask via `chat ask`). A
+  // plain agent→human send has no channel: humans are reached with `chat ask`
+  // (decisions/approval) or `chat update --description` (progress). The only
+  // exempt shape is the silent `agent-final-text` mirror (it addresses no one —
+  // an agent's own response surfaced for human observers). An agent CANNOT
+  // resolve a question either: resolution is human-only (the web answer), so a
+  // resolution-carrying agent send is not exempt here and is also refused by the
+  // resolution authorization below.
+  if (senderType !== "human" && data.format !== MESSAGE_FORMATS.REQUEST && data.purpose !== "agent-final-text") {
+    const humanTarget = mentionTargets.map((id) => participantsById.get(id)).find((p) => p?.type === "human");
+    if (humanTarget) {
+      const label = humanTarget.displayName || humanTarget.name || "that human";
+      throw new BadRequestError(
+        `An agent cannot \`chat send\` a human (addressed ${label}). Ask a human with ` +
+          "`chat ask` (a decision/approval/answer), or report progress with `chat update --description`.",
+      );
+    }
+  }
+
   const isAgentFinalText = data.purpose === "agent-final-text";
   const purposeProfile = isAgentFinalText
     ? {
@@ -548,12 +567,12 @@ async function sendMessageInner(
     //      +1 — ANY `format=request` opens a question for its single human
     //           target. (A request-shaped reply also +1's — it is a new,
     //           independently-answerable question; it does NOT auto-close the
-    //           one it replies to. Superseding is now an explicit close.)
+    //           one it replies to. Both stay open, worked oldest-first.)
     //      -1 — an EXPLICIT resolution: a message carrying `metadata.resolves`
-    //           pointed at a prior open question (the human's clean answer, or
-    //           the asking agent's `chat send --answer`/`--close`). `inReplyTo`
-    //           no longer resolves anything — it is pure threading, so a
-    //           "chat about this" discussion can thread under the question
+    //           pointed at a prior open question. Resolution is human-only — the
+    //           target's web answer; an agent (even the asker) cannot resolve.
+    //           `inReplyTo` no longer resolves anything — it is pure threading,
+    //           so a "chat about this" discussion can thread under the question
     //           without clearing the red dot. Idempotent — only the first
     //           resolution decrements; `GREATEST(0, …)` floors at zero.
     const requestTarget = mergedMentions[0];
@@ -596,27 +615,31 @@ async function sendMessageInner(
         parent.format === MESSAGE_FORMATS.REQUEST && parentMentions.length === 1 ? parentMentions[0] : undefined;
       if (typeof target !== "string") {
         throw new BadRequestError(
-          `Cannot resolve "${requestId}": it is not a tracked request. Only messages sent with --request can be answered or closed.`,
+          `Cannot resolve "${requestId}": it is not a tracked request. Only a question raised with \`chat ask\` can be answered.`,
         );
       }
-      // Only the target (a direct answer) or the asking agent (answer/close
-      // after judging the discussion) may resolve a question.
-      if (senderId !== target && senderId !== parent.senderId) {
-        throw new ForbiddenError("Only the question's target or the asking agent may resolve it.");
+      // Resolution is human-only: ONLY the target human resolves it, by
+      // answering in the web UI. An agent — including the asker — cannot mark a
+      // question answered or close it; an agent reaches the human only by asking.
+      // (The send guard above already refuses an agent→human send that is not an
+      // ask; this is the authoritative authz for the resolution itself.)
+      if (senderId !== target) {
+        throw new ForbiddenError("Only the question's target may resolve it — the human answers in the web UI.");
       }
       // Idempotency: only the FIRST resolution decrements (exclude the row we
       // just inserted). A prior resolution is any other message in this chat
-      // whose `metadata.resolves.request` points at the same question — but
-      // ONLY from an authorized resolver (the target or the asker). Without
-      // the sender scope, any participant could pre-write a stray
-      // `metadata.resolves` for this question (which itself never decrements,
-      // being unauthorized) and have it count as a "prior", permanently
-      // blocking the legitimate resolution from clearing the red dot.
-      // (Unauthorized resolves are rejected above nowadays, but rows written
-      // before that gate existed may still be present — keep the scope.)
-      // A re-resolve of an already-resolved question stays a soft success:
-      // it threads as a confirmation and simply skips the decrement, so the
-      // human-answers-while-agent-closes race never errors either side.
+      // whose `metadata.resolves.request` points at the same question, from a
+      // sender in the resolver scope. The scope is the target human (the only
+      // authorized resolver now) PLUS the asker — the asker is kept ONLY to
+      // recognize legacy pre-gate rows it may have written back when an agent
+      // could resolve; it can no longer write a NEW resolution (the authz above
+      // rejects it). The scope matters because, without it, any participant
+      // could pre-write a stray `metadata.resolves` (itself never decrementing,
+      // being unauthorized) that would count as a "prior" and permanently block
+      // the legitimate resolution from clearing the red dot. A re-resolve of an
+      // already-resolved question stays a soft success: it threads as a
+      // confirmation and simply skips the decrement, so a duplicate human answer
+      // never errors.
       const resolvers = [target, parent.senderId];
       const priors = await tx
         .select({ id: messages.id })

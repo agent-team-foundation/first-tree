@@ -116,12 +116,13 @@ describe("chat membership invariants", () => {
       participantIds: [peer.agent.uuid],
     });
 
-    // peer sends a message so admin has an unread counter to remember.
+    // peer asks the admin (the agent→human channel is `chat ask`/format=request)
+    // so admin gets a chat_user_state row to remember.
     await sendMessage(app.db, chatId, peer.agent.uuid, {
       source: "api",
-      format: "text",
+      format: "request",
       content: "ping",
-      metadata: { mentions: [admin.humanAgentUuid] },
+      metadata: { mentions: [admin.humanAgentUuid], request: { question: "ok?" } },
     });
 
     // Materialise the chat_user_state row by marking read.

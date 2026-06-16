@@ -107,7 +107,9 @@ describe("1:1 chat wake-up + unread badge (explicit-mention contract)", () => {
     expect(await loadUnread(chatId, peer.agent.uuid, peer.memberId, peer.organizationId)).toBe(0);
   });
 
-  it("agent → human DM with explicit mentions wakes the human and bumps the unread counter", async () => {
+  it("agent → human DM ask (format=request) wakes the human and bumps the unread counter", async () => {
+    // `chat send` is agent-directed; an agent reaches a human only as an ask
+    // (`chat ask`, format=request), which still wakes the human and counts unread.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const peer = await createTestAgent(app, { name: `dma2h-${crypto.randomUUID().slice(0, 6)}` });
@@ -117,9 +119,9 @@ describe("1:1 chat wake-up + unread badge (explicit-mention contract)", () => {
     });
     await sendMessage(app.db, chatId, peer.agent.uuid, {
       source: "api",
-      format: "text",
-      content: "ack",
-      metadata: { mentions: [admin.humanAgentUuid] },
+      format: "request",
+      content: "ack — quick check",
+      metadata: { mentions: [admin.humanAgentUuid], request: { question: "ok?" } },
     });
 
     expect(await notifyInboxRows(chatId, admin.humanAgentUuid)).toHaveLength(1);

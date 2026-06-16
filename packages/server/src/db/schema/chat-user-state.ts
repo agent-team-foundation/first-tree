@@ -42,8 +42,8 @@ export const chatUserState = pgTable(
      * Count of open questions (`messages.format = 'request'`) directed at
      * this (chat, human) — incremented on RAISE, decremented by an EXPLICIT
      * resolution (a message carrying `metadata.resolves` pointed at the
-     * question — the human's clean answer, or the asking agent's
-     * `chat send --answer`/`--close`). NOT decremented by plain threaded replies
+     * question — the target human's clean web answer; resolution is human-only,
+     * an agent cannot resolve). NOT decremented by plain threaded replies
      * (`inReplyTo` is pure threading now), so a "chat about this" discussion
      * keeps the question open. Drives the re-introduced `needs_you` red-dot.
      *

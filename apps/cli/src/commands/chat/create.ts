@@ -16,9 +16,8 @@ interface CreateOptions {
   metadata?: string;
   agent?: string;
   request?: boolean;
-  subject?: string;
-  question?: string;
-  option?: string[];
+  options?: string;
+  multiSelect?: boolean;
 }
 
 function collect(value: string, previous: string[]): string[] {
@@ -91,14 +90,13 @@ export function registerChatCreateCommand(chat: Command): void {
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .option(
       "--request",
-      "Create the task with an open question. Requires exactly one --to recipient; the message body is context.",
+      "Create the task with an open question. Requires exactly one --to human; the message body IS the ask.",
     )
     .option(
-      "--subject <text>",
-      "Short headline for the request, shown in the answer dock/card header (with --request, ≤80 chars)",
+      "--options <json>",
+      "Answer options as a JSON array, 2–4 items of {label (1–5 words), description, preview?} (with --request)",
     )
-    .option("--question <text>", "The question prompt — just the ask, no background (with --request, ≤200 chars)")
-    .option("--option <opt>", "An answer option for the question; repeatable (with --request)", collect, [])
+    .option("--multi-select", "Allow picking more than one option (with --request; requires --options)")
     .action(async (message: string | undefined, options: CreateOptions) => {
       try {
         const to = options.to ?? [];
