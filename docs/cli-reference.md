@@ -263,8 +263,8 @@ first-tree chat
 ├── ask <name> [message]                             # ask a HUMAN a tracked question; the body IS the ask (background + question)
 │     --options <json>                               #   2–4 answer options {label (1–5 words), description, preview?}; omit for free-text
 │     --multi-select                                 #   allow picking more than one option (requires --options)
-│     --reply-to <messageId>                         #   ask a NEW question threaded under <messageId> (opens a tracked question)
-│     # (no resolve flag — the human answers in the web UI; an agent can only ASK)
+│     # always a fresh top-level question — no threading, and no resolve flag
+│     # (the human answers in the web UI; an agent can only ASK)
 ├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before same-task send
 ├── list
 ├── history <chatId>
@@ -324,12 +324,8 @@ first-tree chat ask alice \
 # Free-text ask (no options)
 first-tree chat ask alice "What rollback window do you want before we ship 0021?"
 
-# Ask a follow-up question threaded under an earlier message. This still opens a
-# NEW tracked question (a fresh red-dot + block); threading does NOT turn it into
-# a non-blocking context note, and it does not resolve the message it threads under.
-first-tree chat ask alice --reply-to <messageId> "Follow-up: also drop the legacy index in the same migration?"
-
-# There is NO resolve command. An agent can only ASK — it cannot mark a question
+# `chat ask` always opens a fresh top-level question — there is no threading
+# (no --reply-to) and no resolve command. An agent can only ASK — it cannot mark a question
 # answered or close it. The human resolves it by answering in the web UI; a moot
 # question is simply left open (the human works open questions oldest-first), and
 # re-asking opens a NEW, independent question.

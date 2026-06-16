@@ -14,7 +14,6 @@ interface AskOptions {
   agent?: string;
   options?: string;
   multiSelect?: boolean;
-  replyTo?: string;
 }
 
 export function registerChatAskCommand(chat: Command): void {
@@ -36,12 +35,6 @@ export function registerChatAskCommand(chat: Command): void {
         `'[{"label":"Ship","description":"Roll to 20% now"},{"label":"Hold","description":"Wait 24h"}]'`,
     )
     .option("--multi-select", "Allow picking more than one option (requires --options)")
-    .option(
-      "--reply-to <messageId>",
-      "Ask a NEW question threaded under <messageId> (sets inReplyTo). Like any ask it opens a tracked " +
-        "question and blocks the human — threading does NOT make it a non-blocking context note, and it does " +
-        "not resolve the message it threads under (the human resolves on the web).",
-    )
     .action(async (name: string | undefined, message: string | undefined, options: AskOptions) => {
       try {
         const chatId = process.env.FIRST_TREE_CHAT_ID;
@@ -119,18 +112,14 @@ export function registerChatAskCommand(chat: Command): void {
               }
             : metadata;
 
-        // `--reply-to` threads a FRESH ask under an arbitrary message. `inReplyTo`
-        // is pure threading — the threaded ask is still a `format="request"` send,
-        // so it opens its own tracked question.
-        const inReplyTo = options.replyTo;
-
+        // `chat ask` always opens a fresh top-level question; it does not thread
+        // under another message (no `inReplyTo`).
         const result = await sdk.sendMessage(chatId, {
           format,
           content: captured.content,
           metadata: outboundMetadata,
           source: "cli",
           ...(target ? { receiverNames: [target] } : {}),
-          ...(inReplyTo ? { inReplyTo } : {}),
         });
         success(result);
       } catch (error) {

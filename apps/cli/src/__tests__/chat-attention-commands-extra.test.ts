@@ -226,19 +226,12 @@ describe("chat command behavior", () => {
     await expect(runChat(["ask", "nova"])).rejects.toMatchObject({ code: "ASK_NEEDS_BODY", exitCode: 2 });
   });
 
-  it("chat ask --reply-to (no --answer) opens a NEW threaded question, not a resolution", async () => {
+  it("chat ask never threads — it always opens a fresh top-level question (no inReplyTo)", async () => {
     const sdk = localAgentMocks.createSdk();
-    await runChat(["ask", "nova", "Follow-up: also drop the legacy index?", "--reply-to", "msg-7"]);
+    await runChat(["ask", "nova", "Ship the rollout?"]);
     const [, payload] = sdk.sendMessage.mock.calls.at(-1) ?? [];
-    // It is a fresh tracked ask (format=request) threaded under msg-7 …
-    expect(payload).toMatchObject({
-      format: "request",
-      content: "Follow-up: also drop the legacy index?",
-      inReplyTo: "msg-7",
-      metadata: expect.objectContaining({ request: {} }),
-    });
-    // … and explicitly NOT a resolution — threading does not resolve anything.
-    expect(payload?.metadata).not.toHaveProperty("resolves");
+    expect(payload).toMatchObject({ format: "request", content: "Ship the rollout?" });
+    expect(payload).not.toHaveProperty("inReplyTo");
   });
 
   it("chat ask validates --options: bad JSON, count, label length, and multi-select without options", async () => {
@@ -276,11 +269,15 @@ describe("chat command behavior", () => {
     });
   });
 
-  it("chat ask is ask-only: it does not accept --answer (resolution is human/web-only)", async () => {
-    // The agent can only ASK; the human resolves in the web UI. `--answer` was
-    // removed, so passing it is an unknown-option error.
+  it("chat ask is ask-only: it accepts neither --answer nor --reply-to", async () => {
+    // The agent can only ASK; the human resolves in the web UI. `--answer`
+    // (resolve) and `--reply-to` (thread) were both removed, so each is an
+    // unknown-option error.
     await expect(runChat(["ask", "nova", "Ship it.", "--answer", "req-1"])).rejects.toThrow(
       /unknown option.*--answer/i,
+    );
+    await expect(runChat(["ask", "nova", "Ship it.", "--reply-to", "msg-7"])).rejects.toThrow(
+      /unknown option.*--reply-to/i,
     );
   });
 
