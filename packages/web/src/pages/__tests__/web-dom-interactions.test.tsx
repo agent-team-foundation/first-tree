@@ -1111,6 +1111,15 @@ describe("web DOM interaction coverage", () => {
     await waitForText("only your GitHub identity", local.container);
     await waitForText("Dev: skip GitHub", local.container);
     expect(local.container.querySelector<HTMLAnchorElement>('a[href="/api/v1/auth/github/start"]')).toBeTruthy();
+    // "Back to home" leaves the app for the marketing site (not the app root,
+    // which would bounce a logged-out visitor straight back to /login).
+    expect(local.container.querySelector<HTMLAnchorElement>('a[href="https://first-tree.ai"]')).toBeTruthy();
+    // Trust strip links the public repo and opens it safely in a new tab.
+    const repoLink = local.container.querySelector<HTMLAnchorElement>(
+      'a[href="https://github.com/agent-team-foundation/first-tree"]',
+    );
+    expect(repoLink).toBeTruthy();
+    expect(repoLink?.rel).toContain("noopener");
     await unmountRoot(local.root);
 
     Object.defineProperty(window, "location", {
