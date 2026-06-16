@@ -612,7 +612,12 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // worktrees.
     expect(briefing).toContain("git -C <legacy> status --porcelain");
     expect(briefing).toContain("merge-base --is-ancestor HEAD origin/<default>");
-    expect(briefing).toContain("only after BOTH checks pass");
+    // P1 (codex-assistant, PR #1083 follow-up): `rm -rf <legacy>` also destroys
+    // local-only history the working-tree/HEAD checks don't see — branches not
+    // checked out in any worktree, and stashes. Guard those too before delete.
+    expect(briefing).toContain("git -C <legacy> branch --no-merged origin/<default>");
+    expect(briefing).toContain("git -C <legacy> stash list");
+    expect(briefing).toContain("only after ALL of the above are clear");
     // The context-tree symlink case points at the existing Tree Location block.
     expect(briefing).toMatch(/`context-tree` \*\*symlink\*\* migrates the same/);
   });
