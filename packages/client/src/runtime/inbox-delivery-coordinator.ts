@@ -114,11 +114,11 @@ export class InboxDeliveryCoordinator {
     return { kind: "deliver", work: { chatId, entryId: entry.id, messageId } };
   }
 
-  shouldRecoverBeforeDispatch(chatId: string, hasHealthyLiveHandler: boolean, hasLocalSessionRecord: boolean): boolean {
+  shouldRecoverBeforeDispatch(chatId: string, hasHealthyLiveHandler: boolean, hasLocalRecoveryRisk: boolean): boolean {
     const ledger = this.ledgers.get(chatId);
     if (ledger?.recoveryActivationReady) return false;
     if (ledger?.recoveryDebt === "required" || ledger?.recoveryDebt === "running") return true;
-    return Boolean(this.config.recoverChat) && hasLocalSessionRecord && !hasHealthyLiveHandler;
+    return Boolean(this.config.recoverChat) && hasLocalRecoveryRisk && !hasHealthyLiveHandler;
   }
 
   takeRecoveryActivationReady(chatId: string): boolean {
@@ -306,6 +306,49 @@ export class InboxDeliveryCoordinator {
     if (remaining.length > 0) await this.markRecoveryDebt(chatId, reason);
   }
 
+  async prepareOperatorSuspend(chatId: string): Promise<void> {
+    const ledger = this.ledgers.get(chatId);
+    if (!ledger || ledger.entries.length === 0) return;
+
+    let resolvablePrefixCount = 0;
+    let changed = false;
+    const handledAt = Date.now();
+    for (const tracked of ledger.entries) {
+      if (tracked.phase === "terminal") {
+        resolvablePrefixCount++;
+        continue;
+      }
+      if (tracked.phase === "owned" && tracked.processingStartedAt !== undefined) {
+        tracked.phase = "terminal";
+        tracked.terminalOutcome = {
+          status: "error",
+          errorKind: "deterministic",
+          handledAt,
+        };
+        resolvablePrefixCount++;
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (changed) this.emitWorkChanged(chatId);
+
+    if (resolvablePrefixCount > 0) {
+      const lastResolvable = ledger.entries[resolvablePrefixCount - 1];
+      if (lastResolvable) {
+        await this.ackThrough(chatId, lastResolvable.entryId, "operator_suspended:resolved_prefix", {
+          requireTerminalPrefix: true,
+          requestRecoveryOnAckFailure: false,
+        });
+      }
+    }
+
+    const remaining = this.ledgers.get(chatId)?.entries ?? [];
+    if (remaining.length > 0) {
+      await this.markRecoveryDebt(chatId, "operator_suspended:deferred_tail", { requestNow: false });
+    }
+  }
+
   prepareEvict(chatId: string, reason: string): void {
     const ledger = this.ledgers.get(chatId);
     if (!ledger || ledger.entries.length === 0) return;
@@ -344,10 +387,9 @@ export class InboxDeliveryCoordinator {
     return ledger.entries.some((entry) => entry.phase === "owned" && entry.processingStartedAt !== undefined);
   }
 
-  latestEntryId(chatId: string): number | null {
+  hasRecoveryDebt(chatId: string): boolean {
     const ledger = this.ledgers.get(chatId);
-    if (!ledger || ledger.entries.length === 0) return null;
-    return ledger.entries[ledger.entries.length - 1]?.entryId ?? null;
+    return ledger?.recoveryDebt !== undefined && ledger.recoveryDebt !== "none";
   }
 
   snapshot(chatId: string): WorkSnapshot {
@@ -367,7 +409,7 @@ export class InboxDeliveryCoordinator {
     chatId: string,
     throughEntryId: number,
     reason: string,
-    opts: { requireTerminalPrefix?: boolean } = {},
+    opts: { requireTerminalPrefix?: boolean; requestRecoveryOnAckFailure?: boolean } = {},
   ): Promise<void> {
     const ledger = this.ledgers.get(chatId);
     if (!ledger) return;
@@ -394,7 +436,7 @@ export class InboxDeliveryCoordinator {
     chatId: string,
     throughEntryId: number,
     reason: string,
-    opts: { requireTerminalPrefix?: boolean },
+    opts: { requireTerminalPrefix?: boolean; requestRecoveryOnAckFailure?: boolean },
   ): Promise<void> {
     const ledger = this.ledgers.get(chatId);
     if (!ledger || ledger.entries.length === 0) return;
@@ -447,7 +489,9 @@ export class InboxDeliveryCoordinator {
         }
       }
       this.emitWorkChanged(chatId);
-      void this.markRecoveryDebt(chatId, `${reason}:ack_failed`);
+      void this.markRecoveryDebt(chatId, `${reason}:ack_failed`, {
+        requestNow: opts.requestRecoveryOnAckFailure ?? true,
+      });
       return;
     }
 
@@ -465,7 +509,7 @@ export class InboxDeliveryCoordinator {
     this.emitWorkChanged(chatId);
   }
 
-  private async markRecoveryDebt(chatId: string, reason: string): Promise<void> {
+  private async markRecoveryDebt(chatId: string, reason: string, opts: { requestNow?: boolean } = {}): Promise<void> {
     const ledger = this.ledger(chatId);
     if (ledger.recoveryDebt !== "required") {
       ledger.recoveryDebt = "required";
@@ -475,6 +519,7 @@ export class InboxDeliveryCoordinator {
       { chatId, reason, entryIds: ledger.entries.map((entry) => entry.entryId) },
       "chat has unsettled inbox work; waiting for recovery redelivery",
     );
+    if (opts.requestNow === false) return;
     await this.requestRecovery(chatId, reason);
   }
 
