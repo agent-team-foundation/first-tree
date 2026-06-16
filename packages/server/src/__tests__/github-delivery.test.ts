@@ -751,6 +751,86 @@ describe("deliverNormalizedEvent", () => {
     expect(mappings).toHaveLength(1);
   });
 
+  it("a `mentioned` involve does NOT reuse the entity chat — it mints a fresh chat (S5, reuse is review_requested-only)", async () => {
+    // S9 reuse is scoped to review_requested. An @mention of a human who is
+    // already a speaker of the entity's bound chat must still pierce into a
+    // FRESH chat (S5), never get routed back into the existing one.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlgA-${randomUUID().slice(0, 6)}`,
+    });
+    const humanA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `humanA-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegateA,
+    });
+    const delegateM = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlgM-${randomUUID().slice(0, 6)}`,
+    });
+    const humanM = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `humanM-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegateM,
+    });
+
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
+    // The mentioned human + its delegate are BOTH already speakers of the bound chat.
+    await app.db.insert(chatMembership).values(
+      [humanA, delegateA, humanM, delegateM].map((agentId, i) => ({
+        chatId,
+        agentId,
+        role: i === 0 ? "owner" : "member",
+        accessMode: "speaker" as const,
+        mode: "full" as const,
+        source: "manual" as const,
+      })),
+    );
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: humanA,
+      delegateAgentId: delegateA,
+      entityType: "pull_request",
+      entityKey: "owner/repo#211",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const event = makeEvent({ orgId: admin.organizationId, entityType: "pull_request", entityKey: "owner/repo#211" });
+    const involvedMention: AudienceTarget = {
+      humanAgentId: humanM,
+      delegateAgentId: delegateM,
+      kind: "new",
+      chatId: null,
+      involveReason: "mentioned",
+      involveLogin: "humanm",
+      actorAgentId: null,
+    };
+
+    const stats = await deliverNormalizedEvent(app, event, [involvedMention]);
+
+    // A fresh chat was minted for the mention (NOT reused into the bound chat).
+    expect(stats.newChats).toBe(1);
+    const mintedMappings = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(
+        and(
+          eq(githubEntityChatMappings.entityKey, "owner/repo#211"),
+          eq(githubEntityChatMappings.humanAgentId, humanM),
+        ),
+      );
+    expect(mintedMappings).toHaveLength(1);
+    expect(mintedMappings[0]?.chatId).not.toBe(chatId);
+  });
+
   // Regression: a GitHub-bound chat that has been expanded to >=3 speakers
   // (e.g. a teammate invited in) must still wake the delegate agent that
   // owns the entity. github-delivery wakes the delegate by adding it to the

@@ -260,19 +260,24 @@ async function resolveChatFor(
     title: event.entity.title,
     url: event.entity.url,
   };
-  // Reviewer-reuse (S9, deliver-once-per-chat): if the entity already has a
-  // single bound chat where this involved (human, delegate) are both speakers,
-  // route there instead of minting a sibling chat — and write NO mapping row.
-  // The pair sees the entity's events through chat membership, and Phase 2
-  // dedups so the chat gets one card whose wake-set includes this delegate.
-  const reuseChatId = await findReuseChatForInvolved(
-    app.db,
-    event.source.organizationId,
-    entity,
-    target.humanAgentId,
-    target.delegateAgentId,
-  );
-  if (reuseChatId) return { chatId: reuseChatId, created: false };
+  // Reviewer-reuse (S9, deliver-once-per-chat) — scoped to `review_requested`
+  // ONLY. When the entity already has exactly one reusable bound chat (the
+  // reviewer's human + delegate both already speak there), route there instead
+  // of minting a sibling chat, writing NO mapping row; the pair sees the
+  // entity's events through chat membership and Phase 2 dedups to one card.
+  // `mentioned` / `assigned` involves are deliberately NOT reused: a mention is
+  // a directed call that must mint a fresh chat (S5 — mentions pierce into a
+  // new chat, never back into an existing/unfollowed one).
+  if (target.involveReason === "review_requested") {
+    const reuseChatId = await findReuseChatForInvolved(
+      app.db,
+      event.source.organizationId,
+      entity,
+      target.humanAgentId,
+      target.delegateAgentId,
+    );
+    if (reuseChatId) return { chatId: reuseChatId, created: false };
+  }
 
   const relatedEntities: GithubEntity[] = event.relatedRefs.map((ref) => ({
     type: "issue",
