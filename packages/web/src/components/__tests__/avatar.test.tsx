@@ -1,7 +1,14 @@
+import type { MeChatRow } from "@first-tree/shared";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { Avatar } from "../avatar.js";
-import { Identicon } from "../identicon.js";
+import { ChatRowAvatar } from "../chat/chat-row-avatar.js";
+import { Identicon, IdenticonBlocks } from "../identicon.js";
+
+type Participant = MeChatRow["participants"][number];
+function participant(agentId: string, over: Partial<Participant> = {}): Participant {
+  return { agentId, displayName: agentId, type: "agent", avatarColorToken: null, avatarImageUrl: null, ...over };
+}
 
 /**
  * Pin the avatar fallback contract after the identicon migration: an image
@@ -57,5 +64,42 @@ describe("Avatar — image vs identicon fallback", () => {
     const bySeed = renderToStaticMarkup(<Avatar name="Alice" seed="Alice" />);
     const byName = renderToStaticMarkup(<Avatar name="Alice" />);
     expect(byName).toBe(bySeed);
+  });
+});
+
+describe("IdenticonBlocks — fill-parent block svg", () => {
+  it("emits a 100% currentColor svg with the requested aspect handling", () => {
+    const html = renderToStaticMarkup(<IdenticonBlocks seed="x" preserveAspectRatio="xMidYMid slice" />);
+    expect(html).toContain("<svg");
+    expect(html).toContain('width="100%"');
+    expect(html).toContain('fill="currentColor"');
+    expect(html).toContain('preserveAspectRatio="xMidYMid slice"');
+    expect(html).not.toContain("border-radius"); // no own shape; the parent clips
+  });
+});
+
+describe("ChatRowAvatar — group composite uses identicons", () => {
+  const peers = [participant("self"), participant("alice"), participant("bob")];
+
+  it("renders an identicon (no initials) per peer face in a composite", () => {
+    const html = renderToStaticMarkup(
+      <ChatRowAvatar title="Team" type="group" participants={peers} selfAgentId="self" unreadCount={0} />,
+    );
+    // Two peer faces → at least two block svgs; no uploaded images here.
+    expect((html.match(/<svg/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(html).not.toContain("<img");
+  });
+
+  it("prefers a peer's uploaded image over the identicon in its segment", () => {
+    const withImage = [
+      participant("self"),
+      participant("alice", { avatarImageUrl: "https://example.com/a.png" }),
+      participant("bob"),
+    ];
+    const html = renderToStaticMarkup(
+      <ChatRowAvatar title="Team" type="group" participants={withImage} selfAgentId="self" unreadCount={0} />,
+    );
+    expect(html).toContain('src="https://example.com/a.png"');
+    expect(html).toContain("<svg"); // bob still falls back to an identicon
   });
 });
