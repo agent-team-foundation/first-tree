@@ -20,15 +20,17 @@ import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
  * Both mechanisms have been retired. In the new world, clients (the
  * web composer is the main one) inject the peer's uuid into
  * `metadata.mentions` for 2-speaker chats, and the server treats that
- * exactly like any other explicit mention — notify=true for the peer,
- * unread badge +1 for the peer.
+ * exactly like any other explicit mention — notify=true for the peer.
+ * The unread badge (`unread_mention_count`) is a human-attention signal:
+ * it bumps only when the mention target is a HUMAN, so a mentioned agent
+ * is woken via the inbox but raises no red dot.
  *
  * Invariants this file pins:
- *   1. Human → agent DM with explicit mentions wakes the agent and
- *      bumps the agent's unread counter.
+ *   1. Human → agent DM with explicit mentions wakes the agent but
+ *      raises NO unread red dot (the agent is a non-human target).
  *   2. Agent → human DM with explicit mentions wakes the human and
  *      bumps the human's unread counter.
- *   3. Agent ↔ agent DM with explicit mentions wakes the peer.
+ *   3. Agent ↔ agent DM with explicit mentions wakes the peer (no red dot).
  *   4. A DM send WITHOUT explicit mentions (would only happen via a
  *      pre-explicit-contract caller) does NOT wake the peer and does
  *      NOT bump the badge — this is the regression guard for the
