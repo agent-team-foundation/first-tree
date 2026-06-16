@@ -288,8 +288,11 @@ export const MIGRATIONS_REGISTRY: readonly Migration[] = [
         "first-tree-cloud",
         "first-tree-github-scan",
         "first-tree-onboarding",
-        "first-tree-write",
         "github-scan",
+        "first-tree",
+        "first-tree-context",
+        "first-tree-sync",
+        "first-tree-github",
       ];
       let removed = 0;
       for (const name of historicalNames) {

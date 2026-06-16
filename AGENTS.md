@@ -56,9 +56,9 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 
 ## Repo-Local Skills
 
-- `skills/first-tree/SKILL.md` — top-level dispatcher (routing + mandatory pre-task hygiene checklist) **and** canonical home for the Communication Principles, three-principal model, Your-Hosting-Daemon mental model, and CLI Namespace Map. Always start here. The `chat send` / `chat invite` long-form CLI mechanics live in `skills/first-tree/references/agent-communication.md`.
+- `skills/first-tree-write/SKILL.md` — source-driven Context Tree authorship guide: concept model, source-system boundary, authorship read-discipline, and how to write from a specific PR / design doc / meeting note / pasted source. No source artifact means no write task.
 - `skills/first-tree-read/SKILL.md` — task-scoped Context Tree reader-command workflow for locating and reading relevant tree files before acting on source-side work.
-- `skills/first-tree-context/SKILL.md` — Context Tree concept and writing guide (concept model, source-system boundary, authorship read-discipline, and how to write from a specific source). Single-file skill — the per-topic `references/` subtree was folded back into `SKILL.md` under the simplify-context-skill pass. The retired `first-tree-write` payload now lives here as the "Writing the Tree" section.
+- `skills/first-tree-seed/SKILL.md` — one-time bootstrap for a brand-new, still-empty Context Tree. Use only right after Cloud onboarding provisions an empty workspace/tree repo.
 - Operator-only material (`login`, `daemon install / uninstall`, `agent create / claim / bind`, etc.) is **not** in any skill — it lives in `docs/cli-reference.md` and `docs/onboarding-guide.md`. The dedicated `first-tree-cloud` skill it used to live in was retired because nearly all of its content was for human operators, not for agents at runtime.
 
 ## Monorepo Structure
@@ -69,7 +69,7 @@ Full guide (rules, parallel dev installs, what's NOT isolated, teardown): [docs/
 - `packages/web/` — `@first-tree/web` — React admin dashboard (private, bundled)
 - `apps/cli/` — `first-tree` — Unified CLI (**published**, the consumer-facing tarball; binaries `first-tree` and `ft`)
 - `docs/` — [quickstart.md](docs/quickstart.md), [onboarding-guide.md](docs/onboarding-guide.md), [cli-reference.md](docs/cli-reference.md), [observability.md](docs/observability.md), [migration/](docs/migration/), [development/](docs/development/), [troubleshooting/](docs/troubleshooting/)
-- `skills/` — repo-local skill payloads (`first-tree`, `first-tree-context`, `first-tree-read`, `first-tree-sync`, `first-tree-seed`)
+- `skills/` — repo-local skill payloads (`first-tree-write`, `first-tree-read`, `first-tree-seed`)
 
 ## Architecture Rules
 

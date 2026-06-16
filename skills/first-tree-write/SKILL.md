@@ -1,15 +1,15 @@
 ---
-name: first-tree-context
+name: first-tree-write
 version: 0.8.4
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: Context Tree concept and writing guide. Covers what a Context Tree is, the source-system boundary, authorship read-discipline, and how to write tree updates from a specific source (PR / doc / note). Use `first-tree-read` for task-scoped tree reads before acting; use this skill when the user asks to reflect a PR / doc / note into the tree, update the tree from source material, or write a decision to the tree.
+description: Source-driven Context Tree authorship guide. Covers what a Context Tree is, the source-system boundary, authorship read-discipline, and how to write tree updates from a specific source artifact such as a PR, design doc, meeting note, or pasted source. Use `first-tree-read` for task-scoped tree reads before acting; use this skill when the user asks to reflect a source artifact into the tree, update the tree from source material, or write a decision to the tree. If no source artifact is available, there is no write task; ask the user for one.
 ---
 
-# First Tree — Context
+# First Tree Write
 
-Read this skill when you need the Context Tree concept model or when a
-specific source artifact should be reflected into the tree. It is the
+Read this skill when a specific source artifact should be reflected
+into the Context Tree. It is the
 operating guide for authorship: a few principles, a small set of hard
 rules, and the judgment guidelines that turn source material into
 correct edits.
@@ -82,8 +82,8 @@ tree model, neighbouring decisions, and source-system boundary.
 ## Writing the Tree
 
 Writing is **source-driven** — a specific PR, design doc, meeting note,
-or pasted text motivates a specific edit. Without a source there is
-no write task; stop and ask the user for one.
+or pasted source motivates a specific edit. Without a source artifact
+there is no write task; stop and ask the user for one.
 
 ### Hard Rules
 

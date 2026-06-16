@@ -1,0 +1,4 @@
+interface:
+  display_name: "First Tree Write"
+  short_description: "Source-driven Context Tree write guide"
+  default_prompt: "Use $first-tree-write to reflect this source artifact into the Context Tree."
