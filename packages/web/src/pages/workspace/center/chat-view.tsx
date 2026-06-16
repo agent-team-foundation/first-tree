@@ -1765,10 +1765,11 @@ export function ChatView({
   // an option or typing free text both resolve the question; there is no
   // separate "leave it open for the asker to judge" path on this surface.
   // Watchers never block — the read-only branch renders no composer.
-  // `findBlockingRequest` only returns a request whose structured payload
-  // parses, so `dockPayload` is always non-null when `dockRequest` is set — a
-  // request with no usable answer surface is skipped rather than blocking the
-  // timeline with no way to answer.
+  // `readRequestPayload` always yields an answer affordance (a well-formed
+  // payload, or a free-text fallback for an absent / legacy / malformed one), so
+  // `dockPayload` is non-null whenever `dockRequest` is set: every open request —
+  // including ones written under the retired schema — stays answerable and its
+  // red dot can be cleared.
   const dockRequest = useMemo(
     () => (readOnly ? null : findBlockingRequest(mergedMessages, myAgentId)),
     [readOnly, mergedMessages, myAgentId],

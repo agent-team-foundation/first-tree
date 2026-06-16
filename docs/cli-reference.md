@@ -256,11 +256,14 @@ first-tree chat
 │     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
 │     --with <name>                                #   context participant; added silently, not woken by the first message
 │     --topic <text> / --description <text>        #   initial chat self-description
-│     --request / --subject / --question / --option #  first message is a tracked ask; exactly one --to human
-├── send <name> [message]                            # recipient is any participant (agent or human)
-│     --request / --subject / --question / --option  #   structured ask directed at a human
-│     --answer <requestId>                           #   resolve a question you asked: body = the answer, clears their red-dot
-│     --close <requestId>                            #   withdraw a question you asked: body = the reason (re-asking opens a NEW question)
+│     --request                                    #   first message is a tracked ask; the body IS the ask; exactly one --to human
+│     --options <json> / --multi-select            #   (with --request) 2–4 options {label,description,preview?}; allow multi-pick
+├── send <name> [message]                            # wake an AGENT participant (a human recipient is rejected — use `chat ask`)
+│     --reply-to <messageId>                         #   thread a reply under a message (pure threading)
+├── ask <name> [message]                             # ask a HUMAN a tracked question; the body IS the ask (background + question)
+│     --options <json>                               #   2–4 answer options {label (1–5 words), description, preview?}; omit for free-text
+│     --multi-select                                 #   allow picking more than one option (requires --options)
+│     --answer <requestId>                           #   resolve a question you asked: body = the confirmed answer, clears their red-dot
 │     --reply-to <messageId>                         #   thread a reply under a message (pure threading; does not resolve a question)
 ├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before same-task send
 ├── list
@@ -283,15 +286,14 @@ first-tree chat create "Please review the rollout plan." --to code-agent --with 
   --description "reviewing rollout plan; waiting on code-agent"
 
 # Start a new task chat with a tracked question. The first request must target
-# exactly one human. The message body is the background/context; --subject is
-# the dock/card headline (≤80 chars), and --question is only the ask (≤200 chars).
+# exactly one human. The message body IS the ask (background + the question);
+# pass 2–4 --options (JSON) for a clean pick, or omit them for a free-text answer.
 first-tree chat create --to alice --request \
-  "Migration 0021 drops the legacy column — irreversible." \
-  --subject "Migration gate" \
-  --question "Ship the destructive migration?" \
-  --option "Ship" --option "Hold"
+  "Migration 0021 drops the legacy column — irreversible. Ship the destructive migration?" \
+  --options '[{"label":"Ship","description":"Roll the migration now"},{"label":"Hold","description":"Wait 24h"}]'
 
-# Inline
+# Inline — `chat send` wakes an AGENT participant. Addressing a human is rejected
+# (use `chat ask`); the recipient must be a participant of FIRST_TREE_CHAT_ID.
 first-tree chat send code-agent "ship the PR"
 
 # Stdin (multiline, markdown, special chars)
@@ -311,26 +313,25 @@ EOF
 # Stdin bodies are never checked — piping is also the escape hatch for
 # intentionally sending literal `\n` text.
 
-# Ask a human a tracked question (red-dot until answered). --request must
-# target a single human; the body carries context, --subject is the headline
-# (≤80 chars), and --question carries only the ask (≤200 chars).
-first-tree chat send alice --request \
-  "Migration 0021 drops the legacy column — irreversible." \
-  --subject "Migration gate" \
-  --question "Ship the destructive migration?" \
-  --option "Ship" --option "Hold"
+# Ask a human a tracked question (red-dot + blocks the chat for them until they
+# answer). `chat ask` targets a single human; the message body IS the ask
+# (background + the question). Omit --options for a free-text answer, or pass 2–4
+# --options (JSON) for a clean pick; add --multi-select to allow more than one.
+first-tree chat ask alice \
+  "Migration 0021 drops the legacy column — irreversible. Ship the destructive migration?" \
+  --options '[{"label":"Ship","description":"Roll it now"},{"label":"Hold","description":"Wait 24h"}]'
 
-# If --question exceeds 200 chars, the CLI exits with QUESTION_TOO_LONG.
-# If --subject exceeds 80 chars, the CLI exits with SUBJECT_TOO_LONG.
+# Free-text ask (no options)
+first-tree chat ask alice "What rollback window do you want before we ship 0021?"
 
 # Thread a reply under a message (pure threading; does NOT resolve a question)
-first-tree chat send alice --reply-to <messageId> "Holding — will split the migration."
+first-tree chat ask alice --reply-to <messageId> "Adding context — the column is unused since 0019."
 
-# Resolve an open question you asked the human (marks answered, clears their red-dot; body = the answer)
-first-tree chat send alice "Ship it — go ahead with migration 0021." --answer <requestId>
-
-# Withdraw an open question you asked (body = the reason; re-asking opens a NEW question, never auto-supersedes)
-first-tree chat send alice "Superseded — splitting the migration first." --close <requestId>
+# Resolve an open question you asked the human (marks answered, clears their
+# red-dot; body = the confirmed answer). There is no --close: a moot question is
+# left open and the human works open questions oldest-first; re-asking opens a
+# NEW, independent question.
+first-tree chat ask alice "Ship it — go ahead with migration 0021." --answer <requestId>
 
 # Pull a non-member into the current chat first, then send normally. Use this
 # for same-task stage / role handoffs.
@@ -346,8 +347,8 @@ first-tree chat history <chatId>
 # their own). The description carries task background + plan + progress, renders
 # as Markdown, and shows at the top of the chat's right sidebar; agents also read
 # it via `chat list` to self-locate (see the agent briefing's "Chat Topic &
-# Description"). Keep blockers / decisions OUT of it — raise `chat send <human>
-# --request` for those. Owner-gated: the chat's creator may update it, and when
+# Description"). Keep blockers / decisions OUT of it — raise `chat ask <human>`
+# for those. Owner-gated: the chat's creator may update it, and when
 # no agent owner is present (human-created chats — Web / GitHub-sourced — or the
 # creator left) every worker agent counts as the owner; a non-owner agent in a
 # chat whose agent creator is still present is refused with 403.

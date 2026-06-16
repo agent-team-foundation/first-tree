@@ -48,10 +48,17 @@ export function contentStartsWithMention(content: unknown, names: readonly strin
   return new Set(names.map((n) => n.toLowerCase())).has(m[1].toLowerCase());
 }
 
-/** Parse `metadata.request` into the ask's answer affordance; `null` when absent/malformed. */
-export function readRequestPayload(metadata: Record<string, unknown> | null | undefined): AskRequest | null {
+/**
+ * Read `metadata.request` into the ask's answer affordance. A well-formed
+ * payload yields its `options` + `multiSelect`. Anything else — absent metadata,
+ * or a legacy/retired shape (e.g. the old `{ subject?, questions: [...] }`) —
+ * falls back to a **free-text ask** (`{ multiSelect: false }`), so an
+ * already-open question is always answerable and never stranded with no web
+ * answer surface (its open-request red dot would otherwise never clear).
+ */
+export function readRequestPayload(metadata: Record<string, unknown> | null | undefined): AskRequest {
   const parsed = askRequestSchema.safeParse(metadata?.request);
-  return parsed.success ? parsed.data : null;
+  return parsed.success ? parsed.data : { multiSelect: false };
 }
 
 /** Parse `metadata.resolves` into the explicit resolution signal; `null` when absent/malformed. */
@@ -96,7 +103,7 @@ export function deriveRequestLifecycleProjection(
         const payload = readRequestPayload(request.metadata);
         return {
           state: "resolved",
-          selectedLabels: payload?.options ? recoverSelectedLabels(m.content, payload.options) : [],
+          selectedLabels: payload.options ? recoverSelectedLabels(m.content, payload.options) : [],
           closeReason: null,
         };
       }
@@ -180,11 +187,11 @@ export function findBlockingRequest(thread: readonly Message[], viewerAgentId: s
   for (const m of thread) {
     if (m.format !== "request") continue;
     if (!readMentions(m.metadata).includes(viewerAgentId)) continue;
-    // A free-text ask parses to an empty payload (`{}`); only a genuinely
-    // malformed payload is null, which has no usable answer surface — skip it so
-    // the next parseable live question becomes the block instead of stranding
-    // the viewer behind an unanswerable takeover.
-    if (!readRequestPayload(m.metadata)) continue;
+    // Every `format="request"` row is answerable — a well-formed payload via its
+    // options, a legacy/malformed one via the free-text fallback in
+    // `readRequestPayload`. We never skip a live request, so an already-open
+    // question (including ones written under the retired schema) keeps a takeover
+    // and its red dot can always be cleared.
     const st = deriveRequestState(m, thread);
     if (st === "open" || st === "discussing") return m;
   }

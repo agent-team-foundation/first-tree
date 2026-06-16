@@ -349,6 +349,50 @@ describe("open-question (format=request) + open_request_count", () => {
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
   });
 
+  it("the asking agent answers its own question ADDRESSED to the human (real `chat ask --answer` path passes the agent→human guard)", async () => {
+    // Regression for the CLI `chat ask --answer` path: it sends the answer as a
+    // plain `text` message addressed to the human (mentions=[human]) — NOT
+    // recipientless. The agent→human send guard must NOT reject it, because the
+    // message carries a valid `metadata.resolves`; otherwise the asker can never
+    // clear the open question it raised.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: {} },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Asker → human, addressed (mentions=[human]), plain text, carrying the
+    // resolution. No `allowRecipientlessSend`: this is the live CLI shape.
+    await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "Going with 20%.",
+      metadata: { mentions: [human.uuid], resolves: { request: question.id, kind: "answered" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
+  });
+
+  it("a plain agent→human send WITHOUT a resolution is still rejected (guard intact)", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    await expect(
+      sendMessage(app.db, chat.id, asker.agent.uuid, {
+        source: "api",
+        format: "text",
+        content: "just pinging you",
+        metadata: { mentions: [human.uuid] },
+      }),
+    ).rejects.toThrow(/cannot .*send.* a human/i);
+  });
+
   it("a resolves from neither the target nor the asker is REJECTED (unauthorized, fail loud)", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);

@@ -286,10 +286,22 @@ export function preflightMessageSendIntent(input: {
 
   // An agent may address a human ONLY as a `request` (an ask via `chat ask`). A
   // plain agent→human send has no channel: humans are reached with `chat ask`
-  // (decisions/approval) or `chat update --description` (progress). The silent
-  // `agent-final-text` mirror is exempt — it addresses no one and is an agent's
-  // own response surfaced for human observers, not a message into the room.
-  if (senderType !== "human" && data.format !== MESSAGE_FORMATS.REQUEST && data.purpose !== "agent-final-text") {
+  // (decisions/approval) or `chat update --description` (progress). Two shapes
+  // are exempt: the silent `agent-final-text` mirror (it addresses no one — an
+  // agent's own response surfaced for human observers), and a message that
+  // carries a resolution signal — the asking agent resolving its own question
+  // via `chat ask --answer` threads a (text) answer addressed to the human, and
+  // that is a legitimate agent→human turn. A bogus `resolves` cannot abuse this
+  // hole: the resolution handler below validates the target/authz and rolls the
+  // whole send back when it does not point at a real question the sender may
+  // resolve.
+  const carriesResolution = requestResolutionSchema.safeParse(metadataToStore.resolves).success;
+  if (
+    senderType !== "human" &&
+    data.format !== MESSAGE_FORMATS.REQUEST &&
+    data.purpose !== "agent-final-text" &&
+    !carriesResolution
+  ) {
     const humanTarget = mentionTargets.map((id) => participantsById.get(id)).find((p) => p?.type === "human");
     if (humanTarget) {
       const label = humanTarget.displayName || humanTarget.name || "that human";

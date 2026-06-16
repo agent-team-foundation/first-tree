@@ -122,20 +122,31 @@ describe("isRelatedViewer / defaultExpanded", () => {
 describe("readRequestPayload", () => {
   it("parses an options ask + multiSelect default", () => {
     const p = readRequestPayload(request.metadata);
-    expect(p?.options?.length).toBe(2);
-    expect(p?.multiSelect).toBe(false);
+    expect(p.options?.length).toBe(2);
+    expect(p.multiSelect).toBe(false);
   });
   it("parses a free-text ask (no options) as an empty payload", () => {
     expect(readRequestPayload({ request: {} })).toEqual({ multiSelect: false });
   });
-  it("returns null for non-request metadata", () => {
-    expect(readRequestPayload({ mentions: [TARGET] })).toBeNull();
+  // A request row is always answerable: anything that does not parse under the
+  // current schema — absent metadata, a legacy `{subject?, questions[]}` shape,
+  // or an otherwise-invalid payload — falls back to a free-text ask so an open
+  // question is never stranded with no answer surface.
+  it("falls back to a free-text ask for non-request metadata", () => {
+    expect(readRequestPayload({ mentions: [TARGET] })).toEqual({ multiSelect: false });
   });
-  it("returns null for an invalid payload — fewer than 2 options", () => {
-    expect(readRequestPayload({ request: { options: [{ label: "only", description: "d" }] } })).toBeNull();
+  it("falls back to a free-text ask for a legacy `{subject, questions}` payload", () => {
+    expect(readRequestPayload({ request: { subject: "Ship?", questions: [{ prompt: "5% or 20%?" }] } })).toEqual({
+      multiSelect: false,
+    });
   });
-  it("returns null when multiSelect is set without options", () => {
-    expect(readRequestPayload({ request: { multiSelect: true } })).toBeNull();
+  it("falls back to a free-text ask for an invalid payload — fewer than 2 options", () => {
+    expect(readRequestPayload({ request: { options: [{ label: "only", description: "d" }] } })).toEqual({
+      multiSelect: false,
+    });
+  });
+  it("falls back to a free-text ask when multiSelect is set without options", () => {
+    expect(readRequestPayload({ request: { multiSelect: true } })).toEqual({ multiSelect: false });
   });
 });
 
@@ -220,16 +231,20 @@ describe("findBlockingRequest", () => {
     expect(findBlockingRequest([older, request], OTHER)).toBeNull();
     expect(findBlockingRequest([older, request], null)).toBeNull();
   });
-  it("skips an unparseable request and blocks on the next parseable one (no stuck block)", () => {
-    // `multiSelect` without `options` fails the schema → no usable answer surface.
-    const malformed = msg({
-      id: "req-bad",
+  it("blocks on a legacy/unparseable request too (answerable as free text, never stranded)", () => {
+    // A request whose `metadata.request` does not parse under the current schema
+    // (here a legacy `{subject, questions}` shape) is still answerable as free
+    // text via the fallback in `readRequestPayload`, so it must still block —
+    // otherwise its open-request red dot could never be cleared on the Web.
+    const legacy = msg({
+      id: "req-legacy",
       format: "request",
       createdAt: "2026-06-01T00:00:00.000Z",
-      metadata: { mentions: [TARGET], request: { multiSelect: true } },
+      metadata: { mentions: [TARGET], request: { subject: "Ship?", questions: [{ prompt: "5% or 20%?" }] } },
     });
-    expect(findBlockingRequest([malformed, request], TARGET)?.id).toBe("req");
-    expect(findBlockingRequest([malformed], TARGET)).toBeNull();
+    // FIFO: the legacy one is older, so it blocks first.
+    expect(findBlockingRequest([legacy, request], TARGET)?.id).toBe("req-legacy");
+    expect(findBlockingRequest([legacy], TARGET)?.id).toBe("req-legacy");
   });
 });
 
