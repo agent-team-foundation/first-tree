@@ -27,6 +27,52 @@ import type { CSSProperties, ReactNode } from "react";
 
 const VIEWBOX = 100;
 
+/**
+ * Just the block pattern as a self-scaling `<svg>` filled with `currentColor`.
+ * Fills its parent (`width/height: 100%`); the parent supplies the hue
+ * background, the `color` the blocks inherit, and any clip/shape. Square group
+ * composite cells use the default `meet`; non-square cells pass `slice` to
+ * cover-crop without distorting the grid.
+ */
+export function IdenticonBlocks({
+  seed,
+  gridSize = 5,
+  preserveAspectRatio = "xMidYMid meet",
+}: {
+  seed: string;
+  gridSize?: number;
+  /** SVG aspect handling. `meet` fits (square tiles); `slice` cover-crops (non-square cells). */
+  preserveAspectRatio?: string;
+}) {
+  const cells = identiconCells(seed, gridSize);
+  const block = VIEWBOX / (gridSize + 1);
+  const margin = block / 2;
+
+  const rects: ReactNode[] = [];
+  for (let y = 0; y < gridSize; y++) {
+    const row = cells[y];
+    if (!row) continue;
+    for (let x = 0; x < gridSize; x++) {
+      if (!row[x]) continue;
+      rects.push(<rect key={`${x}-${y}`} x={margin + x * block} y={margin + y * block} width={block} height={block} />);
+    }
+  }
+
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox={`0 0 ${VIEWBOX} ${VIEWBOX}`}
+      width="100%"
+      height="100%"
+      preserveAspectRatio={preserveAspectRatio}
+      fill="currentColor"
+      style={{ display: "block" }}
+    >
+      {rects}
+    </svg>
+  );
+}
+
 export function Identicon({
   seed,
   size,
@@ -47,20 +93,6 @@ export function Identicon({
   /** When set, exposes the tile as `role="img"` with this label; otherwise `aria-hidden`. */
   label?: string;
 }) {
-  const cells = identiconCells(seed, gridSize);
-  const block = VIEWBOX / (gridSize + 1);
-  const margin = block / 2;
-
-  const rects: ReactNode[] = [];
-  for (let y = 0; y < gridSize; y++) {
-    const row = cells[y];
-    if (!row) continue;
-    for (let x = 0; x < gridSize; x++) {
-      if (!row[x]) continue;
-      rects.push(<rect key={`${x}-${y}`} x={margin + x * block} y={margin + y * block} width={block} height={block} />);
-    }
-  }
-
   const style: CSSProperties = {
     width: size,
     height: size,
@@ -76,16 +108,7 @@ export function Identicon({
 
   return (
     <span className={className} style={style} {...a11y}>
-      <svg
-        aria-hidden="true"
-        viewBox={`0 0 ${VIEWBOX} ${VIEWBOX}`}
-        width={size}
-        height={size}
-        fill="currentColor"
-        style={{ display: "block" }}
-      >
-        {rects}
-      </svg>
+      <IdenticonBlocks seed={seed} gridSize={gridSize} />
     </span>
   );
 }
