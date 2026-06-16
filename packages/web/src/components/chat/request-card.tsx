@@ -30,13 +30,12 @@ import { OptionCard } from "../ui/option-card.js";
 import { QuestionPrompt } from "./question-prompt.js";
 import {
   defaultExpanded,
-  deriveRequestState,
+  deriveRequestLifecycleProjection,
   isRelatedViewer,
+  type RequestLifecycleProjection,
   type RequestState,
-  readCloseReason,
   readMentions,
   readRequestPayload,
-  recoverAnswerSelections,
 } from "./request-state.js";
 
 type ChipSpec = { label: string; Icon: ComponentType<{ size?: number }>; bg: string; fg: string };
@@ -89,6 +88,7 @@ function Chip({ state, target }: { state: RequestState; target?: string }) {
 export function RequestCard({
   message,
   thread,
+  requestProjection,
   viewerAgentId,
   body,
   bodyShowsTarget = false,
@@ -97,7 +97,9 @@ export function RequestCard({
   suppressAnswerBlock = false,
 }: {
   message: Message;
-  thread: readonly Message[];
+  /** Fallback for legacy callers. Chat timeline callers should pass requestProjection. */
+  thread?: readonly Message[];
+  requestProjection?: RequestLifecycleProjection;
   viewerAgentId: string | null;
   /** Pre-rendered markdown body (the chat-view owns the Markdown setup). */
   body: ReactNode;
@@ -120,7 +122,11 @@ export function RequestCard({
    */
   suppressAnswerBlock?: boolean;
 }) {
-  const state = useMemo(() => deriveRequestState(message, thread), [message, thread]);
+  const projection = useMemo(
+    () => requestProjection ?? deriveRequestLifecycleProjection(message, thread ?? [message]),
+    [message, requestProjection, thread],
+  );
+  const state = projection.state;
   const payload = useMemo(() => readRequestPayload(message.metadata), [message.metadata]);
   const targets = useMemo(() => readMentions(message.metadata), [message.metadata]);
   const related = isRelatedViewer(message, viewerAgentId);
@@ -143,19 +149,7 @@ export function RequestCard({
   // is the one carrying `metadata.resolves` (kind="answered") for this request;
   // its body holds the `"prompt → answer"` lines. Empty when the answer was a
   // free-form reply that doesn't match the format.
-  const selections = useMemo<Record<string, string>>(() => {
-    if (state !== "resolved" || !payload) return {};
-    const reply = thread.find((m) => {
-      const raw = m.metadata?.resolves;
-      return (
-        raw != null &&
-        typeof raw === "object" &&
-        (raw as { request?: unknown }).request === message.id &&
-        (raw as { kind?: unknown }).kind === "answered"
-      );
-    });
-    return reply ? recoverAnswerSelections(reply.content, payload.questions) : {};
-  }, [state, payload, thread, message.id]);
+  const selections = state === "resolved" && payload ? projection.selections : {};
 
   const mut = useMutation({
     // A clean answer from the target resolves the question: it threads under
@@ -189,7 +183,7 @@ export function RequestCard({
 
   // Closing is explicit now (the asker calls `chat send --close`; re-asking never
   // auto-supersedes) — show the reason they gave, when any.
-  const closeReason = state === "closed" ? readCloseReason(message, thread) : null;
+  const closeReason = state === "closed" ? projection.closeReason : null;
   const summary =
     state === "resolved"
       ? "answered"
