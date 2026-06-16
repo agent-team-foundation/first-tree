@@ -23,8 +23,9 @@
  * See first-tree-context:agent-hub/web-console.md for the contract under test.
  */
 
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { users } from "../db/schema/users.js";
 import { applyAfterFanOut } from "../services/chat-projection.js";
 import {
   addMeChatParticipants,
@@ -68,6 +69,31 @@ describe("chat-first workspace service layer", () => {
       participantIds: [peer.agent.uuid],
     });
     expect(a.chatId).not.toBe(b.chatId);
+  });
+
+  it("listMeChats: resolves human external avatars while leaving agent avatars null without an upload", async () => {
+    const app = getApp();
+    const owner = await createTestAdmin(app);
+    const teammate = await createTestAdmin(app);
+    const bot = await createTestAgent(app, { name: "avatar-list-bot", displayName: "Avatar List Bot" });
+    const teammateAvatar = "https://avatars.githubusercontent.com/u/12345?v=4";
+    await app.db.update(users).set({ avatarUrl: teammateAvatar }).where(eq(users.id, teammate.userId));
+
+    const { chatId } = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
+      participantIds: [teammate.humanAgentUuid, bot.agent.uuid],
+    });
+
+    const list = await listMeChats(app.db, owner.humanAgentUuid, owner.memberId, owner.organizationId, {
+      limit: 50,
+      filter: "all",
+      engagement: "all",
+    });
+    const row = list.rows.find((r) => r.chatId === chatId);
+    expect(row).toBeDefined();
+    const participantsById = new Map((row?.participants ?? []).map((p) => [p.agentId, p]));
+
+    expect(participantsById.get(teammate.humanAgentUuid)?.avatarImageUrl).toBe(teammateAvatar);
+    expect(participantsById.get(bot.agent.uuid)?.avatarImageUrl).toBeNull();
   });
 
   it("watcher rows: managed agent's chat creates a subscription, not a participant", async () => {

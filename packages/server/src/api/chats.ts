@@ -12,10 +12,12 @@ import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
+import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { users } from "../db/schema/users.js";
 import { BadRequestError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
-import { agentAvatarImageUrl } from "../services/agent.js";
+import { resolveAvatarImageUrl } from "../services/agent.js";
 import { getChatAgentStatuses } from "../services/agent-chat-status.js";
 import { ensureParticipant, leaveChat } from "../services/chat.js";
 import { declareEntityFollow, listChatGithubEntities, removeEntityFollow } from "../services/github-entity-follow.js";
@@ -67,9 +69,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         type: agents.type,
         avatarColorToken: agents.avatarColorToken,
         avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+        userAvatarUrl: users.avatarUrl,
       })
       .from(chatMembership)
       .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+      .leftJoin(members, eq(members.agentId, agents.uuid))
+      .leftJoin(users, eq(users.id, members.userId))
       .where(and(eq(chatMembership.chatId, chat.id), eq(chatMembership.accessMode, "speaker")));
 
     const firstMsgRows = (await app.db.execute<{ content: unknown }>(sql`
@@ -85,7 +90,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       displayName: p.displayName,
       type: p.type,
       avatarColorToken: p.avatarColorToken ?? null,
-      avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
+      avatarImageUrl: resolveAvatarImageUrl({
+        uuid: p.agentId,
+        type: p.type,
+        avatarImageUpdatedAt: p.avatarImageUpdatedAt,
+        userAvatarUrl: p.userAvatarUrl,
+      }),
     }));
     const title = resolveChatTitle(chat.topic, firstMessagePreview, participantsForTitle, scope.humanAgentId);
 
@@ -125,7 +135,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         type: p.type,
         joinedAt: p.joinedAt.toISOString(),
         avatarColorToken: p.avatarColorToken ?? null,
-        avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
+        avatarImageUrl: resolveAvatarImageUrl({
+          uuid: p.agentId,
+          type: p.type,
+          avatarImageUpdatedAt: p.avatarImageUpdatedAt,
+          userAvatarUrl: p.userAvatarUrl,
+        }),
       })),
     };
   });

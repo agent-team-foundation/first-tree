@@ -39,9 +39,11 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
+import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { users } from "../db/schema/users.js";
 import { BadRequestError, CallerNotSpeakerError, NotFoundError } from "../errors.js";
-import { agentAvatarImageUrl } from "./agent.js";
+import { resolveAvatarImageUrl } from "./agent.js";
 import { resolveAgentChatStatuses } from "./agent-chat-status.js";
 import { createChat } from "./chat.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
@@ -415,9 +417,12 @@ export async function listMeChats(
       type: agents.type,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      userAvatarUrl: users.avatarUrl,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.accessMode, "speaker")));
 
   const participantsByChat = new Map<string, MeChatRow["participants"]>();
@@ -431,14 +436,12 @@ export async function listMeChats(
       displayName: p.displayName,
       type: p.type,
       avatarColorToken: p.avatarColorToken,
-      // Chat list intentionally retains the agent-only avatar path — it
-      // does NOT fall back to `users.avatar_url` for human participants.
-      // The detail-view surfaces (message bubbles, ParticipantsHeader)
-      // use `resolveAvatarImageUrl` via `/agents` / `/me/managed-agents`
-      // and DO honor the human → GitHub fallback. Keep the chat row
-      // unchanged so the existing visual contract (first-letter / hue
-      // for humans without an upload) stays stable.
-      avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt),
+      avatarImageUrl: resolveAvatarImageUrl({
+        uuid: p.agentId,
+        type: p.type,
+        avatarImageUpdatedAt: p.avatarImageUpdatedAt,
+        userAvatarUrl: p.userAvatarUrl,
+      }),
     });
     participantsByChat.set(p.chatId, list);
     if (p.type !== "human") {
