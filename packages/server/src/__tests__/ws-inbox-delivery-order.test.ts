@@ -1,7 +1,9 @@
 import type { InboxDeliverFrame } from "@first-tree/shared";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import { sendMessage } from "../services/message.js";
@@ -31,6 +33,48 @@ describe("Agent WS — inbox delivery ordering", () => {
       };
       ws.on("message", onMessage);
     });
+  }
+
+  async function sendHeartbeat(ws: WebSocket): Promise<void> {
+    const ackPromise = waitForFrame(ws, (m) => (m as { type?: string }).type === "heartbeat:ack");
+    ws.send(JSON.stringify({ type: "heartbeat" }));
+    await ackPromise;
+  }
+
+  function expectNoDeliverFrame(ws: WebSocket, timeoutMs = 250): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        ws.off("message", onMessage);
+        resolve();
+      }, timeoutMs);
+      const onMessage = (raw: WebSocket.RawData) => {
+        try {
+          const msg = JSON.parse(raw.toString()) as Partial<InboxDeliverFrame> & { type?: string };
+          if (msg.type !== "inbox:deliver") return;
+          clearTimeout(timer);
+          ws.off("message", onMessage);
+          reject(new Error(`unexpected duplicate inbox:deliver frame for entry ${msg.entryId ?? "unknown"}`));
+        } catch {
+          // ignore non-JSON frames
+        }
+      };
+      ws.on("message", onMessage);
+    });
+  }
+
+  async function loadNotifyRow(inboxId: string, messageId: string) {
+    const [row] = await app.db
+      .select({
+        id: inboxEntries.id,
+        status: inboxEntries.status,
+        deliveredAt: inboxEntries.deliveredAt,
+      })
+      .from(inboxEntries)
+      .where(
+        and(eq(inboxEntries.inboxId, inboxId), eq(inboxEntries.messageId, messageId), eq(inboxEntries.notify, true)),
+      )
+      .limit(1);
+    return row;
   }
 
   function collectDeliverFrames(ws: WebSocket, count: number, timeoutMs = 5000): Promise<InboxDeliverFrame[]> {
@@ -141,6 +185,163 @@ describe("Agent WS — inbox delivery ordering", () => {
 
       expect(frames.map((frame) => frame.message.id)).toEqual([first.message.id, second.message.id]);
       expect(frames.map((frame) => frame.message.content)).toEqual(["A1", "A2"]);
+    } finally {
+      ws.close();
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    }
+  }, 15000);
+
+  it("repairs a pending notify row on heartbeat when PG NOTIFY was missed", async () => {
+    const admin = await createAdminContext(app, { username: `ws-repair-${crypto.randomUUID().slice(0, 6)}` });
+    const agent = await createAgent(app.db, {
+      name: `ws-repair-agent-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+      organizationId: admin.organizationId,
+    });
+    const chat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [agent.uuid],
+    });
+    const ws = await openBoundSocket({
+      accessToken: admin.accessToken,
+      clientId: admin.clientId,
+      agentId: agent.uuid,
+      runtimeProvider: agent.runtimeProvider,
+    });
+
+    try {
+      const sent = await sendMessage(app.db, chat.id, admin.humanAgentUuid, {
+        source: "api",
+        format: "text",
+        content: "lost notify repair",
+        metadata: { mentions: [agent.uuid] },
+      });
+      expect((await loadNotifyRow(agent.inboxId, sent.message.id))?.status).toBe("pending");
+
+      const framesPromise = collectDeliverFrames(ws, 1);
+      await sendHeartbeat(ws);
+      const [frame] = await framesPromise;
+
+      expect(frame?.message.id).toBe(sent.message.id);
+      const row = await loadNotifyRow(agent.inboxId, sent.message.id);
+      expect(row?.id).toBe(frame?.entryId);
+      expect(row?.status).toBe("delivered");
+      expect(row?.deliveredAt).toBeInstanceOf(Date);
+    } finally {
+      ws.close();
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    }
+  }, 15000);
+
+  it("does not duplicate delivery when NOTIFY drain races heartbeat repair", async () => {
+    const admin = await createAdminContext(app, { username: `ws-repair-dupe-${crypto.randomUUID().slice(0, 6)}` });
+    const agent = await createAgent(app.db, {
+      name: `ws-repair-dupe-agent-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+      organizationId: admin.organizationId,
+    });
+    const chat = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [agent.uuid],
+    });
+    const ws = await openBoundSocket({
+      accessToken: admin.accessToken,
+      clientId: admin.clientId,
+      agentId: agent.uuid,
+      runtimeProvider: agent.runtimeProvider,
+    });
+
+    try {
+      const sent = await sendMessage(app.db, chat.id, admin.humanAgentUuid, {
+        source: "api",
+        format: "text",
+        content: "notify repair race",
+        metadata: { mentions: [agent.uuid] },
+      });
+
+      const framesPromise = collectDeliverFrames(ws, 1);
+      await Promise.all([app.notifier.notify(agent.inboxId, sent.message.id), sendHeartbeat(ws)]);
+      const [frame] = await framesPromise;
+      expect(frame?.message.id).toBe(sent.message.id);
+      await expectNoDeliverFrame(ws);
+
+      const row = await loadNotifyRow(agent.inboxId, sent.message.id);
+      expect(row?.id).toBe(frame?.entryId);
+      expect(row?.status).toBe("delivered");
+    } finally {
+      ws.close();
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    }
+  }, 15000);
+
+  it("uses repair drains without letting one full chat block other chats", async () => {
+    const admin = await createAdminContext(app, { username: `ws-repair-fair-${crypto.randomUUID().slice(0, 6)}` });
+    const agent = await createAgent(app.db, {
+      name: `ws-repair-fair-agent-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+      organizationId: admin.organizationId,
+    });
+    const chatA = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [agent.uuid],
+    });
+    const chatB = await createChat(app.db, admin.humanAgentUuid, {
+      type: "group",
+      participantIds: [agent.uuid],
+    });
+    const ws = await openBoundSocket({
+      accessToken: admin.accessToken,
+      clientId: admin.clientId,
+      agentId: agent.uuid,
+      runtimeProvider: agent.runtimeProvider,
+    });
+
+    try {
+      const chatAMessageIds: string[] = [];
+      for (let i = 0; i < 9; i++) {
+        const sent = await sendMessage(app.db, chatA.id, admin.humanAgentUuid, {
+          source: "api",
+          format: "text",
+          content: `repair A${i + 1}`,
+          metadata: { mentions: [agent.uuid] },
+        });
+        chatAMessageIds.push(sent.message.id);
+      }
+      const chatBMessage = await sendMessage(app.db, chatB.id, admin.humanAgentUuid, {
+        source: "api",
+        format: "text",
+        content: "repair B1",
+        metadata: { mentions: [agent.uuid] },
+      });
+
+      const framesPromise = collectDeliverFrames(ws, 9);
+      await sendHeartbeat(ws);
+      const frames = await framesPromise;
+      const contents = frames.map((frame) => String(frame.message.content));
+
+      expect(contents.filter((content) => content.startsWith("repair A"))).toHaveLength(8);
+      expect(contents).toContain("repair B1");
+      expect(contents).not.toContain("repair A9");
+      expect((await loadNotifyRow(agent.inboxId, chatBMessage.message.id))?.status).toBe("delivered");
+
+      const lastChatAMessageId = chatAMessageIds.at(-1);
+      if (!lastChatAMessageId) throw new Error("expected chat A messages");
+      expect((await loadNotifyRow(agent.inboxId, lastChatAMessageId))?.status).toBe("pending");
+
+      const topUpPromise = collectDeliverFrames(ws, 1);
+      const firstChatAFrame = frames.find((frame) => frame.message.content === "repair A1");
+      if (!firstChatAFrame) throw new Error("expected repair A1 delivery");
+      ws.send(JSON.stringify({ type: "inbox:ack", entryId: firstChatAFrame.entryId, ref: "ack-repair-a1" }));
+      const [topUp] = await topUpPromise;
+
+      expect(topUp?.message.id).toBe(lastChatAMessageId);
+      expect(topUp?.message.content).toBe("repair A9");
     } finally {
       ws.close();
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
