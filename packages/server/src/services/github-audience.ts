@@ -96,11 +96,12 @@ export type AudienceTarget = {
   involveLogin: string | null;
   /**
    * Set when the event's actor resolves to an org agent (`identifyActor`
-   * returned `kind: "agent"`). Stage 3 excludes this id from the card's
-   * notification addressing (`addressedToAgentIds`) so the actor is never
-   * woken / red-dotted by their own action, while the card itself still
-   * lands in the chat as the public record (#942). `null` for our-app-bot
-   * and external actors.
+   * returned `kind: "agent"`). Stage 3 passes this id as the message's
+   * `suppressNotifyAgentIds` so the actor is never woken / red-dotted by its
+   * own action, while staying structurally addressed — the card still lands
+   * in the chat (as a silent `notify=false` row for the actor) as the public
+   * record (#942, S2/D1). The suppress target is decoupled from `senderId`.
+   * `null` for our-app-bot and external actors.
    */
   actorAgentId: string | null;
 };
@@ -119,12 +120,13 @@ export type AudienceTarget = {
  * Echo filtering runs after the union:
  *   - actor = `agent`: no row is dropped — every mapped chat keeps the card
  *     as the public record of what happened. Instead, each row is annotated
- *     with `actorAgentId` so Stage 3 excludes the actor from notification
- *     addressing (the actor isn't woken / red-dotted by their own action,
- *     other recipients are notified normally). Dropping rows here used to
- *     conflate "should this chat get the card" with "should this recipient
- *     be notified" and silently killed delivery to multi-participant chats
- *     whose only routing entry had the actor on one side (#942).
+ *     with `actorAgentId` so Stage 3 passes the actor as
+ *     `suppressNotifyAgentIds` (the actor isn't woken / red-dotted by its own
+ *     action, other recipients are notified normally; the actor still gets a
+ *     silent row). Dropping rows here used to conflate "should this chat get
+ *     the card" with "should this recipient be notified" and silently killed
+ *     delivery to multi-participant chats whose only routing entry had the
+ *     actor on one side (#942).
  *   - actor = `our-app-bot`: `kind: "existing"` rows are kept so follow-up
  *     events on entities the agent opened still reach the chat through the
  *     subscription path; `kind: "new"` rows are dropped to avoid forking a
@@ -307,12 +309,14 @@ export async function resolveAudience(
     // (#942). Every mapped chat keeps its card — the chat row is the public
     // record of what happened, and other participants of a multi-member
     // chat legitimately want to see it. The actor's id is annotated onto
-    // every target so Stage 3 (`deliverNormalizedEvent`) excludes it from
-    // `addressedToAgentIds`: the actor is never woken / red-dotted by their
-    // own action, while everyone else is notified normally. A 1:1 chat where
-    // the actor is the sole addressable recipient reduces naturally to "card
-    // visible, nobody woken" via the existing `allowRecipientlessSend`
-    // trusted opt-out.
+    // every target so Stage 3 (`deliverNormalizedEvent`) passes it as
+    // `suppressNotifyAgentIds`: the actor stays structurally addressed but is
+    // not woken / red-dotted by its own action (it still gets a silent
+    // `notify=false` row), while everyone else is notified normally.
+    // Suppression is decoupled from `senderId` (S2/D1) — the actor is
+    // frequently not a speaker of the chat, so it must not become the
+    // chat-local sender. A 1:1 chat where the actor is the sole addressable
+    // recipient reduces naturally to "card visible, nobody woken".
     //
     // The previous implementation dropped `kind: "existing"` rows whose
     // human or delegate side matched the actor. When such a row was the
