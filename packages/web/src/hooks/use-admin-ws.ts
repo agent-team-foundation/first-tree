@@ -116,8 +116,8 @@ const chatAgentStatusInvalidator = createThrottledInvalidator(["chat-agent-statu
 //
 // `["chat-right-sidebar", "session", ...]` is targeted explicitly to keep
 // the sibling `["chat-right-sidebar", "github-entities", chatId]` query
-// (github-section.tsx) — a 60s GitHub REST poll — out of the invalidation
-// path on every `session:state` burst.
+// (github-section.tsx) — a periodic GitHub-entity DB projection — out of
+// the invalidation path on every `session:state` burst.
 type SessionPairThrottleState = {
   lastAt: number;
   trailingTimer: ReturnType<typeof setTimeout> | null;

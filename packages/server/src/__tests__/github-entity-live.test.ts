@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { GITHUB_API_BASE } from "../services/github-api-base.js";
-import { __testing, resolveChatGithubEntity } from "../services/github-entity-live.js";
+import { __testing, materializeChatGithubEntity, resolveChatGithubEntity } from "../services/github-entity-live.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status });
@@ -142,6 +142,36 @@ describe("fetchEntityLiveFields", () => {
 });
 
 describe("resolveChatGithubEntity", () => {
+  it("materializes persisted PR and issue lifecycle state without live fetches", () => {
+    expect(
+      materializeChatGithubEntity({
+        entityType: "pull_request",
+        entityKey: "owner/repo#12",
+        boundVia: "direct",
+        entityState: "draft",
+      }),
+    ).toMatchObject({
+      entityType: "pull_request",
+      entityKey: "owner/repo#12",
+      state: "draft",
+      title: null,
+      number: 12,
+    });
+    expect(
+      materializeChatGithubEntity({
+        entityType: "issue",
+        entityKey: "owner/repo#13",
+        boundVia: "direct",
+        entityState: "merged",
+      }),
+    ).toMatchObject({
+      entityType: "issue",
+      entityKey: "owner/repo#13",
+      state: null,
+      number: 13,
+    });
+  });
+
   it("materializes wire entities with optional live fields", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse({ title: "Bug", state: "open" }));
 

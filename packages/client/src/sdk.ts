@@ -389,7 +389,7 @@ export class FirstTreeHubSDK {
     );
   }
 
-  /** List the GitHub entities currently wired into a chat (live title/state included). */
+  /** List the GitHub entities currently wired into a chat. */
   async listChatGithubEntities(chatId: string): Promise<ChatGithubEntityListResponse> {
     return this.requestJson<ChatGithubEntityListResponse>(`/api/v1/agent/chats/${chatId}/github-entities`);
   }
