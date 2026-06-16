@@ -106,6 +106,15 @@ describe("error-taxonomy.classify", () => {
       expect(c.reasonCode).toBe("auth_refresh_failed");
     });
 
+    it("ClaudeTuiLoginRequiredError (session source) → permanent, no retry", () => {
+      const err = new Error("claude TUI requires re-authentication (run /login) — session=ftth-x");
+      err.name = "ClaudeTuiLoginRequiredError";
+      const c = classify(err, { source: "session" });
+      expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
+      expect(c.reasonCode).toBe("claude_login_required");
+      expect(c.strategy.kind).toBe("none");
+    });
+
     it("ClientOrgMismatchError → permanent with default message", () => {
       const c = classify(noMessageShape({ name: "ClientOrgMismatchError" }));
       expect(c.kind).toBe(ERROR_KINDS.PERMANENT);

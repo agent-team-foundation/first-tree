@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveSessionName,
+  isBypassPermissionsWarning,
+  isClaudeLoginWall,
   isResumeSummaryPrompt,
   isWorkspaceTrustPrompt,
   ownedSessionPrefix,
@@ -131,5 +133,59 @@ Resuming the full session will consume a substantial portion of your usage limit
 `;
 
     expect(isResumeSummaryPrompt(pane)).toBe(false);
+  });
+});
+
+describe("isBypassPermissionsWarning", () => {
+  it("detects the one-time bypass-permissions acceptance modal", () => {
+    const pane = `
+ WARNING: Claude Code running in Bypass Permissions mode
+
+ In Bypass Permissions mode, Claude Code will not ask for your approval
+ before running potentially dangerous commands.
+
+ ❯ 1. Yes, I accept
+   2. No, exit
+
+ Enter to confirm · Esc to cancel
+`;
+
+    expect(isBypassPermissionsWarning(pane)).toBe(true);
+  });
+
+  it("does not treat the normal ready surface ('bypass permissions on') as the modal", () => {
+    const pane = `
+❯ Try "edit <filepath> to..."
+⏵⏵ bypass permissions on (shift+tab to cycle)
+`;
+
+    expect(isBypassPermissionsWarning(pane)).toBe(false);
+  });
+});
+
+describe("isClaudeLoginWall", () => {
+  it("detects the interactive login-method selector", () => {
+    const pane = `
+ Select login method:
+
+ ❯ 1. Login with Claude account
+   2. Login with Claude Console (API)
+`;
+
+    expect(isClaudeLoginWall(pane)).toBe(true);
+  });
+
+  it("detects a 'run /login' re-auth prompt", () => {
+    expect(isClaudeLoginWall("OAuth refresh token is no longer valid; run /login to re-authenticate")).toBe(true);
+    expect(isClaudeLoginWall("Not authenticated. Please run /login and try again.")).toBe(true);
+  });
+
+  it("does not fire on the normal ready surface", () => {
+    const pane = `
+❯ Try "edit <filepath> to..."
+⏵⏵ bypass permissions on (shift+tab to cycle)
+`;
+
+    expect(isClaudeLoginWall(pane)).toBe(false);
   });
 });

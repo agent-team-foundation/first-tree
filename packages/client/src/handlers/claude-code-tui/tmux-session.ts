@@ -211,14 +211,62 @@ export function isResumeSummaryPrompt(pane: string): boolean {
 }
 
 /**
+ * `--dangerously-skip-permissions` makes Claude Code show a one-time "Bypass
+ * Permissions mode" warning ("Yes, I accept" / "No, exit") before the ready
+ * surface unless the HOME has already accepted it (a settings flag or a prior
+ * interactive accept). First Tree never sets that flag, so a fresh HOME (new
+ * machine / cloud agent) hits this modal and deadlocks exactly like the trust
+ * dialog. Distinct from the READY_MARKER ("bypass permissions on") by the
+ * "mode" wording plus the accept option.
+ */
+export function isBypassPermissionsWarning(pane: string): boolean {
+  return pane.includes("Bypass Permissions mode") && pane.includes("Yes, I accept");
+}
+
+/**
+ * Claude Code drops into an interactive login / re-auth wall when credentials
+ * are missing or expired (OAuth refresh token revoked, API key invalid, …) —
+ * a login-method selector or a "run /login" prompt. Unlike the trust / resume
+ * / bypass modals this is NOT answerable by keystroke (it needs a human to
+ * re-authenticate in a browser), so waitForReady throws
+ * {@link ClaudeTuiLoginRequiredError} on sight; the error taxonomy classifies
+ * it `permanent` so the session stops the otherwise-infinite transient retry
+ * loop and surfaces to an operator instead of silently spamming retries.
+ */
+export function isClaudeLoginWall(pane: string): boolean {
+  return (
+    pane.includes("Select login method") ||
+    pane.includes("Login with Claude account") ||
+    pane.includes("OAuth refresh token is no longer valid") ||
+    /\brun \/login\b/i.test(pane)
+  );
+}
+
+/**
+ * Thrown by {@link waitForReady} when the TUI is parked on an unanswerable
+ * login / re-auth wall. The `name` is the classification contract: the error
+ * taxonomy maps it to a `permanent` `claude_login_required` so SessionManager
+ * stops retrying and surfaces the session as errored.
+ */
+export class ClaudeTuiLoginRequiredError extends Error {
+  constructor(sessionName: string) {
+    super(`claude TUI requires re-authentication (run /login) — session=${sessionName}`);
+    this.name = "ClaudeTuiLoginRequiredError";
+  }
+}
+
+/**
  * Poll capture-pane until both the bypass-permissions marker and a `❯`
  * input prompt line are visible. Resolves on success, throws on timeout.
- * Two one-time interactive prompts can precede the ready surface; we
- * auto-acknowledge each and keep waiting:
- * - the workspace trust prompt (acknowledged with Enter); and
- * - the large-session "resume strategy" menu, where we accept the default
- *   "Resume from summary (recommended)" so over-threshold sessions resume from
- *   a summary instead of deadlocking on an unanswerable menu.
+ * One-time interactive prompts can precede the ready surface; the detached
+ * runtime handles each instead of deadlocking on it:
+ * - the workspace trust prompt (acknowledged with Enter);
+ * - the bypass-permissions warning (accept option 1, "Yes, I accept");
+ * - the large-session "resume strategy" menu (select option 1, "Resume from
+ *   summary", so over-threshold sessions resume from a summary).
+ * The login / re-auth wall is NOT keystroke-answerable, so it throws
+ * {@link ClaudeTuiLoginRequiredError} (classified `permanent`) to stop the
+ * retry loop and surface to an operator rather than time out forever.
  */
 export async function waitForReady(input: WaitForReadyInput): Promise<void> {
   const timeoutMs = input.timeoutMs ?? 30_000;
@@ -227,14 +275,34 @@ export async function waitForReady(input: WaitForReadyInput): Promise<void> {
   const started = Date.now();
   let deadline = started + timeoutMs;
   let acceptedWorkspaceTrust = false;
+  let acceptedBypassWarning = false;
   let acceptedResumeSummary = false;
   while (Date.now() < deadline) {
     // The TUI prints U+00A0 (NBSP) inside its chrome (see tui-markers.ts);
     // normalize to ASCII space once so every substring match below is robust
     // to that, regardless of which gaps Claude renders as NBSP.
     const pane = (await capturePane(input.name)).replace(/\u00A0/g, " ");
+    // An unanswerable login / re-auth wall can't be keystroked away; fail fast
+    // and let the taxonomy mark it permanent so we stop retrying forever.
+    if (isClaudeLoginWall(pane)) {
+      throw new ClaudeTuiLoginRequiredError(input.name);
+    }
     if (!acceptedWorkspaceTrust && isWorkspaceTrustPrompt(pane)) {
       acceptedWorkspaceTrust = true;
+      await sendKey(input.name, "Enter");
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      continue;
+    }
+    if (!acceptedBypassWarning && isBypassPermissionsWarning(pane)) {
+      acceptedBypassWarning = true;
+      // Accept by selecting option 1 ("Yes, I accept") explicitly by number.
+      // We must NOT rely on Enter hitting the default highlight here: if the
+      // modal ever defaulted to "No, exit", a bare Enter would QUIT claude.
+      // "1" pins the affirmative option; if number-select is unsupported it is
+      // ignored and Enter falls on the default (the affirmative option 1, as
+      // with the trust dialog).
+      await sendKey(input.name, "1");
+      await new Promise((r) => setTimeout(r, 100));
       await sendKey(input.name, "Enter");
       await new Promise((r) => setTimeout(r, pollIntervalMs));
       continue;
