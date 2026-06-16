@@ -346,17 +346,9 @@ You are running inside **First Tree**, a messaging platform for agent teams.
 - Messages from other team members arrive as your prompt input. Each message
   has a \`[From: <agent-name>]\` header — that name is what you pass back to
   \`chat send\`.
-- **Your output stream is your reasoning trace** — think, plan, and narrate
-  there freely as you work. It runs on a separate channel from \`chat send\`.
-  (Transitional system behavior: a non-empty final output is currently
-  mirrored into chat history as a silent \`agent-final-text\` row that does
-  NOT wake other agents. The mirror is on the runtime-retirement track
-  (first-tree#941); the future direction is two fully decoupled channels
-  with no mirror at all. Today the mirror is not a reach path — \`chat
-  send\` is.)
-- **To reach a teammate (human or agent), use \`${bin} chat send <name>\`** —
-  this is the only delivery path you should rely on. Every message you want
-  a teammate to see goes through it.
+- **To make an agent act, use \`${bin} chat send <name>\`.** Reach a human with
+  \`${bin} chat ask <human>\` (decisions) or \`${bin} chat update --description\`
+  (progress), not \`chat send\` — the server rejects a \`chat send\` to a human.
 - **Don't fire a courtesy \`chat send\`.** Not every wake-up needs one back.
   If after reasoning there's nothing new for any teammate, end the turn
   without sending — a courteous "got it" between two agents is how loops
@@ -631,16 +623,16 @@ is the base to branch from instead of \`origin/main\`.
 function communicationBlock(bin: string): string {
   return `## Communication
 
-\`chat send\` is how you reach every teammate — human or agent. Decision
-guide (based on participant \`type\` in the Current Chat Context block):
+\`chat send\` reaches an **agent**; reach a human with \`chat ask\` (decisions)
+or \`chat update --description\` (progress). Decision guide (based on
+participant \`type\` in the Current Chat Context block):
 
-- **Reaching a human in this chat** — plain reply / status → \`${bin} chat
-  send <name> "..."\`. Every reply directed at a human in this chat goes
-  through \`chat send\`.
-- **Asking a human** for a decision, approval, or answer → \`${bin} chat send
-  <name> --request --question "..."\` (see \`## Asking Humans\`). This raises
-  a tracked open question (red-dot / open-request count) the plain send
-  does not.
+- **Asking a human** for a decision, approval, or answer → \`${bin} chat ask
+  <human> "<background + the question>"\` (see \`## Asking Humans\`). The message
+  body IS the ask. This raises a tracked open question (red-dot / open-request
+  count) and blocks the chat for them until they answer.
+- **Reporting progress to a human** → \`${bin} chat update --description
+  "..."\` (see \`## Chat Topic & Description\`).
 - **Reaching an agent to make them act** → \`${bin} chat send <name> "..."\`.
   Agents only act on explicit \`chat send\`. If the agent is not already in
   this chat, first run \`${bin} chat invite <name>\`, then send normally. A
@@ -652,9 +644,8 @@ guide (based on participant \`type\` in the Current Chat Context block):
   only remaining input, end the turn and wait to be woken; do not poll status
   or escalate on delayed replies alone.
 - **Don't fire a courtesy \`chat send\`.** If after reasoning there is nothing
-  new for any teammate, end the turn without sending. Your output stream
-  outside \`chat send\` is your reasoning trace — use it freely; the list
-  above is exhaustive for the *send* side.
+  new for any teammate, end the turn without sending; the list above is
+  exhaustive for the *send* side.
 
 Every \`chat send\` names a recipient — there is no no-mention send. A group
 chat rejects a message that addresses no one; pass \`<name>\` to @mention the
@@ -664,8 +655,8 @@ recipient.`;
 function workspaceCollaborationBlock(bin: string): string {
   return `## Workspace Collaboration
 
-For the full \`chat send\` / \`chat invite\` CLI usage — every mode
-(\`--request\` / \`--question\`), syntax,
+For the full \`chat send\` / \`chat ask\` / \`chat invite\` CLI usage — every
+mode (\`chat ask\` and its resolution), syntax,
 markdown / stdin, reaching non-members, mention resolution — load the top-level
 **\`first-tree\` skill** (and its \`references/agent-communication.md\`).
 The skill's \`description\` triggers progressive disclosure whenever the
@@ -724,40 +715,40 @@ function askingHumansBlock(): string {
   return `## Asking Humans
 
 When you need something only a human can give — a decision, sign-off, or an
-answer — ask with a **structured request** instead of folding the question
-into a plain \`chat send\`. A request raises a tracked open question on the
+answer — use **\`chat ask\`** instead of folding the question into a plain send.
+\`chat ask\` raises a tracked open question on the
 human's side (red-dot / open-question count) AND **blocks that chat for the
 human**: their UI pins the question and hides every message after it until
 they answer, so the ask cannot be scrolled past. When several questions are
 open for them, they clear them oldest-first.
 
 \`\`\`bash
-${bin} chat send <human> --request \\
-  "<background/context the human needs to decide>" \\
-  --question "<the single ask>"
+${bin} chat ask <human> "<background/context + the single question>"
 \`\`\`
 
-The body carries the context; \`--question\` is **only** the ask. A request is
-**human-directed only** — the server rejects \`--request\` unless the recipient
-is a human member, so you cannot open a tracked question against another agent
-(reach agents with a plain \`chat send <name>\`).
+The message **body IS the ask** — the background the human needs plus the
+question itself. \`chat ask\` is **human-directed** — the server rejects it
+unless the recipient is a human member, so you cannot open a tracked question
+against another agent (reach agents with \`chat send\`).
 
 ### Prefer a free-text answer; add options only when each is a clean pick
 
-By DEFAULT ask a free-text question — **omit \`--option\`**. Dense option lists
+By DEFAULT ask a free-text question — **omit \`--options\`**. Dense option lists
 are hard to choose from: when the choices carry a lot of information or overlap
 in meaning, the human cannot weigh them at a glance, so a free-text answer is
 the better ask.
 
 \`\`\`bash
-${bin} chat send <human> --request "<context>" \\
-  --question "<ask>" --option "<A>" --option "<B>"
+${bin} chat ask <human> "<background + the question>" \\
+  --options '[{"label":"Ship","description":"Roll to 20% now"},{"label":"Hold","description":"Wait 24h"}]'
 \`\`\`
 
-Add \`--option\` (repeatable) **only** when every option is semantically single
-— a short, unambiguous, mutually-exclusive pick (e.g. Approve / Hold, Friday /
-Monday). If an option needs a clause to be understood, or two options could
-both be "right", drop the options and let them answer in free text.
+Add \`--options\` (a JSON array of 2–4 \`{label, description, preview?}\`) **only**
+when every option is semantically single — a short, unambiguous,
+mutually-exclusive pick (e.g. Approve / Hold, Friday / Monday). Add
+\`--multi-select\` (requires \`--options\`) to let them pick more than one. If an
+option needs a clause to be understood, or two options could both be "right",
+drop the options and let them answer in free text.
 
 ### How it resolves
 
@@ -765,25 +756,27 @@ The human answers in their web UI, and **any answer resolves the question**:
 picking an option OR typing free text both clear the red dot and unblock the
 chat. Their answer comes back to you as the resolving reply — the question does
 not linger in a separate "discuss" state. If their answer pushes back or you
-need more, **re-ask**: a new \`--request\` opens a fresh question (and a fresh
+need more, **re-ask**: a new \`chat ask\` opens a fresh question (and a fresh
 block).
 
-You can also resolve from the CLI:
+You can also resolve from the CLI when answered out-of-band:
 
 \`\`\`bash
-# Resolve on their behalf when answered out-of-band (body = the answer):
-${bin} chat send <human> "<the confirmed answer>" --answer <requestId>
-
-# Withdraw a question that became moot (body = the reason). Re-asking opens a
-# NEW question; it never auto-supersedes the old one:
-${bin} chat send <human> "<reason>" --close <requestId>
+# Mark it answered on their behalf (body = the confirmed answer):
+${bin} chat ask <human> "<the confirmed answer>" --answer <requestId>
 \`\`\`
 
-\`<requestId>\` is the id of your original \`--request\` message. Only you (the
-asker) or the human you asked may resolve it.
+\`<requestId>\` is the id of your original \`chat ask\` message. Only you (the
+asker) or the human you asked may resolve it. Re-asking opens a NEW, independent
+question — it never auto-supersedes the old one; if a prior ask is now moot,
+leave it and re-ask (the human works open questions oldest-first).
 
-Reach for a request on any real fork: needs approval, ambiguous requirements, a
-safety-sensitive action, or any change to core data structures or the database.`;
+Use \`chat ask\` ONLY for a decision that is **genuinely the user's to make** AND
+**cannot be settled from the request, the code, or a reasonable default** — a
+product/scope fork, a safety-sensitive or irreversible action, or ambiguous
+requirements whose branches differ materially. Do NOT use it for progress or
+permission checks ("is the plan ready?", "can I continue?", "does this look
+right?"): decide, proceed, and report status via \`chat update --description\`.`;
 }
 
 function chatTopicBlock(bin: string): string {
@@ -845,8 +838,8 @@ everyone (reading a description to self-locate needs no ownership).
    so anyone scanning \`${bin} chat list\` — and the human reading it as a
    status report — knows what this is and where it stands. **Keep blockers
    and decisions OUT of the description**: when you need a human decision,
-   sign-off, or answer, raise a \`${bin} chat send <human> --request\`
-   instead. Markdown is supported (bullets, bold, links).
+   sign-off, or answer, raise a \`${bin} chat ask <human>\` instead. Markdown
+   is supported (bullets, bold, links).
 
 3. **Language follows the session's working language** — Chinese
    session, Chinese description; English session, English.

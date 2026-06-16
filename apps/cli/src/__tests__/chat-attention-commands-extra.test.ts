@@ -153,80 +153,146 @@ describe("chat command behavior", () => {
     await expect(runChat(["send", "nova"])).rejects.toMatchObject({ code: "NO_MESSAGE", exitCode: 2 });
   });
 
-  it("sends a --request with the body as context and --question as just the ask", async () => {
+  it("chat ask sends an open question with the body as the ask and JSON --options", async () => {
     const sdk = localAgentMocks.createSdk();
     await runChat([
-      "send",
+      "ask",
       "nova",
-      "Rollout is at 5% and error rate is flat for 24h.",
-      "--request",
-      "--question",
-      "Ship to 20%?",
-      "--option",
-      "yes",
-      "--option",
-      "hold",
+      "Rollout at 5%, error flat 24h — ship to 20%?",
+      "--options",
+      JSON.stringify([
+        { label: "Ship", description: "Roll to 20% now" },
+        { label: "Hold", description: "Wait another 24h" },
+      ]),
     ]);
 
     expect(sdk.sendMessage).toHaveBeenCalledWith(
       "chat-env",
       expect.objectContaining({
         format: "request",
-        content: "Rollout is at 5% and error rate is flat for 24h.",
+        content: "Rollout at 5%, error flat 24h — ship to 20%?",
         receiverNames: ["nova"],
         metadata: expect.objectContaining({
           request: {
-            questions: [{ id: "q1", prompt: "Ship to 20%?", kind: "single", options: ["yes", "hold"], required: true }],
+            options: [
+              { label: "Ship", description: "Roll to 20% now" },
+              { label: "Hold", description: "Wait another 24h" },
+            ],
           },
         }),
       }),
     );
   });
 
-  it("rejects a --request with no body — context belongs in the body, not the question", async () => {
-    ioMocks.readStdin.mockResolvedValueOnce(null);
-    await expect(runChat(["send", "nova", "--request", "--question", "Ship to 20%?"])).rejects.toMatchObject({
-      code: "REQUEST_NEEDS_BODY",
-      exitCode: 2,
-    });
-  });
-
-  it("passes --subject through as the request's dock/card headline", async () => {
+  it("chat ask without --options is a free-text ask (empty request payload)", async () => {
     const sdk = localAgentMocks.createSdk();
-    await runChat([
-      "send",
-      "nova",
-      "Rollout is at 5% and error rate is flat for 24h.",
-      "--request",
-      "--subject",
-      "Rollout gate",
-      "--question",
-      "Ship to 20%?",
-      "--option",
-      "yes",
-    ]);
-
+    await runChat(["ask", "nova", "What's the rollback window?"]);
     expect(sdk.sendMessage).toHaveBeenCalledWith(
       "chat-env",
       expect.objectContaining({
         format: "request",
+        content: "What's the rollback window?",
+        metadata: expect.objectContaining({ request: {} }),
+      }),
+    );
+  });
+
+  it("chat ask --multi-select records multiSelect alongside options", async () => {
+    const sdk = localAgentMocks.createSdk();
+    await runChat([
+      "ask",
+      "nova",
+      "Which surfaces to ship?",
+      "--multi-select",
+      "--options",
+      JSON.stringify([
+        { label: "Web", description: "ship web" },
+        { label: "CLI", description: "ship cli" },
+        { label: "API", description: "ship api" },
+      ]),
+    ]);
+    expect(sdk.sendMessage).toHaveBeenCalledWith(
+      "chat-env",
+      expect.objectContaining({
         metadata: expect.objectContaining({
-          request: expect.objectContaining({ subject: "Rollout gate" }),
+          request: expect.objectContaining({ multiSelect: true }),
         }),
       }),
     );
   });
 
-  it("rejects an over-long --question — the wall of text belongs in the body", async () => {
-    await expect(
-      runChat(["send", "nova", "body context", "--request", "--question", "x".repeat(201)]),
-    ).rejects.toMatchObject({ code: "QUESTION_TOO_LONG", exitCode: 2 });
+  it("chat ask rejects no body — the body is the ask", async () => {
+    ioMocks.readStdin.mockResolvedValueOnce(null);
+    await expect(runChat(["ask", "nova"])).rejects.toMatchObject({ code: "ASK_NEEDS_BODY", exitCode: 2 });
   });
 
-  it("rejects an over-long --subject — it is a headline, not a summary", async () => {
+  it("chat ask validates --options: bad JSON, count, label length, and multi-select without options", async () => {
+    await expect(runChat(["ask", "nova", "body", "--options", "{nope"])).rejects.toMatchObject({
+      code: "INVALID_OPTIONS",
+      exitCode: 2,
+    });
     await expect(
-      runChat(["send", "nova", "body context", "--request", "--subject", "s".repeat(81), "--question", "Ship?"]),
-    ).rejects.toMatchObject({ code: "SUBJECT_TOO_LONG", exitCode: 2 });
+      runChat(["ask", "nova", "body", "--options", JSON.stringify([{ label: "Only", description: "one" }])]),
+    ).rejects.toMatchObject({ code: "INVALID_OPTIONS", exitCode: 2 });
+    await expect(
+      runChat([
+        "ask",
+        "nova",
+        "body",
+        "--options",
+        JSON.stringify(["a", "b", "c", "d", "e"].map((l) => ({ label: l, description: "d" }))),
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_OPTIONS", exitCode: 2 });
+    await expect(
+      runChat([
+        "ask",
+        "nova",
+        "body",
+        "--options",
+        JSON.stringify([
+          { label: "this label is way too long", description: "d" },
+          { label: "Fine", description: "d" },
+        ]),
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_OPTIONS", exitCode: 2 });
+    await expect(runChat(["ask", "nova", "body", "--multi-select"])).rejects.toMatchObject({
+      code: "MULTISELECT_NEEDS_OPTIONS",
+      exitCode: 2,
+    });
+  });
+
+  it("chat ask resolves an open question via --answer and rejects bad combinations", async () => {
+    const sdk = localAgentMocks.createSdk();
+
+    await runChat(["ask", "nova", "Ship it.", "--answer", "req-1"]);
+    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
+      "chat-env",
+      expect.objectContaining({
+        content: "Ship it.",
+        receiverNames: ["nova"],
+        inReplyTo: "req-1",
+        metadata: expect.objectContaining({ resolves: { request: "req-1", kind: "answered" } }),
+      }),
+    );
+
+    await expect(
+      runChat([
+        "ask",
+        "nova",
+        "x",
+        "--answer",
+        "req-1",
+        "--options",
+        JSON.stringify([
+          { label: "A", description: "a" },
+          { label: "B", description: "b" },
+        ]),
+      ]),
+    ).rejects.toMatchObject({ code: "RESOLVE_WITH_OPTIONS", exitCode: 2 });
+  });
+
+  it("chat send no longer accepts --request (moved to chat ask)", async () => {
+    await expect(runChat(["send", "nova", "body", "--request"])).rejects.toThrow();
   });
 
   it("creates task chats with first-message routing and silent context participants", async () => {
@@ -288,14 +354,11 @@ describe("chat command behavior", () => {
       "--agent",
       "worker",
       "--request",
-      "--subject",
-      "Rollout gate",
-      "--question",
-      "Ship to 20%?",
-      "--option",
-      "yes",
-      "--option",
-      "hold",
+      "--options",
+      JSON.stringify([
+        { label: "Ship", description: "Roll to 20% now" },
+        { label: "Hold", description: "Wait another 24h" },
+      ]),
     ]);
 
     expect(localAgentMocks.createSdk).toHaveBeenCalledWith("worker");
@@ -307,15 +370,9 @@ describe("chat command behavior", () => {
           content: "stdin message",
           metadata: {
             request: {
-              subject: "Rollout gate",
-              questions: [
-                {
-                  id: "q1",
-                  prompt: "Ship to 20%?",
-                  kind: "single",
-                  options: ["yes", "hold"],
-                  required: true,
-                },
+              options: [
+                { label: "Ship", description: "Roll to 20% now" },
+                { label: "Hold", description: "Wait another 24h" },
               ],
             },
           },
@@ -323,20 +380,27 @@ describe("chat command behavior", () => {
       }),
     );
 
+    // --request still requires exactly one --to human.
     await expect(runChat(["create", "body", "--request", "--to", "nova", "--to", "design"])).rejects.toMatchObject({
       code: "REQUEST_NEEDS_ONE_TARGET",
       exitCode: 2,
     });
-    await expect(runChat(["create", "body", "--request", "--to", "nova"])).rejects.toMatchObject({
-      code: "REQUEST_NEEDS_QUESTION",
+    // A --request with no --options is a valid free-text ask (empty payload).
+    await runChat(["create", "body", "--request", "--to", "nova"]);
+    expect(sdk.createTaskChat).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        initialMessage: expect.objectContaining({ format: "request", metadata: { request: {} } }),
+      }),
+    );
+    // Malformed options / multi-select without options are rejected.
+    await expect(runChat(["create", "body", "--request", "--to", "nova", "--options", "{nope"])).rejects.toMatchObject({
+      code: "INVALID_OPTIONS",
       exitCode: 2,
     });
-    await expect(
-      runChat(["create", "body", "--request", "--to", "nova", "--question", "x".repeat(201)]),
-    ).rejects.toMatchObject({ code: "QUESTION_TOO_LONG", exitCode: 2 });
-    await expect(
-      runChat(["create", "body", "--request", "--to", "nova", "--subject", "s".repeat(81), "--question", "Ship?"]),
-    ).rejects.toMatchObject({ code: "SUBJECT_TOO_LONG", exitCode: 2 });
+    await expect(runChat(["create", "body", "--request", "--to", "nova", "--multi-select"])).rejects.toMatchObject({
+      code: "MULTISELECT_NEEDS_OPTIONS",
+      exitCode: 2,
+    });
   });
 
   it("validates chat create input and treats uncertain create outcomes as non-retryable", async () => {

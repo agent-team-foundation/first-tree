@@ -1,59 +1,56 @@
+import { askOptionSchema } from "@first-tree/shared";
+import { z } from "zod";
 import { fail } from "../../../cli/output.js";
 
-/**
- * Hard caps on the structured ask. `--question` is the short ask the web pins
- * above the composer (RequestDock); `--subject` is its headline. Background
- * and context belong in the message body, which renders as markdown in the
- * request card.
- */
-export const REQUEST_QUESTION_MAX_CHARS = 200;
-export const REQUEST_SUBJECT_MAX_CHARS = 80;
+/** Provided options come 2–4 at a time, each `{label (1–5 words), description, preview?}`. */
+const optionsArraySchema = z.array(askOptionSchema).min(2).max(4);
 
 export type RequestCliOptions = {
-  subject?: string;
-  question?: string;
-  option?: string[];
+  /** Raw JSON passed to `--options`: an array of `{label, description, preview?}`. */
+  options?: string;
+  /** `--multi-select`: allow picking more than one option (requires `--options`). */
+  multiSelect?: boolean;
 };
 
+/**
+ * Build `metadata.request` for an ask. The ask itself is the message body; this
+ * payload carries only the answer affordance:
+ *   - no `--options` → free-text answer (empty `request`).
+ *   - `--options '<json>'` → 2–4 options; `--multi-select` toggles multiple.
+ */
 export function buildRequestMetadata(
   metadata: Record<string, unknown> | undefined,
   options: RequestCliOptions,
 ): Record<string, unknown> {
-  if (!options.question) {
-    fail("REQUEST_NEEDS_QUESTION", "--request needs --question <text>.", 2);
-  }
-  if (options.question.length > REQUEST_QUESTION_MAX_CHARS) {
-    fail(
-      "QUESTION_TOO_LONG",
-      `--question must stay a short ask (≤${REQUEST_QUESTION_MAX_CHARS} chars, got ${options.question.length}). ` +
-        "Move the background/context into the message body — it renders as the request card's markdown body; " +
-        "the question is pinned verbatim above the composer.",
-      2,
-    );
-  }
-  if (options.subject && options.subject.length > REQUEST_SUBJECT_MAX_CHARS) {
-    fail(
-      "SUBJECT_TOO_LONG",
-      `--subject is a headline (≤${REQUEST_SUBJECT_MAX_CHARS} chars, got ${options.subject.length}). ` +
-        "Keep it to a few words; details belong in the body or --question.",
-      2,
-    );
+  let parsedOptions: z.infer<typeof optionsArraySchema> | undefined;
+  if (options.options !== undefined) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(options.options);
+    } catch {
+      fail("INVALID_OPTIONS", "--options must be valid JSON: an array of {label, description, preview?}.", 2);
+    }
+    const result = optionsArraySchema.safeParse(raw);
+    if (!result.success) {
+      const issue = result.error.issues[0];
+      fail(
+        "INVALID_OPTIONS",
+        "--options must be 2–4 items of {label (1–5 words), description, preview?}" +
+          (issue ? ` — ${issue.path.join(".") || "options"}: ${issue.message}` : "") +
+          ".",
+        2,
+      );
+    }
+    parsedOptions = result.data;
   }
 
-  const opts = options.option ?? [];
-  return {
-    ...(metadata ?? {}),
-    request: {
-      ...(options.subject ? { subject: options.subject } : {}),
-      questions: [
-        {
-          id: "q1",
-          prompt: options.question,
-          kind: opts.length > 0 ? "single" : "free",
-          options: opts,
-          required: true,
-        },
-      ],
-    },
-  };
+  if (options.multiSelect && !parsedOptions) {
+    fail("MULTISELECT_NEEDS_OPTIONS", "--multi-select requires --options.", 2);
+  }
+
+  const request: Record<string, unknown> = {};
+  if (parsedOptions) request.options = parsedOptions;
+  if (options.multiSelect) request.multiSelect = true;
+
+  return { ...(metadata ?? {}), request };
 }

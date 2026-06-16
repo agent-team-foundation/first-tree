@@ -110,6 +110,66 @@ describe("open-question (format=request) + open_request_count", () => {
     ).rejects.toThrow(/human/i);
   });
 
+  it("rejects an agent's plain (non-request) message addressed to a human — `chat send` is agent-directed", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, other, chat } = await setup(app, uid);
+
+    // Agent → human as a plain message has no channel: it must fail loud and
+    // point at `chat ask` / `chat update --description`.
+    await expect(
+      sendMessage(app.db, chat.id, asker.agent.uuid, {
+        source: "api",
+        format: "text",
+        content: "quick update for you",
+        metadata: { mentions: [human.uuid] },
+      }),
+    ).rejects.toThrow(/cannot `chat send` a human/i);
+
+    // Mixed mention (agent + human) in a non-text format is still rejected — a
+    // human is addressed, and the rule does not depend on the message format.
+    await expect(
+      sendMessage(app.db, chat.id, asker.agent.uuid, {
+        source: "api",
+        format: "markdown",
+        content: "**fyi** both",
+        metadata: { mentions: [other.uuid, human.uuid] },
+      }),
+    ).rejects.toThrow(/cannot `chat send` a human/i);
+
+    // The rejected send leaves nothing in history (tx rollback).
+    const stray = await app.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(and(eq(messages.chatId, chat.id), eq(messages.senderId, asker.agent.uuid)));
+    expect(stray).toHaveLength(0);
+
+    // The same intent as an ASK (format=request) is allowed.
+    await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "need a quick decision",
+      metadata: { mentions: [human.uuid], request: { question: "ok to ship?" } },
+    });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Agent → agent plain message is unaffected.
+    await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "ping",
+      metadata: { mentions: [other.uuid] },
+    });
+
+    // A HUMAN sender addressing anyone is unaffected (the rule is agent-only).
+    await sendMessage(app.db, chat.id, human.uuid, {
+      source: "web",
+      format: "text",
+      content: "hi team",
+      metadata: { mentions: [other.uuid] },
+    });
+  });
+
   it("an explicit answer resolution decrements the count; further resolutions are no-ops", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
@@ -218,7 +278,8 @@ describe("open-question (format=request) + open_request_count", () => {
 
   it("re-asking (a new format=request) opens a SECOND independent question (+1, no auto-supersede)", async () => {
     // Under the explicit-resolution model a new request never auto-closes the
-    // one it threads under — superseding is now an explicit `chat send --close`.
+    // one it threads under — both stay open and the human works them
+    // oldest-first (re-asking opens a new, independent question).
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, chat } = await setup(app, uid);
@@ -256,7 +317,8 @@ describe("open-question (format=request) + open_request_count", () => {
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // The ASKER explicitly closes (chat send --close) → resolves(closed) → -1.
+    // The ASKER writes an explicit resolves(closed) — the server still honors
+    // this resolution kind (no CLI flag produces it now) → -1.
     await sendMessage(
       app.db,
       chat.id,
@@ -624,7 +686,7 @@ describe("open-question (format=request) + open_request_count", () => {
     // desync it, so edits touching `request` are rejected.
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
-    const { asker, human, chat } = await setup(app, uid);
+    const { asker, human, other, chat } = await setup(app, uid);
 
     const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
       source: "api",
@@ -632,11 +694,13 @@ describe("open-question (format=request) + open_request_count", () => {
       content: "ratio?",
       metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
     });
+    // A plain agent message must target an agent (`other`); agent→human plain is
+    // rejected. Recipient identity is irrelevant to this format-edit check.
     const { message: plain } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
       source: "api",
       format: "text",
       content: "fyi",
-      metadata: { mentions: [human.uuid] },
+      metadata: { mentions: [other.uuid] },
     });
 
     await expect(editMessage(app.db, chat.id, question.id, asker.agent.uuid, { format: "text" })).rejects.toThrow(

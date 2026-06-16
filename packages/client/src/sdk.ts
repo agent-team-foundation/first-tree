@@ -403,7 +403,7 @@ export class FirstTreeHubSDK {
    *   background + plan + progress, serving both self-location (agent /
    *   teammate) and a human-facing status report. May use Markdown. Max
    *   1500 chars; surfaced to the agent each turn and via `chat list`.
-   *   Keep blockers / decisions out of it — those go to a `--request`.
+   *   Keep blockers / decisions out of it — those go to `chat ask`.
    * Pass either field as `null` to clear it (a cleared `topic` makes the title
    * fall back to first-message preview / participant names).
    *

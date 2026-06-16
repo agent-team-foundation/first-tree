@@ -138,7 +138,10 @@ describe("chat membership + fan-out semantics (explicit-only)", () => {
       expect(await notifyEntries(chat.id, agent.uuid)).toHaveLength(1);
     });
 
-    it("agent→human 1-on-1 with explicit mentions wakes the human (symmetric)", async () => {
+    it("agent→human 1-on-1 ask (format=request) wakes the human (symmetric)", async () => {
+      // `chat send` is agent-directed: an agent reaches a human only as an ask
+      // (`chat ask`, format=request), never a plain send. That ask still wakes
+      // the human, so the wake projection stays symmetric with human→agent.
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const human = await createTestAgent(app, { name: `fo-h2-${uid}`, type: "human" });
@@ -150,9 +153,9 @@ describe("chat membership + fan-out semantics (explicit-only)", () => {
       });
       await sendMessage(app.db, chat.id, agent.uuid, {
         source: "api",
-        format: "text",
-        content: "today is 2026-04-29",
-        metadata: { mentions: [human.agent.uuid] },
+        format: "request",
+        content: "today is 2026-04-29 — need a quick call",
+        metadata: { mentions: [human.agent.uuid], request: { question: "proceed?" } },
       });
 
       expect(await notifyEntries(chat.id, human.agent.uuid)).toHaveLength(1);

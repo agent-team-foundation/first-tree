@@ -39,9 +39,9 @@ export const MESSAGE_FORMATS = {
   FILE: "file",
   /**
    * Open question — an "ask" directed at a single human (the sole entry in
-   * `metadata.mentions`). The narrative/context lives in the message body
-   * (`content`); the specific question + optional subject live in
-   * `metadata.request`. No lifecycle state is stored on the message.
+   * `metadata.mentions`). The ask itself is the message body (`content`);
+   * `metadata.request` carries only the answer affordance (optional `options`
+   * + `multiSelect`). No lifecycle state is stored on the message.
    *
    * BLOCKING: while such a question is unresolved, the web UI blocks that chat
    * for the target human — it pins the question and hides every message after
@@ -65,35 +65,50 @@ export const messageFormatSchema = z.enum(["text", "markdown", "card", "referenc
 export type MessageFormat = z.infer<typeof messageFormatSchema>;
 
 /**
- * One question inside a `format="request"` message. A request can carry
- * several questions answered together in one reply.
- *   - `kind="single"` — pick exactly one of `options`.
- *   - `kind="free"`   — free-text answer (options ignored).
+ * One answer option on an ask. Options come 2–4 at a time, or are omitted
+ * entirely for a free-text answer.
  */
-export const openQuestionItemSchema = z.object({
-  id: z.string().min(1),
-  prompt: z.string().min(1),
-  kind: z.enum(["single", "free"]).default("single"),
-  options: z.array(z.string().min(1)).default([]),
-  required: z.boolean().default(true),
+export const askOptionSchema = z.object({
+  /**
+   * 1–5 words. Hard-capped: a label longer than five words is a description,
+   * not a label — put the explanation in `description`.
+   */
+  label: z
+    .string()
+    .min(1)
+    .refine(
+      (s) => {
+        const words = s.trim().split(/\s+/).filter(Boolean).length;
+        return words >= 1 && words <= 5;
+      },
+      { message: "label must be 1–5 words" },
+    ),
+  /** Explains the option's meaning / trade-off. */
+  description: z.string().min(1),
+  /** Optional mockup / code snippet rendered when the option is focused. */
+  preview: z.string().optional(),
 });
-export type OpenQuestionItem = z.infer<typeof openQuestionItemSchema>;
+export type AskOption = z.infer<typeof askOptionSchema>;
 
 /**
- * Shape of `metadata.request` on a `format="request"` message: the long
- * narrative/decision context lives in the message body (`content`); this
- * carries the structured ask. Server-opaque (the send path validates only
- * the single-human-target rule, not this payload) — the web parses it with
- * `safeParse` to render the answer block, mirroring how `githubEventCardSchema`
- * gates card rendering. See proposals/group-chat-unified-send §D1.
+ * Shape of `metadata.request` on a `format="request"` message. The ask itself
+ * is the message body (`content`); this payload carries only the answer
+ * affordance:
+ *   - omit `options` → free-text answer.
+ *   - 2–4 `options` → a choice; `multiSelect` toggles single vs. multiple.
+ * Server-opaque (the send path validates only the single-human-target rule,
+ * not this payload) — the web parses it with `safeParse` to render the answer
+ * block, mirroring how `githubEventCardSchema` gates card rendering.
  */
-export const openQuestionRequestSchema = z.object({
-  subject: z.string().optional(),
-  questions: z.array(openQuestionItemSchema).min(1),
-  /** Allow a free-text addition alongside option questions. */
-  allowExtra: z.boolean().default(false),
-});
-export type OpenQuestionRequest = z.infer<typeof openQuestionRequestSchema>;
+export const askRequestSchema = z
+  .object({
+    options: z.array(askOptionSchema).min(2).max(4).optional(),
+    multiSelect: z.boolean().default(false),
+  })
+  .refine((r) => r.options !== undefined || r.multiSelect === false, {
+    message: "multiSelect requires options",
+  });
+export type AskRequest = z.infer<typeof askRequestSchema>;
 
 /**
  * Explicit lifecycle signal carried in `metadata.resolves` on a reply to a

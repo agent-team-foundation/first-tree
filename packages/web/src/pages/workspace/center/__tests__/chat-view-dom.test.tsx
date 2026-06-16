@@ -594,8 +594,20 @@ function buttonByText(container: ParentNode, text: string): HTMLButtonElement | 
   return [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === text) ?? null;
 }
 
-function optionByText(container: ParentNode, text: string): HTMLLabelElement | null {
-  return [...container.querySelectorAll("label")].find((label) => label.textContent?.includes(text)) ?? null;
+/** The AskTakeover overlay's option button (role radio/checkbox) containing `text`. */
+function askOption(container: ParentNode, text: string): HTMLButtonElement | null {
+  return (
+    [...container.querySelectorAll<HTMLButtonElement>('[role="radio"],[role="checkbox"]')].find((b) =>
+      b.textContent?.includes(text),
+    ) ?? null
+  );
+}
+
+/** The AskTakeover overlay's free-text answer textarea (Other, or the pure free-text box). */
+function askTextarea(container: ParentNode): HTMLTextAreaElement | null {
+  return container.querySelector<HTMLTextAreaElement>(
+    'textarea[placeholder^="Type your answer"], textarea[placeholder^="Other"]',
+  );
 }
 
 beforeEach(() => {
@@ -801,7 +813,7 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  it("does not re-render an old request markdown body when request state changes", async () => {
+  it("renders a request as a normal message and does not re-render its body when a reply arrives", async () => {
     const { ChatView } = await import("../chat-view.js");
     const request = message({
       id: "req-render",
@@ -811,8 +823,10 @@ describe("ChatView", () => {
       metadata: {
         mentions: ["human-agent-self"],
         request: {
-          subject: "Render isolation",
-          questions: [{ id: "q1", prompt: "Proceed?", kind: "single", options: ["Yes"], required: true }],
+          options: [
+            { label: "Proceed", description: "go ahead" },
+            { label: "Hold", description: "wait" },
+          ],
         },
       },
       source: "api",
@@ -821,8 +835,8 @@ describe("ChatView", () => {
     const answer = message({
       id: "req-answer",
       senderId: "human-agent-self",
-      format: "card",
-      content: { resolved: true },
+      format: "markdown",
+      content: "Proceed sounds good to me.",
       metadata: { resolves: { request: "req-render", kind: "answered" } },
       inReplyTo: "req-render",
       source: "web",
@@ -834,8 +848,12 @@ describe("ChatView", () => {
       "/",
     );
 
+    // The request renders as a normal message body — no status-label chrome
+    // (no "RESOLVED"/"OPEN" badge), since the timeline no longer special-cases
+    // `format="request"`. Viewer agent-1 is not the target, so there is no
+    // answer overlay either.
     await waitForText(container, "Lifecycle");
-    await waitForText(container, "Awaiting your answer");
+    expect(container.textContent).not.toContain("RESOLVED");
     await flush();
     markdownMocks.render.mockClear();
 
@@ -844,7 +862,9 @@ describe("ChatView", () => {
     });
     await flush();
 
-    await waitForText(container, "RESOLVED");
+    // The reply arrives as its own message; the request row is memoized and its
+    // markdown body is not re-rendered.
+    await waitForText(container, "Proceed sounds good to me.");
     expect(markdownMocks.render).not.toHaveBeenCalledWith("Lifecycle **body** stays memoized.");
     await act(async () => root.unmount());
   });
@@ -928,15 +948,9 @@ describe("ChatView", () => {
         metadata: {
           mentions: ["human-agent-self"],
           request: {
-            subject: "Deploy",
-            questions: [
-              {
-                id: "q1",
-                prompt: "Deploy color?",
-                kind: "single",
-                options: ["Blue-green", "Rolling update"],
-                required: true,
-              },
+            options: [
+              { label: "Blue-green", description: "blue-green deploy" },
+              { label: "Rolling update", description: "rolling deploy" },
             ],
           },
         },
@@ -961,17 +975,18 @@ describe("ChatView", () => {
       queryClient.setQueryData(["chat-messages", "chat-1"], dockMessages);
     });
     await flush();
-    await waitForText(container, "Awaiting your answer");
+    await waitForText(container, "Reply");
     await waitForCondition(() => textarea.value === "", "Expected late request dock to clear auto-primed @");
 
     // Decoupled: clicking an option highlights the pill but does NOT fill the
     // composer — the draft stays empty (the auto-primed @ has been cleared).
-    await click(optionByText(container, "Blue-green"));
+    // Answering happens in the overlay: the composer stays empty.
+    await click(askOption(container, "Blue-green"));
     expect(textarea.value).toBe("");
-    await click(container.querySelector('button[aria-label="Send"]'));
+    await click(buttonByText(container, "Reply"));
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected option answer send");
-    // Sending merges the selection into a canonical line and resolves.
-    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Deploy color? → Blue-green", ["agent-1"], {
+    // The answer is the selected option label, resolving the question.
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Blue-green", ["agent-1"], {
       inReplyTo: "req-1",
       resolves: { request: "req-1", kind: "answered" },
     });
@@ -979,7 +994,7 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  it("resolves an options-only answer via Enter while focus is off the composer", async () => {
+  it("resolves an options answer via the overlay Reply button (gated on a selection)", async () => {
     const { ChatView } = await import("../chat-view.js");
     const dockMessages = messages([
       message({
@@ -990,15 +1005,9 @@ describe("ChatView", () => {
         metadata: {
           mentions: ["human-agent-self"],
           request: {
-            subject: "Deploy",
-            questions: [
-              {
-                id: "q1",
-                prompt: "Deploy color?",
-                kind: "single",
-                options: ["Blue-green", "Rolling update"],
-                required: true,
-              },
+            options: [
+              { label: "Blue-green", description: "blue-green deploy" },
+              { label: "Rolling update", description: "rolling deploy" },
             ],
           },
         },
@@ -1015,48 +1024,18 @@ describe("ChatView", () => {
       queryClient.setQueryData(["chat-messages", "chat-1"], dockMessages);
     });
     await flush();
-    await waitForText(container, "Awaiting your answer");
+    await waitForText(container, "Reply");
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) throw new Error("Composer textarea missing");
-
-    // Enter is dispatched on the focused option radio (a composer-footer
-    // descendant) and bubbles to the footer-scoped backstop — mirroring the
-    // real focus path after a pill click, and proving the listener is scoped to
-    // the composer subtree rather than `window`.
-    const optionRadio = () => {
-      const radio = optionByText(container, "Blue-green")?.querySelector<HTMLInputElement>('input[type="radio"]');
-      if (!radio) throw new Error("Option radio missing");
-      return radio;
-    };
-    const pressEnterOnRadio = async () => {
-      await act(async () => {
-        const radio = optionRadio();
-        radio.focus();
-        radio.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
-      });
-    };
-
-    // No answer yet → Enter must be a no-op (the backstop isn't bound while the
-    // question is unresolvable, so a focused-but-unselected radio sends nothing).
-    await pressEnterOnRadio();
-    await flush();
-    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
-
-    // Pick an option and type nothing — focus stays on the radio, off the
-    // composer. This is the exact path that previously left Enter dead: the
-    // composer's own keydown never fired, so the dock's "↵ Send" promise was
-    // broken for the no-typing answer.
-    await click(optionByText(container, "Blue-green"));
-    expect(textarea.value).toBe("");
-    expect(document.activeElement).not.toBe(textarea);
-
-    await pressEnterOnRadio();
+    // Reply is disabled until an option is picked, then resolves with the label.
+    expect(buttonByText(container, "Reply")?.disabled).toBe(true);
+    await click(askOption(container, "Blue-green"));
+    expect(buttonByText(container, "Reply")?.disabled).toBe(false);
+    await click(buttonByText(container, "Reply"));
     await waitForCondition(
       () => chatMocks.sendChatMessage.mock.calls.length > 0,
-      "Expected Enter to resolve the options-only answer",
+      "Expected the options answer to resolve",
     );
-    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Deploy color? → Blue-green", ["agent-1"], {
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Blue-green", ["agent-1"], {
       inReplyTo: "req-enter",
       resolves: { request: "req-enter", kind: "answered" },
     });
@@ -1075,15 +1054,9 @@ describe("ChatView", () => {
         metadata: {
           mentions: ["human-agent-self"],
           request: {
-            subject: "Deploy",
-            questions: [
-              {
-                id: "q1",
-                prompt: "Deploy color?",
-                kind: "single",
-                options: ["Blue-green", "Rolling update"],
-                required: true,
-              },
+            options: [
+              { label: "Blue-green", description: "blue-green deploy" },
+              { label: "Rolling update", description: "rolling deploy" },
             ],
           },
         },
@@ -1096,27 +1069,24 @@ describe("ChatView", () => {
       "/",
     );
 
-    await waitForText(container, "Awaiting your answer");
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) throw new Error("Composer textarea missing");
+    await waitForText(container, "Reply");
+    const other = askTextarea(container);
+    if (!other) throw new Error("Overlay free-text input missing");
 
-    // No option picked + empty composer → Send disabled.
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled).toBe(true);
+    // No option picked + empty Other → Reply disabled.
+    expect(buttonByText(container, "Reply")?.disabled).toBe(true);
 
-    // Typing a free-text answer (without picking an option) must enable Send —
-    // this was the reported bug.
-    await setValue(textarea, "Neither — let's hold the deploy");
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled).toBe(false);
+    // Typing a free-text answer (without picking an option) enables Reply.
+    await setValue(other, "Neither — let's hold the deploy");
+    expect(buttonByText(container, "Reply")?.disabled).toBe(false);
 
-    // ...and sending resolves the question with the free text as the answer.
-    await click(container.querySelector('button[aria-label="Send"]'));
+    // ...and Reply resolves with the free text as the answer.
+    await click(buttonByText(container, "Reply"));
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected free-text answer send");
-    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith(
-      "chat-1",
-      "Deploy color? → Neither — let's hold the deploy",
-      ["agent-1"],
-      { inReplyTo: "req-opt", resolves: { request: "req-opt", kind: "answered" } },
-    );
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Neither — let's hold the deploy", ["agent-1"], {
+      inReplyTo: "req-opt",
+      resolves: { request: "req-opt", kind: "answered" },
+    });
 
     await act(async () => root.unmount());
   });
@@ -1158,7 +1128,7 @@ describe("ChatView", () => {
       queryClient.setQueryData(["chat-messages", "chat-1"], dockMessages);
     });
     await flush();
-    await waitForText(container, "Awaiting your answer");
+    await waitForText(container, "Reply");
     expect(textarea.value).toBe("");
 
     await setValue(textarea, "@");
@@ -1192,25 +1162,22 @@ describe("ChatView", () => {
       "/",
     );
 
-    await waitForText(container, "Awaiting your answer");
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    if (!textarea) throw new Error("Composer textarea missing");
-    await setValue(textarea, "Screenshot evidence attached");
-    // While a question blocks me there is no image/judge reply path — the send
-    // is the answer and it resolves via a text reply. An attached image is left
-    // pending (not sent) so it can be sent normally once the block lifts.
+    await waitForText(container, "Reply");
+    const answerBox = askTextarea(container);
+    if (!answerBox) throw new Error("Overlay free-text input missing");
+    await setValue(answerBox, "Screenshot evidence attached");
+    // The (covered) composer's image attachment is NOT part of the answer — the
+    // overlay Reply sends a text resolve only.
     const file = new File(["abc"], "evidence.png", { type: "image/png" });
     const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
     if (!fileInput) throw new Error("File input missing");
     await changeFiles(fileInput, [file]);
-    await click(container.querySelector('button[aria-label="Send"]'));
+    await click(buttonByText(container, "Reply"));
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected text resolve send");
-    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith(
-      "chat-1",
-      "Evidence? → Screenshot evidence attached",
-      ["agent-1"],
-      { inReplyTo: "req-file", resolves: { request: "req-file", kind: "answered" } },
-    );
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Screenshot evidence attached", ["agent-1"], {
+      inReplyTo: "req-file",
+      resolves: { request: "req-file", kind: "answered" },
+    });
     expect(chatMocks.sendFileMessageBatch).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());

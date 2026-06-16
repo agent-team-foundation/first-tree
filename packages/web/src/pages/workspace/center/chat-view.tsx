@@ -59,6 +59,7 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AgentHovercard } from "../../../components/chat/agent-hovercard.js";
+import { AskTakeover } from "../../../components/chat/ask-takeover.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
   GITHUB_SYSTEM_SENDER_NAME,
@@ -67,17 +68,9 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
-import { RequestCard } from "../../../components/chat/request-card.js";
-import { RequestDock } from "../../../components/chat/request-dock.js";
 import {
-  allRequiredAnswered,
-  buildResolveAnswer,
-  contentStartsWithMention,
-  deriveRequestLifecycleProjectionMap,
   findBlockingRequest,
   findThreadableRequestId,
-  type RequestLifecycleProjection,
-  readMentions,
   readRequestPayload,
 } from "../../../components/chat/request-state.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
@@ -268,23 +261,12 @@ type MessageRowProps = {
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
   mentionParticipants: MentionParticipant[];
-  requestProjection?: RequestLifecycleProjection;
-  /**
-   * True when this message is the request currently pinned in the composer
-   * dock — its timeline card suppresses the inline answer block (the dock
-   * owns answering). Passed as a per-row boolean (not the docked id) so memo
-   * invalidates only the affected row.
-   */
-  suppressAnswerBlock?: boolean;
 };
 
 type MessageBodyProps = {
   msg: MessageWithDelivery;
   myAgentId: string | null;
-  agentNameFn: (id: string) => string;
   mentionParticipants: MentionParticipant[];
-  requestProjection?: RequestLifecycleProjection;
-  suppressAnswerBlock: boolean;
 };
 
 type MessageMarkdownProps = {
@@ -301,14 +283,7 @@ const MessageMarkdown = memo(function MessageMarkdown({ children, components, re
   );
 });
 
-const MessageBody = memo(function MessageBody({
-  msg,
-  myAgentId,
-  agentNameFn,
-  mentionParticipants,
-  requestProjection,
-  suppressAnswerBlock,
-}: MessageBodyProps) {
+const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipants }: MessageBodyProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   // Generic attachment refs (doc-preview is the first consumer; kind:
@@ -323,19 +298,6 @@ const MessageBody = memo(function MessageBody({
     return map;
   }, [msg.metadata]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
-  // Does the request body *lead* with its target mention — the server-
-  // normalised `@target ...` shape that the renderer always chips? Resolved
-  // against the same membership projection the rehype plugin uses. RequestCard
-  // uses it to drop its duplicate `· @target` only when the body is guaranteed
-  // to show it; every other shape keeps the metadata target. False for
-  // non-request rows.
-  const requestBodyShowsTarget = useMemo(() => {
-    if (msg.format !== "request") return false;
-    const targetNames = readMentions(msg.metadata)
-      .map((id) => mentionParticipants.find((p) => p.agentId === id)?.name)
-      .filter((name): name is string => typeof name === "string");
-    return contentStartsWithMention(msg.content, targetNames);
-  }, [msg.format, msg.content, msg.metadata, mentionParticipants]);
   // Successful doc captures are already explicit `[display](attachment:<id>)`
   // links the runtime rewrote into the message body — web does NOT re-linkify
   // bare tokens any more. The only scanner-driven rewrite left is wrapping the
@@ -482,27 +444,15 @@ const MessageBody = memo(function MessageBody({
         />
       ) : msg.format === "file" && isImageRefContent(msg.content) ? (
         <ImageFromRef content={msg.content} />
-      ) : msg.format === "text" || msg.format === "markdown" ? (
+      ) : msg.format === "text" || msg.format === "markdown" || msg.format === "request" ? (
+        // A `request` ("ask") renders as a normal message — just its markdown
+        // body. The answering surface is the AskTakeover overlay; the timeline
+        // carries no separate card / status-label chrome for it.
         <MessageMarkdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
           {textContent ?? ""}
         </MessageMarkdown>
       ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
         <GithubEventCardMessage content={msg.content} />
-      ) : msg.format === "request" ? (
-        <RequestCard
-          message={msg}
-          requestProjection={requestProjection}
-          viewerAgentId={myAgentId}
-          bodyShowsTarget={requestBodyShowsTarget}
-          body={
-            <MessageMarkdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
-              {textContent ?? ""}
-            </MessageMarkdown>
-          }
-          resolveAgentName={agentNameFn}
-          onSent={() => queryClient.invalidateQueries({ queryKey: ["chat-messages", msg.chatId] })}
-          suppressAnswerBlock={suppressAnswerBlock}
-        />
       ) : (
         <pre
           className="mono text-label"
@@ -528,8 +478,6 @@ const MessageRow = memo(function MessageRow({
   agentAvatarFn,
   agentColorTokenFn,
   mentionParticipants,
-  requestProjection,
-  suppressAnswerBlock = false,
 }: MessageRowProps) {
   // GitHub-dispatcher cards keep the human-agent uuid in `senderId` so
   // routing / read-receipts / mention-resolution stay consistent, but we
@@ -598,14 +546,7 @@ const MessageRow = memo(function MessageRow({
             <ReadReceipt msg={msg} myAgentId={myAgentId} />
           </span>
         </div>
-        <MessageBody
-          msg={msg}
-          myAgentId={myAgentId}
-          agentNameFn={agentNameFn}
-          mentionParticipants={mentionParticipants}
-          requestProjection={requestProjection}
-          suppressAnswerBlock={suppressAnswerBlock}
-        />
+        <MessageBody msg={msg} myAgentId={myAgentId} mentionParticipants={mentionParticipants} />
       </div>
     </div>
   );
@@ -618,9 +559,7 @@ function areMessageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): 
     prev.agentNameFn === next.agentNameFn &&
     prev.agentAvatarFn === next.agentAvatarFn &&
     prev.agentColorTokenFn === next.agentColorTokenFn &&
-    mentionParticipantsEqual(prev.mentionParticipants, next.mentionParticipants) &&
-    requestProjectionEqual(prev.requestProjection, next.requestProjection) &&
-    Boolean(prev.suppressAnswerBlock) === Boolean(next.suppressAnswerBlock)
+    mentionParticipantsEqual(prev.mentionParticipants, next.mentionParticipants)
   );
 }
 
@@ -628,10 +567,7 @@ function areMessageBodyPropsEqual(prev: MessageBodyProps, next: MessageBodyProps
   return (
     messageBodyFieldsEqual(prev.msg, next.msg) &&
     prev.myAgentId === next.myAgentId &&
-    prev.agentNameFn === next.agentNameFn &&
-    mentionParticipantsEqual(prev.mentionParticipants, next.mentionParticipants) &&
-    requestProjectionEqual(prev.requestProjection, next.requestProjection) &&
-    prev.suppressAnswerBlock === next.suppressAnswerBlock
+    mentionParticipantsEqual(prev.mentionParticipants, next.mentionParticipants)
   );
 }
 
@@ -664,26 +600,6 @@ function mentionParticipantsEqual(a: readonly MentionParticipant[], b: readonly 
     const right = b[i];
     if (!left || !right) return false;
     if (left.agentId !== right.agentId || left.name !== right.name) return false;
-  }
-  return true;
-}
-
-function requestProjectionEqual(
-  a: RequestLifecycleProjection | undefined,
-  b: RequestLifecycleProjection | undefined,
-): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return a.state === b.state && a.closeReason === b.closeReason && stringRecordEqual(a.selections, b.selections);
-}
-
-function stringRecordEqual(a: Record<string, string>, b: Record<string, string>): boolean {
-  if (a === b) return true;
-  const aKeys = Object.keys(a);
-  const bKeys = Object.keys(b);
-  if (aKeys.length !== bKeys.length) return false;
-  for (const key of aKeys) {
-    if (a[key] !== b[key]) return false;
   }
   return true;
 }
@@ -892,7 +808,6 @@ type ChatTimelineProps = {
   agentColorTokenFn: (id: string) => string | null;
   myAgentId: string | null;
   mentionParticipants: MentionParticipant[];
-  requestProjectionById: ReadonlyMap<string, RequestLifecycleProjection>;
   dockRequestId: string | undefined;
   gapAfterMessageId: string | null;
   firstNewItemIdx: number;
@@ -914,7 +829,6 @@ const ChatTimeline = memo(function ChatTimeline({
   agentColorTokenFn,
   myAgentId,
   mentionParticipants,
-  requestProjectionById,
   dockRequestId,
   gapAfterMessageId,
   firstNewItemIdx,
@@ -976,8 +890,6 @@ const ChatTimeline = memo(function ChatTimeline({
                     agentAvatarFn={agentAvatarFn}
                     agentColorTokenFn={agentColorTokenFn}
                     mentionParticipants={mentionParticipants}
-                    requestProjection={requestProjectionById.get(msg.id)}
-                    suppressAnswerBlock={dockRequestId != null && msg.id === dockRequestId}
                   />
                 );
               }
@@ -1580,34 +1492,9 @@ export function ChatView({
     const images = pendingImages;
     if (uploading) return;
 
-    // Blocking question: while a question blocks me, the only send is the
-    // answer, and it ALWAYS resolves. Merge the option selections + the
-    // composer's free text into one canonical reply, thread it under the
-    // request (`inReplyTo`), and carry the explicit `resolves` signal that
-    // drives the server's red-dot −1. Mentions route to the asker
-    // automatically, so no typed @mention is needed even in a group chat.
-    // Gated on every required question being answered (the send button mirrors
-    // this), so an options-only answer with an empty draft sends fine and a
-    // partial answer cannot slip through. Runs BEFORE the empty-draft guard
-    // below precisely because a pure-option answer carries no composer text.
-    if (dockRequest && dockPayload) {
-      if (!dockCanResolve || sendMut.isPending) return;
-      // The answer is text only. A queued image is NOT part of it and stays
-      // attached (so it isn't lost) — flag that so the no-op on the image
-      // doesn't look like a stuck send.
-      if (images.length > 0) {
-        setUploadError(
-          "Your answer is sent as text — the attached image isn't included; it stays attached to send after you reply.",
-        );
-      }
-      sendMut.mutate({
-        content: buildResolveAnswer(dockPayload, answerSelections, draft),
-        mentions: [dockRequest.senderId],
-        inReplyTo: dockRequest.id,
-        resolves: { request: dockRequest.id, kind: "answered" },
-      });
-      return;
-    }
+    // Answering a blocking question is owned by the AskTakeover overlay (it
+    // covers the composer while a question blocks me), so the composer's send
+    // path no longer resolves requests — it is reached only when nothing blocks.
 
     if (!text && images.length === 0) return;
 
@@ -1857,7 +1744,6 @@ export function ChatView({
     for (const m of fromServer) byId.set(m.id, m);
     return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }, [cachedMessages, messagesData]);
-  const requestProjectionById = useMemo(() => deriveRequestLifecycleProjectionMap(mergedMessages), [mergedMessages]);
 
   const gapAfterMessageId = useMemo<string | null>(
     () => findGapAfterMessageId(cachedMessages ?? [], messagesData?.items ?? []),
@@ -1888,51 +1774,14 @@ export function ChatView({
     [readOnly, mergedMessages, myAgentId],
   );
   const dockPayload = useMemo(() => (dockRequest ? readRequestPayload(dockRequest.metadata) : null), [dockRequest]);
-  const dockRequestId = dockRequest?.id;
-  // Option selections, keyed by prompt — decoupled from the composer draft.
-  const [answerSelections, setAnswerSelections] = useState<Record<string, string>>({});
-  // Sending now resolves iff every required question is answered through either
-  // channel (a selected option, or free text for a free-text question).
-  const dockCanResolve =
-    dockRequest != null && dockPayload != null && allRequiredAnswered(dockPayload, answerSelections, draft);
-  const pickDockOption = (prompt: string, option: string) => {
-    setAnswerSelections((prev) => ({ ...prev, [prompt]: option }));
-  };
-  // Enter-to-resolve backstop while a question is pinned. The composer textarea
-  // already sends on Enter when it's focused — but an options-only answer never
-  // touches the composer: the viewer clicks a pill, focus lands on the (sr-only)
-  // radio, and Enter never reaches the composer's handler, so the dock's "↵ Send
-  // answers and resolves this question" promise was broken for the no-typing
-  // path. Bind on the composer-footer subtree (not `window`) so only keys from
-  // inside the composer/dock reach it — a portaled dialog over the chat can't
-  // resolve the pinned question from the background. Fire from anywhere in that
-  // subtree EXCEPT a control that owns Enter itself (the composer textarea / any
-  // other text input / a button / a link); radios and checkboxes do not, so
-  // Enter on a selected option pill resolves. Only bound while the answer is
-  // actually resolvable (`dockCanResolve`), so Enter is a no-op on a still-
-  // unanswered required question. `handleSend` is read through a ref so the
-  // listener never goes stale or re-subscribes per render.
-  const handleSendRef = useRef(handleSend);
-  handleSendRef.current = handleSend;
-  useEffect(() => {
-    const footer = composerFooterRef.current;
-    if (!footer || !dockRequest || !dockCanResolve) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
-      const active = document.activeElement;
-      const ownsEnter =
-        active instanceof HTMLTextAreaElement ||
-        active instanceof HTMLButtonElement ||
-        active instanceof HTMLAnchorElement ||
-        (active instanceof HTMLInputElement && active.type !== "radio" && active.type !== "checkbox") ||
-        (active instanceof HTMLElement && active.isContentEditable);
-      if (ownsEnter) return;
-      event.preventDefault();
-      void handleSendRef.current();
-    };
-    footer.addEventListener("keydown", onKeyDown);
-    return () => footer.removeEventListener("keydown", onKeyDown);
-  }, [dockRequest, dockCanResolve]);
+  // Requests the viewer chose to Skip this session — the AskTakeover dismisses,
+  // but the open-request / red dot persists and it reappears on next visit.
+  const [skippedRequestIds, setSkippedRequestIds] = useState<ReadonlySet<string>>(() => new Set<string>());
+  // The full-coverage ask card is active (and owns answering) iff a question
+  // blocks me and I haven't skipped it. While active it drives the timeline
+  // truncation below; on Skip it clears so the timeline becomes legible again.
+  const askOverlayActive = dockRequest != null && dockPayload != null && !skippedRequestIds.has(dockRequest.id);
+  const dockRequestId = askOverlayActive ? dockRequest.id : undefined;
   useEffect(() => {
     if (!dockRequestId || draft !== "@" || !autoPrimedDraftRef.current) return;
     // Real message data can arrive after an empty group composer already
@@ -1954,15 +1803,8 @@ export function ChatView({
   // bleed into the next — never when the block first appears (prev=null) or
   // fully clears (next=null), where the send mutation's onMutate already owns
   // the draft.
-  const prevDockIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    const prevId = prevDockIdRef.current;
-    const nextId = dockRequestId ?? null;
-    prevDockIdRef.current = nextId;
-    if (prevId === nextId) return;
-    setAnswerSelections({});
-    if (prevId && nextId) setDraft("");
-  }, [dockRequestId]);
+  // Answer state lives in the AskTakeover overlay (remounted per request via
+  // `key`), so chat-view no longer resets per-question selections here.
 
   const items: TimelineItem[] = useMemo(() => {
     const rawEvents = eventsData?.items ?? [];
@@ -2804,17 +2646,14 @@ export function ChatView({
   // dimming) and handleSend's Enter-key backstop. A blocking question lifts the
   // gate: the pinned question makes its asker the default recipient, so no
   // typed @mention is required while a question blocks me.
-  const sendBlockedByMentionGate = requiresMention && draftMentions.length === 0 && dockRequest == null;
+  const sendBlockedByMentionGate = requiresMention && draftMentions.length === 0 && !askOverlayActive;
 
-  // Unified send-disabled gate. While a question blocks me the only send is the
-  // answer, enabled exactly when every required question is answered
-  // (`dockCanResolve`) — an options-only answer carries no composer text, so
-  // the usual empty-draft / mention gate does not apply. Otherwise the normal
-  // rules: need text or an image, and (group chats) an addressed @mention.
+  // Unified send-disabled gate for the composer. While the AskTakeover overlay
+  // is active it covers the composer (answering is owned there), so the composer
+  // only ever sends ordinary messages: need text or an image, and (group chats)
+  // an addressed @mention.
   const sendDisabled =
-    sendMut.isPending ||
-    uploading ||
-    (dockRequest != null ? !dockCanResolve : (!draft.trim() && pendingImages.length === 0) || sendBlockedByMentionGate);
+    sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0) || sendBlockedByMentionGate;
 
   const mention = useMentionAutocomplete({
     value: draft,
@@ -2929,7 +2768,40 @@ export function ChatView({
           rail and its scrim — no effect on wider viewports where both
           render as inline siblings. */}
       <div className="flex-1 flex overflow-hidden relative">
-        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        <div
+          className="flex-1 flex flex-col overflow-hidden min-w-0 relative"
+          // While a blocking ask owns this chat, lift the center column above the
+          // narrow-viewport right rail (an absolute `z-30` sibling + `z-20` scrim
+          // anchored to the parent) so the takeover card is never occluded on
+          // phone widths. No effect on wider viewports, where the rail is an
+          // inline sibling and nothing overlaps. See QA defect: mobile rail over ask.
+          style={askOverlayActive ? { zIndex: 40 } : undefined}
+        >
+          {/* The ask pops up as a card INSIDE the workspace body — offset below
+              the (stable, single-row) 52px topic header so the header and the
+              right rail stay visible. Owns answering: Reply resolves; Skip
+              dismisses for this session (the red dot persists). Keyed by request
+              id so its answer state resets when the blocking question changes. */}
+          {askOverlayActive && dockRequest && dockPayload ? (
+            <div style={{ position: "absolute", top: 52, left: 0, right: 0, bottom: 0, zIndex: 30 }}>
+              <AskTakeover
+                key={dockRequest.id}
+                body={typeof dockRequest.content === "string" ? dockRequest.content : ""}
+                payload={dockPayload}
+                askerName={chatScopedAgentName(dockRequest.senderId)}
+                sending={sendMut.isPending}
+                onReply={(content) =>
+                  sendMut.mutate({
+                    content,
+                    mentions: [dockRequest.senderId],
+                    inReplyTo: dockRequest.id,
+                    resolves: { request: dockRequest.id, kind: "answered" },
+                  })
+                }
+                onSkip={() => setSkippedRequestIds((prev) => new Set(prev).add(dockRequest.id))}
+              />
+            </div>
+          ) : null}
           {/* Chat header — content centred in a reading column that's now
           measured against the left column rather than the full panel.
           Title + EntityLink + ParticipantsStats live in the reading
@@ -3261,7 +3133,6 @@ export function ChatView({
             agentColorTokenFn={agentColorToken}
             myAgentId={myAgentId}
             mentionParticipants={renderMentionParticipants}
-            requestProjectionById={requestProjectionById}
             dockRequestId={dockRequestId}
             gapAfterMessageId={gapAfterMessageId}
             firstNewItemIdx={firstNewItemIdx}
@@ -3341,24 +3212,9 @@ export function ChatView({
                       chatId={chatId}
                       agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
                     />
-                    {/* The live open question directed at me — questions +
-                        options pinned where the answer happens. See the dock
-                        state block above `handleSend` for the send contract. */}
-                    {dockRequest && dockPayload ? (
-                      <RequestDock
-                        requestId={dockRequest.id}
-                        payload={dockPayload}
-                        selections={answerSelections}
-                        directResolve={dockCanResolve}
-                        draftEmpty={draft.trim().length === 0}
-                        askerName={chatScopedAgentName(dockRequest.senderId)}
-                        onPick={pickDockOption}
-                        // Back to the full markdown context: the request's own
-                        // timeline card. No-op when the card is outside the
-                        // loaded message window (querySelector miss).
-                        onJumpToOrigin={() => scrollToMessage(dockRequest.id, "start", "smooth")}
-                      />
-                    ) : null}
+                    {/* A blocking question is answered in the full-coverage
+                        AskTakeover overlay (rendered over the workspace), not in
+                        the composer. */}
                     {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
                     <div
                       style={{

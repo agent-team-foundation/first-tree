@@ -20,7 +20,7 @@ function describe(): string {
     "plan + progress, Markdown-supported, surfaced to the agent each turn, shown " +
     "by default at the top of the chat's right sidebar, and used to locate the " +
     "chat via `chat list`. Keep blockers / decisions OUT of the description — " +
-    "raise `chat send <human> --request` for those. By default acts on the " +
+    "raise `chat ask <human>` for those. By default acts on the " +
     "caller's current chat (FIRST_TREE_CHAT_ID); use --chat <id> to target " +
     "another. Owner-gated: the chat's creator may update it, and when no agent " +
     "owner is present (human-created chats, or the creator left) every worker " +

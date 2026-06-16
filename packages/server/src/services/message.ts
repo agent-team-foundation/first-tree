@@ -284,6 +284,22 @@ export function preflightMessageSendIntent(input: {
     }
   }
 
+  // An agent may address a human ONLY as a `request` (an ask via `chat ask`). A
+  // plain agent→human send has no channel: humans are reached with `chat ask`
+  // (decisions/approval) or `chat update --description` (progress). The silent
+  // `agent-final-text` mirror is exempt — it addresses no one and is an agent's
+  // own response surfaced for human observers, not a message into the room.
+  if (senderType !== "human" && data.format !== MESSAGE_FORMATS.REQUEST && data.purpose !== "agent-final-text") {
+    const humanTarget = mentionTargets.map((id) => participantsById.get(id)).find((p) => p?.type === "human");
+    if (humanTarget) {
+      const label = humanTarget.displayName || humanTarget.name || "that human";
+      throw new BadRequestError(
+        `An agent cannot \`chat send\` a human (addressed ${label}). Ask a human with ` +
+          "`chat ask` (a decision/approval/answer), or report progress with `chat update --description`.",
+      );
+    }
+  }
+
   const isAgentFinalText = data.purpose === "agent-final-text";
   const purposeProfile = isAgentFinalText
     ? {
@@ -548,10 +564,10 @@ async function sendMessageInner(
     //      +1 — ANY `format=request` opens a question for its single human
     //           target. (A request-shaped reply also +1's — it is a new,
     //           independently-answerable question; it does NOT auto-close the
-    //           one it replies to. Superseding is now an explicit close.)
+    //           one it replies to. Both stay open, worked oldest-first.)
     //      -1 — an EXPLICIT resolution: a message carrying `metadata.resolves`
     //           pointed at a prior open question (the human's clean answer, or
-    //           the asking agent's `chat send --answer`/`--close`). `inReplyTo`
+    //           the asking agent's `chat ask --answer`). `inReplyTo`
     //           no longer resolves anything — it is pure threading, so a
     //           "chat about this" discussion can thread under the question
     //           without clearing the red dot. Idempotent — only the first
@@ -596,7 +612,7 @@ async function sendMessageInner(
         parent.format === MESSAGE_FORMATS.REQUEST && parentMentions.length === 1 ? parentMentions[0] : undefined;
       if (typeof target !== "string") {
         throw new BadRequestError(
-          `Cannot resolve "${requestId}": it is not a tracked request. Only messages sent with --request can be answered or closed.`,
+          `Cannot resolve "${requestId}": it is not a tracked request. Only a question raised with \`chat ask\` can be answered.`,
         );
       }
       // Only the target (a direct answer) or the asking agent (answer/close

@@ -79,6 +79,7 @@ describe("CLI command registration", () => {
       "workspace",
     ]);
     expect(subcommands(root, "chat")).toEqual([
+      "ask",
       "create",
       "history",
       "invite",

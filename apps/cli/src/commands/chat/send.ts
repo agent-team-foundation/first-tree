@@ -6,59 +6,27 @@ import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { print } from "../../core/output.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
 import { looksLikeEscapedNewlineBody, readStdin } from "./_shared/io.js";
-import { buildRequestMetadata } from "./_shared/request.js";
 
 interface SendOptions {
   format: MessageFormat;
   metadata?: string;
   agent?: string;
-  request?: boolean;
-  subject?: string;
-  question?: string;
-  option?: string[];
   replyTo?: string;
-  answer?: string;
-  close?: string;
-}
-
-/** Commander collector for a repeatable flag (`--option a --option b`). */
-function collectOption(value: string, previous: string[]): string[] {
-  return [...previous, value];
 }
 
 export function registerChatSendCommand(chat: Command): void {
   chat
     .command("send [name] [message]")
     .description(
-      "Send a message into the caller's current chat (FIRST_TREE_CHAT_ID). <name> is any participant — agent or " +
-        "human; the recipient is @mentioned and woken (must already be a participant — `chat invite` an agent " +
-        "first). A message must name a recipient — there is no no-mention send. Use --request to ask a human an " +
-        "open question, and --answer/--close to resolve a question you asked.",
+      "Send a message to an AGENT in the caller's current chat (FIRST_TREE_CHAT_ID). <name> is an agent " +
+        "participant; the recipient is @mentioned and woken (must already be a participant — `chat invite` an " +
+        "agent first). `chat send` is agent-directed: addressing a human is rejected — put a tracked question to a " +
+        "human with `chat ask`, or report progress with `chat update --description`. A message must name a " +
+        "recipient — there is no no-mention send.",
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
-    .option(
-      "--request",
-      "Send as an open question (format=request) directed at a single human <name>. The message body carries the " +
-        "background/context; --question carries only the ask",
-    )
-    .option(
-      "--subject <text>",
-      "Short headline for the request, shown in the answer dock/card header (with --request, ≤80 chars)",
-    )
-    .option("--question <text>", "The question prompt — just the ask, no background (with --request, ≤200 chars)")
-    .option("--option <opt>", "An answer option for the question; repeatable (with --request)", collectOption, [])
-    .option(
-      "--answer <requestId>",
-      "Resolve an open question you asked: mark it answered and clear the human's red dot. The message body is " +
-        "the confirmed answer. Threads under the question.",
-    )
-    .option(
-      "--close <requestId>",
-      "Withdraw an open question you asked: mark it closed and clear the human's red dot. The message body is the " +
-        "reason. Re-asking opens a NEW question — it never auto-supersedes, so close the stale one explicitly.",
-    )
     .option(
       "--reply-to <messageId>",
       "Thread a reply under a message — sets inReplyTo (pure threading; does NOT resolve a question)",
@@ -94,11 +62,6 @@ export function registerChatSendCommand(chat: Command): void {
         // one long unformatted line. Stdin bodies are never checked: piping
         // is both the fix and the escape hatch for intentional literal `\n`.
         if (inlineBody !== undefined && looksLikeEscapedNewlineBody(inlineBody)) {
-          // The copyable retry form goes through `print.line` — plain
-          // multi-line stderr text (silenced in --json mode). The fail
-          // envelope below stays a single-line JSON object per the
-          // Print-layer contract; embedding the heredoc example there would
-          // itself arrive `\n`-escaped, which is exactly this bug.
           print.line(
             "chat send: the message body arrived with literal \\n escapes — shell quotes do not expand \\n, " +
               "so it would render as one long unformatted line. Resend with real newlines via stdin:\n\n" +
@@ -119,19 +82,6 @@ export function registerChatSendCommand(chat: Command): void {
         }
 
         const content = inlineBody ?? (await readStdin());
-        const isRequest = options.request === true;
-        // Every send needs a body. For a request the split is: the body carries
-        // the background/context (rendered as the card's markdown body), and
-        // --question carries ONLY the ask. Allowing an empty body let agents
-        // cram the whole context into --question, leaving the card bodyless.
-        if (!content && isRequest) {
-          fail(
-            "REQUEST_NEEDS_BODY",
-            "--request still needs a message body: put the background/context in the body " +
-              "(argument or stdin) and keep --question to just the ask.",
-            2,
-          );
-        }
         if (!content) {
           fail("NO_MESSAGE", "No message provided. Pass as argument or pipe via stdin.", 2);
         }
@@ -143,35 +93,6 @@ export function registerChatSendCommand(chat: Command): void {
           } catch {
             fail("INVALID_METADATA", "Metadata must be valid JSON.", 2);
           }
-        }
-
-        let format: MessageFormat = options.format;
-        if (isRequest) {
-          if (!target) {
-            fail("REQUEST_NEEDS_TARGET", "--request must be directed at a single human member.", 2);
-          }
-          format = "request";
-          metadata = buildRequestMetadata(metadata, options);
-        }
-
-        // --answer / --close fold open-question resolution into `send`: they
-        // attach `metadata.resolves` (the explicit signal the server's red-dot
-        // −1 keys off) and thread the reply under the question. `inReplyTo`
-        // alone never resolves anything — it is pure threading now.
-        const resolveId = options.answer ?? options.close;
-        if (resolveId !== undefined) {
-          if (isRequest) {
-            fail("RESOLVE_WITH_REQUEST", "--answer/--close cannot be combined with --request.", 2);
-          }
-          if (options.answer && options.close) {
-            fail("RESOLVE_AMBIGUOUS", "Pass only one of --answer / --close.", 2);
-          }
-          const kind = options.answer ? "answered" : "closed";
-          metadata = {
-            ...(metadata ?? {}),
-            // For a withdrawal the body doubles as the human-readable reason.
-            resolves: { request: resolveId, kind, ...(kind === "closed" && content ? { reason: content } : {}) },
-          };
         }
 
         const sdk = createSdk(options.agent);
@@ -190,20 +111,16 @@ export function registerChatSendCommand(chat: Command): void {
               }
             : metadata;
 
-        // `--reply-to` threads explicitly; `--answer`/`--close` thread under the
-        // question they resolve. Either way `inReplyTo` is pure threading.
-        const inReplyTo = options.replyTo ?? resolveId;
-
         const result = await sdk.sendMessage(chatId, {
-          format,
+          format: options.format,
           content: captured.content,
           metadata: outboundMetadata,
           source: "cli",
           // Server resolves the name against the chat's participant list and
           // adds it to mentions; an unknown name fails with a `chat invite`
-          // hint.
+          // hint, and a human recipient is rejected (use `chat ask`).
           ...(target ? { receiverNames: [target] } : {}),
-          ...(inReplyTo ? { inReplyTo } : {}),
+          ...(options.replyTo ? { inReplyTo: options.replyTo } : {}),
         });
         success(result);
       } catch (error) {
