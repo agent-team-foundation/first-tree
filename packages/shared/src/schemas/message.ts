@@ -53,10 +53,13 @@ export const MESSAGE_FORMATS = {
    * answered/closed only by a later message carrying `metadata.resolves` (see
    * `requestResolutionSchema`), which drives `chat_user_state.open_request_count`
    * down. The target's answer ALWAYS resolves it — picking an option OR typing
-   * free text both write `resolves` (kind="answered"). Resolution is human-only:
-   * only the target may resolve, and an agent cannot post a non-ask follow-up to
-   * the human at all (a plain agent→human send is rejected). `inReplyTo` itself
-   * is pure threading and never changes a question's lifecycle.
+   * free text both write `resolves` (kind="answered"). NEW resolutions are
+   * human-only — the server accepts a `resolves` write only from the target, and
+   * an agent cannot post a non-ask follow-up to the human (a plain agent→human
+   * send is rejected). Lifecycle readers additionally honor a legacy
+   * asker-authored resolution row (written before the refinement) for
+   * backward-compat. `inReplyTo` itself is pure threading and never changes a
+   * question's lifecycle.
    */
   REQUEST: "request",
 } as const;
@@ -118,10 +121,13 @@ export type AskRequest = z.infer<typeof askRequestSchema>;
  * Written ONLY by the target human's web answer — picking an option OR typing
  * free text both attach `resolves` (kind="answered"); the blocking answer
  * surface has no "reply without resolving" path, so every human answer resolves.
- * An agent (including the asker) **cannot** resolve: the server authorizes a
- * resolution only from the question's target, so an agent answers nothing and
- * closes nothing. A bare threaded reply that carries no `resolves` does not
- * resolve — `inReplyTo` is pure threading.
+ * An agent (including the asker) **cannot** write a resolution: the server
+ * authorizes a NEW resolution only from the question's target, so an agent
+ * answers nothing and closes nothing. (Pre-refinement history may still hold
+ * asker-authored resolution rows from when an agent could resolve; readers and
+ * the idempotency scan honor those for backward-compat, but no new ones can be
+ * written.) A bare threaded reply that carries no `resolves` does not resolve —
+ * `inReplyTo` is pure threading.
  *
  *   - kind="answered" — the question is answered. The readable answer stays in
  *     the message `content`.

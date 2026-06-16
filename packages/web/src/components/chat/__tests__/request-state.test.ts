@@ -68,17 +68,18 @@ describe("deriveRequestState", () => {
   it("is resolved on an explicit answered resolution (from the target)", () => {
     expect(deriveRequestState(request, [request, resolveMsg("r1", TARGET, "answered")])).toBe("resolved");
   });
-  it("ignores a `resolves` from the asking agent — only the target human resolves", () => {
-    // The asker cannot resolve its own question (mirrors the server authz); the
-    // signal is ignored and the threaded reply just reads as discussion.
-    expect(deriveRequestState(request, [request, resolveMsg("r1", ASKER, "answered")])).toBe("discussing");
+  it("honors a legacy asker-authored resolution as resolved (compat — new ones are rejected server-side)", () => {
+    // New asker resolutions never reach the reader (the server rejects them), but
+    // pre-refinement history can hold asker-authored rows; the reader honors them
+    // so a legacy asker-resolved request does not re-block the target.
+    expect(deriveRequestState(request, [request, resolveMsg("r1", ASKER, "answered")])).toBe("resolved");
   });
-  it("ignores a closed `resolves` from the asking agent too", () => {
+  it("honors a legacy asker-authored closed resolution too", () => {
     expect(deriveRequestState(request, [request, resolveMsg("c1", ASKER, "closed", "no longer needed")])).toBe(
-      "discussing",
+      "closed",
     );
   });
-  it("ignores a `resolves` written by any non-target sender", () => {
+  it("ignores a `resolves` written by a sender that is neither the target nor the asker", () => {
     expect(deriveRequestState(request, [request, resolveMsg("s1", OTHER, "answered")])).toBe("discussing");
   });
   it("an unrelated reply (wrong inReplyTo) leaves it open", () => {
@@ -230,6 +231,19 @@ describe("findBlockingRequest", () => {
       metadata: { resolves: { request: "req-old", kind: "answered" } },
     });
     expect(findBlockingRequest([older, request, answerOld], TARGET)?.id).toBe("req");
+  });
+  it("does NOT re-block on a request a legacy asker-authored resolution already resolved (compat)", () => {
+    // The regression the human-only refinement could have caused: a request the
+    // ASKER resolved before the refinement (red-dot already cleared server-side)
+    // must not reappear as a takeover. The reader honors the legacy asker row, so
+    // the block advances past it to the next live question.
+    const askerAnswer = msg({
+      id: "ans-legacy",
+      senderId: ASKER,
+      inReplyTo: "req-old",
+      metadata: { resolves: { request: "req-old", kind: "answered" } },
+    });
+    expect(findBlockingRequest([older, request, askerAnswer], TARGET)?.id).toBe("req");
   });
   it("returns null for non-target / signed-out viewers", () => {
     expect(findBlockingRequest([older, request], OTHER)).toBeNull();
