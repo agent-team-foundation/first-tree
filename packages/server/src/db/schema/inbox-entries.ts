@@ -49,5 +49,11 @@ export const inboxEntries = pgTable(
      * Composite shape mirrors the actual WHERE clause used in pollInbox.
      */
     index("idx_inbox_chat_silent").on(table.inboxId, table.chatId, table.notify, table.status),
+    /**
+     * Message-history delivery status lookup. The chat messages API checks
+     * whether any inbox row for a message is acked, delivered, or still
+     * pending; keeping message_id first bounds that lookup by page size.
+     */
+    index("idx_inbox_entries_message_status").on(table.messageId, table.status),
   ],
 );
