@@ -517,8 +517,8 @@ async function sendMessageInner(
     if (!msg) throw new Error("Unexpected: INSERT RETURNING produced no row");
 
     // 6. Chat-first workspace projection (append-only, post-fan-out).
-    //    Updates chats.last_message_*, increments speaker + watcher mention
-    //    counters. New code; no existing path is modified — see
+    //    Updates chats.last_message_*, increments the directly-mentioned human
+    //    speaker's unread-mention counter (plus the agent-final-text bump). See
     //    first-tree-context:agent-hub/web-console.md "Risk Constraints".
     // Chat-list preview: prefer string content (text/markdown) verbatim;
     // fall back to the caption of a batched image send (`format: "file"`

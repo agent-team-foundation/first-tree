@@ -7,9 +7,12 @@
  *      appear in `inbox_entries` even when a chat is messaged.
  *   2. Mention candidates resolve from speaker rows only
  *      (`access_mode = 'speaker'`) — watchers cannot be `@`-mentioned.
- *   3. Mention propagation increments the watcher's
- *      `chat_user_state.unread_mention_count` when the watched managed
- *      agent is mentioned.
+ *   3. Mention propagation increments `chat_user_state.unread_mention_count`
+ *      ONLY for a directly-mentioned human speaker. Mentioning a watched
+ *      managed (non-human) agent wakes it but does NOT bump its
+ *      manager-watcher's count — red dots are a direct-human signal. (The
+ *      watcher count still bumps via an `agent-final-text` send by the
+ *      managed agent; that path is unchanged.)
  *   4. `chats.last_message_at` / `last_message_preview` advance on each send.
  *   5. `joinAsParticipant` preserves `chat_user_state` (last_read_at +
  *      unread_mention_count survive the watcher → speaker flip).
@@ -655,8 +658,8 @@ describe("chat-first workspace service layer", () => {
     // chat_membership.access_mode = 'speaker', so a watcher's name resolves
     // to nothing even when typed verbatim. We pin this in a group chat
     // (≥3 speakers) so the direct-chat auto-mention path is not exercised
-    // here; admin watches no one in this chat, so the manager-of-mentioned
-    // branch can't fire either, isolating the name-resolution invariant.
+    // here, isolating the name-resolution invariant: a watcher's name simply
+    // does not resolve to a mention candidate.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const peer = await createTestAgent(app, { name: `peer-mc-${crypto.randomUUID().slice(0, 6)}` });
@@ -698,6 +701,43 @@ describe("chat-first workspace service layer", () => {
     // Either the row was never created (lazy materialisation, no event
     // touched it) or its count stayed at zero — the @-name path cannot
     // reach a watcher, by design.
+    expect(adminStateRow?.unread_mention_count ?? 0).toBe(0);
+  });
+
+  it("mentioning a managed non-human agent does NOT bump its manager-watcher's red dot", async () => {
+    // Negative regression for the removed watcher-of-mentioned-agent branch.
+    // A human (admin) manages `managed`; another participant @-mentions
+    // `managed`. The managed agent is woken, but red dots are a direct-human
+    // signal, so admin's manager-watcher `unread_mention_count` stays 0.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const { createAgent } = await import("../services/agent.js");
+    const managed = await createAgent(app.db, {
+      name: `mng-neg-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "MngNeg",
+      managerId: admin.memberId,
+      organizationId: admin.organizationId,
+      clientId: undefined,
+    });
+    const peer = await createTestAgent(app, { name: `peer-neg-${crypto.randomUUID().slice(0, 6)}` });
+    const { chatId } = await createMeChat(app.db, peer.agent.uuid, peer.organizationId, {
+      participantIds: [managed.uuid],
+    });
+
+    // peer @-mentions the managed agent (which is a speaker of this chat).
+    await sendMessage(app.db, chatId, peer.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: `@${managed.name} please review`,
+      metadata: { mentions: [managed.uuid] },
+    });
+
+    // admin (manager-watcher of `managed`) gets NO red dot.
+    const [adminStateRow] = await app.db.execute<{ unread_mention_count: number | null }>(sql`
+      SELECT unread_mention_count FROM chat_user_state
+       WHERE chat_id = ${chatId} AND agent_id = ${admin.humanAgentUuid}
+    `);
     expect(adminStateRow?.unread_mention_count ?? 0).toBe(0);
   });
 
