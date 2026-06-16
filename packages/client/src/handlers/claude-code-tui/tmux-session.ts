@@ -229,7 +229,10 @@ export async function waitForReady(input: WaitForReadyInput): Promise<void> {
   let acceptedWorkspaceTrust = false;
   let acceptedResumeSummary = false;
   while (Date.now() < deadline) {
-    const pane = await capturePane(input.name);
+    // The TUI prints U+00A0 (NBSP) inside its chrome (see tui-markers.ts);
+    // normalize to ASCII space once so every substring match below is robust
+    // to that, regardless of which gaps Claude renders as NBSP.
+    const pane = (await capturePane(input.name)).replace(/\u00A0/g, " ");
     if (!acceptedWorkspaceTrust && isWorkspaceTrustPrompt(pane)) {
       acceptedWorkspaceTrust = true;
       await sendKey(input.name, "Enter");
@@ -237,9 +240,14 @@ export async function waitForReady(input: WaitForReadyInput): Promise<void> {
       continue;
     }
     if (!acceptedResumeSummary && isResumeSummaryPrompt(pane)) {
-      // Enter selects the default-highlighted "1. Resume from summary
-      // (recommended)" — the over-threshold path the menu itself recommends.
       acceptedResumeSummary = true;
+      // Select option 1 ("Resume from summary") explicitly by its number rather
+      // than relying on Enter hitting the default highlight: it pins the
+      // over-threshold path to a summary even if a future build reorders or
+      // re-highlights the menu. (If number-select is unsupported, the "1" is
+      // ignored and Enter still falls on the recommended default — option 1.)
+      await sendKey(input.name, "1");
+      await new Promise((r) => setTimeout(r, 100));
       await sendKey(input.name, "Enter");
       // Summary generation needs a fresh, longer window than a normal start,
       // or a large session answers the menu and still times out.
