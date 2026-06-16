@@ -912,6 +912,13 @@ export function ChatView({
   }, [hasDocPreview, showSidebar, setSidebarByUser]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // The composer footer band — wraps BOTH the request dock (with its option
+  // radios) and the composer. The Enter-to-resolve backstop binds its keydown
+  // listener here, not on `window`, so it only sees keys from inside the
+  // composer/dock subtree: a portaled dialog (custom Select listbox, Radix
+  // dialog) rendered over a still-mounted chat can't bubble Enter into it and
+  // silently resolve the pinned question in the background.
+  const composerFooterRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Scrollable container that holds the message timeline. Ref is wired
   // up on the corresponding <div> below; consumed by useChatScroll (for
@@ -1580,6 +1587,41 @@ export function ChatView({
   const pickDockOption = (prompt: string, option: string) => {
     setAnswerSelections((prev) => ({ ...prev, [prompt]: option }));
   };
+  // Enter-to-resolve backstop while a question is pinned. The composer textarea
+  // already sends on Enter when it's focused — but an options-only answer never
+  // touches the composer: the viewer clicks a pill, focus lands on the (sr-only)
+  // radio, and Enter never reaches the composer's handler, so the dock's "↵ Send
+  // answers and resolves this question" promise was broken for the no-typing
+  // path. Bind on the composer-footer subtree (not `window`) so only keys from
+  // inside the composer/dock reach it — a portaled dialog over the chat can't
+  // resolve the pinned question from the background. Fire from anywhere in that
+  // subtree EXCEPT a control that owns Enter itself (the composer textarea / any
+  // other text input / a button / a link); radios and checkboxes do not, so
+  // Enter on a selected option pill resolves. Only bound while the answer is
+  // actually resolvable (`dockCanResolve`), so Enter is a no-op on a still-
+  // unanswered required question. `handleSend` is read through a ref so the
+  // listener never goes stale or re-subscribes per render.
+  const handleSendRef = useRef(handleSend);
+  handleSendRef.current = handleSend;
+  useEffect(() => {
+    const footer = composerFooterRef.current;
+    if (!footer || !dockRequest || !dockCanResolve) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+      const active = document.activeElement;
+      const ownsEnter =
+        active instanceof HTMLTextAreaElement ||
+        active instanceof HTMLButtonElement ||
+        active instanceof HTMLAnchorElement ||
+        (active instanceof HTMLInputElement && active.type !== "radio" && active.type !== "checkbox") ||
+        (active instanceof HTMLElement && active.isContentEditable);
+      if (ownsEnter) return;
+      event.preventDefault();
+      void handleSendRef.current();
+    };
+    footer.addEventListener("keydown", onKeyDown);
+    return () => footer.removeEventListener("keydown", onKeyDown);
+  }, [dockRequest, dockCanResolve]);
   useEffect(() => {
     if (!dockRequestId || draft !== "@" || !autoPrimedDraftRef.current) return;
     // Real message data can arrive after an empty group composer already
@@ -3022,6 +3064,7 @@ export function ChatView({
           the home-indicator doesn't overlap the send button. */}
           {
             <div
+              ref={composerFooterRef}
               className="shrink-0"
               style={{
                 padding: "var(--sp-2_5) var(--sp-6) calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
