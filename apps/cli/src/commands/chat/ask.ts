@@ -14,7 +14,6 @@ interface AskOptions {
   agent?: string;
   options?: string;
   multiSelect?: boolean;
-  answer?: string;
   replyTo?: string;
 }
 
@@ -25,8 +24,8 @@ export function registerChatAskCommand(chat: Command): void {
       "Ask a HUMAN in the caller's current chat (FIRST_TREE_CHAT_ID) a tracked question — a decision, approval, or " +
         "answer. Writes an open question (format=request) directed at a single human <name>: the message body IS " +
         "the ask (background + question). Omit --options for a free-text answer, or pass 2–4 --options for a " +
-        "choice. Raises a tracked red dot and blocks the chat for them until they answer. Use --answer to " +
-        "resolve a question you asked.",
+        "choice. Raises a tracked red dot and blocks the chat for them until they answer. The human resolves it " +
+        "in the web UI — an agent can only ASK; it cannot answer or close a question.",
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
@@ -38,15 +37,10 @@ export function registerChatAskCommand(chat: Command): void {
     )
     .option("--multi-select", "Allow picking more than one option (requires --options)")
     .option(
-      "--answer <requestId>",
-      "Resolve an open question you asked: mark it answered and clear the human's red dot. The message body is " +
-        "the confirmed answer. Threads under the question.",
-    )
-    .option(
       "--reply-to <messageId>",
       "Ask a NEW question threaded under <messageId> (sets inReplyTo). Like any ask it opens a tracked " +
         "question and blocks the human — threading does NOT make it a non-blocking context note, and it does " +
-        "not resolve the message it threads under. To resolve a question, use --answer.",
+        "not resolve the message it threads under (the human resolves on the web).",
     )
     .action(async (name: string | undefined, message: string | undefined, options: AskOptions) => {
       try {
@@ -98,36 +92,20 @@ export function registerChatAskCommand(chat: Command): void {
           }
         }
 
-        // Two modes: resolve (--answer) attaches `metadata.resolves` and threads
-        // under the question; otherwise this is a fresh ask (a
-        // `format="request"` open question).
-        const resolveId = options.answer;
-        let format: MessageFormat = options.format;
-        if (resolveId !== undefined) {
-          if (options.options !== undefined || options.multiSelect) {
-            fail("RESOLVE_WITH_OPTIONS", "--answer cannot be combined with --options / --multi-select.", 2);
-          }
-          if (!content) {
-            fail("NO_MESSAGE", "Resolving needs a body: the confirmed answer.", 2);
-          }
-          metadata = {
-            ...(metadata ?? {}),
-            resolves: { request: resolveId, kind: "answered" },
-          };
-        } else {
-          // Fresh ask: the body IS the ask (background + question). `--options`
-          // (2–4) adds a choice; omit them for a free-text answer.
-          if (!content) {
-            fail(
-              "ASK_NEEDS_BODY",
-              "`chat ask` needs a message body — the body is the ask (background + question). " +
-                "Pass it as an argument or via stdin.",
-              2,
-            );
-          }
-          format = "request";
-          metadata = buildRequestMetadata(metadata, options);
+        // `chat ask` only ASKS. The body IS the ask (background + question);
+        // `--options` (2–4) adds a choice, omit them for a free-text answer.
+        // There is no resolve path here — the human answers in the web UI; an
+        // agent cannot mark a question answered or close it.
+        if (!content) {
+          fail(
+            "ASK_NEEDS_BODY",
+            "`chat ask` needs a message body — the body is the ask (background + question). " +
+              "Pass it as an argument or via stdin.",
+            2,
+          );
         }
+        const format: MessageFormat = "request";
+        metadata = buildRequestMetadata(metadata, options);
 
         const sdk = createSdk(options.agent);
 
@@ -141,11 +119,10 @@ export function registerChatAskCommand(chat: Command): void {
               }
             : metadata;
 
-        // `--reply-to` threads a FRESH ask under an arbitrary message; `--answer`
-        // threads the resolution under the question it resolves. `inReplyTo` is
-        // pure threading either way — a `--reply-to` ask (no `--answer`) is still
-        // a `format="request"` send, so it opens its own tracked question.
-        const inReplyTo = options.replyTo ?? resolveId;
+        // `--reply-to` threads a FRESH ask under an arbitrary message. `inReplyTo`
+        // is pure threading — the threaded ask is still a `format="request"` send,
+        // so it opens its own tracked question.
+        const inReplyTo = options.replyTo;
 
         const result = await sdk.sendMessage(chatId, {
           format,

@@ -9,9 +9,11 @@ import { askRequestSchema, MENTION_REGEX, requestResolutionSchema } from "@first
  *   - `open`       — no reply yet. Counts toward the needs_you dot.
  *   - `discussing` — threaded (non-resolving) replies exist; still counts.
  *   - `resolved`   — a `metadata.resolves` with `kind="answered"` from the
- *                    target or the asking agent.
- *   - `closed`     — same, `kind="closed"` (the asker withdrew it).
- * Only the target or the asking agent can resolve (mirrors the server's authz).
+ *                    target human (the web answer).
+ *   - `closed`     — same, `kind="closed"` (a legacy/server-only kind; no
+ *                    surface produces it now).
+ * Resolution is human-only: only the target may resolve (mirrors the server's
+ * authz — an agent, including the asker, cannot answer or close a question).
  *
  * The ask itself is the message BODY (`content`); `metadata.request` carries
  * only the answer affordance (`options` + `multiSelect`). The answer is free
@@ -82,8 +84,8 @@ export function recoverSelectedLabels(replyContent: unknown, options: readonly {
 /**
  * Derive the request's lifecycle from the surrounding messages. An explicit
  * `metadata.resolves` wins; absent that, threaded replies mean `discussing`,
- * and a bare request means `open`. Resolution counts only from the target or
- * the asking agent — mirrors the server's authz.
+ * and a bare request means `open`. Resolution counts only from the target human
+ * — mirrors the server's authz (an agent, including the asker, cannot resolve).
  */
 export function deriveRequestState(request: Message, thread: readonly Message[]): RequestState {
   return deriveRequestLifecycleProjection(request, thread).state;
@@ -94,7 +96,9 @@ export function deriveRequestLifecycleProjection(
   thread: readonly Message[],
 ): RequestLifecycleProjection {
   const targets = readMentions(request.metadata);
-  const canResolve = (senderId: string): boolean => senderId === request.senderId || targets.includes(senderId);
+  // Human-only resolution: only the question's target may resolve it (mirrors
+  // the server authz). The asker can NOT resolve its own question.
+  const canResolve = (senderId: string): boolean => targets.includes(senderId);
   let discussing = false;
   for (const m of thread) {
     const res = readResolution(m.metadata);

@@ -286,22 +286,13 @@ export function preflightMessageSendIntent(input: {
 
   // An agent may address a human ONLY as a `request` (an ask via `chat ask`). A
   // plain agent→human send has no channel: humans are reached with `chat ask`
-  // (decisions/approval) or `chat update --description` (progress). Two shapes
-  // are exempt: the silent `agent-final-text` mirror (it addresses no one — an
-  // agent's own response surfaced for human observers), and a message that
-  // carries a resolution signal — the asking agent resolving its own question
-  // via `chat ask --answer` threads a (text) answer addressed to the human, and
-  // that is a legitimate agent→human turn. A bogus `resolves` cannot abuse this
-  // hole: the resolution handler below validates the target/authz and rolls the
-  // whole send back when it does not point at a real question the sender may
-  // resolve.
-  const carriesResolution = requestResolutionSchema.safeParse(metadataToStore.resolves).success;
-  if (
-    senderType !== "human" &&
-    data.format !== MESSAGE_FORMATS.REQUEST &&
-    data.purpose !== "agent-final-text" &&
-    !carriesResolution
-  ) {
+  // (decisions/approval) or `chat update --description` (progress). The only
+  // exempt shape is the silent `agent-final-text` mirror (it addresses no one —
+  // an agent's own response surfaced for human observers). An agent CANNOT
+  // resolve a question either: resolution is human-only (the web answer), so a
+  // resolution-carrying agent send is not exempt here and is also refused by the
+  // resolution authorization below.
+  if (senderType !== "human" && data.format !== MESSAGE_FORMATS.REQUEST && data.purpose !== "agent-final-text") {
     const humanTarget = mentionTargets.map((id) => participantsById.get(id)).find((p) => p?.type === "human");
     if (humanTarget) {
       const label = humanTarget.displayName || humanTarget.name || "that human";
@@ -578,10 +569,10 @@ async function sendMessageInner(
     //           independently-answerable question; it does NOT auto-close the
     //           one it replies to. Both stay open, worked oldest-first.)
     //      -1 — an EXPLICIT resolution: a message carrying `metadata.resolves`
-    //           pointed at a prior open question (the human's clean answer, or
-    //           the asking agent's `chat ask --answer`). `inReplyTo`
-    //           no longer resolves anything — it is pure threading, so a
-    //           "chat about this" discussion can thread under the question
+    //           pointed at a prior open question. Resolution is human-only — the
+    //           target's web answer; an agent (even the asker) cannot resolve.
+    //           `inReplyTo` no longer resolves anything — it is pure threading,
+    //           so a "chat about this" discussion can thread under the question
     //           without clearing the red dot. Idempotent — only the first
     //           resolution decrements; `GREATEST(0, …)` floors at zero.
     const requestTarget = mergedMentions[0];
@@ -627,10 +618,13 @@ async function sendMessageInner(
           `Cannot resolve "${requestId}": it is not a tracked request. Only a question raised with \`chat ask\` can be answered.`,
         );
       }
-      // Only the target (a direct answer) or the asking agent (answer/close
-      // after judging the discussion) may resolve a question.
-      if (senderId !== target && senderId !== parent.senderId) {
-        throw new ForbiddenError("Only the question's target or the asking agent may resolve it.");
+      // Resolution is human-only: ONLY the target human resolves it, by
+      // answering in the web UI. An agent — including the asker — cannot mark a
+      // question answered or close it; an agent reaches the human only by asking.
+      // (The send guard above already refuses an agent→human send that is not an
+      // ask; this is the authoritative authz for the resolution itself.)
+      if (senderId !== target) {
+        throw new ForbiddenError("Only the question's target may resolve it — the human answers in the web UI.");
       }
       // Idempotency: only the FIRST resolution decrements (exclude the row we
       // just inserted). A prior resolution is any other message in this chat

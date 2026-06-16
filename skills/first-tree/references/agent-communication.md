@@ -124,23 +124,19 @@ first-tree chat ask <human> "<background + the question>" \
   --options '[{"label":"Ship","description":"Roll to 20% now"},{"label":"Hold","description":"Wait 24h"}]'
 ```
 
+- **You only ask — the human resolves.** An agent can ONLY ask; it **cannot**
+  mark a question answered or close it. There is no resolve command. Resolution
+  is entirely the human's web answer.
 - **Any answer resolves it.** The human answers in their web UI by picking an
   option OR typing free text — **both** write the resolution, clear the red dot,
   and unblock the chat. There is no human-side "discuss without resolving":
   answering *is* resolving. If their answer pushes back or you need more, re-ask
   (a new request → a new block).
 - **The resolution signal.** Resolution is carried by `metadata.resolves =
-  {request: <requestId>, kind: "answered"}`, and **only** this clears the red
-  dot. It is written by the human's web answer, or from the CLI by the asking
-  agent:
-  - `chat ask <human> "<answer>" --answer <requestId>` — resolve on their
-    behalf when answered out-of-band (body = the confirmed answer).
-- **Authorization:** only the target human or the asking agent may resolve.
-- **Invalid targets fail loud.** `--answer` is rejected (nothing is written)
-  when `<requestId>` does not exist in this chat, is not a tracked request, or
-  you are neither the target nor the asker. Re-resolving an already-resolved
-  question is a soft success: it threads as a confirmation and changes no
-  counter.
+  {request: <requestId>, kind: "answered"}` and **only** this clears the red dot.
+  It is written **only** by the target human's web answer — the server rejects a
+  resolution from anyone other than the target (an agent, including the asker,
+  cannot resolve).
 - **Re-asking opens a NEW, independent question** — it never auto-supersedes the
   old one. If a prior ask is now moot, just leave it and re-ask; the human works
   their open questions oldest-first.
@@ -218,11 +214,11 @@ See the SKILL.md Communication Principles' Decision guide table and the
   that chat for them** until they answer). Their answer — an option click or
   free text — **resolves** it and clears the dot; prefer a free-text question
   and add 2–4 `--options` (JSON) only for short, single-meaning picks. If you
-  need more, re-ask. You can also resolve from the CLI with `chat ask ...
-  --answer <requestId>`. Reserve `chat ask` for a genuine user decision you
-  cannot settle from the request / code / a reasonable default — never a
-  progress or "can I continue?" / "plan ready?" check (decide and report via
-  `chat update --description`).
+  need more, re-ask. You can ONLY ask — the human resolves in the web UI; an
+  agent cannot mark a question answered or close it. Reserve `chat ask` for a
+  genuine user decision you cannot settle from the request / code / a reasonable
+  default — never a progress or "can I continue?" / "plan ready?" check (decide
+  and report via `chat update --description`).
 - **Agent** → `chat send <name> "..."`. After the handoff, continue only
   independent work; if their reply is the only remaining input, end the
   turn and wait to be woken. Do not poll status or escalate on delayed

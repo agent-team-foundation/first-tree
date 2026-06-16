@@ -1541,9 +1541,8 @@ export function ChatView({
     // back-and-forth stays scoped to it. Computed BEFORE the image branch —
     // a captioned image answering a docked question must thread exactly like
     // a text reply. This does NOT resolve the question — `inReplyTo` is pure
-    // threading; resolution needs an explicit `metadata.resolves`, written by
-    // the dock's clean answer or the asking agent's `chat send
-    // --answer`/`--close`.
+    // threading; resolution needs an explicit `metadata.resolves`, written only
+    // by the target human's answer in the AskTakeover (an agent cannot resolve).
     const threadedRequestId = findThreadableRequestId(mergedMessages, myAgentId, routedMentions) ?? undefined;
 
     if (images.length > 0) {

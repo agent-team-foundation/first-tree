@@ -115,20 +115,20 @@ export type AskRequest = z.infer<typeof askRequestSchema>;
  * `format="request"` message. This is the ONLY thing that answers or closes
  * an open question — `inReplyTo` no longer does (it is pure threading now).
  *
- * Written by:
- *   - the human's web UI on ANY answer — picking an option OR typing free text
- *     both attach `resolves` (kind="answered"); the blocking answer surface has
- *     no "reply without resolving" path, so every human answer resolves, or
- *   - the asking agent via `chat ask --answer` (resolve on the human's behalf
- *     when the answer arrived out-of-band).
- * A bare threaded reply that carries no `resolves` does not resolve — `inReplyTo`
- * is pure threading.
+ * Written ONLY by the target human's web answer — picking an option OR typing
+ * free text both attach `resolves` (kind="answered"); the blocking answer
+ * surface has no "reply without resolving" path, so every human answer resolves.
+ * An agent (including the asker) **cannot** resolve: the server authorizes a
+ * resolution only from the question's target, so an agent answers nothing and
+ * closes nothing. A bare threaded reply that carries no `resolves` does not
+ * resolve — `inReplyTo` is pure threading.
  *
  *   - kind="answered" — the question is answered. The readable answer stays in
  *     the message `content`.
  *   - kind="closed"   — the question is withdrawn. Retained as a server-honored
- *     resolution kind for compatibility; no current CLI flag produces it (the
- *     agent surface resolves only by answering). `reason` optionally explains why.
+ *     resolution kind for compatibility; no current surface produces it (the
+ *     human web answer only ever writes "answered"). `reason` optionally explains
+ *     why.
  *
  * Server-opaque except for the `open_request_count` counter, whose −1 keys
  * off `resolves.request`. The web parses it with `safeParse`.

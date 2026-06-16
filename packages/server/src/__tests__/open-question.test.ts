@@ -18,8 +18,8 @@ import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
  *       +1  a FRESH request (format=request) → target human.
  *       -1  an EXPLICIT resolution: a message carrying
  *           `metadata.resolves = {request, kind}` pointed at the question,
- *           from the target (answered) or the asking agent (answered/closed).
- *           Idempotent and floored at zero.
+ *           ONLY from the target human (the web answer). An agent — including
+ *           the asker — cannot resolve. Idempotent and floored at zero.
  *   - `inReplyTo` is pure threading and NEVER resolves: a "chat about this"
  *     discussion reply leaves the question open. Re-asking (a new
  *     `format=request`) opens a second independent question (+1) — it does
@@ -304,57 +304,10 @@ describe("open-question (format=request) + open_request_count", () => {
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(2);
   });
 
-  it("the asking agent closes via an explicit resolves(closed) (clears the target's count)", async () => {
-    const app = getApp();
-    const uid = crypto.randomUUID().slice(0, 6);
-    const { asker, human, chat } = await setup(app, uid);
-
-    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
-      source: "api",
-      format: "request",
-      content: "ratio?",
-      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
-    });
-    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
-
-    // The ASKER writes an explicit resolves(closed) — the server still honors
-    // this resolution kind (no CLI flag produces it now) → -1.
-    await sendMessage(
-      app.db,
-      chat.id,
-      asker.agent.uuid,
-      {
-        source: "api",
-        format: "text",
-        content: "Never mind — resolved this offline.",
-        metadata: { resolves: { request: question.id, kind: "closed", reason: "resolved offline" } },
-      },
-      { allowRecipientlessSend: true },
-    );
-    expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
-
-    // A second close is a no-op — floored at zero.
-    await sendMessage(
-      app.db,
-      chat.id,
-      asker.agent.uuid,
-      {
-        source: "api",
-        format: "text",
-        content: "(still closed)",
-        metadata: { resolves: { request: question.id, kind: "closed" } },
-      },
-      { allowRecipientlessSend: true },
-    );
-    expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
-  });
-
-  it("the asking agent answers its own question ADDRESSED to the human (real `chat ask --answer` path passes the agent→human guard)", async () => {
-    // Regression for the CLI `chat ask --answer` path: it sends the answer as a
-    // plain `text` message addressed to the human (mentions=[human]) — NOT
-    // recipientless. The agent→human send guard must NOT reject it, because the
-    // message carries a valid `metadata.resolves`; otherwise the asker can never
-    // clear the open question it raised.
+  it("the asking agent CANNOT resolve its own question — resolution is human-only", async () => {
+    // The asker raises the question but can neither answer nor close it; only
+    // the target human resolves (in the web UI). Both shapes of an asker-sent
+    // resolution are refused, and the open count stays up.
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, chat } = await setup(app, uid);
@@ -367,14 +320,64 @@ describe("open-question (format=request) + open_request_count", () => {
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // Asker → human, addressed (mentions=[human]), plain text, carrying the
-    // resolution. No `allowRecipientlessSend`: this is the live CLI shape.
-    await sendMessage(app.db, chat.id, asker.agent.uuid, {
+    // Recipientless asker resolution (the old "resolve on the human's behalf"
+    // shape) is refused by the resolution authz — only the target may resolve.
+    await expect(
+      sendMessage(
+        app.db,
+        chat.id,
+        asker.agent.uuid,
+        {
+          source: "api",
+          format: "text",
+          content: "Going with 20%.",
+          metadata: { resolves: { request: question.id, kind: "answered" } },
+        },
+        { allowRecipientlessSend: true },
+      ),
+    ).rejects.toThrow(/only the question's target may resolve/i);
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // Addressing the human does not help — the agent→human send guard refuses a
+    // non-ask agent→human send before authz even runs.
+    await expect(
+      sendMessage(app.db, chat.id, asker.agent.uuid, {
+        source: "api",
+        format: "text",
+        content: "Going with 20%.",
+        metadata: { mentions: [human.uuid], resolves: { request: question.id, kind: "answered" } },
+      }),
+    ).rejects.toThrow(/cannot .*send.* a human/i);
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+  });
+
+  it("the target human resolves their own question (web answer) → clears the count", async () => {
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
       source: "api",
-      format: "text",
-      content: "Going with 20%.",
-      metadata: { mentions: [human.uuid], resolves: { request: question.id, kind: "answered" } },
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: {} },
     });
+    expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
+
+    // The human's web answer carries the resolution; senderId === target → allowed.
+    await sendMessage(
+      app.db,
+      chat.id,
+      human.uuid,
+      {
+        source: "web",
+        format: "text",
+        content: "Going with 20%.",
+        inReplyTo: question.id,
+        metadata: { resolves: { request: question.id, kind: "answered" } },
+      },
+      { allowRecipientlessSend: true },
+    );
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(0);
   });
 
@@ -393,7 +396,7 @@ describe("open-question (format=request) + open_request_count", () => {
     ).rejects.toThrow(/cannot .*send.* a human/i);
   });
 
-  it("a resolves from neither the target nor the asker is REJECTED (unauthorized, fail loud)", async () => {
+  it("a resolves from anyone other than the target is REJECTED (unauthorized, fail loud)", async () => {
     const app = getApp();
     const uid = crypto.randomUUID().slice(0, 6);
     const { asker, human, other, chat } = await setup(app, uid);
@@ -406,7 +409,8 @@ describe("open-question (format=request) + open_request_count", () => {
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // `other` (an unrelated participant) tries to resolve — must fail loud.
+    // `other` (an unrelated participant, not the target human) tries to resolve
+    // — must fail loud.
     await expect(
       sendMessage(
         app.db,
@@ -416,11 +420,11 @@ describe("open-question (format=request) + open_request_count", () => {
           source: "api",
           format: "text",
           content: "I'll close this",
-          metadata: { resolves: { request: question.id, kind: "closed" } },
+          metadata: { resolves: { request: question.id, kind: "answered" } },
         },
         { allowRecipientlessSend: true },
       ),
-    ).rejects.toThrow(/target or the asking agent/i);
+    ).rejects.toThrow(/only the question's target may resolve/i);
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
     // The rejected send must not leave a message in history (tx rollback).
@@ -547,8 +551,9 @@ describe("open-question (format=request) + open_request_count", () => {
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // Authorized sender, valid request id, but bogus `kind` — must fail loud,
-    // not land as ordinary metadata (which would poison the priors scan).
+    // Valid request id but a bogus `kind` — must fail loud on the schema parse
+    // (before any authz), not land as ordinary metadata (which would poison the
+    // priors scan).
     await expect(
       sendMessage(
         app.db,
@@ -587,13 +592,14 @@ describe("open-question (format=request) + open_request_count", () => {
       .where(and(eq(messages.chatId, chat.id), sql`${messages.metadata} ? 'resolves'`));
     expect(stray).toHaveLength(0);
 
-    // The legitimate resolution still works and clears the count.
+    // The legitimate resolution (from the target human) still works and clears
+    // the count.
     await sendMessage(
       app.db,
       chat.id,
-      asker.agent.uuid,
+      human.uuid,
       {
-        source: "api",
+        source: "web",
         format: "text",
         content: "confirmed: 5%",
         metadata: { resolves: { request: question.id, kind: "answered" } },
@@ -616,9 +622,10 @@ describe("open-question (format=request) + open_request_count", () => {
     });
     expect(await openReqCount(app, chat.id, human.uuid)).toBe(1);
 
-    // A pre-validation row from an AUTHORIZED sender with a malformed kind:
-    // matches the priors scan on `resolves ->> 'request'` + sender, but is
-    // not a schema-valid resolution — it must not count as a "prior".
+    // A pre-validation row whose sender is in the priors-scan scope (the asker,
+    // kept in scope for legacy rows) with a malformed kind: it matches the priors
+    // scan on `resolves ->> 'request'` + sender, but is not a schema-valid
+    // resolution — it must not count as a "prior".
     await app.db.insert(messages).values({
       id: crypto.randomUUID(),
       chatId: chat.id,
@@ -629,12 +636,13 @@ describe("open-question (format=request) + open_request_count", () => {
       source: "api",
     });
 
+    // The target human's legitimate resolution still decrements past it.
     await sendMessage(
       app.db,
       chat.id,
-      asker.agent.uuid,
+      human.uuid,
       {
-        source: "api",
+        source: "web",
         format: "text",
         content: "confirmed: 5%",
         metadata: { resolves: { request: question.id, kind: "answered" } },

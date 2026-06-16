@@ -7,8 +7,9 @@
 > the output stream as the agent's reasoning trace. That model has been
 > **superseded**. Today agent→human splits into three intent-specific channels:
 > `chat ask` (a tracked question — the message **body is the ask**, `--options`
-> as a JSON array, resolve with `--answer`; there is no `--close`),
-> `chat update --description` (progress / status), and `chat send` is
+> as a JSON array; an agent can ONLY ask — the human resolves in the web UI,
+> there is no agent resolve/close), `chat update --description` (progress /
+> status), and `chat send` is
 > **agent-directed only** — the server **rejects** a plain agent→human send. This
 > file is retained for historical reference and is **not** authoritative.
 > The current contract lives in `packages/client/src/runtime/agent-briefing.ts`

@@ -14,8 +14,9 @@
  *     the open-request persists; Reply resolves with the composed answer).
  *
  * The answer is plain text: selected option labels join on one line, any typed
- * note follows — `buildResolveAnswer` owns the format, so the resolving reply
- * reads the same whether sent from here or via `chat ask --answer`.
+ * note follows — `buildResolveAnswer` owns the format. This is the ONLY way to
+ * resolve a question: the target human answers here, in the web UI; an agent can
+ * only ask, never answer or close.
  */
 import type { AskOption, AskRequest } from "@first-tree/shared";
 import { useState } from "react";

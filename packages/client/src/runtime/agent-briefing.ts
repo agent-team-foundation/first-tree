@@ -752,24 +752,15 @@ drop the options and let them answer in free text.
 
 ### How it resolves
 
-The human answers in their web UI, and **any answer resolves the question**:
-picking an option OR typing free text both clear the red dot and unblock the
-chat. Their answer comes back to you as the resolving reply — the question does
-not linger in a separate "discuss" state. If their answer pushes back or you
-need more, **re-ask**: a new \`chat ask\` opens a fresh question (and a fresh
-block).
-
-You can also resolve from the CLI when answered out-of-band:
-
-\`\`\`bash
-# Mark it answered on their behalf (body = the confirmed answer):
-${bin} chat ask <human> "<the confirmed answer>" --answer <requestId>
-\`\`\`
-
-\`<requestId>\` is the id of your original \`chat ask\` message. Only you (the
-asker) or the human you asked may resolve it. Re-asking opens a NEW, independent
-question — it never auto-supersedes the old one; if a prior ask is now moot,
-leave it and re-ask (the human works open questions oldest-first).
+**You only ask — the human resolves.** The human answers in their web UI, and
+**any answer resolves the question**: picking an option OR typing free text both
+clear the red dot and unblock the chat. Their answer comes back to you as the
+resolving reply — the question does not linger in a separate "discuss" state. An
+agent **cannot** mark a question answered or close it (there is no resolve
+command); resolution is entirely the human's web answer. If their answer pushes
+back or you need more, **re-ask**: a new \`chat ask\` opens a fresh question (and a
+fresh block). Re-asking never auto-supersedes the old one; if a prior ask is now
+moot, just leave it and re-ask (the human works open questions oldest-first).
 
 Use \`chat ask\` ONLY for a decision that is **genuinely the user's to make** AND
 **cannot be settled from the request, the code, or a reasonable default** — a

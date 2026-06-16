@@ -276,34 +276,12 @@ describe("chat command behavior", () => {
     });
   });
 
-  it("chat ask resolves an open question via --answer and rejects bad combinations", async () => {
-    const sdk = localAgentMocks.createSdk();
-
-    await runChat(["ask", "nova", "Ship it.", "--answer", "req-1"]);
-    expect(sdk.sendMessage).toHaveBeenLastCalledWith(
-      "chat-env",
-      expect.objectContaining({
-        content: "Ship it.",
-        receiverNames: ["nova"],
-        inReplyTo: "req-1",
-        metadata: expect.objectContaining({ resolves: { request: "req-1", kind: "answered" } }),
-      }),
+  it("chat ask is ask-only: it does not accept --answer (resolution is human/web-only)", async () => {
+    // The agent can only ASK; the human resolves in the web UI. `--answer` was
+    // removed, so passing it is an unknown-option error.
+    await expect(runChat(["ask", "nova", "Ship it.", "--answer", "req-1"])).rejects.toThrow(
+      /unknown option.*--answer/i,
     );
-
-    await expect(
-      runChat([
-        "ask",
-        "nova",
-        "x",
-        "--answer",
-        "req-1",
-        "--options",
-        JSON.stringify([
-          { label: "A", description: "a" },
-          { label: "B", description: "b" },
-        ]),
-      ]),
-    ).rejects.toMatchObject({ code: "RESOLVE_WITH_OPTIONS", exitCode: 2 });
   });
 
   it("chat send no longer accepts --request (moved to chat ask)", async () => {

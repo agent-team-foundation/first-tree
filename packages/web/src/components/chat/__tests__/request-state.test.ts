@@ -68,15 +68,17 @@ describe("deriveRequestState", () => {
   it("is resolved on an explicit answered resolution (from the target)", () => {
     expect(deriveRequestState(request, [request, resolveMsg("r1", TARGET, "answered")])).toBe("resolved");
   });
-  it("is resolved when the asking agent answers (chat ask --answer)", () => {
-    expect(deriveRequestState(request, [request, resolveMsg("r1", ASKER, "answered")])).toBe("resolved");
+  it("ignores a `resolves` from the asking agent — only the target human resolves", () => {
+    // The asker cannot resolve its own question (mirrors the server authz); the
+    // signal is ignored and the threaded reply just reads as discussion.
+    expect(deriveRequestState(request, [request, resolveMsg("r1", ASKER, "answered")])).toBe("discussing");
   });
-  it("is closed on an explicit closed resolution (from the asking agent)", () => {
+  it("ignores a closed `resolves` from the asking agent too", () => {
     expect(deriveRequestState(request, [request, resolveMsg("c1", ASKER, "closed", "no longer needed")])).toBe(
-      "closed",
+      "discussing",
     );
   });
-  it("ignores a `resolves` written by an unauthorized sender (not target/asker)", () => {
+  it("ignores a `resolves` written by any non-target sender", () => {
     expect(deriveRequestState(request, [request, resolveMsg("s1", OTHER, "answered")])).toBe("discussing");
   });
   it("an unrelated reply (wrong inReplyTo) leaves it open", () => {
@@ -93,13 +95,15 @@ describe("readResolution / readCloseReason", () => {
     });
     expect(readResolution({ mentions: [TARGET] })).toBeNull();
   });
-  it("readCloseReason returns the asker's reason from the closing message", () => {
-    expect(readCloseReason(request, [request, resolveMsg("c1", ASKER, "closed", "decided offline")])).toBe(
+  it("readCloseReason returns the close reason from a closing message (target-authored)", () => {
+    // `closed` is a legacy/server-only kind; only the target may write a
+    // resolution, so a close that carries a reason reads it back.
+    expect(readCloseReason(request, [request, resolveMsg("c1", TARGET, "closed", "decided offline")])).toBe(
       "decided offline",
     );
   });
   it("readCloseReason is null when the close carried no reason / not closed", () => {
-    expect(readCloseReason(request, [request, resolveMsg("c1", ASKER, "closed")])).toBeNull();
+    expect(readCloseReason(request, [request, resolveMsg("c1", TARGET, "closed")])).toBeNull();
     expect(readCloseReason(request, [request, resolveMsg("r1", TARGET, "answered")])).toBeNull();
   });
 });

@@ -704,12 +704,15 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("## Asking Humans");
     // Asking Humans prescribes `chat ask` (the request mechanism moved off
     // `chat send`). The ask schema is body-is-the-ask + optional `--options`
-    // JSON (NOT the retired `--question`/`--option`/`--close` flags).
+    // JSON (NOT the retired `--question`/`--option`/`--close` flags). `chat ask`
+    // is ask-ONLY: the human resolves in the web UI, so the briefing carries no
+    // CLI resolution flag.
     expect(briefing).toMatch(/chat ask <human>/);
     expect(briefing).toContain("body IS the ask");
     expect(briefing).toContain("--options");
     expect(briefing).toContain("--multi-select");
-    expect(briefing).toContain("--answer <requestId>");
+    expect(briefing).toMatch(/cannot.*mark a question answered or close it/i);
+    expect(briefing).not.toContain("--answer");
     expect(briefing).not.toContain("--question");
     expect(briefing).not.toContain("--close");
     // Usage discipline: `chat ask` is ONLY for a genuine user decision that
