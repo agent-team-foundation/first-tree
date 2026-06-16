@@ -267,7 +267,7 @@ first-tree chat
 ├── history <chatId>
 ├── update                                           # update topic and/or description (each independently)
 │     --topic <text> / --clear-topic                 #   set/clear the short display label
-│     --description <text> / --clear-description      #   set/clear the work summary + status report (Markdown)
+│     --description <text> / --clear-description      #   set/clear the work summary + status report (Markdown; `-` = read from stdin/heredoc)
 │     --chat <chatId> / --agent <name>               #   target another chat / the named agent
 ├── set-topic [topic]                                # [DEPRECATED — use `update`] hidden alias
 └── open <agent-name>                                # interactive REPL
@@ -355,6 +355,17 @@ first-tree chat update --topic "review PR #916"
 first-tree chat update --description "Reviewing PR #916. **Plan:** address review findings, re-verify. **Progress:** 2/3 findings fixed."
 first-tree chat update --topic "ship plan" --description "Drafting; next: hand to QA."
 first-tree chat update --clear-description
+# A one-line --description whose newlines are written as literal `\n` is rejected
+# before the write: shell quotes do not expand `\n`, so it would persist and
+# render as one long line with visible `\n` tokens. For a multi-line description
+# pass real newlines — either an ANSI-C $'...' string, or `--description -` to
+# read it from stdin/heredoc:
+cat <<'EOF' | first-tree chat update --description -
+Reviewing PR #916.
+
+**Plan:** address review findings, re-verify.
+**Progress:** 2/3 findings fixed.
+EOF
 # `chat set-topic` still works as a deprecated alias.
 
 # Interactive

@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
-import { readStdin } from "./_shared/io.js";
+import { guardInlineDescription, readStdin } from "./_shared/io.js";
 import { buildRequestMetadata } from "./_shared/request.js";
 
 interface CreateOptions {
@@ -109,6 +109,13 @@ export function registerChatCreateCommand(chat: Command): void {
         const content = message ?? (await readStdin());
         if (!content || content.trim().length === 0) {
           fail("NO_MESSAGE", "No message provided. Pass as argument or pipe via stdin.", 2);
+        }
+
+        // The initial message already consumes stdin, so `--description` is
+        // inline-only here: reject a literal `\n`-escaped value before the
+        // chat is created (the hint points to ANSI-C `$'...'` quoting).
+        if (options.description !== undefined) {
+          guardInlineDescription(options.description, { supportsStdin: false });
         }
 
         let metadata: Record<string, unknown> | undefined;
