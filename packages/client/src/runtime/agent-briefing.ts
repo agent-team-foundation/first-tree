@@ -467,6 +467,29 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
     "   with an auth error, tell a human in the chat what failed and continue",
     "   with what you have locally; do not retry silently.",
   );
+  lines.push(
+    "",
+    "**One-time legacy-layout migration — do this once, and only in your",
+    "OWN workspace.** Some agents were first provisioned with a single",
+    "**non-bare** checkout at the workspace root (instead of a bare clone",
+    "under `source-repos/`), often with task worktrees hanging off it. If",
+    "you find one, migrate it — never reach into a sibling agent's",
+    "workspace. Create the bare clone per **Ensure** above (its new home),",
+    "then retire the legacy checkout. Before deleting it, drop each hosted",
+    "worktree **safely** — only when it has no uncommitted changes AND is",
+    "already merged into `origin/<default>`, so no work is lost:",
+    "",
+    "```bash",
+    "git -C <legacy> worktree list          # what hangs off the old checkout",
+    "git -C <wt> status --porcelain         # empty ⇒ no uncommitted work",
+    "git -C <legacy> merge-base --is-ancestor <wt-HEAD> origin/<default>  # exit 0 ⇒ already merged",
+    "git -C <legacy> worktree remove <wt>   # repeat per worktree; refuses if dirty",
+    "rm -rf <legacy>                        # then remove the checkout itself",
+    "```",
+    "",
+    "The legacy `context-tree` **symlink** migrates the same one-time way —",
+    "see `## Tree Location` (remove the symlink only, then clone).",
+  );
   return lines.join("\n");
 }
 

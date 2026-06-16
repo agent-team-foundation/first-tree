@@ -597,6 +597,16 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // Reuse is now CONDITIONAL on the origin matching — not an unconditional
     // "reuse the existing path as-is".
     expect(briefing).toContain("**If it matches**, reuse the clone");
+    // One-time legacy-layout migration: an agent provisioned under the old
+    // non-bare-checkout-at-workspace-root layout gets a safe, scoped recipe
+    // to retire it — drop only clean + already-merged worktrees, then the
+    // checkout — and is told to stay inside its OWN workspace.
+    expect(briefing).toContain("One-time legacy-layout migration");
+    expect(briefing).toContain("never reach into a sibling agent's");
+    expect(briefing).toContain("merge-base --is-ancestor <wt-HEAD> origin/<default>");
+    expect(briefing).toContain("rm -rf <legacy>");
+    // The context-tree symlink case points at the existing Tree Location block.
+    expect(briefing).toMatch(/`context-tree` \*\*symlink\*\* migrates the same/);
   });
 
   it("omits the Source Repositories block when no repos are predeclared", () => {
