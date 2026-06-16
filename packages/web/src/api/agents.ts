@@ -1,4 +1,4 @@
-import type { Agent, AgentSkills, CreateAgent, RebindAgent, UpdateAgent } from "@first-tree/shared";
+import type { Agent, AgentSkills, CreateAgent, UpdateAgent } from "@first-tree/shared";
 import { ApiError, api, getStoredTokens, withOrg } from "./client.js";
 
 type PaginatedAgents = {
@@ -112,16 +112,6 @@ export function checkAgentNameAvailability(name: string): Promise<AgentNameAvail
 
 export function updateAgent(uuid: string, data: UpdateAgent): Promise<Agent> {
   return api.patch<Agent>(`/agents/${encodeURIComponent(uuid)}`, data);
-}
-
-/**
- * Re-bind an agent to a new client and/or a new runtime provider. The server
- * runs owner / org / capability checks atomically; pass `force: true` to
- * bypass the capability match (e.g. when the destination client is offline
- * and `clients.metadata.capabilities` is stale).
- */
-export function rebindAgent(uuid: string, data: RebindAgent): Promise<Agent> {
-  return api.patch<Agent>(`/agents/${encodeURIComponent(uuid)}/rebind`, data);
 }
 
 export function deleteAgent(uuid: string): Promise<void> {

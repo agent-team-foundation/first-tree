@@ -89,7 +89,7 @@ describe("Admin Agents API", () => {
 
   // Regression guard for the mutation-response path. PR #571 review
   // (yuezengwu second-pass) flagged that fixing only `requireAgentAccess`
-  // would still leave PATCH / suspend / reactivate / rebind responses
+  // would still leave PATCH / suspend / reactivate responses
   // without `runtimeState`, because those serialize the mutation's
   // `.returning()` row rather than `requireAgentAccess`'s. The fix
   // routes every mutation service through `selectAgentRowWithRuntime`

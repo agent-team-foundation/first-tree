@@ -21,7 +21,7 @@ import { createLogger, messageAttrs, withSpan } from "../observability/index.js"
 import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
-import { validateDocumentContext } from "./doc-snapshots.js";
+import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
 
 const log = createLogger("message");
 
@@ -185,10 +185,7 @@ export function preflightMessageSendIntent(input: {
   }
 
   const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
-  validateDocumentContext(incomingMeta, {
-    chatId,
-    participantSlugs: new Set(participants.map((p) => p.name?.toLowerCase()).filter((n): n is string => Boolean(n))),
-  });
+  validateDocumentContext(incomingMeta);
   if (incomingMeta.resolves !== undefined && !requestResolutionSchema.safeParse(incomingMeta.resolves).success) {
     throw new BadRequestError(
       'Malformed "metadata.resolves": expected {request: <messageId>, kind: "answered"|"closed", reason?}.',
@@ -413,6 +410,14 @@ async function sendMessageInner(
       participants,
     });
     const { content: outboundContent, metadata: metadataToStore, mentionedAgentIds: mergedMentions } = prepared;
+
+    // 2b. Validate generic attachment refs (`metadata.attachments[]`) against
+    //     the blob store: each referenced attachment must exist and its
+    //     declared mime/size must match the stored row. Async (DB lookup), so
+    //     it runs here rather than in the sync preflight. Byte integrity is
+    //     checked client-side at render via `ref.sha256`; uploader != sender by
+    //     design (see validateMessageAttachmentRefs).
+    await validateMessageAttachmentRefs(tx, metadataToStore);
 
     // 3. Store the message (with merged metadata + normalised content).
     // UUID v7 per the "UUID v7 as Message ID" architecture rule in

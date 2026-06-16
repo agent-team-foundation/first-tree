@@ -6,6 +6,7 @@ import {
   configureClientLoggerForService,
   discoverClaudeCodeSkills,
   probeCapabilities,
+  reprobeOnReconnect,
 } from "@first-tree/client";
 import {
   agentConfigSchema,
@@ -242,6 +243,38 @@ export function registerDaemonStartCommand(daemon: Command): void {
         for (const [name, agentConfig] of agents) {
           runtime.addAgent(name, agentConfig);
         }
+
+        // Re-probe runtime-provider capabilities on each WS reconnect. The
+        // startup probe goes stale while the daemon runs (a provider gets
+        // installed / logged in / removed), and there is otherwise no refresh
+        // until a restart. On reconnect we conditionally re-probe — a full real
+        // smoke only when the last result was non-ok or older than the TTL,
+        // else a free resolve+auth re-validate — then re-upload. Guarded against
+        // overlap; never throws into the connection.
+        let reprobeInFlight = false;
+        runtime.onReconnect(() => {
+          void (async () => {
+            if (reprobeInFlight) return;
+            reprobeInFlight = true;
+            try {
+              const { capabilities, mode } = await reprobeOnReconnect(probedCapabilities ?? {});
+              probedCapabilities = capabilities;
+              const accessToken = await ensureFreshAccessToken();
+              await uploadClientCapabilities({
+                serverUrl: config.server.url,
+                accessToken,
+                clientId: config.client.id,
+                capabilities,
+              });
+              print.status("•", `runtime capabilities re-probed on reconnect (${mode}) and uploaded`);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              print.status("⚠️", `reconnect capability re-probe skipped: ${msg}`);
+            } finally {
+              reprobeInFlight = false;
+            }
+          })();
+        });
 
         await runtime.start();
 

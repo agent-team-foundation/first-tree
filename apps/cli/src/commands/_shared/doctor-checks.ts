@@ -1,4 +1,4 @@
-import { FirstTreeHubSDK } from "@first-tree/client";
+import { FirstTreeHubSDK, probeCapabilities } from "@first-tree/client";
 import { clientConfigSchema, initConfig, resetConfig, resetConfigMeta } from "@first-tree/shared/config";
 import type { CheckResult } from "../../core/doctor.js";
 import {
@@ -12,7 +12,19 @@ import {
   ensureFreshAccessToken,
   reconcileAgentConfigs,
   resolveServerUrl,
+  runtimeProviderChecks,
 } from "../../core/index.js";
+
+/**
+ * Runtime-provider readiness: a launch-verified probe per built-in provider,
+ * rendered one CheckResult per provider. This really launches each provider
+ * (e.g. a 1-turn haiku query / a `codex doctor` handshake), so it is heavier
+ * than the other checks — acceptable for a deliberate diagnostic. Probe
+ * failures are captured per-provider (never thrown), so this never rejects.
+ */
+export async function checkRuntimeProviders(): Promise<CheckResult[]> {
+  return runtimeProviderChecks(await probeCapabilities());
+}
 
 /**
  * Daemon-side readiness checks. Shared by `daemon doctor` (which renders
@@ -58,5 +70,6 @@ export async function runDaemonChecks(): Promise<CheckResult[]> {
     agentCheck,
     await checkWebSocket(),
     checkBackgroundService(),
+    ...(await checkRuntimeProviders()),
   ];
 }

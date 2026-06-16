@@ -31,12 +31,17 @@ describe("nextParamsForEngagement", () => {
     expect(result.has("c")).toBe(false);
   });
 
-  it("clears any doc-preview overlay", () => {
+  it("clears any doc-preview overlay (current attachment-ref params + legacy)", () => {
     const result = nextParamsForEngagement(
-      paramsOf("c=abc&engagement=active&docChat=a&docAgent=b&docPath=p&docBase=base"),
+      paramsOf("c=abc&engagement=active&docChat=a&docMsg=m&docAttachment=att&docAgent=b&docPath=p&docBase=base"),
       "all",
     );
+    // Current attachment-ref params — switching engagement must not leave a
+    // stale preview behind (R3).
     expect(result.has("docChat")).toBe(false);
+    expect(result.has("docMsg")).toBe(false);
+    expect(result.has("docAttachment")).toBe(false);
+    // Legacy params still cleared for in-flight URLs minted pre-migration.
     expect(result.has("docAgent")).toBe(false);
     expect(result.has("docPath")).toBe(false);
     expect(result.has("docBase")).toBe(false);

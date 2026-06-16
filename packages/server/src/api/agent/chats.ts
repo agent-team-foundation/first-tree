@@ -134,7 +134,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Update chat metadata (`topic` and/or `description`) from inside an agent
-  // session (`chat set-topic`). Unlike the user-scope PATCH /api/v1/chats/:chatId
+  // session (`chat update`). Unlike the user-scope PATCH /api/v1/chats/:chatId
   // (which stays participation-gated so a managing human can still rename from
   // the console), this agent route is **owner-gated**: the chat's creator
   // (membership `role == "owner"`) may rename or re-describe it, and in a

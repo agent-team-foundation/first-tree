@@ -391,16 +391,18 @@ describe("buildAgentEnv", () => {
       },
       chatId: "chat-1",
       docContext: {
-        base: "/ws/coder/first-tree",
+        // Source clones live under the `source-repos/` layer; the narrow base
+        // is the source-repo top and the repo-local-path is agentHome-relative.
+        base: "/ws/coder/source-repos/first-tree",
         agentHome: "/ws/coder",
-        singleRepoLocalPath: "first-tree",
+        singleRepoLocalPath: "source-repos/first-tree",
         workspacesRoot: "/ws",
         selfSlug: "coder",
       },
     });
-    expect(env.FIRST_TREE_DOC_BASE).toBe("/ws/coder/first-tree");
+    expect(env.FIRST_TREE_DOC_BASE).toBe("/ws/coder/source-repos/first-tree");
     expect(env.FIRST_TREE_DOC_AGENT_HOME).toBe("/ws/coder");
-    expect(env.FIRST_TREE_DOC_REPO_LOCAL_PATH).toBe("first-tree");
+    expect(env.FIRST_TREE_DOC_REPO_LOCAL_PATH).toBe("source-repos/first-tree");
     expect(env.FIRST_TREE_WORKSPACES_ROOT).toBe("/ws");
     expect(env.FIRST_TREE_AGENT_SLUG).toBe("coder");
   });

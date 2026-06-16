@@ -89,6 +89,54 @@ describe("Agent WS — runtime provider mismatch on bind", () => {
     return { agent, token, clientId };
   }
 
+  // Like seedCodexAgent, but leaves the agent UNBOUND (clientId null) so the
+  // WS first-bind claim path is exercised. The client is seeded + connected so
+  // a bind attempt can be made from it.
+  async function seedUnboundCodexAgent(suffix: string) {
+    const orgId = await resolveDefaultOrgId(app.db);
+    const userId = uuidv7();
+    const memberId = uuidv7();
+    const clientId = `cli-rtmm-unb-${suffix}-${crypto.randomUUID().slice(0, 6)}`;
+
+    const agent = await app.db.transaction(async (tx) => {
+      await tx.insert(users).values({
+        id: userId,
+        username: `rtmm-unb-user-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
+        passwordHash: "x",
+        displayName: "Mismatch Tester",
+      });
+
+      const human = await createAgent(tx as unknown as typeof app.db, {
+        name: `rtmm-unb-human-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
+        type: "human",
+        displayName: "Mismatch Human",
+        source: "admin-api",
+        managerId: memberId,
+        organizationId: orgId,
+      });
+
+      await tx
+        .insert(members)
+        .values({ id: memberId, userId, organizationId: orgId, agentId: human.uuid, role: "admin" });
+      await tx.insert(clients).values({ id: clientId, userId, organizationId: orgId, status: "connected" });
+
+      // No clientId on the agent → unbound. The create-time capability gate
+      // short-circuits (clientId null), so the codex agent is created freely.
+      return createAgent(tx as unknown as typeof app.db, {
+        name: `rtmm-unb-codex-${suffix}-${crypto.randomUUID().slice(0, 6)}`,
+        type: "agent",
+        displayName: "Codex Agent",
+        source: "admin-api",
+        managerId: memberId,
+        organizationId: orgId,
+        runtimeProvider: "codex",
+      });
+    });
+
+    const token = await signMemberJwt(userId, memberId, orgId);
+    return { agent, token, clientId };
+  }
+
   function waitForFrame(ws: WebSocket, match: (m: unknown) => boolean, timeoutMs = 5000): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -196,6 +244,44 @@ describe("Agent WS — runtime provider mismatch on bind", () => {
 
       expect(msg.type).toBe("agent:bound");
       expect(msg.ref).toBe("bind-match");
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("does NOT claim an unbound agent when the first bind's runtimeType mismatches", async () => {
+    const seed = await seedUnboundCodexAgent("noclaim");
+    expect(seed.agent.clientId).toBeNull();
+    const ws = await openClientSocket(seed);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "agent:bind",
+          agentId: seed.agent.uuid,
+          ref: "bind-firstbind-mismatch",
+          runtimeType: "claude-code", // <- agent is `codex` in DB
+          runtimeVersion: "0.0.0",
+        }),
+      );
+
+      const msg = (await waitForFrame(ws, (m) => (m as { type?: string }).type === "agent:bind:rejected")) as {
+        ref: string;
+        reason: string;
+      };
+      expect(msg.ref).toBe("bind-firstbind-mismatch");
+      expect(msg.reason).toBe(AGENT_BIND_REJECT_REASONS.RUNTIME_PROVIDER_MISMATCH);
+
+      // The mismatch must be checked BEFORE the first-bind claim: the agent
+      // stays unbound so a correctly-running client can still bind it later.
+      // With re-bind removed, a wrong first pin would be unrecoverable.
+      const [row] = await app.db
+        .select({ clientId: agents.clientId })
+        .from(agents)
+        .where(eq(agents.uuid, seed.agent.uuid))
+        .limit(1);
+      expect(row?.clientId).toBeNull();
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));

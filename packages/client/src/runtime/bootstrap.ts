@@ -519,18 +519,19 @@ export function installCoreSkills(options: InstallCoreSkillsOptions): boolean {
 }
 
 /**
- * One predeclared source repository the handler checked out at the **top
- * level** of the agent home before the agent ran (e.g. `<agentHome>/<localPath>/`).
- * Surfaced in the per-chat system prompt so the LLM knows the absolute
- * path and upstream coordinates.
+ * One predeclared source repository the agent config declares under the agent
+ * home's `source-repos/` directory (e.g. `<agentHome>/source-repos/<localPath>/`).
+ * Pure declaration — the agent itself clones/refreshes it per its briefing
+ * protocol (the runtime never runs git on it). Surfaced in the per-chat system
+ * prompt so the LLM knows the absolute path and upstream coordinates.
  *
  * Note: the old "PredeclaredWorktree" model put these under
- * `<agentHome>/worktrees/<name>/`. Per the 2026-05-22 redesign, source
- * checkouts sit at the top level so the `worktrees/` subdir is reserved
- * **entirely** for agent-on-demand worktrees the LLM creates per task.
+ * `<agentHome>/worktrees/<name>/`. Source clones now sit under `source-repos/`
+ * so the `worktrees/` subdir is reserved **entirely** for agent-on-demand
+ * worktrees the LLM creates per task.
  */
 export type PredeclaredSourceRepo = {
-  /** Absolute path on the host filesystem (top level of the agent home). */
+  /** Absolute path on the host filesystem (under the agent home's `source-repos/` dir). */
   absolutePath: string;
   url: string;
   ref?: string;

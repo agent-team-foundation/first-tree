@@ -43,7 +43,7 @@ first-tree
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
 ├── org ...                  Organization-level operations
-├── daemon ...               Background daemon (start, stop, status, doctor)
+├── daemon ...               Background daemon (start, stop, status, doctor, probe)
 ├── config ...               View/modify this machine's client.yaml
 └── tree ...                 Validate and browse Context Trees
 ```
@@ -265,10 +265,11 @@ first-tree chat
 ├── invite <agentName>                               # add to FIRST_TREE_CHAT_ID before same-task send
 ├── list
 ├── history <chatId>
-├── set-topic [topic]                                # set/clear topic + description (chat self-description)
-│     --clear                                        #   clear the topic (falls back to auto-derived title)
-│     --description <text> / --clear-description     #   set/clear the running work-state summary
+├── update                                           # update topic and/or description (each independently)
+│     --topic <text> / --clear-topic                 #   set/clear the short display label
+│     --description <text> / --clear-description      #   set/clear the work summary + status report (Markdown)
 │     --chat <chatId> / --agent <name>               #   target another chat / the named agent
+├── set-topic [topic]                                # [DEPRECATED — use `update`] hidden alias
 └── open <agent-name>                                # interactive REPL
 ```
 
@@ -340,17 +341,21 @@ first-tree chat send code-agent "now we can talk"
 first-tree chat list
 first-tree chat history <chatId>
 
-# Self-description: a short topic label + a longer running work summary,
-# both set through set-topic. Agents read descriptions via `chat list` to
-# self-locate across threads (see the agent briefing's "Chat Topic & Description").
-# Owner-gated: the chat's creator may set topic/description, and when no agent
-# owner is present (human-created chats — Web / GitHub-sourced — or the creator
-# left) every worker agent counts as the owner; a non-owner agent in a chat
-# whose agent creator is still present is refused with 403.
-first-tree chat set-topic "review PR #916"
-first-tree chat set-topic --description "reviewing PR #916; addressing review findings, re-verifying"
-first-tree chat set-topic "ship plan" --description "drafting; waiting on QA"
-first-tree chat set-topic --clear-description
+# Self-description: a short topic label + a work summary + status report,
+# updated independently through `chat update` (topic and description each on
+# their own). The description carries task background + plan + progress, renders
+# as Markdown, and shows at the top of the chat's right sidebar; agents also read
+# it via `chat list` to self-locate (see the agent briefing's "Chat Topic &
+# Description"). Keep blockers / decisions OUT of it — raise `chat send <human>
+# --request` for those. Owner-gated: the chat's creator may update it, and when
+# no agent owner is present (human-created chats — Web / GitHub-sourced — or the
+# creator left) every worker agent counts as the owner; a non-owner agent in a
+# chat whose agent creator is still present is refused with 403.
+first-tree chat update --topic "review PR #916"
+first-tree chat update --description "Reviewing PR #916. **Plan:** address review findings, re-verify. **Progress:** 2/3 findings fixed."
+first-tree chat update --topic "ship plan" --description "Drafting; next: hand to QA."
+first-tree chat update --clear-description
+# `chat set-topic` still works as a deprecated alias.
 
 # Interactive
 first-tree chat open code-agent
@@ -439,7 +444,8 @@ first-tree daemon
 ├── stop
 ├── restart
 ├── status
-└── doctor
+├── doctor
+└── probe [--no-upload] [--json]
 ```
 
 | Subcommand | Purpose |
@@ -448,7 +454,19 @@ first-tree daemon
 | `stop` | Stop the service (preserves auto-start; bring it back with `start`). |
 | `restart` | Restart the service. |
 | `status` | Local service state + server binding + auth health. Runs in well under a second. |
-| `doctor` | Walk Node version, config, server reachability, WS, agent registrations, and the installed service file; report each step. |
+| `doctor` | Walk Node version, config, server reachability, WS, agent registrations, the installed service file, **and the runtime providers** — each step reported. The runtime-provider rows run the real launch-verified probe (a 1-turn model call for `claude-code`, a `codex doctor` handshake for `codex`), so `doctor` makes live provider calls; it is a deliberate diagnostic, not a hot path. |
+| `probe` | Launch-probe the local runtime providers on demand and upload the result to the server (`PATCH /clients/:id/capabilities`). This is the manual refresh for a client's advertised capabilities after a provider is installed / logged in. Each probe really launches its provider. `--no-upload` runs a **credentials-free local-only** diagnostic (probe + print, no server auth needed). `--json` (or the global `--json`) emits the capability snapshot as the machine-readable `{ ok, data }` envelope on stdout. |
+
+**Capability refresh timing.** The daemon launch-probes runtime providers at
+startup and re-probes automatically on every WebSocket reconnect. A full real
+re-probe of all providers runs only when there is no prior snapshot or one is
+older than 24h; otherwise each provider is re-validated individually — a
+still-launchable, still-logged-in provider keeps its prior `ok` for free
+(resolve + auth re-checked, no session smoke re-run), a provider that lost its
+binary or login downgrades, and a non-ok provider is fully re-probed so it can
+recover. So a machine missing an optional provider (e.g. no tmux for
+`claude-code-tui`) does not re-smoke its healthy providers on every reconnect.
+`daemon probe` is the manual, on-demand path between those automatic refreshes.
 
 The top-level `first-tree status` is the cross-subsystem overview that
 calls `daemon status` internally and adds server/auth/agent rows.

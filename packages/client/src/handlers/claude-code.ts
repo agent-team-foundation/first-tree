@@ -701,7 +701,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let injectDrainInProgress = false;
   /**
    * Predeclared source repos the agent config declares at
-   * `<agentHome>/<localPath>/`. Pure declaration (`declaredSourceRepos`) —
+   * `<agentHome>/source-repos/<localPath>/`. Pure declaration (`declaredSourceRepos`) —
    * the agent itself clones/refreshes them per its briefing protocol.
    * Surfaced in the briefing so the LLM knows the absolute paths and
    * upstream coordinates. NOT to be confused with on-demand worktrees the
@@ -1468,8 +1468,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   /**
    * Derive the prompt-facing source-repo list from the runtime config's
    * `gitRepos` — pure declaration, no git. The agent itself clones and
-   * refreshes `<cwd>/<localPath>/` per the protocol in its briefing; the
-   * `worktrees/` subdirectory stays reserved for the per-task worktrees the
+   * refreshes `<cwd>/source-repos/<localPath>/` per the protocol in its
+   * briefing; the `worktrees/` subdirectory stays reserved for the per-task worktrees the
    * agent creates and cleans up on its own.
    */
   function declareSourceRepos(workspace: string, payload: AgentRuntimeConfigPayload | undefined): void {

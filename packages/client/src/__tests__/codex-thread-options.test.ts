@@ -73,10 +73,10 @@ describe("buildCodexThreadOptions", () => {
       }),
       "/tmp/wsk",
     );
-    // Per the 2026-05-22 redesign: predeclared source repos materialise at
-    // the TOP LEVEL of the agent home — no `worktrees/` prefix. The
-    // `additionalDirectories` allowlist follows the same paths.
-    expect(opts.additionalDirectories).toEqual(["/tmp/wsk/bar", "/tmp/wsk/custom-path"]);
+    // Predeclared source repos materialise under the agent home's
+    // `source-repos/` directory (no `worktrees/` prefix). The
+    // `additionalDirectories` allowlist follows the same resolved paths.
+    expect(opts.additionalDirectories).toEqual(["/tmp/wsk/source-repos/bar", "/tmp/wsk/source-repos/custom-path"]);
   });
 
   it("rejects unsafe git repo localPath before adding additionalDirectories", () => {

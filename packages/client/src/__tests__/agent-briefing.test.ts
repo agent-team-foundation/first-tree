@@ -539,29 +539,31 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).not.toContain("<agent-home>/worktrees/");
   });
 
-  it("renders predeclared source repos with top-level paths and upstream coordinates", () => {
+  it("renders predeclared source repos with source-repos/ paths and upstream coordinates", () => {
     const sourceRepos: PredeclaredSourceRepo[] = [
       {
-        absolutePath: `${AGENT_HOME}/api`,
+        absolutePath: `${AGENT_HOME}/source-repos/api`,
         url: "git@github.com:example/api.git",
         ref: "main",
         branch: "session/test-agent",
       },
       {
-        absolutePath: `${AGENT_HOME}/web`,
+        absolutePath: `${AGENT_HOME}/source-repos/web`,
         url: "git@github.com:example/web.git",
       },
     ];
     const briefing = buildAgentBriefing(makeOpts({ sourceRepos }));
 
     expect(briefing).toContain("## Source Repositories (agent-managed, bare)");
-    // Top-level paths — no `worktrees/` prefix.
-    expect(briefing).toContain(`\`${AGENT_HOME}/api\``);
+    // Source clones live under `source-repos/`, not at the workspace root and
+    // not under `worktrees/`.
+    expect(briefing).toContain(`\`${AGENT_HOME}/source-repos/api\``);
     expect(briefing).not.toContain(`\`${AGENT_HOME}/worktrees/api\``);
+    expect(briefing).not.toContain(`\`${AGENT_HOME}/api\``);
     expect(briefing).toContain("url=git@github.com:example/api.git");
     expect(briefing).toContain("ref=main");
     expect(briefing).toContain("branch=session/test-agent");
-    expect(briefing).toContain(`\`${AGENT_HOME}/web\``);
+    expect(briefing).toContain(`\`${AGENT_HOME}/source-repos/web\``);
     // Partial entry — only url should appear, ref/branch parens omitted.
     expect(briefing).not.toMatch(/url=git@github\.com:example\/web\.git,\s*ref=/);
     // Agent-managed bare protocol: the agent maintains bare clones itself
@@ -571,10 +573,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("git clone --bare <url> <path>");
     // refspec config makes refs/remotes/origin/* available for worktrees.
     expect(briefing).toContain("git -C <path> config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'");
-    // localPath is a single directory name (nested paths are rejected at the
-    // schema layer), so the clone needs no `mkdir -p` of a parent.
-    expect(briefing).toContain("single directory name directly under your workspace");
-    expect(briefing).not.toContain("mkdir -p");
+    // Clones live under the workspace's `source-repos/` directory. `git clone`
+    // does create the missing parent on its own (verified), but the protocol
+    // makes it explicit with `mkdir -p` so an agent that deviates from the exact
+    // clone command can't trip over a missing `source-repos/` parent.
+    expect(briefing).toContain("source-repos/");
+    expect(briefing).toContain("immediate child of your workspace's");
+    expect(briefing).toContain('mkdir -p "$(dirname <path>)"');
     // Read goes through a worktree, not the clone path; skills scan there too.
     expect(briefing).toContain("Read through a worktree, not the clone path.");
     expect(briefing).toContain("first-tree-seed");
@@ -634,11 +639,14 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("--question");
 
     expect(briefing).toContain("## Chat Topic & Description");
-    expect(briefing).toContain("first-tree chat set-topic");
-    // The combined block documents setting the description through the same
-    // command, and carries the description discipline keys.
-    expect(briefing).toContain("set-topic --description");
-    expect(briefing).toMatch(/name the current task/);
+    expect(briefing).toContain("first-tree chat update");
+    // The block documents updating the description independently through
+    // `chat update`, and carries the upgraded description discipline keys
+    // (human-facing status report + Markdown), with set-topic kept as a
+    // deprecated alias.
+    expect(briefing).toContain("chat update --description");
+    expect(briefing).toMatch(/status report/);
+    expect(briefing).toMatch(/deprecated alias/);
     expect(briefing).toMatch(/Self-locate/);
     // The Chat Topic block points at the Current Chat Context block at the
     // BOTTOM of the briefing (not "above" as in the pre-restructure

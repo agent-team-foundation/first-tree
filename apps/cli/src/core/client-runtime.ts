@@ -100,6 +100,10 @@ export class ClientRuntime {
    */
   private lastCredentialsSnapshot: string | null = null;
 
+  /** Callbacks fired after a WS RE-registration (reconnect), not the first
+   * register. Used by the daemon to re-probe runtime-provider capabilities. */
+  private readonly reconnectListeners: Array<() => void> = [];
+
   constructor(serverUrl: string, clientId: string, options: ClientRuntimeOptions = {}) {
     this.serverUrl = serverUrl;
     this.options = options;
@@ -173,6 +177,30 @@ export class ClientRuntime {
       if (!entry || !reason) return;
       entry.state = reason === "agent_suspended" ? "suspended-skipped" : "idle";
     });
+
+    // Fire reconnect listeners only on a RE-registration (the daemon re-probes
+    // runtime-provider capabilities then). `isReconnect` is false on the first
+    // welcome, so startup is not double-probed. Listener errors are swallowed —
+    // a re-probe failure must never disturb the connection.
+    this.connection.on("server:welcome", (welcome) => {
+      if (!welcome.isReconnect) return;
+      for (const cb of this.reconnectListeners) {
+        try {
+          cb();
+        } catch (err) {
+          print.status("⚠️", `reconnect handler error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    });
+  }
+
+  /**
+   * Register a callback fired after each WS RE-registration (reconnect after a
+   * drop), not the first register. The daemon uses this to refresh
+   * runtime-provider capabilities without a restart.
+   */
+  onReconnect(callback: () => void): void {
+    this.reconnectListeners.push(callback);
   }
 
   addAgent(name: string, config: AgentConfig): void {

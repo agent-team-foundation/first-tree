@@ -13,10 +13,13 @@ channel (`first-tree` on prod, `first-tree-staging` on staging,
 
 - one tree repo at `<workspaceRoot>/<tree>`, resolved by reading
   `<workspaceRoot>/.first-tree/workspace.json` directly (schema:
-  `{ tree: "<dir>", sources: [...] }`). The `<binName> tree status`
-  CLI was retired in 2026-06 — the manifest is small JSON, `cat` it.
-- one or more source repos at `<workspaceRoot>/<name>` for each
-  `name` in `sources`. Under the agent-managed repo model these are
+  `{ tree: "<dir>", sources: [...], sourcesRoot?: "source-repos" }`). The
+  `<binName> tree status` CLI was retired in 2026-06 — the manifest is
+  small JSON, `cat` it.
+- one or more source repos at `<workspaceRoot>/<sourcesRoot>/<name>` for
+  each `name` in `sources` — i.e. `<workspaceRoot>/source-repos/<name>`
+  (a legacy flat manifest omits `sourcesRoot` and keeps them at
+  `<workspaceRoot>/<name>`). Under the agent-managed repo model these are
   **bare** clones (no working tree) — Phase 4 reads them through a
   read worktree, never the bare path directly (see Phase 4).
   Phase 4 iterates over **every** bound source; for multi-source
@@ -60,12 +63,21 @@ code-side read, materialize one read worktree per source off its latest
 default branch — following the **Worktrees** protocol in your `AGENTS.md`
 / `CLAUDE.md` briefing — and remove it when the audit is done:
 
+Resolve each source's bare-clone path from the manifest's `sourcesRoot`
+(do NOT hard-code it — the field is optional):
+
+- `sourcesRoot` present (current manifests, value `source-repos`):
+  `<source-clone>` = `<workspaceRoot>/<sourcesRoot>/<source>`
+  (e.g. `<workspaceRoot>/source-repos/<source>`)
+- `sourcesRoot` absent (legacy flat manifest):
+  `<source-clone>` = `<workspaceRoot>/<source>`
+
 ```bash
-# for each <source> in manifest.sources:
-git -C <workspaceRoot>/<source> fetch origin
-git -C <workspaceRoot>/<source> worktree add <workspaceRoot>/worktrees/sync-<source> origin/main
+# for each <source> in manifest.sources, with <source-clone> resolved as above:
+git -C <source-clone> fetch origin
+git -C <source-clone> worktree add <workspaceRoot>/worktrees/sync-<source> origin/main
 # ... all Phase 2–4 reads below use this worktree as <source-root> ...
-git -C <workspaceRoot>/<source> worktree remove <workspaceRoot>/worktrees/sync-<source>
+git -C <source-clone> worktree remove <workspaceRoot>/worktrees/sync-<source>
 ```
 
 Throughout Phases 2–4, `<source-root>` / `<source-path>` resolve **inside

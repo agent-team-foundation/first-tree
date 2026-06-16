@@ -8,7 +8,12 @@ import type {
   SessionEvent,
   SessionState,
 } from "@first-tree/shared";
-import { deriveRepoLocalPath, isImageBatchRefContent, isImageRefContent } from "@first-tree/shared";
+import {
+  deriveRepoLocalPath,
+  isImageBatchRefContent,
+  isImageRefContent,
+  SOURCE_REPOS_DIRNAME,
+} from "@first-tree/shared";
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
@@ -108,9 +113,9 @@ type ManualPauseGuard = {
  * Two layouts coexist after the per-agent-home redesign (#506) and its
  * legacy-resume hotfix (#530):
  *  - NEW chats run cwd = the per-agent home (`<workspaceRoot>` itself, see
- *    `acquireAgentHome`), with predeclared source repos materialised at the
- *    TOP LEVEL (`<workspaceRoot>/<localPath>`). No `<workspaceRoot>/<chatId>/`
- *    dir is ever created.
+ *    `acquireAgentHome`), with predeclared source repos materialised under the
+ *    `source-repos/` dir (`<workspaceRoot>/source-repos/<localPath>`). No
+ *    `<workspaceRoot>/<chatId>/` dir is ever created.
  *  - LEGACY chats (created before #506) keep their original per-chat cwd
  *    `<workspaceRoot>/<chatId>/`, with their own v1.x layout (source repos at
  *    `<workspaceRoot>/<chatId>/<localPath>`); #530 resumes them in place.
@@ -167,17 +172,30 @@ export function resolveSessionDocRoot(workspaceRoot: string, chatId: string): st
  * a doc the agent wrote in the workspace could never be previewed.
  *
  * Resolution:
- *  - exactly one repo → that repo's worktree, the unambiguous markdown-link
- *    root. The worktree is materialised at `<sessionRoot>/<localPath>`, so the
- *    base MUST be that ABSOLUTE path. Returning a bare relative `localPath`
- *    (the old behaviour) made the runtime resolve it against its own
- *    `process.cwd()` — the launch dir, not the session workspace — so it
- *    silently failed to find any doc and cloud preview was dead.
+ *  - exactly one repo → that source repo's clone, the unambiguous markdown-link
+ *    root, as an ABSOLUTE path. Returning a bare relative `localPath` (the old
+ *    behaviour) made the runtime resolve it against its own `process.cwd()` —
+ *    the launch dir, not the session workspace — so cloud preview was dead.
+ *    The `source-repos/` layer applies ONLY to the new agent-home layout
+ *    (`sessionRoot === workspaceRoot`): the clone is at
+ *    `<workspaceRoot>/source-repos/<localPath>`. A legacy pre-#506 per-chat
+ *    session (`sessionRoot` is `<workspaceRoot>/<chatId>`, NOT the agent home)
+ *    keeps its prior flat base `<sessionRoot>/<localPath>` — that layout never
+ *    had a `source-repos/` layer, so prepending one would point preview at a
+ *    directory that does not exist.
  *  - zero or multiple repos → the session doc root.
  */
-export function documentBasePathFromRuntimeConfig(payload: AgentRuntimeConfigPayload, sessionRoot: string): string {
+export function documentBasePathFromRuntimeConfig(
+  payload: AgentRuntimeConfigPayload,
+  sessionRoot: string,
+  workspaceRoot: string,
+): string {
   const localPath = singleRepoLocalPathFromPayload(payload);
-  return localPath ? join(sessionRoot, localPath) : sessionRoot;
+  if (!localPath) return sessionRoot;
+  // New agent-home layout only: source clones live under `source-repos/`.
+  return sessionRoot === workspaceRoot
+    ? join(sessionRoot, SOURCE_REPOS_DIRNAME, localPath)
+    : join(sessionRoot, localPath);
 }
 
 /**
@@ -208,10 +226,21 @@ export function singleRepoLocalPathFromPayload(payload: AgentRuntimeConfigPayloa
  * itself, not the narrower source-repo top — so on-demand `worktrees/<task>/`
  * checkouts (PR #498's idiom) also resolve.
  */
-export function selfFenceFromRuntimeConfig(payload: AgentRuntimeConfigPayload | null, sessionRoot: string): SelfFence {
+export function selfFenceFromRuntimeConfig(
+  payload: AgentRuntimeConfigPayload | null,
+  sessionRoot: string,
+  workspaceRoot: string,
+): SelfFence {
   if (!payload) return { agentHome: sessionRoot };
-  const singleRepoLocalPath = singleRepoLocalPathFromPayload(payload);
-  return singleRepoLocalPath ? { agentHome: sessionRoot, singleRepoLocalPath } : { agentHome: sessionRoot };
+  const name = singleRepoLocalPathFromPayload(payload);
+  if (!name) return { agentHome: sessionRoot };
+  // `singleRepoLocalPath` is the source repo's path RELATIVE to `agentHome`
+  // (the snapshot pipeline resolves it as `resolve(agentHome, …)`). The
+  // `source-repos/` layer applies ONLY to the new agent-home layout
+  // (`sessionRoot === workspaceRoot`); a legacy pre-#506 per-chat session keeps
+  // its prior flat relative path `<name>`, matching `documentBasePathFromRuntimeConfig`.
+  const singleRepoLocalPath = sessionRoot === workspaceRoot ? `${SOURCE_REPOS_DIRNAME}/${name}` : name;
+  return { agentHome: sessionRoot, singleRepoLocalPath };
 }
 
 function repoLocalPath(repo: GitRepo): string {
@@ -369,6 +398,10 @@ export class SessionManager {
   private readonly sessionRuntimeStates = new Map<string, RuntimeState>();
   private readonly manualPauseGuards = new Map<string, ManualPauseGuard>();
   private manualPauseGeneration = 0;
+  /** Cache of chatId → organizationId, resolved via `getChatDetail`. A chat's
+   *  org is immutable, so this is a cheap permanent memo that keeps doc-capture
+   *  uploads off the hot path after the first lookup. */
+  private readonly chatOrgIds = new Map<string, string>();
   private lastReportedRuntimeState: RuntimeState | null = null;
   private idleTimer: ReturnType<typeof setInterval> | null = null;
   private runtimeReaffirmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1774,10 +1807,13 @@ export class SessionManager {
     // kept emitting the OLD source-repo-top semantics so a stale pre-fix
     // `chat send` binary inherited from this process still snapshots like it
     // used to — see `agent-io.ts` for the wire-compat plumbing.
-    const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
+    const workspaceRoot = this.config.handlerConfig.workspaceRoot;
+    const sessionRoot = resolveSessionDocRoot(workspaceRoot, chatId);
     const cachedPayload = this.config.agentConfigCache?.get(this.config.agentIdentity.agentId)?.payload ?? null;
-    const selfFence = selfFenceFromRuntimeConfig(cachedPayload, sessionRoot);
-    const docBase = cachedPayload ? documentBasePathFromRuntimeConfig(cachedPayload, sessionRoot) : sessionRoot;
+    const selfFence = selfFenceFromRuntimeConfig(cachedPayload, sessionRoot, workspaceRoot);
+    const docBase = cachedPayload
+      ? documentBasePathFromRuntimeConfig(cachedPayload, sessionRoot, workspaceRoot)
+      : sessionRoot;
 
     const forwardResult = createResultSink({
       sdk: this.config.sdk,
@@ -1789,6 +1825,7 @@ export class SessionManager {
       },
       log,
       getSelfFence: () => this.resolveSelfFence(log, chatId),
+      getOrgId: () => this.resolveChatOrgId(log, chatId),
       workspacesRoot,
       selfSlug,
     });
@@ -1841,16 +1878,42 @@ export class SessionManager {
     // the per-agent home for new chats, the legacy `<workspaceRoot>/<chatId>/`
     // dir for pre-#506 chats. See `resolveSessionDocRoot` (read-only existsSync;
     // no acquire* side effects on every outbound message).
-    const sessionRoot = resolveSessionDocRoot(this.config.handlerConfig.workspaceRoot, chatId);
+    const workspaceRoot = this.config.handlerConfig.workspaceRoot;
+    const sessionRoot = resolveSessionDocRoot(workspaceRoot, chatId);
     if (!this.config.agentConfigCache) return { agentHome: sessionRoot };
     try {
       const { payload } = await this.config.agentConfigCache.refreshIfNewer(this.config.agentIdentity.agentId, 0);
-      return selfFenceFromRuntimeConfig(payload, sessionRoot);
+      return selfFenceFromRuntimeConfig(payload, sessionRoot, workspaceRoot);
     } catch (err) {
       log(
         `document preview self-fence: config unavailable, using agent home only: ${err instanceof Error ? err.message : String(err)}`,
       );
       return { agentHome: sessionRoot };
+    }
+  }
+
+  /**
+   * Resolve the organization id a chat belongs to, for doc-capture uploads
+   * (`POST /orgs/:orgId/attachments`). Cached permanently (a chat's org never
+   * changes). Returns `null` when the lookup fails so the sink degrades doc
+   * mentions to plain text instead of blocking the message.
+   */
+  private async resolveChatOrgId(log: (msg: string) => void, chatId: string): Promise<string | null> {
+    const cached = this.chatOrgIds.get(chatId);
+    if (cached) return cached;
+    try {
+      const detail = await this.config.sdk.getChatDetail(chatId);
+      const orgId = detail.organizationId;
+      if (typeof orgId === "string" && orgId.length > 0) {
+        this.chatOrgIds.set(chatId, orgId);
+        return orgId;
+      }
+      return null;
+    } catch (err) {
+      log(
+        `doc capture: org lookup failed, doc mentions stay plain text: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
     }
   }
 

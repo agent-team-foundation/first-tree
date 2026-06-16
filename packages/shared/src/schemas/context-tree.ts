@@ -94,6 +94,10 @@ export const contextTreeChangeSchema = z.object({
   changedAt: z.string().nullable(),
   changedBy: z.string().nullable(),
   summary: z.string().nullable(),
+  // Pull-request number parsed from the commit subject (e.g. the `(#514)`
+  // a squash-merge appends). Null when the landing commit carries no PR
+  // reference. Defaulted so existing change constructors stay valid.
+  prNumber: z.number().int().positive().nullable().default(null),
 });
 export type ContextTreeChange = z.infer<typeof contextTreeChangeSchema>;
 
@@ -236,6 +240,39 @@ export const contextTreeIoEventSchema = z.object({
 });
 export type ContextTreeIoEvent = z.infer<typeof contextTreeIoEventSchema>;
 
+// A tree *write*, derived from the context-tree repo's git history rather than
+// live session telemetry. Git is the only source that captures every landed
+// change — PR merges and worktree edits included — so writes are complete and
+// attributed even when the session-telemetry path drops them. Reads stay on
+// telemetry (`contextTreeIoEventSchema`) because reads produce no commits.
+export const contextTreeWriteEventSchema = z.object({
+  // Stable per (commit, node): `${commit}:${nodePath}`.
+  id: z.string(),
+  nodeId: z.string().nullable(),
+  // Tree-root-relative path of the changed node (e.g.
+  // `system/cloud/team/tenancy-and-identity`).
+  nodePath: z.string(),
+  title: z.string(),
+  changeType: contextTreeChangeTypeSchema,
+  summary: z.string().nullable(),
+  riskLevel: contextTreeRiskLevelSchema,
+  // Raw git author (`%an`) of the landing commit. Always present as the
+  // fallback display name when the author can't be resolved to a known agent
+  // (e.g. PR-merge commits authored by GitHub, or humans).
+  authorName: z.string().nullable(),
+  // Resolved org agent when `authorName` matches an agent's name / display
+  // name; null otherwise (the UI then shows `authorName`). Best-effort
+  // attribution — see attributeContextTreeWrites.
+  agentId: z.string().nullable(),
+  agentName: z.string().nullable(),
+  agentAvatarColorToken: z.string().nullable(),
+  commit: z.string().nullable(),
+  prNumber: z.number().int().positive().nullable(),
+  // Commit time (ISO). Null only when git omitted it.
+  createdAt: z.string().nullable(),
+});
+export type ContextTreeWriteEvent = z.infer<typeof contextTreeWriteEventSchema>;
+
 export const contextTreeIoSkipBreakdownSchema = z.object({
   reason: contextTreeIoSkipReasonSchema,
   eventCount: z.number().int().nonnegative(),
@@ -269,7 +306,15 @@ export const contextTreeIoSummarySchema = z.object({
     write: contextTreeIoBucketSchema,
   }),
   agents: z.array(contextTreeIoAgentSummarySchema),
+  // Telemetry-sourced READ events only (best-effort, capped). Writes used to
+  // ride this array too, but the telemetry write path silently drops merges
+  // and worktree edits; writes now come from `writes` (git-derived, complete).
   recentEvents: z.array(contextTreeIoEventSchema),
+  // Git-derived writes for the window — complete and attributed. Capped by the
+  // diff-entry limit, not the read feed's 50-cap; `writesTotal` is the count
+  // before any client-side pagination.
+  writes: z.array(contextTreeWriteEventSchema),
+  writesTotal: z.number().int().nonnegative(),
   skipped: contextTreeIoSkipSummarySchema,
 });
 export type ContextTreeIoSummary = z.infer<typeof contextTreeIoSummarySchema>;

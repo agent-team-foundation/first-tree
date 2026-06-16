@@ -12,7 +12,7 @@
  *
  *   1. Per-agent / per-member recompute fan-out
  *      (`recomputeWatchersForAgent`, `recomputeWatchersForMember`).
- *      These translate an agent-rebind or member-status flip into a
+ *      These translate a manager reassignment or member-status flip into a
  *      set of chat-scoped recomputes. The underlying chat-scoped
  *      operation `recomputeChatWatchers` itself lives in
  *      `participant-mode.ts` next to the speaker writer that owns
@@ -51,13 +51,13 @@ type DbLike = PgDatabase<PgQueryResultHKT, any, any>;
 
 // ---------------------------------------------------------------------------
 // Per-agent / per-member recompute fan-out. Translate an event that touches
-// one agent (rebind) or one member (status flip) into the right set of
-// chat-scoped recomputes.
+// one agent (manager reassignment) or one member (status flip) into the right
+// set of chat-scoped recomputes.
 // ---------------------------------------------------------------------------
 
 /**
  * Recompute watcher rows touching ONE agent across all chats it
- * speaks in. Used after `rebindAgent` (manager change) so the new
+ * speaks in. Used after a manager reassignment (`updateAgent`) so the new
  * manager picks up watcher rows and the old manager's are dropped.
  */
 export async function recomputeWatchersForAgent(db: DbLike, agentId: string): Promise<void> {

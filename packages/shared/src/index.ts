@@ -59,8 +59,6 @@ export {
   legacyWireAgentTypeSchema,
   listAgentsQuerySchema,
   RESERVED_AGENT_NAMES,
-  type RebindAgent,
-  rebindAgentSchema,
   type UpdateAgent,
   updateAgentSchema,
 } from "./schemas/agent.js";
@@ -134,6 +132,16 @@ export {
   type UploadAttachmentResponse,
   uploadAttachmentResponseSchema,
 } from "./schemas/attachment.js";
+export {
+  ATTACHMENT_KINDS,
+  type AttachmentKind,
+  type AttachmentRef,
+  attachmentKindSchema,
+  attachmentRefSchema,
+  attachmentRefsFromMetadata,
+  isAttachmentRef,
+  MAX_MESSAGE_ATTACHMENT_REFS,
+} from "./schemas/attachment-ref.js";
 export {
   type ConnectTokenExchange,
   type ConnectTokenResponse,
@@ -282,6 +290,7 @@ export {
   type ContextTreeUpdate,
   type ContextTreeUsageEvent,
   type ContextTreeUsageSummary,
+  type ContextTreeWriteEvent,
   contextTreeChangeSchema,
   contextTreeChangeTypeSchema,
   contextTreeEdgeKindSchema,
@@ -307,6 +316,7 @@ export {
   contextTreeUpdateSchema,
   contextTreeUsageEventSchema,
   contextTreeUsageSummarySchema,
+  contextTreeWriteEventSchema,
   type InitializeContextTreeRequest,
   type InitializeContextTreeResponse,
   initializeContextTreeRequestSchema,
@@ -445,13 +455,8 @@ export {
   type GetMeDocResponse,
   getMeDocResponseSchema,
   getMeDocSchema,
-  MAX_DOC_SNAPSHOT_BYTES,
-  MAX_DOC_SNAPSHOTS_PER_MESSAGE,
   MAX_FAILED_DOC_MENTION_RAW_LEN,
   MAX_FAILED_DOC_MENTIONS_PER_MESSAGE,
-  MAX_TOTAL_DOC_SNAPSHOT_BYTES,
-  type SnapshotDoc,
-  snapshotDocSchema,
   type WorkspaceDocRef,
   workspaceDocRefSchema,
 } from "./schemas/me-doc.js";
@@ -756,6 +761,7 @@ export {
 } from "./schemas/user.js";
 export { type WebhookSource, webhookSourceSchema } from "./schemas/webhook-source.js";
 export {
+  SOURCE_REPOS_DIRNAME,
   WORKSPACE_MANIFEST_FILENAME,
   WORKSPACE_STATE_DIRNAME,
   type WorkspaceManifest,

@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
  * Every section is one of exactly two kinds, with ONE canonical label each so
  * the distinction reads at a glance:
  *   - immediate: writes land as soon as you make them (identity, appearance,
- *     bind/re-bind, repositories, skills, MCP, instructions).
+ *     computer bind, repositories, skills, MCP, instructions).
  *   - draft: changes are staged and committed together from the Save bar
  *     (model, reasoning effort, environment variables).
  */
