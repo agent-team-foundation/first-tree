@@ -1,4 +1,0 @@
-interface:
-  display_name: "First Tree — Context"
-  short_description: "Context Tree concept and durable-content reference guide"
-  default_prompt: "Use $first-tree-context when I need the Context Tree concept model, source-system boundary, node anatomy, or durable-content principles. Use $first-tree-write for source-backed tree writes."

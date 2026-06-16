@@ -196,7 +196,7 @@ describe("workspace-migrations registry", () => {
     // Plant a currently-bundled skill alongside one of the legacy names.
     // The current skill must survive; the legacy one must go.
     mkdirSync(join(workspace, ".claude", "skills"), { recursive: true });
-    const currentName = "first-tree-context"; // still in TREE_SKILL_NAMES
+    const currentName = "first-tree-read"; // still in TREE_SKILL_NAMES
     const legacyName = "first-tree-cloud"; // retired
     for (const name of [currentName, legacyName]) {
       const agentsDir = join(workspace, ".agents", "skills", name);

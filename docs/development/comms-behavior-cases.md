@@ -26,7 +26,9 @@ agent's reasoning trace, not a chat reply path). Every case is grounded in a
 
 These are the regression set for the contract defined in
 `packages/client/src/runtime/agent-briefing.ts` (Communication / Asking Humans
-blocks) and `skills/first-tree/SKILL.md` + `references/agent-communication.md`.
+blocks). The top-level `first-tree` payload no longer ships as a repo-local
+runtime skill, so the always-needed communication mechanics stay inline in the
+briefing and are validated by these cases.
 
 **Validation status (2026-06-08, real e2e runtime + real Claude Code agent):**
 C1 (ask human via `--request`) and C4 (wake agent via plain `chat send`)

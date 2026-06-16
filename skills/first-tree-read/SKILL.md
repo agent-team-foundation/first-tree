@@ -12,8 +12,8 @@ read-only: it uses `first-tree tree tree` to find relevant tree files, then
 uses the agent's native file-reading capability to read their content and
 summarize the constraints that matter for the user's task.
 
-Use `first-tree-write` for tree writes from a source artifact. Use
-`first-tree-sync` for broad drift audits.
+Use `first-tree-write` for tree writes from a source artifact. Broad drift
+audits are outside this read-only workflow.
 
 ## Workflow
 

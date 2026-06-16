@@ -55,15 +55,7 @@ export const CORE_SKILL_NAMES = [] as const;
  * `scripts/copy-bundled-skills.mjs` — that script materialises these
  * directories under `<client-pkg>/skills/`.
  */
-export const TREE_SKILL_NAMES = [
-  "first-tree",
-  "first-tree-context",
-  "first-tree-write",
-  "first-tree-read",
-  "first-tree-sync",
-  "first-tree-seed",
-  "first-tree-github",
-] as const;
+export const TREE_SKILL_NAMES = ["first-tree-read", "first-tree-seed", "first-tree-write"] as const;
 
 export type CoreSkillName = (typeof CORE_SKILL_NAMES)[number];
 export type TreeSkillName = (typeof TREE_SKILL_NAMES)[number];
@@ -104,14 +96,14 @@ type SkillLayout = {
  *       → walks up to `packages/client/` (which carries `skills/` via the
  *         `files` field of package.json)
  *
- * Throws when no `skills/first-tree/SKILL.md` is reachable from the running
+ * Throws when no `skills/first-tree-read/SKILL.md` is reachable from the running
  * module. That's a build/packaging bug — prebuild was not run, or `skills/`
  * was excluded from the npm tarball.
  */
 export function resolveBundledSkillsRoot(startDir?: string): string {
   let currentDir = resolve(startDir ?? dirname(fileURLToPath(import.meta.url)));
   while (true) {
-    const candidate = join(currentDir, "skills", "first-tree", "SKILL.md");
+    const candidate = join(currentDir, "skills", "first-tree-read", "SKILL.md");
     if (existsSync(candidate)) {
       return join(currentDir, "skills");
     }
@@ -330,9 +322,8 @@ export function installCoreSkills(options: InstallCoreSkillsOptions): InstallSki
 }
 
 /**
- * Install the tree-aware skill payloads (`first-tree`, `first-tree-context`,
- * etc.) into the workspace. Called by the agent bootstrap when the agent
- * has a Context Tree binding.
+ * Install the tree-aware skill payloads into the workspace. Called by the
+ * agent bootstrap when the agent has a Context Tree binding.
  *
  * Also reconciles `.agent/managed.json::skills`: any skill the workspace
  * recorded as installed by a previous CLI version but that's no longer in

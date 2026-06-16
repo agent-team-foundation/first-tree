@@ -31,7 +31,7 @@ describe("managed-state", () => {
       schemaVersion: 1,
       cliVersion: "0.3.2",
       updatedAt: "2026-06-08T16:00:00.000Z",
-      skills: ["first-tree", "first-tree-context", "first-tree-sync"],
+      skills: ["first-tree-read", "first-tree-seed", "first-tree-write"],
     };
     writeManagedState(workspace, state);
     expect(readManagedState(workspace)).toEqual(state);
@@ -55,11 +55,11 @@ describe("managed-state", () => {
         cliVersion: null,
         updatedAt: "2026-06-08T16:00:00.000Z",
         // Intentionally garbage entries to confirm the read filter:
-        skills: ["first-tree", 42, null, "first-tree-context"],
+        skills: ["first-tree-read", 42, null, "first-tree-write"],
       }),
       "utf-8",
     );
-    expect(readManagedState(workspace)?.skills).toEqual(["first-tree", "first-tree-context"]);
+    expect(readManagedState(workspace)?.skills).toEqual(["first-tree-read", "first-tree-write"]);
   });
 
   it("coerces a non-array skills value to [] (defensive read)", () => {
@@ -93,11 +93,11 @@ describe("managed-state", () => {
   it("updateManagedState preserves skills across a later no-op update", () => {
     updateManagedState(workspace, "1.2.3", (current) => ({
       ...current,
-      skills: ["first-tree", "first-tree-context"],
+      skills: ["first-tree-read", "first-tree-write"],
     }));
     updateManagedState(workspace, "1.2.3", (current) => current);
     const final = readManagedState(workspace);
-    expect(final?.skills).toEqual(["first-tree", "first-tree-context"]);
+    expect(final?.skills).toEqual(["first-tree-read", "first-tree-write"]);
     expect(final?.cliVersion).toBe("1.2.3");
   });
 

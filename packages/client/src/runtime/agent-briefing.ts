@@ -70,14 +70,13 @@ export type BuildAgentBriefingOptions = {
  *                                              — agent-scope rows `prompt set` does NOT own
  *                                                (inline replacements of team prompts)
  *   4. `# Working in First Tree (First Tree Managed)` — mostly static, with subsections:
- *        intro · Working Directory · Source Repositories · Worktrees ·
+ *        intro · Working Directory · Source Repositories · Worktrees · Hosting Daemon ·
  *        Communication · Workspace Collaboration · GitHub Entity Attention ·
  *        Asking Humans · Chat Topic & Description · CLI Overview
- *   5. `# Required Reading (First Tree Managed)` — tree-bound only; unconditional load of `first-tree`
- *   6. `# Context Tree (First Tree Managed)`   — per binding, with subsections:
+ *   5. `# Context Tree (First Tree Managed)`   — per binding, with subsections:
  *        Core Model · Reading the Tree · Writing the Tree · Tree Location
- *   7. `# Skills (First Tree Managed)`         — Team Skills (if any) + First Tree Family
- *   8. `## Current Chat Context (First Tree Managed, per-chat)` — per-chat (issue #808 will move it out)
+ *   6. `# Skills (First Tree Managed)`         — Team Skills (if any) + First Tree Family
+ *   7. `## Current Chat Context (First Tree Managed, per-chat)` — per-chat (issue #808 will move it out)
  */
 export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   const sections: string[] = [];
@@ -107,21 +106,6 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
       contextTreePath: opts.contextTreePath,
     }),
   );
-
-  // `# Required Reading` — sits AFTER `# Working in First Tree` so the
-  // agent first reads the inline workspace-collab basics (chat send,
-  // working directory, communication contract) it needs to operate at
-  // all, then hits the hard mandate to load `first-tree` before
-  // doing any real work. Placing it
-  // immediately before `# Context Tree` also keeps the mandate adjacent
-  // to the context-management routing it introduces. Gated on
-  // `contextTreePath !== null` for the same reason `skillsSection`
-  // gates `firstTreeFamilyMap`: a tree-less agent has no First Tree
-  // skill payloads installed on disk (`installFirstTreeIntegration`
-  // is short-circuited in `agent-bootstrap.ts`), so mandating a load
-  // would point at files that don't exist.
-  const requiredReading = requiredReadingSection(opts.contextTreePath, opts.workspacePath);
-  if (requiredReading) sections.push(requiredReading);
 
   sections.push(
     contextTreeSection(opts.contextTreePath, opts.contextTreeRepoUrl ?? null, opts.contextTreeBranch ?? null),
@@ -255,66 +239,6 @@ prompt.*`,
   return blocks.join("\n\n");
 }
 
-// --- # Required Reading -----------------------------------------------------
-
-/**
- * Hard mandate that the agent load `first-tree` before doing any
- * non-trivial work, regardless of whether the user mentioned chat /
- * context keywords that would otherwise trigger progressive disclosure.
- *
- * Rationale: the inline briefing is a routing index, not a substitute. The
- * skill payloads carry rules that are NOT duplicated here:
- *
- *  - `first-tree` ships the three-principal model, the Communication
- *    Principles in full (decision guide / courtesy-send guard /
- *    channel-binary substitution), the Hosting-Daemon mental model
- *    and its do-not-stop-yourself invariant, the CLI Namespace Map,
- *    and the mandatory pre-task hygiene (workspace binding check /
- *    tree HEAD freshness / role-fork).
- *
- * This section is gated on `contextTreePath !== null` because the runtime only
- * installs the SKILL.md payloads to disk when a Context Tree is bound
- * (see `runtime/first-tree-skills/installer.ts` and the short-circuit in
- * `agent-bootstrap.ts`). Telling a tree-less agent to load them would
- * point at files that aren't there.
- */
-function requiredReadingSection(contextTreePath: string | null, workspacePath: string): string | null {
-  if (contextTreePath === null) return null;
-  const firstTreeSkillPath = `${workspacePath}/.agents/skills/first-tree/SKILL.md`;
-  return `# Required Reading (First Tree Managed)
-
-Before responding to any non-trivial instruction in this chat, you MUST
-load the skill below — loading it **is** the first step of the
-pre-task hygiene the \`first-tree\` skill itself describes. The
-\`# Working in First Tree\` section above carries the minimum
-mechanics you need to operate at all (chat send, working directory,
-CLI surface); the skill below carries the durable rules in full, with
-the inline briefing only summarising the slices needed for those
-workspace-collab basics.
-
-1. **\`first-tree\`** — what First Tree is, the three-principal model
-   (Server / Client / Agent), the Communication Principles in full,
-   the Hosting-Daemon mental model (and its do-not-stop-yourself
-   invariant), the CLI Namespace Map, and the mandatory pre-task
-   hygiene (workspace binding check / tree HEAD freshness / role-fork).
-
-If your runtime does not automatically inject the full skill body after
-selecting a skill from the skill listing, read the local payload files
-directly before acting:
-
-- \`${firstTreeSkillPath}\`
-
-This skill is unconditional. The remaining First Tree skills
-(\`first-tree-context\`, \`first-tree-read\`, \`first-tree-write\`,
-\`first-tree-sync\`) load on
-demand based on the task signal as listed in the First Tree Family map below.
-
-Skipping this skill costs you the daemon-lifecycle invariants, the
-full Communication Principles, and the pre-task hygiene — content the
-inline briefing either omits or only summarises. Acting without it is the #1
-source of advice that conflicts with reality.`;
-}
-
 // --- # Working in First Tree -------------------------------------------------
 
 type WorkingInFirstTreeOpts = {
@@ -353,6 +277,7 @@ You are running inside **First Tree**, a messaging platform for agent teams.
   }
 
   blocks.push(worktreesBlock(opts.agentHome, opts.sourceRepos));
+  blocks.push(hostingDaemonBlock(bin));
   blocks.push(communicationBlock(bin));
   blocks.push(workspaceCollaborationBlock(bin));
   blocks.push(githubAttentionBlock(bin, opts.contextTreePath !== null));
@@ -439,7 +364,7 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
     "   `origin/<default>` is current.",
     "4. **Read through a worktree, not the clone path.** A bare clone has no",
     "   files to read. To read source — `grep`, `cat`, `git log`, or a",
-    "   shipped skill scan (`first-tree-seed`, `first-tree-sync`) — create a",
+    "   shipped skill scan (`first-tree-seed`) — create a",
     "   read worktree off `origin/<default>` (or the pinned `ref`), read",
     "   inside it, and remove it when done. To write, create a task worktree",
     "   on a new branch. Both flows are in `## Worktrees`.",
@@ -608,6 +533,28 @@ is the base to branch from instead of \`origin/main\`.
   worktrees of finished tasks when you notice them.`;
 }
 
+function hostingDaemonBlock(bin: string): string {
+  return `## Hosting Daemon
+
+A background First Tree daemon hosts this agent process. It owns the
+WebSocket to the server, credential refresh, inbox delivery, session
+lifecycle, and workspace bootstrap. You are a child process of that
+daemon.
+
+**Do not run \`${bin} daemon stop\` or \`${bin} daemon restart\` from
+inside this agent.** Those commands stop or restart your own parent
+process and can kill this session and every other agent hosted on this
+machine. If a daemon cycle is genuinely needed, ask a human or another
+agent on a different machine to do it.
+
+Read-only daemon introspection is allowed:
+
+\`\`\`bash
+${bin} daemon status
+${bin} daemon doctor
+\`\`\``;
+}
+
 function communicationBlock(bin: string): string {
   return `## Communication
 
@@ -644,37 +591,23 @@ function workspaceCollaborationBlock(bin: string): string {
   return `## Workspace Collaboration
 
 For the full \`chat send\` / \`chat ask\` / \`chat invite\` CLI usage — every
-mode (\`chat ask\` and its resolution), syntax,
-markdown / stdin, reaching non-members, mention resolution — load the top-level
-**\`first-tree\` skill** (and its \`references/agent-communication.md\`).
-The skill's \`description\` triggers progressive disclosure whenever the
-user mentions chat, daemon, agent config, or anything related to First
-Tree.
+mode (\`chat ask\` and its resolution), syntax, markdown / stdin, reaching
+non-members, and mention resolution — use the inline Communication and Asking
+Humans rules in this generated briefing, plus \`${bin} chat send --help\`,
+\`${bin} chat ask --help\`, and \`${bin} chat invite --help\`.
 
-Substitute \`${bin}\` for the literal \`first-tree\` in any examples you
-read there — this agent's CLI binary on PATH is \`${bin}\`. **Tree-less
-agents** (no Context Tree binding) won't have \`first-tree\` installed on
-disk; the Communication block above is inline here for exactly that
-reason — the sunk content is the long CLI mechanics, not the routing
-rules.`;
+The Communication block above carries the always-needed send-side rules
+inline so agent/human routing remains visible before any skill load. This
+agent's CLI binary on PATH is \`${bin}\`.`;
 }
 
 // Inline (not skill-only) on purpose: the follow-after-create default has to
-// fire at PR/issue-creation time, and progressive disclosure of the
-// `first-tree-github` skill only triggers when the agent already *thinks*
-// about following. Without this always-present rule, agents create entities
-// and never wire their event streams (the session-event auto-binder was
-// deliberately removed in #979 — explicit declaration is the only entrance).
-function githubAttentionBlock(bin: string, treeBound: boolean): string {
-  // Tree-less agents have no First Tree skill payloads on disk
-  // (`installFirstTreeIntegration` is gated on the tree binding), so the
-  // full-guide pointer must not name the skill for them — the same
-  // discipline `requiredReadingSection` and `firstTreeFamilyMap` follow.
-  const fullGuide = treeBound
-    ? `For the full decision guide — upstream-dependency follows, the \`409\` /
-\`--rebind\` conflict flow, and the error contract — load the
-\`first-tree-github\` skill.`
-    : `For the full flag surface and conflict handling, see
+// fire at PR/issue-creation time. Without this always-present rule, agents
+// create entities and never wire their event streams (the session-event
+// auto-binder was deliberately removed in #979 — explicit declaration is the
+// only entrance).
+function githubAttentionBlock(bin: string, _treeBound: boolean): string {
+  const fullGuide = `For the full flag surface and conflict handling, see
 \`${bin} github follow --help\` / \`${bin} github unfollow --help\`.`;
 
   return `## GitHub Entity Attention
@@ -884,8 +817,8 @@ directory; each node is a markdown file with frontmatter (\`owners\`,
 \`soft_links\`) plus the actual content.
 
 For node anatomy, ownership tiers, and soft_link navigation, load
-\`first-tree-context\`. For task-scoped file selection and operational
-read workflow, load \`first-tree-read\`.`);
+\`first-tree-read\` and read the root \`NODE.md\` plus relevant parent nodes
+before acting.`);
 
   blocks.push(`## Reading the Tree
 
@@ -941,7 +874,7 @@ guidance:
 | Task | Skill |
 |---|---|
 | Reflect one specific PR / doc / note into the tree | \`first-tree-write\` (source-backed workflow and write rules) |
-| Broad drift audit (no specific source attached)    | \`first-tree-sync\`  |
+| Seed a brand-new empty tree                        | \`first-tree-seed\`  |
 
 Do not invent ad-hoc tree edits without loading the skill — the
 operating guide covers staging, review routing, and ownership rules
@@ -1042,22 +975,17 @@ function firstTreeFamilyMap(): string {
   // list against the prebuild copy script.
   return `## First Tree Family
 
-\`first-tree\` is **unconditional** — load it on every task per
-\`# Required Reading\` above. The remaining rows load on demand: each
-skill's \`description\` field drives
-progressive disclosure when you mention its domain. For general /
-harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
-…) trust the auto-injected list.
+These repo-local skills are installed only for agents with a Context Tree
+binding. Load them on demand: each skill's \`description\` field drives
+progressive disclosure when you mention its domain. For general / harness
+skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`, …) trust the
+auto-injected list.
 
 | Skill | Load when |
 |---|---|
-| \`first-tree\`         | unconditional (see \`# Required Reading\`) — communication principles, pre-task hygiene, CLI namespace map |
-| \`first-tree-context\` | Context Tree concept/reference questions — concept model, source-system boundary, node anatomy, and durable-content principles |
-| \`first-tree-write\`   | source-backed Context Tree writes from a concrete PR / doc / note / pasted source |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
-| \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |
 | \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |
-| \`first-tree-github\`  | follow / unfollow a GitHub entity's event stream for the current chat — the follow-after-create DEFAULT is inline in \`## GitHub Entity Attention\` above; load for the full decision guide (upstream-dependency follows, \`409\` / \`--rebind\`, error contract) |`;
+| \`first-tree-write\`   | source-backed Context Tree writes from a concrete PR / doc / note / pasted source |`;
 }
 
 /**
@@ -1069,12 +997,4 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
  * between these two lists would tell agents to load a skill that isn't
  * on disk; the cross-check test in `agent-briefing.test.ts` blocks that.
  */
-export const FIRST_TREE_FAMILY_SKILL_NAMES = [
-  "first-tree",
-  "first-tree-context",
-  "first-tree-write",
-  "first-tree-read",
-  "first-tree-sync",
-  "first-tree-seed",
-  "first-tree-github",
-] as const;
+export const FIRST_TREE_FAMILY_SKILL_NAMES = ["first-tree-read", "first-tree-seed", "first-tree-write"] as const;

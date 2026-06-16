@@ -46,14 +46,7 @@ const repoRoot = (() => {
   throw new Error("Could not locate repo root from drift-guard test");
 })();
 
-const SHIPPED_SKILLS = [
-  "first-tree",
-  "first-tree-context",
-  "first-tree-write",
-  "first-tree-read",
-  "first-tree-sync",
-  "first-tree-seed",
-];
+const SHIPPED_SKILLS = ["first-tree-read", "first-tree-seed", "first-tree-write"];
 
 const RETIRED_TREE_SUBCOMMANDS = [
   "status",
@@ -152,7 +145,7 @@ function findRetiredHitsInBash(file: string): Array<{ subcommand: string; line: 
  * under `skills/<name>/agents/*.yaml` and `skills/<name>/agents/*.yml`.
  * They are NOT bash blocks but they tell composer / runtime what to
  * route an agent at. PR #848 review (baixiaohang R2) caught a stale
- * routing line in `skills/first-tree-context/agents/openai.yaml` that
+ * routing line in a shipped skill's `agents/openai.yaml` that
  * the markdown-only scan missed — this list of retired skill names is
  * the drift-guard contract for those files.
  */
@@ -263,9 +256,9 @@ describe("retired tree subcommand drift guard", () => {
     // prompt. Any reference to a retired skill name (e.g. the previous
     // `first-tree-onboarding` payload) routes users at something that
     // is no longer on disk; PR #848 review (baixiaohang R2) flagged
-    // exactly this class of drift in `first-tree-context/agents/
-    // openai.yaml`. The repo-root markdown / bash drift guard above
-    // missed it because the file is YAML, not markdown.
+    // exactly this class of drift in a shipped skill's `agents/*.yaml`.
+    // The repo-root markdown / bash drift guard above missed it because
+    // the file is YAML, not markdown.
     const skillsRoot = join(repoRoot, "skills");
     const failures: Array<{ file: string; skill: string; line: number; snippet: string }> = [];
     for (const yamlPath of listAgentMetadataFiles(skillsRoot)) {
@@ -286,7 +279,7 @@ describe("retired tree subcommand drift guard", () => {
     if (failures.length > 0) {
       const detail = failures.map((f) => `  ${f.file}:${f.line}: \`${f.skill}\` — ${f.snippet}`).join("\n");
       throw new Error(
-        `Retired skill name resurfaced in shipped agent-metadata YAML (composer will route at a skill that is not on disk):\n${detail}\n\nRewrite to use a surviving skill (\`first-tree\`, \`first-tree-context\`, \`first-tree-write\`, \`first-tree-read\`, \`first-tree-sync\`, \`first-tree-seed\`) or to the operator-handoff phrasing, or extend RETIRED_SKILL_NAMES if a skill is intentionally being un-retired.`,
+        `Retired skill name resurfaced in shipped agent-metadata YAML (composer will route at a skill that is not on disk):\n${detail}\n\nRewrite to use one of the shipped First Tree skills (${SHIPPED_SKILLS.map((name) => `\`${name}\``).join(", ")}) or to the operator-handoff phrasing, or extend RETIRED_SKILL_NAMES if a skill is intentionally being un-retired.`,
       );
     }
   });

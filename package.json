@@ -23,7 +23,7 @@
     "e2e:full": "turbo run e2e:full --filter=@first-tree/e2e",
     "e2e:up": "pnpm --filter @first-tree/e2e e2e:up",
     "e2e:clean": "pnpm --filter @first-tree/e2e e2e:clean",
-    "validate:skill": "python3 ./skills/first-tree/scripts/quick_validate.py ./skills/first-tree"
+    "validate:skill": "node ./scripts/validate-skills.mjs ./skills/first-tree-read ./skills/first-tree-seed ./skills/first-tree-write"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.0",

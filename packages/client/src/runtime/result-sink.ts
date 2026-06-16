@@ -22,9 +22,8 @@ import type { AgentIdentity } from "./handler.js";
  * text always woke the trigger sender, so a courteous "thanks / got it"
  * reply kept the conversation alive forever. Final-text writes land in chat
  * history as a silent `agent-final-text` row (visible to humans, never wakes
- * another session). Under the chat-send-only contract (see the top-level
- * `first-tree` skill — its SKILL.md "Communication Principles" decision
- * table and `references/agent-communication.md`), the agent-facing model
+ * another session). Under the chat-send-only contract (see the generated
+ * briefing's `## Communication` decision guide), the agent-facing model
  * treats the output stream and `chat send` as separate channels: `chat
  * send` is the reach path; this mirror is transitional system behavior,
  * never a delivery commitment. The future direction is two fully

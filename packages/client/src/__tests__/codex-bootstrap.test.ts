@@ -131,13 +131,13 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     expect(briefing).toContain("Follow the local implementation plan.");
     expect(briefing).toContain("## Current Chat Context");
     expect(briefing).toContain("# Working in First Tree");
-    // The long-form Sending Messages CLI usage lives in the top-level
-    // first-tree skill; the Communication decision guide stays inline
-    // because first-tree is not in CORE_SKILL_NAMES (tree-less agents
-    // would otherwise lose it).
+    // The unconditional First Tree surface is generated inline; only the
+    // three Context Tree task skills are installed as runtime payloads.
     expect(briefing).toContain("## Communication");
     expect(briefing).toContain("## Workspace Collaboration");
-    expect(briefing).toContain("`first-tree` skill");
+    expect(briefing).toContain("## Hosting Daemon");
+    expect(briefing).toContain("Do not run `first-tree-staging daemon stop` or `first-tree-staging daemon restart`");
+    expect(briefing).toContain("first-tree-staging chat send --help");
     expect(briefing).toContain("first-tree-staging chat send");
     // `chat send` is agent-directed; humans are reached via `chat ask`
     // (decisions) / `chat update --description` (progress). No output-stream
