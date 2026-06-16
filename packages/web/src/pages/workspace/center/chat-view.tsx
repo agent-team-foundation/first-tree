@@ -14,8 +14,10 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, ExternalLink, Eye, Menu, MessageSquare, PanelRight, Paperclip, X } from "lucide-react";
 import {
+  memo,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type RefObject,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -70,8 +72,10 @@ import {
   allRequiredAnswered,
   buildResolveAnswer,
   contentStartsWithMention,
+  deriveRequestLifecycleProjectionMap,
   findBlockingRequest,
   findThreadableRequestId,
+  type RequestLifecycleProjection,
   readMentions,
   readRequestPayload,
 } from "../../../components/chat/request-state.js";
@@ -256,50 +260,60 @@ function Avatar({
   );
 }
 
-function TextRow({
-  msg,
-  myAgentId,
-  agentNameFn,
-  agentAvatarFn,
-  agentColorTokenFn,
-  mentionParticipants,
-  messages,
-  suppressAnswerBlock = false,
-}: {
+type MessageRowProps = {
   msg: MessageWithDelivery;
   myAgentId: string | null;
   agentNameFn: (id: string) => string;
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
   mentionParticipants: MentionParticipant[];
-  /** Full visible thread — RequestCard derives a request's lifecycle from it. */
-  messages: readonly MessageWithDelivery[];
+  requestProjection?: RequestLifecycleProjection;
   /**
    * True when this message is the request currently pinned in the composer
    * dock — its timeline card suppresses the inline answer block (the dock
-   * owns answering). Passed as a per-row boolean (not the docked id) so a
-   * future memo() on TextRow invalidates only the affected row.
+   * owns answering). Passed as a per-row boolean (not the docked id) so memo
+   * invalidates only the affected row.
    */
   suppressAnswerBlock?: boolean;
-}) {
+};
+
+type MessageBodyProps = {
+  msg: MessageWithDelivery;
+  myAgentId: string | null;
+  agentNameFn: (id: string) => string;
+  mentionParticipants: MentionParticipant[];
+  requestProjection?: RequestLifecycleProjection;
+  suppressAnswerBlock: boolean;
+};
+
+type MessageMarkdownProps = {
+  children: string;
+  components: Components;
+  rehypePlugins: MarkdownProps["rehypePlugins"];
+};
+
+const MessageMarkdown = memo(function MessageMarkdown({ children, components, rehypePlugins }: MessageMarkdownProps) {
+  return (
+    <Markdown components={components} rehypePlugins={rehypePlugins}>
+      {children}
+    </Markdown>
+  );
+});
+
+const MessageBody = memo(function MessageBody({
+  msg,
+  myAgentId,
+  agentNameFn,
+  mentionParticipants,
+  requestProjection,
+  suppressAnswerBlock,
+}: MessageBodyProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  // GitHub-dispatcher cards keep the human-agent uuid in `senderId` so
-  // routing / read-receipts / mention-resolution stay consistent, but we
-  // re-attribute the row to a synthetic "GitHub" sender in the UI. The
-  // gate is conjunctive (`source` + `format` + content shape + metadata
-  // marker) because `sendMessageSchema` accepts arbitrary metadata — a
-  // metadata-only check would let any agent spoof a "from GitHub" card by
-  // posting plain text with the marker set. `isSelf` is also overridden
-  // so the recipient does not see their own name color treatment on a
-  // card the dispatcher wrote on their row.
-  const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
-  const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
-  const isSelf = !isGithubSystem && myAgentId === msg.senderId;
   // Generic attachment refs (doc-preview is the first consumer; kind:
   // "document"). Keyed by attachmentId so the `attachment:<id>` link click can
   // look the ref up and seed the drawer's cache. Old messages (legacy inline
-  // shape) have no `metadata.attachments` → empty map → no preview, plain text.
+  // shape) have no `metadata.attachments` -> empty map -> no preview, plain text.
   const docAttachmentRefs = useMemo(() => {
     const map = new Map<string, AttachmentRef>();
     for (const ref of attachmentRefsFromMetadata(msg.metadata)) {
@@ -309,7 +323,7 @@ function TextRow({
   }, [msg.metadata]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
   // Does the request body *lead* with its target mention — the server-
-  // normalised `@target …` shape that the renderer always chips? Resolved
+  // normalised `@target ...` shape that the renderer always chips? Resolved
   // against the same membership projection the rehype plugin uses. RequestCard
   // uses it to drop its duplicate `· @target` only when the body is guaranteed
   // to show it; every other shape keeps the metadata target. False for
@@ -325,7 +339,7 @@ function TextRow({
   // links the runtime rewrote into the message body — web does NOT re-linkify
   // bare tokens any more. The only scanner-driven rewrite left is wrapping the
   // runtime-reported FAILED mentions into inert-chip placeholder hrefs
-  // (`#doc-failed?reason=…`); the `a` override renders those as disabled chips.
+  // (`#doc-failed?reason=...`); the `a` override renders those as disabled chips.
   // Web-composed messages (`source === "web"`) are left untouched so paths a
   // human types render exactly as authored.
   const textContent = useMemo<string | null>(() => {
@@ -355,7 +369,7 @@ function TextRow({
     () => ({
       a({ href, children, ...props }) {
         // Inert chip for runtime-reported snapshot failures: the magic
-        // `#doc-failed?reason=…` href is emitted by `wrapFailedDocMentions`
+        // `#doc-failed?reason=...` href is emitted by `wrapFailedDocMentions`
         // around tokens the runtime couldn't snapshot. Gate detection on
         // (a) the message actually carrying failedMentions metadata, so a
         // user-typed `[anything](#doc-failed?reason=missing)` in a web-source
@@ -447,6 +461,90 @@ function TextRow({
 
   return (
     <div
+      className="text-body"
+      style={{
+        color: "var(--fg)",
+        marginTop: 2,
+      }}
+    >
+      {msg.format === "file" && isImageBatchRefContent(msg.content) ? (
+        <ImageBatchFromRef
+          content={msg.content}
+          markdownComponents={markdownComponents}
+          rehypePlugins={messageRehypePlugins}
+        />
+      ) : msg.format === "file" && isInlineImageContent(msg.content) ? (
+        <img
+          src={`data:${msg.content.mimeType};base64,${msg.content.data}`}
+          alt={msg.content.filename ?? "image"}
+          style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
+        />
+      ) : msg.format === "file" && isImageRefContent(msg.content) ? (
+        <ImageFromRef content={msg.content} />
+      ) : msg.format === "text" || msg.format === "markdown" ? (
+        <MessageMarkdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
+          {textContent ?? ""}
+        </MessageMarkdown>
+      ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
+        <GithubEventCardMessage content={msg.content} />
+      ) : msg.format === "request" ? (
+        <RequestCard
+          message={msg}
+          requestProjection={requestProjection}
+          viewerAgentId={myAgentId}
+          bodyShowsTarget={requestBodyShowsTarget}
+          body={
+            <MessageMarkdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
+              {textContent ?? ""}
+            </MessageMarkdown>
+          }
+          resolveAgentName={agentNameFn}
+          onSent={() => queryClient.invalidateQueries({ queryKey: ["chat-messages", msg.chatId] })}
+          suppressAnswerBlock={suppressAnswerBlock}
+        />
+      ) : (
+        <pre
+          className="mono text-label"
+          style={{
+            background: "var(--bg-sunken)",
+            padding: 8,
+            borderRadius: "var(--radius-input)",
+            overflow: "auto",
+            maxHeight: 160,
+          }}
+        >
+          {JSON.stringify(msg.content, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}, areMessageBodyPropsEqual);
+
+const MessageRow = memo(function MessageRow({
+  msg,
+  myAgentId,
+  agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
+  mentionParticipants,
+  requestProjection,
+  suppressAnswerBlock = false,
+}: MessageRowProps) {
+  // GitHub-dispatcher cards keep the human-agent uuid in `senderId` so
+  // routing / read-receipts / mention-resolution stay consistent, but we
+  // re-attribute the row to a synthetic "GitHub" sender in the UI. The
+  // gate is conjunctive (`source` + `format` + content shape + metadata
+  // marker) because `sendMessageSchema` accepts arbitrary metadata — a
+  // metadata-only check would let any agent spoof a "from GitHub" card by
+  // posting plain text with the marker set. `isSelf` is also overridden
+  // so the recipient does not see their own name color treatment on a
+  // card the dispatcher wrote on their row.
+  const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
+  const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
+  const isSelf = !isGithubSystem && myAgentId === msg.senderId;
+
+  return (
+    <div
       className="grid"
       data-message-id={msg.id}
       style={{
@@ -499,66 +597,122 @@ function TextRow({
             <ReadReceipt msg={msg} myAgentId={myAgentId} />
           </span>
         </div>
-        <div
-          className="text-body"
-          style={{
-            color: "var(--fg)",
-            marginTop: 2,
-          }}
-        >
-          {msg.format === "file" && isImageBatchRefContent(msg.content) ? (
-            <ImageBatchFromRef
-              content={msg.content}
-              markdownComponents={markdownComponents}
-              rehypePlugins={messageRehypePlugins}
-            />
-          ) : msg.format === "file" && isInlineImageContent(msg.content) ? (
-            <img
-              src={`data:${msg.content.mimeType};base64,${msg.content.data}`}
-              alt={msg.content.filename ?? "image"}
-              style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
-            />
-          ) : msg.format === "file" && isImageRefContent(msg.content) ? (
-            <ImageFromRef content={msg.content} />
-          ) : msg.format === "text" || msg.format === "markdown" ? (
-            <Markdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
-              {textContent ?? ""}
-            </Markdown>
-          ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
-            <GithubEventCardMessage content={msg.content} />
-          ) : msg.format === "request" ? (
-            <RequestCard
-              message={msg}
-              thread={messages}
-              viewerAgentId={myAgentId}
-              bodyShowsTarget={requestBodyShowsTarget}
-              body={
-                <Markdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
-                  {textContent ?? ""}
-                </Markdown>
-              }
-              resolveAgentName={agentNameFn}
-              onSent={() => queryClient.invalidateQueries({ queryKey: ["chat-messages", msg.chatId] })}
-              suppressAnswerBlock={suppressAnswerBlock}
-            />
-          ) : (
-            <pre
-              className="mono text-label"
-              style={{
-                background: "var(--bg-sunken)",
-                padding: 8,
-                borderRadius: "var(--radius-input)",
-                overflow: "auto",
-                maxHeight: 160,
-              }}
-            >
-              {JSON.stringify(msg.content, null, 2)}
-            </pre>
-          )}
-        </div>
+        <MessageBody
+          msg={msg}
+          myAgentId={myAgentId}
+          agentNameFn={agentNameFn}
+          mentionParticipants={mentionParticipants}
+          requestProjection={requestProjection}
+          suppressAnswerBlock={suppressAnswerBlock}
+        />
       </div>
     </div>
   );
+}, areMessageRowPropsEqual);
+
+function areMessageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): boolean {
+  return (
+    messageRenderFieldsEqual(prev.msg, next.msg) &&
+    prev.myAgentId === next.myAgentId &&
+    prev.agentNameFn === next.agentNameFn &&
+    prev.agentAvatarFn === next.agentAvatarFn &&
+    prev.agentColorTokenFn === next.agentColorTokenFn &&
+    mentionParticipantsEqual(prev.mentionParticipants, next.mentionParticipants) &&
+    requestProjectionEqual(prev.requestProjection, next.requestProjection) &&
+    Boolean(prev.suppressAnswerBlock) === Boolean(next.suppressAnswerBlock)
+  );
+}
+
+function areMessageBodyPropsEqual(prev: MessageBodyProps, next: MessageBodyProps): boolean {
+  return (
+    messageBodyFieldsEqual(prev.msg, next.msg) &&
+    prev.myAgentId === next.myAgentId &&
+    prev.agentNameFn === next.agentNameFn &&
+    mentionParticipantsEqual(prev.mentionParticipants, next.mentionParticipants) &&
+    requestProjectionEqual(prev.requestProjection, next.requestProjection) &&
+    prev.suppressAnswerBlock === next.suppressAnswerBlock
+  );
+}
+
+function messageRenderFieldsEqual(a: MessageWithDelivery, b: MessageWithDelivery): boolean {
+  return (
+    messageBodyFieldsEqual(a, b) &&
+    a.createdAt === b.createdAt &&
+    (a.deliveryStatus ?? null) === (b.deliveryStatus ?? null)
+  );
+}
+
+function messageBodyFieldsEqual(a: MessageWithDelivery, b: MessageWithDelivery): boolean {
+  return (
+    a.id === b.id &&
+    a.chatId === b.chatId &&
+    a.senderId === b.senderId &&
+    a.format === b.format &&
+    a.source === b.source &&
+    a.inReplyTo === b.inReplyTo &&
+    jsonLikeEqual(a.content, b.content) &&
+    jsonLikeEqual(a.metadata, b.metadata)
+  );
+}
+
+function mentionParticipantsEqual(a: readonly MentionParticipant[], b: readonly MentionParticipant[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (!left || !right) return false;
+    if (left.agentId !== right.agentId || left.name !== right.name) return false;
+  }
+  return true;
+}
+
+function requestProjectionEqual(
+  a: RequestLifecycleProjection | undefined,
+  b: RequestLifecycleProjection | undefined,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.state === b.state && a.closeReason === b.closeReason && stringRecordEqual(a.selections, b.selections);
+}
+
+function stringRecordEqual(a: Record<string, string>, b: Record<string, string>): boolean {
+  if (a === b) return true;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function jsonLikeEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!jsonLikeEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (!isJsonRecord(a) || !isJsonRecord(b)) return false;
+  const aKeys = Object.keys(a).sort();
+  const bKeys = Object.keys(b).sort();
+  if (aKeys.length !== bKeys.length) return false;
+  for (let i = 0; i < aKeys.length; i++) {
+    const key = aKeys[i];
+    if (!key || key !== bKeys[i]) return false;
+    if (!jsonLikeEqual(a[key], b[key])) return false;
+  }
+  return true;
 }
 
 /**
@@ -723,6 +877,155 @@ type TimelineItem =
   | { kind: "message"; at: string; key: string; data: MessageWithDelivery }
   | { kind: "event"; at: string; key: string; data: SessionEventRow }
   | { kind: "workgroup"; at: string; key: string; events: SessionEventRow[] };
+
+type ChatTimelineProps = {
+  itemCount: number;
+  visibleItems: readonly TimelineItem[];
+  hiddenByBlock: number;
+  readOnly: boolean;
+  scrollContainerRef: RefObject<HTMLDivElement | null>;
+  messagesEndRef: RefObject<HTMLDivElement | null>;
+  defaultWorkgroupOpen: boolean;
+  agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
+  myAgentId: string | null;
+  mentionParticipants: MentionParticipant[];
+  requestProjectionById: ReadonlyMap<string, RequestLifecycleProjection>;
+  dockRequestId: string | undefined;
+  gapAfterMessageId: string | null;
+  firstNewItemIdx: number;
+  dividerRef: RefObject<HTMLDivElement | null>;
+  pillCount: number;
+  onPillClick: () => void;
+};
+
+const ChatTimeline = memo(function ChatTimeline({
+  itemCount,
+  visibleItems,
+  hiddenByBlock,
+  readOnly,
+  scrollContainerRef,
+  messagesEndRef,
+  defaultWorkgroupOpen,
+  agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
+  myAgentId,
+  mentionParticipants,
+  requestProjectionById,
+  dockRequestId,
+  gapAfterMessageId,
+  firstNewItemIdx,
+  dividerRef,
+  pillCount,
+  onPillClick,
+}: ChatTimelineProps) {
+  return (
+    <div className="relative flex-1 flex flex-col min-h-0">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
+        <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+          {itemCount === 0 && (
+            <div
+              className="flex flex-col items-center text-body"
+              style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
+            >
+              <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
+              {readOnly ? "No messages yet" : "Send a message to start the conversation"}
+            </div>
+          )}
+          <div className="flex flex-col" style={{ gap: 4 }}>
+            {visibleItems.flatMap((item, idx) => {
+              let node: ReactNode = null;
+              if (item.kind === "workgroup") {
+                // Default to folded while chatDetail is still loading — opening
+                // a group chat's card for one frame and then folding it after
+                // chatDetail resolves is worse than under-opening direct chats
+                // by the same one-frame window.
+                node = (
+                  <WorkingTurn
+                    key={item.key}
+                    events={item.events}
+                    defaultOpen={defaultWorkgroupOpen}
+                    agentNameFn={agentNameFn}
+                    agentAvatarFn={agentAvatarFn}
+                    agentColorTokenFn={agentColorTokenFn}
+                  />
+                );
+              } else if (item.kind === "event") {
+                const ev = item.data;
+                switch (ev.kind) {
+                  case "error":
+                    node = <ErrorRow key={item.key} event={ev} agentNameFn={agentNameFn} />;
+                    break;
+                  default:
+                    // assistant_text / tool_call / thinking are folded into
+                    // the workgroup card above; turn_end is filtered upstream;
+                    // anything else is dropped.
+                    node = null;
+                }
+              } else {
+                const msg = item.data;
+                node = (
+                  <MessageRow
+                    key={item.key}
+                    msg={msg}
+                    myAgentId={myAgentId}
+                    agentNameFn={agentNameFn}
+                    agentAvatarFn={agentAvatarFn}
+                    agentColorTokenFn={agentColorTokenFn}
+                    mentionParticipants={mentionParticipants}
+                    requestProjection={requestProjectionById.get(msg.id)}
+                    suppressAnswerBlock={dockRequestId != null && msg.id === dockRequestId}
+                  />
+                );
+              }
+              // Insert the gap banner immediately after the last cached
+              // message when there's a known break between cache and the
+              // server window.
+              const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
+              // Insert the "New Messages" divider before the first item
+              // whose message id is strictly newer than the current anchor
+              // (snapshotted at chat-open; re-armed when the divider scrolls
+              // past the viewport top — see the IntersectionObserver above).
+              const showDivider = idx === firstNewItemIdx;
+              const prelude = showDivider ? <UnreadDivider key="unread-divider" ref={dividerRef} /> : null;
+              const epilogue =
+                isGapAnchor && item.kind === "message" ? <HistoryGapBanner key={`gap-after-${item.data.id}`} /> : null;
+              if (prelude || epilogue) {
+                const out: ReactNode[] = [];
+                if (prelude) out.push(prelude);
+                out.push(node);
+                if (epilogue) out.push(epilogue);
+                return out;
+              }
+              return node;
+            })}
+            {/* Blocking truncation marker: the conversation past the question is
+                hidden until I answer it above. Keeps the cut from reading as a
+                load error / empty tail. */}
+            {hiddenByBlock > 0 ? (
+              <div
+                className="mono text-caption"
+                style={{ color: "var(--fg-4)", textAlign: "center", padding: "var(--sp-3) 0 var(--sp-1)" }}
+              >
+                {`Answer the question above to see ${hiddenByBlock} newer ${
+                  hiddenByBlock === 1 ? "message" : "messages"
+                }`}
+              </div>
+            ) : null}
+          </div>
+          <div ref={messagesEndRef} />
+        </div>
+      </div>
+      {/* Floating "↓ N new messages" pill — surfaces whenever there are messages
+          newer than the user's session high watermark. Own sends never trigger
+          the pill because send paths pre-advance the watermark to the new
+          message id. */}
+      {pillCount > 0 && !dockRequestId ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
+    </div>
+  );
+});
 
 /**
  * Renders a small "↗ View on GitHub" link beside the chat title when the chat
@@ -1540,6 +1843,7 @@ export function ChatView({
     for (const m of fromServer) byId.set(m.id, m);
     return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }, [cachedMessages, messagesData]);
+  const requestProjectionById = useMemo(() => deriveRequestLifecycleProjectionMap(mergedMessages), [mergedMessages]);
 
   const gapAfterMessageId = useMemo<string | null>(
     () => findGapAfterMessageId(cachedMessages ?? [], messagesData?.items ?? []),
@@ -2895,122 +3199,27 @@ export function ChatView({
           inside is capped via `maxWidth` and centered to align with the
           composer below into one vertical thread. Side padding (sp-6) prevents
           content from kissing the panel border on narrow viewports. */}
-          <div className="relative flex-1 flex flex-col min-h-0">
-            <div
-              ref={scrollContainerRef}
-              className="flex-1 overflow-y-auto"
-              style={{ padding: "var(--sp-2_5) var(--sp-6)" }}
-            >
-              <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-                {itemCount === 0 && (
-                  <div
-                    className="flex flex-col items-center text-body"
-                    style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
-                  >
-                    <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
-                    {readOnly ? "No messages yet" : "Send a message to start the conversation"}
-                  </div>
-                )}
-                <div className="flex flex-col" style={{ gap: 4 }}>
-                  {visibleItems.flatMap((item, idx) => {
-                    let node: ReactNode = null;
-                    if (item.kind === "workgroup") {
-                      // Default to folded while chatDetail is still loading —
-                      // opening a group chat's card for one frame and then
-                      // folding it after chatDetail resolves is worse than
-                      // under-opening direct chats by the same one-frame window.
-                      node = (
-                        <WorkingTurn
-                          key={item.key}
-                          events={item.events}
-                          defaultOpen={chatDetail?.type === "direct"}
-                          agentNameFn={chatScopedAgentName}
-                          agentAvatarFn={agentAvatar}
-                          agentColorTokenFn={agentColorToken}
-                        />
-                      );
-                    } else if (item.kind === "event") {
-                      const ev = item.data;
-                      switch (ev.kind) {
-                        case "error":
-                          node = <ErrorRow key={item.key} event={ev} agentNameFn={chatScopedAgentName} />;
-                          break;
-                        default:
-                          // assistant_text / tool_call / thinking are folded into
-                          // the workgroup card above; turn_end is filtered
-                          // upstream; anything else is dropped.
-                          node = null;
-                      }
-                    } else {
-                      const msg = item.data;
-                      node = (
-                        <TextRow
-                          key={item.key}
-                          msg={msg}
-                          myAgentId={myAgentId}
-                          agentNameFn={chatScopedAgentName}
-                          agentAvatarFn={agentAvatar}
-                          agentColorTokenFn={agentColorToken}
-                          mentionParticipants={renderMentionParticipants}
-                          messages={mergedMessages}
-                          suppressAnswerBlock={dockRequestId != null && msg.id === dockRequestId}
-                        />
-                      );
-                    }
-                    // Insert the gap banner immediately after the last cached
-                    // message when there's a known break between cache and the
-                    // server window.
-                    const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
-                    // Insert the "New Messages" divider before the first item
-                    // whose message id is strictly newer than the current
-                    // anchor (snapshotted at chat-open; re-armed when the
-                    // divider scrolls past the viewport top — see the
-                    // IntersectionObserver above).
-                    const showDivider = idx === firstNewItemIdx;
-                    const prelude = showDivider ? <UnreadDivider key="unread-divider" ref={dividerRef} /> : null;
-                    const epilogue =
-                      isGapAnchor && item.kind === "message" ? (
-                        <HistoryGapBanner key={`gap-after-${item.data.id}`} />
-                      ) : null;
-                    if (prelude || epilogue) {
-                      const out: ReactNode[] = [];
-                      if (prelude) out.push(prelude);
-                      out.push(node);
-                      if (epilogue) out.push(epilogue);
-                      return out;
-                    }
-                    return node;
-                  })}
-                  {/* Blocking truncation marker: the conversation past the
-                      question is hidden until I answer it above. Keeps the cut
-                      from reading as a load error / empty tail. */}
-                  {hiddenByBlock > 0 ? (
-                    <div
-                      className="mono text-caption"
-                      style={{ color: "var(--fg-4)", textAlign: "center", padding: "var(--sp-3) 0 var(--sp-1)" }}
-                    >
-                      {`Answer the question above to see ${hiddenByBlock} newer ${
-                        hiddenByBlock === 1 ? "message" : "messages"
-                      }`}
-                    </div>
-                  ) : null}
-                </div>
-                <div ref={messagesEndRef} />
-              </div>
-            </div>
-            {/* Floating "↓ N new messages" pill — surfaces whenever there are
-                messages newer than the user's session high watermark. Own
-                sends never trigger the pill because `sendMut.onSuccess` /
-                the file-send path pre-advance the watermark to the new
-                message's id before initiating the smooth scroll, so
-                `pillCount` stays 0 throughout the animation (PR 286 manual
-                sign-off rev 10). Rendered as a sibling of the scroll
-                container, not a child, so its `absolute` positioning
-                anchors to the outer wrapper's visible bounds instead of
-                being affected by the scroll container's internal
-                `overflow-auto` + `position: relative` interaction (rev 8). */}
-            {pillCount > 0 && !dockRequestId ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
-          </div>
+          <ChatTimeline
+            itemCount={itemCount}
+            visibleItems={visibleItems}
+            hiddenByBlock={hiddenByBlock}
+            readOnly={readOnly}
+            scrollContainerRef={scrollContainerRef}
+            messagesEndRef={messagesEndRef}
+            defaultWorkgroupOpen={chatDetail?.type === "direct"}
+            agentNameFn={chatScopedAgentName}
+            agentAvatarFn={agentAvatar}
+            agentColorTokenFn={agentColorToken}
+            myAgentId={myAgentId}
+            mentionParticipants={renderMentionParticipants}
+            requestProjectionById={requestProjectionById}
+            dockRequestId={dockRequestId}
+            gapAfterMessageId={gapAfterMessageId}
+            firstNewItemIdx={firstNewItemIdx}
+            dividerRef={dividerRef}
+            pillCount={pillCount}
+            onPillClick={onPillClick}
+          />
 
           {/* Input. Outer band keeps full-width border-top + side padding so
           the composer separator continues the panel's edge-to-edge frame.

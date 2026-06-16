@@ -18,6 +18,10 @@ const activityMocks = vi.hoisted(() => ({
   listClients: vi.fn(),
 }));
 
+const markdownMocks = vi.hoisted(() => ({
+  render: vi.fn(),
+}));
+
 const agentStatusMocks = vi.hoisted(() => ({
   fetchChatAgentStatuses: vi.fn(),
 }));
@@ -108,21 +112,40 @@ vi.mock("../../../../auth/auth-context.js", () => ({
   useAuth: () => authMock.value,
 }));
 
+vi.mock("../../../../components/ui/markdown.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../components/ui/markdown.js")>();
+  return {
+    ...actual,
+    Markdown: (props: import("../../../../components/ui/markdown.js").MarkdownProps) => {
+      markdownMocks.render(props.children);
+      return actual.Markdown(props);
+    },
+  };
+});
+
+function resolveAgentIdentityForTest(id: string | null | undefined) {
+  if (!id) return null;
+  return {
+    name: AGENT_SLUGS[id] ?? id,
+    displayName: AGENT_NAMES[id] ?? id,
+    avatarImageUrl: null,
+    avatarColorToken: id === "agent-1" ? "hue-2" : null,
+  };
+}
+
+function resolveAgentNameForTest(id: string | null | undefined): string {
+  return id ? (AGENT_NAMES[id] ?? id) : "unknown";
+}
+
+function resolveAgentSlugForTest(slug: string | null | undefined): string | null {
+  if (!slug) return null;
+  return Object.entries(AGENT_SLUGS).find(([, value]) => value === slug)?.[0] ?? null;
+}
+
 vi.mock("../../../../lib/use-agent-name-map.js", () => ({
-  useAgentIdentityMap: () => (id: string | null | undefined) => {
-    if (!id) return null;
-    return {
-      name: AGENT_SLUGS[id] ?? id,
-      displayName: AGENT_NAMES[id] ?? id,
-      avatarImageUrl: null,
-      avatarColorToken: id === "agent-1" ? "hue-2" : null,
-    };
-  },
-  useAgentNameMap: () => (id: string | null | undefined) => (id ? (AGENT_NAMES[id] ?? id) : "unknown"),
-  useAgentSlugToIdMap: () => (slug: string | null | undefined) => {
-    if (!slug) return null;
-    return Object.entries(AGENT_SLUGS).find(([, value]) => value === slug)?.[0] ?? null;
-  },
+  useAgentIdentityMap: () => resolveAgentIdentityForTest,
+  useAgentNameMap: () => resolveAgentNameForTest,
+  useAgentSlugToIdMap: () => resolveAgentSlugForTest,
 }));
 
 vi.mock("../../../../lib/use-org-agents.js", () => ({
@@ -728,6 +751,83 @@ describe("ChatView", () => {
     expect(onJoin).toHaveBeenCalledTimes(1);
     await act(async () => readOnly.root.unmount());
 
+    await act(async () => root.unmount());
+  });
+
+  it("does not re-render old message markdown when the composer draft changes", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const page = messages([
+      message({
+        id: "stable-markdown",
+        senderId: "agent-1",
+        content: "Stable **markdown** body for render isolation.",
+        source: "api",
+        createdAt: "2026-05-28T12:00:00.000Z",
+      }),
+    ]);
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (queryClient) => seedChat(queryClient, chatDetail(), page),
+      "/",
+    );
+
+    await waitForText(container, "Stable");
+    await flush();
+    markdownMocks.render.mockClear();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    await setValue(textarea, "typing in the composer");
+
+    expect(markdownMocks.render).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
+  it("does not re-render an old request markdown body when request state changes", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const request = message({
+      id: "req-render",
+      senderId: "agent-1",
+      format: "request",
+      content: "Lifecycle **body** stays memoized.",
+      metadata: {
+        mentions: ["human-agent-self"],
+        request: {
+          subject: "Render isolation",
+          questions: [{ id: "q1", prompt: "Proceed?", kind: "single", options: ["Yes"], required: true }],
+        },
+      },
+      source: "api",
+      createdAt: "2026-05-28T12:00:00.000Z",
+    });
+    const answer = message({
+      id: "req-answer",
+      senderId: "human-agent-self",
+      format: "card",
+      content: { resolved: true },
+      metadata: { resolves: { request: "req-render", kind: "answered" } },
+      inReplyTo: "req-render",
+      source: "web",
+      createdAt: "2026-05-28T12:01:00.000Z",
+    });
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), messages([request])),
+      "/",
+    );
+
+    await waitForText(container, "Lifecycle");
+    await waitForText(container, "Awaiting your answer");
+    await flush();
+    markdownMocks.render.mockClear();
+
+    await act(async () => {
+      queryClient.setQueryData(["chat-messages", "chat-1"], messages([request, answer]));
+    });
+    await flush();
+
+    await waitForText(container, "RESOLVED");
+    expect(markdownMocks.render).not.toHaveBeenCalledWith("Lifecycle **body** stays memoized.");
     await act(async () => root.unmount());
   });
 

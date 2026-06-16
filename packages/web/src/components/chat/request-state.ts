@@ -22,6 +22,12 @@ import { MENTION_REGEX, openQuestionRequestSchema, requestResolutionSchema } fro
  */
 export type RequestState = "open" | "discussing" | "resolved" | "closed";
 
+export type RequestLifecycleProjection = {
+  state: RequestState;
+  selections: Record<string, string>;
+  closeReason: string | null;
+};
+
 /** Read the resolved `@`-mention uuids from a message's metadata. */
 export function readMentions(metadata: Record<string, unknown> | null | undefined): string[] {
   const raw = metadata?.mentions;
@@ -74,19 +80,44 @@ export function readResolution(metadata: Record<string, unknown> | null | undefi
  * the card.
  */
 export function deriveRequestState(request: Message, thread: readonly Message[]): RequestState {
+  return deriveRequestLifecycleProjection(request, thread).state;
+}
+
+export function deriveRequestLifecycleProjection(
+  request: Message,
+  thread: readonly Message[],
+): RequestLifecycleProjection {
   const targets = readMentions(request.metadata);
   const canResolve = (senderId: string): boolean => senderId === request.senderId || targets.includes(senderId);
   let discussing = false;
   for (const m of thread) {
     const res = readResolution(m.metadata);
     if (res && res.request === request.id && canResolve(m.senderId)) {
-      return res.kind === "answered" ? "resolved" : "closed";
+      if (res.kind === "answered") {
+        const payload = readRequestPayload(request.metadata);
+        return {
+          state: "resolved",
+          selections: payload ? recoverAnswerSelections(m.content, payload.questions) : {},
+          closeReason: null,
+        };
+      }
+      return { state: "closed", selections: {}, closeReason: res.reason ?? null };
     }
     // A threaded reply that is NOT a resolution is a "chat about this"
     // discussion turn — the question is being clarified, not answered.
     if (m.id !== request.id && m.inReplyTo === request.id) discussing = true;
   }
-  return discussing ? "discussing" : "open";
+  return { state: discussing ? "discussing" : "open", selections: {}, closeReason: null };
+}
+
+export function deriveRequestLifecycleProjectionMap(
+  thread: readonly Message[],
+): Map<string, RequestLifecycleProjection> {
+  const byRequestId = new Map<string, RequestLifecycleProjection>();
+  for (const m of thread) {
+    if (m.format === "request") byRequestId.set(m.id, deriveRequestLifecycleProjection(m, thread));
+  }
+  return byRequestId;
 }
 
 /**
@@ -95,19 +126,7 @@ export function deriveRequestState(request: Message, thread: readonly Message[])
  * the close carried no reason. Used for the closed card's copy.
  */
 export function readCloseReason(request: Message, thread: readonly Message[]): string | null {
-  const targets = readMentions(request.metadata);
-  for (const m of thread) {
-    const res = readResolution(m.metadata);
-    if (
-      res &&
-      res.request === request.id &&
-      res.kind === "closed" &&
-      (m.senderId === request.senderId || targets.includes(m.senderId))
-    ) {
-      return res.reason ?? null;
-    }
-  }
-  return null;
+  return deriveRequestLifecycleProjection(request, thread).closeReason;
 }
 
 /** Viewer is "related" to a request iff they are the asker or the single target. */
