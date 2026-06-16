@@ -41,12 +41,14 @@ import type {
   HandlerFactory,
   SessionContext,
   SessionMessage,
+  TurnConsumedErrorReason,
 } from "../runtime/handler.js";
 import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { formatAuthHint, isCodexAuthError } from "./auth-error-hint.js";
+import { resolveTurnSettlement } from "./turn-settlement.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -215,6 +217,15 @@ export function isTransientCodexErrorMessage(message: string): boolean {
     m.includes("etimedout") ||
     m.includes("epipe")
   );
+}
+
+type CodexFailureKind = "deterministic" | "transient" | "unknown";
+type CodexTerminalFailure = { kind: CodexFailureKind; message: string };
+
+function classifyCodexFailure(message: string): CodexFailureKind {
+  if (isCodexAuthError(message)) return "deterministic";
+  if (isTransientCodexErrorMessage(message)) return "transient";
+  return "unknown";
 }
 
 /**
@@ -838,17 +849,10 @@ export const createCodexHandler: HandlerFactory = (config) => {
     currentAbort = abort;
     gitWriteTracker.captureBaseline();
 
-    // Emit exactly one `turn_end` per turn, after `forwardResult` resolves —
-    // mirrors claude-code so admin events + completion bookkeeping reflect
-    // actual delivery, not just SDK turn termination. `turn.completed` /
-    // `turn.failed` only flip the local status here; the emit happens below.
-    //
-    // `userVisibleEmitted` gates the retry path: once we've emitted an
-    // assistant_text / tool_call to the chat, re-running the turn would
-    // double-render those items, so we stop retrying even if the SDK
-    // surfaces a transient `turn.failed`.
     let finalResponse = "";
-    let turnFailed = false;
+    const providerCompletedBox: { value: boolean } = { value: false };
+    const diagnosticErrorEmittedBox: { value: boolean } = { value: false };
+    const terminalFailureBox: { value: CodexTerminalFailure | null } = { value: null };
     let userVisibleEmitted = false;
     // Wrapper object so TS doesn't narrow `lastUsage` to `null` based on the
     // synchronous initializer (assignments live inside the IIFE below, which
@@ -860,7 +864,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
         // Reset per-attempt; finalResponse intentionally persists across
         // attempts only because we abort retries the moment any user-visible
         // item is emitted, so it is empty whenever a retry runs.
-        turnFailed = false;
+        providerCompletedBox.value = false;
+        diagnosticErrorEmittedBox.value = false;
+        terminalFailureBox.value = null;
         let retryRequested = false;
         let retryDelay = 0;
         let retryReason = "";
@@ -897,6 +903,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
                 // Capture usage for the post-turn metrics log; `turn_end` is
                 // still emitted after forwardResult below.
                 usageBox.value = event.usage;
+                providerCompletedBox.value = true;
               } else if (event.type === "turn.failed") {
                 if (
                   !userVisibleEmitted &&
@@ -908,7 +915,10 @@ export const createCodexHandler: HandlerFactory = (config) => {
                   retryReason = `turn.failed (transient): ${event.error.message}`;
                   break;
                 }
-                turnFailed = true;
+                terminalFailureBox.value = {
+                  kind: classifyCodexFailure(event.error.message),
+                  message: event.error.message,
+                };
                 const message = formatCodexSdkError(event.error.message);
                 sessionCtx.emitEvent({
                   kind: "error",
@@ -921,7 +931,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
                   retryReason = `stream error (transient): ${event.message}`;
                   break;
                 }
-                turnFailed = true;
+                diagnosticErrorEmittedBox.value = true;
                 const message = formatCodexSdkError(event.message);
                 sessionCtx.emitEvent({
                   kind: "error",
@@ -937,7 +947,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
               retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
               retryReason = `runStreamed threw (transient): ${msg}`;
             } else {
-              turnFailed = true;
+              terminalFailureBox.value = { kind: classifyCodexFailure(msg), message: msg };
               const message = formatCodexSdkError(msg);
               sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message } });
             }
@@ -989,8 +999,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
     // Match @openai/codex-sdk's Thread.run() success semantics: when a turn
     // emits several non-empty agent_message items, finalResponse is the latest
     // one. Earlier agent_message items remain live assistant_text progress
-    // events only. If the turn failed, do not forward partial text as a final
-    // chat message.
+    // events only. If the provider never completes successfully, do not
+    // forward partial text as a final chat message.
     const accumulated = finalResponse;
 
     // Codex reports CUMULATIVE thread usage on `turn.completed`; convert it to
@@ -1033,18 +1043,21 @@ export const createCodexHandler: HandlerFactory = (config) => {
       perTurnUsage.cached_input_tokens === 0 &&
       perTurnUsage.output_tokens === 0 &&
       perTurnUsage.reasoning_output_tokens === 0;
-    const usageLimitEmptyTurn = !turnFailed && accumulated.trim().length === 0 && zeroTokenDelta;
+    const failure = terminalFailureBox.value;
+    const providerCompleted = providerCompletedBox.value;
+    const completedSuccessfully = providerCompleted && failure === null;
+    const usageLimitEmptyTurn = completedSuccessfully && accumulated.trim().length === 0 && zeroTokenDelta;
 
     let forwardFailed = false;
+    let retryReason: string | null = null;
+    let consumedErrorReason: TurnConsumedErrorReason | null = null;
     if (usageLimitEmptyTurn) {
       // Layer 2 (observability): emit an error event + warn-level log so the
       // daemon log and admin event stream record a real failure instead of a
-      // phantom `turn_end: success`. Mirrors the existing `turnFailed`
-      // treatment — runtime state still goes `idle` below so a later message
-      // can retry once the limit resets. We do NOT auto-redeliver THIS message
-      // (finishTurn still runs below); auto-redelivery is tracked
-      // separately (see #971 discussion) because it needs a reset-aware
-      // trigger + loop guard that the SDK's missing `rate_limits` can't supply.
+      // phantom `turn_end: success`. Runtime state still goes idle after the
+      // visible notice is delivered; auto-redelivery is tracked separately
+      // (see #971 discussion) because it needs a reset-aware trigger + loop
+      // guard that the SDK's missing `rate_limits` can't supply.
       sessionCtx.emitEvent({
         kind: "error",
         payload: {
@@ -1063,14 +1076,16 @@ export const createCodexHandler: HandlerFactory = (config) => {
       // no reply, rather than having to dig through codex rollout files.
       try {
         await sessionCtx.forwardResult(USAGE_LIMIT_NOTICE);
+        consumedErrorReason = "usage_limit_notice_posted";
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         sessionCtx.emitEvent({
           kind: "error",
           payload: { source: "runtime", message: `usage-limit notice delivery failed: ${msg}` },
         });
+        retryReason = "codex_usage_limit_notice_delivery_failed";
       }
-    } else if (!turnFailed && accumulated.trim()) {
+    } else if (completedSuccessfully && accumulated.trim()) {
       try {
         await sessionCtx.forwardResult(accumulated);
       } catch (err) {
@@ -1081,9 +1096,23 @@ export const createCodexHandler: HandlerFactory = (config) => {
           payload: { source: "runtime", message: `forwardResult failed: ${msg}` },
         });
       }
+    } else if (failure !== null) {
+      retryReason = `codex_${failure.kind}_failure`;
+      sessionCtx.log(
+        `codex turn did not complete successfully; scheduling recovery (${failure.kind}): ${failure.message}`,
+      );
+    } else if (!providerCompleted) {
+      retryReason = diagnosticErrorEmittedBox.value
+        ? "codex_stream_ended_after_diagnostic_error"
+        : "codex_stream_ended_without_completion";
+      sessionCtx.log(`codex stream ended without turn.completed; scheduling recovery (${retryReason})`);
     }
 
-    const succeeded = !turnFailed && !forwardFailed && !usageLimitEmptyTurn;
+    const settlement = resolveTurnSettlement({
+      retryReason,
+      consumedErrorReason,
+      forwardFailed,
+    });
 
     // Emit `token_usage` just before `turn_end` so the wire-order matches the
     // claude-code handler (consumers can group all usage events for a turn
@@ -1111,13 +1140,13 @@ export const createCodexHandler: HandlerFactory = (config) => {
     }
     sessionCtx.emitEvent({
       kind: "turn_end",
-      payload: { status: succeeded ? "success" : "error" },
+      payload: { status: settlement.status },
     });
-    // Ack the entries this turn consumed. All four turn outcomes (success,
-    // silent / no-text, SDK turn.failed, forwardResult failure) are
-    // terminal for this turn — redelivery would either replay an already-
-    // delivered reply or re-hit the same failure.
-    await token.complete(messages, { status: succeeded ? "success" : "error", terminal: true });
+    if (settlement.action.kind === "complete") {
+      await token.complete(messages, settlement.action.outcome);
+    } else {
+      token.retry(messages, settlement.action.reason);
+    }
 
     // Structured usage / timing log — emitted via `sessionCtx.log` rather
     // than a new SessionEvent kind so we stay inside the codex handler
@@ -1132,7 +1161,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
           `input_tokens=${Math.max(0, perTurnUsage.input_tokens - perTurnUsage.cached_input_tokens)} ` +
           `cached_input_tokens=${perTurnUsage.cached_input_tokens} ` +
           `output_tokens=${perTurnUsage.output_tokens} reasoning_output_tokens=${perTurnUsage.reasoning_output_tokens} ` +
-          `status=${succeeded ? "success" : "error"}`,
+          `status=${settlement.status}`,
       );
     }
 

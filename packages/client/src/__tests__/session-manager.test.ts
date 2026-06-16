@@ -10,6 +10,7 @@ import type {
   HandlerFactory,
   SessionContext,
   SessionMessage,
+  TurnOutcome,
 } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
@@ -789,6 +790,13 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     return { sm, handler: h };
   }
 
+  const unsafeErrorCompletions = [
+    { name: "missing classification", outcome: { status: "error", terminal: true } },
+    { name: "deterministic classification", outcome: { status: "error", terminal: true, errorKind: "deterministic" } },
+    { name: "transient classification", outcome: { status: "error", terminal: true, errorKind: "transient" } },
+    { name: "unknown classification", outcome: { status: "error", terminal: true, errorKind: "unknown" } },
+  ] satisfies Array<{ name: string; outcome: TurnOutcome }>;
+
   it("starts a fresh chat without same-socket recovery even when recoverChat is configured", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     const recoverChat = vi.fn().mockResolvedValue(undefined);
@@ -1476,6 +1484,87 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
 
     expect(ackEntry).toHaveBeenCalledTimes(1);
     expect(ackEntry).toHaveBeenCalledWith(8);
+
+    await sm.shutdown();
+  });
+
+  it.each(unsafeErrorCompletions)("does not ACK token.complete(error) with $name", async ({ outcome }) => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, _ctx, token) => {
+        capturedMessage = message;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const { sm } = buildSm(ackEntry, handler, recoverChat);
+
+    await sm.dispatch(mockEntry({ id: 18, chatId: "chat-token-error", messageId: "msg-token-error" }));
+    if (!capturedToken || !capturedMessage) throw new Error("delivery token was not captured");
+
+    await capturedToken.complete(capturedMessage, outcome);
+
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(recoverChat).toHaveBeenCalledWith("chat-token-error");
+
+    await sm.shutdown();
+  });
+
+  it("ACKs explicit consumed error completion", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, _ctx, token) => {
+        capturedMessage = message;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const { sm } = buildSm(ackEntry, handler, recoverChat);
+
+    await sm.dispatch(mockEntry({ id: 19, chatId: "chat-consumed-error", messageId: "msg-consumed-error" }));
+    if (!capturedToken || !capturedMessage) throw new Error("delivery token was not captured");
+
+    await capturedToken.complete(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_clean_error",
+    });
+
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(19);
+    expect(recoverChat).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("applies the same error completion guard to legacy ctx.finishTurn", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let capturedCtx: SessionContext | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx) => {
+        capturedMessage = message;
+        capturedCtx = ctx;
+        return "session-id-mock";
+      }),
+    });
+    const { sm } = buildSm(ackEntry, handler, recoverChat);
+
+    await sm.dispatch(mockEntry({ id: 20, chatId: "chat-legacy-error", messageId: "msg-legacy-error" }));
+    if (!capturedCtx || !capturedMessage) throw new Error("session context was not captured");
+
+    await capturedCtx.finishTurn(capturedMessage, { status: "error", terminal: true });
+
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(recoverChat).toHaveBeenCalledWith("chat-legacy-error");
 
     await sm.shutdown();
   });

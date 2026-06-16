@@ -43,6 +43,7 @@ import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runti
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
+import { consumedErrorOutcome } from "./turn-settlement.js";
 
 const MAX_RETRIES = 2;
 
@@ -924,10 +925,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * failures (e.g. inject's `toSDKUserMessage` catch) where the semantics is
    * "commit this single inbox message, NOT close the active SDK turn".
    */
-  async function ackTurnClose(status: "success" | "error"): Promise<void> {
+  async function ackTurnClose(
+    status: "success" | "error",
+    reason: Parameters<typeof consumedErrorOutcome>[0] = "provider_clean_error",
+  ): Promise<void> {
     const pending = pendingAckMessages.shift();
     if (pending) {
-      await pending.token.complete(pending.message, { status, terminal: true });
+      const outcome = status === "success" ? { status, terminal: true } : consumedErrorOutcome(reason);
+      await pending.token.complete(pending.message, outcome);
     }
     markCurrentPendingMessageProcessingStarted();
     stashedSdkMessage = null;
@@ -1277,7 +1282,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // Permanent stream API failure — ack so the server
                     // doesn't redeliver a message that would just produce
                     // the same error. Retry was exhausted upstream.
-                    await ackTurnClose("error");
+                    await ackTurnClose("error", "stream_api_error_posted");
                   } else {
                     // Genuine success — reset retry budget for the next turn.
                     // Do NOT reset on the sniff-hit branches above: a wrapped
@@ -1319,7 +1324,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       // counter when an unrelated future stream error
                       // fires.
                       retryCount = 0;
-                      await ackTurnClose("error");
+                      await ackTurnClose("error", "forward_failed");
                     }
                   }
                 } else {
@@ -1344,7 +1349,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                 // SDK reported a turn-level error (non-success subtype):
                 // redelivery would just hit the same error — ack.
-                await ackTurnClose("error");
+                await ackTurnClose("error", "provider_clean_error");
               }
               // Reset the auth-hint flag only on a SUCCESSFUL result. This
               // gives a clean slate for the next turn once auth is clearly
@@ -1400,7 +1405,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // Deduplicator collapses every bind-reset replay so the entry
             // never re-dispatches and never gets acked. Per design §4
             // "permanent → ack".
-            await ackTurnClose("error");
+            await ackTurnClose("error", "retry_exhausted_notice_posted");
             return;
           }
 
@@ -1449,7 +1454,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // Same reasoning as the MAX_RETRIES branch above — without this
             // ack the row would loop in `delivered` forever, deduped on every
             // bind-reset replay. Per design §4 "permanent → ack".
-            await ackTurnClose("error");
+            await ackTurnClose("error", "auto_resume_failed_notice_posted");
             return;
           }
         }

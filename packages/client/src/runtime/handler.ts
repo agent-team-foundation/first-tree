@@ -43,11 +43,44 @@ export type HandlerContext = {
   log: (msg: string) => void;
 };
 
-export type TurnOutcome = {
-  status: "success" | "error";
-  terminal?: boolean;
-  errorKind?: "deterministic" | "transient" | "unknown";
-};
+export type TurnConsumedErrorReason =
+  | "forward_failed"
+  | "provider_clean_error"
+  | "usage_limit_notice_posted"
+  | "stream_api_error_posted"
+  | "retry_exhausted_notice_posted"
+  | "auto_resume_failed_notice_posted"
+  | (string & {});
+
+export type TurnOutcome =
+  | {
+      status: "success";
+      terminal?: boolean;
+      completion?: undefined;
+      errorKind?: undefined;
+      reason?: undefined;
+    }
+  | {
+      status: "error";
+      terminal?: boolean;
+      completion: "consumed";
+      reason: TurnConsumedErrorReason;
+      errorKind?: undefined;
+    }
+  | {
+      status: "error";
+      terminal?: boolean;
+      errorKind: "deterministic" | "transient" | "unknown";
+      completion?: undefined;
+      reason?: undefined;
+    }
+  | {
+      status: "error";
+      terminal?: boolean;
+      completion?: undefined;
+      errorKind?: undefined;
+      reason?: undefined;
+    };
 
 export type TerminalRejectionEvidence =
   | { kind: "chat_message"; messageId: string }
