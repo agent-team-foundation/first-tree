@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   deriveSessionName,
+  isResumeSummaryPrompt,
   isWorkspaceTrustPrompt,
   ownedSessionPrefix,
 } from "../handlers/claude-code-tui/tmux-session.js";
@@ -91,5 +92,44 @@ describe("isWorkspaceTrustPrompt", () => {
 `;
 
     expect(isWorkspaceTrustPrompt(pane)).toBe(false);
+  });
+});
+
+describe("isResumeSummaryPrompt", () => {
+  it("detects Claude Code's large-session resume strategy menu", () => {
+    const pane = `
+This session is 2h 41m old and 119.5k tokens.
+Resuming the full session will consume a substantial portion of your usage limits. We recommend resuming from a summary.
+
+ ❯ 1. Resume from summary (recommended)
+   2. Resume full session as-is
+   3. Don't ask me again
+
+ Enter to confirm · Esc to cancel
+`;
+
+    expect(isResumeSummaryPrompt(pane)).toBe(true);
+  });
+
+  it("does not treat the normal ready surface as a resume menu", () => {
+    const pane = `
+❯ Try "edit <filepath> to..."
+⏵⏵ bypass permissions on (shift+tab to cycle)
+`;
+
+    expect(isResumeSummaryPrompt(pane)).toBe(false);
+  });
+
+  it("does not trip on the trust prompt (disjoint option labels)", () => {
+    const pane = `
+ Quick safety check: Is this a project you created or one you trust?
+
+ ❯ 1. Yes, I trust this folder
+   2. No, exit
+
+ Enter to confirm · Esc to cancel
+`;
+
+    expect(isResumeSummaryPrompt(pane)).toBe(false);
   });
 });

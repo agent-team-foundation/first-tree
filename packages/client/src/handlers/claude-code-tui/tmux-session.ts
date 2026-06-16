@@ -169,6 +169,14 @@ export type WaitForReadyInput = {
   name: string;
   timeoutMs?: number;
   pollIntervalMs?: number;
+  /**
+   * Deadline granted *after* we auto-select "Resume from summary". Claude then
+   * generates the summary (an LLM round-trip over the whole session) before it
+   * reaches the ready surface, which routinely exceeds the normal `timeoutMs`
+   * start window. Without a fresh, longer deadline a large session would answer
+   * the menu and still time out, re-deadlocking on the next resume attempt.
+   */
+  summaryReadyTimeoutMs?: number;
 };
 
 /**
@@ -186,21 +194,56 @@ export function isWorkspaceTrustPrompt(pane: string): boolean {
 }
 
 /**
+ * Claude Code shows a one-time "resume strategy" menu before the normal TUI
+ * surface when resuming a large / old session — e.g. "This session is 2h 41m
+ * old and 119.5k tokens. … We recommend resuming from a summary." with options
+ * `1. Resume from summary (recommended)` / `2. Resume full session as-is` /
+ * `3. Don't ask me again`. The detached runtime has no human to answer it, so
+ * without acknowledging this menu the handler never reaches the ready marker
+ * and the session start times out, looping forever on every resume attempt.
+ * We match on the two stable option labels plus the confirm footer so the
+ * normal ready surface never trips it.
+ */
+export function isResumeSummaryPrompt(pane: string): boolean {
+  return (
+    pane.includes("Resume from summary") && pane.includes("Resume full session") && pane.includes("Enter to confirm")
+  );
+}
+
+/**
  * Poll capture-pane until both the bypass-permissions marker and a `❯`
  * input prompt line are visible. Resolves on success, throws on timeout.
- * If Claude shows its workspace trust prompt first, acknowledge it once and
- * keep waiting for the actual ready surface.
+ * Two one-time interactive prompts can precede the ready surface; we
+ * auto-acknowledge each and keep waiting:
+ * - the workspace trust prompt (acknowledged with Enter); and
+ * - the large-session "resume strategy" menu, where we accept the default
+ *   "Resume from summary (recommended)" so over-threshold sessions resume from
+ *   a summary instead of deadlocking on an unanswerable menu.
  */
 export async function waitForReady(input: WaitForReadyInput): Promise<void> {
   const timeoutMs = input.timeoutMs ?? 30_000;
   const pollIntervalMs = input.pollIntervalMs ?? 250;
+  const summaryReadyTimeoutMs = input.summaryReadyTimeoutMs ?? 120_000;
   const started = Date.now();
+  let deadline = started + timeoutMs;
   let acceptedWorkspaceTrust = false;
-  while (Date.now() - started < timeoutMs) {
+  let acceptedResumeSummary = false;
+  while (Date.now() < deadline) {
     const pane = await capturePane(input.name);
     if (!acceptedWorkspaceTrust && isWorkspaceTrustPrompt(pane)) {
       acceptedWorkspaceTrust = true;
       await sendKey(input.name, "Enter");
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+      continue;
+    }
+    if (!acceptedResumeSummary && isResumeSummaryPrompt(pane)) {
+      // Enter selects the default-highlighted "1. Resume from summary
+      // (recommended)" — the over-threshold path the menu itself recommends.
+      acceptedResumeSummary = true;
+      await sendKey(input.name, "Enter");
+      // Summary generation needs a fresh, longer window than a normal start,
+      // or a large session answers the menu and still times out.
+      deadline = Date.now() + summaryReadyTimeoutMs;
       await new Promise((r) => setTimeout(r, pollIntervalMs));
       continue;
     }
@@ -209,7 +252,8 @@ export async function waitForReady(input: WaitForReadyInput): Promise<void> {
     }
     await new Promise((r) => setTimeout(r, pollIntervalMs));
   }
-  throw new Error(`claude TUI did not become ready within ${timeoutMs}ms (session=${input.name})`);
+  const waitedMs = Date.now() - started;
+  throw new Error(`claude TUI did not become ready within ${waitedMs}ms (session=${input.name})`);
 }
 
 /**
