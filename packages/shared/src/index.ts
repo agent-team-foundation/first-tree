@@ -16,6 +16,8 @@ export {
   normalizeDocLinkPath,
   parseWorkspaceDocKey,
 } from "./lib/doc-path.js";
+// -- GitHub-style identicon avatar generator (shared by web Avatar fallback; pure, browser + Node safe) --
+export { type IdenticonSvgOptions, identiconCells, identiconSvg } from "./lib/identicon.js";
 export {
   extractMentions,
   MENTION_REGEX,

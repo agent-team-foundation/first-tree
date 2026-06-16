@@ -1,20 +1,16 @@
 /**
- * Avatar — circular avatar with initials fallback.
+ * Avatar — avatar with a deterministic identicon fallback.
  *
  * Renders an image URL when present (member GitHub avatar, agent custom
- * upload). Falls back to a colored circle + initial. The fill color is
- * resolved from `colorToken` when provided (manager-selected agent
- * override), otherwise from the deterministic hash on `seed`. When
- * neither is supplied, falls back to the brand color.
+ * upload) as a circle. Otherwise falls back to a GitHub-style identicon — a
+ * symmetric block pattern derived from `seed` (or `name` when no seed is
+ * given), painted in the subject's themed avatar hue (`colorToken` override,
+ * else the deterministic hash). The identicon replaces the old colored
+ * circle + initial.
  */
 
 import { resolveAvatarHue } from "./chat/chat-row-avatar.js";
-
-function initial(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) return "?";
-  return trimmed[0]?.toUpperCase() ?? "?";
-}
+import { Identicon } from "./identicon.js";
 
 type AvatarProps = {
   src?: string | null;
@@ -23,20 +19,19 @@ type AvatarProps = {
   className?: string;
   /**
    * Manager-selected color token (e.g. an agent's `avatarColorToken`).
-   * When omitted the fallback color is resolved from `seed`, then from
-   * `--brand` if neither is provided.
+   * When omitted the identicon hue is resolved from `seed` (then `name`).
    */
   colorToken?: string | null;
   /**
-   * Stable seed used to derive a deterministic fallback color (typically
-   * the agent's uuid). Only used when `colorToken` is absent.
+   * Stable seed for the deterministic identicon pattern and hue (typically
+   * the agent's uuid). Falls back to `name` when absent.
    */
   seed?: string;
 };
 
 export function Avatar({ src, name, size = 28, className, colorToken, seed }: AvatarProps) {
-  const dim = `${size}px`;
   if (src) {
+    const dim = `${size}px`;
     return (
       <img
         src={src}
@@ -54,28 +49,7 @@ export function Avatar({ src, name, size = 28, className, colorToken, seed }: Av
       />
     );
   }
-  const hasHueInput = (typeof colorToken === "string" && colorToken.length > 0) || (seed && seed.length > 0);
-  const background = hasHueInput ? resolveAvatarHue(colorToken, seed ?? "") : "var(--brand)";
-  const color = hasHueInput ? "var(--fg-on-vivid)" : "var(--bg-raised)";
-  return (
-    <span
-      className={className}
-      role="img"
-      aria-label={name}
-      style={{
-        width: dim,
-        height: dim,
-        borderRadius: "50%",
-        background,
-        color,
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        lineHeight: 1,
-        userSelect: "none",
-      }}
-    >
-      <span className="text-subtitle font-semibold">{initial(name)}</span>
-    </span>
-  );
+  const identiconSeed = seed && seed.length > 0 ? seed : name;
+  const color = resolveAvatarHue(colorToken, identiconSeed);
+  return <Identicon seed={identiconSeed} size={size} color={color} className={className} label={name} />;
 }

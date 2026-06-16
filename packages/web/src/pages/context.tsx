@@ -13,6 +13,7 @@ import { useNavigate } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
 import { useAuth } from "../auth/auth-context.js";
 import { resolveAvatarHue } from "../components/chat/chat-row-avatar.js";
+import { Identicon } from "../components/identicon.js";
 import { Button } from "../components/ui/button.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
@@ -452,9 +453,7 @@ function ReadFeedRow({
   return (
     <li className={fresh ? "context-usage-feed-row is-fresh" : "context-usage-feed-row"}>
       <span className="context-usage-feed-dot" aria-hidden="true" />
-      <span className="context-usage-feed-avatar" aria-hidden="true" style={{ background: hue }}>
-        {agentInitials(event.agentName)}
-      </span>
+      <Identicon seed={event.agentId} size={22} color={hue} className="context-usage-feed-avatar" />
       <span className="context-usage-feed-text">
         <span className="context-usage-feed-agent">{event.agentName}</span>
         <span className="context-usage-feed-action"> read </span>
@@ -521,13 +520,20 @@ function WriteFeedRow({
       <span className="context-usage-feed-write-icon" aria-hidden="true">
         ✎
       </span>
-      <span
-        className={attributed ? "context-usage-feed-avatar" : "context-usage-feed-avatar is-git"}
-        aria-hidden="true"
-        style={attributed ? { background: hue } : undefined}
-      >
-        {agentInitials(displayName)}
-      </span>
+      {attributed ? (
+        <Identicon
+          seed={write.agentId ?? displayName}
+          size={22}
+          color={hue ?? "var(--avatar-hue-0)"}
+          className="context-usage-feed-avatar"
+        />
+      ) : (
+        // Git author (no agent matched): keep an honest neutral initials marker,
+        // never a generated identicon that would read as a first-tree agent.
+        <span className="context-usage-feed-avatar is-git" aria-hidden="true">
+          {agentInitials(displayName)}
+        </span>
+      )}
       <span className="context-usage-feed-text">
         <span className="context-usage-feed-agent">{displayName}</span>
         <span className="context-usage-feed-action">{writeVerb(write.changeType)}</span>
@@ -564,19 +570,11 @@ function WriteFeedRow({
   );
 }
 
-function chatLabel(event: ContextTreeIoEvent): string {
-  const trimmed = event.chatTitle?.trim();
-  if (trimmed && trimmed.length > 0) return `#${trimmed}`;
-  if (event.chatId) return `#${event.chatId.slice(-6)}`;
-  return "";
-}
-
 /**
- * Two-letter initials from an agent display name. Handles space-separated
- * names ("Test Agent" → "TA"), kebab/snake/dot separators
- * ("gandy-coder" → "GC", "qa.bot" → "QB"), and falls back to the first
- * two characters when there is only one token ("reviewer" → "RE").
- * Always uppercase.
+ * Two-letter initials for a git author with no matched agent (the only
+ * remaining non-identicon avatar — agents use <Identicon>). Handles
+ * space/kebab/snake/dot separators ("gandy-coder" → "GC"), falling back to the
+ * first two characters for single tokens. Always uppercase.
  */
 function agentInitials(name: string): string {
   const trimmed = name.trim();
@@ -586,6 +584,13 @@ function agentInitials(name: string): string {
     return `${tokens[0]?.[0] ?? ""}${tokens[1]?.[0] ?? ""}`.toUpperCase();
   }
   return trimmed.slice(0, 2).toUpperCase();
+}
+
+function chatLabel(event: ContextTreeIoEvent): string {
+  const trimmed = event.chatTitle?.trim();
+  if (trimmed && trimmed.length > 0) return `#${trimmed}`;
+  if (event.chatId) return `#${event.chatId.slice(-6)}`;
+  return "";
 }
 
 function relativeTimeLabel(value: string, nowMs: number): string {

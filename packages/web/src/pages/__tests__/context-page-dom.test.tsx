@@ -194,7 +194,9 @@ describe("ContextPage DOM behavior", () => {
     expect(container.textContent).toContain("wrote 5 times");
     expect(container.textContent).toContain("23total nodes");
     expect(container.textContent).toContain("+6 updates");
-    expect(container.textContent).toContain("QB");
+    // The usage-feed avatar is a generated identicon (an svg), not text initials.
+    expect(container.querySelector(".context-usage-feed-avatar svg")).not.toBeNull();
+    expect(container.textContent).toContain("qa.bot-2");
     expect(container.textContent).toContain("#chat-3");
 
     await click(buttonByText(container, "Show all 22"));
