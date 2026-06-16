@@ -1475,5 +1475,38 @@ describe("ChatView", () => {
 
       await act(async () => root.unmount());
     });
+
+    // Regression: the rail keys its stateful sections (Participants, Summary) by
+    // chatId to reset fold state on switch. Those keys MUST be per-section unique
+    // — keying both with the bare chatId made them collide, and React duplicated
+    // the sections (two "Participants" stacked). Guard by asserting React emits no
+    // "two children with the same key" console error while the rail renders.
+    it("renders the rail's keyed sections without a duplicate-key collision", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const withDescription = chatDetail({ description: DESCRIPTION_MD });
+      chatMocks.getChat.mockResolvedValue(withDescription);
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { container, root } = await renderDom(
+        <ChatView agentId="agent-1" chatId="chat-1" />,
+        (queryClient) => seedChat(queryClient, withDescription),
+        "/",
+      );
+      await waitForCondition(() => sidebarOpen(container), "Expected rail to auto-open for a chat with a description");
+
+      const dupKeyWarnings = errorSpy.mock.calls.filter((args) =>
+        args.some((a) => typeof a === "string" && a.includes("two children with the same key")),
+      );
+      expect(dupKeyWarnings).toEqual([]);
+
+      // And exactly one of each keyed section is in the DOM.
+      const eyebrows = [...container.querySelectorAll('aside[aria-label="Chat details"] .text-eyebrow')].map((e) =>
+        (e.textContent ?? "").trim(),
+      );
+      expect(eyebrows.filter((t) => t.startsWith("Participants"))).toHaveLength(1);
+      expect(eyebrows.filter((t) => t.startsWith("Summary"))).toHaveLength(1);
+
+      errorSpy.mockRestore();
+      await act(async () => root.unmount());
+    });
   });
 });
