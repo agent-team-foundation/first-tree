@@ -1,4 +1,6 @@
-import { readdirSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -604,22 +606,107 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("One-time legacy-layout migration");
     expect(briefing).toContain("never reach into a sibling agent's");
     expect(briefing).toContain("merge-base --is-ancestor <wt-HEAD> origin/<default>");
-    expect(briefing).toContain("rm -rf <legacy>");
-    // P1 (Codex, PR #1083): `git worktree remove` refuses a main working tree,
-    // so `rm -rf <legacy>` is the only way to drop the legacy checkout itself —
-    // the guidance must require clearing the SAME clean + already-merged bar on
-    // the checkout's own tree/HEAD before that delete, not just on linked
-    // worktrees.
-    expect(briefing).toContain("git -C <legacy> status --porcelain");
+    // P0 (issue #1086): the retire target must be mechanically constrained, not
+    // hand-filled. A path preflight derives `$legacy` from the manifest and
+    // proves it is exactly the intended legacy checkout before the git-state
+    // gates run — resolve workspace root from `.first-tree/workspace.json`,
+    // realpath + immediate-child check, reject reserved workspace dirs and
+    // symlinks, require the toplevel/non-bare/origin to all match.
+    expect(briefing).toContain('[ -f "$d/.first-tree/workspace.json" ]');
+    expect(briefing).toContain("assert_legacy_target() {");
+    expect(briefing).toContain("reserved workspace dir");
+    expect(briefing).toContain(".first-tree|source-repos|worktrees|context-tree)");
+    // Every gate runs against `$candidate`, never `$legacy`.
+    expect(briefing).toContain('real=$(realpath "$candidate")');
+    expect(briefing).toContain("reject: target is the workspace root");
+    expect(briefing).toContain("is not an immediate child of");
+    expect(briefing).toContain('git -C "$candidate" rev-parse --show-toplevel');
+    expect(briefing).toContain("rev-parse --is-bare-repository");
+    expect(briefing).toContain('git -C "$candidate" remote get-url origin');
+    // Blocker (yuezengwu / codex-bot on PR #1087): `$legacy` is cleared on entry
+    // and only published after EVERY gate passes, so a rejected/failed call can
+    // never leave a stale target for the git-state gates that follow.
+    expect(briefing).toContain("name=$1 want=$2 legacy= candidate=$WS/$name");
+    expect(briefing).toContain("  legacy=$candidate");
+    // Blocker (codex-assistant on PR #1087, per #1086): the origin compare is
+    // canonical — `.git` and the https/http/ssh/git/scp transport forms all
+    // collapse to host/path, so a legitimate checkout cloned via a different URL
+    // form is not rejected as wrong-origin (behaviorally exercised below).
+    expect(briefing).toContain("canon_url() {");
+    expect(briefing).toContain('[ "$(canon_url "$got")" = "$(canon_url "$want")" ]');
+    // The candidate path is derived per declared source and baked from the
+    // manifest, so the agent never hand-fills a naked `<legacy>` placeholder.
+    expect(briefing).toContain("assert_legacy_target 'api' 'git@github.com:example/api.git'");
+    expect(briefing).toContain("assert_legacy_target 'web' 'git@github.com:example/web.git'");
+    // Git-state gates now run against the validated `$legacy` variable, not a
+    // raw `<legacy>` placeholder.
+    expect(briefing).toContain('git -C "$legacy" status --porcelain');
     expect(briefing).toContain("merge-base --is-ancestor HEAD origin/<default>");
-    // P1 (codex-assistant, PR #1083 follow-up): `rm -rf <legacy>` also destroys
+    // P1 (codex-assistant, PR #1083 follow-up): the retire also destroys
     // local-only history the working-tree/HEAD checks don't see — branches not
     // checked out in any worktree, and stashes. Guard those too before delete.
-    expect(briefing).toContain("git -C <legacy> branch --no-merged origin/<default>");
-    expect(briefing).toContain("git -C <legacy> stash list");
+    expect(briefing).toContain('git -C "$legacy" branch --no-merged origin/<default>');
+    expect(briefing).toContain('git -C "$legacy" stash list');
     expect(briefing).toContain("only after ALL of the above are clear");
+    // P0 (issue #1086): the final destructive action is a reversible quarantine
+    // move, not an in-place irreversible `rm -rf`; deletion is a separate
+    // human-confirmed step.
+    expect(briefing).toContain('mv -- "$legacy" "$legacy.retired.$(date +%Y%m%d%H%M%S)"');
+    expect(briefing).not.toContain("rm -rf <legacy>");
+    expect(briefing).toContain("a separate step a human confirms");
     // The context-tree symlink case points at the existing Tree Location block.
     expect(briefing).toMatch(/`context-tree` \*\*symlink\*\* migrates the same/);
+  });
+
+  it("preflight canon_url collapses .git / https / http / ssh / git / scp origin forms for the same repo but not a different one (issue #1086)", () => {
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        sourceRepos: [{ absolutePath: `${AGENT_HOME}/source-repos/api`, url: "https://github.com/org/api" }],
+      }),
+    );
+    // Extract the shipped `canon_url` shell function verbatim from the recipe
+    // and exercise it — a string assertion alone cannot prove the transport
+    // forms actually collapse. codex-assistant (PR #1087) asked for a test that
+    // accepts equivalent SSH/HTTPS origins while still rejecting a different repo.
+    // Use plain indexOf/slice rather than a regex — a backtracking pattern over
+    // the (analysis-uncontrolled) briefing string trips the ReDoS check.
+    const fnStart = briefing.indexOf("canon_url() {\n");
+    expect(fnStart).toBeGreaterThanOrEqual(0);
+    const fnEnd = briefing.indexOf("\n}", fnStart);
+    expect(fnEnd).toBeGreaterThan(fnStart);
+    const canonFn = briefing.slice(fnStart, fnEnd + 2);
+
+    // Run the shipped function from a script file with the URL passed as a
+    // positional argument — never interpolated into a shell command string — so
+    // the test exercises the real `sed` pipeline without constructing a command
+    // from a variable (which a static-analysis command-injection check flags).
+    const dir = mkdtempSync(join(tmpdir(), "canon-url-"));
+    try {
+      const scriptPath = join(dir, "canon.sh");
+      writeFileSync(scriptPath, `${canonFn}\ncanon_url "$1"\n`);
+      const canon = (url: string): string => execFileSync("sh", [scriptPath, url], { encoding: "utf8" }).trim();
+
+      const key = canon("https://github.com/agent-team-foundation/first-tree.git");
+      expect(key).toBe("github.com/agent-team-foundation/first-tree");
+      const sameRepo = [
+        "https://github.com/agent-team-foundation/first-tree.git",
+        "https://github.com/agent-team-foundation/first-tree",
+        "http://github.com/agent-team-foundation/first-tree",
+        "git@github.com:agent-team-foundation/first-tree.git",
+        "git@github.com:agent-team-foundation/first-tree",
+        "ssh://git@github.com/agent-team-foundation/first-tree.git",
+        "git://github.com/agent-team-foundation/first-tree.git",
+      ];
+      for (const url of sameRepo) {
+        expect(canon(url), `expected ${url} to canonicalize to ${key}`).toBe(key);
+      }
+      // Genuinely different repos must NOT collapse to the same canonical key —
+      // canonicalization stays fail-closed (no false-accept of another repo).
+      expect(canon("https://github.com/agent-team-foundation/other")).not.toBe(key);
+      expect(canon("git@gitlab.com:agent-team-foundation/first-tree.git")).not.toBe(key);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("omits the Source Repositories block when no repos are predeclared", () => {
