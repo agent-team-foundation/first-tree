@@ -247,6 +247,43 @@ describe("SessionManager: transient retry on session start", () => {
     await sm.shutdown();
   });
 
+  it("manual suspend during retry backoff cancels the retry and leaves work for recovery", async () => {
+    vi.useFakeTimers();
+    try {
+      const failing: AgentHandler = {
+        start: vi.fn().mockRejectedValue(new FakeRateLimit("rate limited")),
+        resume: vi.fn(),
+        inject: vi.fn(),
+        suspend: vi.fn().mockResolvedValue(undefined),
+        shutdown: vi.fn().mockResolvedValue(undefined),
+      };
+      const recovered: AgentHandler = {
+        start: vi.fn().mockResolvedValue("session-after-retry"),
+        resume: vi.fn().mockResolvedValue("session-after-retry"),
+        inject: vi.fn(),
+        suspend: vi.fn().mockResolvedValue(undefined),
+        shutdown: vi.fn().mockResolvedValue(undefined),
+      };
+      const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+      const sm = makeManager({ handlers: [failing, recovered], recoverChat });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-suspend-retry", messageId: "msg-retry-1" }));
+      await sm.handleCommand("chat-suspend-retry", "session:suspend");
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(recovered.start).not.toHaveBeenCalled();
+      expect(recoverChat).not.toHaveBeenCalled();
+
+      await sm.dispatch(mockEntry({ id: 2, chatId: "chat-suspend-retry", messageId: "msg-retry-2" }));
+      expect(recoverChat).toHaveBeenCalledWith("chat-suspend-retry");
+      expect(recovered.start).not.toHaveBeenCalled();
+
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("queues newer retry-window messages behind the original unconsumed prefix", async () => {
     const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
     const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);

@@ -39,6 +39,8 @@ type SessionManagerInternals = {
     receive(entry: InboxEntryWithMessage): DeliveryDecision;
     markOwned(work: DeliveryWork): boolean;
     markProcessingStarted(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void;
+    prepareOperatorSuspend(chatId: string): Promise<void>;
+    hasRecoveryDebt(chatId: string): boolean;
   };
   _activeCount: number;
   acquireActiveSlot(chatId: string, message: SessionMessage | null): boolean;
@@ -580,13 +582,12 @@ describe("SessionManager edge coverage", () => {
     await sm.shutdown();
   });
 
-  it("drains same-chat buffered delivery after explicit resume at the concurrency limit", async () => {
+  it("routes same-chat delivery after manual suspend without explicit resume", async () => {
     const resume = vi.fn().mockResolvedValue("resumed-paused");
-    const inject = vi.fn().mockReturnValue({ kind: "owned", mode: "queued" });
     const paused = makeSessionRecord("chat-paused", {
       status: "suspended",
       claudeSessionId: "old-paused-session",
-      handler: handler({ resume, inject }),
+      handler: handler({ resume }),
     });
     const sm = makeManager({ concurrency: 1 });
     internals(sm).sessions.set("chat-paused", paused);
@@ -595,14 +596,11 @@ describe("SessionManager edge coverage", () => {
 
     const entry = mockEntry({ id: 101, chatId: "chat-paused" });
     await sm.dispatch(entry);
-    expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-paused" && item.message)).toBe(true);
 
-    await sm.handleCommand("chat-paused", "session:resume");
-    await Promise.resolve();
-
-    expect(resume).toHaveBeenCalledWith(undefined, "old-paused-session", expect.anything());
-    expect(inject).toHaveBeenCalledWith(
+    expect(resume).toHaveBeenCalledWith(
       expect.objectContaining({ inboxEntryId: 101, chatId: "chat-paused" }),
+      "old-paused-session",
+      expect.anything(),
       expect.anything(),
     );
     expect(internals(sm).pendingQueue.some((item) => item.chatId === "chat-paused")).toBe(false);
@@ -803,6 +801,33 @@ describe("SessionManager edge coverage", () => {
     internals(sm).triggerImmediateRetry("missing");
     internals(sm).sessions.set("chat-no-retry", makeSessionRecord("chat-no-retry", { retryAttempt: 0 }));
     internals(sm).triggerImmediateRetry("chat-no-retry");
+    await sm.shutdown();
+  });
+
+  it("does not let runRetry bypass existing recovery debt", async () => {
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const recovered = handler({ start: vi.fn().mockResolvedValue("should-not-start") });
+    const sm = makeManager({ handlers: [recovered], recoverChat });
+    const chatId = "chat-retry-debt";
+    const inbox = internals(sm).inboxDelivery;
+
+    inbox.receive(mockEntry({ id: 77, chatId, messageId: "msg-retry-debt" }));
+    await inbox.prepareOperatorSuspend(chatId);
+    expect(inbox.hasRecoveryDebt(chatId)).toBe(true);
+
+    const retrying = makeSessionRecord(chatId, {
+      retryAttempt: 1,
+      status: "suspended",
+      startMessage: makeMessage(chatId),
+      lastRetryReason: "rate_limit",
+    });
+    internals(sm).sessions.set(chatId, retrying);
+
+    await internals(sm).runRetry(chatId);
+
+    expect(recoverChat).toHaveBeenCalledWith(chatId);
+    expect(recovered.start).not.toHaveBeenCalled();
+    expect(retrying.retryAttempt).toBe(0);
     await sm.shutdown();
   });
 

@@ -101,12 +101,6 @@ type SlotDeliveryKind = "fresh" | "recovery" | "control";
 
 type SessionCommandType = "session:suspend" | "session:resume" | "session:terminate";
 
-type ManualPauseGuard = {
-  generation: number;
-  pausedAfterEntryId: number | null;
-  createdAt: number;
-};
-
 /**
  * Resolve the directory the runtime reads markdown doc snapshots against —
  * the same dir the handler actually hands the agent as cwd for this chat.
@@ -397,8 +391,6 @@ export class SessionManager {
   private readonly pendingQueue: PendingMessage[] = [];
   private readonly lastReportedStates = new Map<string, SessionState>();
   private readonly sessionRuntimeStates = new Map<string, RuntimeState>();
-  private readonly manualPauseGuards = new Map<string, ManualPauseGuard>();
-  private manualPauseGeneration = 0;
   /** Cache of chatId → organizationId, resolved via `getChatDetail`. A chat's
    *  org is immutable, so this is a cheap permanent memo that keeps doc-capture
    *  uploads off the hot path after the first lookup. */
@@ -456,6 +448,8 @@ export class SessionManager {
   async dispatch(entry: InboxEntryWithMessage): Promise<void> {
     const chatId = entry.chatId ?? entry.message.chatId;
     const messageId = entry.message.id;
+    const suspending = this.sessions.get(chatId)?.suspending;
+    if (suspending) await suspending;
     const isRecoveryRedelivery = this.inboxDelivery.takeRecoveryActivationReady(chatId);
 
     if (
@@ -463,7 +457,7 @@ export class SessionManager {
       this.inboxDelivery.shouldRecoverBeforeDispatch(
         chatId,
         this.hasHealthyLiveHandler(chatId) || this.hasPendingTransientRetry(chatId),
-        this.hasLocalSessionRecord(chatId),
+        this.hasLocalRecoveryRisk(chatId),
       )
     ) {
       await this.inboxDelivery.recoverIfNeeded(chatId, `before_dispatch:${entry.id}:${messageId}`);
@@ -531,11 +525,6 @@ export class SessionManager {
           await this.ensureContextTreeBinding();
         }
 
-        if (this.shouldBufferForManualPause(chatId)) {
-          this.bufferForManualPause(chatId, message, isRecoveryRedelivery ? "recovery" : "fresh");
-          return;
-        }
-
         // 5. Route by session state. ACK no longer happens inside route — the
         // entry sits in the coordinator ledger until the handler completes the
         // concrete message/batch it actually consumed. Do not await inside the
@@ -600,22 +589,33 @@ export class SessionManager {
   /** Handle a server-issued session command. Terminate drops all local state without reporting back. */
   async handleCommand(chatId: string, command: SessionCommandType): Promise<void> {
     if (command === "session:suspend") {
-      this.setManualPauseGuard(chatId);
       const session = this.sessions.get(chatId);
+      if (session) this.clearRetryState(session);
       if (session?.status === "active") {
         this.config.log.info({ chatId }, "suspend command received");
-        this.suspendSession(session);
+        this.suspendSession(session, {
+          reason: "operator_suspended",
+          ackConsumedPrefix: true,
+          operatorResolution: true,
+        });
+      } else {
+        await this.inboxDelivery.prepareOperatorSuspend(chatId);
       }
       this.projectSessionRuntime(chatId);
       return;
     }
 
     if (command === "session:resume") {
-      this.clearManualPauseGuard(chatId);
       const session = this.sessions.get(chatId);
-      if (session && session.status !== "active") {
+      if (session?.suspending) await session.suspending;
+      if (await this.recoverDebtBeforeResume(chatId, "session_resume:recovery_debt")) {
+        this.drainPendingQueue();
+        return;
+      }
+      const current = this.sessions.get(chatId);
+      if (current && current.status !== "active") {
         this.config.log.info({ chatId }, "resume command received");
-        await this.resumeSession(session, undefined, "fresh");
+        await this.resumeSession(current, undefined, "fresh");
       }
       this.projectSessionRuntime(chatId);
       this.drainPendingQueue();
@@ -623,7 +623,6 @@ export class SessionManager {
     }
 
     if (command === "session:terminate") {
-      this.clearManualPauseGuard(chatId);
       const session = this.sessions.get(chatId);
       const hadMapping = this.evictedMappings.has(chatId);
       if (!session && !hadMapping) return;
@@ -789,40 +788,26 @@ export class SessionManager {
     return Boolean(entry && entry.retryAttempt > 0);
   }
 
-  private hasLocalSessionRecord(chatId: string): boolean {
-    return this.sessions.has(chatId) || this.evictedMappings.has(chatId);
+  private hasLocalRecoveryRisk(chatId: string): boolean {
+    return this.evictedMappings.has(chatId) || this.sessions.get(chatId)?.status === "evicted";
   }
 
-  private setManualPauseGuard(chatId: string): void {
-    this.manualPauseGuards.set(chatId, {
-      generation: ++this.manualPauseGeneration,
-      pausedAfterEntryId: this.inboxDelivery.latestEntryId(chatId),
-      createdAt: Date.now(),
-    });
+  private clearRetryState(entry: SessionEntry): void {
+    if (entry.retryTimer) clearTimeout(entry.retryTimer);
+    entry.retryAttempt = 0;
+    entry.retryNextAt = null;
+    entry.retryTimer = null;
+    entry.lastRetryReason = null;
+    entry.lastRetryRawError = null;
+    entry.retryQueuedMessages = [];
   }
 
-  private clearManualPauseGuard(chatId: string): void {
-    this.manualPauseGuards.delete(chatId);
-  }
-
-  private shouldBufferForManualPause(chatId: string): boolean {
-    return this.manualPauseGuards.has(chatId);
-  }
-
-  private bufferForManualPause(chatId: string, message: SessionMessage, deliveryKind: SlotDeliveryKind): void {
-    if (
-      message.inboxEntryId !== undefined &&
-      this.pendingQueue.some((queued) => queued.message?.inboxEntryId === message.inboxEntryId)
-    ) {
-      return;
-    }
-    const guard = this.manualPauseGuards.get(chatId);
-    this.config.log.info(
-      { chatId, entryId: message.inboxEntryId, deliveryKind, pauseGeneration: guard?.generation },
-      "manual pause guard buffered inbox delivery",
-    );
-    this.pendingQueue.push({ message, chatId, deliveryKind });
+  private async recoverDebtBeforeResume(chatId: string, reason: string): Promise<boolean> {
+    if (!this.inboxDelivery.hasRecoveryDebt(chatId)) return false;
+    this.config.log.info({ chatId, reason }, "resume deferred because chat has recovery debt");
+    await this.inboxDelivery.recoverIfNeeded(chatId, reason);
     this.projectSessionRuntime(chatId);
+    return true;
   }
 
   private errorCompletionRetryReason(outcome: TurnOutcome): string | null {
@@ -919,11 +904,6 @@ export class SessionManager {
     message: SessionMessage,
     deliveryKind: SlotDeliveryKind = "fresh",
   ): Promise<void> {
-    if (this.shouldBufferForManualPause(chatId)) {
-      this.bufferForManualPause(chatId, message, deliveryKind);
-      return;
-    }
-
     const existing = this.sessions.get(chatId);
 
     // Transient retry path: keep the original start/resume message at the head
@@ -1100,6 +1080,7 @@ export class SessionManager {
     if (entry.suspending) {
       await entry.suspending;
     }
+    if (await this.recoverDebtBeforeResume(entry.chatId, "session_resume:recovery_debt")) return;
 
     // Admin-triggered resume has no provider input. It may use idle capacity,
     // but it must not preempt unrelated working turns.
@@ -1291,15 +1272,10 @@ export class SessionManager {
     const entry = this.sessions.get(chatId);
     if (!entry) return;
     if (entry.status === "active") return; // racing inject already revived it
-    if (this.shouldBufferForManualPause(chatId)) {
-      const nextDelay = 5_000;
-      entry.retryNextAt = Date.now() + nextDelay;
-      entry.retryTimer = setTimeout(() => {
-        entry.retryTimer = null;
-        this.runRetry(chatId).catch((err) => {
-          this.config.log.warn({ chatId, err }, "paused session retry rearm failed");
-        });
-      }, nextDelay);
+    if (this.inboxDelivery.hasRecoveryDebt(chatId)) {
+      this.clearRetryState(entry);
+      await this.inboxDelivery.recoverIfNeeded(chatId, "session_retry:recovery_debt");
+      this.projectSessionRuntime(chatId);
       return;
     }
 
@@ -1435,7 +1411,6 @@ export class SessionManager {
   private triggerImmediateRetry(chatId: string): void {
     const entry = this.sessions.get(chatId);
     if (!entry || entry.retryAttempt === 0) return;
-    if (this.shouldBufferForManualPause(chatId)) return;
     if (entry.retryTimer) {
       clearTimeout(entry.retryTimer);
       entry.retryTimer = null;
@@ -1448,10 +1423,6 @@ export class SessionManager {
 
     const queued = entry.retryQueuedMessages.splice(0);
     for (const message of queued) {
-      if (this.shouldBufferForManualPause(entry.chatId)) {
-        this.bufferForManualPause(entry.chatId, message, "recovery");
-        continue;
-      }
       this.setCurrentTrigger(entry.chatId, message);
       try {
         if (
@@ -1572,15 +1543,17 @@ export class SessionManager {
 
   private suspendSession(
     entry: SessionEntry,
-    opts: { reason: string; ackConsumedPrefix: boolean; drainQueue?: boolean } = {
+    opts: { reason: string; ackConsumedPrefix: boolean; drainQueue?: boolean; operatorResolution?: boolean } = {
       reason: "session_suspended",
       ackConsumedPrefix: true,
       drainQueue: true,
     },
   ): void {
-    const prepare = opts.ackConsumedPrefix
-      ? this.inboxDelivery.prepareSuspend(entry.chatId, opts.reason)
-      : Promise.resolve(this.inboxDelivery.prepareEvict(entry.chatId, opts.reason));
+    const prepare = opts.operatorResolution
+      ? this.inboxDelivery.prepareOperatorSuspend(entry.chatId)
+      : opts.ackConsumedPrefix
+        ? this.inboxDelivery.prepareSuspend(entry.chatId, opts.reason)
+        : Promise.resolve(this.inboxDelivery.prepareEvict(entry.chatId, opts.reason));
     entry.status = "suspended";
     this._activeCount--;
     // Clear per-session runtime state on suspend
@@ -1606,7 +1579,7 @@ export class SessionManager {
 
   private drainPendingQueue(): void {
     if (this.pendingQueue.length === 0) return;
-    const nextIndex = this.pendingQueue.findIndex((queued) => !this.shouldBufferForManualPause(queued.chatId));
+    const nextIndex = this.pendingQueue.findIndex((queued) => !this.inboxDelivery.hasRecoveryDebt(queued.chatId));
     if (nextIndex < 0) return;
     const next = this.pendingQueue[nextIndex];
     if (!next) return;
