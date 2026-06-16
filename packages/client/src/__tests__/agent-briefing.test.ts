@@ -668,9 +668,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // and exercise it — a string assertion alone cannot prove the transport
     // forms actually collapse. codex-assistant (PR #1087) asked for a test that
     // accepts equivalent SSH/HTTPS origins while still rejecting a different repo.
-    const match = briefing.match(/canon_url\(\) \{\n[\s\S]*?\n\}/);
-    expect(match).not.toBeNull();
-    const canonFn = match?.[0] ?? "";
+    // Use plain indexOf/slice rather than a regex — a backtracking pattern over
+    // the (analysis-uncontrolled) briefing string trips the ReDoS check.
+    const fnStart = briefing.indexOf("canon_url() {\n");
+    expect(fnStart).toBeGreaterThanOrEqual(0);
+    const fnEnd = briefing.indexOf("\n}", fnStart);
+    expect(fnEnd).toBeGreaterThan(fnStart);
+    const canonFn = briefing.slice(fnStart, fnEnd + 2);
 
     // Run the shipped function from a script file with the URL passed as a
     // positional argument — never interpolated into a shell command string — so
