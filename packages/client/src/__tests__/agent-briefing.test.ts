@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -614,12 +615,24 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("assert_legacy_target() {");
     expect(briefing).toContain("reserved workspace dir");
     expect(briefing).toContain(".first-tree|source-repos|worktrees|context-tree)");
-    expect(briefing).toContain('real=$(realpath "$legacy")');
+    // Every gate runs against `$candidate`, never `$legacy`.
+    expect(briefing).toContain('real=$(realpath "$candidate")');
     expect(briefing).toContain("reject: target is the workspace root");
     expect(briefing).toContain("is not an immediate child of");
-    expect(briefing).toContain('git -C "$legacy" rev-parse --show-toplevel');
+    expect(briefing).toContain('git -C "$candidate" rev-parse --show-toplevel');
     expect(briefing).toContain("rev-parse --is-bare-repository");
-    expect(briefing).toContain('git -C "$legacy" remote get-url origin');
+    expect(briefing).toContain('git -C "$candidate" remote get-url origin');
+    // Blocker (yuezengwu / codex-bot on PR #1087): `$legacy` is cleared on entry
+    // and only published after EVERY gate passes, so a rejected/failed call can
+    // never leave a stale target for the git-state gates that follow.
+    expect(briefing).toContain("name=$1 want=$2 legacy= candidate=$WS/$name");
+    expect(briefing).toContain("  legacy=$candidate");
+    // Blocker (codex-assistant on PR #1087, per #1086): the origin compare is
+    // canonical — `.git` and the https/http/ssh/git/scp transport forms all
+    // collapse to host/path, so a legitimate checkout cloned via a different URL
+    // form is not rejected as wrong-origin (behaviorally exercised below).
+    expect(briefing).toContain("canon_url() {");
+    expect(briefing).toContain('[ "$(canon_url "$got")" = "$(canon_url "$want")" ]');
     // The candidate path is derived per declared source and baked from the
     // manifest, so the agent never hand-fills a naked `<legacy>` placeholder.
     expect(briefing).toContain("assert_legacy_target 'api' 'git@github.com:example/api.git'");
@@ -642,6 +655,42 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("a separate step a human confirms");
     // The context-tree symlink case points at the existing Tree Location block.
     expect(briefing).toMatch(/`context-tree` \*\*symlink\*\* migrates the same/);
+  });
+
+  it("preflight canon_url collapses .git / https / http / ssh / git / scp origin forms for the same repo but not a different one (issue #1086)", () => {
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        sourceRepos: [{ absolutePath: `${AGENT_HOME}/source-repos/api`, url: "https://github.com/org/api" }],
+      }),
+    );
+    // Extract the shipped `canon_url` shell function verbatim from the recipe
+    // and exercise it — a string assertion alone cannot prove the transport
+    // forms actually collapse. codex-assistant (PR #1087) asked for a test that
+    // accepts equivalent SSH/HTTPS origins while still rejecting a different repo.
+    const match = briefing.match(/canon_url\(\) \{\n[\s\S]*?\n\}/);
+    expect(match).not.toBeNull();
+    const canonFn = match?.[0] ?? "";
+    const canon = (url: string): string =>
+      execFileSync("sh", ["-c", `${canonFn}\ncanon_url "$1"`, "sh", url], { encoding: "utf8" }).trim();
+
+    const key = canon("https://github.com/agent-team-foundation/first-tree.git");
+    expect(key).toBe("github.com/agent-team-foundation/first-tree");
+    const sameRepo = [
+      "https://github.com/agent-team-foundation/first-tree.git",
+      "https://github.com/agent-team-foundation/first-tree",
+      "http://github.com/agent-team-foundation/first-tree",
+      "git@github.com:agent-team-foundation/first-tree.git",
+      "git@github.com:agent-team-foundation/first-tree",
+      "ssh://git@github.com/agent-team-foundation/first-tree.git",
+      "git://github.com/agent-team-foundation/first-tree.git",
+    ];
+    for (const url of sameRepo) {
+      expect(canon(url), `expected ${url} to canonicalize to ${key}`).toBe(key);
+    }
+    // Genuinely different repos must NOT collapse to the same canonical key —
+    // canonicalization stays fail-closed (no false-accept of another repo).
+    expect(canon("https://github.com/agent-team-foundation/other")).not.toBe(key);
+    expect(canon("git@gitlab.com:agent-team-foundation/first-tree.git")).not.toBe(key);
   });
 
   it("omits the Source Repositories block when no repos are predeclared", () => {
