@@ -12,7 +12,6 @@ import { chats } from "../../db/schema/chats.js";
 import { BadRequestError } from "../../errors.js";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
-import { agentAvatarImageUrl } from "../../services/agent.js";
 import * as chatService from "../../services/chat.js";
 import { resolveBindingPair } from "../../services/github-entity-chat.js";
 import {
@@ -129,7 +128,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       type: r.type,
       joinedAt: r.joinedAt.toISOString(),
       avatarColorToken: r.avatarColorToken ?? null,
-      avatarImageUrl: agentAvatarImageUrl(r.agentId, r.avatarImageUpdatedAt ?? null),
+      avatarImageUrl: r.avatarImageUrl,
     }));
   });
 
