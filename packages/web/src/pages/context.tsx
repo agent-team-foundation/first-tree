@@ -12,6 +12,7 @@ import { useNavigate } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
 import { useAuth } from "../auth/auth-context.js";
 import { resolveAvatarHue } from "../components/chat/chat-row-avatar.js";
+import { Identicon } from "../components/identicon.js";
 import { Button } from "../components/ui/button.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
@@ -338,9 +339,7 @@ function ContextUsageFeed({ snapshot }: { snapshot: ContextTreeSnapshot }) {
           return (
             <li key={event.id} className={isFresh ? "context-usage-feed-row is-fresh" : "context-usage-feed-row"}>
               <span className="context-usage-feed-dot" aria-hidden="true" />
-              <span className="context-usage-feed-avatar" aria-hidden="true" style={{ background: hue }}>
-                {agentInitials(event.agentName)}
-              </span>
+              <Identicon seed={event.agentId} size={22} color={hue} className="context-usage-feed-avatar" />
               <span className="context-usage-feed-text">
                 <span className="context-usage-feed-agent">{event.agentName}</span>
                 <span className="context-usage-feed-action">{event.action === "write" ? " wrote " : " read "}</span>
@@ -393,23 +392,6 @@ function chatLabel(event: ContextTreeIoEvent): string {
   if (trimmed && trimmed.length > 0) return `#${trimmed}`;
   if (event.chatId) return `#${event.chatId.slice(-6)}`;
   return "";
-}
-
-/**
- * Two-letter initials from an agent display name. Handles space-separated
- * names ("Test Agent" → "TA"), kebab/snake/dot separators
- * ("gandy-coder" → "GC", "qa.bot" → "QB"), and falls back to the first
- * two characters when there is only one token ("reviewer" → "RE").
- * Always uppercase.
- */
-function agentInitials(name: string): string {
-  const trimmed = name.trim();
-  if (trimmed.length === 0) return "??";
-  const tokens = trimmed.split(/[\s._-]+/).filter((part) => part.length > 0);
-  if (tokens.length >= 2) {
-    return `${tokens[0]?.[0] ?? ""}${tokens[1]?.[0] ?? ""}`.toUpperCase();
-  }
-  return trimmed.slice(0, 2).toUpperCase();
 }
 
 function relativeTimeLabel(value: string, nowMs: number): string {

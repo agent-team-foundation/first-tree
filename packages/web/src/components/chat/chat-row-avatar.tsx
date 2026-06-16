@@ -26,6 +26,7 @@
 
 import type { MeChatRow } from "@first-tree/shared";
 import type { ReactNode } from "react";
+import { Identicon } from "../identicon.js";
 
 type Participant = MeChatRow["participants"][number];
 
@@ -301,28 +302,7 @@ function SingleAvatar({
       />
     );
   }
-  return (
-    <span
-      aria-hidden="true"
-      style={{
-        width: size,
-        height: size,
-        borderRadius: "50%",
-        background: resolveAvatarHue(colorToken, hueSeed, muted),
-        color: "var(--fg-on-vivid)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: Math.round(size * 0.42),
-        fontWeight: 700,
-        lineHeight: 1,
-        letterSpacing: "-0.02em",
-        userSelect: "none",
-      }}
-    >
-      {initial(name)}
-    </span>
-  );
+  return <Identicon seed={hueSeed} size={size} color={resolveAvatarHue(colorToken, hueSeed, muted)} />;
 }
 
 function CompositeAvatar({
