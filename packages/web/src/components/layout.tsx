@@ -6,6 +6,7 @@ import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { DisconnectChip } from "./disconnect-chip.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
+import { NewVersionChip } from "./new-version-chip.js";
 import { ThemeToggle } from "./ui/theme-toggle.js";
 import { UserMenu } from "./user-menu.js";
 
@@ -118,6 +119,7 @@ export function Layout() {
               </span>
             </a>
             <DisconnectChip />
+            <NewVersionChip />
           </div>
         )}
 
