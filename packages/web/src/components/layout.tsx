@@ -1,6 +1,7 @@
 import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
+import { useNewVersionAvailable } from "../hooks/use-version-check.js";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
 import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
@@ -61,6 +62,12 @@ export function Layout() {
   // fall back to the OS `prefers-color-scheme` (honoured at boot in index.html);
   // the toggle returns at `md`. The avatar is the one control that never drops.
   const viewport = useWorkspaceViewport();
+  // Lifted out of NewVersionChip so the `/version.json` poll runs at EVERY
+  // breakpoint — the brand cluster (and its chip) is dropped on `narrow`, but
+  // version detection must not be. The chip is rendered in two places below:
+  // the full pill in the brand cluster, and a compact icon-only fallback in the
+  // right controls when the brand is dropped.
+  const newVersionAvailable = useNewVersionAvailable();
   const showJumpButton = viewport === "xl";
   const dropBrand = viewport === "narrow";
   const showThemeToggle = viewport !== "narrow";
@@ -119,7 +126,7 @@ export function Layout() {
               </span>
             </a>
             <DisconnectChip />
-            <NewVersionChip />
+            <NewVersionChip show={newVersionAvailable} />
           </div>
         )}
 
@@ -239,6 +246,9 @@ export function Layout() {
               />
             </>
           ) : null}
+          {/* On `narrow` the brand cluster (with the full chip) is dropped, so
+              surface a compact icon-only refresh entry here instead. */}
+          {dropBrand ? <NewVersionChip show={newVersionAvailable} compact /> : null}
           <UserMenu />
         </div>
       </header>
