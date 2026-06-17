@@ -7,7 +7,6 @@ import {
   type DocSnapshotFailReason,
   documentContextSchema,
   extractMentions,
-  isAgentFinalTextMetadata,
   isImageBatchRefContent,
   isImageRefContent,
   type MentionParticipant,
@@ -118,6 +117,7 @@ import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
+import { selectVisibleMessages } from "../../../utils/agent-final-text-filter.js";
 import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
 import { computeRequiresMention, shouldPrimeMentionOnFocus } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
@@ -1813,8 +1813,18 @@ export function ChatView({
     const byId = new Map<string, MessageWithDelivery>();
     for (const m of fromCache) byId.set(m.id, m);
     for (const m of fromServer) byId.set(m.id, m);
-    return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  }, [cachedMessages, messagesData]);
+    const sorted = Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    // Staging-only view filter applied at THE single source feeding the
+    // timeline AND every read-state projection derived from it (pill,
+    // high-water, divider, scroll anchor, useReadTracker's `messages`). Doing
+    // it here — not just at the rendered `items` — keeps the DOM and those
+    // projections from diverging: a hidden row has no DOM node, so it must
+    // also be absent from pill/anchor math or it drives an un-clearable "N
+    // new" pill. The IDB/server caches keep the full set, so toggling off
+    // restores the rows; the read-tracker derives its writes from the visible
+    // DOM (see use-read-tracker), so durable read-state stays coherent.
+    return selectVisibleMessages(sorted, hideFinalTextActive);
+  }, [cachedMessages, messagesData, hideFinalTextActive]);
 
   const gapAfterMessageId = useMemo<string | null>(
     () => findGapAfterMessageId(cachedMessages ?? [], messagesData?.items ?? []),
@@ -1912,16 +1922,11 @@ export function ChatView({
     //
     // mergedMessages (IDB cache ∪ server) feeds the timeline, not the raw server
     // window — otherwise cached messages outside the "last 50" window would
-    // vanish on chat re-open until the server fetch lands.
-    //
-    // Staging-only view filter: when active, drop agent final-text mirror rows
-    // here at the timeline-projection layer only. `mergedMessages` (and thus
-    // read-state, the new-message divider, threading, and blocking-request
-    // detection) keeps the full set — hiding is purely presentational.
-    const timelineMessages = hideFinalTextActive
-      ? mergedMessages.filter((m) => !isAgentFinalTextMetadata(m.metadata))
-      : mergedMessages;
-    const out: TimelineItem[] = timelineMessages.map((m) => ({
+    // vanish on chat re-open until the server fetch lands. When the staging
+    // hide toggle is active, mergedMessages is already the filtered visible set
+    // (see its useMemo), so the timeline, pill, divider, and read-tracker all
+    // share one source.
+    const out: TimelineItem[] = mergedMessages.map((m) => ({
       kind: "message" as const,
       at: m.createdAt,
       key: `m-${m.id}`,
@@ -1948,7 +1953,7 @@ export function ChatView({
 
     out.sort((a, b) => a.at.localeCompare(b.at));
     return out;
-  }, [mergedMessages, eventsData, hideFinalTextActive]);
+  }, [mergedMessages, eventsData]);
 
   const itemCount = items.length;
 
