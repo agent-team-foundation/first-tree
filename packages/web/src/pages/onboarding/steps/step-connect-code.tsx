@@ -1,5 +1,6 @@
+import type { GithubAppInstallationOutput } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Check, ChevronRight, Github } from "lucide-react";
+import { ArrowRight, Building2, Check, ChevronRight, Github, User } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { ApiError } from "../../../api/client.js";
 import { listOrgGithubRepos } from "../../../api/github.js";
@@ -270,6 +271,20 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
     <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
       <PhaseNav phase="pick" />
 
+      {/* Confirm WHICH GitHub account/org the App landed on — the install
+          account is whoever's github.com session was active at install time,
+          not necessarily the First Tree login account, so name it explicitly
+          before the repo pick. */}
+      {installQuery.data && (
+        <ConnectedBanner
+          installation={installQuery.data}
+          // Show the granted-repo count once the list has actually resolved —
+          // including 0 (loaded-but-empty is a real, informative count). Stay
+          // null while loading or on error, where a count would be a guess.
+          repoCount={reposQuery.isSuccess ? (reposQuery.data?.length ?? 0) : null}
+        />
+      )}
+
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
         {/* The "which repos" prompt only makes sense when there's a list to
             pick from — in loading / load-failed / empty states it would ask
@@ -411,6 +426,62 @@ function PhaseNav({ phase }: { phase: "connect" | "pick" }) {
           </Fragment>
         );
       })}
+    </div>
+  );
+}
+
+/**
+ * Post-install confirmation banner: names the GitHub account/org the App is now
+ * connected to (plus the granted-repo count once the list loads). The install
+ * account is set by whichever github.com session was active at install time —
+ * which need not be the account the user signed into First Tree with — so
+ * surfacing it here lets the user catch a wrong-account/org install before they
+ * pick repos. Mirrors the Settings → GitHub "Connected as" idiom (account icon +
+ * login + type chip) for visual consistency.
+ */
+function ConnectedBanner({
+  installation,
+  repoCount,
+}: {
+  installation: GithubAppInstallationOutput;
+  repoCount: number | null;
+}) {
+  const AccountIcon = installation.accountType === "Organization" ? Building2 : User;
+  return (
+    <div
+      className="flex items-center"
+      style={{
+        gap: "var(--sp-2)",
+        padding: "var(--sp-2) var(--sp-3)",
+        background: "var(--bg-sunken)",
+        borderRadius: "var(--radius-input)",
+        flexWrap: "wrap",
+      }}
+    >
+      <Check className="h-4 w-4" style={{ color: "var(--primary)", flexShrink: 0 }} aria-hidden="true" />
+      <span className="text-label" style={{ color: "var(--fg-3)" }}>
+        {COPY.connectCode.connected.label}
+      </span>
+      <AccountIcon className="h-4 w-4" style={{ color: "var(--fg-2)", flexShrink: 0 }} aria-hidden="true" />
+      <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
+        {installation.accountLogin}
+      </span>
+      <span
+        className="text-label"
+        style={{
+          padding: "var(--sp-0_5) var(--sp-1_5)",
+          background: "var(--bg)",
+          borderRadius: "var(--radius-input)",
+          color: "var(--fg-3)",
+        }}
+      >
+        {installation.accountType}
+      </span>
+      {repoCount !== null && (
+        <span className="text-label" style={{ color: "var(--fg-4)", marginLeft: "auto" }}>
+          {COPY.connectCode.connected.repoCount(repoCount)}
+        </span>
+      )}
     </div>
   );
 }

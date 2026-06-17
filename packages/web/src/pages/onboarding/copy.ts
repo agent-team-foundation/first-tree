@@ -136,8 +136,17 @@ export const COPY = {
     phases: ["Connect GitHub", "Pick repos"],
     cta: "Install on GitHub",
     waiting: "Waiting for GitHub…",
-    // (connected status row removed — the PhaseNav's "✓ Connect GitHub" already
-    // signals the connection, and the repo picker shows the org + repos.)
+    /** Post-install confirmation. The account a GitHub App is installed on is
+        set by whoever's github.com session was active at install time — which
+        is NOT necessarily the account the user signed into First Tree with. So
+        name the connected account/org explicitly here, letting the user catch
+        "installed on the wrong account/org" before they pick repos (the picker
+        alone only implies it via repo names). */
+    connected: {
+      label: "Connected to",
+      /** Granted-repo count, shown once the repo list loads. */
+      repoCount: (n: number) => `${n} ${n === 1 ? "repository" : "repositories"} available`,
+    },
     pickProject: "Which repos should your agent work on?",
     /** Loading state for the repo picker (was hardcoded in the step). */
     loading: "Loading your repos…",
