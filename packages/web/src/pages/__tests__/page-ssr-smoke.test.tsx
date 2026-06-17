@@ -1229,7 +1229,9 @@ describe("page SSR smoke coverage", () => {
     expect(connectedHtml).toContain("close this tab");
     expect(connectedHtml).toContain('role="status"');
 
-    expect(await renderOnboardingStep(<StepTeam />, { activeStep: "team" })).toContain("Name your team");
+    expect(await renderOnboardingStep(<StepTeam />, { activeStep: "team" })).toContain(
+      "What should we call your team?",
+    );
     expect(await renderOnboardingStep(<StepWelcome />, { path: "invitee", activeStep: "welcome" })).toContain("Acme");
     expect(await renderOnboardingStep(<StepConnectComputer />, { activeStep: "connect-computer" })).toContain(
       "gandy-macbook",

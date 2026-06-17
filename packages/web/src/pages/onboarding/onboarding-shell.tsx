@@ -25,12 +25,20 @@ import { StepProgress } from "./step-progress.js";
  * Outcomes (the old "What you'll have" footer) were folded into each step's
  * `why` copy — one place for the user to read, less repetition, less density.
  */
+// Hero steps render a centered "this is a moment" layout (brand mark + greeting
+// own the column) instead of the standard left-aligned config column: a wider
+// column, anchored higher, with the shell's title/why suppressed because the
+// step renders its own hero. The journey's two welcomes: the admin opening
+// (`team`) and the invitee landing (`welcome`).
+const HERO_STEPS = new Set<string>(["team", "welcome"]);
+
 export function OnboardingShell({ children }: { children: ReactNode }) {
   const { activeStep, finishLater, hasAgent } = useOnboardingFlow();
   const { logout, memberships } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
   const copy = STEP_COPY[activeStep];
+  const isHero = HERO_STEPS.has(activeStep);
 
   // A multi-team user gets the full workspace UserMenu (team switching,
   // create/join, invite, sign out) instead of the bare "Sign out" link. The
@@ -103,8 +111,10 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
           overflowY: "auto",
           // Fixed top-anchor offset for the content column. COUPLED: the repo
           // picker's fill cap in flow-ui.tsx (`calc(100vh - 33rem)`) is tuned to
-          // this value — if you change it, re-tune that cap too.
-          paddingTop: "6rem",
+          // this value — if you change it, re-tune that cap too. Hero steps sit a
+          // touch higher (upper third) for a "moment" feel; that path has no repo
+          // picker, so the cap coupling is unaffected.
+          paddingTop: isHero ? "clamp(var(--sp-12), 13vh, var(--sp-20))" : "6rem",
           paddingBottom: "var(--sp-8)",
           paddingInline: "var(--sp-5)",
         }}
@@ -116,7 +126,9 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
         <main
           className="min-w-0"
           style={{
-            width: "34rem",
+            // Hero steps get a wider column so the centered greeting + subtitle
+            // breathe; config steps keep the tighter 34rem reading column.
+            width: isHero ? "46rem" : "34rem",
             maxWidth: "100%",
             flexShrink: 0,
             // The repo picker carries its own viewport-relative max-height, so a
@@ -127,16 +139,24 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
             minHeight: 0,
           }}
         >
-          <div key={activeStep} className="onboarding-shell-step fade-in">
+          <div
+            key={activeStep}
+            className="onboarding-shell-step fade-in"
+            style={
+              isHero ? { display: "flex", flexDirection: "column", alignItems: "center", width: "100%" } : undefined
+            }
+          >
             {/* Progress at the top of the column — renders nothing on bookend
                 steps (team / welcome / kickoff). */}
             <StepProgress />
-            {copy.title ? (
+            {/* Hero steps render their own greeting inside the step, so the
+                shell suppresses its title/why for them. */}
+            {!isHero && copy.title ? (
               <h1 className="text-title font-semibold" style={{ margin: "0 0 var(--sp-2_5)", color: "var(--fg)" }}>
                 {copy.title}
               </h1>
             ) : null}
-            {copy.why ? (
+            {!isHero && copy.why ? (
               <p className="text-body" style={{ margin: "0 0 var(--sp-6)", color: "var(--fg-3)" }}>
                 {copy.why}
               </p>
