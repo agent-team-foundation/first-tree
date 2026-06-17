@@ -376,14 +376,15 @@ export const COPY = {
       post: " — let's bring your coding agent (Claude Code, Codex) onto the team.",
     },
     nextSteps: ["Install First Tree", "Create your first agent", "Start working"],
-    // Title states the fact; the body leads with the action, not the wait. In the
-    // default-none world the most common not-ready cause is "admin finished
-    // without a tree", which never resolves — so "Meet your agent" is the real
-    // path forward (the primary CTA), and the auto-advance is a quiet conditional
-    // footnote (notReadyStatus), never a "coming soon" promise the team may break.
+    // Title states the fact; the body names the cause (the admin's First Tree
+    // setup) and leads with the reassurance — you can start now. The most common
+    // not-ready cause is "admin finished without a tree", which never resolves,
+    // so "Meet your agent" is the real path forward (the primary CTA). The page
+    // still advances on its own if the team does finish, but we no longer
+    // announce it — a "coming soon" promise the team may break reads worse than
+    // a quiet hand-off.
     notReadyTitle: "Your team is still setting up",
-    notReadyBody: "No need to wait — meet your agent now.",
-    notReadyStatus: "This page continues on its own if your team finishes setup.",
+    notReadyBody: "Your admin is still setting up the team on First Tree — but you can meet your agent now.",
     // The primary action on the not-ready screen — start an intro chat now
     // instead of waiting on the team.
     startAnyway: "Meet your agent",
