@@ -255,6 +255,10 @@ function broadcast(msg: WsMessage) {
       if (chatId) {
         latestQc.invalidateQueries({ queryKey: ["chat-messages", chatId] });
         latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
+        // The blocking answer UI reads open requests window-independently;
+        // refresh them on the same kick so a new (or just-resolved) ask flips
+        // the takeover without waiting for its own 5s poll.
+        latestQc.invalidateQueries({ queryKey: ["chat-open-requests", chatId] });
       }
     } else if (msg.type === "pulse:tick") {
       // Per-org runtime-state aggregate (pulse-aggregator broadcasts every 5s).
@@ -329,6 +333,9 @@ function connect() {
       // refetchInterval in ChatView; now that the poll is gone, reconnect
       // must explicitly catch up the open chat's message timeline.
       latestQc.invalidateQueries({ queryKey: ["chat-messages"] });
+      // Same reasoning for the window-independent open-requests source that
+      // backs the blocking takeover — catch it up after a WS gap too.
+      latestQc.invalidateQueries({ queryKey: ["chat-open-requests"] });
       // The chat-first workspace reads `viewerMembershipKind` (and other
       // viewer-scoped fields) off `["chat-detail", chatId]`. Without this,
       // a frame that fired while the WS was down (e.g. the caller was

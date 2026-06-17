@@ -33,7 +33,7 @@ import {
   resolveChatTitle,
   setChatEngagement,
 } from "../services/me-chat.js";
-import { sendMessage } from "../services/message.js";
+import { listOpenRequestsForViewer, sendMessage } from "../services/message.js";
 import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import { notifyRecipients } from "../services/notifier.js";
 import { extractSummary } from "../services/session.js";
@@ -366,6 +366,18 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         createdAt: m.createdAt.toISOString(),
       })),
       nextCursor,
+    };
+  });
+
+  // The caller's currently-open questions in this chat, window-independent —
+  // the blocking takeover UI reads this so an open ask that has scrolled past
+  // the (capped, unpaginated) message page above still surfaces. Scoped to the
+  // member's own human-agent uuid, the same id carried in `metadata.mentions`.
+  app.get<{ Params: { chatId: string } }>("/:chatId/open-requests", async (request) => {
+    const { scope } = await requireChatAccess(request, app.db);
+    const items = await listOpenRequestsForViewer(app.db, request.params.chatId, scope.humanAgentId);
+    return {
+      items: items.map((m) => ({ ...m, createdAt: m.createdAt.toISOString() })),
     };
   });
 

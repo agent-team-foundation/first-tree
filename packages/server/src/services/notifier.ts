@@ -20,6 +20,15 @@ const SESSION_RUNTIME_CHANNEL = "session_runtime_changes";
  * inbox NOTIFY path that only reaches speakers.
  */
 const CHAT_MESSAGE_CHANNEL = "chat_message_events";
+/**
+ * Cross-replica chat-audience invalidation. Carries the bare `<chatId>`.
+ * The push-audience cache (`chat-audience-cache.ts`) is process-local, so a
+ * membership change on one replica only drops THAT replica's cache. This
+ * channel fans the invalidation to every replica so the one hosting a viewer's
+ * admin WS doesn't keep serving a stale audience (and dropping `chat:message`
+ * pushes to a just-added member) for up to the cache TTL.
+ */
+const CHAT_AUDIENCE_CHANNEL = "chat_audience_events";
 
 export type ConfigChangeHandler = (channel: string) => void;
 export type SessionStateChangeHandler = (payload: {
@@ -57,6 +66,7 @@ export type SessionRuntimeChangeHandler = (payload: {
   organizationId: string;
 }) => void;
 export type ChatMessageChangeHandler = (payload: { chatId: string; messageId: string }) => void;
+export type ChatAudienceChangeHandler = (payload: { chatId: string }) => void;
 
 /**
  * Per-socket push handler for the WS data plane. When a NOTIFY arrives on
@@ -92,6 +102,8 @@ export type Notifier = {
   notifySessionRuntime(agentId: string, chatId: string, state: string, organizationId: string): Promise<void>;
   /** Chat-first workspace: kick admin WS sockets to invalidate ["me","chats"] and the timeline of `chatId`. */
   notifyChatMessage(chatId: string, messageId: string): Promise<void>;
+  /** Fan a chat-audience-cache invalidation for `chatId` to every replica. */
+  notifyChatAudience(chatId: string): Promise<void>;
   /**
    * Push a raw JSON frame to every socket currently subscribed to `inboxId`
    * on **this server instance only**. Unlike `notify`, does not fan out
@@ -112,6 +124,8 @@ export type Notifier = {
   onSessionRuntime(handler: SessionRuntimeChangeHandler): void;
   /** Register a handler for chat:message change notifications. */
   onChatMessage(handler: ChatMessageChangeHandler): void;
+  /** Register a handler for cross-replica chat-audience invalidations. */
+  onChatAudience(handler: ChatAudienceChangeHandler): void;
   /** Start listening for PG notifications */
   start(): Promise<void>;
   /** Stop listening */
@@ -126,6 +140,7 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const runtimeStateChangeHandlers: RuntimeStateChangeHandler[] = [];
   const sessionRuntimeHandlers: SessionRuntimeChangeHandler[] = [];
   const chatMessageHandlers: ChatMessageChangeHandler[] = [];
+  const chatAudienceHandlers: ChatAudienceChangeHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
@@ -133,6 +148,7 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   let unlistenRuntimeStateFn: (() => Promise<void>) | null = null;
   let unlistenSessionRuntimeFn: (() => Promise<void>) | null = null;
   let unlistenChatMessageFn: (() => Promise<void>) | null = null;
+  let unlistenChatAudienceFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
     // payload format: "inboxId:messageId"
@@ -240,6 +256,15 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    async notifyChatAudience(chatId: string) {
+      try {
+        await listenClient`SELECT pg_notify(${CHAT_AUDIENCE_CHANNEL}, ${chatId})`;
+      } catch {
+        // fire-and-forget — a missed fan-out just means the stale replica
+        // serves its cached audience until the TTL ages it out (≤ cache TTL).
+      }
+    },
+
     async pushFrameToInbox(inboxId: string, frame: string): Promise<number> {
       const map = subscriptions.get(inboxId);
       if (!map) return 0;
@@ -282,6 +307,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
 
     onChatMessage(handler: ChatMessageChangeHandler) {
       chatMessageHandlers.push(handler);
+    },
+
+    onChatAudience(handler: ChatAudienceChangeHandler) {
+      chatAudienceHandlers.push(handler);
     },
 
     async start() {
@@ -400,6 +429,20 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         }
       });
       unlistenChatMessageFn = chatMessageResult.unlisten;
+
+      const chatAudienceResult = await listenClient.listen(CHAT_AUDIENCE_CHANNEL, (payload) => {
+        if (!payload) return;
+        // payload is the bare chatId (a UUID).
+        const chatId = payload;
+        for (const handler of chatAudienceHandlers) {
+          try {
+            handler({ chatId });
+          } catch {
+            // swallow — handler errors must not poison fan-out
+          }
+        }
+      });
+      unlistenChatAudienceFn = chatAudienceResult.unlisten;
     },
 
     async stop() {
@@ -430,6 +473,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenChatMessageFn) {
         await unlistenChatMessageFn();
         unlistenChatMessageFn = null;
+      }
+      if (unlistenChatAudienceFn) {
+        await unlistenChatAudienceFn();
+        unlistenChatAudienceFn = null;
       }
     },
   };

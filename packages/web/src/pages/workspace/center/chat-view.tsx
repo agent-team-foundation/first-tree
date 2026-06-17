@@ -38,6 +38,7 @@ import {
   type ImageBatchRefContent,
   type ImageRefContent,
   listChatMessages,
+  listChatOpenRequests,
   type MessageWithDelivery,
   type PaginatedMessages,
   patchChatEngagement,
@@ -1221,6 +1222,17 @@ export function ChatView({
     refetchInterval: 5_000,
   });
 
+  // The viewer's open questions in this chat, fetched independently of the
+  // capped 50-message timeline window above. The blocking answer UI unions
+  // these into its derivation (`blockingMessages`) so an open ask that has
+  // scrolled past the latest page still surfaces. Same 5s poll + WS
+  // invalidation as the timeline; the query usually returns 0–1 rows.
+  const { data: openRequestsData } = useQuery({
+    queryKey: ["chat-open-requests", chatId],
+    queryFn: () => listChatOpenRequests(chatId),
+    refetchInterval: 5_000,
+  });
+
   // Fetch newest events first so the turn-grouping filter always sees the
   // latest `turn_end` even in chats with thousands of total events. The
   // timeline renderer later sorts by timestamp, so the fetch order is moot
@@ -1771,18 +1783,29 @@ export function ChatView({
   // `dockPayload` is non-null whenever `dockRequest` is set: every open request —
   // including ones written under the retired schema — stays answerable and its
   // red dot can be cleared.
+  // Union the server's window-independent open requests with the loaded
+  // timeline before deriving the block, so an open ask that scrolled past the
+  // latest 50 messages still blocks. Dedup by id; the loaded message WINS over
+  // the open-requests row (it may carry an optimistic resolving reply, or the
+  // resolving reply itself, that lifts the block the instant the viewer answers).
+  const blockingMessages = useMemo<MessageWithDelivery[]>(() => {
+    const open = openRequestsData?.items ?? [];
+    if (open.length === 0) return mergedMessages;
+    const byId = new Map<string, MessageWithDelivery>();
+    for (const r of open) byId.set(r.id, r);
+    for (const m of mergedMessages) byId.set(m.id, m);
+    return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }, [openRequestsData, mergedMessages]);
   const dockRequest = useMemo(
-    () => (readOnly ? null : findBlockingRequest(mergedMessages, myAgentId)),
-    [readOnly, mergedMessages, myAgentId],
+    () => (readOnly ? null : findBlockingRequest(blockingMessages, myAgentId)),
+    [readOnly, blockingMessages, myAgentId],
   );
   const dockPayload = useMemo(() => (dockRequest ? readRequestPayload(dockRequest.metadata) : null), [dockRequest]);
-  // Requests the viewer chose to Skip this session — the AskTakeover dismisses,
-  // but the open-request / red dot persists and it reappears on next visit.
-  const [skippedRequestIds, setSkippedRequestIds] = useState<ReadonlySet<string>>(() => new Set<string>());
   // The full-coverage ask card is active (and owns answering) iff a question
-  // blocks me and I haven't skipped it. While active it drives the timeline
-  // truncation below; on Skip it clears so the timeline becomes legible again.
-  const askOverlayActive = dockRequest != null && dockPayload != null && !skippedRequestIds.has(dockRequest.id);
+  // blocks me. Both Reply and Skip resolve the question (Skip sends a "skipped"
+  // answer — see the `onSkip` handler), so the overlay clears the moment the
+  // resolving reply lands; there is no "dismiss but keep it open" path.
+  const askOverlayActive = dockRequest != null && dockPayload != null;
   const dockRequestId = askOverlayActive ? dockRequest.id : undefined;
   useEffect(() => {
     if (!dockRequestId || draft !== "@" || !autoPrimedDraftRef.current) return;
@@ -2781,9 +2804,11 @@ export function ChatView({
         >
           {/* The ask pops up as a card INSIDE the workspace body — offset below
               the (stable, single-row) topic header so the header and the
-              right rail stay visible. Owns answering: Reply resolves; Skip
-              dismisses for this session (the red dot persists). Keyed by request
-              id so its answer state resets when the blocking question changes. */}
+              right rail stay visible. Owns answering: Reply resolves with the
+              composed answer; Skip ALSO resolves, sending a "skipped" answer so
+              the asking agent unblocks and the red dot clears (skip is an answer,
+              not a temporary dismiss). Keyed by request id so its answer state
+              resets when the blocking question changes. */}
           {askOverlayActive && dockRequest && dockPayload ? (
             <div style={{ position: "absolute", top: 52, left: 0, right: 0, bottom: 0, zIndex: 30 }}>
               <AskTakeover
@@ -2800,7 +2825,18 @@ export function ChatView({
                     resolves: { request: dockRequest.id, kind: "answered" },
                   })
                 }
-                onSkip={() => setSkippedRequestIds((prev) => new Set(prev).add(dockRequest.id))}
+                onSkip={() =>
+                  // Skip is an answer, not a dismiss: send a resolving reply
+                  // (kind="answered") carrying a "skipped" body so the open
+                  // request resolves, the red dot clears, and the asking agent
+                  // unblocks and proceeds with its own judgment.
+                  sendMut.mutate({
+                    content: "(Skipped — no answer provided.)",
+                    mentions: [dockRequest.senderId],
+                    inReplyTo: dockRequest.id,
+                    resolves: { request: dockRequest.id, kind: "answered" },
+                  })
+                }
               />
             </div>
           ) : null}
