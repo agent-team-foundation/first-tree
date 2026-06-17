@@ -712,6 +712,30 @@ describe("github-entity-follow", () => {
     });
   });
 
+  it("following surfaces the persisted entity title from the DB projection", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: s.admin.organizationId,
+      humanAgentId: s.human,
+      delegateAgentId: s.delegate,
+      entityType: "pull_request",
+      entityKey: "Acme/Api#9",
+      chatId: s.chatId,
+      boundVia: "agent_declared",
+      title: "Refactor inbox dispatcher",
+    });
+
+    const list = await listChatGithubEntities(app.db, { chatId: s.chatId });
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]).toMatchObject({
+      entityKey: "Acme/Api#9",
+      title: "Refactor inbox dispatcher",
+      state: "open",
+      number: 9,
+    });
+  });
+
   it("following lists legacy discussion mappings under the canonical numeric key", async () => {
     const app = getApp();
     const s = await setup(app);

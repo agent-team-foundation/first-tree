@@ -52,7 +52,11 @@ export function GitHubSection({ chatId }: { chatId: string }) {
         GitHub <span className="mono">· {items.length}</span>
       </div>
 
-      <div className="flex flex-col" style={{ padding: "0 var(--sp-2) var(--sp-2)", gap: 2 }}>
+      {/* Inter-row gap (--sp-1_5) is deliberately larger than the intra-row
+          line gap (the tight title-to-reference gap below). Rows are multi-line
+          once titles render, so the larger outer gap is what makes each entity
+          read as one grouped block instead of the lines bleeding together. */}
+      <div className="flex flex-col" style={{ padding: "0 var(--sp-2) var(--sp-2)", gap: "var(--sp-1_5)" }}>
         {sorted.map((entity) => (
           <GitHubRow key={`${entity.entityType}::${entity.entityKey}`} entity={entity} />
         ))}
@@ -83,9 +87,26 @@ export function sortEntitiesByType(items: ChatGithubEntity[]): ChatGithubEntity[
   return [...items].sort((a, b) => typeRank(a.entityType) - typeRank(b.entityType));
 }
 
+/**
+ * Drop the `owner/` prefix so the reference line reads `repo#42` instead of
+ * `owner/repo#42`. The title now carries the meaning, the repo disambiguates,
+ * and the org is rarely needed in-rail — it stays available on hover (the full
+ * `entityKey` is the row's `title` attribute) and in the link target. Falls
+ * back to the full key when there is no `/` to split on.
+ */
+function compactEntityRef(entityKey: string): string {
+  const slash = entityKey.indexOf("/");
+  return slash >= 0 ? entityKey.slice(slash + 1) : entityKey;
+}
+
 function GitHubRow({ entity }: { entity: ChatGithubEntity }) {
   const Icon = iconForType(entity.entityType, entity.state);
   const view = viewForState(entity.state);
+  const hasTitle = Boolean(entity.title && entity.title.length > 0);
+  // Reference text: the compact `repo#number` when a title leads the row, or
+  // the full `owner/repo#number` when the reference IS the primary line (no
+  // title) and needs to stand alone.
+  const referenceText = hasTitle ? compactEntityRef(entity.entityKey) : entity.entityKey;
 
   return (
     <a
@@ -108,12 +129,11 @@ function GitHubRow({ entity }: { entity: ChatGithubEntity }) {
         strokeWidth={1.75}
         style={{ marginTop: 2, color: iconColor(entity.state) }}
       />
-      <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 3 }}>
-        <div className="mono text-label flex items-center" style={{ gap: "var(--sp-1_5)", color: "var(--fg-2)" }}>
-          <span>{entity.entityKey}</span>
-          {view ? <DenseBadge tone={view.tone}>{view.label}</DenseBadge> : null}
-        </div>
-        {entity.title ? (
+      <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 2 }}>
+        {/* Primary line: the human title when present — what the eye scans
+            first. The bare entityKey carries no meaning, so it never leads;
+            when there is no title the reference line below stands in. */}
+        {hasTitle ? (
           <div
             className="text-body"
             style={{
@@ -123,10 +143,26 @@ function GitHubRow({ entity }: { entity: ChatGithubEntity }) {
               WebkitLineClamp: 2,
               WebkitBoxOrient: "vertical",
             }}
+            title={entity.title ?? undefined}
           >
             {entity.title}
           </div>
         ) : null}
+        {/* Reference + status. Muted and secondary when a title leads; promoted
+            to the primary line (stronger color) when it stands alone. */}
+        <div
+          className="mono text-label flex items-center"
+          style={{ gap: "var(--sp-1_5)", color: hasTitle ? "var(--fg-3)" : "var(--fg-2)" }}
+        >
+          <span
+            className="min-w-0"
+            style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            title={entity.entityKey}
+          >
+            {referenceText}
+          </span>
+          {view ? <DenseBadge tone={view.tone}>{view.label}</DenseBadge> : null}
+        </div>
       </div>
       <ExternalLink
         aria-hidden="true"

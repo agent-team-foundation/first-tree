@@ -428,7 +428,7 @@ export async function declareEntityFollow(
     organizationId: params.organizationId,
     humanAgentId: params.humanAgentId,
     delegateAgentId: params.delegateAgentId,
-    entity: { type: entity.entityType, key: entity.entityKey, url: entity.htmlUrl },
+    entity: { type: entity.entityType, key: entity.entityKey, url: entity.htmlUrl, title: entity.title ?? undefined },
     chatId: params.chatId,
     boundVia: params.boundVia,
     entityState: entity.entityState,
@@ -601,6 +601,7 @@ export async function listChatGithubEntities(
       entityKey: githubEntityChatMappings.entityKey,
       boundVia: githubEntityChatMappings.boundVia,
       entityState: githubEntityChatMappings.entityState,
+      title: githubEntityChatMappings.title,
       boundAt: githubEntityChatMappings.boundAt,
     })
     .from(githubEntityChatMappings)

@@ -61,3 +61,42 @@ export async function setEntityState(db: Database, input: SetEntityStateInput): 
     .returning({ chatId: githubEntityChatMappings.chatId });
   return { updated: updated.length };
 }
+
+export type SetEntityTitleInput = {
+  organizationId: string;
+  /** Must match `entityType` on the mapping table, e.g. `"pull_request"` / `"issue"`. */
+  entityType: string;
+  /** Stable cluster key, e.g. `"owner/repo#42"`. */
+  entityKey: string;
+  /** Human label from the current webhook payload. */
+  title: string;
+};
+
+/**
+ * Persist the entity's human label on every mapping row for this
+ * `(organization, entity_type, entity_key)` cluster.
+ *
+ * Mirrors `setEntityState`'s scope so a single webhook keeps both the
+ * lifecycle state and the sidebar label fresh — this is what backfills
+ * pre-existing rows (inserted before titles were persisted) and tracks PR /
+ * Issue renames. No-op on a blank title so we never blank out a good label.
+ * Idempotent under webhook retries.
+ */
+export async function setEntityTitle(db: Database, input: SetEntityTitleInput): Promise<{ updated: number }> {
+  const title = input.title.trim();
+  if (!input.organizationId || !input.entityType || !input.entityKey || title.length === 0) {
+    return { updated: 0 };
+  }
+  const updated = await db
+    .update(githubEntityChatMappings)
+    .set({ title })
+    .where(
+      and(
+        eq(githubEntityChatMappings.organizationId, input.organizationId),
+        eq(githubEntityChatMappings.entityType, input.entityType),
+        eq(githubEntityChatMappings.entityKey, input.entityKey),
+      ),
+    )
+    .returning({ chatId: githubEntityChatMappings.chatId });
+  return { updated: updated.length };
+}

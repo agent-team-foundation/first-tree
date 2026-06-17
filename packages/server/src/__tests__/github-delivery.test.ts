@@ -407,6 +407,16 @@ describe("deliverNormalizedEvent", () => {
 
     const [row] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(row?.topic).toBe("PR repo#200: Renamed title");
+
+    // The same event also backfills the mapping's persisted `title` (the row
+    // was inserted before titles were persisted), so the right sidebar gets a
+    // label without a per-row GitHub fetch.
+    const [mapping] = await app.db
+      .select({ title: githubEntityChatMappings.title })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#200"))
+      .limit(1);
+    expect(mapping?.title).toBe("Renamed title");
   });
 
   it("does NOT overwrite the owning topic when a linked (fixes_link) entity's event arrives", async () => {

@@ -4,7 +4,7 @@ import type { GithubEntity } from "../api/webhooks/github-entity.js";
 import { createLogger } from "../observability/index.js";
 import type { AudienceTarget } from "./github-audience.js";
 import { findReuseChatForInvolved, refreshGithubChatTopic, resolveTargetChat } from "./github-entity-chat.js";
-import type { EntityStateSeed } from "./github-entity-state.js";
+import { type EntityStateSeed, setEntityTitle } from "./github-entity-state.js";
 import { sendMessage } from "./message.js";
 import { notifyRecipients } from "./notifier.js";
 
@@ -135,6 +135,32 @@ export async function deliverNormalizedEvent(
     if (target.kind === "new" && target.involveReason && !delivery.involveReason) {
       delivery.involveReason = target.involveReason;
       delivery.involveLogin = target.involveLogin;
+    }
+  }
+
+  // Phase 1.5 — refresh the persisted title for this entity's mapping rows.
+  // Seeding happens on insert, but rows created before titles were persisted
+  // (and any upstream rename) only get a label here. Scoped to the entity's
+  // cluster, gated on at least one resolved chat, and isolated so a title
+  // write never aborts card delivery.
+  if (byChat.size > 0 && event.entity.title && event.entity.title.length > 0) {
+    try {
+      await setEntityTitle(app.db, {
+        organizationId: event.source.organizationId,
+        entityType: event.entity.type,
+        entityKey: event.entity.key,
+        title: event.entity.title,
+      });
+    } catch (err) {
+      log.warn(
+        {
+          err,
+          entityType: event.entity.type,
+          entityKey: event.entity.key,
+          errorMessage: err instanceof Error ? err.message : String(err),
+        },
+        "failed to refresh github entity title — continuing",
+      );
     }
   }
 
