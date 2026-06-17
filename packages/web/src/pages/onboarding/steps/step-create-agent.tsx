@@ -1,9 +1,10 @@
 import type { AgentVisibility } from "@first-tree/shared";
 import { ArrowRight } from "lucide-react";
+import { useEffect } from "react";
 import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { OptionCard } from "../../../components/ui/option-card.js";
-import { runtimeProviderLabel } from "../../clients/cards/shared/providers.js";
+import { asRuntimeProvider, PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
 import { COPY } from "../copy.js";
 import { FlowHint, WorkingState } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
@@ -54,6 +55,20 @@ export function StepCreateAgent() {
     computer.okRuntimes.includes(computer.selectedRuntime) &&
     agentPhase === "idle";
 
+  // The coding-agent picker lives HERE now (moved from connect-computer). Always
+  // a list — even for one — defaulting to Claude Code when present, else the
+  // first detected. Seed the selection if it isn't a valid detected runtime yet.
+  const { okRuntimes, selectedRuntime, setSelectedRuntime } = computer;
+  useEffect(() => {
+    if (selectedRuntime && okRuntimes.includes(selectedRuntime)) return;
+    const next = okRuntimes.find((r) => r === "claude-code") ?? okRuntimes[0];
+    if (next) setSelectedRuntime(next);
+  }, [okRuntimes, selectedRuntime, setSelectedRuntime]);
+  const okProviders = okRuntimes.flatMap((p) => {
+    const provider = asRuntimeProvider(p);
+    return provider ? [provider] : [];
+  });
+
   if (agentPhase === "creating") {
     return <WorkingState label={COPY.createAgent.creating} hint={COPY.createAgent.creatingHint} />;
   }
@@ -88,19 +103,34 @@ export function StepCreateAgent() {
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
-      {/* Dynamic opener: grounds the abstract "agent" in the concrete coding
-          agent the user already runs ("Claude Code on gandys-macbook is about
-          to join your team."). Shown only when both a runtime and a connected
-          client are known; the computer-disconnected hint below covers the
-          gap otherwise. */}
-      {computer.connectedClient && computer.selectedRuntime ? (
-        <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
-          {COPY.createAgent.joining(
-            runtimeProviderLabel(computer.selectedRuntime),
-            computer.connectedClient.hostname ?? computer.connectedClient.id,
-          )}
-        </p>
-      ) : null}
+      {/* Collapsed-model subtitle: the agent you create IS your local coding
+          agent given a team identity — no two-layer "powered by" framing. */}
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+        {COPY.createAgent.subtitle}
+      </p>
+
+      {/* Coding agent — always a list (even for one), default Claude Code. */}
+      {okProviders.length > 0 && (
+        <fieldset className="flex flex-col" style={{ gap: "var(--sp-2)", margin: 0, padding: 0, border: 0 }}>
+          <legend className="text-label font-medium" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-1)" }}>
+            {COPY.createAgent.codingAgentLabel}
+          </legend>
+          <div className="flex flex-wrap" style={{ gap: "var(--sp-2)" }}>
+            {okProviders.map((provider) => (
+              <OptionCard
+                key={provider}
+                name="onboarding-coding-agent"
+                layout="pill"
+                checked={selectedRuntime === provider}
+                onSelect={() => setSelectedRuntime(provider)}
+              >
+                <span className="text-body">{PROVIDER_LABEL[provider]}</span>
+              </OptionCard>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
         <label htmlFor="onboarding-agent-name" className="text-label font-medium" style={{ color: "var(--fg-2)" }}>
           {COPY.createAgent.nameLabel}
@@ -164,7 +194,7 @@ export function StepCreateAgent() {
 
       <div className="flex">
         <Button type="button" variant="cta" onClick={handleCreate} disabled={!canCreate}>
-          <span>Add {trimmed || "your agent"} to the team</span>
+          <span>Create agent</span>
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>

@@ -93,9 +93,6 @@ export function StepTeam() {
           maxLength={200}
           disabled={saving}
         />
-        <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-          {COPY.team.renameHint}
-        </p>
       </div>
 
       {(saveError || loadError) && (
@@ -103,6 +100,13 @@ export function StepTeam() {
           {saveError ?? `Couldn't load your team — ${loadError}. Refresh and try again.`}
         </FlowHint>
       )}
+
+      {/* Brief "what's next" one-liner above Get started — orients the admin
+          without weight (the two-column split was dropped). */}
+      <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+        <span style={{ color: "var(--fg-3)" }}>{COPY.team.nextPrefix}</span>
+        {COPY.team.nextSteps.join("  →  ")}
+      </p>
 
       <div className="flex">
         <Button type="submit" disabled={!canSubmit}>

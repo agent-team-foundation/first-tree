@@ -20,6 +20,11 @@ export function StepWelcome() {
         </span>
         . To get started, let's create your own agent.
       </p>
+      {/* Brief "what's next" one-liner above Get started (mirrors the admin team step). */}
+      <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+        <span style={{ color: "var(--fg-3)" }}>{COPY.invitee.nextPrefix}</span>
+        {COPY.invitee.nextSteps.join("  →  ")}
+      </p>
       <div className="flex">
         <Button type="button" onClick={goNext}>
           <span>{COPY.getStarted}</span>
