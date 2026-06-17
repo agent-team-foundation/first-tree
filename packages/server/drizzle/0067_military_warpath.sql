@@ -1,0 +1,1 @@
+ALTER TABLE "github_entity_chat_mappings" ADD COLUMN "title" text;

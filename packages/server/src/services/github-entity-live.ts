@@ -164,6 +164,7 @@ export type MappingRow = {
   entityKey: string;
   boundVia: string;
   entityState?: string | null;
+  title?: string | null;
 };
 
 function stateFromPersistedEntityState(
@@ -189,8 +190,9 @@ function stateFromPersistedEntityState(
  * `parsed` may be null when `entityKey` doesn't match the expected
  * `owner/repo#N` or `owner/repo@<sha>` shape; in that case the row is
  * dropped because the right rail cannot build a trustworthy GitHub link.
- * The title remains null because mappings do not persist titles; lifecycle
- * state comes from the webhook-synced `entity_state` projection.
+ * Title and lifecycle state come straight from the persisted projection
+ * (`title` / `entity_state`), both webhook-synced; an empty title degrades
+ * to null so the row renders its entityKey link alone.
  */
 export function materializeChatGithubEntity(row: MappingRow): ChatGithubEntity | null {
   // Defend against unknown enum values landing here — schema drift between
@@ -211,7 +213,7 @@ export function materializeChatGithubEntity(row: MappingRow): ChatGithubEntity |
     entityKey,
     boundVia,
     htmlUrl: buildHtmlUrl(entityType, parsed),
-    title: null,
+    title: row.title && row.title.length > 0 ? row.title : null,
     state: stateFromPersistedEntityState(entityType, row.entityState),
     number: parsed.kind === "numeric" ? parsed.number : null,
   };

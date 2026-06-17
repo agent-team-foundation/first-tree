@@ -18,7 +18,7 @@ import { mintContextTreeInstallationToken } from "./github-app-token.js";
 import { insertMappingIfAbsent } from "./github-entity-chat.js";
 import { githubEntityDedupKey, githubEntityKeyCandidates, legacyDiscussionEntityKey } from "./github-entity-key.js";
 import { materializeChatGithubEntity } from "./github-entity-live.js";
-import type { EntityState } from "./github-entity-state.js";
+import { type EntityState, setEntityTitle } from "./github-entity-state.js";
 
 const log = createLogger("GithubEntityFollow");
 
@@ -428,11 +428,32 @@ export async function declareEntityFollow(
     organizationId: params.organizationId,
     humanAgentId: params.humanAgentId,
     delegateAgentId: params.delegateAgentId,
-    entity: { type: entity.entityType, key: entity.entityKey, url: entity.htmlUrl },
+    entity: { type: entity.entityType, key: entity.entityKey, url: entity.htmlUrl, title: entity.title ?? undefined },
     chatId: params.chatId,
     boundVia: params.boundVia,
     entityState: entity.entityState,
   });
+
+  // Repair the persisted title across every row for this entity — not just a
+  // freshly inserted one. `insertMappingIfAbsent` only seeds title on a brand
+  // new row, but the already-following / rebind / conflict paths reuse a
+  // pre-existing row whose title may predate the column (0067) or have changed
+  // upstream. Follow-time resolution already fetched the live title, so refresh
+  // it now instead of waiting for the next webhook (the bug both reviewers
+  // flagged). Runs before the rebind UPDATE below so the moved row keeps the
+  // fresh title; the reinsert-race branch seeds its own row directly. No-op on
+  // a blank title (never clobbers a good label).
+  if (entity.title && entity.title.length > 0) {
+    await setEntityTitle(db, {
+      organizationId: params.organizationId,
+      entityType: entity.entityType,
+      // Candidate keys (not just the canonical one) so a legacy discussion row
+      // stored as `owner/repo#discussion-N` — which rebind moves via the same
+      // candidate set — also gets its title refreshed.
+      entityKey: githubEntityKeyCandidates(entity.entityType, entity.entityKey),
+      title: entity.title,
+    });
+  }
 
   if (result.inserted) {
     log.info(
@@ -479,7 +500,15 @@ export async function declareEntityFollow(
         organizationId: params.organizationId,
         humanAgentId: params.humanAgentId,
         delegateAgentId: params.delegateAgentId,
-        entity: { type: entity.entityType, key: entity.entityKey, url: entity.htmlUrl },
+        // Seed the title here too: the prior `setEntityTitle` matched zero rows
+        // because the existing row vanished in the race, so this fresh row is
+        // the only one carrying the label.
+        entity: {
+          type: entity.entityType,
+          key: entity.entityKey,
+          url: entity.htmlUrl,
+          title: entity.title ?? undefined,
+        },
         chatId: params.chatId,
         boundVia: params.boundVia,
         entityState: entity.entityState,
@@ -601,6 +630,7 @@ export async function listChatGithubEntities(
       entityKey: githubEntityChatMappings.entityKey,
       boundVia: githubEntityChatMappings.boundVia,
       entityState: githubEntityChatMappings.entityState,
+      title: githubEntityChatMappings.title,
       boundAt: githubEntityChatMappings.boundAt,
     })
     .from(githubEntityChatMappings)

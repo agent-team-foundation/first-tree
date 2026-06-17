@@ -353,6 +353,10 @@ export async function insertMappingIfAbsent(
       chatId: params.chatId,
       boundVia: params.boundVia,
       ...(params.entityState ? { entityState: params.entityState } : {}),
+      // Seed the human label from whatever the caller carried (webhook payload
+      // or follow-time GitHub fetch). Null degrades to the entityKey link; the
+      // webhook handler later backfills/refreshes it via `setEntityTitle`.
+      ...(entity.title && entity.title.length > 0 ? { title: entity.title } : {}),
     })
     .onConflictDoNothing({
       target: [

@@ -470,6 +470,13 @@
       "when": 1781663934468,
       "tag": "0066_lowly_scorpion",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1781668714974,
+      "tag": "0067_military_warpath",
+      "breakpoints": true
     }
   ]
 }
