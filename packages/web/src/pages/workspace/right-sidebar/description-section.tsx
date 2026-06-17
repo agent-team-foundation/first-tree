@@ -97,7 +97,39 @@ export function DescriptionSection({
             overflow: "hidden",
           }}
         >
-          <Markdown>{trimmed}</Markdown>
+          <Markdown
+            // The shared Markdown defaults to `prose prose-sm`, which (a) blows
+            // headings far past body size and (b) silently enlarges the BODY too
+            // — both wrong for this narrow rail, where the design body size is the
+            // `--text-body` token, the rest of the rail matches it, and the module
+            // already has its own "Summary" eyebrow title above. Scope a coherent
+            // type scale to the Summary surface only (chat messages keep the
+            // default):
+            //   - body (p / li) pinned to --text-body, matching the rail
+            //     (prose-sm otherwise enlarges it and leaves headings SMALLER than
+            //     body text).
+            //   - headings collapse to two compact tiers — h1/h2 at
+            //     --text-subtitle, h3–h6 at --text-body — so they read as SECTION
+            //     LABELS, not titles, and a stray deep heading can't blow up the
+            //     layout. Hierarchy is carried by weight + top-margin, not a size
+            //     jump.
+            //   - tidy-ups: first block hugs the eyebrow (mt-0), last hugs the
+            //     hairline (mb-0), list indent tightened for the column.
+            //
+            // Uses `[&_hN]` / `[&_p]` descendant variants, NOT `prose-*:` — the
+            // typography plugin's `prose-*` modifiers wrap selectors in
+            // `:where()` (zero specificity), so they only TIE prose-sm's own rules
+            // and lose on source order. `[&_h1]` emits a real `.cls h1` selector
+            // that reliably beats it.
+            //
+            // Arbitrary font-sizes need the `length:` data-type hint — a bare
+            // `text-[token]` is ambiguous (Tailwind can't tell a length from a
+            // color and silently treats it as color), so the size is a no-op
+            // unless the value is prefixed with `length:`.
+            className="[&_p]:text-[length:var(--text-body)] [&_li]:text-[length:var(--text-body)] [&_:is(h1,h2)]:text-[length:var(--text-subtitle)] [&_:is(h3,h4,h5,h6)]:text-[length:var(--text-body)] [&_:is(h1,h2,h3,h4,h5,h6)]:font-semibold [&_:is(h1,h2,h3,h4,h5,h6)]:leading-snug [&_:is(h1,h2,h3,h4,h5,h6)]:mt-3.5 [&_:is(h1,h2,h3,h4,h5,h6)]:mb-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:pl-4 [&_ol]:pl-4"
+          >
+            {trimmed}
+          </Markdown>
         </div>
         {showFade ? (
           <div

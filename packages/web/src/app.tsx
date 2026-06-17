@@ -98,6 +98,12 @@ const UserMenuPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/user-menu-preview.js").then((module) => ({ default: module.UserMenuPreviewPage })))
   : null;
 
+const SummarySectionPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/summary-section-preview.js").then((module) => ({ default: module.SummarySectionPreviewPage })),
+    )
+  : null;
+
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
 // above this ships in prod too, so it can be opened on a deployed URL — it has
 // no auth-gated data, only tokens and `components/ui` primitives.
@@ -186,6 +192,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <UserMenuPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {SummarySectionPreviewPage ? (
+                <Route
+                  path="/preview/summary-section"
+                  element={
+                    <Suspense fallback={null}>
+                      <SummarySectionPreviewPage />
                     </Suspense>
                   }
                 />
