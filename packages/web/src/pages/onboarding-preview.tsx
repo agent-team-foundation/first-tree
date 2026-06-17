@@ -18,6 +18,7 @@ import { StepTeam } from "./onboarding/steps/step-team.js";
 import { StepWelcome } from "./onboarding/steps/step-welcome.js";
 import { getStepSequence, type OnboardingPath, type StepId } from "./onboarding/steps.js";
 import type { ComputerConnection } from "./onboarding/use-computer-connection.js";
+import { MockTeamStepsA, MockTeamStepsB, MockWelcomeCeremonial } from "./onboarding-team-steps-mocks.js";
 
 /**
  * DEV-only gallery of every onboarding screen + state, mounted at
@@ -427,11 +428,34 @@ type Scenario = {
   role: Role;
   wizard?: WizardSpec;
   invite?: ReactNode;
+  /** A self-contained design mockup rendered full-bleed (no shell wrap). */
+  mockup?: ReactNode;
 };
 
 const SCENARIOS: Scenario[] = [
   // ── ADMIN ──────────────────────────────────────────────────────────────
   { id: "admin-team", label: "Name your team", group: "1 · Team", role: "admin", wizard: { step: "team" } },
+  {
+    id: "admin-team-steps-a",
+    label: "Steps preview · A list",
+    group: "★ Team steps preview (mockup)",
+    role: "admin",
+    mockup: <MockTeamStepsA />,
+  },
+  {
+    id: "admin-team-steps-b",
+    label: "Steps preview · B one-liner",
+    group: "★ Team steps preview (mockup)",
+    role: "admin",
+    mockup: <MockTeamStepsB />,
+  },
+  {
+    id: "admin-welcome-ceremonial",
+    label: "Welcome · ceremonial",
+    group: "★ Team steps preview (mockup)",
+    role: "admin",
+    mockup: <MockWelcomeCeremonial />,
+  },
 
   {
     id: "admin-cc-waiting",
@@ -1165,6 +1189,10 @@ export function OnboardingPreviewPage() {
       <main style={{ flex: 1, minWidth: 0, overflow: "hidden", position: "relative" }}>
         {active?.wizard ? (
           <WizardScenarioView key={active.id} spec={active.wizard} role={active.role} />
+        ) : active?.mockup ? (
+          <div key={active.id} style={{ height: "100%", overflow: "hidden" }}>
+            {active.mockup}
+          </div>
         ) : active?.invite ? (
           <div key={active.id} style={{ height: "100%", overflowY: "auto" }}>
             <InviteAcceptShell>{active.invite}</InviteAcceptShell>

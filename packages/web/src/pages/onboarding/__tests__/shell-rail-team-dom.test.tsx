@@ -161,7 +161,7 @@ describe("onboarding shell and team step", () => {
     expect(container.textContent).toContain("First Tree");
     // config step → top segmented progress shows position (admin has 3)
     expect(container.textContent).toContain("Step 1 of 3");
-    expect(container.textContent).toContain("Connect your coding agent");
+    expect(container.textContent).toContain("Install First Tree");
     expect(container.textContent).toContain("Step body");
 
     await click(
