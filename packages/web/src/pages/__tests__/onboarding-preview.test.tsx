@@ -76,7 +76,7 @@ describe("onboarding preview review surface", () => {
   });
 
   it("uses URL params for shareable role, view, and scenario selection", async () => {
-    window.history.replaceState(null, "", "/preview/onboarding?role=invitee&view=states&scenario=inv-ko-noinstall");
+    window.history.replaceState(null, "", "/preview/onboarding?role=invitee&view=states&scenario=inv-ko-not-ready");
 
     const { OnboardingPreviewPage } = await import("../onboarding-preview.js");
     const { container, root } = await renderDom(
@@ -86,7 +86,7 @@ describe("onboarding preview review surface", () => {
     );
 
     expect(container.textContent).toContain("State inventory");
-    expect(container.textContent).toContain("No code connection");
+    expect(container.textContent).toContain("Team not ready");
     expect(container.textContent).not.toContain("Waiting for computer");
     expect(container.textContent).not.toContain("Form (idle)");
 

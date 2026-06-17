@@ -207,31 +207,25 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
 }
 
 /**
- * Which invitee kickoff sub-state to show, given what the team has set up.
+ * Which invitee kickoff state to show, given what the team has set up. Just two:
+ *   - "ready"     → the team has BOTH a Context Tree and a GitHub connection;
+ *                   the agent can do real work, so launch.
+ *   - "not-ready" → either is missing. We don't distinguish "no tree" from "no
+ *                   GitHub": in both cases the invitee is blocked on the admin
+ *                   and can't act on it, so a single screen ("your team is still
+ *                   setting up" + a "Meet your agent" bailout) covers both. The
+ *                   kickoff query keeps polling, so this flips to "ready" on its
+ *                   own the moment the admin finishes whichever half was missing.
+ *
  * Pure so it's unit-testable (the React component just maps the result to a
- * body). Ordered upstream-first — fix the biggest blocker before launch:
- *   - no Context Tree link yet            → "waiting"          (admin isn't done at all)
- *   - link but no GitHub App installation → "no-installation"  (admin skipped code; agent would 403)
- *   - link + install                      → "ready"            (just launch)
- *
- * There is deliberately no repo-selection sub-state. The invitee's agent
- * inherits the team's `recommended` repo resources automatically (they're
- * enabled for every org agent), so picking repos here changed nothing about
- * what the agent could access — it only flavoured the kickoff message. The
- * "ready" state is a pure launch; the body names the team's repos when there
- * are any, otherwise frames it as an intro.
- *
- * The "no-installation" state exists because the previous flow silently
- * advanced invitees past it, where the agent's first git op would 403. We
- * hold there instead, with a "Meet your agent" bailout so the invitee is
- * never truly blocked.
+ * body). There is no repo-selection state: the invitee's agent inherits the
+ * team's `recommended` repo resources automatically (enabled for every org
+ * agent), so there was never anything to pick here.
  */
-export type InviteeKickoffState = "waiting" | "no-installation" | "ready";
+export type InviteeKickoffState = "ready" | "not-ready";
 
 export function resolveInviteeKickoffState(args: { treeUrl: string; hasInstallation: boolean }): InviteeKickoffState {
-  if (!args.treeUrl) return "waiting";
-  if (!args.hasInstallation) return "no-installation";
-  return "ready";
+  return args.treeUrl && args.hasInstallation ? "ready" : "not-ready";
 }
 
 export type TreeRecoveryFacts = {

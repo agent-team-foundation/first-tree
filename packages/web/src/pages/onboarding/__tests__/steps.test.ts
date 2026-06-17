@@ -156,15 +156,10 @@ describe("shouldEnterOnboarding", () => {
 });
 
 describe("resolveInviteeKickoffState", () => {
-  it("waits when the team has no knowledge link yet (admin not done)", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: false })).toBe("waiting");
-    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: true })).toBe("waiting");
-  });
-  it("waiting wins over no-installation when the tree is also missing (fix the bigger blocker first)", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: false })).toBe("waiting");
-  });
-  it("stops at no-installation when the tree is set but the App was never installed (agent would 403)", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: false })).toBe("no-installation");
+  it("is not-ready while either the tree or the GitHub connection is missing", () => {
+    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: false })).toBe("not-ready");
+    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: true })).toBe("not-ready");
+    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: false })).toBe("not-ready");
   });
   it("is ready to launch once the tree is set and the App is installed (no repo selection)", () => {
     expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: true })).toBe("ready");

@@ -12,7 +12,7 @@ import { cn } from "../../lib/utils.js";
  * skips title/why when STEP_COPY leaves them empty. Spacing matches the shell's
  * heading so per-state steps line up with static ones.
  */
-export function StepHeading({ title, why }: { title: string; why?: string | null }) {
+export function StepHeading({ title, why }: { title: string; why?: ReactNode }) {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-2_5)" }}>
       {/* Skip the h1 on an empty title — the build-tree recovery surface
