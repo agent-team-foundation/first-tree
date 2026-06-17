@@ -8,6 +8,48 @@ import type { SmokeOutcome } from "./launch-probe.js";
  * real smoke at most this often on reconnect, to catch silent drift. */
 export const REPROBE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
+/** The runtime providers a built-in probe exists for. Used by
+ * {@link hasNonOkProvider} to decide whether a daemon's advertised capability
+ * snapshot still has a provider worth re-probing for. */
+export const PROBED_RUNTIME_PROVIDERS: readonly RuntimeProvider[] = ["claude-code", "claude-code-tui", "codex"];
+
+/** First delay before the daemon-side degraded-capability re-probe fires. Short
+ * enough that a freshly-installed provider is noticed quickly during setup. */
+export const CAPABILITY_REFRESH_BASE_MS = 15 * 1000;
+
+/** Upper bound on the backoff between degraded-capability re-probes. Once the
+ * interval reaches this ceiling it stays there, so a permanently-missing
+ * provider (e.g. `claude-code-tui` on a no-tmux box) settles into a cheap,
+ * low-frequency poll rather than hammering the host. */
+export const CAPABILITY_REFRESH_MAX_MS = 5 * 60 * 1000;
+
+/**
+ * True when the snapshot still has a built-in provider that is not `ok` — i.e.
+ * a provider that could still become usable if the operator installs / logs in.
+ * An empty or partial snapshot counts as degraded (a provider that was never
+ * probed is not yet `ok`). Drives whether the daemon keeps a background
+ * re-probe scheduled while it stays connected.
+ */
+export function hasNonOkProvider(caps: ClientCapabilities): boolean {
+  return PROBED_RUNTIME_PROVIDERS.some((provider) => caps[provider]?.state !== "ok");
+}
+
+/**
+ * Exponential backoff for the degraded-capability re-probe loop:
+ * `base * 2^attempt`, clamped to `max`. `attempt` is 0 for the first poll after
+ * a state change and increments while nothing changes, so an actively-setting-up
+ * machine is polled quickly and an idle degraded machine slows to the ceiling.
+ */
+export function nextCapabilityRefreshDelayMs(attempt: number, opts: { baseMs?: number; maxMs?: number } = {}): number {
+  const baseMs = opts.baseMs ?? CAPABILITY_REFRESH_BASE_MS;
+  const maxMs = opts.maxMs ?? CAPABILITY_REFRESH_MAX_MS;
+  const safeAttempt = Number.isFinite(attempt) && attempt > 0 ? Math.floor(attempt) : 0;
+  // Cap the exponent so `2 ** attempt` cannot overflow to Infinity before the
+  // Math.min clamp runs.
+  const exponent = Math.min(safeAttempt, 30);
+  return Math.min(maxMs, baseMs * 2 ** exponent);
+}
+
 function errorEntry(err: unknown): CapabilityEntry {
   return {
     state: "error",

@@ -1,6 +1,13 @@
 import type { CapabilityEntry, ClientCapabilities } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { REPROBE_MAX_AGE_MS, shouldFullReprobe } from "../runtime/capabilities/index.js";
+import {
+  CAPABILITY_REFRESH_BASE_MS,
+  CAPABILITY_REFRESH_MAX_MS,
+  hasNonOkProvider,
+  nextCapabilityRefreshDelayMs,
+  REPROBE_MAX_AGE_MS,
+  shouldFullReprobe,
+} from "../runtime/capabilities/index.js";
 
 /**
  * Reconnect re-probe policy (PR-2b): on a WS reconnect the daemon either runs
@@ -55,6 +62,63 @@ describe("shouldFullReprobe", () => {
 
   it("unparseable detectedAt → full (treat as unknown age)", () => {
     expect(shouldFullReprobe({ codex: okEntry({ detectedAt: "not-a-date" }) }, now)).toBe(true);
+  });
+});
+
+describe("hasNonOkProvider", () => {
+  it("empty snapshot is degraded (no provider has reached ok yet)", () => {
+    expect(hasNonOkProvider({})).toBe(true);
+  });
+
+  it("a partial snapshot missing a built-in provider is degraded", () => {
+    // claude-code-tui + codex are absent → still degraded.
+    expect(hasNonOkProvider({ "claude-code": okEntry() })).toBe(true);
+  });
+
+  it("all built-in providers ok → not degraded (stops the poll)", () => {
+    expect(
+      hasNonOkProvider({
+        "claude-code": okEntry(),
+        "claude-code-tui": okEntry(),
+        codex: okEntry(),
+      }),
+    ).toBe(false);
+  });
+
+  it("any non-ok built-in provider keeps it degraded", () => {
+    expect(
+      hasNonOkProvider({
+        "claude-code": okEntry(),
+        "claude-code-tui": okEntry(),
+        codex: okEntry({ state: "unauthenticated", authenticated: false }),
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("nextCapabilityRefreshDelayMs", () => {
+  it("first poll uses the base delay", () => {
+    expect(nextCapabilityRefreshDelayMs(0)).toBe(CAPABILITY_REFRESH_BASE_MS);
+  });
+
+  it("doubles per attempt", () => {
+    expect(nextCapabilityRefreshDelayMs(1)).toBe(CAPABILITY_REFRESH_BASE_MS * 2);
+    expect(nextCapabilityRefreshDelayMs(2)).toBe(CAPABILITY_REFRESH_BASE_MS * 4);
+  });
+
+  it("clamps to the ceiling and never overflows", () => {
+    expect(nextCapabilityRefreshDelayMs(100)).toBe(CAPABILITY_REFRESH_MAX_MS);
+    expect(Number.isFinite(nextCapabilityRefreshDelayMs(1000))).toBe(true);
+  });
+
+  it("treats negative / non-finite attempts as the first poll", () => {
+    expect(nextCapabilityRefreshDelayMs(-5)).toBe(CAPABILITY_REFRESH_BASE_MS);
+    expect(nextCapabilityRefreshDelayMs(Number.NaN)).toBe(CAPABILITY_REFRESH_BASE_MS);
+  });
+
+  it("honors injected base/max overrides", () => {
+    expect(nextCapabilityRefreshDelayMs(3, { baseMs: 1000, maxMs: 4000 })).toBe(4000);
+    expect(nextCapabilityRefreshDelayMs(1, { baseMs: 1000, maxMs: 8000 })).toBe(2000);
   });
 });
 

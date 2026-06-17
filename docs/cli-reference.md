@@ -476,7 +476,15 @@ still-launchable, still-logged-in provider keeps its prior `ok` for free
 binary or login downgrades, and a non-ok provider is fully re-probed so it can
 recover. So a machine missing an optional provider (e.g. no tmux for
 `claude-code-tui`) does not re-smoke its healthy providers on every reconnect.
-`daemon probe` is the manual, on-demand path between those automatic refreshes.
+
+**While the daemon stays connected**, it also runs a bounded background
+re-probe whenever any provider is not yet `ok` — so installing or logging into
+a provider is noticed within a bounded time without a restart or reconnect. The
+poll starts ~15s after the degraded state is seen and backs off to a 5-minute
+ceiling, re-probes only the non-`ok` providers (already-`ok` ones stay on the
+free cached path), uploads only when the snapshot actually changes, and stops
+once every provider is `ok`. `daemon probe` remains the manual, on-demand path
+to force an immediate full re-probe + upload.
 
 The top-level `first-tree status` is the cross-subsystem overview that
 calls `daemon status` internally and adds server/auth/agent rows.

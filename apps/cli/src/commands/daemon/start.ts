@@ -6,7 +6,6 @@ import {
   configureClientLoggerForService,
   discoverClaudeCodeSkills,
   probeCapabilities,
-  reprobeOnReconnect,
 } from "@first-tree/client";
 import {
   agentConfigSchema,
@@ -23,6 +22,7 @@ import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
 import {
+  CapabilityRefresher,
   ClientRuntime,
   COMMAND_VERSION,
   createApiNameResolver,
@@ -45,15 +45,6 @@ import {
 } from "../../core/index.js";
 import { print } from "../../core/output.js";
 import { isWslDbusOvermount } from "./_shared/wsl-dbus.js";
-
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
-  return `{${Object.entries(value)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
-    .join(",")}}`;
-}
 
 export function registerDaemonStartCommand(daemon: Command): void {
   daemon
@@ -253,64 +244,38 @@ export function registerDaemonStartCommand(daemon: Command): void {
           runtime.addAgent(name, agentConfig);
         }
 
-        let lastUploadedCapabilitiesJson: string | null = null;
-        const uploadCapabilitiesIfChanged = async (capabilities: Awaited<ReturnType<typeof probeCapabilities>>) => {
-          const nextJson = stableJson(capabilities);
-          if (lastUploadedCapabilitiesJson === nextJson) return false;
-          const accessToken = await ensureFreshAccessToken();
-          await uploadClientCapabilities({
-            serverUrl: config.server.url,
-            accessToken,
-            clientId: config.client.id,
-            capabilities,
-          });
-          lastUploadedCapabilitiesJson = nextJson;
-          return true;
-        };
-
-        // Re-probe runtime-provider capabilities on each WS reconnect. The
-        // startup probe goes stale while the daemon runs (a provider gets
-        // installed / logged in / removed), and there is otherwise no refresh
-        // until a restart. On reconnect we conditionally re-probe — a full real
-        // smoke only when the last result was non-ok or older than the TTL,
-        // else a free resolve+auth re-validate — then re-upload. Guarded against
-        // overlap; never throws into the connection.
-        let reprobeInFlight = false;
-        runtime.onReconnect(() => {
-          void (async () => {
-            if (reprobeInFlight) return;
-            reprobeInFlight = true;
-            try {
-              const { capabilities, mode } = await reprobeOnReconnect(probedCapabilities ?? {});
-              probedCapabilities = capabilities;
-              const uploaded = await uploadCapabilitiesIfChanged(capabilities);
-              print.status(
-                "•",
-                `runtime capabilities re-probed on reconnect (${mode})${uploaded ? " and uploaded" : "; unchanged, upload skipped"}`,
-              );
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              print.status("⚠️", `reconnect capability re-probe skipped: ${msg}`);
-            } finally {
-              reprobeInFlight = false;
-            }
-          })();
+        // Runtime-capability refresh as a single probing model. The refresher
+        // owns BOTH the WS-reconnect re-probe AND a bounded, backoff-scheduled
+        // background poll that runs while the daemon stays connected — the gap
+        // this fixes: the startup snapshot goes stale the instant the operator
+        // installs / logs into a provider, and with no reconnect there was
+        // otherwise no refresh until a restart or a manual `daemon probe`. The
+        // poll re-probes only while a provider is non-`ok` and stops once every
+        // provider is `ok`; reconnect and poll share one in-flight guard so
+        // providers are never launched concurrently. Uploads are deduped.
+        const capabilityRefresher = new CapabilityRefresher({
+          initial: probedCapabilities,
+          upload: async (capabilities) => {
+            const accessToken = await ensureFreshAccessToken();
+            await uploadClientCapabilities({
+              serverUrl: config.server.url,
+              accessToken,
+              clientId: config.client.id,
+              capabilities,
+            });
+          },
+          log: (symbol, msg) => print.status(symbol, msg),
         });
+        runtime.onReconnect(() => capabilityRefresher.onReconnect());
 
         await runtime.start();
 
-        // Post-register capabilities upload — the `clients` row only exists
-        // after the `client:register` WS handshake, so we run the PATCH here
-        // instead of pre-flight. Best-effort: a transient failure logs and
-        // moves on; agents still bind, and a subsequent restart retries.
-        if (probedCapabilities) {
-          try {
-            await uploadCapabilitiesIfChanged(probedCapabilities);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            print.status("⚠️", `capabilities upload skipped: ${msg}`);
-          }
-        }
+        // Post-register capabilities upload + arm the background poll — the
+        // `clients` row only exists after the `client:register` WS handshake,
+        // so the first PATCH runs here rather than pre-flight. Best-effort: a
+        // transient failure logs and moves on; agents still bind, and the poll
+        // (or a later restart) retries.
+        await capabilityRefresher.start();
 
         // Post-register slash-command skill upload. Phase 1B scope is
         // user-global Claude Code skills — every claude-code agent on this
@@ -375,6 +340,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // Graceful shutdown
         const shutdown = async () => {
           print.line("\n  Shutting down...\n");
+          capabilityRefresher.stop();
           runtime.unwatchAgentsDir();
           await runtime.stop();
           process.exit(0);
