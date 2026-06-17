@@ -224,6 +224,14 @@ function AdminKickoff({
           .fetchQuery({
             queryKey: ["onboarding", "org-github-repos", organizationId],
             queryFn: () => listOrgGithubRepos(organizationId),
+            // Within one onboarding session grants don't change, so reuse the
+            // list connect-code just fetched instead of re-reading GitHub on
+            // every "Start". That keeps the normal connect-code → kickoff path
+            // off a live read a transient blip could fail (which fail-closed
+            // would turn into a hard block). A genuine resume-at-kickoff is a
+            // fresh page load with an empty in-memory cache, so it still fetches
+            // and validates here.
+            staleTime: 5 * 60 * 1000,
           })
           .catch(() => {
             throw new Error("Couldn't check your repositories with GitHub just now. Try again in a moment.");
