@@ -1870,6 +1870,31 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
+  it("fails closed at kickoff when the grant list can't be read (no stale write)", async () => {
+    // If the current-grant read fails we can't prove the selected repos are still
+    // accessible and nothing downstream re-checks grants, so kickoff must NOT
+    // write the (possibly stale) selection — it surfaces a retryable error and
+    // stays on the form instead.
+    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    githubMocks.listOrgGithubRepos.mockRejectedValue(new Error("github unavailable"));
+    const view = await renderOnboardingDom(<StepKickoff />, {
+      activeStep: "kickoff",
+      selectedRepoUrls: ["https://github.com/acme/web.git"],
+      treeMode: "existing",
+      treeUrl: "https://github.com/acme/context-tree",
+    });
+    await waitForText("Your agent's ready to get to work", view.container);
+    await click(
+      ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
+        null) as HTMLButtonElement | null,
+    );
+    await waitForText("Couldn't check your repositories", view.container);
+    expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
+    expect(chatApiMocks.createAgentChat).not.toHaveBeenCalled();
+    expect(view.flow.completeAndEnterChat).not.toHaveBeenCalled();
+    await unmountRoot(view.root);
+  });
+
   it("edits MCP server rows through validation, stdio, and HTTP submissions", async () => {
     const { McpSection } = await import("../agent-detail/mcp-section.js");
     const onAdd = vi.fn();

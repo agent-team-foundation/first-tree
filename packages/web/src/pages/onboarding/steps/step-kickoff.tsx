@@ -210,21 +210,26 @@ function AdminKickoff({
       // restored per-org draft, and the connect-code prune only runs when that
       // step mounts — a flow resumed directly at kickoff (persisted step index)
       // would otherwise register a repo removed from the installation since the
-      // user picked it. Reuses connect-code's cached repo list; on a fetch
-      // failure we don't block kickoff (downstream registration still verifies).
+      // user picked it. Reuses connect-code's cached repo list.
+      //
+      // Fail CLOSED: if we can't read the current grant list (no_installation,
+      // suspended, not_configured, upstream 5xx) we cannot prove the selected
+      // repos are still accessible, and nothing downstream re-checks grants
+      // (`createTeamResourceForOrg` only validates URL shape; existing-tree
+      // writes are best-effort). So surface a retryable error instead of
+      // registering a possibly-stale selection — clicking Start again retries.
       let repos = selectedRepoUrls;
       if (organizationId) {
-        try {
-          const granted = await queryClient.fetchQuery({
+        const granted = await queryClient
+          .fetchQuery({
             queryKey: ["onboarding", "org-github-repos", organizationId],
             queryFn: () => listOrgGithubRepos(organizationId),
+          })
+          .catch(() => {
+            throw new Error("Couldn't check your repositories with GitHub just now. Try again in a moment.");
           });
-          const grantedUrls = new Set(granted.map((r) => r.cloneUrl));
-          repos = selectedRepoUrls.filter((url) => grantedUrls.has(url));
-        } catch {
-          // Transient GitHub read failure — proceed with the user's selection
-          // rather than block the finale on a grant-list refresh.
-        }
+        const grantedUrls = new Set(granted.map((r) => r.cloneUrl));
+        repos = selectedRepoUrls.filter((url) => grantedUrls.has(url));
       }
 
       // Everything the user picked is gone from the installation → nothing to
