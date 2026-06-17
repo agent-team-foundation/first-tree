@@ -285,6 +285,9 @@ describe("github-entity-follow", () => {
     expect(rows[0]?.chatId).toBe(newChat);
     // The moved row no longer impersonates a github-minted anchor.
     expect(rows[0]?.boundVia).toBe("agent_declared");
+    // The pre-0067 row had no title; follow-time resolution fetched it, so the
+    // moved row must now carry it instead of waiting for a webhook.
+    expect(rows[0]?.title).toBe("Add follow command");
   });
 
   it("rebind moves a legacy discussion row instead of inserting a duplicate canonical row", async () => {
