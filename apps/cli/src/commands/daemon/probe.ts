@@ -15,11 +15,14 @@ import { isJsonMode, print } from "../../core/output.js";
 /**
  * `daemon probe` — run the launch-verified capability probes on demand.
  *
- * The daemon only probes at startup, so this is how an operator refreshes a
- * client's advertised capabilities after installing / logging into a provider
- * without restarting the daemon — and sees the real, verbatim probe result
- * locally. Each probe really launches its provider (a 1-turn haiku query / a
- * `codex doctor` handshake), so this is not free.
+ * The daemon refreshes capabilities automatically (at startup, on every WS
+ * reconnect, and via a bounded background poll while any provider is non-`ok`),
+ * so installing / logging into a provider is normally noticed without operator
+ * action. This command is the immediate, on-demand path — it forces a full
+ * re-probe + upload right now (instead of waiting for the next backed-off poll)
+ * and surfaces the real, verbatim probe result locally. Each probe really
+ * launches its provider (a 1-turn haiku query / a `codex doctor` handshake), so
+ * this is not free.
  *
  * Probing is purely local and needs no First Tree credentials; only the
  * (default) upload step requires a logged-in client. So `--no-upload` runs as

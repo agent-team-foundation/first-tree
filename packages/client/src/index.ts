@@ -27,6 +27,11 @@ export {
 export { probeClaudeCodeCapability } from "./runtime/capabilities/claude-code.js";
 export { probeCodexCapability } from "./runtime/capabilities/codex.js";
 export {
+  CAPABILITY_REFRESH_BASE_MS,
+  CAPABILITY_REFRESH_MAX_MS,
+  hasNonOkProvider,
+  nextCapabilityRefreshDelayMs,
+  PROBED_RUNTIME_PROVIDERS,
   probeCapabilities,
   REPROBE_MAX_AGE_MS,
   reprobeOnReconnect,

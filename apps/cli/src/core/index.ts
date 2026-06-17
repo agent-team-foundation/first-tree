@@ -14,6 +14,9 @@ export {
   saveAgentConfig,
   saveCredentials,
 } from "./bootstrap.js";
+export type { CapabilityRefresherDeps } from "./capability-refresh.js";
+// Runtime-capability refresh (reconnect re-probe + bounded background poll)
+export { CapabilityRefresher, stableCapabilitiesJson } from "./capability-refresh.js";
 export { cliFetch } from "./cli-fetch.js";
 // Local client identity rotation (on CLIENT_ORG_MISMATCH)
 export { handleClientOrgMismatch, rotateClientIdWithBackup } from "./client-reidentify.js";
