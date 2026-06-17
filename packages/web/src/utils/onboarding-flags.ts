@@ -14,6 +14,51 @@ const JOIN_PATH_KEY = "onboarding:joinPath";
 
 const ONBOARDING_AGENT_UUID_KEY = "onboarding:agentUuid";
 
+const SELECTED_REPOS_KEY = (orgId: string) => `onboarding:selectedRepos:${orgId}`;
+
+/**
+ * Per-org draft of the repos the admin picked on the connect-code step.
+ *
+ * Persisted so leaving before kickoff — the top-bar "I'll finish later", a
+ * refresh, or a mid-flow navigation — doesn't silently discard the selection;
+ * the user resumes the wizard with the repos they chose still ticked. The
+ * formal team-resource write still happens only at kickoff ("Build tree &
+ * start"); this is purely an in-flight draft so the choice survives a bailout.
+ *
+ * Per-tab (sessionStorage), matching the other onboarding flags and the
+ * same-session continuation the flow targets. Keyed by org so a multi-org user
+ * keeps an independent draft per team.
+ *
+ * Returns `null` when no draft exists (the user hasn't touched the picker yet)
+ * — distinct from `[]`, which means they deliberately deselected everything.
+ * The connect-code step needs that distinction: it only auto-selects all
+ * granted repos when there is NO draft, so a resumed narrowing (to a subset, or
+ * to none) is never clobbered back to "all".
+ */
+export function readOnboardingSelectedRepos(orgId: string): string[] | null {
+  if (typeof window === "undefined" || !orgId) return null;
+  const raw = window.sessionStorage.getItem(SELECTED_REPOS_KEY(orgId));
+  if (raw === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    const urls: string[] = [];
+    for (const u of parsed) {
+      if (typeof u !== "string") return null;
+      urls.push(u);
+    }
+    return urls;
+  } catch {
+    return null;
+  }
+}
+
+export function writeOnboardingSelectedRepos(orgId: string, urls: string[] | null): void {
+  if (typeof window === "undefined" || !orgId) return;
+  if (urls === null) window.sessionStorage.removeItem(SELECTED_REPOS_KEY(orgId));
+  else window.sessionStorage.setItem(SELECTED_REPOS_KEY(orgId), JSON.stringify(urls));
+}
+
 /**
  * UUID of the agent created during onboarding. The kickoff step uses it to
  * start the first chat against the right agent on a re-visit (where

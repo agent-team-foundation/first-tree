@@ -761,6 +761,7 @@ function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): Onboardi
     hasAgent: true,
     selectedRepoUrls: ["https://github.com/acme/web.git"],
     setSelectedRepoUrls: () => undefined,
+    hasRepoDraft: true,
     treeMode: "existing",
     setTreeMode: () => undefined,
     treeUrl: "https://github.com/acme/context-tree",

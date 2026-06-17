@@ -38,7 +38,7 @@ const INSTALL_ATTEMPT_KEY = "onboarding:connect-code:install-attempt";
  * with no prop (friction, not a block) — unchanged.
  */
 export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
-  const { organizationId, goNext, selectedRepoUrls, setSelectedRepoUrls } = useOnboardingFlow();
+  const { organizationId, goNext, selectedRepoUrls, setSelectedRepoUrls, hasRepoDraft } = useOnboardingFlow();
   const [installError, setInstallError] = useState<"not_configured" | "not_admin" | "generic" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
   // Whether the user has actually kicked off an install (this tab). We only
@@ -92,15 +92,31 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
 
   // Default the picker to every granted repo so the user doesn't re-pick what
   // they just granted on GitHub (they can narrow by unchecking). One-shot when
-  // repos first load — after that we never fight a deliberate "none".
+  // repos first load — and ONLY when there's no saved draft for this org, so a
+  // resumed selection (narrowed to a subset, or to none, then "finish later" /
+  // refreshed) is restored as-is instead of being re-selected back to "all".
   const preselectedRef = useRef(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on first repo load; reads selection at fire time
+  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on first repo load; reads selection + draft flag at fire time
   useEffect(() => {
     if (preselectedRef.current) return;
     const loaded = reposQuery.data;
     if (!loaded || loaded.length === 0) return;
     preselectedRef.current = true;
-    if (selectedRepoUrls.length === 0) setSelectedRepoUrls(loaded.map((r) => r.cloneUrl));
+    const grantedUrls = loaded.map((r) => r.cloneUrl);
+    if (!hasRepoDraft) {
+      // First visit: default to every granted repo.
+      setSelectedRepoUrls(grantedUrls);
+      return;
+    }
+    // Resumed draft: keep the user's narrowing, but drop any repo the GitHub App
+    // no longer grants (uninstalled, or the granted set changed between bailout
+    // and resume). The pre-draft behaviour reset to "all current grants" every
+    // visit, so a restored draft is the only path a stale URL could ride into
+    // kickoff and get provisioned from a repo the app can't access. Prune only
+    // against an authoritative loaded list (this effect already returned above
+    // on an empty/missing list, so a transient load failure never wipes).
+    const pruned = selectedRepoUrls.filter((url) => grantedUrls.includes(url));
+    if (pruned.length !== selectedRepoUrls.length) setSelectedRepoUrls(pruned);
   }, [reposQuery.data]);
 
   const handleConnect = async (): Promise<void> => {
