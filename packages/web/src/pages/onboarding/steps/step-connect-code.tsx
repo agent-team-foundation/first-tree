@@ -168,25 +168,16 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
             appears in place. Intro/why live in STEP_COPY. */}
 
         {installError === "not_configured" || installError === "not_admin" ? (
-          <>
-            <FlowHint>{recovery ? COPY.connectCode.cantConnectRecovery : COPY.connectCode.cantConnect}</FlowHint>
-            {/* Recovery has no skip — a repo is mandatory. A blocked admin
-                leaves via the shell's "Back to workspace". Onboarding: the same
-                unified "Skip for now" quiet link as every other skip in this step. */}
-            {!recovery && (
-              <Button type="button" variant="link" className="h-auto self-start p-0 text-label" onClick={goNext}>
-                {COPY.skipForNow}
-              </Button>
-            )}
-          </>
+          // Just the message — the unified "Skip for now" at the bottom of the
+          // step is the way forward (recovery has no skip; a blocked admin leaves
+          // via the shell's "Back to workspace").
+          <FlowHint>{recovery ? COPY.connectCode.cantConnectRecovery : COPY.connectCode.cantConnect}</FlowHint>
         ) : (
           <>
-            {/* Decision row: primary CTA + Skip as a quiet sibling. Both
-                actions visible side-by-side so the user sees their full set
-                of options at a glance instead of hunting for Skip in a
-                footer. Skip goes straight through (no confirm gate); the
-                muted reassurance line below keeps the choice informed. */}
-            <div className="flex items-center" style={{ gap: "var(--sp-4)", flexWrap: "wrap" }}>
+            {/* Primary CTA only — "Skip for now" lives at the bottom of the step
+                (unified across states), so Install reads as the one clear primary
+                action here rather than competing with a sibling skip. */}
+            <div className="flex">
               {/* Lock the CTA once an attempt is in flight. The original tab
                   never navigates away here, so a second mint would overwrite the
                   first attempt's `oauth_state_nonce` cookie and break its
@@ -200,12 +191,6 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
                 <Github className="h-4 w-4" />
                 {COPY.connectCode.cta}
               </Button>
-              {/* No skip on the recovery surface — a repo is required to build. */}
-              {!recovery && (
-                <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleSkip}>
-                  {COPY.skipForNow}
-                </Button>
-              )}
             </div>
             {/* Merged caveat + skip reassurance; the gating fact is bolded. */}
             <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
@@ -228,22 +213,30 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
                 safe way to retry — see the CTA-lock note above). */}
             {attempted ? (
               // Stuck recovery (replaces the old "Need help?" disclosure): the
-              // live "waiting" status + a re-mint retry, plus the one genuinely
-              // useful, non-obvious explanation — non-owners' installs need an
-              // org owner's approval before they connect.
-              <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
-                <div className="flex items-center" style={{ gap: "var(--sp-2_5)", flexWrap: "wrap" }}>
-                  <StatusRow state="waiting" label={COPY.connectCode.waiting} />
-                  <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleStartOver}>
-                    {COPY.connectCode.restartInstall}
-                  </Button>
-                </div>
-                <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-                  {COPY.connectCode.troubleshootBody}
-                </p>
+              // live "waiting" status + a re-mint retry. notOwnerHint above
+              // already covers who can install / owner approval, so no extra
+              // troubleshooting line here.
+              <div className="flex items-center" style={{ gap: "var(--sp-2_5)", flexWrap: "wrap" }}>
+                <StatusRow state="waiting" label={COPY.connectCode.waiting} />
+                <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleStartOver}>
+                  {COPY.connectCode.restartInstall}
+                </Button>
               </div>
             ) : null}
           </>
+        )}
+        {/* Unified "Skip for now" at the bottom — the same quiet link in every
+            not-installed state (was beside the CTA / under the error message).
+            handleSkip clears any in-flight install marker first. */}
+        {!recovery && (
+          <Button
+            type="button"
+            variant="link"
+            className="h-auto self-start p-0 text-label underline underline-offset-2"
+            onClick={handleSkip}
+          >
+            {COPY.skipForNow}
+          </Button>
         )}
       </div>
     );
@@ -338,23 +331,17 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
         ) : (
           // No repo (didn't pick / couldn't load / none exist): continuing
           // without one is never the desired path, so it's always a very weak
-          // muted micro-link — never a strong button. When there ARE repos to
-          // pick, add the consequence line so the skip is an informed, deliberate
-          // choice (friction, not a block). When the list failed/empty, the
-          // picker area already explains why, so no extra line.
-          <>
-            {hasPickableRepos && <FlowHint>{COPY.connectCode.noRepoConsequence}</FlowHint>}
-            {/* Unified skip: same "Skip for now" label + quiet link style as the
-                pre-connect skip, so the skip reads identically in every state. */}
-            <Button
-              type="button"
-              variant="link"
-              className="h-auto self-start p-0 text-label underline underline-offset-2"
-              onClick={goNext}
-            >
-              {COPY.skipForNow}
-            </Button>
-          </>
+          // muted micro-link — never a strong button. Unified skip: same
+          // "Skip for now" label + quiet link style as the pre-connect skip, so
+          // the skip reads identically in every state.
+          <Button
+            type="button"
+            variant="link"
+            className="h-auto self-start p-0 text-label underline underline-offset-2"
+            onClick={goNext}
+          >
+            {COPY.skipForNow}
+          </Button>
         )}
       </div>
     </div>

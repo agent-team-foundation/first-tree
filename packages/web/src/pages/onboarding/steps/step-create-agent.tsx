@@ -69,6 +69,15 @@ export function StepCreateAgent() {
     return provider ? [provider] : [];
   });
 
+  // Coding-agent pills to render. When the computer drops mid-form, okRuntimes
+  // empties but `selectedRuntime` keeps the last pick — so we still show THAT
+  // agent (disabled) rather than letting the whole field vanish and the form
+  // jump. A disabled pill + the reconnect hint reads as "your agent's here, just
+  // temporarily unreachable", not "it's gone".
+  const connected = !!computer.connectedClient;
+  const fallbackProvider = selectedRuntime ? asRuntimeProvider(selectedRuntime) : null;
+  const displayProviders = okProviders.length > 0 ? okProviders : fallbackProvider ? [fallbackProvider] : [];
+
   if (agentPhase === "creating") {
     return <WorkingState label={COPY.createAgent.creating} hint={COPY.createAgent.creatingHint} />;
   }
@@ -109,20 +118,58 @@ export function StepCreateAgent() {
         {COPY.createAgent.subtitle}
       </p>
 
-      {/* Coding agent — always a list (even for one), default Claude Code. */}
-      {okProviders.length > 0 && (
+      {/* Coding agent — always a list (even for one), default Claude Code.
+          Stays visible (disabled) when the computer drops, so the field never
+          vanishes from under the user. */}
+      {displayProviders.length > 0 && (
         <fieldset className="flex flex-col" style={{ gap: "var(--sp-2)", margin: 0, padding: 0, border: 0 }}>
-          <legend className="text-label font-medium" style={{ color: "var(--fg-2)", marginBottom: "var(--sp-1)" }}>
+          <legend
+            className="text-label font-medium"
+            style={{
+              color: "var(--fg-2)",
+              marginBottom: "var(--sp-1)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "var(--sp-2)",
+            }}
+          >
             {COPY.createAgent.codingAgentLabel}
+            {/* Prominent amber "Not ready" badge when the computer dropped — makes
+                the disabled pill read as unavailable (reconnect needed), not just
+                quietly greyed. */}
+            {!connected && (
+              <span
+                className="inline-flex items-center text-caption font-medium"
+                style={{
+                  gap: "var(--sp-1)",
+                  padding: "var(--sp-0_5) var(--sp-1_5)",
+                  borderRadius: "var(--radius-chip)",
+                  background: "var(--state-needs-you-soft)",
+                  color: "var(--fg-needs-you-strong)",
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: "var(--sp-1_5)",
+                    height: "var(--sp-1_5)",
+                    borderRadius: "var(--radius-full)",
+                    background: "var(--state-needs-you)",
+                  }}
+                />
+                {COPY.createAgent.codingAgentNotReady}
+              </span>
+            )}
           </legend>
           <div className="flex flex-wrap" style={{ gap: "var(--sp-2)" }}>
-            {okProviders.map((provider) => (
+            {displayProviders.map((provider) => (
               <OptionCard
                 key={provider}
                 name="onboarding-coding-agent"
                 layout="pill"
                 checked={selectedRuntime === provider}
                 onSelect={() => setSelectedRuntime(provider)}
+                disabled={!connected}
               >
                 <span className="text-body">{PROVIDER_LABEL[provider]}</span>
               </OptionCard>

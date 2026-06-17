@@ -62,11 +62,13 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     // self-evident enough, and the why is one glance below). "code" (not jargon
     // "repo") for the concept; "repos" is reserved for the actual selection.
     title: "Connect to GitHub",
-    // why = value + reassurance. The "install the GitHub App" mechanism lives on
-    // the CTA button (so this never reads as "install software"); the reassurance
-    // ("never changes them without your okay") is kept — it's worth a lot at the
-    // first GitHub authorization.
-    why: "Your agent works on your code. Connect your GitHub and choose which repos it can use — and it never changes them without your okay.",
+    // why = explain BOTH the reason and the action: sentence 1 is the WHY (the
+    // agent needs your code), sentence 2 is the WHAT (connect GitHub + scope the
+    // repos). The "install the GitHub App" mechanism lives on the CTA button (so
+    // this never reads as "install software"). Only the trailing "never changes
+    // them without your okay" reassurance was cut — "choose which repos it can
+    // use" already carries the in-control message.
+    why: "Your agent works on your code. Connect your GitHub and choose which repos it can use.",
   },
   "connect-computer": {
     // Reframed: this step installs the First Tree client (a small background app)
@@ -148,7 +150,10 @@ export const COPY = {
       /** Granted-repo count, shown once the repo list loads. */
       repoCount: (n: number) => `${n} ${n === 1 ? "repository" : "repositories"} available`,
     },
-    pickProject: "Which repos should your agent work on?",
+    // Concise field-label for the repo picker — the subtitle already explains
+    // ("choose which repos it can use"), so this just tags the field rather than
+    // re-asking the question (and avoids echoing the subtitle's "choose…use").
+    pickProject: "Repos your agent can use",
     /** Loading state for the repo picker (was hardcoded in the step). */
     loading: "Loading your repos…",
     // The picker is sourced from the team's GitHub App installation grant, so
@@ -167,7 +172,6 @@ export const COPY = {
     // Recovery variant: no "continue without" — offer a retry instead.
     loadFailedRecovery: "Couldn't load your team's repos. Try again in a moment.",
     loadFailedRetry: "Try again",
-    reconnect: "Reconnect GitHub with repo access",
     // Collapsed the two rare, not-user-fixable install errors (App not set up on
     // this server / caller lacks permission) into one recoverable message — the
     // action is the same either way (continue, set up later), so two separate
@@ -178,14 +182,6 @@ export const COPY = {
     // install it). The shell's "Back to workspace" is the way out.
     cantConnectRecovery:
       "Couldn't connect a repo here. Building your team's Context Tree needs First Tree connected to GitHub — a GitHub org owner has to install it. Once it's connected, come back.",
-    continueWithout: "Continue without a repo",
-    continueNoProject: "Continue without a repo",
-    // Shown when the picker has repos but none are selected. Connecting one is
-    // the whole point of this step — it's what gives the team a Context Tree —
-    // so we add friction (state the consequence + a quieter skip button), but
-    // never block: a beginner should still be able to move on.
-    noRepoConsequence:
-      "Pick a repo so your agent can build your team's Context Tree. Without one, teammates who join will be left waiting until you connect one.",
     /**
      * Shown under the CTA/Skip row: the install caveat (who can install) merged
      * with the skip reassurance into one muted line. `emphasis` renders bold so
@@ -203,28 +199,6 @@ export const COPY = {
         `oauth_state_nonce` cookie — re-minting while the first install tab is
         mid-flow would fail its callback. */
     restartInstall: "Didn't work? Start over",
-    /**
-     * Troubleshooting shown inside the "Need help?" disclosure (alongside the
-     * InstallGuide how-to), mirroring connect-computer. The disclosure
-     * auto-opens when the user returns from GitHub without an installation, so
-     * the title is state-neutral (it can also be opened proactively).
-     */
-    /** "Need help?" InstallGuide — a 3-beat visual flow + numbered how-to,
-        written to match GitHub's REAL App-install screen: choose where to
-        install → pick repo access (all / select) → click Install (or Request,
-        for non-owners) → auto-return. */
-    installFlow: ["Choose org", "Pick repos", "Install", "Back here"],
-    installFlowAria: "Flow: choose your org, pick repos, click Install on GitHub, then return to setup.",
-    installSteps: [
-      "Choose where to install First Tree — your team's GitHub org (or your account, if your repos live there).",
-      "Pick which repos it can access: all of them, or just the ones you choose.",
-      "Click Install. Not a GitHub org owner? The button says Request instead — an owner approves it.",
-      "GitHub sends you straight back here, and this page connects on its own.",
-    ],
-    troubleshootTitle: "If it didn't connect:",
-    troubleshootBody:
-      "Make sure you clicked Install (or Request) on GitHub. If you're not a GitHub org owner, an owner has to approve it — once they do, it connects here automatically.",
-    // (skipReassure merged into `notOwnerHint` — one muted line under the row.)
   },
   /** connect-computer states */
   connectComputer: {
@@ -236,14 +210,22 @@ export const COPY = {
     // at the machine where they're installed — the user's coding agent already
     // lives there, so running the command connects it. The "— that connects it
     // to your team" tail gives the bare command its purpose.
-    whyWaiting: "A small background app that lets your local coding agents (Claude Code, Codex) connect to your team.",
+    whyWaiting: "A background app that connects your local coding agents (Claude Code, Codex) to your First Tree team.",
     whyConnected:
-      "A small background app that lets your local coding agents (Claude Code, Codex) connect to your team.",
-    // Two install paths (waiting state): run in a terminal, or paste a ready
-    // prompt to the coding agent the user already has and let it install.
+      "A background app that connects your local coding agents (Claude Code, Codex) to your First Tree team.",
+    // Two install paths (waiting state): run the bare command in a terminal, or
+    // paste a ready prompt to the coding agent the user already has — the prompt
+    // wraps the command in a "please run this" line so the agent executes it
+    // instead of just explaining a bare command.
     terminalBoxLabel: "Run this command in your terminal",
     agentBoxLabel: "Or paste this to your Claude Code or Codex agent",
     agentPromptPrefix: "Help me install First Tree by running the command below:",
+    // Quiet caption naming the nested coding-agent list, so the indented rows
+    // read as "found ON this computer" (the relationship the nesting implies)
+    // rather than as an unlabelled cluster. Count-aware so a single detection
+    // doesn't read as a plural label.
+    detectedLabel: (count: number) =>
+      count === 1 ? "Coding agent on this computer" : "Coding agents on this computer",
     // Bridge below the detected-agents list → the next step (create-agent).
     detectedBridge: "Next, create your first agent.",
     // Stuck recovery (replaces the Need-help disclosure): ONE line, Node.js the
@@ -252,22 +234,12 @@ export const COPY = {
     stuckNodePost: ", re-run.",
     waiting: "Waiting for your computer…",
     connected: "connected",
-    noRuntime:
-      "Your computer is connected, but we didn't find a coding agent on it. Install one (like Claude Code) and sign in — it'll show up here automatically.",
+    // One line: the "✓ <host> connected" row above already says the computer is
+    // connected (so no "Your computer is connected, but…" lead-in), and this is a
+    // live polling state (so the dropped "it'll appear here automatically" tail is
+    // implied — a detected agent just shows up). Problem + fix only.
+    noRuntime: "No coding agent found yet. Install one (like Claude Code) and sign in.",
     detecting: "Looking for coding agents on it…",
-    /**
-     * Ready · exactly one coding agent detected — nothing to choose, so name
-     * the tool and bridge into the next step. `name` is the friendly
-     * PROVIDER_LABEL (e.g. "Claude Code").
-     */
-    runtimeReady: (name: string) => `${name} is ready on this computer. Next, add it to your team.`,
-    /**
-     * Ready · two or more coding agents detected — state the count and prompt
-     * the user to pick which one to connect first (a single-select list
-     * follows).
-     */
-    runtimesReady: (count: number) =>
-      `We found ${count} coding agents on this computer — pick which one to connect first.`,
     stuckTitle: "Taking a while? A few common reasons:",
     stuckReasons: [
       "If you saw “command not found”, your computer needs Node.js first — it's a free install. Get it, then run the command again.",
@@ -276,11 +248,6 @@ export const COPY = {
     ],
     nodeLinkLabel: "Install Node.js (free)",
     nodeUrl: "https://nodejs.org",
-    /** "Need help?" disclosure — label, and the stuck variant it switches to. */
-    helpStuckLabel: "Taking a while? Need help?",
-    /** Troubleshooting block inside the disclosure (neutral title — it can be
-        opened proactively, not only when stuck). Reuses `stuckReasons`. */
-    troubleshootTitle: "If it's not connecting:",
     /** Token-mint failure (POST /me/connect-tokens threw, after silent retries).
         Calm + recoverable: the auto-retry handles transient blips, so by the
         time this shows it's worth a manual Try again. */
@@ -289,38 +256,49 @@ export const COPY = {
   },
   /** create-agent states */
   createAgent: {
-    // Dynamic opener at the top of the step: names the connected tool + the
-    // machine it's on, grounding the abstract "agent" in the concrete coding
-    // agent the user already runs (e.g. "Claude Code on gandys-macbook is about
-    // to join your team."). Rendered only when both are known.
-    joining: (toolLabel: string, hostname: string) => `${toolLabel} on ${hostname} is about to join your team.`,
-    // Collapsed-model subtitle: the agent the user creates IS their local coding
-    // agent given a team identity — no "powered by / runtime" two-layer framing.
-    subtitle: "Your Claude Code or Codex becomes a team agent. Choose which one, name it, and set who can use it.",
+    // Subtitle = relationship + a smooth, generic lead-in to the setup. The
+    // SUBJECT carries the relationship ("your local coding agent" — the category
+    // word, NOT the tool names, which live in the field's pills +
+    // `codingAgentHint`); "ready to join your First Tree team" says what's
+    // happening, and "let's set it up" invites the configuration below WITHOUT
+    // enumerating / echoing the field labels (the robotic "Choose which one,
+    // name it, and set who can use it" list was the redundancy we cut). No
+    // two-layer "powered by / runtime" framing.
+    subtitle: "Your local coding agent is ready to join your First Tree team — let's set it up.",
     // Coding-agent picker (moved here from connect-computer): always a list, even
-    // for one, default-selected to Claude Code when present.
-    codingAgentLabel: "Coding agent",
+    // for one, default-selected to Claude Code when present. Verb-leading to
+    // match the imperative `nameLabel` ("Name your agent") below; "local" keeps
+    // the subtitle's vocabulary and frames the pick as the user's own
+    // machine-side tool — connect-computer already showed which machine, so no
+    // "Detected on <host>" sub-label is repeated here.
+    codingAgentLabel: "Choose your local coding agent",
+    // Amber "not ready" badge beside the label when the computer dropped — so the
+    // disabled picker reads AS unavailable (action needed: reconnect) at a glance,
+    // not just a quietly greyed pill.
+    codingAgentNotReady: "Not ready",
     nameLabel: "Name your agent",
     // "Bringing your agent online…" (not "Setting up…"): the step registers the
     // agent then polls until it comes online. Pairs with timeout's "isn't online
     // yet".
     creating: "Bringing your agent online…",
     creatingHint: "This usually takes a few seconds.",
-    // Timeout: added but didn't report online within 30s. ONE paragraph, no
-    // separate bold title — the shell already renders the step h1 ("Add your
-    // agent to the team"), so a second heading read as a stacked double-title.
-    // Leads with the situation, then causes + fix. "coding agent" matches
-    // connect-computer.
-    timeoutBody:
-      "Your agent isn't online yet — the computer it runs on may have gone to sleep, lost its connection, or the coding agent didn't start. Check that computer, then try again.",
+    // Timeout: added but didn't report online within 30s. One short line — the
+    // shell already renders the step h1, so no second title. Situation + the
+    // condensed likely cause (the three separate causes — sleep / lost
+    // connection / agent didn't start — collapse to "asleep or offline") + fix.
+    timeoutBody: "Your agent isn't online yet — its computer may be asleep or offline. Check it, then try again.",
     retry: "Try again",
     /** Shown on the form when the computer isn't connected (Create is disabled).
-        Rendered as one line with an inline "reconnect it" link (→ connect-computer)
-        rather than a separate orphaned link line. Auto-clears on reconnect. */
+        One line with an inline "reconnect it" link (→ connect-computer). The old
+        "to add your agent to the team" tail was dropped: the disabled "Create
+        agent" button right below already shows the consequence, and the new
+        "Not ready" badge + greyed picker carry the at-a-glance status — so this
+        line just states the specific reason + the recover action. Auto-clears on
+        reconnect. */
     computerDisconnected: {
       pre: "Your computer isn't connected — ",
       link: "reconnect it",
-      post: " to add your agent to the team.",
+      post: ".",
     },
   },
   /** kickoff — one unified "launch" finale across every path. Titles/bodies are

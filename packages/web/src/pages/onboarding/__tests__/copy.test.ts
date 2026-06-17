@@ -31,12 +31,9 @@ describe("onboarding vocabulary (connect-agent reframe)", () => {
       cc.connected,
       cc.noRuntime,
       cc.detecting,
-      cc.runtimeReady("Claude Code"),
-      cc.runtimesReady(2),
       ...cc.stuckReasons,
-      cc.troubleshootTitle,
       cc.tokenErrorTitle,
-      ca.joining("Claude Code", "gandys-macbook"),
+      ca.subtitle,
       ca.nameLabel,
       ca.creating,
       ca.creatingHint,
@@ -50,7 +47,9 @@ describe("onboarding vocabulary (connect-agent reframe)", () => {
 
   it("names the coding agent directly once detected", () => {
     expect(COPY.connectComputer.whyWaiting).toContain("Claude Code");
-    expect(COPY.connectComputer.runtimeReady("Claude Code")).toContain("Claude Code");
-    expect(COPY.createAgent.joining("Claude Code", "host")).toContain("Claude Code");
+    // create-agent's subtitle intentionally uses the category word ("local
+    // coding agent"), not the tool names — the concrete tool is named in the
+    // field's pills (PROVIDER_LABEL) instead.
+    expect(COPY.createAgent.subtitle).toContain("local coding agent");
   });
 });

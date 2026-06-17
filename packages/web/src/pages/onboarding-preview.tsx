@@ -49,7 +49,11 @@ const ORG_ID = "org-acme";
 const TEAM_NAME = "Gandy's team";
 const TREE_URL = "https://github.com/acme/context-tree";
 const DEFAULT_AGENT_NAME = "Gandy's assistant";
-const SAMPLE_CLI = "npm install -g <package>\n<binName> login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
+// Mirror the real prod bootstrap shape (server fills the channel's actual
+// package + bin name — `first-tree` on prod; see api/me.ts) so the gallery
+// reads true for design review instead of showing literal <package>/<binName>
+// placeholders a real user never sees.
+const SAMPLE_CLI = "npm install -g first-tree\nfirst-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
 
 const NOW_ISO = new Date().toISOString();
 
@@ -134,7 +138,7 @@ const ASYNC_NOOP = async (): Promise<void> => {};
 // `selectedRuntime` / `setSelectedRuntime` are made interactive per-scenario in
 // WizardScenarioView (state-backed), so the runtime pills actually switch.
 const COMPUTER: Record<
-  "waiting" | "tokenError" | "detecting" | "noRuntime" | "ready" | "readyMulti",
+  "waiting" | "tokenError" | "detecting" | "noRuntime" | "ready" | "readyMulti" | "lostWhileReady",
   ComputerConnection
 > = {
   waiting: {
@@ -193,6 +197,19 @@ const COMPUTER: Record<
     connectedClient: HOST,
     capabilitiesLoaded: true,
     okRuntimes: ["claude-code", "codex", "claude-code-tui"],
+    selectedRuntime: "claude-code",
+    setSelectedRuntime: NOOP,
+    cliCommand: SAMPLE_CLI,
+    tokenError: null,
+    retry: NOOP,
+  },
+  // Was connected & ready, then the computer dropped mid-form: live capabilities
+  // are gone (okRuntimes empties) but the last pick is remembered, so create-agent
+  // shows that coding agent DISABLED rather than letting the field vanish.
+  lostWhileReady: {
+    connectedClient: null,
+    capabilitiesLoaded: false,
+    okRuntimes: [],
     selectedRuntime: "claude-code",
     setSelectedRuntime: NOOP,
     cliCommand: SAMPLE_CLI,
@@ -566,7 +583,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     label: "Form · computer disconnected",
     group: "Agent creation states",
     role: "admin",
-    wizard: { step: "create-agent", flow: { computer: COMPUTER.waiting, agentPhase: "idle" } },
+    wizard: { step: "create-agent", flow: { computer: COMPUTER.lostWhileReady, agentPhase: "idle" } },
   },
 
   {
