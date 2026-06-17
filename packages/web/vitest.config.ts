@@ -7,6 +7,13 @@ import { unitCoverageConfig } from "../../scripts/vitest-coverage.js";
 // directly, so the React plugin is needed at transform time to strip JSX.
 export default defineConfig({
   plugins: [react()],
+  // `__WEB_BUILD_ID__` is injected by Vite's `define` at build time (see
+  // vite.config.ts). Vitest doesn't read that config, so provide a stub here so
+  // components that read it (e.g. NewVersionChip) don't hit a ReferenceError
+  // when rendered in tests.
+  define: {
+    __WEB_BUILD_ID__: JSON.stringify("test"),
+  },
   test: {
     coverage: unitCoverageConfig(),
     testTimeout: 20_000,
