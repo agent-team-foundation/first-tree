@@ -69,6 +69,10 @@ export class CapabilityRefresher {
   private snapshot: ClientCapabilities | null;
   private lastUploadedJson: string | null = null;
   private inFlight = false;
+  /** A reconnect that landed while a refresh was in flight, to be drained (in
+   * reconnect mode) once the current refresh finishes — never dropped, so the
+   * reconnect TTL/full re-probe path is always honored. */
+  private pendingReconnect = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Consecutive polls with no observed state change — drives the backoff. */
   private idleAttempts = 0;
@@ -84,9 +88,10 @@ export class CapabilityRefresher {
   }
 
   /**
-   * Push the startup snapshot to the server (deduped) and, if any provider is
-   * not yet `ok`, arm the background poll. Best-effort: an upload failure is
-   * logged and the poll is still armed (a later poll re-tries the upload).
+   * Push the startup snapshot to the server (deduped) and arm the background
+   * poll if a refresh is still warranted (a non-`ok` provider, or a snapshot
+   * the server has not confirmed). Best-effort: an upload failure is logged and
+   * the poll is still armed (a later poll re-tries the upload).
    */
   async start(): Promise<void> {
     if (this.snapshot) {
@@ -103,9 +108,15 @@ export class CapabilityRefresher {
   /**
    * Re-probe after a WS reconnect (full or revalidate per the TTL policy), then
    * re-arm or stop the poll based on the fresh snapshot. Fire-and-forget; never
-   * throws into the connection. No-op if a refresh is already in flight.
+   * throws into the connection.
+   *
+   * If a refresh is already in flight (e.g. a degraded-state poll), the
+   * reconnect is recorded as pending and drained in reconnect mode once that
+   * refresh finishes — it is never dropped, so the reconnect's TTL/full
+   * re-probe always runs even when it coincides with a poll.
    */
   onReconnect(): void {
+    this.pendingReconnect = true;
     void this.runRefresh("reconnect");
   }
 
@@ -131,52 +142,80 @@ export class CapabilityRefresher {
   }
 
   private async runRefresh(trigger: "reconnect" | "poll"): Promise<void> {
-    if (this.inFlight || this.stopped) return;
+    if (this.stopped) return;
+    if (this.inFlight) return; // a coincident reconnect is held in pendingReconnect
+
     this.inFlight = true;
     try {
+      // A reconnect that arrived (now, or while a prior refresh ran) wins over a
+      // poll: it carries the stricter TTL/full re-probe semantics. Drain the
+      // intent into this run so it is honored rather than dropped.
+      const effective: "reconnect" | "poll" = this.pendingReconnect ? "reconnect" : trigger;
+      this.pendingReconnect = false;
+
       const previous = this.snapshot ?? {};
-      let next: ClientCapabilities;
-      let modeLabel: string;
-      if (trigger === "reconnect") {
-        const { capabilities, mode } = await this.reprobe(previous);
-        next = capabilities;
-        modeLabel = `reconnect, ${mode}`;
-      } else {
-        next = await this.revalidate(previous);
-        modeLabel = "poll";
+      let probed = false;
+      try {
+        let next: ClientCapabilities;
+        let modeLabel: string;
+        if (effective === "reconnect") {
+          const { capabilities, mode } = await this.reprobe(previous);
+          next = capabilities;
+          modeLabel = `reconnect, ${mode}`;
+        } else {
+          next = await this.revalidate(previous);
+          modeLabel = "poll";
+        }
+        probed = true;
+        const changed = stableCapabilitiesJson(next) !== stableCapabilitiesJson(previous);
+        this.snapshot = next;
+        // Upload is tracked separately from the probe: a probe that recovered a
+        // provider to `ok` but whose PATCH failed must NOT let the poll stop —
+        // the server would otherwise stay on the stale degraded snapshot. The
+        // upload failure resets the backoff so the retry is prompt.
+        let uploadFailed = false;
+        try {
+          const uploaded = await this.uploadIfChanged(next);
+          this.deps.log(
+            "•",
+            `runtime capabilities re-probed (${modeLabel})${uploaded ? " and uploaded" : "; unchanged, upload skipped"}`,
+          );
+        } catch (uploadErr) {
+          uploadFailed = true;
+          this.deps.log("⚠️", `capabilities upload skipped: ${message(uploadErr)}`);
+        }
+        // A reconnect, an observed state change, or a failed upload all warrant
+        // a prompt next attempt; only an unchanged, fully-synced poll backs off.
+        this.idleAttempts = effective === "reconnect" || changed || uploadFailed ? 0 : this.idleAttempts + 1;
+      } catch (probeErr) {
+        this.deps.log("⚠️", `${effective} capability re-probe skipped: ${message(probeErr)}`);
+        // Keep polling on a transient probe failure so the daemon still converges.
       }
-      const changed = stableCapabilitiesJson(next) !== stableCapabilitiesJson(previous);
-      this.snapshot = next;
-      const uploaded = await this.uploadIfChanged(next);
-      this.deps.log(
-        "•",
-        `runtime capabilities re-probed (${modeLabel})${uploaded ? " and uploaded" : "; unchanged, upload skipped"}`,
-      );
-      // A reconnect is a fresh external trigger, so reset the backoff; for a
-      // poll, a state change means the operator is actively setting up (poll
-      // again quickly), while an unchanged poll lets the interval grow toward
-      // the ceiling.
-      this.idleAttempts = trigger === "reconnect" || changed ? 0 : this.idleAttempts + 1;
-      this.scheduleNext();
-    } catch (err) {
-      this.deps.log("⚠️", `${trigger} capability re-probe skipped: ${message(err)}`);
-      // Keep polling on a transient failure so the daemon still converges.
+      if (!probed) this.idleAttempts += 1;
       this.scheduleNext();
     } finally {
       this.inFlight = false;
     }
+
+    // A reconnect that landed while this refresh ran is drained now (in
+    // reconnect mode), so its TTL/full re-probe is never skipped.
+    if (this.pendingReconnect && !this.stopped) {
+      void this.runRefresh("reconnect");
+    }
   }
 
   /**
-   * Arm the next poll when the snapshot still has a non-`ok` provider (a null
-   * snapshot — the startup probe failed — also counts as degraded), else cancel
-   * it. The interval is read from `idleAttempts`, which the callers advance.
+   * Arm the next poll while a refresh is still warranted, else cancel it. A
+   * refresh is warranted when the snapshot is missing (startup probe failed),
+   * still has a non-`ok` provider, OR is healthy but not yet confirmed uploaded
+   * to the server (a prior PATCH failed) — the poll must keep going until the
+   * server actually reflects readiness. The interval is read from
+   * `idleAttempts`, which the callers advance.
    */
   private scheduleNext(): void {
     this.clearPending();
     if (this.stopped) return;
-    const degraded = !this.snapshot || hasNonOkProvider(this.snapshot);
-    if (!degraded) {
+    if (!this.needsRefresh()) {
       this.idleAttempts = 0;
       return;
     }
@@ -188,6 +227,16 @@ export class CapabilityRefresher {
       this.timer = null;
       void this.runRefresh("poll");
     }, delay);
+  }
+
+  /** True while the daemon should keep re-probing: no snapshot yet, a provider
+   * is still non-`ok`, or the current healthy snapshot has not been confirmed
+   * uploaded (so the server may still show stale "no runtime ready"). */
+  private needsRefresh(): boolean {
+    const snap = this.snapshot;
+    if (!snap) return true;
+    if (hasNonOkProvider(snap)) return true;
+    return stableCapabilitiesJson(snap) !== this.lastUploadedJson;
   }
 }
 

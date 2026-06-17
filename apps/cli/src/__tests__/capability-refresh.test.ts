@@ -158,23 +158,55 @@ describe("CapabilityRefresher", () => {
     refresher.stop();
   });
 
-  it("does not run a reconnect re-probe while a poll is already in flight", async () => {
+  it("defers a reconnect that lands mid-poll and drains it afterward (reconnect re-probe never dropped)", async () => {
     const gate = deferred<ClientCapabilities>();
     const { refresher, reprobe, revalidate } = makeRefresher({ initial: codexMissing() });
-    revalidate.mockReturnValueOnce(gate.promise);
+    revalidate.mockReturnValueOnce(gate.promise); // poll #1 hangs in flight
 
     await refresher.start();
-    // Kick the poll; revalidate is now pending (in-flight).
     await vi.advanceTimersByTimeAsync(BASE);
     expect(revalidate).toHaveBeenCalledTimes(1);
 
-    // A reconnect arriving mid-poll must be dropped, not run concurrently.
+    // A reconnect arriving mid-poll must NOT run concurrently with it...
     refresher.onReconnect();
     await vi.advanceTimersByTimeAsync(0);
     expect(reprobe).not.toHaveBeenCalled();
 
-    gate.resolve(allOk());
+    // ...but once the poll resolves, the held reconnect is drained in reconnect
+    // mode so its TTL/full re-probe still runs (the codex-assistant finding).
+    gate.resolve(codexMissing());
     await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reprobe).toHaveBeenCalledTimes(1);
+    expect(reprobe).toHaveBeenLastCalledWith(codexMissing());
+    refresher.stop();
+  });
+
+  it("keeps polling when a recovery is probed but its upload fails, then stops once the server is in sync", async () => {
+    const { refresher, upload, revalidate } = makeRefresher({ initial: codexMissing() });
+    // Default revalidate already returns all-ok, so poll #1 recovers locally.
+    upload.mockReset();
+    upload.mockResolvedValue(undefined);
+    upload.mockResolvedValueOnce(undefined); // start: degraded snapshot uploads ok
+    upload.mockRejectedValueOnce(new Error("PATCH 503")); // poll #1 recovery upload FAILS
+
+    await refresher.start();
+    expect(upload).toHaveBeenCalledTimes(1);
+
+    // Poll #1 recovers to all-ok locally, but the upload fails: the poll must
+    // NOT stop — the server is still on the stale degraded snapshot (yuezengwu).
+    await vi.advanceTimersByTimeAsync(BASE);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(upload).toHaveBeenCalledTimes(2);
+
+    // The failed upload resets the backoff, so the retry fires at BASE again and
+    // succeeds → server now in sync → poll stops.
+    await vi.advanceTimersByTimeAsync(BASE);
+    expect(revalidate).toHaveBeenCalledTimes(2);
+    expect(upload).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(MAX * 4);
+    expect(revalidate).toHaveBeenCalledTimes(2); // healthy + synced → no more polls
     refresher.stop();
   });
 
