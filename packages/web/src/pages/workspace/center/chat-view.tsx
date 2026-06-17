@@ -1,5 +1,8 @@
 import {
+  type AttachmentRef,
+  attachmentRefsFromMetadata,
   CHAT_ENGAGEMENT_STATUSES,
+  type ChatDetail,
   type ChatParticipantDetail,
   type DocSnapshotFailReason,
   documentContextSchema,
@@ -7,15 +10,15 @@ import {
   isImageBatchRefContent,
   isImageRefContent,
   type MentionParticipant,
-  type OpenQuestionRequest,
-  parseWorkspaceDocKey,
   type RequestResolution,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, ExternalLink, Eye, Menu, MessageSquare, PanelRight, Paperclip, X } from "lucide-react";
 import {
+  memo,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type RefObject,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -35,6 +38,7 @@ import {
   type ImageBatchRefContent,
   type ImageRefContent,
   listChatMessages,
+  listChatOpenRequests,
   type MessageWithDelivery,
   type PaginatedMessages,
   patchChatEngagement,
@@ -56,7 +60,7 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AgentHovercard } from "../../../components/chat/agent-hovercard.js";
-import { ChatDescriptionInfo } from "../../../components/chat/chat-description-info.js";
+import { AskTakeover } from "../../../components/chat/ask-takeover.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
   GITHUB_SYSTEM_SENDER_NAME,
@@ -65,17 +69,10 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
-import { RequestCard } from "../../../components/chat/request-card.js";
-import { RequestDock } from "../../../components/chat/request-dock.js";
 import {
-  allRequiredSelected,
-  buildAnswerDraft,
-  contentStartsWithMention,
-  findDockableRequest,
+  findBlockingRequest,
   findThreadableRequestId,
-  readMentions,
   readRequestPayload,
-  recoverAnswerSelections,
 } from "../../../components/chat/request-state.js";
 import { WorkingTurn } from "../../../components/chat/working-turn.js";
 import { HistoryGapBanner } from "../../../components/history-gap-banner.js";
@@ -100,14 +97,9 @@ import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { viewOf } from "../../../lib/agent-status-view.js";
-import {
-  docPreviewPathFromHref,
-  linkifyMarkdownDocPaths,
-  parseFailedDocHref,
-  wrapFailedDocMentions,
-} from "../../../lib/doc-preview-links.js";
+import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from "../../../lib/doc-preview-links.js";
 import { isNavigableWebHref } from "../../../lib/safe-href.js";
-import { useAgentIdentityMap, useAgentNameMap, useAgentSlugToIdMap } from "../../../lib/use-agent-name-map.js";
+import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingImages } from "../../../lib/use-pending-images.js";
@@ -119,12 +111,20 @@ import { ChatRightSidebar } from "../right-sidebar/index.js";
 
 const SIDEBAR_OPEN_STORAGE_KEY = "first-tree:chat-right-sidebar:open:v1";
 
-function loadSidebarOpen(): boolean {
-  if (typeof window === "undefined") return false;
+/**
+ * Read the user's stored right-rail preference. Returns `null` when the
+ * user has never toggled the rail (no stored key) so the caller can apply a
+ * description-driven default; an explicit `"1"` / `"0"` is honored as the
+ * user's own choice.
+ */
+function loadSidebarOpen(): boolean | null {
+  if (typeof window === "undefined") return null;
   try {
-    return window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY) === "1";
+    const raw = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
+    if (raw === null) return null;
+    return raw === "1";
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -255,95 +255,70 @@ function Avatar({
   );
 }
 
-function TextRow({
-  msg,
-  myAgentId,
-  agentNameFn,
-  agentAvatarFn,
-  agentColorTokenFn,
-  mentionParticipants,
-  messages,
-  suppressAnswerBlock = false,
-}: {
+type MessageRowProps = {
   msg: MessageWithDelivery;
   myAgentId: string | null;
   agentNameFn: (id: string) => string;
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
   mentionParticipants: MentionParticipant[];
-  /** Full visible thread — RequestCard derives a request's lifecycle from it. */
-  messages: readonly MessageWithDelivery[];
-  /**
-   * True when this message is the request currently pinned in the composer
-   * dock — its timeline card suppresses the inline answer block (the dock
-   * owns answering). Passed as a per-row boolean (not the docked id) so a
-   * future memo() on TextRow invalidates only the affected row.
-   */
-  suppressAnswerBlock?: boolean;
-}) {
+};
+
+type MessageBodyProps = {
+  msg: MessageWithDelivery;
+  myAgentId: string | null;
+  mentionParticipants: MentionParticipant[];
+};
+
+type MessageMarkdownProps = {
+  children: string;
+  components: Components;
+  rehypePlugins: MarkdownProps["rehypePlugins"];
+};
+
+const MessageMarkdown = memo(function MessageMarkdown({ children, components, rehypePlugins }: MessageMarkdownProps) {
+  return (
+    <Markdown components={components} rehypePlugins={rehypePlugins}>
+      {children}
+    </Markdown>
+  );
+});
+
+const MessageBody = memo(function MessageBody({ msg, myAgentId, mentionParticipants }: MessageBodyProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const slugToId = useAgentSlugToIdMap();
-  // GitHub-dispatcher cards keep the human-agent uuid in `senderId` so
-  // routing / read-receipts / mention-resolution stay consistent, but we
-  // re-attribute the row to a synthetic "GitHub" sender in the UI. The
-  // gate is conjunctive (`source` + `format` + content shape + metadata
-  // marker) because `sendMessageSchema` accepts arbitrary metadata — a
-  // metadata-only check would let any agent spoof a "from GitHub" card by
-  // posting plain text with the marker set. `isSelf` is also overridden
-  // so the recipient does not see their own name color treatment on a
-  // card the dispatcher wrote on their row.
-  const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
-  const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
-  const isSelf = !isGithubSystem && myAgentId === msg.senderId;
-  const docBasePath = documentBasePathFromMetadata(msg.metadata);
-  const docSnapshots = useMemo(() => documentSnapshotMapFromMetadata(msg.metadata), [msg.metadata]);
+  // Generic attachment refs (doc-preview is the first consumer; kind:
+  // "document"). Keyed by attachmentId so the `attachment:<id>` link click can
+  // look the ref up and seed the drawer's cache. Old messages (legacy inline
+  // shape) have no `metadata.attachments` -> empty map -> no preview, plain text.
+  const docAttachmentRefs = useMemo(() => {
+    const map = new Map<string, AttachmentRef>();
+    for (const ref of attachmentRefsFromMetadata(msg.metadata)) {
+      if (ref.kind === "document") map.set(ref.attachmentId, ref);
+    }
+    return map;
+  }, [msg.metadata]);
   const failedDocMentions = useMemo(() => failedDocMentionsFromMetadata(msg.metadata), [msg.metadata]);
-  // Does the request body *lead* with its target mention — the server-
-  // normalised `@target …` shape that the renderer always chips? Resolved
-  // against the same membership projection the rehype plugin uses. RequestCard
-  // uses it to drop its duplicate `· @target` only when the body is guaranteed
-  // to show it; every other shape keeps the metadata target. False for
-  // non-request rows.
-  const requestBodyShowsTarget = useMemo(() => {
-    if (msg.format !== "request") return false;
-    const targetNames = readMentions(msg.metadata)
-      .map((id) => mentionParticipants.find((p) => p.agentId === id)?.name)
-      .filter((name): name is string => typeof name === "string");
-    return contentStartsWithMention(msg.content, targetNames);
-  }, [msg.format, msg.content, msg.metadata, mentionParticipants]);
-  // Linkify plain `.md` mentions only on agent-sourced messages. Anything the
-  // user typed in the web composer (`source === "web"`) is left untouched
-  // so paths that humans write — code-fence walkthroughs, quoted snippets,
-  // intentional bare references — render exactly as authored. Only paths that
-  // this message actually carries a snapshot for get linkified, so a filename
-  // the agent only *mentions* in prose stays plain text instead of becoming a
-  // dead link — and every link that does render opens from cache without a
-  // server round-trip.
-  //
-  // Failed mentions go through `wrapFailedDocMentions` AFTER linkify so any
-  // tokens still bare in the text get the inert-chip placeholder href
-  // (`#doc-failed?reason=…`). The `a` override below renders that placeholder
-  // as a disabled chip with a reason-mapped tooltip instead of a clickable
-  // link. Order matters: linkify first so a path that snapshotted is wrapped
-  // into a markdown link (and therefore hard-skipped by the scanner the
-  // failed-mention wrapper uses), and only the genuinely-failed remainder
-  // becomes chips.
+  // Successful doc captures are already explicit `[display](attachment:<id>)`
+  // links the runtime rewrote into the message body — web does NOT re-linkify
+  // bare tokens any more. The only scanner-driven rewrite left is wrapping the
+  // runtime-reported FAILED mentions into inert-chip placeholder hrefs
+  // (`#doc-failed?reason=...`); the `a` override renders those as disabled chips.
+  // Web-composed messages (`source === "web"`) are left untouched so paths a
+  // human types render exactly as authored.
   const textContent = useMemo<string | null>(() => {
     // `request` is included so RequestCard's `body` (the long narrative /
-    // decision context) renders through the same markdown + doc-link path as
+    // decision context) renders through the same markdown path as
     // text/markdown — without this it falls back to "" and the card shows
     // only the chip + answer block (QA: missing body on expanded requests).
     if (msg.format !== "text" && msg.format !== "markdown" && msg.format !== "request") return null;
     if (typeof msg.content !== "string") return JSON.stringify(msg.content);
     if (msg.source === "web") return msg.content;
-    const snapshotPaths = new Set(docSnapshots?.keys() ?? []);
-    let body = linkifyMarkdownDocPaths(msg.content, snapshotPaths, msg.chatId);
     if (failedDocMentions && failedDocMentions.size > 0) {
-      body = wrapFailedDocMentions(body, failedDocMentions);
+      return wrapFailedDocMentions(msg.content, failedDocMentions);
     }
-    return body;
-  }, [msg.format, msg.content, msg.source, msg.chatId, docSnapshots, failedDocMentions]);
+    return msg.content;
+  }, [msg.format, msg.content, msg.source, failedDocMentions]);
   // Highlight `@<participant>` tokens in sent messages with the same
   // chip styling the composer's mirror overlay uses. Code blocks and
   // link text are skipped by the plugin itself, so a message containing
@@ -358,7 +333,7 @@ function TextRow({
     () => ({
       a({ href, children, ...props }) {
         // Inert chip for runtime-reported snapshot failures: the magic
-        // `#doc-failed?reason=…` href is emitted by `wrapFailedDocMentions`
+        // `#doc-failed?reason=...` href is emitted by `wrapFailedDocMentions`
         // around tokens the runtime couldn't snapshot. Gate detection on
         // (a) the message actually carrying failedMentions metadata, so a
         // user-typed `[anything](#doc-failed?reason=missing)` in a web-source
@@ -392,14 +367,13 @@ function TextRow({
             );
           }
         }
-        // issue 831: a markdown link whose href is neither a workspace doc-preview
-        // path nor a navigable web URL (e.g. an agent-written worktree path
-        // like `/Users/…/worktrees/<task>`) has no route on the cloud origin
-        // and 404s when clicked. Render the link text as plain text instead of
-        // a dead link. Doc-preview paths are checked first so snapshot-backed
-        // `.md` mentions keep their click-to-preview anchor.
-        const docPreviewPath = typeof href === "string" ? docPreviewPathFromHref(href) : null;
-        if (!docPreviewPath && !isNavigableWebHref(href)) {
+        // Doc-preview links are `attachment:<id>` (the runtime rewrites a
+        // captured mention into one). issue 831: a link whose href is neither a
+        // doc-preview attachment nor a navigable web URL (e.g. an agent-written
+        // worktree path) has no route on the cloud origin and 404s when
+        // clicked — render its text as plain text instead of a dead link.
+        const attachmentId = typeof href === "string" ? attachmentIdFromHref(href) : null;
+        if (!attachmentId && !isNavigableWebHref(href)) {
           return <>{children}</>;
         }
         const onClick = (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -415,53 +389,27 @@ function TextRow({
             return;
           }
 
-          const docPath = docPreviewPathFromHref(href);
-          if (!docPath) return;
+          const clickedAttachmentId = attachmentIdFromHref(href);
+          if (!clickedAttachmentId) return;
 
           event.preventDefault();
+          // Seed the drawer's React Query ref cache (keyed by attachmentId) with
+          // EVERY doc ref this message carries — so the drawer opens
+          // synchronously and an in-doc cross-link to a sibling doc in the same
+          // message hits cache too. The drawer fetches the bytes on demand from
+          // `GET /attachments/:id`.
+          const messageRefs = [...docAttachmentRefs.values()];
+          for (const ref of messageRefs) {
+            queryClient.setQueryData(docAttachmentRefQueryKey(ref.attachmentId), ref);
+          }
+          // Also seed the FULL per-message ref list under its own key so the
+          // drawer can enumerate same-message siblings on the seeded path
+          // (relative `other.md` links) without re-fetching the messages window.
+          queryClient.setQueryData(docMessageAttachmentRefsQueryKey(msg.id), messageRefs);
           const next = new URLSearchParams(searchParams);
           next.set("docChat", msg.chatId);
-          // Owner attribution for `docAgent`: a global cross-agent key
-          // `<ownerSlug>/<chatId>/…` (chatId segment === this chat) belongs to
-          // the OWNER, not the sender; self / legacy bare keys stay the sender.
-          // `docAgent` is only a hint here — the drawer authoritatively
-          // re-resolves the owner from the key's own slug for the path-based
-          // fallback (review P2-a), so an unresolved owner does NOT mis-query
-          // the sender's workspace; it just leaves this placeholder in the URL
-          // for `hasDocRef`. The inline snapshot path renders from cache
-          // regardless of `docAgent`.
-          const parsedKey = parseWorkspaceDocKey(docPath);
-          const ownerId =
-            parsedKey && parsedKey.chatId === msg.chatId
-              ? (slugToId(parsedKey.agentSlug) ?? msg.senderId)
-              : msg.senderId;
-          next.set("docAgent", ownerId);
-          next.set("docPath", docPath);
-
-          // Prefer the inline snapshot variant: hand the drawer the bytes via
-          // React Query cache (keyed by chat+message+path) and tag the URL
-          // with the source message id. Falls back to path-based legacy
-          // preview when the agent emitted only a `kind: "path"` context.
-          //
-          // Seed the ENTIRE message's docs[] in one shot — not just the
-          // clicked one — so when the drawer's internal markdown links jump
-          // between snapshots in the same message they still hit cache and
-          // avoid the legacy network round-trip.
-          const snapshot = docSnapshots?.get(docPath);
-          if (snapshot && docSnapshots) {
-            for (const entry of docSnapshots.values()) {
-              queryClient.setQueryData(docSnapshotQueryKey(msg.chatId, msg.id, entry.path), entry);
-            }
-            next.set("docMsg", msg.id);
-            next.delete("docBase");
-          } else {
-            next.delete("docMsg");
-            if (docBasePath) {
-              next.set("docBase", docBasePath);
-            } else {
-              next.delete("docBase");
-            }
-          }
+          next.set("docMsg", msg.id);
+          next.set("docAttachment", clickedAttachmentId);
           setSearchParams(next);
         };
 
@@ -472,19 +420,78 @@ function TextRow({
         );
       },
     }),
-    [
-      docBasePath,
-      docSnapshots,
-      failedDocMentions,
-      msg.chatId,
-      msg.id,
-      msg.senderId,
-      queryClient,
-      searchParams,
-      setSearchParams,
-      slugToId,
-    ],
+    [docAttachmentRefs, failedDocMentions, msg.chatId, msg.id, queryClient, searchParams, setSearchParams],
   );
+
+  return (
+    <div
+      className="text-body"
+      style={{
+        color: "var(--fg)",
+        marginTop: 2,
+      }}
+    >
+      {msg.format === "file" && isImageBatchRefContent(msg.content) ? (
+        <ImageBatchFromRef
+          content={msg.content}
+          markdownComponents={markdownComponents}
+          rehypePlugins={messageRehypePlugins}
+        />
+      ) : msg.format === "file" && isInlineImageContent(msg.content) ? (
+        <img
+          src={`data:${msg.content.mimeType};base64,${msg.content.data}`}
+          alt={msg.content.filename ?? "image"}
+          style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
+        />
+      ) : msg.format === "file" && isImageRefContent(msg.content) ? (
+        <ImageFromRef content={msg.content} />
+      ) : msg.format === "text" || msg.format === "markdown" || msg.format === "request" ? (
+        // A `request` ("ask") renders as a normal message — just its markdown
+        // body. The answering surface is the AskTakeover overlay; the timeline
+        // carries no separate card / status-label chrome for it.
+        <MessageMarkdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
+          {textContent ?? ""}
+        </MessageMarkdown>
+      ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
+        <GithubEventCardMessage content={msg.content} />
+      ) : (
+        <pre
+          className="mono text-label"
+          style={{
+            background: "var(--bg-sunken)",
+            padding: 8,
+            borderRadius: "var(--radius-input)",
+            overflow: "auto",
+            maxHeight: 160,
+          }}
+        >
+          {JSON.stringify(msg.content, null, 2)}
+        </pre>
+      )}
+    </div>
+  );
+}, areMessageBodyPropsEqual);
+
+const MessageRow = memo(function MessageRow({
+  msg,
+  myAgentId,
+  agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
+  mentionParticipants,
+}: MessageRowProps) {
+  // GitHub-dispatcher cards keep the human-agent uuid in `senderId` so
+  // routing / read-receipts / mention-resolution stay consistent, but we
+  // re-attribute the row to a synthetic "GitHub" sender in the UI. The
+  // gate is conjunctive (`source` + `format` + content shape + metadata
+  // marker) because `sendMessageSchema` accepts arbitrary metadata — a
+  // metadata-only check would let any agent spoof a "from GitHub" card by
+  // posting plain text with the marker set. `isSelf` is also overridden
+  // so the recipient does not see their own name color treatment on a
+  // card the dispatcher wrote on their row.
+  const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
+  const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
+  const isSelf = !isGithubSystem && myAgentId === msg.senderId;
 
   return (
     <div
@@ -540,94 +547,90 @@ function TextRow({
             <ReadReceipt msg={msg} myAgentId={myAgentId} />
           </span>
         </div>
-        <div
-          className="text-body"
-          style={{
-            color: "var(--fg)",
-            marginTop: 2,
-          }}
-        >
-          {msg.format === "file" && isImageBatchRefContent(msg.content) ? (
-            <ImageBatchFromRef
-              content={msg.content}
-              markdownComponents={markdownComponents}
-              rehypePlugins={messageRehypePlugins}
-            />
-          ) : msg.format === "file" && isInlineImageContent(msg.content) ? (
-            <img
-              src={`data:${msg.content.mimeType};base64,${msg.content.data}`}
-              alt={msg.content.filename ?? "image"}
-              style={{ maxWidth: 320, borderRadius: "var(--radius-panel)", marginTop: 4 }}
-            />
-          ) : msg.format === "file" && isImageRefContent(msg.content) ? (
-            <ImageFromRef content={msg.content} />
-          ) : msg.format === "text" || msg.format === "markdown" ? (
-            <Markdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
-              {textContent ?? ""}
-            </Markdown>
-          ) : msg.format === "card" && isGithubEventCardContent(msg.content) ? (
-            <GithubEventCardMessage content={msg.content} />
-          ) : msg.format === "request" ? (
-            <RequestCard
-              message={msg}
-              thread={messages}
-              viewerAgentId={myAgentId}
-              bodyShowsTarget={requestBodyShowsTarget}
-              body={
-                <Markdown components={markdownComponents} rehypePlugins={messageRehypePlugins}>
-                  {textContent ?? ""}
-                </Markdown>
-              }
-              resolveAgentName={agentNameFn}
-              onSent={() => queryClient.invalidateQueries({ queryKey: ["chat-messages", msg.chatId] })}
-              suppressAnswerBlock={suppressAnswerBlock}
-            />
-          ) : (
-            <pre
-              className="mono text-label"
-              style={{
-                background: "var(--bg-sunken)",
-                padding: 8,
-                borderRadius: "var(--radius-input)",
-                overflow: "auto",
-                maxHeight: 160,
-              }}
-            >
-              {JSON.stringify(msg.content, null, 2)}
-            </pre>
-          )}
-        </div>
+        <MessageBody msg={msg} myAgentId={myAgentId} mentionParticipants={mentionParticipants} />
       </div>
     </div>
   );
+}, areMessageRowPropsEqual);
+
+function areMessageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): boolean {
+  return (
+    messageRenderFieldsEqual(prev.msg, next.msg) &&
+    prev.myAgentId === next.myAgentId &&
+    prev.agentNameFn === next.agentNameFn &&
+    prev.agentAvatarFn === next.agentAvatarFn &&
+    prev.agentColorTokenFn === next.agentColorTokenFn &&
+    mentionParticipantsEqual(prev.mentionParticipants, next.mentionParticipants)
+  );
 }
 
-function documentBasePathFromMetadata(metadata: Record<string, unknown> | undefined): string | undefined {
-  const parsed = documentContextSchema.safeParse(metadata?.documentContext);
-  if (!parsed.success) return undefined;
-  // Only the path-based legacy variant exposes basePath; snapshot variants
-  // carry inline content rendered through a separate path.
-  return parsed.data.kind === "path" ? parsed.data.basePath : undefined;
+function areMessageBodyPropsEqual(prev: MessageBodyProps, next: MessageBodyProps): boolean {
+  return (
+    messageBodyFieldsEqual(prev.msg, next.msg) &&
+    prev.myAgentId === next.myAgentId &&
+    mentionParticipantsEqual(prev.mentionParticipants, next.mentionParticipants)
+  );
 }
 
-export type DocSnapshotEntry = { path: string; content: string; sha256: string; size: number };
+function messageRenderFieldsEqual(a: MessageWithDelivery, b: MessageWithDelivery): boolean {
+  return (
+    messageBodyFieldsEqual(a, b) &&
+    a.createdAt === b.createdAt &&
+    (a.deliveryStatus ?? null) === (b.deliveryStatus ?? null)
+  );
+}
 
-/**
- * For snapshot-variant `documentContext`, return a map from `docs[].path` to
- * the snapshot record. Path-based or absent variants return `undefined`.
- * The map keys match the raw href that the agent emitted, so the chat link
- * click handler can use the clicked href directly as a lookup key.
- */
-export function documentSnapshotMapFromMetadata(
-  metadata: Record<string, unknown> | undefined,
-): Map<string, DocSnapshotEntry> | undefined {
-  const parsed = documentContextSchema.safeParse(metadata?.documentContext);
-  if (!parsed.success || parsed.data.kind !== "snapshot") return undefined;
-  const map = new Map<string, DocSnapshotEntry>();
-  for (const doc of parsed.data.docs) {
-    map.set(doc.path, { path: doc.path, content: doc.content, sha256: doc.sha256, size: doc.size });
+function messageBodyFieldsEqual(a: MessageWithDelivery, b: MessageWithDelivery): boolean {
+  return (
+    a.id === b.id &&
+    a.chatId === b.chatId &&
+    a.senderId === b.senderId &&
+    a.format === b.format &&
+    a.source === b.source &&
+    a.inReplyTo === b.inReplyTo &&
+    jsonLikeEqual(a.content, b.content) &&
+    jsonLikeEqual(a.metadata, b.metadata)
+  );
+}
+
+function mentionParticipantsEqual(a: readonly MentionParticipant[], b: readonly MentionParticipant[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (!left || !right) return false;
+    if (left.agentId !== right.agentId || left.name !== right.name) return false;
   }
-  return map;
+  return true;
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function jsonLikeEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!jsonLikeEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (!isJsonRecord(a) || !isJsonRecord(b)) return false;
+  const aKeys = Object.keys(a).sort();
+  const bKeys = Object.keys(b).sort();
+  if (aKeys.length !== bKeys.length) return false;
+  for (let i = 0; i < aKeys.length; i++) {
+    const key = aKeys[i];
+    if (!key || key !== bKeys[i]) return false;
+    if (!jsonLikeEqual(a[key], b[key])) return false;
+  }
+  return true;
 }
 
 /**
@@ -669,8 +672,26 @@ function failedDocReasonTooltip(reason: DocSnapshotFailReason): string {
   }
 }
 
-export function docSnapshotQueryKey(chatId: string, messageId: string, path: string): readonly unknown[] {
-  return ["chat-doc-snapshot", chatId, messageId, path] as const;
+/**
+ * React Query key for a doc `AttachmentRef`, keyed solely by attachmentId (the
+ * blob is immutable, so the id is a stable cache key independent of which
+ * message referenced it). The chat-view click handler seeds the ref here so the
+ * drawer can read filename / sha256 / source.path without re-deriving them.
+ */
+export function docAttachmentRefQueryKey(attachmentId: string): readonly unknown[] {
+  return ["chat-doc-attachment-ref", attachmentId] as const;
+}
+
+/**
+ * React Query key for the FULL list of doc `AttachmentRef`s a single message
+ * carries, keyed by messageId. The chat-view click handler seeds this so the
+ * drawer can enumerate same-message sibling docs (relative `other.md` links)
+ * on the seeded (no-fetch) path — `docAttachmentRefQueryKey` alone is keyed by
+ * attachmentId and can't be enumerated. The cold-load / deep-link path falls
+ * back to recovering the list from the chat's messages window.
+ */
+export function docMessageAttachmentRefsQueryKey(msgId: string): readonly unknown[] {
+  return ["chat-doc-message-attachment-refs", msgId] as const;
 }
 
 function isInlineImageContent(content: unknown): content is FileMessageContent {
@@ -775,6 +796,151 @@ type TimelineItem =
   | { kind: "event"; at: string; key: string; data: SessionEventRow }
   | { kind: "workgroup"; at: string; key: string; events: SessionEventRow[] };
 
+type ChatTimelineProps = {
+  itemCount: number;
+  visibleItems: readonly TimelineItem[];
+  hiddenByBlock: number;
+  readOnly: boolean;
+  scrollContainerRef: RefObject<HTMLDivElement | null>;
+  messagesEndRef: RefObject<HTMLDivElement | null>;
+  defaultWorkgroupOpen: boolean;
+  agentNameFn: (id: string) => string;
+  agentAvatarFn: (id: string) => string | null;
+  agentColorTokenFn: (id: string) => string | null;
+  myAgentId: string | null;
+  mentionParticipants: MentionParticipant[];
+  dockRequestId: string | undefined;
+  gapAfterMessageId: string | null;
+  firstNewItemIdx: number;
+  dividerRef: RefObject<HTMLDivElement | null>;
+  pillCount: number;
+  onPillClick: () => void;
+};
+
+const ChatTimeline = memo(function ChatTimeline({
+  itemCount,
+  visibleItems,
+  hiddenByBlock,
+  readOnly,
+  scrollContainerRef,
+  messagesEndRef,
+  defaultWorkgroupOpen,
+  agentNameFn,
+  agentAvatarFn,
+  agentColorTokenFn,
+  myAgentId,
+  mentionParticipants,
+  dockRequestId,
+  gapAfterMessageId,
+  firstNewItemIdx,
+  dividerRef,
+  pillCount,
+  onPillClick,
+}: ChatTimelineProps) {
+  return (
+    <div className="relative flex-1 flex flex-col min-h-0">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
+        <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
+          {itemCount === 0 && (
+            <div
+              className="flex flex-col items-center text-body"
+              style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
+            >
+              <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
+              {readOnly ? "No messages yet" : "Send a message to start the conversation"}
+            </div>
+          )}
+          <div className="flex flex-col" style={{ gap: 4 }}>
+            {visibleItems.flatMap((item, idx) => {
+              let node: ReactNode = null;
+              if (item.kind === "workgroup") {
+                // Default to folded while chatDetail is still loading — opening
+                // a group chat's card for one frame and then folding it after
+                // chatDetail resolves is worse than under-opening direct chats
+                // by the same one-frame window.
+                node = (
+                  <WorkingTurn
+                    key={item.key}
+                    events={item.events}
+                    defaultOpen={defaultWorkgroupOpen}
+                    agentNameFn={agentNameFn}
+                    agentAvatarFn={agentAvatarFn}
+                    agentColorTokenFn={agentColorTokenFn}
+                  />
+                );
+              } else if (item.kind === "event") {
+                const ev = item.data;
+                switch (ev.kind) {
+                  case "error":
+                    node = <ErrorRow key={item.key} event={ev} agentNameFn={agentNameFn} />;
+                    break;
+                  default:
+                    // assistant_text / tool_call / thinking are folded into
+                    // the workgroup card above; turn_end is filtered upstream;
+                    // anything else is dropped.
+                    node = null;
+                }
+              } else {
+                const msg = item.data;
+                node = (
+                  <MessageRow
+                    key={item.key}
+                    msg={msg}
+                    myAgentId={myAgentId}
+                    agentNameFn={agentNameFn}
+                    agentAvatarFn={agentAvatarFn}
+                    agentColorTokenFn={agentColorTokenFn}
+                    mentionParticipants={mentionParticipants}
+                  />
+                );
+              }
+              // Insert the gap banner immediately after the last cached
+              // message when there's a known break between cache and the
+              // server window.
+              const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
+              // Insert the "New Messages" divider before the first item
+              // whose message id is strictly newer than the current anchor
+              // (snapshotted at chat-open; re-armed when the divider scrolls
+              // past the viewport top — see the IntersectionObserver above).
+              const showDivider = idx === firstNewItemIdx;
+              const prelude = showDivider ? <UnreadDivider key="unread-divider" ref={dividerRef} /> : null;
+              const epilogue =
+                isGapAnchor && item.kind === "message" ? <HistoryGapBanner key={`gap-after-${item.data.id}`} /> : null;
+              if (prelude || epilogue) {
+                const out: ReactNode[] = [];
+                if (prelude) out.push(prelude);
+                out.push(node);
+                if (epilogue) out.push(epilogue);
+                return out;
+              }
+              return node;
+            })}
+            {/* Blocking truncation marker: the conversation past the question is
+                hidden until I answer it above. Keeps the cut from reading as a
+                load error / empty tail. */}
+            {hiddenByBlock > 0 ? (
+              <div
+                className="mono text-caption"
+                style={{ color: "var(--fg-4)", textAlign: "center", padding: "var(--sp-3) 0 var(--sp-1)" }}
+              >
+                {`Answer the question above to see ${hiddenByBlock} newer ${
+                  hiddenByBlock === 1 ? "message" : "messages"
+                }`}
+              </div>
+            ) : null}
+          </div>
+          <div ref={messagesEndRef} />
+        </div>
+      </div>
+      {/* Floating "↓ N new messages" pill — surfaces whenever there are messages
+          newer than the user's session high watermark. Own sends never trigger
+          the pill because send paths pre-advance the watermark to the new
+          message id. */}
+      {pillCount > 0 && !dockRequestId ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
+    </div>
+  );
+});
+
 /**
  * Renders a small "↗ View on GitHub" link beside the chat title when the chat
  * was created by the GitHub webhook router. Reads `metadata.entityUrl` (set by
@@ -807,6 +973,7 @@ function EntityLink({ metadata }: { metadata: Record<string, unknown> | undefine
 export function ChatView({
   agentId,
   chatId,
+  initialChatDetail,
   readOnly = false,
   titleFallback,
   joinAction,
@@ -815,6 +982,9 @@ export function ChatView({
 }: {
   agentId: string;
   chatId: string;
+  /** Chat detail already fetched by the chat-id shell. Used to avoid an
+   * immediate same-key refetch when ChatView mounts for the same chat. */
+  initialChatDetail?: ChatDetail;
   /** When true, render watching mode: timeline only, no rename, no [+] participant,
    *  composer slot replaced with a Join panel. */
   readOnly?: boolean;
@@ -872,20 +1042,40 @@ export function ChatView({
     // user adds or removes an image — they're already fixing it.
     onChange: () => setUploadError(null),
   });
-  // Right-rail visibility — defaults to hidden so the chat area gets the
-  // full reading column; user opens via the header icon and the choice
-  // persists across chats (a global preference, not per-chat).
-  const [showSidebar, setShowSidebar] = useState<boolean>(loadSidebarOpen);
-  useEffect(() => {
-    saveSidebarOpen(showSidebar);
-  }, [showSidebar]);
+  // Right-rail visibility. Two-tier default:
+  //   • If the user has ever toggled the rail, that stored preference wins
+  //     and persists across chats (a global preference, not per-chat).
+  //   • Otherwise (no stored preference) the rail auto-opens for chats that
+  //     HAVE a description, so the running summary is visible by default;
+  //     chats without a description stay collapsed for the full reading
+  //     column. This default is applied below once `chatDetail` resolves.
+  const storedSidebarPref = useRef<boolean | null>(loadSidebarOpen());
+  const [showSidebar, setShowSidebar] = useState<boolean>(storedSidebarPref.current ?? false);
+  // Persist only genuine user choices (toggle / dismiss / open), never the
+  // transient doc-preview stash or the description-driven auto-open — those
+  // must not masquerade as an explicit preference. `setSidebarByUser` writes
+  // through to localStorage; system-driven changes use `setShowSidebar`.
+  const setSidebarByUser = useCallback((open: boolean | ((v: boolean) => boolean)) => {
+    setShowSidebar((prev) => {
+      const next = typeof open === "function" ? open(prev) : open;
+      storedSidebarPref.current = next;
+      saveSidebarOpen(next);
+      return next;
+    });
+  }, []);
+  // The chat id the description-driven rail default was last applied for.
+  // `ChatView` is NOT remounted on chat switch (the `chat-detail` query
+  // just refetches by `chatId`), so this must be keyed by chat id — not a
+  // one-shot boolean — or the default would only ever apply to the first
+  // chat viewed in the session.
+  const descriptionDefaultChatRef = useRef<string | null>(null);
   // Doc-preview opens to the right of chat-view (mounted at workspace level);
   // we render two right rails on the same row, so when the user clicks a doc
   // link we collapse this sidebar to give the preview the right slot it
   // expects. Stash whether the sidebar was visible at the moment doc-preview
   // opened so we can auto-restore it when the preview closes — the user did
   // not ask to dismiss the sidebar, they only opened a doc.
-  const hasDocPreview = Boolean(searchParams.get("docChat") && searchParams.get("docPath"));
+  const hasDocPreview = Boolean(searchParams.get("docChat") && searchParams.get("docAttachment"));
   const sidebarBeforeDocPreviewRef = useRef<boolean | null>(null);
   useEffect(() => {
     if (hasDocPreview) {
@@ -908,16 +1098,20 @@ export function ChatView({
     if (hasDocPreview) {
       const next = new URLSearchParams(searchParams);
       next.delete("docChat");
+      next.delete("docMsg");
+      // Current owner of which doc is open (attachment-ref model).
+      next.delete("docAttachment");
+      // Legacy params from the pre-convergence `docPath` model — still cleared
+      // so a stale URL minted before the migration also clears cleanly.
       next.delete("docAgent");
       next.delete("docPath");
       next.delete("docBase");
-      next.delete("docMsg");
       setSearchParams(next, { replace: true });
       sidebarBeforeDocPreviewRef.current = true;
       return;
     }
-    setShowSidebar((v) => !v);
-  }, [hasDocPreview, searchParams, setSearchParams]);
+    setSidebarByUser((v) => !v);
+  }, [hasDocPreview, searchParams, setSearchParams, setSidebarByUser]);
   // Esc closes the rail when it's open AND the focus is not inside an
   // editable element (textarea / input). Otherwise pressing Esc to
   // dismiss an IME composition or clear a draft would unexpectedly
@@ -932,13 +1126,20 @@ export function ChatView({
         const tag = active.tagName;
         if (tag === "INPUT" || tag === "TEXTAREA" || active.isContentEditable) return;
       }
-      setShowSidebar(false);
+      setSidebarByUser(false);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [hasDocPreview, showSidebar]);
+  }, [hasDocPreview, showSidebar, setSidebarByUser]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  // The composer footer band — wraps BOTH the request dock (with its option
+  // radios) and the composer. The Enter-to-resolve backstop binds its keydown
+  // listener here, not on `window`, so it only sees keys from inside the
+  // composer/dock subtree: a portaled dialog (custom Select listbox, Radix
+  // dialog) rendered over a still-mounted chat can't bubble Enter into it and
+  // silently resolve the pinned question in the background.
+  const composerFooterRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Scrollable container that holds the message timeline. Ref is wired
   // up on the corresponding <div> below; consumed by useChatScroll (for
@@ -1021,6 +1222,17 @@ export function ChatView({
     refetchInterval: 5_000,
   });
 
+  // The viewer's open questions in this chat, fetched independently of the
+  // capped 50-message timeline window above. The blocking answer UI unions
+  // these into its derivation (`blockingMessages`) so an open ask that has
+  // scrolled past the latest page still surfaces. Same 5s poll + WS
+  // invalidation as the timeline; the query usually returns 0–1 rows.
+  const { data: openRequestsData } = useQuery({
+    queryKey: ["chat-open-requests", chatId],
+    queryFn: () => listChatOpenRequests(chatId),
+    refetchInterval: 5_000,
+  });
+
   // Fetch newest events first so the turn-grouping filter always sees the
   // latest `turn_end` even in chats with thousands of total events. The
   // timeline renderer later sorts by timestamp, so the fetch order is moot
@@ -1034,7 +1246,31 @@ export function ChatView({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
     enabled: !!chatId,
+    initialData: initialChatDetail?.id === chatId ? initialChatDetail : undefined,
+    staleTime: 10_000,
   });
+
+  // Apply the description-driven right-rail default once per chat, after that
+  // chat's `chatDetail` resolves — but only when the user has no stored
+  // preference (otherwise their explicit choice is honored untouched). A chat
+  // with a non-empty description auto-opens the rail so the summary is visible
+  // by default; a chat without one collapses it (so a previous chat's transient
+  // auto-open doesn't leak across navigation). This auto-open does NOT persist,
+  // so only a later explicit toggle creates a sticky preference. While a
+  // doc-preview owns the right rail we bail out WITHOUT marking the chat
+  // applied — otherwise a chat entered via a doc-preview deep link would be
+  // marked done while the open was skipped, and closing the preview (which
+  // re-runs this effect via `hasDocPreview`) would hit the per-chat guard and
+  // never apply the default. Leaving it unmarked lets the close re-evaluate.
+  useEffect(() => {
+    if (chatDetailLoading || !chatDetail || chatDetail.id !== chatId) return;
+    if (descriptionDefaultChatRef.current === chatId) return;
+    if (hasDocPreview) return;
+    descriptionDefaultChatRef.current = chatId;
+    if (storedSidebarPref.current !== null) return;
+    const hasDescription = Boolean(chatDetail.description && chatDetail.description.trim().length > 0);
+    setShowSidebar(hasDescription);
+  }, [chatId, chatDetail, chatDetailLoading, hasDocPreview]);
 
   // Cumulative token usage for the whole chat (server SUM over token_usage
   // events). Polled on the same cadence as messages so the composer marker
@@ -1045,6 +1281,8 @@ export function ChatView({
     enabled: !!chatId,
     refetchInterval: 5_000,
   });
+  const chatActiveTokens = chatTokenUsage ? chatTokenUsage.inputTokens + chatTokenUsage.outputTokens : 0;
+  const chatProcessedTokens = chatTokenUsage ? chatActiveTokens + chatTokenUsage.cachedInputTokens : 0;
 
   /** Org-wide agent list, consumed by `managedByMeMap` for picker
    *  grouping and by the identity-map hooks (`useAgentIdentityMap` etc.)
@@ -1182,9 +1420,9 @@ export function ChatView({
       inReplyTo?: string;
       resolves?: RequestResolution;
     }) =>
-      // `resolves` rides only the composer dock's direct-resolve send (the
-      // untouched option selection) — see `dockDirectResolve` in handleSend.
-      // Plain sends keep the 3-arg shape (no opts object on the wire path).
+      // `resolves` rides the blocking question's answer send (option
+      // selections + free text merged) — see the `dockRequest` branch in
+      // handleSend. Plain sends keep the 3-arg shape (no opts on the wire).
       inReplyTo || resolves
         ? sendChatMessage(chatId, content, mentions, { inReplyTo, resolves })
         : sendChatMessage(chatId, content, mentions),
@@ -1266,25 +1504,13 @@ export function ChatView({
   const handleSend = async () => {
     const text = draft.trim();
     const images = pendingImages;
-    if (!text && images.length === 0) return;
     if (uploading) return;
 
-    // Direct resolve: the draft is exactly the dock's untouched option
-    // selection — send it as the clean answer. It threads under the request
-    // (`inReplyTo`) and carries the explicit `resolves` signal that drives the
-    // server's red-dot −1. Mentions route to the asker automatically, so this
-    // path needs no typed @mention even in a group chat. Any edit, free text,
-    // or attached image fails `dockDirectResolve` and falls through to the
-    // normal send below (a plain reply the asking agent judges).
-    if (dockDirectResolve && dockRequest) {
-      sendMut.mutate({
-        content: text,
-        mentions: [dockRequest.senderId],
-        inReplyTo: dockRequest.id,
-        resolves: { request: dockRequest.id, kind: "answered" },
-      });
-      return;
-    }
+    // Answering a blocking question is owned by the AskTakeover overlay (it
+    // covers the composer while a question blocks me), so the composer's send
+    // path no longer resolves requests — it is reached only when nothing blocks.
+
+    if (!text && images.length === 0) return;
 
     // No client-side unresolved-`@`-token pre-flight: a `@<token>` that
     // doesn't resolve to a chat member is treated as plain text, matching
@@ -1329,9 +1555,8 @@ export function ChatView({
     // back-and-forth stays scoped to it. Computed BEFORE the image branch —
     // a captioned image answering a docked question must thread exactly like
     // a text reply. This does NOT resolve the question — `inReplyTo` is pure
-    // threading; resolution needs an explicit `metadata.resolves`, written by
-    // the dock's clean answer or the asking agent's `chat send
-    // --answer`/`--close`.
+    // threading; resolution needs an explicit `metadata.resolves`, written only
+    // by the target human's answer in the AskTakeover (an agent cannot resolve).
     const threadedRequestId = findThreadableRequestId(mergedMessages, myAgentId, routedMentions) ?? undefined;
 
     if (images.length > 0) {
@@ -1538,56 +1763,54 @@ export function ChatView({
     [cachedMessages, messagesData],
   );
 
-  // ── Request dock: the most recent live open question directed at me pins
-  // its questions + options directly above the composer (the timeline card
-  // suppresses its inline answer block — the answering surface exists once).
-  // Single send button, one contract: clicking an option REPLACES the draft
-  // with the canonical answer text; sending a clean answer direct-resolves
-  // via `metadata.resolves`; sending any other text is a plain reply routed
-  // to the asking agent to judge — the question stays open.
+  // ── Blocking request: the OLDEST (FIFO) live open question directed at me.
+  // It pins its questions + options directly above the composer, the timeline
+  // hides every item after it, and the block lifts only once it resolves —
+  // then the next-oldest unanswered question takes over. The timeline card for
+  // this request suppresses its inline answer block so the answering surface
+  // (dock options + composer) exists exactly once.
   //
-  // The selection state is DERIVED from the draft (`recoverAnswerSelections`),
-  // never stored: the draft is the single source of truth, so the send
-  // mutation's own draft lifecycle (onMutate clears, onError restores) keeps
-  // resolve semantics across a failed-send retry for free, and hand-typing
-  // the exact option text counts as a clean answer (accepted semantics).
-  // Watchers never dock — the read-only branch renders no composer, and
-  // suppressing the timeline card without a dock would leave zero answering
-  // surfaces.
+  // Two decoupled answer channels, unified on send: option clicks set
+  // `answerSelections` (kept here as state, NEVER written into the composer, so
+  // a click only highlights the option and leaves typed text untouched), and
+  // the composer holds free text only. Sending merges both into one canonical
+  // reply that ALWAYS carries `metadata.resolves` (kind="answered") — clicking
+  // an option or typing free text both resolve the question; there is no
+  // separate "leave it open for the asker to judge" path on this surface.
+  // Watchers never block — the read-only branch renders no composer.
+  // `readRequestPayload` always yields an answer affordance (a well-formed
+  // payload, or a free-text fallback for an absent / legacy / malformed one), so
+  // `dockPayload` is non-null whenever `dockRequest` is set: every open request —
+  // including ones written under the retired schema — stays answerable and its
+  // red dot can be cleared.
+  // Union the server's window-independent open requests with the loaded
+  // timeline before deriving the block, so an open ask that scrolled past the
+  // latest 50 messages still blocks. Dedup by id; the loaded message WINS over
+  // the open-requests row (it may carry an optimistic resolving reply, or the
+  // resolving reply itself, that lifts the block the instant the viewer answers).
+  const blockingMessages = useMemo<MessageWithDelivery[]>(() => {
+    const open = openRequestsData?.items ?? [];
+    if (open.length === 0) return mergedMessages;
+    const byId = new Map<string, MessageWithDelivery>();
+    for (const r of open) byId.set(r.id, r);
+    for (const m of mergedMessages) byId.set(m.id, m);
+    return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }, [openRequestsData, mergedMessages]);
   const dockRequest = useMemo(
-    () => (readOnly ? null : findDockableRequest(mergedMessages, myAgentId)),
-    [readOnly, mergedMessages, myAgentId],
+    () => (readOnly ? null : findBlockingRequest(blockingMessages, myAgentId)),
+    [readOnly, blockingMessages, myAgentId],
   );
   const dockPayload = useMemo(() => (dockRequest ? readRequestPayload(dockRequest.metadata) : null), [dockRequest]);
-  const dockRequestId = dockRequest?.id;
-  const dockSelections = useMemo<Record<string, string>>(
-    () => (dockPayload ? recoverAnswerSelections(draft, dockPayload.questions) : {}),
-    [dockPayload, draft],
-  );
-  const dockDirectResolve =
-    dockRequest != null &&
-    dockPayload != null &&
-    pendingImages.length === 0 &&
-    draft.trim().length > 0 &&
-    draft.trim() === buildAnswerDraft(dockPayload, dockSelections) &&
-    allRequiredSelected(dockPayload, dockSelections);
-  const pickDockOption = (prompt: string, option: string) => {
-    if (!dockPayload) return;
-    const nextDraft = buildAnswerDraft(dockPayload, { ...dockSelections, [prompt]: option });
-    autoPrimedDraftRef.current = false;
-    setDraft(nextDraft);
-    setCursor(nextDraft.length);
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-    });
-  };
+  // The full-coverage ask card is active (and owns answering) iff a question
+  // blocks me. Both Reply and Skip resolve the question (Skip sends a "skipped"
+  // answer — see the `onSkip` handler), so the overlay clears the moment the
+  // resolving reply lands; there is no "dismiss but keep it open" path.
+  const askOverlayActive = dockRequest != null && dockPayload != null;
+  const dockRequestId = askOverlayActive ? dockRequest.id : undefined;
   useEffect(() => {
     if (!dockRequestId || draft !== "@" || !autoPrimedDraftRef.current) return;
     // Real message data can arrive after an empty group composer already
-    // focus-primed `@`; once the dock appears, the asker is the default route.
+    // focus-primed `@`; once the block appears, the asker is the default route.
     autoPrimedDraftRef.current = false;
     focusPrimedRef.current = false;
     setDraft("");
@@ -1598,25 +1821,15 @@ export function ChatView({
       el.setSelectionRange(0, 0);
     });
   }, [dockRequestId, draft]);
-  // When the dock re-pins to a DIFFERENT request (a newer question arrived,
-  // or the current one resolved under us), drop a draft the old dock
-  // authored — otherwise a staged clean answer silently retargets and would
-  // thread under the new question as a confusing bare reply. Typed
-  // discussion text never matches the old request's canonical answer shape
-  // and is kept. Functional setDraft returns the same string in the keep
-  // case, so React bails out of the no-op update.
-  const prevDockRef = useRef<{ id: string; payload: OpenQuestionRequest } | null>(null);
-  useEffect(() => {
-    const prev = prevDockRef.current;
-    prevDockRef.current = dockRequest && dockPayload ? { id: dockRequest.id, payload: dockPayload } : null;
-    if (!prev || prev.id === dockRequest?.id) return;
-    setDraft((current) => {
-      const trimmed = current.trim();
-      if (trimmed.length === 0) return current;
-      const derived = recoverAnswerSelections(trimmed, prev.payload.questions);
-      return Object.keys(derived).length > 0 && trimmed === buildAnswerDraft(prev.payload, derived) ? "" : current;
-    });
-  }, [dockRequest, dockPayload]);
+  // Reset the per-question answer state when the block moves to a DIFFERENT
+  // request (the current one resolved, or a newer one became the oldest live
+  // question). Selections always reset; the free-text draft is dropped only on
+  // a question→question handoff so an answer typed for one question doesn't
+  // bleed into the next — never when the block first appears (prev=null) or
+  // fully clears (next=null), where the send mutation's onMutate already owns
+  // the draft.
+  // Answer state lives in the AskTakeover overlay (remounted per request via
+  // `key`), so chat-view no longer resets per-question selections here.
 
   const items: TimelineItem[] = useMemo(() => {
     const rawEvents = eventsData?.items ?? [];
@@ -1672,6 +1885,21 @@ export function ChatView({
   }, [mergedMessages, eventsData]);
 
   const itemCount = items.length;
+
+  // Blocking truncation: while a question blocks me (the FIFO-oldest live
+  // request directed at me), hide every timeline item AFTER that request's
+  // card — the conversation does not continue until I answer. The block is
+  // viewer-local (`dockRequestId` is undefined for watchers / non-targets and
+  // in the read-only view), so everyone else keeps the full timeline. If the
+  // blocking request isn't in the loaded window (cutoff === -1) we don't
+  // truncate — there's nothing to anchor on, and the dock still pins the
+  // answer surface.
+  const visibleItems = useMemo<TimelineItem[]>(() => {
+    if (!dockRequestId) return items;
+    const cutoff = items.findIndex((it) => it.kind === "message" && it.data.id === dockRequestId);
+    return cutoff === -1 ? items : items.slice(0, cutoff + 1);
+  }, [items, dockRequestId]);
+  const hiddenByBlock = itemCount - visibleItems.length;
 
   // M2: scroll-position snapshot — synchronous IndexedDB lookup of
   // where the user's viewport bottom was the last time they left
@@ -2440,12 +2668,17 @@ export function ChatView({
   );
 
   // Group-chat mention gate, shared by the send button (disabled / title /
-  // dimming) and handleSend's Enter-key backstop. A live dock lifts the gate:
-  // the pinned question makes its asker the default recipient (a clean answer
-  // direct-resolves; an edited/typed reply routes to the asker to judge —
-  // exactly what the dock's helper line promises), so no typed @mention is
-  // required while a question is docked.
-  const sendBlockedByMentionGate = requiresMention && draftMentions.length === 0 && dockRequest == null;
+  // dimming) and handleSend's Enter-key backstop. A blocking question lifts the
+  // gate: the pinned question makes its asker the default recipient, so no
+  // typed @mention is required while a question blocks me.
+  const sendBlockedByMentionGate = requiresMention && draftMentions.length === 0 && !askOverlayActive;
+
+  // Unified send-disabled gate for the composer. While the AskTakeover overlay
+  // is active it covers the composer (answering is owned there), so the composer
+  // only ever sends ordinary messages: need text or an image, and (group chats)
+  // an addressed @mention.
+  const sendDisabled =
+    sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0) || sendBlockedByMentionGate;
 
   const mention = useMentionAutocomplete({
     value: draft,
@@ -2560,7 +2793,53 @@ export function ChatView({
           rail and its scrim — no effect on wider viewports where both
           render as inline siblings. */}
       <div className="flex-1 flex overflow-hidden relative">
-        <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        <div
+          className="flex-1 flex flex-col overflow-hidden min-w-0 relative"
+          // While a blocking ask owns this chat, lift the center column above the
+          // narrow-viewport right rail (an absolute `z-30` sibling + `z-20` scrim
+          // anchored to the parent) so the takeover card is never occluded on
+          // phone widths. No effect on wider viewports, where the rail is an
+          // inline sibling and nothing overlaps. See QA defect: mobile rail over ask.
+          style={askOverlayActive ? { zIndex: 40 } : undefined}
+        >
+          {/* The ask pops up as a card INSIDE the workspace body — offset below
+              the (stable, single-row) topic header so the header and the
+              right rail stay visible. Owns answering: Reply resolves with the
+              composed answer; Skip ALSO resolves, sending a "skipped" answer so
+              the asking agent unblocks and the red dot clears (skip is an answer,
+              not a temporary dismiss). Keyed by request id so its answer state
+              resets when the blocking question changes. */}
+          {askOverlayActive && dockRequest && dockPayload ? (
+            <div style={{ position: "absolute", top: 52, left: 0, right: 0, bottom: 0, zIndex: 30 }}>
+              <AskTakeover
+                key={dockRequest.id}
+                body={typeof dockRequest.content === "string" ? dockRequest.content : ""}
+                payload={dockPayload}
+                askerName={chatScopedAgentName(dockRequest.senderId)}
+                sending={sendMut.isPending}
+                onReply={(content) =>
+                  sendMut.mutate({
+                    content,
+                    mentions: [dockRequest.senderId],
+                    inReplyTo: dockRequest.id,
+                    resolves: { request: dockRequest.id, kind: "answered" },
+                  })
+                }
+                onSkip={() =>
+                  // Skip is an answer, not a dismiss: send a resolving reply
+                  // (kind="answered") carrying a "skipped" body so the open
+                  // request resolves, the red dot clears, and the asking agent
+                  // unblocks and proceeds with its own judgment.
+                  sendMut.mutate({
+                    content: "(Skipped — no answer provided.)",
+                    mentions: [dockRequest.senderId],
+                    inReplyTo: dockRequest.id,
+                    resolves: { request: dockRequest.id, kind: "answered" },
+                  })
+                }
+              />
+            </div>
+          ) : null}
           {/* Chat header — content centred in a reading column that's now
           measured against the left column rather than the full panel.
           Title + EntityLink + ParticipantsStats live in the reading
@@ -2635,11 +2914,10 @@ export function ChatView({
               the chat header. */}
               {/* Title cluster — a stable single row: the topic leads in bold
                   (truncating with an ellipsis when it runs long), followed by
-                  the optional GitHub entity link and the ⓘ description
-                  affordance. The description text is no longer rendered inline
-                  (it made the header height jitter with the running summary and
-                  buried the topic); it now lives behind the ⓘ icon's
-                  hover/click card (`ChatDescriptionInfo`). With the multi-line
+                  the optional GitHub entity link. The description text is not
+                  rendered inline (it made the header height jitter with the
+                  running summary and buried the topic) — it now lives in the
+                  right rail's DescriptionSection. With the multi-line
                   description gone the row is naturally bounded, so the old
                   narrow-viewport `line-clamp-3` cap is no longer needed. */}
               <div className="flex min-w-0 items-center" style={{ flex: 1, gap: "var(--sp-1)" }}>
@@ -2760,16 +3038,13 @@ export function ChatView({
                   </button>
                 )}
                 <EntityLink metadata={chatDetail?.metadata} />
-                {/* Chat description (running work summary) — no longer rendered
-                    inline. It sits behind the ⓘ icon: hover previews it,
-                    clicking pins a copyable card. Hidden while renaming so the
-                    edit row stays clean, and absent entirely when no
-                    description is set (no dead entry point). Read-only on the
-                    web — written by the owning agent via
-                    `chat set-topic --description`, not edited from the console. */}
-                {!renaming && chatDetail?.description ? (
-                  <ChatDescriptionInfo description={chatDetail.description} />
-                ) : null}
+                {/* Chat description (running work summary) is NOT shown in the
+                    header. It lives in the right rail's DescriptionSection
+                    (rendered as markdown at the top of the rail), which
+                    auto-opens for chats that have a description. The former
+                    header ⓘ hover-card was removed as redundant with that
+                    section. Read-only on the web — written by the owning agent
+                    via `chat update --description`. */}
               </div>
               {/* Audience — compact stats icon + quick-add icon. Replaces
               the previous chip-row, which one-shot the panel width once
@@ -2781,7 +3056,7 @@ export function ChatView({
                 participants={chatDetail?.participants ?? []}
                 chatId={chatId}
                 agentIdentity={chatScopedAgentIdentity}
-                onOpen={() => setShowSidebar(true)}
+                onOpen={() => setSidebarByUser(true)}
               />
               {/* Vertical divider splits "look" (avatar strip = identity +
                   state) from "do" (add / open details). Keeps the four
@@ -2883,109 +3158,26 @@ export function ChatView({
           inside is capped via `maxWidth` and centered to align with the
           composer below into one vertical thread. Side padding (sp-6) prevents
           content from kissing the panel border on narrow viewports. */}
-          <div className="relative flex-1 flex flex-col min-h-0">
-            <div
-              ref={scrollContainerRef}
-              className="flex-1 overflow-y-auto"
-              style={{ padding: "var(--sp-2_5) var(--sp-6)" }}
-            >
-              <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
-                {itemCount === 0 && (
-                  <div
-                    className="flex flex-col items-center text-body"
-                    style={{ color: "var(--fg-3)", padding: "var(--sp-8) 0", gap: 6 }}
-                  >
-                    <MessageSquare className="h-8 w-8" style={{ opacity: 0.3 }} />
-                    {readOnly ? "No messages yet" : "Send a message to start the conversation"}
-                  </div>
-                )}
-                <div className="flex flex-col" style={{ gap: 4 }}>
-                  {items.flatMap((item, idx) => {
-                    let node: ReactNode = null;
-                    if (item.kind === "workgroup") {
-                      // Default to folded while chatDetail is still loading —
-                      // opening a group chat's card for one frame and then
-                      // folding it after chatDetail resolves is worse than
-                      // under-opening direct chats by the same one-frame window.
-                      node = (
-                        <WorkingTurn
-                          key={item.key}
-                          events={item.events}
-                          defaultOpen={chatDetail?.type === "direct"}
-                          agentNameFn={chatScopedAgentName}
-                          agentAvatarFn={agentAvatar}
-                          agentColorTokenFn={agentColorToken}
-                        />
-                      );
-                    } else if (item.kind === "event") {
-                      const ev = item.data;
-                      switch (ev.kind) {
-                        case "error":
-                          node = <ErrorRow key={item.key} event={ev} agentNameFn={chatScopedAgentName} />;
-                          break;
-                        default:
-                          // assistant_text / tool_call / thinking are folded into
-                          // the workgroup card above; turn_end is filtered
-                          // upstream; anything else is dropped.
-                          node = null;
-                      }
-                    } else {
-                      const msg = item.data;
-                      node = (
-                        <TextRow
-                          key={item.key}
-                          msg={msg}
-                          myAgentId={myAgentId}
-                          agentNameFn={chatScopedAgentName}
-                          agentAvatarFn={agentAvatar}
-                          agentColorTokenFn={agentColorToken}
-                          mentionParticipants={renderMentionParticipants}
-                          messages={mergedMessages}
-                          suppressAnswerBlock={dockRequestId != null && msg.id === dockRequestId}
-                        />
-                      );
-                    }
-                    // Insert the gap banner immediately after the last cached
-                    // message when there's a known break between cache and the
-                    // server window.
-                    const isGapAnchor = item.kind === "message" && item.data.id === gapAfterMessageId;
-                    // Insert the "New Messages" divider before the first item
-                    // whose message id is strictly newer than the current
-                    // anchor (snapshotted at chat-open; re-armed when the
-                    // divider scrolls past the viewport top — see the
-                    // IntersectionObserver above).
-                    const showDivider = idx === firstNewItemIdx;
-                    const prelude = showDivider ? <UnreadDivider key="unread-divider" ref={dividerRef} /> : null;
-                    const epilogue =
-                      isGapAnchor && item.kind === "message" ? (
-                        <HistoryGapBanner key={`gap-after-${item.data.id}`} />
-                      ) : null;
-                    if (prelude || epilogue) {
-                      const out: ReactNode[] = [];
-                      if (prelude) out.push(prelude);
-                      out.push(node);
-                      if (epilogue) out.push(epilogue);
-                      return out;
-                    }
-                    return node;
-                  })}
-                </div>
-                <div ref={messagesEndRef} />
-              </div>
-            </div>
-            {/* Floating "↓ N new messages" pill — surfaces whenever there are
-                messages newer than the user's session high watermark. Own
-                sends never trigger the pill because `sendMut.onSuccess` /
-                the file-send path pre-advance the watermark to the new
-                message's id before initiating the smooth scroll, so
-                `pillCount` stays 0 throughout the animation (PR 286 manual
-                sign-off rev 10). Rendered as a sibling of the scroll
-                container, not a child, so its `absolute` positioning
-                anchors to the outer wrapper's visible bounds instead of
-                being affected by the scroll container's internal
-                `overflow-auto` + `position: relative` interaction (rev 8). */}
-            {pillCount > 0 ? <NewMessagesPill count={pillCount} onClick={onPillClick} /> : null}
-          </div>
+          <ChatTimeline
+            itemCount={itemCount}
+            visibleItems={visibleItems}
+            hiddenByBlock={hiddenByBlock}
+            readOnly={readOnly}
+            scrollContainerRef={scrollContainerRef}
+            messagesEndRef={messagesEndRef}
+            defaultWorkgroupOpen={chatDetail?.type === "direct"}
+            agentNameFn={chatScopedAgentName}
+            agentAvatarFn={agentAvatar}
+            agentColorTokenFn={agentColorToken}
+            myAgentId={myAgentId}
+            mentionParticipants={renderMentionParticipants}
+            dockRequestId={dockRequestId}
+            gapAfterMessageId={gapAfterMessageId}
+            firstNewItemIdx={firstNewItemIdx}
+            dividerRef={dividerRef}
+            pillCount={pillCount}
+            onPillClick={onPillClick}
+          />
 
           {/* Input. Outer band keeps full-width border-top + side padding so
           the composer separator continues the panel's edge-to-edge frame.
@@ -2997,6 +3189,7 @@ export function ChatView({
           the home-indicator doesn't overlap the send button. */}
           {
             <div
+              ref={composerFooterRef}
               className="shrink-0"
               style={{
                 padding: "var(--sp-2_5) var(--sp-6) calc(var(--sp-3) + env(safe-area-inset-bottom, 0))",
@@ -3044,37 +3237,22 @@ export function ChatView({
                   </div>
                 ) : (
                   <>
-                    {chatTokenUsage && chatTokenUsage.totalTokens > 0 ? (
+                    {chatTokenUsage && chatProcessedTokens > 0 ? (
                       <div
                         className="mono text-caption"
                         style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
-                        title={`input ${chatTokenUsage.inputTokens.toLocaleString()} · cached ${chatTokenUsage.cachedInputTokens.toLocaleString()} · output ${chatTokenUsage.outputTokens.toLocaleString()}`}
+                        title={`active ${chatActiveTokens.toLocaleString()} · input ${chatTokenUsage.inputTokens.toLocaleString()} · cached ${chatTokenUsage.cachedInputTokens.toLocaleString()} · output ${chatTokenUsage.outputTokens.toLocaleString()} · processed ${chatProcessedTokens.toLocaleString()}`}
                       >
-                        {formatTokenCount(chatTokenUsage.totalTokens)} tokens used in this chat
+                        {formatTokenCount(chatActiveTokens)} active tokens in this chat
                       </div>
                     ) : null}
                     <ComposeStatusBar
                       chatId={chatId}
                       agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
                     />
-                    {/* The live open question directed at me — questions +
-                        options pinned where the answer happens. See the dock
-                        state block above `handleSend` for the send contract. */}
-                    {dockRequest && dockPayload ? (
-                      <RequestDock
-                        requestId={dockRequest.id}
-                        payload={dockPayload}
-                        selections={dockSelections}
-                        directResolve={dockDirectResolve}
-                        draftEmpty={draft.trim().length === 0}
-                        askerName={chatScopedAgentName(dockRequest.senderId)}
-                        onPick={pickDockOption}
-                        // Back to the full markdown context: the request's own
-                        // timeline card. No-op when the card is outside the
-                        // loaded message window (querySelector miss).
-                        onJumpToOrigin={() => scrollToMessage(dockRequest.id, "start", "smooth")}
-                      />
-                    ) : null}
+                    {/* A blocking question is answered in the full-coverage
+                        AskTakeover overlay (rendered over the workspace), not in
+                        the composer. */}
                     {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload */}
                     <div
                       style={{
@@ -3399,12 +3577,7 @@ export function ChatView({
                           <button
                             type="button"
                             onClick={handleSend}
-                            disabled={
-                              sendMut.isPending ||
-                              uploading ||
-                              (!draft.trim() && pendingImages.length === 0) ||
-                              sendBlockedByMentionGate
-                            }
+                            disabled={sendDisabled}
                             title={
                               sendBlockedByMentionGate
                                 ? "@mention a member to send — a group message must address someone"
@@ -3413,11 +3586,7 @@ export function ChatView({
                             aria-label="Send"
                             className={cn(
                               "inline-flex items-center justify-center transition-opacity",
-                              (sendMut.isPending ||
-                                uploading ||
-                                (!draft.trim() && pendingImages.length === 0) ||
-                                sendBlockedByMentionGate) &&
-                                "opacity-40 cursor-not-allowed",
+                              sendDisabled && "opacity-40 cursor-not-allowed",
                             )}
                             style={{
                               width: 28,
@@ -3460,13 +3629,14 @@ export function ChatView({
               <button
                 type="button"
                 aria-label="Dismiss"
-                onClick={() => setShowSidebar(false)}
+                onClick={() => setSidebarByUser(false)}
                 className="absolute inset-0 z-20"
                 style={{ background: "var(--overlay-scrim)", border: 0, cursor: "default" }}
               />
               <div className="absolute top-0 bottom-0 right-0 z-30 flex" style={{ boxShadow: "var(--shadow-md)" }}>
                 <ChatRightSidebar
                   chatId={chatId}
+                  description={chatDetail?.description ?? null}
                   participants={chatDetail?.participants ?? []}
                   participantsLoading={chatDetailLoading}
                   managedByMe={managedByMeMap}
@@ -3479,6 +3649,7 @@ export function ChatView({
           ) : (
             <ChatRightSidebar
               chatId={chatId}
+              description={chatDetail?.description ?? null}
               participants={chatDetail?.participants ?? []}
               participantsLoading={chatDetailLoading}
               managedByMe={managedByMeMap}

@@ -12,7 +12,6 @@ import { chats } from "../../db/schema/chats.js";
 import { BadRequestError } from "../../errors.js";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
-import { agentAvatarImageUrl } from "../../services/agent.js";
 import * as chatService from "../../services/chat.js";
 import { resolveBindingPair } from "../../services/github-entity-chat.js";
 import {
@@ -129,12 +128,12 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       type: r.type,
       joinedAt: r.joinedAt.toISOString(),
       avatarColorToken: r.avatarColorToken ?? null,
-      avatarImageUrl: agentAvatarImageUrl(r.agentId, r.avatarImageUpdatedAt ?? null),
+      avatarImageUrl: r.avatarImageUrl,
     }));
   });
 
   // Update chat metadata (`topic` and/or `description`) from inside an agent
-  // session (`chat set-topic`). Unlike the user-scope PATCH /api/v1/chats/:chatId
+  // session (`chat update`). Unlike the user-scope PATCH /api/v1/chats/:chatId
   // (which stays participation-gated so a managing human can still rename from
   // the console), this agent route is **owner-gated**: the chat's creator
   // (membership `role == "owner"`) may rename or re-describe it, and in a
@@ -210,17 +209,7 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { chatId: string } }>("/:chatId/github-entities", async (request) => {
     const identity = requireAgent(request);
     await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
-    const [chat] = await app.db
-      .select({ organizationId: chats.organizationId })
-      .from(chats)
-      .where(eq(chats.id, request.params.chatId))
-      .limit(1);
-    if (!chat) throw new BadRequestError("Chat not found");
-    return listChatGithubEntities(
-      app.db,
-      { appCredentials: app.config.oauth?.githubApp },
-      { chatId: request.params.chatId, organizationId: chat.organizationId },
-    );
+    return listChatGithubEntities(app.db, { chatId: request.params.chatId });
   });
 
   app.post<{ Params: { chatId: string } }>(

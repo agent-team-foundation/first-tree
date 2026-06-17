@@ -43,11 +43,86 @@ export type HandlerContext = {
   log: (msg: string) => void;
 };
 
-export type TurnOutcome = {
-  status: "success" | "error";
-  terminal?: boolean;
-  errorKind?: "deterministic" | "transient" | "unknown";
+export type TurnConsumedErrorReason =
+  | "forward_failed"
+  | "provider_clean_error"
+  | "usage_limit_notice_posted"
+  | "stream_api_error_posted"
+  | "retry_exhausted_notice_posted"
+  | "auto_resume_failed_notice_posted"
+  | (string & {});
+
+export type TurnOutcome =
+  | {
+      status: "success";
+      terminal?: boolean;
+      completion?: undefined;
+      errorKind?: undefined;
+      reason?: undefined;
+    }
+  | {
+      status: "error";
+      terminal?: boolean;
+      completion: "consumed";
+      reason: TurnConsumedErrorReason;
+      errorKind?: undefined;
+    }
+  | {
+      status: "error";
+      terminal?: boolean;
+      errorKind: "deterministic" | "transient" | "unknown";
+      completion?: undefined;
+      reason?: undefined;
+    }
+  | {
+      status: "error";
+      terminal?: boolean;
+      completion?: undefined;
+      errorKind?: undefined;
+      reason?: undefined;
+    };
+
+export type TerminalRejectionEvidence =
+  | { kind: "chat_message"; messageId: string }
+  | { kind: "server_terminal_record"; recordId: string };
+
+export type HandlerRouteReceipt =
+  | { kind: "owned"; mode: "queued" | "processing" }
+  | { kind: "rejected"; reason: string; retryable: true };
+
+export type StartReceipt = {
+  sessionId: string;
+  route: Extract<HandlerRouteReceipt, { kind: "owned" }>;
 };
+
+export type StartResult = StartReceipt | string;
+
+export type ResumeReceipt = {
+  sessionId: string;
+  route: Extract<HandlerRouteReceipt, { kind: "owned" }> | null;
+};
+
+export type ResumeResult = ResumeReceipt | string;
+
+export type DeliveryToken = {
+  processingStarted(messages: SessionMessage | readonly SessionMessage[]): void;
+  complete(messages: SessionMessage | readonly SessionMessage[], outcome: TurnOutcome): Promise<void>;
+  retry(messages: SessionMessage | readonly SessionMessage[], reason: string): void;
+  terminalRejected(
+    messages: SessionMessage | readonly SessionMessage[],
+    reason: string,
+    evidence: TerminalRejectionEvidence,
+  ): Promise<void>;
+};
+
+export function noopDeliveryToken(): DeliveryToken {
+  return {
+    processingStarted: () => {},
+    complete: async () => {},
+    retry: () => {},
+    terminalRejected: async () => {},
+  };
+}
 
 /** Extended context for session-oriented handlers. */
 export type SessionContext = HandlerContext & {
@@ -69,10 +144,9 @@ export type SessionContext = HandlerContext & {
   forwardResult: (text: string) => Promise<void>;
 
   /**
-   * Mark the concrete message or fused batch as entered into the current
-   * provider turn. This is an in-memory boundary used by suspend: consumed
-   * entries can be ACKed when the turn is paused, while handler queues that
-   * have not entered the provider stay unacked for recovery.
+   * Deprecated delivery-reporting shim. Marks the concrete message or fused
+   * batch as provider processing activity only; it no longer makes the entry
+   * ACK-eligible. Built-in handlers should use the explicit DeliveryToken.
    */
   markMessagesConsumed: (messages: SessionMessage | readonly SessionMessage[]) => void;
 
@@ -118,6 +192,17 @@ export type SessionContext = HandlerContext & {
   resolveSenderLabel: (senderId: string) => Promise<string>;
 };
 
+export function deliveryTokenFromSessionContext(ctx: SessionContext): DeliveryToken {
+  return {
+    processingStarted: (messages) => ctx.markMessagesConsumed(messages),
+    complete: (messages, outcome) => ctx.finishTurn(messages, outcome),
+    retry: (messages, reason) => ctx.retryTurn(messages, reason),
+    terminalRejected: async (messages, reason) => {
+      ctx.retryTurn(messages, `terminal_rejected_without_delivery_token:${reason}`);
+    },
+  };
+}
+
 /** Message content extracted from an inbox entry (no entry metadata). */
 export type SessionMessage = {
   /** Inbox entry id that delivered this message to the current agent. */
@@ -160,15 +245,20 @@ export type PrecedingMessage = {
  * for a single chat. The Runtime manages one handler per chatId.
  */
 export type AgentHandler = {
-  /** First message in a new chat. Spawn query, start consumer loop. Returns claudeSessionId. */
-  start(message: SessionMessage, ctx: SessionContext): Promise<string>;
+  /** First message in a new chat. Spawn query, start consumer loop. */
+  start(message: SessionMessage, ctx: SessionContext, token?: DeliveryToken): Promise<StartResult>;
 
-  /** Message arrives for a suspended/evicted chat. Resume query from disk. Returns claudeSessionId.
+  /** Message arrives for a suspended/evicted chat. Resume query from disk.
    *  `message` is undefined for admin-triggered resume (no new user input). */
-  resume(message: SessionMessage | undefined, sessionId: string, ctx: SessionContext): Promise<string>;
+  resume(
+    message: SessionMessage | undefined,
+    sessionId: string,
+    ctx: SessionContext,
+    token?: DeliveryToken,
+  ): Promise<ResumeResult>;
 
-  /** Message arrives while session is active. Push into InputController. Synchronous. */
-  inject(message: SessionMessage): void;
+  /** Message arrives while session is active. Push into provider-owned queue or reject. */
+  inject(message: SessionMessage, token?: DeliveryToken): HandlerRouteReceipt | undefined;
 
   /** Idle timeout. Close query, preserve state for resume. */
   suspend(): Promise<void>;

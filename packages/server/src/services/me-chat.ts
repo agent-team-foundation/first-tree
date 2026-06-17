@@ -39,9 +39,11 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
+import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { users } from "../db/schema/users.js";
 import { BadRequestError, CallerNotSpeakerError, NotFoundError } from "../errors.js";
-import { agentAvatarImageUrl } from "./agent.js";
+import { resolveAvatarImageUrl } from "./agent.js";
 import { resolveAgentChatStatuses } from "./agent-chat-status.js";
 import { createChat } from "./chat.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
@@ -336,8 +338,6 @@ export async function listMeChats(
       c.parent_chat_id      AS parent_chat_id,
       c.last_message_at     AS last_message_at,
       c.last_message_preview AS last_message_preview,
-      (SELECT count(*) FROM chat_membership
-        WHERE chat_id = c.id AND access_mode = 'speaker') AS participant_count,
       cm.access_mode AS access_mode,
       cm.role AS membership_role,
       COALESCE(cus.unread_mention_count, 0) AS unread_mention_count,
@@ -345,12 +345,15 @@ export async function listMeChats(
       COALESCE(cus.engagement_status, ${ACTIVE}) AS engagement_status,
       ${chatSourceSqlExpression} AS source,
       c.metadata->>'entityType' AS entity_type,
-      EXISTS (
-        SELECT 1 FROM messages m
-         WHERE m.chat_id = c.id
-           AND m.created_at > COALESCE(cus.last_read_at, '-infinity'::timestamptz)
-           AND m.metadata -> 'mentions' @> jsonb_build_array(${humanAgentId}::text)
-      ) AS chat_has_explicit_mention_to_me
+      CASE
+        WHEN COALESCE(cus.unread_mention_count, 0) > 0 THEN EXISTS (
+          SELECT 1 FROM messages m
+           WHERE m.chat_id = c.id
+             AND m.created_at > COALESCE(cus.last_read_at, '-infinity'::timestamptz)
+             AND m.metadata -> 'mentions' @> jsonb_build_array(${humanAgentId}::text)
+        )
+        ELSE false
+      END AS chat_has_explicit_mention_to_me
       FROM chats c
       JOIN chat_membership cm
         ON cm.chat_id = c.id AND cm.agent_id = ${humanAgentId}
@@ -379,7 +382,6 @@ export async function listMeChats(
     parent_chat_id: string | null;
     last_message_at: Date | string | null;
     last_message_preview: string | null;
-    participant_count: number | string;
     access_mode: "speaker" | "watcher";
     membership_role: string;
     unread_mention_count: number;
@@ -415,9 +417,12 @@ export async function listMeChats(
       type: agents.type,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      userAvatarUrl: users.avatarUrl,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(and(inArray(chatMembership.chatId, chatIds), eq(chatMembership.accessMode, "speaker")));
 
   const participantsByChat = new Map<string, MeChatRow["participants"]>();
@@ -431,14 +436,12 @@ export async function listMeChats(
       displayName: p.displayName,
       type: p.type,
       avatarColorToken: p.avatarColorToken,
-      // Chat list intentionally retains the agent-only avatar path — it
-      // does NOT fall back to `users.avatar_url` for human participants.
-      // The detail-view surfaces (message bubbles, ParticipantsHeader)
-      // use `resolveAvatarImageUrl` via `/agents` / `/me/managed-agents`
-      // and DO honor the human → GitHub fallback. Keep the chat row
-      // unchanged so the existing visual contract (first-letter / hue
-      // for humans without an upload) stays stable.
-      avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt),
+      avatarImageUrl: resolveAvatarImageUrl({
+        uuid: p.agentId,
+        type: p.type,
+        avatarImageUpdatedAt: p.avatarImageUpdatedAt,
+        userAvatarUrl: p.userAvatarUrl,
+      }),
     });
     participantsByChat.set(p.chatId, list);
     if (p.type !== "human") {
@@ -524,12 +527,15 @@ export async function listMeChats(
   // logic is the same as before the schema refactor — first-message
   // resolution is a `messages` concern, independent of the membership
   // tables.
+  const chatIdsNeedingFirstMessage = pageRaw
+    .filter((r) => r.topic === null || r.topic.length === 0)
+    .map((r) => r.chat_id);
   const firstMessageRows =
-    chatIds.length > 0
+    chatIdsNeedingFirstMessage.length > 0
       ? await db
           .selectDistinctOn([messages.chatId], { chatId: messages.chatId, content: messages.content })
           .from(messages)
-          .where(inArray(messages.chatId, chatIds))
+          .where(inArray(messages.chatId, chatIdsNeedingFirstMessage))
           .orderBy(messages.chatId, messages.createdAt)
       : [];
 
@@ -563,7 +569,7 @@ export async function listMeChats(
       topic: r.topic,
       description: r.description,
       participants,
-      participantCount: Number(r.participant_count),
+      participantCount: participants.length,
       lastMessageAt: toDate(r.last_message_at)?.toISOString() ?? null,
       lastMessagePreview: r.last_message_preview,
       unreadMentionCount: r.unread_mention_count,

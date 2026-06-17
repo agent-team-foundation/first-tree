@@ -1,4 +1,4 @@
-import type { InboxEntryWithMessage, PrecedingMessage } from "@first-tree/shared";
+import { type InboxEntryWithMessage, inboxEntryStatusSchema, type PrecedingMessage } from "@first-tree/shared";
 import { and, asc, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -231,7 +231,7 @@ export async function bundleDeliveryWithSilentContext(
       inboxId: entry.inboxId,
       messageId: entry.messageId,
       chatId: entry.chatId,
-      status: entry.status,
+      status: inboxEntryStatusSchema.parse(entry.status),
       retryCount: entry.retryCount,
       createdAt: entry.createdAt.toISOString(),
       deliveredAt: entry.deliveredAt?.toISOString() ?? null,
@@ -575,8 +575,8 @@ async function collectPrecedingContext(
  * `entryId` is interpreted as a cursor, not as an exact single-row ack:
  * every notify=true row in the same `(inboxId, chatId)` partition up to that
  * id must already be `acked` or `delivered`. Delivered rows in that contiguous
- * prefix are atomically marked `acked`; `pending` / `failed` gaps reject the
- * commit so the database cannot persist `A pending, B acked`.
+ * prefix are atomically marked `acked`; non-committable gaps reject the commit
+ * so the database cannot persist `A pending, B acked`.
  *
  * Trusts only the `inboxId` set the connected socket has bound (no `inboxId`
  * on the wire), and short-circuits on an empty `inboxIds`.
@@ -708,9 +708,8 @@ export async function recoverUnackedForScope(
  * so a subsequent `claimBacklogForPush` re-includes them. Called from the
  * `agent:bind` path: a freshly-connected client may not have acked entries
  * the previous WS push delivered before the connection dropped (or the
- * client crashed). `retryCount` is intentionally NOT incremented — a client
- * crash is not a "delivery attempt failed" event, and bumping the counter
- * here would push genuinely-stuck messages into `failed` too aggressively.
+ * client crashed). `retryCount` is intentionally NOT incremented — a crash or
+ * reconnect is recovery state, not a delivery-attempt failure.
  *
  * Returns the number of rows reset so the caller can log meaningful counts.
  * Short-circuits on empty `inboxIds`.

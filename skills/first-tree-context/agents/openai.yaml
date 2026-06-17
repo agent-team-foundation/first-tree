@@ -1,4 +1,0 @@
-interface:
-  display_name: "First Tree — Context"
-  short_description: "Context Tree operating guide: read before acting, write from a specific source"
-  default_prompt: "Use $first-tree-context to load the Context Tree operating guide before I read or write the tree."

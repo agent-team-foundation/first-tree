@@ -44,10 +44,10 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     // The title greets, the why sets expectations, and naming the team becomes
     // a warm first action below rather than a cold prompt.
     title: "Welcome to First Tree",
-    // Lead with the team (the thing being named right below), not the agent —
-    // otherwise the value line and the naming field talk past each other. The
-    // agent is introduced in the journey preview / its own step.
-    why: "Let's start with your team — where you, your teammates, and your AI agents work together.",
+    // Reframed around "you + your local coding agent joining a First Tree team":
+    // matches the product's "your coding agent already exists, connect it" framing
+    // (Claude Code / Codex are first-class vocabulary).
+    why: "You and your local coding agent (Claude Code, Codex) join a First Tree team to work together.",
   },
   "connect-code": {
     // "repo" (not "project"): this step connects a GitHub repository — the App
@@ -57,36 +57,33 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     // clearer than the beginner-softened "project". Role-framed and agent-centric,
     // matching the connect-computer title; NOT "your agent's repo" (the repo
     // belongs to the user/team, the agent only works on it).
-    title: "Connect the repos your agent works on",
-    // Answer "why connect a repo?" in value terms (the issue-834 UR gap): connecting
-    // isn't just access — it's how the agent learns the repo and turns it
-    // into the team's shared context. The second clause reassures the user the
-    // agent won't touch their code unsupervised.
-    why: "Connect a repo so your agent can learn your codebase and work on it. It never changes your code without your okay.",
+    // Short, clear action in the title; the "why" + reassurance ride in the
+    // subtitle (titles get read, subtitles get skimmed — but the action is
+    // self-evident enough, and the why is one glance below). "code" (not jargon
+    // "repo") for the concept; "repos" is reserved for the actual selection.
+    title: "Connect to GitHub",
+    // why = value + reassurance. The "install the GitHub App" mechanism lives on
+    // the CTA button (so this never reads as "install software"); the reassurance
+    // ("never changes them without your okay") is kept — it's worth a lot at the
+    // first GitHub authorization.
+    why: "Your agent works on your code. Connect your GitHub and choose which repos it can use — and it never changes them without your okay.",
   },
   "connect-computer": {
-    // The user's coding agent already exists on their computer (Claude Code,
-    // Codex, …) — this step CONNECTS it, so the title names that act directly
-    // rather than the old "set up where your agent runs", which implied an
-    // abstract agent living somewhere the user couldn't see. "coding agent" is
-    // the category word; the concrete tool gets named once detected. First verb
-    // in the Connect → Add chain.
-    title: "Connect your coding agent",
-    // why is rendered per-state by StepConnectComputer (the "run the command
-    // below" line is only true while waiting — once connected there's no
-    // command shown, so a static shell subtitle would read as stale). The
-    // shell skips it while empty.
+    // Reframed: this step installs the First Tree client (a small background app)
+    // on the user's computer — "client" is too jargon for beginners and "on this
+    // computer" is the norm (a wrong machine is caught by the next step's
+    // "no coding agent detected" state), so the title is just "Install First Tree".
+    title: "Install First Tree",
+    // why is rendered per-state by StepConnectComputer (waiting shows the app
+    // explainer; connected shows the detected agents + a bridge to create-agent).
     why: "",
   },
   "create-agent": {
-    // The agent was connected in the previous step; here it joins the team — so
-    // the title is "Add … to the team", not "Create …" (nothing is created; an
-    // existing tool gets a team identity). This step is name + visibility (+
-    // future settings), i.e. join-the-team registration. Second verb in the
-    // Connect → Add chain. NOT "your AI teammate": the vocabulary reserves
-    // "teammate" for humans and "agent" for AI. No `why` — title + form
-    // self-explain.
-    title: "Add your agent to the team",
+    // Reframed to "Create your first agent" (more intuitive than the old "Add …
+    // to the team"). The two-layer "agent vs coding agent" confusion is handled
+    // by COLLAPSING the model in the subtitle ("your Claude Code/Codex becomes a
+    // team agent"), not by explaining a runtime/entity distinction.
+    title: "Create your first agent",
     why: "",
   },
   kickoff: {
@@ -118,12 +115,16 @@ export const COPY = {
   hideSetup: "Hide setup",
   /** team (opening / welcome) states */
   team: {
-    // Welcome-screen copy, kept terse — greeting + value live in STEP_COPY;
-    // here are just the field label and a 3-word reassurance. No step preview:
-    // the progress bar already names where you are once you start, so listing
-    // the steps here only added reading + chore-list weight.
-    nameLabel: "What should we call your team?",
-    renameHint: "Rename it anytime.",
+    // The ceremonial admin opening. This bookend renders no progress bar, so the
+    // single-line roadmap below the hero (StepRoadmap, which derives the "N
+    // steps" count from this list) is the only orientation. The admin journey
+    // after team: install → create agent → connect GitHub.
+    nextSteps: ["Install First Tree", "Create your first agent", "Connect to GitHub"],
+    // A warm question that doubles as the field's label, sitting on its own line
+    // above the input — so the pre-filled value is unmistakably the team's name
+    // (a bare box with only a "rename" hint left the field's purpose ambiguous).
+    // The question framing also implies the pre-filled name is editable.
+    nameLead: "What should we call your team?",
   },
   /** connect-code states */
   connectCode: {
@@ -131,13 +132,22 @@ export const COPY = {
     // `STEP_COPY['connect-code'].why` verbatim and had no remaining
     // consumer after the connect-code step started reading from
     // STEP_COPY directly. Keep the why as the single source of truth.
-    /** The step's two sub-phases, shown as an in-step indicator so the user can
-        see it's "connect, then pick" and where they are. */
-    phases: ["Connect GitHub", "Pick repos"],
-    cta: "Install on GitHub",
+    // (The in-step two-phase indicator was removed — install + pick-repos is one
+    // continuous action; a 2-segment bar inside a step that's already "Step N of
+    // 3" read as confusing progress-within-progress. `phases` is gone.)
+    cta: "Install First Tree on GitHub",
     waiting: "Waiting for GitHub…",
-    // (connected status row removed — the PhaseNav's "✓ Connect GitHub" already
-    // signals the connection, and the repo picker shows the org + repos.)
+    /** Post-install confirmation. The account a GitHub App is installed on is
+        set by whoever's github.com session was active at install time — which
+        is NOT necessarily the account the user signed into First Tree with. So
+        name the connected account/org explicitly here, letting the user catch
+        "installed on the wrong account/org" before they pick repos (the picker
+        alone only implies it via repo names). */
+    connected: {
+      label: "Connected to",
+      /** Granted-repo count, shown once the repo list loads. */
+      repoCount: (n: number) => `${n} ${n === 1 ? "repository" : "repositories"} available`,
+    },
     pickProject: "Which repos should your agent work on?",
     /** Loading state for the repo picker (was hardcoded in the step). */
     loading: "Loading your repos…",
@@ -226,9 +236,20 @@ export const COPY = {
     // at the machine where they're installed — the user's coding agent already
     // lives there, so running the command connects it. The "— that connects it
     // to your team" tail gives the bare command its purpose.
-    whyWaiting:
-      "Run this command on the computer where you installed Claude Code, Codex, or other coding agents — that connects it to your team.",
-    whyConnected: "Your computer's connected.",
+    whyWaiting: "A small background app that lets your local coding agents (Claude Code, Codex) connect to your team.",
+    whyConnected:
+      "A small background app that lets your local coding agents (Claude Code, Codex) connect to your team.",
+    // Two install paths (waiting state): run in a terminal, or paste a ready
+    // prompt to the coding agent the user already has and let it install.
+    terminalBoxLabel: "Run this command in your terminal",
+    agentBoxLabel: "Or paste this to your Claude Code or Codex agent",
+    agentPromptPrefix: "Help me install First Tree by running the command below:",
+    // Bridge below the detected-agents list → the next step (create-agent).
+    detectedBridge: "Next, create your first agent.",
+    // Stuck recovery (replaces the Need-help disclosure): ONE line, Node.js the
+    // #1 cause of "command not found". `nodeLinkLabel` is the inline link.
+    stuckNodePre: "“command not found”? → ",
+    stuckNodePost: ", re-run.",
     waiting: "Waiting for your computer…",
     connected: "connected",
     noRuntime:
@@ -273,7 +294,13 @@ export const COPY = {
     // agent the user already runs (e.g. "Claude Code on gandys-macbook is about
     // to join your team."). Rendered only when both are known.
     joining: (toolLabel: string, hostname: string) => `${toolLabel} on ${hostname} is about to join your team.`,
-    nameLabel: "What should your team call it?",
+    // Collapsed-model subtitle: the agent the user creates IS their local coding
+    // agent given a team identity — no "powered by / runtime" two-layer framing.
+    subtitle: "Your Claude Code or Codex becomes a team agent. Choose which one, name it, and set who can use it.",
+    // Coding-agent picker (moved here from connect-computer): always a list, even
+    // for one, default-selected to Claude Code when present.
+    codingAgentLabel: "Coding agent",
+    nameLabel: "Name your agent",
     // "Bringing your agent online…" (not "Setting up…"): the step registers the
     // agent then polls until it comes online. Pairs with timeout's "isn't online
     // yet".
@@ -344,8 +371,23 @@ export const COPY = {
     // shared launch transition
     starting: "Starting your agent…",
   },
-  /** invitee blocked states — the team isn't ready yet (no tree, or no GitHub) */
+  /** invitee welcome + blocked states */
   invitee: {
+    // The invitee's ceremonial welcome (mirrors the admin opening). `welcomeBody`
+    // brackets the team name (rendered bold in StepWelcome); the one-line
+    // roadmap (StepRoadmap) derives its "N steps" count from `nextSteps`. The
+    // invitee journey has no connect-code (they inherit the team's repos):
+    // install → create agent → start working.
+    welcomeBody: {
+      pre: "You're now part of ",
+      // A single warm value line that names the coding agent (Claude Code,
+      // Codex) — symmetric with the admin opening's subtitle, and true to the
+      // "connect your existing coding agent" framing. Deliberately does NOT
+      // restate the roadmap's "Create your first agent" or echo the Get started
+      // CTA — the roadmap + button carry the action; this carries the welcome.
+      post: " — let's bring your coding agent (Claude Code, Codex) onto the team.",
+    },
+    nextSteps: ["Install First Tree", "Create your first agent", "Start working"],
     waitingTitle: "Waiting for your team to set up",
     waitingBody:
       "Your team's admin is still setting up repos and a Context Tree. This page updates on its own as soon as they're done.",

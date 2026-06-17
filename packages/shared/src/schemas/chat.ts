@@ -54,7 +54,8 @@ export const createTaskChatSchema = z
   .object({
     mode: z.literal("task"),
     topic: z.string().trim().max(500).nullable().optional(),
-    description: z.string().trim().max(500).nullable().optional(),
+    // Description cap matches `updateChatSchema` (1500) — see the rationale there.
+    description: z.string().trim().max(1500).nullable().optional(),
     initialRecipientAgentIds: z.array(z.string().min(1)).default([]),
     initialRecipientNames: z.array(z.string().min(1)).default([]),
     contextParticipantAgentIds: z.array(z.string().min(1)).default([]),
@@ -161,7 +162,13 @@ export type ChatDetail = z.infer<typeof chatDetailSchema>;
 export const updateChatSchema = z
   .object({
     topic: z.string().trim().max(500).nullable().optional(),
-    description: z.string().trim().max(500).nullable().optional(),
+    // Description carries two duties at once: the agent's / a teammate's
+    // self-location summary (what this task is + where it stands) AND a
+    // status report aimed at the human. It holds task background + plan +
+    // progress and renders as Markdown, so the cap is wider than the topic's
+    // — 1500 chars gives room for that without becoming a log (blockers /
+    // decisions belong in a `--request`, not here).
+    description: z.string().trim().max(1500).nullable().optional(),
   })
   .refine((v) => v.topic !== undefined || v.description !== undefined, {
     message: "Provide at least one of `topic` or `description`.",

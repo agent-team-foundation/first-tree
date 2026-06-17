@@ -84,6 +84,17 @@ describe("agent-chat-status", () => {
       expect(statuses.some((x) => x.agentId === admin.humanAgentUuid)).toBe(false);
     });
 
+    it("returns an empty list when the chat has no non-human speakers", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const teammate = await createTestAdmin(app);
+      const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+        participantIds: [teammate.humanAgentUuid],
+      });
+
+      await expect(getChatAgentStatuses(app.db, chatId)).resolves.toEqual([]);
+    });
+
     it("a reachable agent with no session reads as ready (not offline)", async () => {
       const { app, peer, chatId } = await newChatWithAgent();
       await bindPresence(peer.agent.uuid, peer.clientId);

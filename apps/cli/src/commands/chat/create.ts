@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
-import { readStdin } from "./_shared/io.js";
+import { guardInlineDescription, readStdin } from "./_shared/io.js";
 import { buildRequestMetadata } from "./_shared/request.js";
 
 interface CreateOptions {
@@ -16,9 +16,8 @@ interface CreateOptions {
   metadata?: string;
   agent?: string;
   request?: boolean;
-  subject?: string;
-  question?: string;
-  option?: string[];
+  options?: string;
+  multiSelect?: boolean;
 }
 
 function collect(value: string, previous: string[]): string[] {
@@ -91,14 +90,13 @@ export function registerChatCreateCommand(chat: Command): void {
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .option(
       "--request",
-      "Create the task with an open question. Requires exactly one --to recipient; the message body is context.",
+      "Create the task with an open question. Requires exactly one --to human; the message body IS the ask.",
     )
     .option(
-      "--subject <text>",
-      "Short headline for the request, shown in the answer dock/card header (with --request, ≤80 chars)",
+      "--options <json>",
+      "Answer options as a JSON array, 2–4 items of {label (1–5 words), description, preview?} (with --request)",
     )
-    .option("--question <text>", "The question prompt — just the ask, no background (with --request, ≤200 chars)")
-    .option("--option <opt>", "An answer option for the question; repeatable (with --request)", collect, [])
+    .option("--multi-select", "Allow picking more than one option (with --request; requires --options)")
     .action(async (message: string | undefined, options: CreateOptions) => {
       try {
         const to = options.to ?? [];
@@ -109,6 +107,13 @@ export function registerChatCreateCommand(chat: Command): void {
         const content = message ?? (await readStdin());
         if (!content || content.trim().length === 0) {
           fail("NO_MESSAGE", "No message provided. Pass as argument or pipe via stdin.", 2);
+        }
+
+        // The initial message already consumes stdin, so `--description` is
+        // inline-only here: reject a literal `\n`-escaped value before the
+        // chat is created (the hint points to ANSI-C `$'...'` quoting).
+        if (options.description !== undefined) {
+          guardInlineDescription(options.description, { supportsStdin: false });
         }
 
         let metadata: Record<string, unknown> | undefined;
@@ -130,10 +135,19 @@ export function registerChatCreateCommand(chat: Command): void {
         }
 
         const sdk = createSdk(options.agent);
-        const captured = await captureOutboundDocs(content);
-        const outboundMetadata = captured.documentContext
-          ? { ...(metadata ?? {}), documentContext: captured.documentContext }
-          : metadata;
+        // KNOWN GAP (follow-up #1069), out of scope for this PR: no chat exists
+        // yet, so the upload org can't be resolved from a chat — doc capture is a
+        // pass-through for `chat create`'s initial message (doc mentions render as
+        // plain text). Subsequent `chat send` captures normally.
+        const captured = await captureOutboundDocs(content, { sdk });
+        const outboundMetadata =
+          captured.attachments || captured.documentContext
+            ? {
+                ...(metadata ?? {}),
+                ...(captured.attachments ? { attachments: captured.attachments } : {}),
+                ...(captured.documentContext ? { documentContext: captured.documentContext } : {}),
+              }
+            : metadata;
         const result = await sdk.createTaskChat({
           mode: "task",
           initialRecipientAgentIds: [],

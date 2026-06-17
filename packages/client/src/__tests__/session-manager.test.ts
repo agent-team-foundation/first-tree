@@ -1,14 +1,16 @@
-import type { AgentRuntimeConfig } from "@first-tree/shared";
+import type { AgentRuntimeConfig, SessionEvent } from "@first-tree/shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { ContextTreeBinding } from "../runtime/bootstrap.js";
 import type {
   AgentHandler,
+  DeliveryToken,
   HandlerConfig,
   HandlerFactory,
   SessionContext,
   SessionMessage,
+  TurnOutcome,
 } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
@@ -22,6 +24,25 @@ function mockSdk(): FirstTreeHubSDK {
     sendMessage: vi.fn().mockResolvedValue({ id: "msg-reply" }),
     sendToAgent: vi.fn().mockResolvedValue({ id: "msg-dm" }),
   } as unknown as FirstTreeHubSDK;
+}
+
+function mockRuntimeConfig(): AgentRuntimeConfig {
+  return {
+    agentId: "agent-1",
+    version: 1,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    updatedBy: "tester",
+    payload: {
+      kind: "claude-code",
+      prompt: { append: "" },
+      model: "",
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+      resourceSkills: [],
+      reasoningEffort: "",
+    },
+  };
 }
 
 /** Create a vi-mocked WS ack callback for SessionManager tests. */
@@ -42,7 +63,7 @@ function createMockHandler(overrides?: Partial<AgentHandler>): AgentHandler {
   return {
     start: vi.fn().mockResolvedValue("session-id-mock"),
     resume: vi.fn().mockResolvedValue("session-id-mock"),
-    inject: vi.fn(),
+    inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -86,6 +107,7 @@ function createSessionManager(opts: {
   log?: pino.Logger;
   agentConfigCache?: AgentConfigCache;
   recoverChat?: (chatId: string) => Promise<void>;
+  onSessionEvent?: (chatId: string, event: SessionEvent) => void;
 }) {
   const handler = opts.handler ?? createMockHandler();
   const factory: HandlerFactory = opts.handlerFactory ?? (() => handler);
@@ -118,6 +140,7 @@ function createSessionManager(opts: {
     ackEntry: opts.ackEntry ?? mockAckEntry(),
     recoverChat: opts.recoverChat,
     agentConfigCache: opts.agentConfigCache,
+    onSessionEvent: opts.onSessionEvent,
   });
 }
 
@@ -269,12 +292,55 @@ describe("SessionManager", () => {
     await sm.shutdown();
   });
 
+  it("does not recover while an earlier same-chat delivery is normally admitting", async () => {
+    const refresh = deferred<AgentRuntimeConfig>();
+    const agentConfigCache: AgentConfigCache = {
+      get: vi.fn(),
+      refreshIfNewer: vi.fn(() => refresh.promise),
+      refresh: vi.fn(() => Promise.resolve(mockRuntimeConfig())),
+      updateUrls: vi.fn(),
+      allReferencedUrls: vi.fn(() => new Set<string>()),
+      forget: vi.fn(),
+    };
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    const injectSpy = vi.fn().mockReturnValue({ kind: "owned", mode: "queued" });
+    const startSpy = vi.fn(async () => "session-id-mock");
+    const handler = createMockHandler({
+      start: startSpy,
+      inject: injectSpy,
+    });
+    const sm = createSessionManager({ handler, agentConfigCache, recoverChat });
+
+    const firstDispatch = sm.dispatch(mockEntry({ id: 60, chatId: "chat-admit", messageId: "msg-admit-1" }));
+    await vi.waitFor(() => expect(agentConfigCache.refreshIfNewer).toHaveBeenCalledTimes(1));
+
+    const secondDispatch = sm.dispatch(mockEntry({ id: 61, chatId: "chat-admit", messageId: "msg-admit-2" }));
+    await Promise.resolve();
+    expect(recoverChat).not.toHaveBeenCalled();
+    expect(startSpy).not.toHaveBeenCalled();
+
+    refresh.resolve(mockRuntimeConfig());
+    await firstDispatch;
+    await secondDispatch;
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(injectSpy).toHaveBeenCalledTimes(1);
+    expect(recoverChat).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
   it("queues a new chat instead of evicting working sessions at max_sessions", async () => {
     const ackEntry = mockAckEntry();
     const recoverChat = vi.fn().mockResolvedValue(undefined);
     const handlers: AgentHandler[] = [];
     const factory: HandlerFactory = () => {
-      const h = createMockHandler();
+      const h = createMockHandler({
+        start: vi.fn(async (message, ctx) => {
+          ctx.markMessagesConsumed(message);
+          return `session-${message.chatId}`;
+        }),
+      });
       handlers.push(h);
       return h;
     };
@@ -310,6 +376,7 @@ describe("SessionManager", () => {
           contexts.set(message.chatId, ctx);
           messages.set(message.chatId, message);
           started.push(message.chatId);
+          ctx.markMessagesConsumed(message);
           return `session-${message.chatId}`;
         },
       });
@@ -374,6 +441,51 @@ describe("SessionManager", () => {
 
     expect(handler.start).toHaveBeenCalledTimes(1);
     expect(handler.inject).toHaveBeenCalledTimes(1);
+
+    await sm.shutdown();
+  });
+
+  it("recovers active inject work when the handler rejects custody", async () => {
+    const ackEntry = mockAckEntry();
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    const handler = createMockHandler({
+      inject: vi.fn().mockReturnValue({ kind: "rejected", reason: "no_active_context", retryable: true } as const),
+    });
+    const sm = createSessionManager({
+      handler,
+      ackEntry,
+      recoverChat,
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-reject", messageId: "msg-1" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-reject", messageId: "msg-2" }));
+
+    expect(handler.inject).toHaveBeenCalledTimes(1);
+    expect(ackEntry).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-reject"));
+    expect(sm.getAggregateRuntimeState()).not.toBe("working");
+
+    await sm.shutdown();
+  });
+
+  it("recovers active inject work when the handler throws before custody", async () => {
+    const ackEntry = mockAckEntry();
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    const handler = createMockHandler({
+      inject: vi.fn(() => {
+        throw new Error("inject offline");
+      }),
+    });
+    const sm = createSessionManager({ handler, ackEntry, recoverChat });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-throw", messageId: "msg-1" }));
+    await expect(sm.dispatch(mockEntry({ id: 2, chatId: "chat-throw", messageId: "msg-2" }))).rejects.toThrow(
+      "inject offline",
+    );
+
+    expect(ackEntry).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith("chat-throw"));
+    expect(sm.getAggregateRuntimeState()).not.toBe("working");
 
     await sm.shutdown();
   });
@@ -737,6 +849,13 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     return { sm, handler: h };
   }
 
+  const unsafeErrorCompletions = [
+    { name: "missing classification", outcome: { status: "error", terminal: true } },
+    { name: "deterministic classification", outcome: { status: "error", terminal: true, errorKind: "deterministic" } },
+    { name: "transient classification", outcome: { status: "error", terminal: true, errorKind: "transient" } },
+    { name: "unknown classification", outcome: { status: "error", terminal: true, errorKind: "unknown" } },
+  ] satisfies Array<{ name: string; outcome: TurnOutcome }>;
+
   it("starts a fresh chat without same-socket recovery even when recoverChat is configured", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     const recoverChat = vi.fn().mockResolvedValue(undefined);
@@ -757,12 +876,13 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const ackEntry = vi.fn().mockReturnValue(ack.promise);
     let capturedCtx: SessionContext | undefined;
     let capturedMessage: SessionMessage | undefined;
+    const start = vi.fn(async (message: SessionMessage, ctx: SessionContext) => {
+      capturedMessage = message;
+      capturedCtx = ctx;
+      return "session-id-mock";
+    });
     const handler = createMockHandler({
-      async start(message, ctx) {
-        capturedMessage = message;
-        capturedCtx = ctx;
-        return "session-id-mock";
-      },
+      start,
     });
     const { sm } = buildSm(ackEntry, handler);
 
@@ -781,6 +901,39 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     await Promise.resolve();
     expect(ackEntry).toHaveBeenCalledTimes(1);
 
+    await sm.shutdown();
+  });
+
+  it("does not re-route same entryId redelivery while terminal ACK is pending", async () => {
+    const ack = deferred<void>();
+    const ackEntry = vi.fn().mockReturnValue(ack.promise);
+    let capturedCtx: SessionContext | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const start = vi.fn(async (message: SessionMessage, ctx: SessionContext) => {
+      capturedMessage = message;
+      capturedCtx = ctx;
+      return "session-id-mock";
+    });
+    const handler = createMockHandler({
+      start,
+    });
+    const { sm } = buildSm(ackEntry, handler);
+    const entry = mockEntry({ id: 77, chatId: "chat-terminal-redelivery", messageId: "msg-terminal" });
+
+    await sm.dispatch(entry);
+    if (!capturedCtx || !capturedMessage) throw new Error("message was not captured");
+
+    const finish = capturedCtx.finishTurn(capturedMessage, { status: "success", terminal: true });
+    await vi.waitFor(() => expect(ackEntry).toHaveBeenCalledTimes(1));
+
+    await sm.dispatch(entry);
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(handler.inject).not.toHaveBeenCalled();
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+
+    ack.resolve(undefined);
+    await finish;
     await sm.shutdown();
   });
 
@@ -811,6 +964,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
 
   it("uses an idle active session before preempting a working session for concurrency", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const events: Array<{ chatId: string; event: SessionEvent }> = [];
     const handlers = new Map<string, AgentHandler>();
     const contexts = new Map<string, SessionContext>();
     const messages = new Map<string, SessionMessage>();
@@ -821,6 +975,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
           handlers.set(message.chatId, current);
           contexts.set(message.chatId, ctx);
           messages.set(message.chatId, message);
+          ctx.markMessagesConsumed(message);
           return `session-${message.chatId}`;
         },
       });
@@ -829,6 +984,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const sm = createSessionManager({
       ackEntry,
       handlerFactory: factory,
+      onSessionEvent: (chatId, event) => events.push({ chatId, event }),
       concurrency: 2,
       session: { idle_timeout: 300, max_sessions: 10, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
     });
@@ -846,6 +1002,16 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     expect(handlers.get("chat-working")?.suspend).not.toHaveBeenCalled();
     expect(handlers.has("chat-new")).toBe(true);
     expect(ackEntry).toHaveBeenCalledWith(2);
+    expect(
+      events.some(
+        ({ chatId, event }) =>
+          chatId === "chat-idle" &&
+          event.kind === "error" &&
+          event.payload.source === "runtime" &&
+          event.payload.message.includes("resilience.session.preempted:") &&
+          event.payload.message.includes("concurrency_idle_yield"),
+      ),
+    ).toBe(false);
 
     await sm.shutdown();
   });
@@ -884,6 +1050,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       },
       inject: vi.fn((m) => {
         injected.push(m);
+        return { kind: "owned", mode: "queued" } as const;
       }),
     });
     const { sm } = buildSm(ackEntry, handler);
@@ -919,6 +1086,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       },
       inject: vi.fn((m) => {
         injected.push(m);
+        return { kind: "owned", mode: "queued" } as const;
       }),
     });
     const { sm } = buildSm(ackEntry, handler);
@@ -994,6 +1162,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       inject: vi.fn((m) => {
         routed.push(`inject:${m.id}`);
         injected.push(m);
+        return { kind: "owned", mode: "queued" } as const;
       }),
     });
     const sm = createSessionManager({ ackEntry, handler, agentConfigCache });
@@ -1068,7 +1237,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     await sm.shutdown();
   });
 
-  it("suspend acks consumed entries and lets newer same-chat input trigger recovery before resume", async () => {
+  it("manual suspend resolves processingStarted entries and lets later input resume", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     const recoverChat = vi.fn().mockResolvedValue(undefined);
     let capturedCtx: SessionContext | undefined;
@@ -1092,35 +1261,72 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
 
     if (firstMessage) capturedCtx?.markMessagesConsumed(firstMessage);
     await sm.handleCommand("chat-suspend", "session:suspend");
-    await Promise.resolve();
+    await vi.waitFor(() => expect(ackEntry).toHaveBeenCalledWith(30));
     expect(ackEntry).toHaveBeenCalledTimes(1);
-    expect(ackEntry).toHaveBeenCalledWith(30);
-
-    await sm.dispatch(mockEntry({ id: 31, chatId: "chat-suspend", messageId: "msg-a2" }));
-    expect(recoverChat).toHaveBeenCalledTimes(1);
-    expect(resumeSpy).not.toHaveBeenCalled();
+    expect(recoverChat).not.toHaveBeenCalled();
 
     await sm.dispatch(mockEntry({ id: 31, chatId: "chat-suspend", messageId: "msg-a2" }));
     expect(resumeSpy).toHaveBeenCalledTimes(1);
+    expect(recoverChat).not.toHaveBeenCalled();
     expect(ackEntry).toHaveBeenCalledTimes(1);
 
     await sm.shutdown();
   });
 
-  it("suspend leaves injected but not consumed entries unacked for recovery", async () => {
-    const ackEntry = vi.fn().mockResolvedValue(undefined);
+  it("manual suspend settlement wins the race with immediate later input", async () => {
+    const ack = deferred<void>();
+    const ackEntry = vi.fn().mockReturnValueOnce(ack.promise).mockResolvedValue(undefined);
     const recoverChat = vi.fn().mockResolvedValue(undefined);
     let capturedCtx: SessionContext | undefined;
     let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
-    const injected: Parameters<AgentHandler["inject"]>[0][] = [];
+    const resumeSpy = vi.fn(async () => "session-id-mock");
     const handler = createMockHandler({
       async start(m, ctx) {
         firstMessage = m;
         capturedCtx = ctx;
         return "session-id-mock";
       },
+      resume: resumeSpy,
+    });
+    const { sm } = buildSm(ackEntry, handler, recoverChat);
+
+    await sm.dispatch(mockEntry({ id: 35, chatId: "chat-suspend-race", messageId: "msg-race-1" }));
+    if (firstMessage) capturedCtx?.markMessagesConsumed(firstMessage);
+
+    await sm.handleCommand("chat-suspend-race", "session:suspend");
+    await vi.waitFor(() => expect(ackEntry).toHaveBeenCalledWith(35));
+
+    const laterDispatch = sm.dispatch(mockEntry({ id: 36, chatId: "chat-suspend-race", messageId: "msg-race-2" }));
+    await Promise.resolve();
+    expect(recoverChat).not.toHaveBeenCalled();
+    expect(resumeSpy).not.toHaveBeenCalled();
+
+    ack.resolve(undefined);
+    await laterDispatch;
+
+    expect(resumeSpy).toHaveBeenCalledTimes(1);
+    expect(recoverChat).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("manual suspend defers recovery for injected but not consumed entries", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let capturedCtx: SessionContext | undefined;
+    let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
+    const injected: Parameters<AgentHandler["inject"]>[0][] = [];
+    const resumeSpy = vi.fn(async () => "session-id-mock");
+    const handler = createMockHandler({
+      async start(m, ctx) {
+        firstMessage = m;
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+      resume: resumeSpy,
       inject: vi.fn((m) => {
         injected.push(m);
+        return { kind: "owned", mode: "queued" } as const;
       }),
     });
     const { sm } = buildSm(ackEntry, handler, recoverChat);
@@ -1133,14 +1339,94 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     expect(injected).toHaveLength(1);
 
     await sm.handleCommand("chat-suspend-queue", "session:suspend");
-    await Promise.resolve();
+    await vi.waitFor(() => expect(ackEntry).toHaveBeenCalledWith(32));
     expect(ackEntry).toHaveBeenCalledTimes(1);
-    expect(ackEntry).toHaveBeenCalledWith(32);
-    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledTimes(1));
+    expect(ackEntry).not.toHaveBeenCalledWith(33);
+    expect(recoverChat).not.toHaveBeenCalled();
 
     await sm.dispatch(mockEntry({ id: 34, chatId: "chat-suspend-queue", messageId: "msg-q3" }));
-    expect(recoverChat).toHaveBeenCalledTimes(1);
+    expect(recoverChat).toHaveBeenCalledWith("chat-suspend-queue");
+    expect(resumeSpy).not.toHaveBeenCalled();
+
+    await sm.dispatch(mockEntry({ id: 33, chatId: "chat-suspend-queue", messageId: "msg-q2" }));
+    expect(resumeSpy).toHaveBeenCalledTimes(1);
     expect(ackEntry).toHaveBeenCalledTimes(1);
+
+    await sm.shutdown();
+  });
+
+  it("explicit resume requests recovery when manual suspend left deferred debt", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let capturedCtx: SessionContext | undefined;
+    let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
+    const resumeSpy = vi.fn(async () => "session-id-mock");
+    const handler = createMockHandler({
+      async start(m, ctx) {
+        firstMessage = m;
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+      resume: resumeSpy,
+      inject: vi.fn(() => ({ kind: "owned", mode: "queued" }) as const),
+    });
+    const { sm } = buildSm(ackEntry, handler, recoverChat);
+
+    await sm.dispatch(mockEntry({ id: 37, chatId: "chat-resume-debt", messageId: "msg-rd-1" }));
+    if (firstMessage) capturedCtx?.markMessagesConsumed(firstMessage);
+    await sm.dispatch(mockEntry({ id: 38, chatId: "chat-resume-debt", messageId: "msg-rd-2" }));
+
+    await sm.handleCommand("chat-resume-debt", "session:suspend");
+    await vi.waitFor(() => expect(ackEntry).toHaveBeenCalledWith(37));
+
+    await sm.handleCommand("chat-resume-debt", "session:resume");
+    expect(recoverChat).toHaveBeenCalledWith("chat-resume-debt");
+    expect(resumeSpy).not.toHaveBeenCalled();
+
+    await sm.dispatch(mockEntry({ id: 38, chatId: "chat-resume-debt", messageId: "msg-rd-2" }));
+    expect(resumeSpy).toHaveBeenCalledTimes(1);
+    expect(ackEntry).not.toHaveBeenCalledWith(38);
+
+    await sm.shutdown();
+  });
+
+  it("explicit resume waits for in-flight manual suspend before checking deferred debt", async () => {
+    const ack = deferred<void>();
+    const ackEntry = vi.fn().mockReturnValueOnce(ack.promise).mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let capturedCtx: SessionContext | undefined;
+    let firstMessage: Parameters<AgentHandler["start"]>[0] | undefined;
+    const resumeSpy = vi.fn(async () => "session-id-mock");
+    const handler = createMockHandler({
+      async start(m, ctx) {
+        firstMessage = m;
+        capturedCtx = ctx;
+        return "session-id-mock";
+      },
+      resume: resumeSpy,
+      inject: vi.fn(() => ({ kind: "owned", mode: "queued" }) as const),
+    });
+    const { sm } = buildSm(ackEntry, handler, recoverChat);
+
+    await sm.dispatch(mockEntry({ id: 39, chatId: "chat-resume-suspend-race", messageId: "msg-rsr-1" }));
+    if (firstMessage) capturedCtx?.markMessagesConsumed(firstMessage);
+    await sm.dispatch(mockEntry({ id: 40, chatId: "chat-resume-suspend-race", messageId: "msg-rsr-2" }));
+
+    await sm.handleCommand("chat-resume-suspend-race", "session:suspend");
+    await vi.waitFor(() => expect(ackEntry).toHaveBeenCalledWith(39));
+
+    const resume = sm.handleCommand("chat-resume-suspend-race", "session:resume");
+    await Promise.resolve();
+    expect(recoverChat).not.toHaveBeenCalled();
+    expect(resumeSpy).not.toHaveBeenCalled();
+
+    ack.resolve(undefined);
+    await resume;
+
+    expect(recoverChat).toHaveBeenCalledWith("chat-resume-suspend-race");
+    expect(recoverChat).toHaveBeenCalledTimes(1);
+    expect(resumeSpy).not.toHaveBeenCalled();
+    expect(ackEntry).not.toHaveBeenCalledWith(40);
 
     await sm.shutdown();
   });
@@ -1158,6 +1444,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
       },
       inject: vi.fn((m) => {
         injected.push(m);
+        return { kind: "owned", mode: "queued" } as const;
       }),
     });
     const { sm } = buildSm(ackEntry, handler);
@@ -1333,7 +1620,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     await sm.shutdown();
   });
 
-  it("acks on permanent handler.start failure so a permanent error doesn't loop on redelivery", async () => {
+  it("does not ACK permanent handler.start failure without durable terminal evidence", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     // Error class name is what `classify` keys on for the permanent
     // `client_identity_mismatch` path (see runtime/error-taxonomy.ts:219).
@@ -1351,11 +1638,147 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     const { sm } = buildSm(ackEntry, handler);
 
     await sm.dispatch(mockEntry({ id: 7, chatId: "chat-perm" }));
-    // Two microtask yields: classify + handleSessionFailure both schedule
-    // event-emit + ack on the queue.
+    // Session events alone are not durable terminal evidence, so the
+    // delivery remains unacked for recovery instead of being eaten.
     await Promise.resolve();
     await Promise.resolve();
-    expect(ackEntry).toHaveBeenCalledWith(7);
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("ACKs terminalRejected only after durable evidence is reported", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, _ctx, token) => {
+        capturedMessage = message;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const { sm } = buildSm(ackEntry, handler);
+
+    await sm.dispatch(mockEntry({ id: 8, chatId: "chat-terminal-rejected", messageId: "msg-terminal-rejected" }));
+    expect(ackEntry).not.toHaveBeenCalled();
+    if (!capturedToken || !capturedMessage) throw new Error("delivery token was not captured");
+
+    await capturedToken.terminalRejected(capturedMessage, "deterministic_pre_provider_failure", {
+      kind: "chat_message",
+      messageId: "error-message-id",
+    });
+
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(8);
+
+    await sm.shutdown();
+  });
+
+  it.each(unsafeErrorCompletions)("does not ACK token.complete(error) with $name", async ({ outcome }) => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, _ctx, token) => {
+        capturedMessage = message;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const { sm } = buildSm(ackEntry, handler, recoverChat);
+
+    await sm.dispatch(mockEntry({ id: 18, chatId: "chat-token-error", messageId: "msg-token-error" }));
+    if (!capturedToken || !capturedMessage) throw new Error("delivery token was not captured");
+
+    await capturedToken.complete(capturedMessage, outcome);
+
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(recoverChat).toHaveBeenCalledWith("chat-token-error");
+
+    await sm.shutdown();
+  });
+
+  it("ACKs explicit consumed error completion", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, _ctx, token) => {
+        capturedMessage = message;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const { sm } = buildSm(ackEntry, handler, recoverChat);
+
+    await sm.dispatch(mockEntry({ id: 19, chatId: "chat-consumed-error", messageId: "msg-consumed-error" }));
+    if (!capturedToken || !capturedMessage) throw new Error("delivery token was not captured");
+
+    await capturedToken.complete(capturedMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_clean_error",
+    });
+
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(19);
+    expect(recoverChat).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("applies the same error completion guard to legacy ctx.finishTurn", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let capturedCtx: SessionContext | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx) => {
+        capturedMessage = message;
+        capturedCtx = ctx;
+        return "session-id-mock";
+      }),
+    });
+    const { sm } = buildSm(ackEntry, handler, recoverChat);
+
+    await sm.dispatch(mockEntry({ id: 20, chatId: "chat-legacy-error", messageId: "msg-legacy-error" }));
+    if (!capturedCtx || !capturedMessage) throw new Error("session context was not captured");
+
+    await capturedCtx.finishTurn(capturedMessage, { status: "error", terminal: true });
+
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(recoverChat).toHaveBeenCalledWith("chat-legacy-error");
+
+    await sm.shutdown();
+  });
+
+  it("ignores duplicate terminal outcomes from the same delivery token", async () => {
+    const ackEntry = vi.fn().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let capturedToken: DeliveryToken | undefined;
+    let capturedMessage: SessionMessage | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, _ctx, token) => {
+        capturedMessage = message;
+        capturedToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "queued" } as const };
+      }),
+    });
+    const { sm } = buildSm(ackEntry, handler, recoverChat);
+
+    await sm.dispatch(mockEntry({ id: 9, chatId: "chat-token-once", messageId: "msg-token-once" }));
+    if (!capturedToken || !capturedMessage) throw new Error("delivery token was not captured");
+
+    await capturedToken.complete(capturedMessage, { status: "success", terminal: true });
+    capturedToken.retry(capturedMessage, "late_retry");
+
+    expect(ackEntry).toHaveBeenCalledTimes(1);
+    expect(ackEntry).toHaveBeenCalledWith(9);
+    expect(recoverChat).not.toHaveBeenCalled();
 
     await sm.shutdown();
   });
@@ -1380,7 +1803,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
     await sm.shutdown();
   });
 
-  it("acks queued in-flight entries on session:terminate", async () => {
+  it("does not ACK queued non-terminal entries on session:terminate", async () => {
     const ackEntry = vi.fn().mockResolvedValue(undefined);
     // Handler whose `start` resolves quickly (matching production: start
     // returns the sessionId; the turn closes later via finishTurn).
@@ -1395,7 +1818,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
 
     await sm.handleCommand("chat-term", "session:terminate");
     await Promise.resolve();
-    expect(ackEntry).toHaveBeenCalledWith(11);
+    expect(ackEntry).not.toHaveBeenCalled();
 
     await sm.shutdown();
   });

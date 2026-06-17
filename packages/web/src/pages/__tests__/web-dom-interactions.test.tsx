@@ -469,6 +469,7 @@ function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): Onboardi
     hasAgent: true,
     selectedRepoUrls: ["https://github.com/acme/web.git"],
     setSelectedRepoUrls: vi.fn(),
+    hasRepoDraft: true,
     treeMode: "existing",
     setTreeMode: vi.fn(),
     treeUrl: "https://github.com/acme/context-tree",
@@ -484,11 +485,14 @@ function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): Onboardi
 async function renderOnboardingDom(
   element: ReactElement,
   overrides: Partial<OnboardingFlowValue> = {},
+  seed?: (queryClient: QueryClient) => void,
 ): Promise<{ container: HTMLElement; root: Root; flow: OnboardingFlowValue }> {
   const { OnboardingFlowContext } = await import("../onboarding/onboarding-flow.js");
   const flow = createFlowValue(overrides);
   const rendered = await renderDom(
     <OnboardingFlowContext.Provider value={flow}>{element}</OnboardingFlowContext.Provider>,
+    "/",
+    seed,
   );
   return { ...rendered, flow };
 }
@@ -1109,7 +1113,8 @@ describe("web DOM interaction coverage", () => {
     });
     authMock.value = { ...authMock.value, isAuthenticated: false };
     const local = await renderDom(<LoginPage />, "/login", undefined);
-    await waitForText("Sign in with GitHub", local.container);
+    await waitForText("Continue with GitHub", local.container);
+    await waitForText("only your GitHub identity", local.container);
     await waitForText("Dev: skip GitHub", local.container);
     expect(local.container.querySelector<HTMLAnchorElement>('a[href="/api/v1/auth/github/start"]')).toBeTruthy();
     await unmountRoot(local.root);
@@ -1465,10 +1470,10 @@ describe("web DOM interaction coverage", () => {
     const openSpy = vi.spyOn(window, "open").mockReturnValue(installTab as unknown as Window);
 
     const disconnected = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install on GitHub", disconnected.container);
+    await waitForText("Install First Tree on GitHub", disconnected.container);
     await click(
       [...disconnected.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Install on GitHub"),
+        button.textContent?.includes("Install First Tree on GitHub"),
       ) ?? null,
     );
     expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding/connected");
@@ -1512,7 +1517,7 @@ describe("web DOM interaction coverage", () => {
     await waitForText("acme/web", connected.container);
     // 0 repos picked but the list is pickable → friction: the consequence line
     // shows and the strong primary "Continue" is absent (only the quiet
-    // "Continue without a repo" link remains; never disabled).
+    // "Skip for now" link remains; never disabled).
     await waitForText("Pick a repo so your agent can build your team's Context Tree", connected.container);
     expect([...connected.container.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Continue")).toBe(
       false,
@@ -1524,7 +1529,7 @@ describe("web DOM interaction coverage", () => {
     expect(setSelectedRepoUrls).toHaveBeenCalledWith(["https://github.com/acme/web.git"]);
     await click(
       [...connected.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Continue without a repo"),
+        button.textContent?.includes("Skip for now"),
       ) ?? null,
     );
     expect(connected.flow.goNext).toHaveBeenCalled();
@@ -1574,19 +1579,88 @@ describe("web DOM interaction coverage", () => {
 
     githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "not configured"));
     const notConfigured = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install on GitHub", notConfigured.container);
+    await waitForText("Install First Tree on GitHub", notConfigured.container);
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Install on GitHub"),
+        button.textContent?.includes("Install First Tree on GitHub"),
       ) ?? null,
     );
     await waitForText("Couldn't connect a repo here right now", notConfigured.container);
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Continue without a repo"),
+        button.textContent?.includes("Skip for now"),
       ) ?? null,
     );
     expect(notConfigured.flow.goNext).toHaveBeenCalled();
+  });
+
+  it("defaults to no selection with no draft, and preserves then prunes a resumed draft", async () => {
+    const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
+    const connectedInstall = {
+      installationId: 42,
+      accountLogin: "acme",
+      accountType: "Organization" as const,
+      accountGithubId: 123,
+      repositorySelection: "selected" as const,
+      permissions: {},
+      events: [],
+      suspended: false,
+      manageUrl: "https://github.com/organizations/acme/settings/installations/42",
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    githubAppMocks.getGithubAppInstallation.mockResolvedValue(connectedInstall);
+
+    // No saved draft (first visit) → default to NONE selected; the user actively
+    // picks which repos to share (paired with the "Skip for now" out + the
+    // no-repo consequence hint). The picker never auto-selects on their behalf.
+    const freshSet = vi.fn();
+    const noDraft = await renderOnboardingDom(<StepConnectCode />, {
+      activeStep: "connect-code",
+      selectedRepoUrls: [],
+      hasRepoDraft: false,
+      setSelectedRepoUrls: freshSet,
+    });
+    await waitForText("acme/web", noDraft.container);
+    await flush();
+    expect(freshSet).not.toHaveBeenCalled();
+    await unmountRoot(noDraft.root);
+
+    // Resumed draft (user narrowed to just one repo earlier, then bailed before
+    // kickoff) → no auto-select; the saved selection is left untouched instead
+    // of being clobbered back to "all granted".
+    const resumedSet = vi.fn();
+    const withDraft = await renderOnboardingDom(<StepConnectCode />, {
+      activeStep: "connect-code",
+      selectedRepoUrls: ["https://github.com/acme/web.git"],
+      hasRepoDraft: true,
+      setSelectedRepoUrls: resumedSet,
+    });
+    await waitForText("acme/web", withDraft.container);
+    await flush();
+    expect(resumedSet).not.toHaveBeenCalled();
+    await unmountRoot(withDraft.root);
+
+    // Resumed draft carrying a repo the GitHub App no longer grants (uninstall /
+    // changed grant between bailout and resume) → prune it against the current
+    // grant list so a stale URL can't ride into kickoff. acme/web is still
+    // granted; the gone repo is dropped.
+    const prunedSet = vi.fn();
+    const staleDraft = await renderOnboardingDom(<StepConnectCode />, {
+      activeStep: "connect-code",
+      selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
+      hasRepoDraft: true,
+      setSelectedRepoUrls: prunedSet,
+    });
+    await waitForText("acme/web", staleDraft.container);
+    await waitForCondition(
+      () =>
+        prunedSet.mock.calls.some(
+          ([arg]) => Array.isArray(arg) && arg.length === 1 && arg[0] === "https://github.com/acme/web.git",
+        ),
+      "prune a no-longer-granted repo from a resumed draft",
+    );
+    await unmountRoot(staleDraft.root);
   });
 
   it("falls back to a full-page redirect when the install popup is blocked", async () => {
@@ -1604,10 +1678,10 @@ describe("web DOM interaction coverage", () => {
     githubAppMocks.getGithubAppInstallUrl.mockClear();
 
     const blocked = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install on GitHub", blocked.container);
+    await waitForText("Install First Tree on GitHub", blocked.container);
     await click(
       [...blocked.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Install on GitHub"),
+        button.textContent?.includes("Install First Tree on GitHub"),
       ) ?? null,
     );
     // Blocked path redirects THIS tab, so it must come back to the wizard
@@ -1626,10 +1700,10 @@ describe("web DOM interaction coverage", () => {
     githubAppMocks.getGithubAppInstallUrl.mockClear();
 
     const view = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install on GitHub", view.container);
+    await waitForText("Install First Tree on GitHub", view.container);
     const installBtn = (): HTMLButtonElement | null =>
       [...view.container.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
-        b.textContent?.includes("Install on GitHub"),
+        b.textContent?.includes("Install First Tree on GitHub"),
       ) ?? null;
 
     await click(installBtn());
@@ -1763,6 +1837,126 @@ describe("web DOM interaction coverage", () => {
     );
     expect(inviteeReady.flow.completeAndEnterChat).toHaveBeenCalled();
     await unmountRoot(inviteeReady.root);
+  });
+
+  it("prunes a no-longer-granted repo at kickoff before writing team resources", async () => {
+    // A flow can resume directly at kickoff (persisted step index) without ever
+    // mounting StepConnectCode, so connect-code's grant prune never runs. The
+    // kickoff handler must re-validate the (possibly stale) selection against the
+    // current grant list, so a repo removed from the installation since the user
+    // picked it is never registered as a team repo resource.
+    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    // Current grants are web + api (GITHUB_REPOS); the draft also carries a repo
+    // the app no longer grants.
+    githubMocks.listOrgGithubRepos.mockResolvedValue(GITHUB_REPOS);
+    const view = await renderOnboardingDom(<StepKickoff />, {
+      activeStep: "kickoff",
+      selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
+      treeMode: "existing",
+      treeUrl: "https://github.com/acme/context-tree",
+    });
+    await waitForText("Your agent's ready to get to work", view.container);
+    await click(
+      ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
+        null) as HTMLButtonElement | null,
+    );
+    await waitForText("Starting your agent", view.container);
+    // web is still granted → written; the stale repo is pruned → never written.
+    expect(resourceMocks.createTeamResourceForOrg).toHaveBeenCalledWith(
+      "org-1",
+      expect.objectContaining({ payload: { url: "https://github.com/acme/web.git" } }),
+    );
+    expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalledWith(
+      "org-1",
+      expect.objectContaining({ payload: { url: "https://github.com/acme/gone.git" } }),
+    );
+    await unmountRoot(view.root);
+  });
+
+  it("fails closed at kickoff when the grant list can't be read (no stale write)", async () => {
+    // If the current-grant read fails we can't prove the selected repos are still
+    // accessible and nothing downstream re-checks grants, so kickoff must NOT
+    // write the (possibly stale) selection — it surfaces a retryable error and
+    // stays on the form instead.
+    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    githubMocks.listOrgGithubRepos.mockRejectedValue(new Error("github unavailable"));
+    const view = await renderOnboardingDom(<StepKickoff />, {
+      activeStep: "kickoff",
+      selectedRepoUrls: ["https://github.com/acme/web.git"],
+      treeMode: "existing",
+      treeUrl: "https://github.com/acme/context-tree",
+    });
+    await waitForText("Your agent's ready to get to work", view.container);
+    await click(
+      ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
+        null) as HTMLButtonElement | null,
+    );
+    await waitForText("Couldn't check your repositories", view.container);
+    expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
+    expect(chatApiMocks.createAgentChat).not.toHaveBeenCalled();
+    expect(view.flow.completeAndEnterChat).not.toHaveBeenCalled();
+    await unmountRoot(view.root);
+  });
+
+  it("kickoff grant check is authoritative — ignores a stale cached grant list", async () => {
+    // The QueryClient is an app-level singleton and finishLater is SPA nav, so a
+    // grant list connect-code cached earlier can still be in the cache when the
+    // user resumes at kickoff — possibly minutes stale. The write-path check
+    // must read CURRENT grants, not trust the cache (guards against re-adding a
+    // staleTime). Seed the cache with a stale list that still contains a repo
+    // that has since been removed; assert the live read prunes it anyway.
+    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    // Current grants (live) are web + api; the stale cache still has `gone`.
+    githubMocks.listOrgGithubRepos.mockResolvedValue(GITHUB_REPOS);
+    const view = await renderOnboardingDom(
+      <StepKickoff />,
+      {
+        activeStep: "kickoff",
+        selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
+        treeMode: "existing",
+        treeUrl: "https://github.com/acme/context-tree",
+      },
+      (queryClient) => {
+        queryClient.setQueryData(
+          ["onboarding", "org-github-repos", "org-1"],
+          [
+            {
+              fullName: "acme/web",
+              cloneUrl: "https://github.com/acme/web.git",
+              htmlUrl: "",
+              private: false,
+              defaultBranch: "main",
+              pushedAt: NOW,
+            },
+            {
+              fullName: "acme/gone",
+              cloneUrl: "https://github.com/acme/gone.git",
+              htmlUrl: "",
+              private: false,
+              defaultBranch: "main",
+              pushedAt: NOW,
+            },
+          ],
+        );
+      },
+    );
+    await waitForText("Your agent's ready to get to work", view.container);
+    await click(
+      ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
+        null) as HTMLButtonElement | null,
+    );
+    await waitForText("Starting your agent", view.container);
+    // Live read returned web + api → `gone` is pruned despite being in the cache.
+    expect(githubMocks.listOrgGithubRepos).toHaveBeenCalled();
+    expect(resourceMocks.createTeamResourceForOrg).toHaveBeenCalledWith(
+      "org-1",
+      expect.objectContaining({ payload: { url: "https://github.com/acme/web.git" } }),
+    );
+    expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalledWith(
+      "org-1",
+      expect.objectContaining({ payload: { url: "https://github.com/acme/gone.git" } }),
+    );
+    await unmountRoot(view.root);
   });
 
   it("edits MCP server rows through validation, stdio, and HTTP submissions", async () => {

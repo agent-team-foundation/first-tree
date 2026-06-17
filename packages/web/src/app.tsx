@@ -64,14 +64,6 @@ const ComposeStatusBarPreviewPage = import.meta.env.DEV
     )
   : null;
 
-const ChatDescriptionPreviewPage = import.meta.env.DEV
-  ? lazy(() =>
-      import("./pages/chat-description-preview.js").then((module) => ({
-        default: module.ChatDescriptionPreviewPage,
-      })),
-    )
-  : null;
-
 const RequestDockPreviewPage = import.meta.env.DEV
   ? lazy(() =>
       import("./pages/request-dock-preview.js").then((module) => ({
@@ -104,6 +96,12 @@ const CommandPalettePreviewPage = import.meta.env.DEV
 
 const UserMenuPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/user-menu-preview.js").then((module) => ({ default: module.UserMenuPreviewPage })))
+  : null;
+
+const SummarySectionPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/summary-section-preview.js").then((module) => ({ default: module.SummarySectionPreviewPage })),
+    )
   : null;
 
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
@@ -168,16 +166,6 @@ export function App() {
                   }
                 />
               ) : null}
-              {ChatDescriptionPreviewPage ? (
-                <Route
-                  path="/preview/chat-description"
-                  element={
-                    <Suspense fallback={null}>
-                      <ChatDescriptionPreviewPage />
-                    </Suspense>
-                  }
-                />
-              ) : null}
               {RequestDockPreviewPage ? (
                 <Route
                   path="/preview/request-dock"
@@ -204,6 +192,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <UserMenuPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {SummarySectionPreviewPage ? (
+                <Route
+                  path="/preview/summary-section"
+                  element={
+                    <Suspense fallback={null}>
+                      <SummarySectionPreviewPage />
                     </Suspense>
                   }
                 />

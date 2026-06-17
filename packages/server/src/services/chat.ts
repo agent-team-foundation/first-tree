@@ -13,8 +13,9 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { users } from "../db/schema/users.js";
 import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
-import { agentAvatarImageUrl } from "./agent.js";
+import { resolveAvatarImageUrl } from "./agent.js";
 import { invalidateChatAudience } from "./chat-audience-cache.js";
 import { resolveChatTitle } from "./me-chat.js";
 import { preflightMessageSendIntent, type SendIntentParticipant, sendMessage } from "./message.js";
@@ -541,9 +542,12 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
       type: agents.type,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      userAvatarUrl: users.avatarUrl,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
 
   // Compute server-resolved `title` + `firstMessagePreview` so the agent
@@ -576,7 +580,12 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
     displayName: p.displayName,
     type: p.type,
     avatarColorToken: p.avatarColorToken ?? null,
-    avatarImageUrl: agentAvatarImageUrl(p.agentId, p.avatarImageUpdatedAt ?? null),
+    avatarImageUrl: resolveAvatarImageUrl({
+      uuid: p.agentId,
+      type: p.type,
+      avatarImageUpdatedAt: p.avatarImageUpdatedAt,
+      userAvatarUrl: p.userAvatarUrl,
+    }),
   }));
 
   // Match the chatDetailSchema wire contract — the chat-first workspace
@@ -660,11 +669,28 @@ export async function listChatParticipantsWithNames(db: Database, chatId: string
       type: agents.type,
       avatarColorToken: agents.avatarColorToken,
       avatarImageUpdatedAt: agents.avatarImageUpdatedAt,
+      userAvatarUrl: users.avatarUrl,
     })
     .from(chatMembership)
     .innerJoin(agents, eq(chatMembership.agentId, agents.uuid))
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .leftJoin(users, eq(users.id, members.userId))
     .where(and(eq(chatMembership.chatId, chatId), eq(chatMembership.accessMode, "speaker")));
-  return rows;
+  return rows.map((r) => ({
+    agentId: r.agentId,
+    role: r.role,
+    joinedAt: r.joinedAt,
+    name: r.name,
+    displayName: r.displayName,
+    type: r.type,
+    avatarColorToken: r.avatarColorToken,
+    avatarImageUrl: resolveAvatarImageUrl({
+      uuid: r.agentId,
+      type: r.type,
+      avatarImageUpdatedAt: r.avatarImageUpdatedAt,
+      userAvatarUrl: r.userAvatarUrl,
+    }),
+  }));
 }
 
 export async function assertParticipant(db: Database, chatId: string, agentId: string): Promise<void> {

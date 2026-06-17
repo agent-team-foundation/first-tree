@@ -221,8 +221,8 @@ describe("splitAttentionRows — predicate", () => {
   });
 
   it("R2: open request, no unread → attention bucket, request tier", () => {
-    // The core scenario: a `--question` chat the human has already READ but
-    // not answered. `unreadMentionCount` is 0 (read-cleared), yet the open
+    // The core scenario: a `chat ask` (request) chat the human has already READ
+    // but not answered. `unreadMentionCount` is 0 (read-cleared), yet the open
     // request keeps the row pinned — it must not leave "Needs attention"
     // until the question is answered or closed.
     const rows = [
@@ -303,7 +303,7 @@ describe("splitAttentionRows — predicate", () => {
   });
 
   it("priority: request beats mention on the same row", () => {
-    // A fresh `--question` is typically also an unread explicit mention —
+    // A fresh `chat ask` (request) is typically also an unread explicit mention —
     // the row sorts under the request tier, and stays pinned (as `request`)
     // after the mention half is read away.
     const rows = [

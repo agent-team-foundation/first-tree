@@ -137,13 +137,14 @@ describe("deliverNormalizedEvent", () => {
   });
 
   it("delivers a recipientless card when the delegate is not a live speaker (trusted opt-out, wakes no one)", async () => {
-    // Empty-addressing system path: github-delivery addresses the delegate via
-    // `addressedToAgentIds`, but on some events that delegate is not an active
-    // speaker of the bound chat, so the addressing resolves to no live
-    // recipient. The default explicit-recipient guard would reject such a send;
-    // github-delivery declares `allowRecipientlessSend` so the card still lands
-    // as a history/context row for human observers. This pins that the trusted
-    // opt-out is load-bearing — the delivery must NOT throw and must wake no one.
+    // Empty-wake-set system path: github-delivery wakes the delegate via native
+    // `metadata.mentions`, but on some events that delegate is not an active
+    // speaker of the bound chat, so the mention is filtered out and the wake-set
+    // resolves to no live recipient. The default explicit-recipient guard would
+    // reject such a send; github-delivery declares `allowRecipientlessSend` so
+    // the card still lands as a history/context row for human observers. This
+    // pins that the trusted opt-out is load-bearing — the delivery must NOT
+    // throw and must wake no one.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -212,12 +213,13 @@ describe("deliverNormalizedEvent", () => {
     expect(delegateEntries).toHaveLength(0);
   });
 
-  it("echo (#942): excludes the actor from addressing — card still written, actor not woken", async () => {
+  it("echo (#942, S2/D1): suppresses the actor's notify but keeps it addressed — card lands as a silent row", async () => {
     // The delegate is a live speaker of the bound chat, so it would normally
     // be woken. When the delegate is ALSO the event's actor (its own GitHub
-    // action, surfaced as `target.actorAgentId`), #942 excludes it from
-    // `addressedToAgentIds`: the card still lands (public record) but the
-    // actor is not woken / red-dotted. With `actorAgentId = null` the same
+    // action, surfaced as `target.actorAgentId`), Stage 3 passes it through
+    // `suppressNotifyAgentIds` (#942, S2/D1): the delegate stays structurally
+    // addressed and the card still lands as a silent `notify=false` row, but
+    // the actor is not woken / red-dotted. With `actorAgentId = null` the same
     // speaker-delegate IS woken — the two deliveries below pin both sides.
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -261,7 +263,8 @@ describe("deliverNormalizedEvent", () => {
       entityKey: "owner/repo#205",
     });
 
-    // (1) actor === delegate: excluded from addressing → card written, no wake.
+    // (1) actor === delegate: suppressed from notify but kept addressed →
+    // card written, no wake, yet the actor still gets a silent context row.
     const echoStats = await deliverNormalizedEvent(app, event, [{ ...baseTarget, actorAgentId: delegate }]);
     expect(echoStats.delivered).toBe(1);
     const afterEcho = await app.db
@@ -269,6 +272,20 @@ describe("deliverNormalizedEvent", () => {
       .from(inboxEntries)
       .where(and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)));
     expect(afterEcho).toHaveLength(0);
+    // The suppressed actor-delegate still receives exactly one silent
+    // (notify=false) row — the card lands as context, it just doesn't wake.
+    const [delegateRow] = await app.db
+      .select({ inboxId: agents.inboxId })
+      .from(agents)
+      .where(eq(agents.uuid, delegate))
+      .limit(1);
+    const delegateInbox = delegateRow?.inboxId ?? "";
+    const delegateSilent = await app.db
+      .select({ notify: inboxEntries.notify })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.inboxId, delegateInbox), eq(inboxEntries.chatId, chatId)));
+    expect(delegateSilent).toHaveLength(1);
+    expect(delegateSilent[0]?.notify).toBe(false);
 
     // (2) actor !== delegate (null): the speaker-delegate IS woken.
     const okStats = await deliverNormalizedEvent(app, event, [{ ...baseTarget, actorAgentId: null }]);
@@ -390,6 +407,16 @@ describe("deliverNormalizedEvent", () => {
 
     const [row] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(row?.topic).toBe("PR repo#200: Renamed title");
+
+    // The same event also backfills the mapping's persisted `title` (the row
+    // was inserted before titles were persisted), so the right sidebar gets a
+    // label without a per-row GitHub fetch.
+    const [mapping] = await app.db
+      .select({ title: githubEntityChatMappings.title })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#200"))
+      .limit(1);
+    expect(mapping?.title).toBe("Renamed title");
   });
 
   it("does NOT overwrite the owning topic when a linked (fixes_link) entity's event arrives", async () => {
@@ -628,12 +655,198 @@ describe("deliverNormalizedEvent", () => {
     expect(sent).toHaveLength(1);
   });
 
+  it("reviewer-reuse + per-chat dedup: an involved member routes into the existing chat (one card, both delegates woken, no new chat/mapping)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const mk = (p: string) =>
+      seedAgent(app, {
+        orgId: admin.organizationId,
+        memberId: admin.memberId,
+        name: `${p}-${randomUUID().slice(0, 6)}`,
+      });
+    const delegateA = await mk("dlgA");
+    const humanA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `humanA-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegateA,
+    });
+    const delegateR = await mk("dlgR");
+    const humanR = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `humanR-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegateR,
+    });
+
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
+    // All four are speakers of the one chat (reviewer + its delegate are already members).
+    await app.db.insert(chatMembership).values(
+      [humanA, delegateA, humanR, delegateR].map((agentId, i) => ({
+        chatId,
+        agentId,
+        role: i === 0 ? "owner" : "member",
+        accessMode: "speaker" as const,
+        mode: "full" as const,
+        source: "manual" as const,
+      })),
+    );
+    // The entity is bound to this chat under (humanA, delegateA) only.
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: humanA,
+      delegateAgentId: delegateA,
+      entityType: "pull_request",
+      entityKey: "owner/repo#210",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const event = makeEvent({ orgId: admin.organizationId, entityType: "pull_request", entityKey: "owner/repo#210" });
+    const subscribed: AudienceTarget = {
+      humanAgentId: humanA,
+      delegateAgentId: delegateA,
+      kind: "existing",
+      chatId,
+      involveReason: null,
+      involveLogin: null,
+      actorAgentId: null,
+    };
+    const involved: AudienceTarget = {
+      humanAgentId: humanR,
+      delegateAgentId: delegateR,
+      kind: "new",
+      chatId: null,
+      involveReason: "review_requested",
+      involveLogin: "humanr",
+      actorAgentId: null,
+    };
+
+    const stats = await deliverNormalizedEvent(app, event, [subscribed, involved]);
+
+    // No new chat minted; exactly one card delivered to the single chat.
+    expect(stats.newChats).toBe(0);
+    expect(stats.delivered).toBe(1);
+    const sent = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
+    expect(sent).toHaveLength(1);
+
+    // Union wake-set: BOTH delegates are woken via native mentions.
+    const wokenCount = async (agentUuid: string) => {
+      const [a] = await app.db
+        .select({ inboxId: agents.inboxId })
+        .from(agents)
+        .where(eq(agents.uuid, agentUuid))
+        .limit(1);
+      const rows = await app.db
+        .select({ id: inboxEntries.messageId })
+        .from(inboxEntries)
+        .where(
+          and(
+            eq(inboxEntries.inboxId, a?.inboxId ?? ""),
+            eq(inboxEntries.chatId, chatId),
+            eq(inboxEntries.notify, true),
+          ),
+        );
+      return rows.length;
+    };
+    expect(await wokenCount(delegateA)).toBe(1);
+    expect(await wokenCount(delegateR)).toBe(1);
+
+    // No reviewer mapping row was written — reuse routes by membership, not subscription.
+    const mappings = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#210"));
+    expect(mappings).toHaveLength(1);
+  });
+
+  it("a `mentioned` involve does NOT reuse the entity chat — it mints a fresh chat (S5, reuse is review_requested-only)", async () => {
+    // S9 reuse is scoped to review_requested. An @mention of a human who is
+    // already a speaker of the entity's bound chat must still pierce into a
+    // FRESH chat (S5), never get routed back into the existing one.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlgA-${randomUUID().slice(0, 6)}`,
+    });
+    const humanA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `humanA-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegateA,
+    });
+    const delegateM = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlgM-${randomUUID().slice(0, 6)}`,
+    });
+    const humanM = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `humanM-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegateM,
+    });
+
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
+    // The mentioned human + its delegate are BOTH already speakers of the bound chat.
+    await app.db.insert(chatMembership).values(
+      [humanA, delegateA, humanM, delegateM].map((agentId, i) => ({
+        chatId,
+        agentId,
+        role: i === 0 ? "owner" : "member",
+        accessMode: "speaker" as const,
+        mode: "full" as const,
+        source: "manual" as const,
+      })),
+    );
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: humanA,
+      delegateAgentId: delegateA,
+      entityType: "pull_request",
+      entityKey: "owner/repo#211",
+      chatId,
+      boundVia: "direct",
+    });
+
+    const event = makeEvent({ orgId: admin.organizationId, entityType: "pull_request", entityKey: "owner/repo#211" });
+    const involvedMention: AudienceTarget = {
+      humanAgentId: humanM,
+      delegateAgentId: delegateM,
+      kind: "new",
+      chatId: null,
+      involveReason: "mentioned",
+      involveLogin: "humanm",
+      actorAgentId: null,
+    };
+
+    const stats = await deliverNormalizedEvent(app, event, [involvedMention]);
+
+    // A fresh chat was minted for the mention (NOT reused into the bound chat).
+    expect(stats.newChats).toBe(1);
+    const mintedMappings = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(
+        and(
+          eq(githubEntityChatMappings.entityKey, "owner/repo#211"),
+          eq(githubEntityChatMappings.humanAgentId, humanM),
+        ),
+      );
+    expect(mintedMappings).toHaveLength(1);
+    expect(mintedMappings[0]?.chatId).not.toBe(chatId);
+  });
+
   // Regression: a GitHub-bound chat that has been expanded to >=3 speakers
   // (e.g. a teammate invited in) must still wake the delegate agent that
-  // owns the entity. Before the fix, github-delivery passed neither
-  // `addressedToAgentIds` nor `metadata.mentions`, so for card-format
-  // messages in a multi-speaker chat the fan-out collapsed to
-  // `notify=false` for everyone and the agent never woke.
+  // owns the entity. github-delivery wakes the delegate by adding it to the
+  // card's native `metadata.mentions`; before that, a card-format message in a
+  // multi-speaker chat produced no mentionSet and the fan-out collapsed to
+  // `notify=false` for everyone, so the agent never woke.
   it("wakes the delegate even in a multi-speaker bound chat (no mention required)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

@@ -55,6 +55,9 @@ export async function attachRequestContext(request: FastifyRequest, _reply: Fast
 
   if (request.agent) {
     span.setAttribute(FIRST_TREE_ATTR.AGENT_ID, request.agent.uuid);
+    if (request.agent.clientId) {
+      span.setAttribute(FIRST_TREE_ATTR.CLIENT_ID, request.agent.clientId);
+    }
     span.setAttribute("agent.inbox_id", request.agent.inboxId);
   }
 }
@@ -85,11 +88,28 @@ export function stampOrgScope(
  * the agent identity even though `request.agent` is only set on Class D
  * runtime-self routes.
  */
-export function stampAgentResource(request: FastifyRequest, agent: { uuid: string; inboxId: string }): void {
+export function stampAgentResource(
+  request: FastifyRequest,
+  agent: { uuid: string; inboxId: string; clientId?: string | null },
+): void {
   const span = rootSpanOf(request);
   if (!span) return;
   span.setAttribute(FIRST_TREE_ATTR.AGENT_ID, agent.uuid);
+  if (agent.clientId) {
+    span.setAttribute(FIRST_TREE_ATTR.CLIENT_ID, agent.clientId);
+  }
   span.setAttribute("agent.inbox_id", agent.inboxId);
+}
+
+/**
+ * Stamp the resolved client resource onto the HTTP root span. Client resource
+ * routes carry `:clientId` directly in the URL rather than through the agent
+ * selector, so they use this helper instead of `request.agent`.
+ */
+export function stampClientResource(request: FastifyRequest, clientId: string): void {
+  const span = rootSpanOf(request);
+  if (!span) return;
+  span.setAttribute(FIRST_TREE_ATTR.CLIENT_ID, clientId);
 }
 
 /**

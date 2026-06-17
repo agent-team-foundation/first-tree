@@ -177,7 +177,6 @@ describe("api wrapper paths", () => {
     await agents.createAgent({ name: "nova", type: "agent", displayName: "Nova" });
     await agents.checkAgentNameAvailability("name with spaces");
     await agents.updateAgent("agent/id", { displayName: "New" });
-    await agents.rebindAgent("agent/id", { clientId: "client-2", runtimeProvider: "claude-code" });
     await agents.deleteAgent("agent/id");
     await agents.deleteAgentAvatar("agent/id");
     await agents.suspendAgent("agent/id");
@@ -259,6 +258,7 @@ describe("api wrapper paths", () => {
     await sessions.getSession("agent/id", "chat/id");
     await sessions.listSessionEvents("agent/id", "chat/id", { limit: 30, cursor: 5, direction: "asc" });
     await sessions.suspendSession("agent/id", "chat/id");
+    await sessions.resumeSession("agent/id", "chat/id");
     await sessions.terminateSession("agent/id", "chat/id");
 
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent/id/config");
@@ -270,10 +270,6 @@ describe("api wrapper paths", () => {
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/all?limit=5&cursor=older");
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent%2Fid/skills");
     expect(apiMock.get).toHaveBeenCalledWith("/orgs/current/agents/names/name%20with%20spaces/availability");
-    expect(apiMock.patch).toHaveBeenCalledWith("/agents/agent%2Fid/rebind", {
-      clientId: "client-2",
-      runtimeProvider: "claude-code",
-    });
     expect(apiMock.post).toHaveBeenCalledWith("/chats/chat%2Fid/messages", {
       format: "text",
       content: "hello",

@@ -163,21 +163,38 @@ export type MappingRow = {
   entityType: string;
   entityKey: string;
   boundVia: string;
+  entityState?: string | null;
+  title?: string | null;
 };
+
+function stateFromPersistedEntityState(
+  entityType: GithubEntityType,
+  entityState: string | null | undefined,
+): GithubEntityLiveState | null {
+  if (entityType === "pull_request") {
+    if (entityState === "open" || entityState === "draft" || entityState === "closed" || entityState === "merged") {
+      return entityState;
+    }
+    return null;
+  }
+  if (entityType === "issue") {
+    if (entityState === "open" || entityState === "closed") return entityState;
+    return null;
+  }
+  return null;
+}
 
 /**
  * Materialise the wire-shape `ChatGithubEntity` for a single mapping row.
  *
  * `parsed` may be null when `entityKey` doesn't match the expected
- * `owner/repo#N` or `owner/repo@<sha>` shape; in that case the
- * `htmlUrl` falls back to a search URL keyed on the raw `entityKey`
- * (still better than dropping the row silently). Live fields are null.
+ * `owner/repo#N` or `owner/repo@<sha>` shape; in that case the row is
+ * dropped because the right rail cannot build a trustworthy GitHub link.
+ * Title and lifecycle state come straight from the persisted projection
+ * (`title` / `entity_state`), both webhook-synced; an empty title degrades
+ * to null so the row renders its entityKey link alone.
  */
-export async function resolveChatGithubEntity(
-  row: MappingRow,
-  token: string | null,
-  fetcher: typeof fetch = fetch,
-): Promise<ChatGithubEntity | null> {
+export function materializeChatGithubEntity(row: MappingRow): ChatGithubEntity | null {
   // Defend against unknown enum values landing here — schema drift between
   // shared and server would otherwise propagate to the wire. Both axes are
   // narrowed via the canonical Zod schema (boundVia) and the exported
@@ -191,15 +208,36 @@ export async function resolveChatGithubEntity(
   const boundVia: GithubEntityBoundVia = boundViaParsed.data;
   const parsed = parseEntityKey(entityType, row.entityKey);
   if (!parsed) return null;
-  const live = token ? await fetchEntityLiveFields(entityType, parsed, token, fetcher) : { title: null, state: null };
   return {
     entityType,
     entityKey,
     boundVia,
     htmlUrl: buildHtmlUrl(entityType, parsed),
-    title: live.title,
-    state: live.state,
+    title: row.title && row.title.length > 0 ? row.title : null,
+    state: stateFromPersistedEntityState(entityType, row.entityState),
     number: parsed.kind === "numeric" ? parsed.number : null,
+  };
+}
+
+/**
+ * Legacy live resolver kept for follow/list unit coverage and future
+ * call sites that explicitly want a best-effort GitHub REST overlay. The
+ * hot right-sidebar list path uses `materializeChatGithubEntity` directly.
+ */
+export async function resolveChatGithubEntity(
+  row: MappingRow,
+  token: string | null,
+  fetcher: typeof fetch = fetch,
+): Promise<ChatGithubEntity | null> {
+  const base = materializeChatGithubEntity(row);
+  if (!base || !token) return base;
+  const parsed = parseEntityKey(base.entityType, row.entityKey);
+  if (!parsed) return base;
+  const live = await fetchEntityLiveFields(base.entityType, parsed, token, fetcher);
+  return {
+    ...base,
+    title: live.title,
+    state: live.state ?? base.state,
   };
 }
 
@@ -207,4 +245,5 @@ export const __testing = {
   parseEntityKey,
   buildHtmlUrl,
   fetchEntityLiveFields,
+  stateFromPersistedEntityState,
 };

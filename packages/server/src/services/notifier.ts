@@ -21,11 +21,14 @@ const SESSION_RUNTIME_CHANNEL = "session_runtime_changes";
  */
 const CHAT_MESSAGE_CHANNEL = "chat_message_events";
 /**
- * Runtime binding cross-process invalidation. Carries a small JSON payload
- * `{ agentId, clientId, reason }`; each server instance conditionally detaches
- * its local route only when `clientId` still owns `agentId` on that instance.
+ * Cross-replica chat-audience invalidation. Carries the bare `<chatId>`.
+ * The push-audience cache (`chat-audience-cache.ts`) is process-local, so a
+ * membership change on one replica only drops THAT replica's cache. This
+ * channel fans the invalidation to every replica so the one hosting a viewer's
+ * admin WS doesn't keep serving a stale audience (and dropping `chat:message`
+ * pushes to a just-added member) for up to the cache TTL.
  */
-export const AGENT_DETACH_CHANNEL = "agent_detach_requests";
+const CHAT_AUDIENCE_CHANNEL = "chat_audience_events";
 
 export type ConfigChangeHandler = (channel: string) => void;
 export type SessionStateChangeHandler = (payload: {
@@ -63,7 +66,7 @@ export type SessionRuntimeChangeHandler = (payload: {
   organizationId: string;
 }) => void;
 export type ChatMessageChangeHandler = (payload: { chatId: string; messageId: string }) => void;
-export type AgentDetachHandler = (payload: { agentId: string; clientId: string; reason?: string }) => void;
+export type ChatAudienceChangeHandler = (payload: { chatId: string }) => void;
 
 /**
  * Per-socket push handler for the WS data plane. When a NOTIFY arrives on
@@ -99,8 +102,8 @@ export type Notifier = {
   notifySessionRuntime(agentId: string, chatId: string, state: string, organizationId: string): Promise<void>;
   /** Chat-first workspace: kick admin WS sockets to invalidate ["me","chats"] and the timeline of `chatId`. */
   notifyChatMessage(chatId: string, messageId: string): Promise<void>;
-  /** Cross-process runtime route invalidation for an agent/client binding. */
-  notifyAgentDetach(agentId: string, clientId: string, reason?: string): Promise<void>;
+  /** Fan a chat-audience-cache invalidation for `chatId` to every replica. */
+  notifyChatAudience(chatId: string): Promise<void>;
   /**
    * Push a raw JSON frame to every socket currently subscribed to `inboxId`
    * on **this server instance only**. Unlike `notify`, does not fan out
@@ -121,8 +124,8 @@ export type Notifier = {
   onSessionRuntime(handler: SessionRuntimeChangeHandler): void;
   /** Register a handler for chat:message change notifications. */
   onChatMessage(handler: ChatMessageChangeHandler): void;
-  /** Register a handler for agent detach requests. */
-  onAgentDetach(handler: AgentDetachHandler): void;
+  /** Register a handler for cross-replica chat-audience invalidations. */
+  onChatAudience(handler: ChatAudienceChangeHandler): void;
   /** Start listening for PG notifications */
   start(): Promise<void>;
   /** Stop listening */
@@ -137,7 +140,7 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const runtimeStateChangeHandlers: RuntimeStateChangeHandler[] = [];
   const sessionRuntimeHandlers: SessionRuntimeChangeHandler[] = [];
   const chatMessageHandlers: ChatMessageChangeHandler[] = [];
-  const agentDetachHandlers: AgentDetachHandler[] = [];
+  const chatAudienceHandlers: ChatAudienceChangeHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
@@ -145,7 +148,7 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   let unlistenRuntimeStateFn: (() => Promise<void>) | null = null;
   let unlistenSessionRuntimeFn: (() => Promise<void>) | null = null;
   let unlistenChatMessageFn: (() => Promise<void>) | null = null;
-  let unlistenAgentDetachFn: (() => Promise<void>) | null = null;
+  let unlistenChatAudienceFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
     // payload format: "inboxId:messageId"
@@ -194,7 +197,8 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       try {
         await listenClient`SELECT pg_notify(${INBOX_CHANNEL}, ${`${inboxId}:${messageId}`})`;
       } catch {
-        // fire-and-forget: notification loss is acceptable, polling covers it
+        // Fire-and-forget: durable inbox rows are repaired by bound WS backlog
+        // drains if this volatile NOTIFY hint is missed.
       }
     },
 
@@ -252,8 +256,13 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
-    async notifyAgentDetach(agentId: string, clientId: string, reason?: string) {
-      await listenClient`SELECT pg_notify(${AGENT_DETACH_CHANNEL}, ${JSON.stringify({ agentId, clientId, reason })})`;
+    async notifyChatAudience(chatId: string) {
+      try {
+        await listenClient`SELECT pg_notify(${CHAT_AUDIENCE_CHANNEL}, ${chatId})`;
+      } catch {
+        // fire-and-forget — a missed fan-out just means the stale replica
+        // serves its cached audience until the TTL ages it out (≤ cache TTL).
+      }
     },
 
     async pushFrameToInbox(inboxId: string, frame: string): Promise<number> {
@@ -300,8 +309,8 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       chatMessageHandlers.push(handler);
     },
 
-    onAgentDetach(handler: AgentDetachHandler) {
-      agentDetachHandlers.push(handler);
+    onChatAudience(handler: ChatAudienceChangeHandler) {
+      chatAudienceHandlers.push(handler);
     },
 
     async start() {
@@ -421,31 +430,19 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       });
       unlistenChatMessageFn = chatMessageResult.unlisten;
 
-      const agentDetachResult = await listenClient.listen(AGENT_DETACH_CHANNEL, (payload) => {
+      const chatAudienceResult = await listenClient.listen(CHAT_AUDIENCE_CHANNEL, (payload) => {
         if (!payload) return;
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(payload);
-        } catch {
-          return;
-        }
-        if (!parsed || typeof parsed !== "object") return;
-        const data = parsed as { agentId?: unknown; clientId?: unknown; reason?: unknown };
-        if (typeof data.agentId !== "string" || typeof data.clientId !== "string") return;
-        const event = {
-          agentId: data.agentId,
-          clientId: data.clientId,
-          reason: typeof data.reason === "string" ? data.reason : undefined,
-        };
-        for (const handler of agentDetachHandlers) {
+        // payload is the bare chatId (a UUID).
+        const chatId = payload;
+        for (const handler of chatAudienceHandlers) {
           try {
-            handler(event);
+            handler({ chatId });
           } catch {
             // swallow — handler errors must not poison fan-out
           }
         }
       });
-      unlistenAgentDetachFn = agentDetachResult.unlisten;
+      unlistenChatAudienceFn = chatAudienceResult.unlisten;
     },
 
     async stop() {
@@ -477,9 +474,9 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         await unlistenChatMessageFn();
         unlistenChatMessageFn = null;
       }
-      if (unlistenAgentDetachFn) {
-        await unlistenAgentDetachFn();
-        unlistenAgentDetachFn = null;
+      if (unlistenChatAudienceFn) {
+        await unlistenChatAudienceFn();
+        unlistenChatAudienceFn = null;
       }
     },
   };

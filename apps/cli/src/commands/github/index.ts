@@ -8,7 +8,7 @@ export function registerGithubCommands(program: Command): void {
     .command("github")
     .description(
       "GitHub entity attention — follow / unfollow / following. Follow wires an entity's webhook events " +
-        "into the current chat; unfollow declares the task's attention span over. One line, one room: a " +
+        "into the current chat; unfollow explicitly stops this chat from tracking the entity. One line, one room: a " +
         "(human, delegate) line lives in exactly one chat (409 → --rebind moves it, never duplicates).",
     );
   registerGithubFollowCommand(github);

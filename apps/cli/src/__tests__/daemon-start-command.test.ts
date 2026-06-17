@@ -9,9 +9,11 @@ const clientMocks = vi.hoisted(() => ({
   configureClientLoggerForService: vi.fn(),
   discoverClaudeCodeSkills: vi.fn(),
   probeCapabilities: vi.fn(),
+  reprobeOnReconnect: vi.fn(),
 }));
 
 const coreMocks = vi.hoisted(() => ({
+  CapabilityRefresher: vi.fn(),
   ClientRuntime: vi.fn(),
   createApiNameResolver: vi.fn(),
   createExecuteUpdate: vi.fn(),
@@ -79,6 +81,12 @@ let runtimeInstance: {
   addAgent: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
   watchAgentsDir: ReturnType<typeof vi.fn>;
+  onReconnect: ReturnType<typeof vi.fn>;
+};
+let refresherInstance: {
+  start: ReturnType<typeof vi.fn>;
+  onReconnect: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
 };
 
 beforeEach(() => {
@@ -99,6 +107,10 @@ beforeEach(() => {
   stderrSpy.mockClear();
 
   clientMocks.probeCapabilities.mockResolvedValue({ "claude-code": { state: "ok" } });
+  clientMocks.reprobeOnReconnect.mockResolvedValue({
+    capabilities: { "claude-code": { state: "ok" } },
+    mode: "revalidate",
+  });
   clientMocks.discoverClaudeCodeSkills.mockResolvedValue([{ name: "review", description: "Review code." }]);
   coreMocks.loadCredentials.mockReturnValue({ refreshToken: "refresh" });
   coreMocks.isServiceSupported.mockReturnValue(false);
@@ -127,8 +139,16 @@ beforeEach(() => {
     watchAgentsDir: vi.fn(() => {
       throw new Error("stop after watch");
     }),
+    onReconnect: vi.fn(),
   };
   coreMocks.ClientRuntime.mockImplementation(() => runtimeInstance);
+
+  refresherInstance = {
+    start: vi.fn(async () => undefined),
+    onReconnect: vi.fn(),
+    stop: vi.fn(),
+  };
+  coreMocks.CapabilityRefresher.mockImplementation(() => refresherInstance);
 });
 
 afterEach(() => {
@@ -156,6 +176,12 @@ async function runStart(args: string[] = []): Promise<unknown> {
 
 function output(): string {
   return stderrSpy.mock.calls.map((call) => String(call[0])).join("");
+}
+
+async function flushAsync(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe("daemon start command", () => {
@@ -249,9 +275,14 @@ describe("daemon start command", () => {
     );
     expect(runtimeInstance.addAgent).toHaveBeenCalledWith("nova", expect.objectContaining({ agentId: "agent-1" }));
     expect(runtimeInstance.start).toHaveBeenCalled();
-    expect(coreMocks.uploadClientCapabilities).toHaveBeenCalledWith(
-      expect.objectContaining({ clientId: "client_1234abcd", capabilities: { "claude-code": { state: "ok" } } }),
+    // Capability refresh is owned by the refresher: it is seeded with the
+    // startup probe snapshot, wired to reconnect, and started (which uploads
+    // the snapshot and arms the background poll).
+    expect(coreMocks.CapabilityRefresher).toHaveBeenCalledWith(
+      expect.objectContaining({ initial: { "claude-code": { state: "ok" } } }),
     );
+    expect(runtimeInstance.onReconnect).toHaveBeenCalledWith(expect.any(Function));
+    expect(refresherInstance.start).toHaveBeenCalled();
     expect(coreMocks.listPinnedAgents).toHaveBeenCalledWith({
       serverUrl: "https://first-tree.example",
       accessToken: "access-token",
@@ -261,6 +292,20 @@ describe("daemon start command", () => {
     );
     expect(runtimeInstance.watchAgentsDir).toHaveBeenCalledWith(join(home, "config", "agents"));
     expect(output()).toContain("Error: stop after watch");
+  });
+
+  it("routes the runtime's reconnect callback into the capability refresher", async () => {
+    await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+
+    // start.ts no longer re-probes inline; it hands the runtime's reconnect
+    // signal to the refresher (whose probe/upload/dedup behavior is covered by
+    // capability-refresh.test.ts).
+    const reconnect = runtimeInstance.onReconnect.mock.calls[0]?.[0];
+    if (typeof reconnect !== "function") throw new Error("Reconnect callback was not registered");
+
+    expect(refresherInstance.onReconnect).not.toHaveBeenCalled();
+    reconnect();
+    expect(refresherInstance.onReconnect).toHaveBeenCalledTimes(1);
   });
 
   it("skips skill upload for stale local aliases that are not pinned to this client", async () => {
@@ -309,7 +354,6 @@ describe("daemon start command", () => {
   it("continues when best-effort reconciliation and uploads fail", async () => {
     coreMocks.migrateLocalAgentDirs.mockRejectedValueOnce(new Error("rename failed"));
     coreMocks.reconcileLocalRuntimeProviders.mockRejectedValueOnce(new Error("runtime probe failed"));
-    coreMocks.uploadClientCapabilities.mockRejectedValueOnce(new Error("capabilities failed"));
     clientMocks.discoverClaudeCodeSkills.mockRejectedValueOnce(new Error("skill scan failed"));
 
     await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
@@ -317,7 +361,6 @@ describe("daemon start command", () => {
     const text = output();
     expect(text).toContain("agent-dir migration skipped: rename failed");
     expect(text).toContain("runtime-provider reconcile skipped: runtime probe failed");
-    expect(text).toContain("capabilities upload skipped: capabilities failed");
     expect(text).toContain("skills upload skipped: skill scan failed");
   });
 

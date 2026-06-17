@@ -19,14 +19,15 @@
  * of `addChatParticipants`, `recomputeChatWatchers`, or any other ad-hoc
  * speaker-row write are still responsible.
  *
- * Cross-instance correctness: not handled here. The PG NOTIFY layer
- * already broadcasts message events to every replica; each replica's
- * audience cache is independently invalidated by its own
- * service-layer mutations on chats it routes traffic for. For
- * cross-replica participant changes to invalidate this cache, route
- * the mutation through the same replica that hosts the WS connection
- * (sticky routing) or add a dedicated `chat:audience` PG NOTIFY in
- * a follow-up.
+ * Cross-instance correctness: handled via a fan-out dispatcher.
+ * `invalidateChatAudience` drops the LOCAL replica's entry AND fires a
+ * registered dispatcher (wired at boot to a `chat_audience_events` PG
+ * NOTIFY) so every other replica drops its entry too. Each replica's
+ * NOTIFY listener calls `invalidateChatAudienceLocal` — the local-only
+ * variant — so the fan-out cannot loop. Without this, a membership change
+ * made on replica A would leave replica B (hosting a viewer's admin WS)
+ * serving a stale audience — and silently dropping that member's
+ * `chat:message` pushes — until the entry aged out after TTL_MS.
  */
 
 import { sql } from "drizzle-orm";
@@ -34,6 +35,22 @@ import type { Database } from "../db/connection.js";
 import { createLogger } from "../observability/index.js";
 
 const log = createLogger("ChatAudienceCache");
+
+// Cross-replica fan-out hook. Registered once at boot (see app.ts) with a
+// function that issues the `chat_audience_events` PG NOTIFY. Left null in
+// unit tests and single-process contexts, where the local drop is enough.
+type AudienceInvalidationDispatcher = (chatId: string) => void;
+let dispatcher: AudienceInvalidationDispatcher | null = null;
+
+/** Wire the cross-replica fan-out (the PG NOTIFY publisher). Call once at boot. */
+export function registerChatAudienceDispatcher(fn: AudienceInvalidationDispatcher): void {
+  dispatcher = fn;
+}
+
+/** Drop the cross-replica fan-out hook (test teardown). */
+export function resetChatAudienceDispatcher(): void {
+  dispatcher = null;
+}
 
 const TTL_MS = 5_000;
 const MAX_ENTRIES = 1024;
@@ -75,7 +92,24 @@ export async function getCachedAudience(db: Database, chatId: string): Promise<S
 /** Drop the cached audience for a chat. Called from participant-
  *  mutation paths after their transaction commits, so the next
  *  `chat:message` dispatch hits the DB and reflects the new
- *  membership instead of serving a stale TTL window. */
+ *  membership instead of serving a stale TTL window. Also fans the
+ *  invalidation to every other replica via the registered dispatcher so
+ *  the replica hosting a viewer's admin WS doesn't keep a stale audience. */
 export function invalidateChatAudience(chatId: string): void {
+  cache.delete(chatId);
+  if (dispatcher) {
+    try {
+      dispatcher(chatId);
+    } catch {
+      // best-effort fan-out — a miss just means the remote replica's entry
+      // ages out after TTL_MS instead of being dropped immediately.
+    }
+  }
+}
+
+/** Drop the cached audience for a chat on THIS replica only — no cross-replica
+ *  fan-out. Used by the `chat_audience_events` NOTIFY listener so a fanned
+ *  invalidation cannot re-broadcast and loop. */
+export function invalidateChatAudienceLocal(chatId: string): void {
   cache.delete(chatId);
 }

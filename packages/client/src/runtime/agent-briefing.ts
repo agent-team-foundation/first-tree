@@ -73,7 +73,7 @@ export type BuildAgentBriefingOptions = {
  *        intro · Working Directory · Source Repositories · Worktrees ·
  *        Communication · Workspace Collaboration · GitHub Entity Attention ·
  *        Asking Humans · Chat Topic & Description · CLI Overview
- *   5. `# Required Reading (First Tree Managed)` — tree-bound only; unconditional load of `first-tree` + `first-tree-context`
+ *   5. `# Required Reading (First Tree Managed)` — tree-bound only; unconditional load of `first-tree-write`
  *   6. `# Context Tree (First Tree Managed)`   — per binding, with subsections:
  *        Core Model · Reading the Tree · Writing the Tree · Tree Location
  *   7. `# Skills (First Tree Managed)`         — Team Skills (if any) + First Tree Family
@@ -111,8 +111,8 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   // `# Required Reading` — sits AFTER `# Working in First Tree` so the
   // agent first reads the inline workspace-collab basics (chat send,
   // working directory, communication contract) it needs to operate at
-  // all, then hits the hard mandate to load `first-tree` and
-  // `first-tree-context` before doing any real work. Placing it
+  // all, then hits the hard mandate to load `first-tree-write`
+  // before doing any real work. Placing it
   // immediately before `# Context Tree` also keeps the mandate adjacent
   // to the content domains the two skills cover. Gated on
   // `contextTreePath !== null` for the same reason `skillsSection`
@@ -258,7 +258,7 @@ prompt.*`,
 // --- # Required Reading -----------------------------------------------------
 
 /**
- * Hard mandate that the agent load `first-tree` and `first-tree-context`
+ * Hard mandate that the agent load `first-tree-write`
  * before doing any non-trivial work, regardless of whether the user
  * mentioned chat / context keywords that would otherwise trigger
  * progressive disclosure.
@@ -266,13 +266,7 @@ prompt.*`,
  * Rationale: the inline briefing is a routing index, not a substitute. The
  * skill payloads carry rules that are NOT duplicated here:
  *
- *  - `first-tree` ships the three-principal model, the Communication
- *    Principles in full (decision guide / courtesy-send guard /
- *    channel-binary substitution), the Hosting-Daemon mental model
- *    and its do-not-stop-yourself invariant, the CLI Namespace Map,
- *    and the mandatory pre-task hygiene (workspace binding check /
- *    tree HEAD freshness / role-fork).
- *  - `first-tree-context` ships the Context Tree concept model, the
+ *  - `first-tree-write` ships the Context Tree concept model, the
  *    Source-System Boundary, the authorship read-discipline, the Hard
  *    Rules 1-7 (default to not writing / read before write / smallest
  *    correct edit / no diffs / verify gate / ownership through humans /
@@ -287,44 +281,31 @@ prompt.*`,
  */
 function requiredReadingSection(contextTreePath: string | null, workspacePath: string): string | null {
   if (contextTreePath === null) return null;
-  const firstTreeSkillPath = `${workspacePath}/.agents/skills/first-tree/SKILL.md`;
-  const contextSkillPath = `${workspacePath}/.agents/skills/first-tree-context/SKILL.md`;
+  const writeSkillPath = `${workspacePath}/.agents/skills/first-tree-write/SKILL.md`;
   return `# Required Reading (First Tree Managed)
 
 Before responding to any non-trivial instruction in this chat, you MUST
-load both skills below — loading them **is** the first step of the
-pre-task hygiene the \`first-tree\` skill itself describes. The
-\`# Working in First Tree\` section above carries the minimum
-mechanics you need to operate at all (chat send, working directory,
-CLI surface); the skills below carry the durable rules in full, with
-the inline briefing only summarising the slices needed for those
-workspace-collab basics.
-
-1. **\`first-tree\`** — what First Tree is, the three-principal model
-   (Server / Client / Agent), the Communication Principles in full,
-   the Hosting-Daemon mental model (and its do-not-stop-yourself
-   invariant), the CLI Namespace Map, and the mandatory pre-task
-   hygiene (workspace binding check / tree HEAD freshness / role-fork).
-2. **\`first-tree-context\`** — what a Context Tree is, the
-   source-system boundary, authorship read-discipline, and the Hard
-   Rules + Double Test that govern every tree write.
+load **\`first-tree-write\`** before acting. The \`# Working in First Tree\`
+section above carries the minimum mechanics you need to operate at all
+(chat send, working directory, CLI surface); the skill carries the
+durable Context Tree concept model, source-system boundary, authorship
+read-discipline, and the Hard Rules + Double Test that govern every
+tree write.
 
 If your runtime does not automatically inject the full skill body after
-selecting a skill from the skill listing, read the local payload files
+selecting a skill from the skill listing, read the local payload file
 directly before acting:
 
-- \`${firstTreeSkillPath}\`
-- \`${contextSkillPath}\`
+- \`${writeSkillPath}\`
 
-These two are unconditional. The remaining First Tree skills
-(\`first-tree-read\`, \`first-tree-sync\`) load on demand based on the
+This skill is unconditional. The remaining First Tree skills
+(\`first-tree-read\`, \`first-tree-seed\`) load on demand based on the
 task signal as listed in the First Tree Family map below.
 
-Skipping either skill costs you the daemon-lifecycle invariants, the
-full Communication Principles, the source-system boundary, and the
-write-side Hard Rules + Double Test — content the inline briefing
-either omits or only summarises. Acting without them is the #1
-source of advice that conflicts with reality.`;
+Skipping it costs you the source-system boundary and the write-side
+Hard Rules + Double Test — content the inline briefing only summarises.
+Acting without it is the #1 source of advice that conflicts with
+reality.`;
 }
 
 // --- # Working in First Tree -------------------------------------------------
@@ -346,17 +327,9 @@ You are running inside **First Tree**, a messaging platform for agent teams.
 - Messages from other team members arrive as your prompt input. Each message
   has a \`[From: <agent-name>]\` header — that name is what you pass back to
   \`chat send\`.
-- **Your output stream is your reasoning trace** — think, plan, and narrate
-  there freely as you work. It runs on a separate channel from \`chat send\`.
-  (Transitional system behavior: a non-empty final output is currently
-  mirrored into chat history as a silent \`agent-final-text\` row that does
-  NOT wake other agents. The mirror is on the runtime-retirement track
-  (first-tree#941); the future direction is two fully decoupled channels
-  with no mirror at all. Today the mirror is not a reach path — \`chat
-  send\` is.)
-- **To reach a teammate (human or agent), use \`${bin} chat send <name>\`** —
-  this is the only delivery path you should rely on. Every message you want
-  a teammate to see goes through it.
+- **To make an agent act, use \`${bin} chat send <name>\`.** Reach a human with
+  \`${bin} chat ask <human>\` (decisions) or \`${bin} chat update --description\`
+  (progress), not \`chat send\` — the server rejects a \`chat send\` to a human.
 - **Don't fire a courtesy \`chat send\`.** Not every wake-up needs one back.
   If after reasoning there's nothing new for any teammate, end the turn
   without sending — a courteous "got it" between two agents is how loops
@@ -459,13 +432,124 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
     "   `origin/<default>` is current.",
     "4. **Read through a worktree, not the clone path.** A bare clone has no",
     "   files to read. To read source — `grep`, `cat`, `git log`, or a",
-    "   shipped skill scan (`first-tree-seed`, `first-tree-sync`) — create a",
+    "   shipped skill scan (`first-tree-seed`) — create a",
     "   read worktree off `origin/<default>` (or the pinned `ref`), read",
     "   inside it, and remove it when done. To write, create a task worktree",
     "   on a new branch. Both flows are in `## Worktrees`.",
     "5. **Credential failures are reportable events** — if clone/fetch fails",
     "   with an auth error, tell a human in the chat what failed and continue",
     "   with what you have locally; do not retry silently.",
+  );
+  lines.push(
+    "",
+    "**One-time legacy-layout migration — do this once, and only in your",
+    "OWN workspace.** Some agents were first provisioned with a single",
+    "**non-bare** checkout as an immediate child of the workspace root",
+    "(`<workspace>/<source-name>`) instead of a bare clone under",
+    "`source-repos/`, often with task worktrees hanging off it. If you find",
+    "one, migrate it — never reach into a sibling agent's workspace. Create",
+    "the bare clone per **Ensure** above (its new home is",
+    "`<workspace>/source-repos/<source-name>`), then retire the legacy",
+    "checkout.",
+    "",
+    "Retiring is irreversible, so clear **two** bars in order before",
+    "touching anything. First a **path preflight** that proves the target is",
+    "exactly the intended legacy checkout — derived from the manifest, not a",
+    "hand-typed path. Only if that passes do the **git-state gates** prove",
+    "the checkout holds no unmigrated work. The preflight matters because a",
+    "mistaken target (the workspace root, `context-tree`, `source-repos`,",
+    "`worktrees`, `.first-tree`, an unbound sibling, or another repo that is",
+    "also clean + merged) would otherwise sail through the git-state gates",
+    "and get the wrong data quarantined.",
+    "",
+    "Path preflight — resolve the workspace root from its manifest, derive",
+    "`$legacy` from the declared source name, and validate it. The per-source",
+    "calls at the end are baked from your manifest; act only on a `$legacy`",
+    "that printed `ok:`:",
+    "",
+    "```bash",
+    "# Resolve the workspace root from its manifest — never hand-type it.",
+    "WS=; d=$PWD",
+    'while [ "$d" != / ]; do',
+    '  [ -f "$d/.first-tree/workspace.json" ] && { WS=$(realpath "$d"); break; }',
+    '  d=$(dirname "$d")',
+    "done",
+    '[ -n "$WS" ] || echo "stop: no .first-tree/workspace.json at or above $PWD"',
+    "",
+    "# Canonicalize a GitHub remote URL to host/path so the `.git` suffix and",
+    "# the https/http/ssh/git/scp transport forms all compare equal (the same",
+    "# canonical match the reuse guard above requires, per #1086).",
+    "canon_url() {",
+    "  printf '%s' \"$1\" | sed -E 's#\\.git$##; s#^(ssh|git|https?)://##; s#^[^/@]*@##; s#^([^/:]+):#\\1/#'",
+    "}",
+    "",
+    "# Validate ONE candidate. Args: <source-name> <declared-origin-url>.",
+    "# Clears $legacy on entry and republishes it only after EVERY gate passes,",
+    "# so a rejected/failed call cannot leave a stale target for the gates below.",
+    "assert_legacy_target() {",
+    "  name=$1 want=$2 legacy= candidate=$WS/$name",
+    "  case $name in",
+    "    ''|.|..|*/*) echo \"reject: bad source name '$name'\"; return 1;;",
+    "    .first-tree|source-repos|worktrees|context-tree)",
+    "      echo \"reject: reserved workspace dir '$name'\"; return 1;;",
+    "  esac",
+    '  [ -e "$candidate" ] || { echo "skip: nothing at $candidate"; return 1; }',
+    '  [ -L "$candidate" ] && { echo "reject: $candidate is a symlink"; return 1; }',
+    '  real=$(realpath "$candidate")',
+    '  [ "$real" = "$WS" ] && { echo "reject: target is the workspace root"; return 1; }',
+    '  [ "$(dirname "$real")" = "$WS" ] \\',
+    '    || { echo "reject: $real is not an immediate child of $WS"; return 1; }',
+    '  top=$(git -C "$candidate" rev-parse --show-toplevel 2>/dev/null) \\',
+    '    || { echo "reject: $candidate is not a git checkout"; return 1; }',
+    '  [ "$top" = "$real" ] || { echo "reject: $candidate sits inside another repo ($top)"; return 1; }',
+    '  [ "$(git -C "$candidate" rev-parse --is-bare-repository 2>/dev/null)" = false ] \\',
+    '    || { echo "reject: $candidate is bare, not a flat checkout"; return 1; }',
+    '  got=$(git -C "$candidate" remote get-url origin 2>/dev/null)',
+    '  [ "$(canon_url "$got")" = "$(canon_url "$want")" ] \\',
+    "    || { echo \"reject: origin '$got' != declared '$want'\"; return 1; }",
+    "  legacy=$candidate",
+    '  echo "ok: $legacy"',
+    "}",
+    "",
+    "# One call per declared source — values baked from your manifest:",
+  );
+  for (const repo of sourceRepos) {
+    const sourceName = repo.absolutePath.split("/").filter(Boolean).pop() ?? "";
+    lines.push(`assert_legacy_target ${shellQuote(sourceName)} ${shellQuote(repo.url)}`);
+  }
+  lines.push(
+    "```",
+    "",
+    "Git-state gates — run only for a `$legacy` the preflight passed (re-run",
+    "`assert_legacy_target` to set `$legacy`). Clear the same zero-data-loss",
+    "bar for **everything** the retire would destroy: its linked worktrees,",
+    "its own working tree, AND any local-only history in its `.git` (branches",
+    "checked out in no worktree, plus stashes). If any check below is",
+    "non-empty, stop — push / migrate that work or ask a human:",
+    "",
+    "```bash",
+    'git -C "$legacy" fetch origin        # refresh origin/<default> so the merge checks are real',
+    'git -C "$legacy" worktree list       # the checkout + every worktree on it',
+    "# each LINKED worktree — clean + already merged, then drop it:",
+    "git -C <wt> status --porcelain       # empty ⇒ no uncommitted work",
+    'git -C "$legacy" merge-base --is-ancestor <wt-HEAD> origin/<default>  # exit 0 ⇒ already merged',
+    'git -C "$legacy" worktree remove <wt>  # repeat per worktree; refuses if dirty',
+    "# the checkout ITSELF — `worktree remove` won't touch a main tree, and the",
+    "# move below also carries local-only refs/stashes; clear the full bar by hand:",
+    'git -C "$legacy" status --porcelain  # empty ⇒ no uncommitted work',
+    'git -C "$legacy" merge-base --is-ancestor HEAD origin/<default>  # exit 0 ⇒ HEAD merged',
+    'git -C "$legacy" branch --no-merged origin/<default>  # empty ⇒ no unmerged local branch',
+    'git -C "$legacy" stash list          # empty ⇒ no stashed work',
+    "# Quarantine, don't delete — keep the retire reversible:",
+    'mv -- "$legacy" "$legacy.retired.$(date +%Y%m%d%H%M%S)"  # only after ALL of the above are clear',
+    "```",
+    "",
+    "The quarantined `*.retired.*` directory is harmless to leave in place;",
+    "the irreversible `rm -rf` of it is a separate step a human confirms once",
+    "they are satisfied nothing was lost.",
+    "",
+    "The legacy `context-tree` **symlink** migrates the same one-time way —",
+    "see `## Tree Location` (remove the symlink only, then clone).",
   );
   return lines.join("\n");
 }
@@ -520,16 +604,16 @@ is the base to branch from instead of \`origin/main\`.
 function communicationBlock(bin: string): string {
   return `## Communication
 
-\`chat send\` is how you reach every teammate — human or agent. Decision
-guide (based on participant \`type\` in the Current Chat Context block):
+\`chat send\` reaches an **agent**; reach a human with \`chat ask\` (decisions)
+or \`chat update --description\` (progress). Decision guide (based on
+participant \`type\` in the Current Chat Context block):
 
-- **Reaching a human in this chat** — plain reply / status → \`${bin} chat
-  send <name> "..."\`. Every reply directed at a human in this chat goes
-  through \`chat send\`.
-- **Asking a human** for a decision, approval, or answer → \`${bin} chat send
-  <name> --request --question "..."\` (see \`## Asking Humans\`). This raises
-  a tracked open question (red-dot / open-request count) the plain send
-  does not.
+- **Asking a human** for a decision, approval, or answer → \`${bin} chat ask
+  <human> "<background + the question>"\` (see \`## Asking Humans\`). The message
+  body IS the ask. This raises a tracked open question (red-dot / open-request
+  count) and blocks the chat for them until they answer.
+- **Reporting progress to a human** → \`${bin} chat update --description
+  "..."\` (see \`## Chat Topic & Description\`).
 - **Reaching an agent to make them act** → \`${bin} chat send <name> "..."\`.
   Agents only act on explicit \`chat send\`. If the agent is not already in
   this chat, first run \`${bin} chat invite <name>\`, then send normally. A
@@ -541,9 +625,8 @@ guide (based on participant \`type\` in the Current Chat Context block):
   only remaining input, end the turn and wait to be woken; do not poll status
   or escalate on delayed replies alone.
 - **Don't fire a courtesy \`chat send\`.** If after reasoning there is nothing
-  new for any teammate, end the turn without sending. Your output stream
-  outside \`chat send\` is your reasoning trace — use it freely; the list
-  above is exhaustive for the *send* side.
+  new for any teammate, end the turn without sending; the list above is
+  exhaustive for the *send* side.
 
 Every \`chat send\` names a recipient — there is no no-mention send. A group
 chat rejects a message that addresses no one; pass \`<name>\` to @mention the
@@ -553,40 +636,24 @@ recipient.`;
 function workspaceCollaborationBlock(bin: string): string {
   return `## Workspace Collaboration
 
-For the full \`chat send\` / \`chat invite\` CLI usage — every mode
-(\`--request\` / \`--question\`), syntax,
-markdown / stdin, reaching non-members, mention resolution — load the top-level
-**\`first-tree\` skill** (and its \`references/agent-communication.md\`).
-The skill's \`description\` triggers progressive disclosure whenever the
-user mentions chat, daemon, agent config, or anything related to First
-Tree.
+The Communication block above is the in-agent contract for \`chat send\`,
+\`chat ask\`, and \`chat update\`: agent-directed sends, human-directed
+asks, no courtesy sends, and raw markdown bodies. For flags, stdin
+forms, history, invite, and related command details, use
+\`${bin} chat --help\` and the relevant subcommand help.
 
-Substitute \`${bin}\` for the literal \`first-tree\` in any examples you
-read there — this agent's CLI binary on PATH is \`${bin}\`. **Tree-less
-agents** (no Context Tree binding) won't have \`first-tree\` installed on
-disk; the Communication block above is inline here for exactly that
-reason — the sunk content is the long CLI mechanics, not the routing
-rules.`;
+Substitute this agent's CLI binary, \`${bin}\`, anywhere external docs
+show the literal \`first-tree\`.`;
 }
 
 // Inline (not skill-only) on purpose: the follow-after-create default has to
 // fire at PR/issue-creation time, and progressive disclosure of the
-// `first-tree-github` skill only triggers when the agent already *thinks*
-// about following. Without this always-present rule, agents create entities
-// and never wire their event streams (the session-event auto-binder was
-// deliberately removed in #979 — explicit declaration is the only entrance).
-function githubAttentionBlock(bin: string, treeBound: boolean): string {
-  // Tree-less agents have no First Tree skill payloads on disk
-  // (`installFirstTreeIntegration` is gated on the tree binding), so the
-  // full-guide pointer must not name the skill for them — the same
-  // discipline `requiredReadingSection` and `firstTreeFamilyMap` follow.
-  const fullGuide = treeBound
-    ? `For the full decision guide — upstream-dependency follows, the \`409\` /
-\`--rebind\` conflict flow, and the error contract — load the
-\`first-tree-github\` skill.`
-    : `For the full flag surface and conflict handling, see
-\`${bin} github follow --help\` / \`${bin} github unfollow --help\`.`;
-
+// Inline on purpose: the follow-after-create default has to fire at
+// PR/issue-creation time. Without this always-present rule, agents create
+// entities and never wire their event streams (the session-event auto-binder
+// was deliberately removed in #979 — explicit declaration is the only
+// entrance).
+function githubAttentionBlock(bin: string, _treeBound: boolean): string {
   return `## GitHub Entity Attention
 
 Creating a PR or issue **never** follows it — no creation path
@@ -600,11 +667,14 @@ and there is no auto-binding. Declaring the dependency is your job:
 
   Skip the follow only when the entity is clearly unrelated to this
   chat's task.
-- **Unfollow when the human explicitly asks to stop tracking** the entity
-  (\`${bin} github unfollow <entity>\`), or when the task's attention span
-  on it has genuinely closed.
+- **Unfollow only when the human explicitly asks to stop tracking** the
+  entity (\`${bin} github unfollow <entity>\`). Do not proactively unfollow
+  merely because a PR or Issue completed, merged, or closed; terminal
+  entities may still carry aftermath this chat should hear.
 
-${fullGuide}`;
+For the full flag surface, upstream-dependency follows, \`409\` /
+\`--rebind\` conflict handling, and the error contract, see
+\`${bin} github follow --help\` / \`${bin} github unfollow --help\`.`;
 }
 
 function askingHumansBlock(): string {
@@ -612,70 +682,86 @@ function askingHumansBlock(): string {
   return `## Asking Humans
 
 When you need something only a human can give — a decision, sign-off, or an
-answer — ask with a **structured request** instead of folding the question
-into a plain \`chat send\`. A request raises a tracked open question on the
-human's side (red-dot / open-question count) that stays until they answer;
-a plain send does not.
+answer — use **\`chat ask\`** instead of folding the question into a plain send.
+\`chat ask\` raises a tracked open question on the
+human's side (red-dot / open-question count) AND **blocks that chat for the
+human**: their UI pins the question and hides every message after it until
+they answer, so the ask cannot be scrolled past. When several questions are
+open for them, they clear them oldest-first.
 
 \`\`\`bash
-${bin} chat send <human> --request \\
-  "<background/context the human needs to decide>" \\
-  --question "<the single ask>" \\
-  --option "<choice A>" --option "<choice B>"
+${bin} chat ask <human> "<background/context + the single question>"
 \`\`\`
 
-The body carries the context; \`--question\` is **only** the ask; \`--option\`
-(repeatable) offers explicit choices. A request is **human-directed only** — the
-server rejects \`--request\` unless the recipient is a human member, so you cannot
-open a tracked question against another agent (reach agents with a plain \`chat
-send <name>\`).
+The message **body IS the ask** — the background the human needs plus the
+question itself. \`chat ask\` is **human-directed** — the server rejects it
+unless the recipient is a human member, so you cannot open a tracked question
+against another agent (reach agents with \`chat send\`).
 
-### When the human replies — discuss, then resolve
+### Prefer a free-text answer; add options only when each is a clean pick
 
-The human's reply comes back as an ordinary message. It does **not** clear the
-red dot on its own, and neither does any plain reply you send back: replying
-threads onto the question (a focused "chat about this" exchange) but leaves it
-**open** so you can clarify back-and-forth without prematurely marking it
-answered. The open question stays tracked until you **explicitly resolve** it.
-
-Once you've got what you need, judge the reply and close the loop with one of:
+By DEFAULT ask a free-text question — **omit \`--options\`**. Dense option lists
+are hard to choose from: when the choices carry a lot of information or overlap
+in meaning, the human cannot weigh them at a glance, so a free-text answer is
+the better ask.
 
 \`\`\`bash
-# You have the answer — resolve it and clear their red dot (body = the answer):
-${bin} chat send <human> "<the confirmed answer>" --answer <requestId>
-
-# The question no longer applies — withdraw it (body = the reason). Re-asking
-# opens a NEW question; it never auto-supersedes the old one:
-${bin} chat send <human> "<reason>" --close <requestId>
+${bin} chat ask <human> "<background + the question>" \\
+  --options '[{"label":"Ship","description":"Roll to 20% now"},{"label":"Hold","description":"Wait 24h"}]'
 \`\`\`
 
-\`<requestId>\` is the id of your original \`--request\` message. Only you (the
-asker) or the human you asked may resolve it; if they answer cleanly in the web
-UI, it's already cleared — no action needed.
+Add \`--options\` (a JSON array of 2–4 \`{label, description, preview?}\`) **only**
+when every option is semantically single — a short, unambiguous,
+mutually-exclusive pick (e.g. Approve / Hold, Friday / Monday). Add
+\`--multi-select\` (requires \`--options\`) to let them pick more than one. If an
+option needs a clause to be understood, or two options could both be "right",
+drop the options and let them answer in free text.
 
-Reach for a request on any real fork: needs approval, ambiguous requirements, a
-safety-sensitive action, or any change to core data structures or the database.`;
+### How it resolves
+
+**You only ask — the human resolves.** The human answers in their web UI, and
+**any answer resolves the question**: picking an option OR typing free text both
+clear the red dot and unblock the chat. Their answer comes back to you as the
+resolving reply — the question does not linger in a separate "discuss" state. An
+agent **cannot** mark a question answered or close it (there is no resolve
+command); resolution is entirely the human's web answer. If their answer pushes
+back or you need more, **re-ask**: a new \`chat ask\` opens a fresh question (and a
+fresh block). Re-asking never auto-supersedes the old one; if a prior ask is now
+moot, just leave it and re-ask (the human works open questions oldest-first).
+
+Use \`chat ask\` ONLY for a decision that is **genuinely the user's to make** AND
+**cannot be settled from the request, the code, or a reasonable default** — a
+product/scope fork, a safety-sensitive or irreversible action, or ambiguous
+requirements whose branches differ materially. Do NOT use it for progress or
+permission checks ("is the plan ready?", "can I continue?", "does this look
+right?"): decide, proceed, and report status via \`chat update --description\`.`;
 }
 
 function chatTopicBlock(bin: string): string {
   return `## Chat Topic & Description
 
 Each chat carries two pieces of self-describing metadata, both set
-through the **same** \`chat set-topic\` command:
+through the **\`chat update\`** command — topic and description update
+independently:
 
 - **topic** — a short (≤ 30 chars) label the workspace chat list shows,
   e.g. "调研 chat rename 方案" or "本周 ship 计划".
-- **description** — a longer running summary of **what this piece of
-  work is and where it currently stands**: the paragraph you (after a
-  context reset) or a teammate reads to reconstruct the thread.
+- **description** — the chat's work summary **and** status report. It
+  serves two readers at once: you (or a teammate) reconstructing what the
+  task is and where it stands, **and** the human reading the current task
+  status. It carries the task's **background + plan + progress**, renders
+  as **Markdown**, and shows by default at the top of the chat's right
+  sidebar.
 
 Both current values appear in the "Current Chat Context" block at the
 bottom of this briefing as explicit \`Topic: <value>\` / \`Description:
 <value>\` or the sentinel \`(unset ...)\`.
 
-    ${bin} chat set-topic "<short label>"
-    ${bin} chat set-topic --description "<current state>"
-    ${bin} chat set-topic "<label>" --description "<state>"
+    ${bin} chat update --topic "<short label>"
+    ${bin} chat update --description "<task background + plan + progress>"
+    ${bin} chat update --topic "<label>" --description "<state>"
+
+(\`chat set-topic\` is a retained deprecated alias — prefer \`chat update\`.)
 
 **Only the chat's owner maintains these — and you count as the owner in
 two cases:** (a) you created the chat, or (b) no agent owner is present —
@@ -694,22 +780,24 @@ everyone (reading a description to self-locate needs no ownership).
    fallback ("first 50 chars of the first message" / "alice, bob-bot")
    is rarely distinctive — naming the chat is a cheap win.
 
-   **Once set, treat the topic as a stable anchor — do not rename it
-   casually.** Users and agents locate a specific chat by its topic, so a
-   chat that keeps changing names becomes hard to find again. Rename only
-   when the topic is genuinely wrong or misleading because the chat's
-   subject itself changed — never to track progress or reflect a passing
-   focus. Progress belongs in the description, not the topic.
+   **Once set, leave the topic unchanged.** Users and agents locate a
+   specific chat by its topic, so a stable topic helps humans find the chat
+   again quickly. Do not rename an existing topic to track progress, reflect
+   a passing focus, or restate a changed subject. Progress and current scope
+   belong in the description, not the topic.
 
-2. **(Owner) Description unset or stale → write or refresh it before ending
-   this turn.** Unlike the topic, the description is **meant to move with
-   the work** — refresh it freely as the state changes. It is the
-   **present** state, not a log — rewrite it in
-   place (the message history is the log), keep it within ~500
-   characters. It must **name the current task** so anyone scanning
-   \`${bin} chat list\` can tell from the description alone whether this
-   chat is the one their task belongs to — lead with the concrete work
-   ("reviewing PR #X"), not a vague restatement of the topic.
+2. **(Owner) Description → keep it current as a status report.** The
+   description is **meant to move with the work**, but refresh it only on
+   **substantive progress** — rewrite it in place (the message history is
+   the log), not as busywork. **If nothing substantive changed this turn,
+   keep working rather than re-touching the description.** Keep it within
+   **1500 characters** and cover the task's **background + plan +
+   progress**, leading with the concrete current task ("reviewing PR #X")
+   so anyone scanning \`${bin} chat list\` — and the human reading it as a
+   status report — knows what this is and where it stands. **Keep blockers
+   and decisions OUT of the description**: when you need a human decision,
+   sign-off, or answer, raise a \`${bin} chat ask <human>\` instead. Markdown
+   is supported (bullets, bold, links).
 
 3. **Language follows the session's working language** — Chinese
    session, Chinese description; English session, English.
@@ -741,7 +829,7 @@ to people and other agents) and **context management** (the Context Tree):
 
 | Namespace | What it owns |
 |---|---|
-| \`${bin} chat …\`   | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`set-topic\` |
+| \`${bin} chat …\`   | messaging — \`send\`, \`invite\`, \`list\`, \`history\`, \`update\` |
 | \`${bin} agent …\`  | self-introspection — \`status\`, \`session\`, \`config show\` |
 | \`${bin} daemon …\` | daemon (read-only from inside an agent) — \`status\`, \`doctor\` |
 | \`${bin} github …\` | GitHub entity attention — \`follow\` / \`unfollow\` / \`following\` an entity's event stream for the current chat |
@@ -775,7 +863,7 @@ directory; each node is a markdown file with frontmatter (\`owners\`,
 \`soft_links\`) plus the actual content.
 
 For node anatomy, ownership tiers, and soft_link navigation, load
-\`first-tree-context\`. For task-scoped file selection and operational
+\`first-tree-write\`. For task-scoped file selection and operational
 read workflow, load \`first-tree-read\`.`);
 
   blocks.push(`## Reading the Tree
@@ -831,12 +919,13 @@ guidance:
 
 | Task | Skill |
 |---|---|
-| Reflect one specific PR / doc / note into the tree | \`first-tree-context\` (Writing the Tree) |
-| Broad drift audit (no specific source attached)    | \`first-tree-sync\`  |
+| Reflect one specific PR / doc / note into the tree | \`first-tree-write\` |
 
-Do not invent ad-hoc tree edits without loading the skill — the
-operating guide covers staging, review routing, and ownership rules
-you will not remember by default.`);
+If there is no specific source artifact, there is no write task yet:
+ask for the PR, design doc, meeting note, or pasted source before
+editing the tree. Do not invent ad-hoc tree edits without loading the
+skill — the operating guide covers staging, review routing, and
+ownership rules you will not remember by default.`);
 
   if (contextTreePath) {
     const branch = contextTreeBranch ?? "main";
@@ -933,21 +1022,18 @@ function firstTreeFamilyMap(): string {
   // list against the prebuild copy script.
   return `## First Tree Family
 
-\`first-tree\` and \`first-tree-context\` are **unconditional** — load
-them on every task per \`# Required Reading\` above. The remaining
-rows load on demand: each skill's \`description\` field drives
+\`first-tree-write\` is **unconditional** — load it on every task per
+\`# Required Reading\` above. The remaining rows load on demand: each
+skill's \`description\` field drives
 progressive disclosure when you mention its domain. For general /
 harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 …) trust the auto-injected list.
 
 | Skill | Load when |
 |---|---|
-| \`first-tree\`         | unconditional (see \`# Required Reading\`) — communication principles, pre-task hygiene, CLI namespace map |
-| \`first-tree-context\` | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
+| \`first-tree-write\`   | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
-| \`first-tree-sync\`    | "is the tree up to date?" — broad drift audit, no source |
-| \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |
-| \`first-tree-github\`  | follow / unfollow a GitHub entity's event stream for the current chat — the follow-after-create DEFAULT is inline in \`## GitHub Entity Attention\` above; load for the full decision guide (upstream-dependency follows, \`409\` / \`--rebind\`, error contract) |`;
+| \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |`;
 }
 
 /**
@@ -959,11 +1045,4 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
  * between these two lists would tell agents to load a skill that isn't
  * on disk; the cross-check test in `agent-briefing.test.ts` blocks that.
  */
-export const FIRST_TREE_FAMILY_SKILL_NAMES = [
-  "first-tree",
-  "first-tree-context",
-  "first-tree-read",
-  "first-tree-sync",
-  "first-tree-seed",
-  "first-tree-github",
-] as const;
+export const FIRST_TREE_FAMILY_SKILL_NAMES = ["first-tree-write", "first-tree-read", "first-tree-seed"] as const;

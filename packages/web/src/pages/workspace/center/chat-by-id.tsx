@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ListMeChatsResponse } from "@first-tree/shared";
+import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import { getChat } from "../../../api/chats.js";
 import { joinMeChat, markMeChatRead } from "../../../api/me-chats.js";
@@ -36,6 +37,28 @@ function pickPrimaryAgent(participants: { agentId: string; type: string }[], myA
   return nonSelf[0]?.agentId ?? null;
 }
 
+function patchReadChatInCachedLists(queryClient: QueryClient, chatId: string, unreadMentionCount: number): void {
+  const cachedQueries = queryClient.getQueryCache().findAll({ queryKey: ["me", "chats"] });
+  for (const query of cachedQueries) {
+    const unreadFilter = query.queryKey[2] === "unread";
+    queryClient.setQueryData<ListMeChatsResponse>(query.queryKey, (prev) => {
+      if (!prev) return prev;
+      let changed = false;
+      const rows = prev.rows.flatMap((row) => {
+        if (row.chatId !== chatId) return [row];
+        changed = true;
+        const patched = {
+          ...row,
+          unreadMentionCount,
+          chatHasExplicitMentionToMe: false,
+        };
+        return unreadFilter && unreadMentionCount <= 0 ? [] : [patched];
+      });
+      return changed ? { ...prev, rows } : prev;
+    });
+  }
+}
+
 export function ChatByIdView({
   chatId,
   narrow,
@@ -64,10 +87,10 @@ export function ChatByIdView({
 
   const markReadMut = useMutation({
     mutationFn: () => markMeChatRead(chatId),
-    onSuccess: () => {
-      // Drop the stale unread dot from every cached filter — `["me","chats"]`
-      // is a prefix invalidation so any of the three filter buckets refetch.
-      queryClient.invalidateQueries({ queryKey: ["me", "chats"] });
+    onSuccess: (res) => {
+      const readChatId = typeof res.chatId === "string" ? res.chatId : chatId;
+      const unreadMentionCount = typeof res.unreadMentionCount === "number" ? res.unreadMentionCount : 0;
+      patchReadChatInCachedLists(queryClient, readChatId, unreadMentionCount);
     },
   });
 
@@ -141,6 +164,7 @@ export function ChatByIdView({
       <ChatView
         agentId={primaryAgent}
         chatId={chatId}
+        initialChatDetail={chatDetail}
         readOnly
         titleFallback={chatDetail?.title ?? null}
         joinAction={{
@@ -154,5 +178,13 @@ export function ChatByIdView({
     );
   }
 
-  return <ChatView agentId={primaryAgent} chatId={chatId} narrow={narrow} onShowConversations={onShowConversations} />;
+  return (
+    <ChatView
+      agentId={primaryAgent}
+      chatId={chatId}
+      initialChatDetail={chatDetail}
+      narrow={narrow}
+      onShowConversations={onShowConversations}
+    />
+  );
 }

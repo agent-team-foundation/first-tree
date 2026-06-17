@@ -3,7 +3,6 @@ import type {
   AgentType,
   AgentVisibility,
   CreateAgent,
-  RebindAgent,
   RuntimeProvider,
   UpdateAgent,
 } from "@first-tree/shared";
@@ -15,9 +14,10 @@ import {
   DEFAULT_RUNTIME_PROVIDER,
   defaultRuntimeConfigPayload,
   isReservedAgentName,
+  runtimeProviderSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
@@ -31,7 +31,6 @@ import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from ".
 import type { OrgScope } from "../scope/types.js";
 import { uuidv7 } from "../uuid.js";
 import { agentAddressableCondition, agentVisibilityCondition } from "./access-control.js";
-import { AGENT_DETACH_CHANNEL } from "./notifier.js";
 import { resolveDefaultOrgId } from "./organization.js";
 import { recomputeWatchersForAgent } from "./watcher.js";
 
@@ -128,7 +127,7 @@ function clientCapabilitiesReported(metadata: unknown): boolean {
  * `state: "unauthenticated"`. A `missing` or `error` entry is *reported* but
  * not usable, so we explicitly reject those rather than treating mere key
  * presence as support. Auth state is left to the user to fix at runtime
- * (the re-bind dialog surfaces an `unauthenticated` hint).
+ * (the new-agent dialog surfaces an `unauthenticated` hint).
  */
 function clientSupportsRuntimeProvider(metadata: unknown, provider: RuntimeProvider): boolean {
   if (!metadata || typeof metadata !== "object") return false;
@@ -591,7 +590,7 @@ export async function checkAgentNameAvailability(
  * Threading this through `getAgent`, `requireAgentAccess`, and every
  * mutation service is what keeps `runtimeState` on the wire across all
  * single-agent endpoints — see PR #571 review: the previous shape lost
- * the field on `GET /:uuid` and every PATCH/rebind/suspend/reactivate
+ * the field on `GET /:uuid` and every PATCH/suspend/reactivate
  * response, which made management surfaces (Team / Settings) read a
  * fictitious "offline" state.
  *
@@ -845,17 +844,17 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   const agent = await getAgent(db, uuid);
 
   // `clientId` is one-shot via this entry: NULL → ID is allowed (admin
-  // claiming an unbound agent for a known client). Cross-client moves go
-  // through `rebindAgent`, which runs owner / org / capability checks
-  // atomically. ID → null is never allowed.
+  // claiming an unbound agent for a known client). Once bound, an agent's
+  // client is immutable — there is no move/re-bind path. ID → null and
+  // ID → another ID are both rejected.
   if (data.clientId !== undefined) {
     if (data.clientId === null) {
       throw new BadRequestError("clientId cannot be cleared — once bound, an agent stays bound to its client");
     }
     if (agent.clientId !== null && agent.clientId !== data.clientId) {
       throw new BadRequestError(
-        "clientId is immutable through this entry — cross-client moves go through rebindAgent " +
-          "(PATCH /agents/:uuid/rebind), which runs owner / org / capability checks atomically.",
+        "clientId is immutable once set — an agent cannot be moved to another client. " +
+          "Provision a new agent on the target client instead.",
       );
     }
   }
@@ -899,6 +898,13 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   // First-set clientId (NULL → ID): validate ownership against the agent's
   // current manager. Reuses the resolveAgentClient ownership check so the
   // semantics match agent creation.
+  //
+  // With re-bind removed, this first bind is the ONLY path an unbound agent
+  // gets a computer, so it must also run the runtime-provider capability gate
+  // — createAgent runs it on the create-with-client path. Without it an agent
+  // could be bound to a client that does not report its provider (e.g. create
+  // an unbound `codex` agent, then bind it to a client reporting codex
+  // missing/error).
   if (data.clientId !== undefined && data.clientId !== null && agent.clientId === null) {
     const resolvedClientId = await resolveAgentClient(db, {
       clientId: data.clientId,
@@ -906,6 +912,13 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
       type: agent.type,
     });
     if (resolvedClientId !== null) {
+      // `agents.runtime_provider` is a text column (typed `string`); narrow it
+      // back to the RuntimeProvider union before the capability check.
+      await ensureClientSupportsRuntimeProvider(
+        db,
+        resolvedClientId,
+        runtimeProviderSchema.parse(agent.runtimeProvider),
+      );
       updates.clientId = resolvedClientId;
     }
   }
@@ -925,69 +938,6 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   const refreshed = await selectAgentRowWithRuntime(db, agent.uuid);
   if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
   return refreshed;
-}
-
-/**
- * Atomically re-bind an agent to a new client and/or runtime provider.
- *
- * Validations: agent must exist and not be human; new client must belong to
- * the same owner (manager.userId) and same organization; client must report
- * the requested runtime provider in its capabilities (skipped under `force`).
- *
- * Intended caller: PATCH /agents/:uuid/rebind. The Web "Re-bind"
- * dialog routes both same-client runtime-only switches and cross-client
- * moves through this single entry.
- *
- * Returns the agent row plus the previous client captured under the same row
- * lock as the update, so callers detach the runtime slot that this rebind
- * actually replaced.
- */
-export async function rebindAgent(db: Database, uuid: string, data: RebindAgent) {
-  return db.transaction(async (tx) => {
-    const [agent] = await tx.select().from(agents).where(eq(agents.uuid, uuid)).for("update").limit(1);
-    if (!agent || agent.status === AGENT_STATUSES.DELETED) {
-      throw new NotFoundError(`Agent "${uuid}" not found`);
-    }
-    if (agent.type === "human") {
-      throw new BadRequestError("Human agents have no runtime — they cannot be re-bound to a client.");
-    }
-    const previousClientId = agent.clientId;
-
-    const newClientId = await resolveAgentClient(tx, {
-      clientId: data.clientId,
-      managerId: agent.managerId,
-      type: agent.type,
-    });
-    if (newClientId === null) {
-      throw new BadRequestError("Rebind requires a non-null clientId.");
-    }
-
-    await ensureClientSupportsRuntimeProvider(tx, newClientId, data.runtimeProvider, { force: data.force });
-
-    const [updated] = await tx
-      .update(agents)
-      .set({
-        clientId: newClientId,
-        runtimeProvider: data.runtimeProvider,
-        updatedAt: new Date(),
-      })
-      .where(eq(agents.uuid, uuid))
-      .returning();
-
-    if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
-    if (previousClientId && previousClientId !== newClientId) {
-      await tx.execute(
-        sql`SELECT pg_notify(${AGENT_DETACH_CHANNEL}, ${JSON.stringify({
-          agentId: uuid,
-          clientId: previousClientId,
-          reason: "agent_rebound",
-        })})`,
-      );
-    }
-    const refreshed = await selectAgentRowWithRuntime(tx, uuid);
-    if (!refreshed) throw new Error("Unexpected: agent disappeared after UPDATE");
-    return { agent: refreshed, previousClientId };
-  });
 }
 
 /**

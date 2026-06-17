@@ -26,7 +26,18 @@ export {
 // Capabilities
 export { probeClaudeCodeCapability } from "./runtime/capabilities/claude-code.js";
 export { probeCodexCapability } from "./runtime/capabilities/codex.js";
-export { probeCapabilities } from "./runtime/capabilities/index.js";
+export {
+  CAPABILITY_REFRESH_BASE_MS,
+  CAPABILITY_REFRESH_MAX_MS,
+  hasNonOkProvider,
+  nextCapabilityRefreshDelayMs,
+  PROBED_RUNTIME_PROVIDERS,
+  probeCapabilities,
+  REPROBE_MAX_AGE_MS,
+  reprobeOnReconnect,
+  revalidateCapabilities,
+  shouldFullReprobe,
+} from "./runtime/capabilities/index.js";
 export type {
   AdoptOptions,
   ChildCategory,

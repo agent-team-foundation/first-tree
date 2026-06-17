@@ -34,11 +34,18 @@ function agent(input: {
   };
 }
 
-const member = (id: string, agentId: string, displayName: string, role = "member") => ({
+const member = (
+  id: string,
+  agentId: string,
+  displayName: string,
+  role = "member",
+  avatarUrl: string | null = null,
+) => ({
   id,
   agentId,
   username: displayName.toLowerCase(),
   displayName,
+  avatarUrl,
   role,
   createdAt: "2026-01-01T00:00:00.000Z",
   lastActiveAt: null,
@@ -109,6 +116,47 @@ describe("buildTeamData", () => {
     const never = humans.find((h) => h.id === "member-2");
     expect(active?.lastActiveLabel).toBeTruthy();
     expect(never?.lastActiveLabel).toBeNull();
+  });
+
+  it("passes member avatarUrl through to the human row", () => {
+    const avatarUrl = "https://avatars.example.test/u/ada.png";
+    const { humans } = buildTeamData({
+      ...base,
+      members: [member("member-1", "human-1", "Ada", "member", avatarUrl)],
+      agents: [],
+      agentByUuid: new Map(),
+    });
+    expect(humans[0]?.avatarUrl).toBe(avatarUrl);
+  });
+
+  it("passes the manager member avatarUrl through to agent owner rows", () => {
+    const avatarUrl = "https://avatars.example.test/u/ada.png";
+    const owned = agent({ uuid: "owned", type: "agent", displayName: "Owned", managerId: "member-1" });
+    const missingOwner = agent({
+      uuid: "missing-owner",
+      type: "agent",
+      displayName: "Missing Owner",
+      managerId: "member-missing",
+    });
+    const { publicAgents } = buildTeamData({
+      ...base,
+      members: [member("member-1", "human-1", "Ada", "member", avatarUrl)],
+      agents: [owned, missingOwner],
+      agentByUuid: new Map(),
+    });
+    expect(publicAgents.find((row) => row.agent.uuid === "owned")?.managerAvatarUrl).toBe(avatarUrl);
+    expect(publicAgents.find((row) => row.agent.uuid === "missing-owner")?.managerAvatarUrl).toBeNull();
+  });
+
+  it("keeps agent owner avatarUrl null when the manager member has no avatar", () => {
+    const owned = agent({ uuid: "owned", type: "agent", displayName: "Owned", managerId: "member-1" });
+    const { publicAgents } = buildTeamData({
+      ...base,
+      members: [member("member-1", "human-1", "Ada")],
+      agents: [owned],
+      agentByUuid: new Map(),
+    });
+    expect(publicAgents[0]?.managerAvatarUrl).toBeNull();
   });
 
   it("partitions agents into Public/Private with own agents pinned first", () => {

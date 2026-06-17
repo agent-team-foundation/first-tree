@@ -3,9 +3,10 @@
  *
  * Renders two orthogonal signals in one 36x36 unit:
  *
- *   1. Identity. Direct chats show a single initial; group chats use a
+ *   1. Identity. Direct chats show one avatar; group chats use a
  *      Telegram-style split-disc composite (vertical bisection for 2,
- *      T-split for 3, 2x2 for exactly 4, 3 + "+N" tile for >=5).
+ *      T-split for 3, 2x2 for exactly 4, 3 + "+N" tile for >=5). Each face
+ *      is the peer's uploaded image, else a generated identicon.
  *   2. Attention. A single corner badge encodes the highest-priority
  *      "do I need to look here" signal: failed (an agent errored, red `!`)
  *      outranks an unread-mention count (red N, numeric up to 99 then "99+").
@@ -25,22 +26,19 @@
  */
 
 import type { MeChatRow } from "@first-tree/shared";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { Identicon, IdenticonBlocks } from "../identicon.js";
 
 type Participant = MeChatRow["participants"][number];
-
-function initial(s: string): string {
-  return s.trim()[0]?.toUpperCase() ?? "?";
-}
 
 /**
  * Per-agent fill colors. References to the `--avatar-hue-0..7` tokens
  * defined in `index.css`; this file holds the *selection* logic, not
  * the colors themselves. Add or restyle hues in index.css.
  *
- * Initials are painted on top in `--fg-on-vivid` (a near-white token,
- * also in index.css) so contrast holds in both themes without relying
- * on `--bg-raised`, which inverts under `.dark`.
+ * Identicon blocks (and the `+N` overflow glyph) sit on top in
+ * `--fg-on-vivid` (a near-white token, also in index.css) so contrast holds
+ * in both themes without relying on `--bg-raised`, which inverts under `.dark`.
  */
 const AVATAR_HUE_COUNT = 8;
 
@@ -301,28 +299,7 @@ function SingleAvatar({
       />
     );
   }
-  return (
-    <span
-      aria-hidden="true"
-      style={{
-        width: size,
-        height: size,
-        borderRadius: "50%",
-        background: resolveAvatarHue(colorToken, hueSeed, muted),
-        color: "var(--fg-on-vivid)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: Math.round(size * 0.42),
-        fontWeight: 700,
-        lineHeight: 1,
-        letterSpacing: "-0.02em",
-        userSelect: "none",
-      }}
-    >
-      {initial(name)}
-    </span>
-  );
+  return <Identicon seed={hueSeed} size={size} color={resolveAvatarHue(colorToken, hueSeed, muted)} />;
 }
 
 function CompositeAvatar({
@@ -341,9 +318,6 @@ function CompositeAvatar({
   //   n5+ → 2x2 grid, first three peers + "+N" overflow tile where N = n - 3
   const n = peers.length;
   const shape = pickCompositeShape(n);
-
-  const fontSize = Math.round(size * (n === 2 ? 0.36 : 0.28));
-  const fontSizeTop = Math.round(size * 0.32);
   const fontSizeMore = Math.round(size * 0.26);
 
   const gridTemplate =
@@ -368,103 +342,30 @@ function CompositeAvatar({
     >
       {shape === "n2" && (
         <>
-          <Seg
-            name={peers[0]?.displayName ?? "?"}
-            hueSeed={peers[0]?.agentId ?? "0"}
-            colorToken={peers[0]?.avatarColorToken ?? null}
-            fontSize={fontSize}
-            muted={muted}
-          />
-          <Seg
-            name={peers[1]?.displayName ?? "?"}
-            hueSeed={peers[1]?.agentId ?? "1"}
-            colorToken={peers[1]?.avatarColorToken ?? null}
-            fontSize={fontSize}
-            muted={muted}
-          />
+          <Seg peer={peers[0]} idx={0} muted={muted} />
+          <Seg peer={peers[1]} idx={1} muted={muted} />
         </>
       )}
       {shape === "n3" && (
         <>
-          <Seg
-            name={peers[0]?.displayName ?? "?"}
-            hueSeed={peers[0]?.agentId ?? "0"}
-            colorToken={peers[0]?.avatarColorToken ?? null}
-            fontSize={fontSizeTop}
-            fullWidth
-            muted={muted}
-          />
-          <Seg
-            name={peers[1]?.displayName ?? "?"}
-            hueSeed={peers[1]?.agentId ?? "1"}
-            colorToken={peers[1]?.avatarColorToken ?? null}
-            fontSize={fontSize}
-            muted={muted}
-          />
-          <Seg
-            name={peers[2]?.displayName ?? "?"}
-            hueSeed={peers[2]?.agentId ?? "2"}
-            colorToken={peers[2]?.avatarColorToken ?? null}
-            fontSize={fontSize}
-            muted={muted}
-          />
+          <Seg peer={peers[0]} idx={0} fullWidth muted={muted} />
+          <Seg peer={peers[1]} idx={1} muted={muted} />
+          <Seg peer={peers[2]} idx={2} muted={muted} />
         </>
       )}
       {shape === "n4" && (
         <>
-          <Seg
-            name={peers[0]?.displayName ?? "?"}
-            hueSeed={peers[0]?.agentId ?? "0"}
-            colorToken={peers[0]?.avatarColorToken ?? null}
-            fontSize={fontSize}
-            muted={muted}
-          />
-          <Seg
-            name={peers[1]?.displayName ?? "?"}
-            hueSeed={peers[1]?.agentId ?? "1"}
-            colorToken={peers[1]?.avatarColorToken ?? null}
-            fontSize={fontSize}
-            muted={muted}
-          />
-          <Seg
-            name={peers[2]?.displayName ?? "?"}
-            hueSeed={peers[2]?.agentId ?? "2"}
-            colorToken={peers[2]?.avatarColorToken ?? null}
-            fontSize={fontSize}
-            muted={muted}
-          />
-          <Seg
-            name={peers[3]?.displayName ?? "?"}
-            hueSeed={peers[3]?.agentId ?? "3"}
-            colorToken={peers[3]?.avatarColorToken ?? null}
-            fontSize={fontSize}
-            muted={muted}
-          />
+          <Seg peer={peers[0]} idx={0} muted={muted} />
+          <Seg peer={peers[1]} idx={1} muted={muted} />
+          <Seg peer={peers[2]} idx={2} muted={muted} />
+          <Seg peer={peers[3]} idx={3} muted={muted} />
         </>
       )}
       {shape === "n5+" && (
         <>
-          <Seg
-            name={peers[0]?.displayName ?? "?"}
-            hueSeed={peers[0]?.agentId ?? "0"}
-            colorToken={peers[0]?.avatarColorToken ?? null}
-            fontSize={fontSize}
-            muted={muted}
-          />
-          <Seg
-            name={peers[1]?.displayName ?? "?"}
-            hueSeed={peers[1]?.agentId ?? "1"}
-            colorToken={peers[1]?.avatarColorToken ?? null}
-            fontSize={fontSize}
-            muted={muted}
-          />
-          <Seg
-            name={peers[2]?.displayName ?? "?"}
-            hueSeed={peers[2]?.agentId ?? "2"}
-            colorToken={peers[2]?.avatarColorToken ?? null}
-            fontSize={fontSize}
-            muted={muted}
-          />
+          <Seg peer={peers[0]} idx={0} muted={muted} />
+          <Seg peer={peers[1]} idx={1} muted={muted} />
+          <Seg peer={peers[2]} idx={2} muted={muted} />
           <SegMore count={n - 3} fontSize={fontSizeMore} />
         </>
       )}
@@ -473,36 +374,41 @@ function CompositeAvatar({
 }
 
 function Seg({
-  name,
-  hueSeed,
-  colorToken,
-  fontSize,
+  peer,
+  idx,
   fullWidth,
   muted = false,
 }: {
-  name: string;
-  hueSeed: string;
-  colorToken?: string | null;
-  fontSize: number;
+  /** The peer in this slot, or `undefined` for a defensive empty cell. */
+  peer: Participant | undefined;
+  /** Slot index — fallback seed so an empty cell still gets a distinct hue. */
+  idx: number;
   fullWidth?: boolean;
   muted?: boolean;
 }) {
+  const seed = peer?.agentId ?? String(idx);
+  const base: CSSProperties = {
+    display: "block",
+    width: "100%",
+    height: "100%",
+    overflow: "hidden",
+    ...(fullWidth ? { gridColumn: "1 / -1" } : null),
+  };
+  // Mirror SingleAvatar's fallback chain: uploaded image first, else the
+  // deterministic identicon. `slice` cover-crops the square grid into the
+  // (often non-square) composite cell without distorting the pixels.
+  if (peer?.avatarImageUrl) {
+    return <img src={peer.avatarImageUrl} alt="" style={{ ...base, objectFit: "cover" }} />;
+  }
   return (
     <span
       style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: resolveAvatarHue(colorToken, hueSeed, muted),
+        ...base,
+        background: resolveAvatarHue(peer?.avatarColorToken ?? null, seed, muted),
         color: "var(--fg-on-vivid)",
-        fontSize,
-        fontWeight: 700,
-        lineHeight: 1,
-        letterSpacing: "-0.02em",
-        ...(fullWidth ? { gridColumn: "1 / -1" } : null),
       }}
     >
-      {initial(name)}
+      <IdenticonBlocks seed={seed} preserveAspectRatio="xMidYMid slice" />
     </span>
   );
 }

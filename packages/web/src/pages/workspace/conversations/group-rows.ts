@@ -196,12 +196,12 @@ function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucke
 //
 //   R2. `openRequestCount > 0`
 //       — An agent raised a structured question (`format=request`) at me
-//         that I have not answered/closed yet. The counter is
-//         ANSWER-cleared, not read-cleared (`chat_user_state.
-//         open_request_count` only decrements on `--answer` / `--close`
-//         or a clean web-UI answer), so merely opening the chat does NOT
-//         drop the row out of the attention bucket — the asking agent is
-//         still blocked on me until I actually resolve the question.
+//         that I have not answered yet. The counter is ANSWER-cleared, not
+//         read-cleared (`chat_user_state.open_request_count` only decrements
+//         on my clean web-UI answer — an agent cannot resolve), so merely
+//         opening the chat does NOT drop the row out of the attention
+//         bucket — the asking agent is still blocked on me until I actually
+//         answer the question.
 //
 //   R3. `unreadMentionCount > 0 && chatHasExplicitMentionToMe === true`
 //       — I have unread, and at least one unread message explicitly

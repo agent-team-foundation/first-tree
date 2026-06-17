@@ -3,6 +3,7 @@ import {
   type Agent,
   AVATAR_COLOR_TOKENS,
   type AvatarColorToken,
+  identiconCells,
   type UpdateAgent,
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
@@ -12,6 +13,7 @@ import { deleteAgentAvatar, listAgents, uploadAgentAvatar } from "../../api/agen
 import { useAuth } from "../../auth/auth-context.js";
 import { AgentChip } from "../../components/agent-chip.js";
 import { resolveAvatarHue } from "../../components/chat/chat-row-avatar.js";
+import { Identicon } from "../../components/identicon.js";
 import { Button } from "../../components/ui/button.js";
 import {
   Dialog,
@@ -24,6 +26,7 @@ import {
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
+import { AVATAR_HUE_COUNT, avatarHueColor, fgOnVividColor } from "../../lib/avatar-hues.js";
 import { useAgentIdentityMap } from "../../lib/use-agent-name-map.js";
 import { AvatarPreview } from "./appearance-section.js";
 
@@ -39,6 +42,10 @@ import { AvatarPreview } from "./appearance-section.js";
 
 const AVATAR_TARGET_SIZE = 256;
 const ACCEPTED_INPUT_TYPES = "image/png,image/jpeg,image/webp";
+/** Grid resolution for baked pixel avatars; matches the <Identicon> default. */
+const PIXEL_GRID = 5;
+/** How many random pixel-avatar candidates to offer per shuffle. */
+const PIXEL_CANDIDATES = 5;
 
 const VISIBILITY_LABELS = {
   [AGENT_VISIBILITY.ORGANIZATION]: "Visible to your team",
@@ -71,6 +78,40 @@ async function resizeToSquareWebp(file: File): Promise<Blob> {
   }
 }
 
+/**
+ * Bake an identicon into a WEBP blob for the avatar-image pipeline. Inverted
+ * palette to match <Identicon>: the hue fills the tile, near-white blocks on
+ * top. Rendered full-bleed so the image path (which clips to a circle) only
+ * trims hue-coloured corners, never a block. Integer geometry avoids seams.
+ * Colours are resolved from the live CSS tokens (see avatar-hues), so the baked
+ * image matches the previewed candidate and never drifts from index.css.
+ */
+async function bakeIdenticonWebp(seed: string, hueIdx: number): Promise<Blob> {
+  const size = AVATAR_TARGET_SIZE;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D context is unavailable in this browser.");
+  ctx.fillStyle = avatarHueColor(hueIdx);
+  ctx.fillRect(0, 0, size, size);
+  const cells = identiconCells(seed, PIXEL_GRID);
+  const block = Math.floor(size / (PIXEL_GRID + 1));
+  const margin = Math.round((size - block * PIXEL_GRID) / 2);
+  ctx.fillStyle = fgOnVividColor();
+  for (let y = 0; y < PIXEL_GRID; y++) {
+    const row = cells[y];
+    if (!row) continue;
+    for (let x = 0; x < PIXEL_GRID; x++) {
+      if (!row[x]) continue;
+      ctx.fillRect(margin + x * block, margin + y * block, block, block);
+    }
+  }
+  const blob: Blob | null = await new Promise((resolve) => canvas.toBlob((b) => resolve(b), "image/webp", 0.85));
+  if (!blob) throw new Error("Failed to encode the pixel avatar to WEBP.");
+  return blob;
+}
+
 export type ProfileEditDialogProps = {
   agent: Agent;
   open: boolean;
@@ -95,6 +136,7 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
   const [uploading, setUploading] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
+  const [pixelCandidates, setPixelCandidates] = useState<Array<{ seed: string; hueIdx: number }>>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const initializedFor = useRef<string | null>(null);
 
@@ -116,6 +158,7 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
     setPicked(AVATAR_COLOR_TOKENS.find((t) => t === agent.avatarColorToken) ?? null);
     setFormError(null);
     setImageError(null);
+    setPixelCandidates([]);
   }, [open, agent]);
 
   const isHuman = agent.type === "human";
@@ -176,9 +219,12 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
     if (!file) return;
     setImageError(null);
     setUploading(true);
+    // Pin the target uuid at click time so a mid-upload agent switch can't
+    // retarget the write (the dialog would unmount, but the promise lives on).
+    const uuid = agent.uuid;
     try {
       const blob = await resizeToSquareWebp(file);
-      await uploadAgentAvatar(agent.uuid, blob);
+      await uploadAgentAvatar(uuid, blob);
       await onRefresh?.();
     } catch (err) {
       setImageError(err instanceof Error ? err.message : String(err));
@@ -190,9 +236,36 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
   async function onRemoveImage() {
     setImageError(null);
     setUploading(true);
+    const uuid = agent.uuid;
     try {
-      await deleteAgentAvatar(agent.uuid);
+      await deleteAgentAvatar(uuid);
       await onRefresh?.();
+    } catch (err) {
+      setImageError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function rollPixelCandidates() {
+    setImageError(null);
+    setPixelCandidates(
+      Array.from({ length: PIXEL_CANDIDATES }, () => ({
+        seed: crypto.randomUUID(),
+        hueIdx: Math.floor(Math.random() * AVATAR_HUE_COUNT),
+      })),
+    );
+  }
+
+  async function applyPixelAvatar(candidate: { seed: string; hueIdx: number }) {
+    setImageError(null);
+    setUploading(true);
+    const uuid = agent.uuid;
+    try {
+      const blob = await bakeIdenticonWebp(candidate.seed, candidate.hueIdx);
+      await uploadAgentAvatar(uuid, blob);
+      await onRefresh?.();
+      setPixelCandidates([]);
     } catch (err) {
       setImageError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -214,7 +287,9 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
         <DialogHeader>
           <DialogTitle>Edit profile</DialogTitle>
           <DialogDescription>
-            Identity and appearance save immediately. Runtime behavior is configured from the other tabs.
+            {isHuman
+              ? "Avatar changes (image) save immediately. Other details save when you click Save."
+              : "Avatar changes (image or pixel avatar) save immediately. Other details save when you click Save."}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-5">
@@ -320,6 +395,50 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
             </p>
             {imageError && <p className="text-body text-destructive">{imageError}</p>}
           </div>
+          {/* Pixel avatars are a non-human-agent identity. Human agents
+              represent real people and use their GitHub avatar (resolved
+              server-side via the backing user's avatar URL), so the
+              pixel-avatar generator is hidden for them — offering it would let
+              a baked identicon override the GitHub avatar. */}
+          {!isHuman && (
+            <div className="space-y-2">
+              <Label>Pixel avatar</Label>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={rollPixelCandidates}
+                  disabled={uploading || saving}
+                >
+                  {pixelCandidates.length ? "Shuffle" : "Generate"}
+                </Button>
+                {pixelCandidates.map((candidate, index) => (
+                  <button
+                    key={candidate.seed}
+                    type="button"
+                    onClick={() => applyPixelAvatar(candidate)}
+                    disabled={uploading || saving}
+                    aria-label={`Use pixel avatar ${index + 1}`}
+                    title="Use this pixel avatar"
+                    className="rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1"
+                    style={{
+                      display: "inline-flex",
+                      padding: 0,
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Identicon seed={candidate.seed} size={40} color={`var(--avatar-hue-${candidate.hueIdx})`} />
+                  </button>
+                ))}
+              </div>
+              <p className="text-caption text-muted-foreground">
+                Generate five random pixel avatars and click one to use it. It saves as the avatar image immediately.
+              </p>
+            </div>
+          )}
           <div className="space-y-2">
             <Label>Color</Label>
             <div className="flex flex-wrap gap-2">

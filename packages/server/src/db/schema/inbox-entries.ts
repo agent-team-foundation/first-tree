@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { bigserial, boolean, index, integer, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { bigserial, boolean, check, index, integer, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { messages } from "./messages.js";
 
 /** Delivery queue (envelope). One entry per recipient created during message fan-out. Uses SKIP LOCKED for concurrent-safe consumption. */
@@ -14,7 +14,7 @@ export const inboxEntries = pgTable(
       .references(() => messages.id),
     /** Routing tag. May differ from message.chat_id in replyTo scenarios; used by Client to route to the correct Session */
     chatId: text("chat_id"),
-    /** "pending" → "delivered" → "acked" | "failed" */
+    /** "pending" -> "delivered" -> "acked" */
     status: text("status").notNull().default("pending"),
     /**
      * When `false`, the entry is a "silent context" row: written so future
@@ -25,7 +25,7 @@ export const inboxEntries = pgTable(
      * Notify=true entries are the normal "active" deliverables.
      */
     notify: boolean("notify").notNull().default(true),
-    /** Timeout reset count; entry is marked "failed" when this reaches the configured max */
+    /** Reserved legacy counter; delivery recovery does not dead-letter rows. */
     retryCount: integer("retry_count").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
@@ -49,5 +49,12 @@ export const inboxEntries = pgTable(
      * Composite shape mirrors the actual WHERE clause used in pollInbox.
      */
     index("idx_inbox_chat_silent").on(table.inboxId, table.chatId, table.notify, table.status),
+    /**
+     * Message-history delivery status lookup. The chat messages API checks
+     * whether any inbox row for a message is acked, delivered, or still
+     * pending; keeping message_id first bounds that lookup by page size.
+     */
+    index("idx_inbox_entries_message_status").on(table.messageId, table.status),
+    check("ck_inbox_entries_status", sql`${table.status} IN ('pending', 'delivered', 'acked')`),
   ],
 );

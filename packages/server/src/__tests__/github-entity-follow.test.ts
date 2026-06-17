@@ -125,6 +125,15 @@ describe("github-entity-follow", () => {
           pull_request: { merged_at: null },
           draft: false,
         }),
+      "/repos/acme/api/pulls/42": () =>
+        json({
+          number: 42,
+          state: "open",
+          title: "Add follow command",
+          html_url: "https://github.com/Acme/Api/pull/42",
+          merged: false,
+          draft: false,
+        }),
       "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
       ...overrides,
     });
@@ -276,6 +285,9 @@ describe("github-entity-follow", () => {
     expect(rows[0]?.chatId).toBe(newChat);
     // The moved row no longer impersonates a github-minted anchor.
     expect(rows[0]?.boundVia).toBe("agent_declared");
+    // The pre-0067 row had no title; follow-time resolution fetched it, so the
+    // moved row must now carry it instead of waiting for a webhook.
+    expect(rows[0]?.title).toBe("Add follow command");
   });
 
   it("rebind moves a legacy discussion row instead of inserting a duplicate canonical row", async () => {
@@ -292,7 +304,10 @@ describe("github-entity-follow", () => {
       boundVia: "direct",
     });
     const fetcher = makeFetcher({
-      "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
+      // The discussion route must precede the repo route: makeFetcher matches
+      // by substring, and `/repos/acme/api` is a prefix of the discussion URL,
+      // so the less-specific repo route would otherwise shadow it (and strip
+      // the title). Real GitHub has no such ambiguity.
       "/repos/Acme/Api/discussions/42": () =>
         json({
           number: 42,
@@ -300,6 +315,7 @@ describe("github-entity-follow", () => {
           title: "RFC",
           html_url: "https://github.com/Acme/Api/discussions/42",
         }),
+      "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
     });
 
     const rebound = await declareEntityFollow(app.db, deps(fetcher), {
@@ -309,10 +325,17 @@ describe("github-entity-follow", () => {
     expect(rebound.outcome).toBe("rebound");
 
     const rows = await app.db
-      .select({ entityKey: githubEntityChatMappings.entityKey, chatId: githubEntityChatMappings.chatId })
+      .select({
+        entityKey: githubEntityChatMappings.entityKey,
+        chatId: githubEntityChatMappings.chatId,
+        title: githubEntityChatMappings.title,
+      })
       .from(githubEntityChatMappings)
       .where(eq(githubEntityChatMappings.entityType, "discussion"));
-    expect(rows).toEqual([{ entityKey: "Acme/Api#discussion-42", chatId: newChat }]);
+    // The legacy key (`#discussion-42`) is matched by the candidate-key title
+    // refresh, so the moved row carries the follow-time title — not just when a
+    // future webhook happens to touch it.
+    expect(rows).toEqual([{ entityKey: "Acme/Api#discussion-42", chatId: newChat, title: "RFC" }]);
   });
 
   it("R11: a merged PR is followable and its terminal state is recorded", async () => {
@@ -327,6 +350,15 @@ describe("github-entity-follow", () => {
           html_url: "https://github.com/Acme/Api/pull/42",
           pull_request: { merged_at: "2026-06-01T00:00:00Z" },
         }),
+      "/repos/acme/api/pulls/42": () =>
+        json({
+          number: 42,
+          state: "closed",
+          title: "Add follow command",
+          html_url: "https://github.com/Acme/Api/pull/42",
+          merged: true,
+          draft: false,
+        }),
     });
 
     const result = await declareEntityFollow(app.db, deps(fetcher), followParams(s, "acme/api#42"));
@@ -339,6 +371,41 @@ describe("github-entity-follow", () => {
       .from(githubEntityChatMappings)
       .where(eq(githubEntityChatMappings.chatId, s.chatId));
     expect(row?.entityState).toBe("merged");
+  });
+
+  it("records draft PR state on follow", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const fetcher = prFetcher({
+      "/repos/acme/api/issues/42": () =>
+        json({
+          number: 42,
+          state: "open",
+          title: "Draft follow command",
+          html_url: "https://github.com/Acme/Api/pull/42",
+          pull_request: { merged_at: null },
+        }),
+      "/repos/acme/api/pulls/42": () =>
+        json({
+          number: 42,
+          state: "open",
+          title: "Draft follow command",
+          html_url: "https://github.com/Acme/Api/pull/42",
+          merged: false,
+          draft: true,
+        }),
+    });
+
+    const result = await declareEntityFollow(app.db, deps(fetcher), followParams(s, "acme/api#42"));
+    expect(result.outcome).toBe("created");
+    if (result.outcome !== "created") throw new Error("unreachable");
+    expect(result.entity.state).toBe("draft");
+
+    const [row] = await app.db
+      .select({ entityState: githubEntityChatMappings.entityState })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.chatId, s.chatId));
+    expect(row?.entityState).toBe("draft");
   });
 
   it("an issue without a pull_request block resolves to entityType issue", async () => {
@@ -628,12 +695,59 @@ describe("github-entity-follow", () => {
       boundVia: "agent_created",
     });
 
-    const list = await listChatGithubEntities(app.db, deps(prFetcher()), {
-      chatId: s.chatId,
-      organizationId: s.admin.organizationId,
-    });
+    const list = await listChatGithubEntities(app.db, { chatId: s.chatId });
     expect(list.items).toHaveLength(1);
-    expect(list.items[0]).toMatchObject({ entityKey: "Acme/Api#7", boundVia: "agent_declared" });
+    expect(list.items[0]).toMatchObject({ entityKey: "Acme/Api#7", boundVia: "agent_declared", state: "open" });
+  });
+
+  it("following reads lifecycle state from the DB projection", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: s.admin.organizationId,
+      humanAgentId: s.human,
+      delegateAgentId: s.delegate,
+      entityType: "pull_request",
+      entityKey: "Acme/Api#8",
+      chatId: s.chatId,
+      boundVia: "agent_declared",
+      entityState: "draft",
+    });
+
+    const list = await listChatGithubEntities(app.db, { chatId: s.chatId });
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]).toMatchObject({
+      entityType: "pull_request",
+      entityKey: "Acme/Api#8",
+      htmlUrl: "https://github.com/Acme/Api/pull/8",
+      title: null,
+      state: "draft",
+      number: 8,
+    });
+  });
+
+  it("following surfaces the persisted entity title from the DB projection", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: s.admin.organizationId,
+      humanAgentId: s.human,
+      delegateAgentId: s.delegate,
+      entityType: "pull_request",
+      entityKey: "Acme/Api#9",
+      chatId: s.chatId,
+      boundVia: "agent_declared",
+      title: "Refactor inbox dispatcher",
+    });
+
+    const list = await listChatGithubEntities(app.db, { chatId: s.chatId });
+    expect(list.items).toHaveLength(1);
+    expect(list.items[0]).toMatchObject({
+      entityKey: "Acme/Api#9",
+      title: "Refactor inbox dispatcher",
+      state: "open",
+      number: 9,
+    });
   });
 
   it("following lists legacy discussion mappings under the canonical numeric key", async () => {
@@ -649,10 +763,7 @@ describe("github-entity-follow", () => {
       boundVia: "agent_declared",
     });
 
-    const list = await listChatGithubEntities(app.db, deps(prFetcher()), {
-      chatId: s.chatId,
-      organizationId: s.admin.organizationId,
-    });
+    const list = await listChatGithubEntities(app.db, { chatId: s.chatId });
 
     expect(list.items).toHaveLength(1);
     expect(list.items[0]).toMatchObject({

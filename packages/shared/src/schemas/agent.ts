@@ -167,8 +167,8 @@ export const updateAgentSchema = z.object({
   /**
    * One-shot bind. NULL → ID still allowed (admin claims an unbound agent for
    * a known client). ID → another ID and ID → null are rejected at the
-   * service layer; cross-client moves go through `rebindAgent`, which runs
-   * owner / org / capability checks atomically.
+   * service layer — once bound, an agent's client is immutable (there is no
+   * move/re-bind path; provision a new agent instead).
    */
   clientId: z.string().min(1).max(100).nullable().optional(),
   /**
@@ -178,20 +178,6 @@ export const updateAgentSchema = z.object({
   avatarColorToken: avatarColorTokenSchema.nullable().optional(),
 });
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
-
-/**
- * Service-level rebind input. Admin / owner re-binds an agent to a new
- * client and/or a new runtime provider in one atomic operation.
- *
- * `force` bypasses the capability-match check (e.g. when the client is
- * offline and capabilities are stale).
- */
-export const rebindAgentSchema = z.object({
-  clientId: z.string().min(1).max(100),
-  runtimeProvider: runtimeProviderSchema,
-  force: z.boolean().optional(),
-});
-export type RebindAgent = z.infer<typeof rebindAgentSchema>;
 
 export const agentSchema = z.object({
   uuid: z.string(),

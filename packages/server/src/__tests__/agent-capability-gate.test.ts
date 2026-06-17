@@ -2,8 +2,8 @@ import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { clients } from "../db/schema/clients.js";
-import { createAgent, rebindAgent } from "../services/agent.js";
-import { createAdminContext, seedClient, useTestApp } from "./helpers.js";
+import { createAgent, updateAgent } from "../services/agent.js";
+import { createAdminContext, useTestApp } from "./helpers.js";
 
 /**
  * Coverage for the post-0026 capability gate in `services/agent.ts`:
@@ -14,9 +14,10 @@ import { createAdminContext, seedClient, useTestApp } from "./helpers.js";
  *     i.e. `state` ∈ {ok, unauthenticated}. `missing` / `error` blocks
  *     unless `force: true`.
  *
- * The gate is invoked from `createAgent` (creation pre-flight) and
- * `rebindAgent` (re-pin). Both paths get one happy / one blocked / one
- * forced case so a regression in either call site fails this suite.
+ * The gate is invoked from `createAgent` (creation pre-flight) and from the
+ * `updateAgent` first-bind path (NULL → ID) — the only way an unbound agent
+ * gets a computer now that re-bind is removed. A regression at either call
+ * site fails this suite.
  */
 
 function entry(state: CapabilityEntry["state"]): CapabilityEntry {
@@ -165,71 +166,29 @@ describe("Agent capability gate (services/agent.ts)", () => {
     expect(human.clientId).toBeNull();
   });
 
-  it("rebindAgent enforces the gate against the new client", async () => {
+  it("enforces the gate on the updateAgent first-bind path (NULL → ID)", async () => {
     const app = getApp();
     const ctx = await createAdminContext(app);
-    await setCapabilities(app, ctx.clientId, { "claude-code": entry("ok") });
-
+    // Unbound agent whose provider is codex — created without a client, so the
+    // creation-time gate short-circuits (clientId null).
     const agent = await createAgent(app.db, {
-      name: `cap-gate-rebind-${crypto.randomUUID().slice(0, 6)}`,
+      name: `cap-gate-firstbind-${crypto.randomUUID().slice(0, 6)}`,
       type: "agent",
       managerId: ctx.memberId,
-      clientId: ctx.clientId,
-      runtimeProvider: "claude-code",
-    });
-
-    // Now mark the same client as "missing codex" and try to rebind to codex.
-    await setCapabilities(app, ctx.clientId, {
-      "claude-code": entry("ok"),
-      codex: entry("missing"),
-    });
-
-    await expect(
-      rebindAgent(app.db, agent.uuid, {
-        clientId: ctx.clientId,
-        runtimeProvider: "codex",
-      }),
-    ).rejects.toThrow(/does not have runtime provider "codex" available/i);
-
-    // After upgrading the report to `unauthenticated` (SDK installed),
-    // the same rebind succeeds.
-    await setCapabilities(app, ctx.clientId, {
-      "claude-code": entry("ok"),
-      codex: entry("unauthenticated"),
-    });
-    const rebound = await rebindAgent(app.db, agent.uuid, {
-      clientId: ctx.clientId,
       runtimeProvider: "codex",
     });
-    expect(rebound.agent.runtimeProvider).toBe("codex");
-    expect(rebound.previousClientId).toBe(ctx.clientId);
-  });
+    expect(agent.clientId).toBeNull();
 
-  it("rebindAgent returns the actual previous client for each committed move", async () => {
-    const app = getApp();
-    const ctx = await createAdminContext(app);
-    const secondClientId = await seedClient(app, ctx.userId, ctx.organizationId);
-    const thirdClientId = await seedClient(app, ctx.userId, ctx.organizationId);
-    const agent = await createAgent(app.db, {
-      name: `cap-gate-prev-${crypto.randomUUID().slice(0, 6)}`,
-      type: "agent",
-      managerId: ctx.memberId,
-      clientId: ctx.clientId,
-      runtimeProvider: "claude-code",
-    });
+    // The only client reports codex missing — first bind must be blocked.
+    await setCapabilities(app, ctx.clientId, { "claude-code": entry("ok"), codex: entry("missing") });
+    await expect(updateAgent(app.db, agent.uuid, { clientId: ctx.clientId })).rejects.toThrow(
+      /does not have runtime provider "codex" available/i,
+    );
 
-    const first = await rebindAgent(app.db, agent.uuid, {
-      clientId: secondClientId,
-      runtimeProvider: "claude-code",
-    });
-    expect(first.previousClientId).toBe(ctx.clientId);
-    expect(first.agent.clientId).toBe(secondClientId);
-
-    const second = await rebindAgent(app.db, agent.uuid, {
-      clientId: thirdClientId,
-      runtimeProvider: "claude-code",
-    });
-    expect(second.previousClientId).toBe(secondClientId);
-    expect(second.agent.clientId).toBe(thirdClientId);
+    // Once the client reports codex available, the same first bind succeeds.
+    await setCapabilities(app, ctx.clientId, { "claude-code": entry("ok"), codex: entry("unauthenticated") });
+    const bound = await updateAgent(app.db, agent.uuid, { clientId: ctx.clientId });
+    expect(bound.clientId).toBe(ctx.clientId);
+    expect(bound.runtimeProvider).toBe("codex");
   });
 });

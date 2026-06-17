@@ -44,9 +44,8 @@ export function getChatTokenUsage(chatId: string): Promise<ChatTokenUsage> {
 }
 
 /**
- * List the GitHub entities bound to this chat. Server fetches live state
- * from GitHub on every request — nothing is cached server-side — so the
- * client should rely on React Query's `staleTime` to keep this gentle.
+ * List the GitHub entities bound to this chat. The server reads its local
+ * mapping projection only; state freshness comes from GitHub webhooks.
  */
 export function listChatGithubEntities(chatId: string): Promise<ChatGithubEntityListResponse> {
   return api.get<ChatGithubEntityListResponse>(`/chats/${encodeURIComponent(chatId)}/github-entities`);
@@ -222,4 +221,13 @@ export function listChatMessages(
   if (params?.cursor) qs.set("cursor", params.cursor);
   const query = qs.toString();
   return api.get<PaginatedMessages>(`/chats/${encodeURIComponent(chatId)}/messages${query ? `?${query}` : ""}`);
+}
+
+/**
+ * The viewer's currently-open questions (`format=request` directed at them, not
+ * yet resolved) in a chat — window-independent, so the blocking answer UI can
+ * surface an open ask that has scrolled past the latest message page.
+ */
+export function listChatOpenRequests(chatId: string): Promise<{ items: Message[] }> {
+  return api.get<{ items: Message[] }>(`/chats/${encodeURIComponent(chatId)}/open-requests`);
 }

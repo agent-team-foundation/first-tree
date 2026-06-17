@@ -28,7 +28,14 @@ import {
   createContextTreeGitWriteTracker,
 } from "../runtime/context-tree-git-status.js";
 import { classify } from "../runtime/error-taxonomy.js";
-import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
+import {
+  type AgentHandler,
+  type DeliveryToken,
+  deliveryTokenFromSessionContext,
+  type HandlerFactory,
+  type SessionContext,
+  type SessionMessage,
+} from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
@@ -36,6 +43,7 @@ import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runti
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
+import { consumedErrorOutcome } from "./turn-settlement.js";
 
 const MAX_RETRIES = 2;
 
@@ -689,8 +697,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * when the session ends or `start()` runs for a fresh session.
    */
   let chatContextForPrompt: ChatContext | undefined;
-  const queuedInjectedMessages: SessionMessage[] = [];
-  const pendingAckMessages: SessionMessage[] = [];
+  const queuedInjectedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
+  const pendingAckMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
   let injectDrainInProgress = false;
   /**
    * Predeclared source repos the agent config declares at
@@ -917,30 +925,35 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * failures (e.g. inject's `toSDKUserMessage` catch) where the semantics is
    * "commit this single inbox message, NOT close the active SDK turn".
    */
-  async function ackTurnClose(sessionCtx: SessionContext, status: "success" | "error"): Promise<void> {
-    const message = pendingAckMessages.shift();
-    if (message) {
-      await sessionCtx.finishTurn(message, { status, terminal: true });
+  async function ackTurnClose(
+    status: "success" | "error",
+    reason: Parameters<typeof consumedErrorOutcome>[0] = "provider_clean_error",
+  ): Promise<void> {
+    const pending = pendingAckMessages.shift();
+    if (pending) {
+      const outcome = status === "success" ? { status, terminal: true } : consumedErrorOutcome(reason);
+      await pending.token.complete(pending.message, outcome);
     }
-    markCurrentPendingMessageConsumed(sessionCtx);
+    markCurrentPendingMessageProcessingStarted();
     stashedSdkMessage = null;
   }
 
-  function pushPendingAckMessage(message: SessionMessage, sessionCtx: SessionContext): void {
+  function pushPendingAckMessage(message: SessionMessage, token: DeliveryToken): void {
     const wasEmpty = pendingAckMessages.length === 0;
-    pendingAckMessages.push(message);
-    if (wasEmpty) sessionCtx.markMessagesConsumed(message);
+    pendingAckMessages.push({ message, token });
+    if (wasEmpty) token.processingStarted(message);
   }
 
-  function markCurrentPendingMessageConsumed(sessionCtx: SessionContext): void {
+  function markCurrentPendingMessageProcessingStarted(): void {
     const current = pendingAckMessages[0];
-    if (current) sessionCtx.markMessagesConsumed(current);
+    if (current) current.token.processingStarted(current.message);
   }
 
   async function pushInjectedMessage(
     message: SessionMessage,
     sessionCtx: SessionContext,
     sessionId: string,
+    token: DeliveryToken,
   ): Promise<void> {
     try {
       await maybeSwitchConfig(sessionCtx);
@@ -952,15 +965,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
       stashedSdkMessage = sdkMsg;
       inputController?.push(sdkMsg);
-      pushPendingAckMessage(message, sessionCtx);
+      pushPendingAckMessage(message, token);
     } catch (err) {
       sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
-      // `toSDKUserMessage` failed before the SDK ever saw the
-      // message, so no `result` event will ever fire to pair this
-      // entry with an SDK result. Ack here — re-handling on
-      // redelivery would re-hit the same conversion error
-      // (permanent failure semantics, design §4).
-      await sessionCtx.finishTurn(message, { status: "error", terminal: true, errorKind: "deterministic" });
+      // The SDK has not seen this input yet, so there is no durable terminal
+      // evidence. Keep it recoverable instead of ACKing through `complete`.
+      token.retry(message, "claude_inject_format_failed");
     }
   }
 
@@ -975,9 +985,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           ctx === sessionCtx &&
           claudeSessionId === sessionId
         ) {
-          const message = queuedInjectedMessages.shift();
-          if (!message) continue;
-          await pushInjectedMessage(message, sessionCtx, sessionId);
+          const queued = queuedInjectedMessages.shift();
+          if (!queued) continue;
+          try {
+            await pushInjectedMessage(queued.message, sessionCtx, sessionId, queued.token);
+          } catch (err) {
+            sessionCtx.log(`inject drain failed: ${err instanceof Error ? err.message : String(err)}`);
+            queued.token.retry(queued.message, "claude_inject_drain_failed");
+          }
         }
       } finally {
         injectDrainInProgress = false;
@@ -986,6 +1001,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         }
       }
     })();
+  }
+
+  function retryBufferedMessages(reason: string): void {
+    const queued = queuedInjectedMessages.splice(0);
+    for (const item of queued) {
+      item.token.retry(item.message, reason);
+    }
+    const pending = pendingAckMessages.splice(0);
+    for (const item of pending) {
+      item.token.retry(item.message, reason);
+    }
   }
 
   /**
@@ -1256,7 +1282,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // Permanent stream API failure — ack so the server
                     // doesn't redeliver a message that would just produce
                     // the same error. Retry was exhausted upstream.
-                    await ackTurnClose(sessionCtx, "error");
+                    await ackTurnClose("error", "stream_api_error_posted");
                   } else {
                     // Genuine success — reset retry budget for the next turn.
                     // Do NOT reset on the sniff-hit branches above: a wrapped
@@ -1273,7 +1299,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       sessionCtx.log("Result forwarded to chat");
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                       // Turn closed cleanly — drain in-flight inbox entries.
-                      await ackTurnClose(sessionCtx, "success");
+                      await ackTurnClose("success");
                     } catch (err) {
                       const reason = err instanceof Error ? err.message : String(err);
                       sessionCtx.log(`Failed to forward result: ${reason}`);
@@ -1298,7 +1324,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       // counter when an unrelated future stream error
                       // fires.
                       retryCount = 0;
-                      await ackTurnClose(sessionCtx, "error");
+                      await ackTurnClose("error", "forward_failed");
                     }
                   }
                 } else {
@@ -1306,7 +1332,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                   // Same reset rationale as the forward-success branch above.
                   retryCount = 0;
                   sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
-                  await ackTurnClose(sessionCtx, "success");
+                  await ackTurnClose("success");
                 }
               } else {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
@@ -1323,7 +1349,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                 // SDK reported a turn-level error (non-success subtype):
                 // redelivery would just hit the same error — ack.
-                await ackTurnClose(sessionCtx, "error");
+                await ackTurnClose("error", "provider_clean_error");
               }
               // Reset the auth-hint flag only on a SUCCESSFUL result. This
               // gives a clean slate for the next turn once auth is clearly
@@ -1379,7 +1405,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // Deduplicator collapses every bind-reset replay so the entry
             // never re-dispatches and never gets acked. Per design §4
             // "permanent → ack".
-            await ackTurnClose(sessionCtx, "error");
+            await ackTurnClose("error", "retry_exhausted_notice_posted");
             return;
           }
 
@@ -1428,7 +1454,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // Same reasoning as the MAX_RETRIES branch above — without this
             // ack the row would loop in `delivered` forever, deduped on every
             // bind-reset replay. Per design §4 "permanent → ack".
-            await ackTurnClose(sessionCtx, "error");
+            await ackTurnClose("error", "auto_resume_failed_notice_posted");
             return;
           }
         }
@@ -1571,7 +1597,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   const handler: AgentHandler = {
-    async start(message, sessionCtx) {
+    async start(message, sessionCtx, token) {
+      const hasExplicitDeliveryToken = token !== undefined;
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       ctx = sessionCtx;
       claudeSessionId = randomUUID();
       // Per agent-session-cwd-redesign: cwd is per-agent, shared by every
@@ -1613,14 +1641,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       stashedSdkMessage = sdkMsg;
       spawnQuery(claudeSessionId, sessionCtx);
       inputController?.push(sdkMsg);
-      pushPendingAckMessage(message, sessionCtx);
+      pushPendingAckMessage(message, deliveryToken);
       scheduleInjectedMessagesDrain(sessionCtx, claudeSessionId);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
-      return claudeSessionId;
+      return hasExplicitDeliveryToken
+        ? { sessionId: claudeSessionId, route: { kind: "owned", mode: "processing" } }
+        : claudeSessionId;
     },
 
-    async resume(message, sessionId, sessionCtx) {
+    async resume(message, sessionId, sessionCtx, token) {
+      const hasExplicitDeliveryToken = token !== undefined;
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       ctx = sessionCtx;
       claudeSessionId = sessionId;
       retryCount = 0;
@@ -1677,11 +1709,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         spawnQuery(sessionId, sessionCtx, sessionId);
         if (sdkMsg) {
           inputController?.push(sdkMsg);
-          if (message) pushPendingAckMessage(message, sessionCtx);
+          if (message) pushPendingAckMessage(message, deliveryToken);
         }
         scheduleInjectedMessagesDrain(sessionCtx, sessionId);
         sessionCtx.log(`Session resumed at legacy cwd (${sessionId})`);
-        return sessionId;
+        return hasExplicitDeliveryToken
+          ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+          : sessionId;
       }
 
       // Normal new-design resume path: cwd is the agent home.
@@ -1721,11 +1755,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         spawnQuery(freshSessionId, sessionCtx);
         if (freshSdkMsg) {
           inputController?.push(freshSdkMsg);
-          if (message) pushPendingAckMessage(message, sessionCtx);
+          if (message) pushPendingAckMessage(message, deliveryToken);
         }
         scheduleInjectedMessagesDrain(sessionCtx, freshSessionId);
         sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
-        return freshSessionId;
+        return hasExplicitDeliveryToken
+          ? { sessionId: freshSessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+          : freshSessionId;
       }
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
@@ -1737,23 +1773,27 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       spawnQuery(sessionId, sessionCtx, sessionId);
       if (resumeSdkMsg) {
         inputController?.push(resumeSdkMsg);
-        if (message) pushPendingAckMessage(message, sessionCtx);
+        if (message) pushPendingAckMessage(message, deliveryToken);
       }
       scheduleInjectedMessagesDrain(sessionCtx, sessionId);
 
       sessionCtx.log(`Session resumed (${sessionId})`);
-      return sessionId;
+      return hasExplicitDeliveryToken
+        ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+        : sessionId;
     },
 
-    inject(message) {
+    inject(message, token) {
       if (!claudeSessionId || !ctx) {
         ctx?.log("inject() called but no active session — dropping message");
-        return;
+        return { kind: "rejected", reason: "no_active_session", retryable: true };
       }
       const sessionCtx = ctx;
+      const deliveryToken = token ?? deliveryTokenFromSessionContext(sessionCtx);
       const sid = claudeSessionId;
-      queuedInjectedMessages.push(message);
+      queuedInjectedMessages.push({ message, token: deliveryToken });
       scheduleInjectedMessagesDrain(sessionCtx, sid);
+      return { kind: "owned", mode: "queued" };
     },
 
     async suspend() {
@@ -1780,8 +1820,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // be moot. Resume goes through `handler.resume(message, sessionId)`
       // which re-stashes from its own argument.
       stashedSdkMessage = null;
-      queuedInjectedMessages.length = 0;
-      pendingAckMessages.length = 0;
+      retryBufferedMessages("claude_suspend_before_terminal");
       injectDrainInProgress = false;
     },
 

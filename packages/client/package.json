@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.84",
-    "@openai/codex-sdk": "^0.134.0",
+    "@openai/codex-sdk": "^0.140.0",
     "pino": "^9.5.0",
     "semver": "^7.6.3",
     "ws": "^8.20.0",

@@ -5,14 +5,13 @@ import { githubEntityTypeSchema } from "./chat-metadata.js";
  * Schema for `GET /api/v1/chats/:chatId/github-entities`.
  *
  * Each item describes one entity bound to the chat via
- * `github_entity_chat_mappings`. Live state (`title`, `state`) is fetched
- * per-request from the GitHub REST API at request time and NEVER
- * persisted to the database — the user explicitly opted for the
- * fresh-on-every-open model rather than a webhook-synced column.
+ * `github_entity_chat_mappings`. The server projects state from the
+ * webhook-synced `entity_state` column rather than calling GitHub on the
+ * read path.
  *
- * Live fields may be `null` when the GitHub call failed (token unavailable,
- * rate-limited, 404 on a deleted entity, etc.). The client falls back to
- * rendering `entityKey + htmlUrl` so the row is still a working link.
+ * Title may be `null` because mapping rows do not persist titles. The client
+ * falls back to rendering `entityKey + htmlUrl` so the row is still a
+ * working link.
  */
 
 /**
@@ -47,11 +46,10 @@ export function isDeclaredBoundVia(value: string): value is DeclaredBoundVia {
 }
 
 /**
- * Coarse live state. PR-specific values (`merged`, `draft`) are folded
+ * Coarse entity state. PR-specific values (`merged`, `draft`) are folded
  * into the same enum as the issue's `open` / `closed` so the UI can
- * switch on a single field. `null` means we couldn't reach GitHub for
- * this entity in this request — the row still renders, just without
- * the state badge.
+ * switch on a single field. `null` means the state is not meaningful for
+ * this entity type, or the persisted value was unknown.
  */
 export const githubEntityLiveStateSchema = z.enum(["open", "closed", "merged", "draft"]);
 export type GithubEntityLiveState = z.infer<typeof githubEntityLiveStateSchema>;
@@ -68,9 +66,9 @@ export const chatGithubEntitySchema = z.object({
    * unreachable for the live fields.
    */
   htmlUrl: z.string().url(),
-  /** Live title from GitHub. `null` when the fetch failed / no token. */
+  /** Persisted title projection when available; currently null for mapping-only rows. */
   title: z.string().nullable(),
-  /** Live state from GitHub. `null` when the fetch failed / no token. */
+  /** Webhook-synced state projection. `null` for commits/discussions. */
   state: githubEntityLiveStateSchema.nullable(),
   /** Issue / PR / Discussion number when applicable. */
   number: z.number().int().nullable(),

@@ -1,15 +1,18 @@
 import type { Agent } from "@first-tree/shared";
 import { Pencil } from "lucide-react";
 import { resolveAvatarHue } from "../../components/chat/chat-row-avatar.js";
+import { Identicon } from "../../components/identicon.js";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
 
 /**
- * Appearance — display of the agent's avatar (image or fallback color/initial).
+ * Appearance — display of the agent's avatar (image or generated identicon).
  * Editing is handled by the unified ProfileEditDialog owned by the Profile tab,
  * so this is display-only: the Edit button and the avatar both call `onEdit`.
  *
- * Render priority: image → color override + initial → hashed color + initial.
+ * Render priority: image → generated identicon (hue from color override, else
+ * hashed). Mirrors the fallback in the shared `<Avatar>` so the preview matches
+ * what renders everywhere else.
  */
 export type AppearanceSectionProps = {
   agent: Agent;
@@ -18,10 +21,6 @@ export type AppearanceSectionProps = {
   onEdit?: () => void;
   variant?: "section" | "inline";
 };
-
-function initial(s: string): string {
-  return s.trim()[0]?.toUpperCase() ?? "?";
-}
 
 export function AvatarPreview({ agent, size }: { agent: Agent; size: number }) {
   if (agent.avatarImageUrl) {
@@ -35,30 +34,7 @@ export function AvatarPreview({ agent, size }: { agent: Agent; size: number }) {
       />
     );
   }
-  // dynamic: scales with avatar size; no fixed token applies
-  const initialFontSize = Math.round(size * 0.42);
-  return (
-    <span
-      aria-hidden="true"
-      className="font-bold"
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: size,
-        height: size,
-        borderRadius: "var(--radius-full)",
-        background: resolveAvatarHue(agent.avatarColorToken, agent.uuid),
-        color: "var(--fg-on-vivid)",
-        fontSize: initialFontSize,
-        lineHeight: 1,
-        letterSpacing: "-0.02em",
-        userSelect: "none",
-      }}
-    >
-      {initial(agent.displayName)}
-    </span>
-  );
+  return <Identicon seed={agent.uuid} size={size} color={resolveAvatarHue(agent.avatarColorToken, agent.uuid)} />;
 }
 
 export function AppearanceSection({ agent, canEdit = true, onEdit, variant = "section" }: AppearanceSectionProps) {

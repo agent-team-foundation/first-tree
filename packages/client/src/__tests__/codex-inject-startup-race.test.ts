@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   agentMessagesByTurn: new Map<number, string[]>(),
   failureByTurn: new Map<number, string>(),
   streamErrorByTurn: new Map<number, string>(),
+  diagnosticAfterFirstMessageByTurn: new Map<number, string>(),
 }));
 
 vi.mock("@openai/codex-sdk", () => {
@@ -33,8 +34,12 @@ vi.mock("@openai/codex-sdk", () => {
         events: (async function* () {
           yield { type: "thread.started", thread_id: "thread-test" };
           const messages = state.agentMessagesByTurn.get(turn) ?? [`reply ${turn}`];
-          for (const text of messages) {
+          const diagnosticAfterFirstMessage = state.diagnosticAfterFirstMessageByTurn.get(turn);
+          for (const [index, text] of messages.entries()) {
             yield { type: "item.completed", item: { type: "agent_message", text } };
+            if (index === 0 && diagnosticAfterFirstMessage) {
+              yield { type: "error", message: diagnosticAfterFirstMessage };
+            }
           }
           const failure = state.failureByTurn.get(turn);
           if (failure) {
@@ -114,7 +119,12 @@ type SendMessageMock = ReturnType<typeof vi.fn<(chatId: string, body: Record<str
 
 function makeContext(
   onFinishTurn: (count?: number) => void,
-  opts: { sendMessage?: SendMessageMock; emitEvent?: SessionContext["emitEvent"] } = {},
+  opts: {
+    sendMessage?: SendMessageMock;
+    emitEvent?: SessionContext["emitEvent"];
+    formatInboundContent?: SessionContext["formatInboundContent"];
+    retryTurn?: SessionContext["retryTurn"];
+  } = {},
 ): SessionContext {
   const sendMessage =
     opts.sendMessage ??
@@ -135,10 +145,20 @@ function makeContext(
     recordProviderActivity: () => {},
     emitEvent: opts.emitEvent ?? (() => {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-startup-race"),
+    ...(opts.formatInboundContent ? { formatInboundContent: opts.formatInboundContent } : {}),
+    ...(opts.retryTurn ? { retryTurn: opts.retryTurn } : {}),
     finishTurn: async (messages) => {
       onFinishTurn(Array.isArray(messages) ? messages.length : 1);
     },
   };
+}
+
+async function waitFor(assertion: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (!assertion()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting for assertion");
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 beforeEach(() => {
@@ -147,6 +167,7 @@ beforeEach(() => {
   state.agentMessagesByTurn.clear();
   state.failureByTurn.clear();
   state.streamErrorByTurn.clear();
+  state.diagnosticAfterFirstMessageByTurn.clear();
   state.chatContextPromise = new Promise((resolve) => {
     state.resolveChatContext = resolve;
   });
@@ -254,7 +275,7 @@ describe("codex handler startup inject queue", () => {
     await handler.shutdown();
   });
 
-  it("does not forward partial Codex text when the turn later fails", async () => {
+  it("treats a stream error followed by final and turn.completed as success with diagnostics", async () => {
     const sendMessage = vi
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
       .mockResolvedValue(undefined);
@@ -262,6 +283,45 @@ describe("codex handler startup inject queue", () => {
     const completedCounts: Array<number | undefined> = [];
     const handler = createCodexHandler({ workspaceRoot });
     const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent });
+
+    state.agentMessagesByTurn.set(1, ["working note", "final answer"]);
+    state.diagnosticAfterFirstMessageByTurn.set(1, "Reconnecting... 2/5 (request timed out)");
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+
+    const events = emitEvent.mock.calls.map(([event]) => event);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1].content).toBe("final answer");
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "error" &&
+          event.payload.source === "sdk" &&
+          event.payload.message.includes("Reconnecting... 2/5"),
+      ),
+    ).toBe(true);
+    expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "success")).toBe(true);
+    expect(completedCounts).toEqual([1]);
+
+    await handler.shutdown();
+  });
+
+  it("does not forward partial Codex text when the turn later fails", async () => {
+    const sendMessage = vi
+      .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
+      .mockResolvedValue(undefined);
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const completedCounts: Array<number | undefined> = [];
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent, retryTurn });
 
     state.agentMessagesByTurn.set(1, ["working note"]);
     state.failureByTurn.set(1, "codex failed");
@@ -283,7 +343,8 @@ describe("codex handler startup inject queue", () => {
       ),
     ).toBe(true);
     expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);
-    expect(completedCounts).toEqual([1]);
+    expect(completedCounts).toEqual([]);
+    expect(retryTurn).toHaveBeenCalledWith([makeMessage("m1", "first")], "codex_unknown_failure");
 
     await handler.shutdown();
   });
@@ -294,8 +355,9 @@ describe("codex handler startup inject queue", () => {
       .mockResolvedValue(undefined);
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
     const completedCounts: Array<number | undefined> = [];
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
     const handler = createCodexHandler({ workspaceRoot });
-    const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent });
+    const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent, retryTurn });
 
     state.agentMessagesByTurn.set(1, ["working note"]);
     state.streamErrorByTurn.set(1, "codex stream error");
@@ -318,7 +380,97 @@ describe("codex handler startup inject queue", () => {
       ),
     ).toBe(true);
     expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);
+    expect(completedCounts).toEqual([]);
+    expect(retryTurn).toHaveBeenCalledWith([makeMessage("m1", "first")], "codex_stream_ended_after_diagnostic_error");
+
+    await handler.shutdown();
+  });
+
+  it("retries queued injects when all inbound formatting fails before provider custody", async () => {
+    const completedCounts: Array<number | undefined> = [];
+    const retryTurn = vi.fn();
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext(
+      (count) => {
+        completedCounts.push(count);
+      },
+      {
+        formatInboundContent: async (message) => {
+          if (message.id === "m2") throw new Error("format failed");
+          const raw = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+          return `[From: ${message.senderId}]\n\n${raw}`;
+        },
+      },
+    );
+    ctx.retryTurn = retryTurn;
+
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+    handler.inject(makeMessage("m2", "bad"));
+
+    await waitFor(() => retryTurn.mock.calls.length === 1);
+
+    expect(state.runInputs).toHaveLength(1);
     expect(completedCounts).toEqual([1]);
+    expect(retryTurn).toHaveBeenCalledWith(makeMessage("m2", "bad"), "codex_queued_turn_format_failed");
+
+    await handler.shutdown();
+  });
+
+  it.each([
+    {
+      name: "first failed and second succeeded",
+      failingIds: new Set(["m2"]),
+      messages: [makeMessage("m2", "bad"), makeMessage("m3", "good")],
+    },
+    {
+      name: "first succeeded and second failed",
+      failingIds: new Set(["m3"]),
+      messages: [makeMessage("m2", "good"), makeMessage("m3", "bad")],
+    },
+  ])("retries the whole queued batch when mixed formatting occurs: $name", async ({ failingIds, messages }) => {
+    const completedCounts: Array<number | undefined> = [];
+    const retryTurn = vi.fn();
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext(
+      (count) => {
+        completedCounts.push(count);
+      },
+      {
+        formatInboundContent: async (message) => {
+          if (failingIds.has(message.id)) throw new Error(`format failed for ${message.id}`);
+          const raw = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+          return `[From: ${message.senderId}]\n\n${raw}`;
+        },
+      },
+    );
+    ctx.retryTurn = retryTurn;
+
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+    for (const message of messages) handler.inject(message);
+
+    await waitFor(() => retryTurn.mock.calls.length === messages.length);
+
+    expect(state.runInputs).toHaveLength(1);
+    expect(completedCounts).toEqual([1]);
+    for (const message of messages) {
+      expect(retryTurn).toHaveBeenCalledWith(message, "codex_queued_turn_format_failed");
+    }
 
     await handler.shutdown();
   });

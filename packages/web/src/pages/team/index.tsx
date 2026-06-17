@@ -59,6 +59,7 @@ type MemberListItem = {
   displayName: string;
   role: string;
   createdAt: string;
+  avatarUrl: string | null;
   /** Derived from the member's most recent message; null = never active. */
   lastActiveAt: string | null;
 };
@@ -463,6 +464,7 @@ export function buildTeamData(args: {
     !search || a.displayName.toLowerCase().includes(search) || (a.name ?? "").toLowerCase().includes(search);
   const matchHuman = (m: MemberListItem) =>
     !search || m.displayName.toLowerCase().includes(search) || m.username.toLowerCase().includes(search);
+  const memberById = new Map(members.map((m) => [m.id, m]));
 
   const visible = (a: Agent) => {
     // Members only see their own private agents; admins see all.
@@ -476,6 +478,7 @@ export function buildTeamData(args: {
     kind: "agent",
     agent: a,
     managerLabel: a.managerId ? resolveMember(a.managerId) : null,
+    managerAvatarUrl: a.managerId ? (memberById.get(a.managerId)?.avatarUrl ?? null) : null,
     isOwnedBySelf: a.managerId === selfMemberId,
   });
 
@@ -516,6 +519,7 @@ export function buildTeamData(args: {
         agentId: m.agentId,
         username: m.username,
         displayName: m.displayName,
+        avatarUrl: m.avatarUrl,
         role: m.role,
         isSelf,
         delegate: resolveDelegate(m.agentId),

@@ -5,10 +5,9 @@ export const INBOX_ENTRY_STATUSES = {
   PENDING: "pending",
   DELIVERED: "delivered",
   ACKED: "acked",
-  FAILED: "failed",
 } as const;
 
-export const inboxEntryStatusSchema = z.enum(["pending", "delivered", "acked", "failed"]);
+export const inboxEntryStatusSchema = z.enum(["pending", "delivered", "acked"]);
 export type InboxEntryStatus = z.infer<typeof inboxEntryStatusSchema>;
 
 export const inboxEntrySchema = z.object({
@@ -16,7 +15,7 @@ export const inboxEntrySchema = z.object({
   inboxId: z.string(),
   messageId: z.string(),
   chatId: z.string().nullable(),
-  status: z.string(),
+  status: inboxEntryStatusSchema,
   retryCount: z.number(),
   createdAt: z.string(),
   deliveredAt: z.string().nullable(),

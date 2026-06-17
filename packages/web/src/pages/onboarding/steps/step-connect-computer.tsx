@@ -2,51 +2,31 @@ import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { STUCK_AFTER_MS } from "../../../components/connect-stuck-panel.js";
 import { Button } from "../../../components/ui/button.js";
-import { OptionCard } from "../../../components/ui/option-card.js";
-import { asRuntimeProvider, PROVIDER_LABEL, runtimeProviderLabel } from "../../clients/cards/shared/providers.js";
+import { runtimeProviderLabel } from "../../clients/cards/shared/providers.js";
 import { COPY } from "../copy.js";
 import { CommandBox, FlowHint, StatusRow } from "../flow-ui.js";
-import { ConnectTroubleshooting, ShowMeHow, TerminalGuide } from "../guides.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
- * Connect the computer the agent will run on. The user pastes a one-liner into
- * a terminal; we poll until the computer shows up and confirm an AI coding
- * tool is ready on it. No "runtime"/"terminal-jockey" assumptions.
+ * Install the First Tree client (a small background app) on the user's computer.
+ * Two install paths: run a one-liner in a terminal, OR paste a ready prompt to
+ * the coding agent the user already has (Claude Code / Codex) and let it install.
+ * We poll until the computer shows up, then list the coding agents detected on it
+ * (read-only — picking which one to use moves to the next step, create-agent).
  *
- * Help is consolidated into a single "Need help?" disclosure (how-to +
- * troubleshooting). It auto-opens once the connect has been hanging a while, so
- * a stuck user gets help without hunting for it — and its label switches to
- * "Taking a while?" then. The required status (waiting / connected / no engine)
- * and the hard token-mint error stay inline; the error offers a Try again
- * (the hook also retries silently first, so most blips never surface).
+ * No "Need help?" disclosure / example terminal: the normal state is just the
+ * command(s) + status; a single Node.js recovery line surfaces only once the
+ * connect has hung a while (Node.js missing is the #1 "command not found" cause).
  */
 export function StepConnectComputer({ initialStuck = false }: { initialStuck?: boolean } = {}) {
   const { computer, goNext } = useOnboardingFlow();
-  const {
-    connectedClient,
-    capabilitiesLoaded,
-    okRuntimes,
-    selectedRuntime,
-    setSelectedRuntime,
-    cliCommand,
-    tokenError,
-    retry,
-  } = computer;
+  const { connectedClient, capabilitiesLoaded, okRuntimes, cliCommand, tokenError, retry } = computer;
 
   const noRuntime = !!connectedClient && capabilitiesLoaded && okRuntimes.length === 0;
   const ready = !!connectedClient && okRuntimes.length > 0;
 
-  // Ready runtimes narrowed to the shared enum, for the single-select pills.
-  // (≥2 → pick one; exactly one → just confirm it.)
-  const okProviders = okRuntimes.flatMap((p) => {
-    const provider = asRuntimeProvider(p);
-    return provider ? [provider] : [];
-  });
-
   // Flip to "stuck" if the command doesn't connect within a reasonable window.
-  // `initialStuck` lets the DEV preview render the stuck state directly (the
-  // real timer takes STUCK_AFTER_MS); production never passes it.
+  // `initialStuck` lets the DEV preview render the stuck state directly.
   const [stuck, setStuck] = useState(initialStuck);
   useEffect(() => {
     if (connectedClient) {
@@ -57,26 +37,19 @@ export function StepConnectComputer({ initialStuck = false }: { initialStuck?: b
     return () => window.clearTimeout(t);
   }, [connectedClient]);
 
-  // Auto-open the help once stuck; before that it stays collapsed (opt-in).
-  const [helpOpen, setHelpOpen] = useState(false);
-  useEffect(() => {
-    if (stuck) setHelpOpen(true);
-  }, [stuck]);
+  // Box 2 hands the SAME command to the user's coding agent as a paste-able
+  // prompt, so it stays in sync with the minted token.
+  const agentPrompt = cliCommand ? `${COPY.connectComputer.agentPromptPrefix}\n${cliCommand}` : null;
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      {/* State-aware subtitle (the shell's static `why` is empty for this step):
-          "run the command below" only holds while waiting; once connected we
-          swap to a neutral line so it doesn't reference a command that's gone. */}
       <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
         {connectedClient ? COPY.connectComputer.whyConnected : COPY.connectComputer.whyWaiting}
       </p>
+
       {!connectedClient ? (
         <>
-          <CommandBox command={cliCommand} />
           {tokenError ? (
-            // Light treatment — recoverable + usually transient, so a quiet
-            // line + a real action button, not a loud colored panel.
             <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
               <FlowHint tone="error" role="alert">
                 {COPY.connectComputer.tokenErrorTitle}
@@ -86,16 +59,40 @@ export function StepConnectComputer({ initialStuck = false }: { initialStuck?: b
               </Button>
             </div>
           ) : (
-            <StatusRow state="waiting" label={COPY.connectComputer.waiting} />
+            <>
+              {/* Path 1 — run it yourself in a terminal. */}
+              <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+                <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg-2)" }}>
+                  {COPY.connectComputer.terminalBoxLabel}
+                </p>
+                <CommandBox command={cliCommand} />
+              </div>
+              {/* Path 2 — paste a prompt to the coding agent you already have. */}
+              <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+                <p className="text-label font-medium" style={{ margin: 0, color: "var(--fg-2)" }}>
+                  {COPY.connectComputer.agentBoxLabel}
+                </p>
+                <CommandBox command={agentPrompt} />
+              </div>
+              <StatusRow state="waiting" label={COPY.connectComputer.waiting} />
+              {/* Stuck recovery — one line, Node.js the #1 "command not found" cause. */}
+              {stuck ? (
+                <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+                  {COPY.connectComputer.stuckNodePre}
+                  <a
+                    href={COPY.connectComputer.nodeUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium"
+                    style={{ color: "var(--primary)" }}
+                  >
+                    {COPY.connectComputer.nodeLinkLabel}
+                  </a>
+                  {COPY.connectComputer.stuckNodePost}
+                </p>
+              ) : null}
+            </>
           )}
-          <ShowMeHow
-            label={stuck ? COPY.connectComputer.helpStuckLabel : undefined}
-            open={helpOpen}
-            onToggle={setHelpOpen}
-          >
-            <TerminalGuide command={cliCommand} />
-            <ConnectTroubleshooting />
-          </ShowMeHow>
         </>
       ) : (
         <>
@@ -113,36 +110,30 @@ export function StepConnectComputer({ initialStuck = false }: { initialStuck?: b
               {COPY.connectComputer.detecting}
             </p>
           ) : noRuntime ? (
-            // Light treatment, consistent with the rest — the disabled Continue
-            // already signals "one more thing before you can move on".
             <FlowHint>{COPY.connectComputer.noRuntime}</FlowHint>
-          ) : okProviders.length <= 1 ? (
-            // Exactly one runtime detected — nothing to choose, so name it and
-            // confirm the agent will use it.
-            <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
-              {COPY.connectComputer.runtimeReady(runtimeProviderLabel(selectedRuntime ?? okRuntimes[0] ?? ""))}
-            </p>
           ) : (
-            // Two or more — count + a single-select list. Defaults to the
-            // auto-picked runtime; clicking a pill re-points `selectedRuntime`,
-            // which create-agent then uses as the agent's runtimeProvider.
-            <div className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
-              <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
-                {COPY.connectComputer.runtimesReady(okProviders.length)}
-              </p>
-              <div className="flex flex-wrap" style={{ gap: "var(--sp-2)" }}>
-                {okProviders.map((provider) => (
-                  <OptionCard
-                    key={provider}
-                    name="onboarding-runtime"
-                    layout="pill"
-                    checked={selectedRuntime === provider}
-                    onSelect={() => setSelectedRuntime(provider)}
-                  >
-                    <span className="text-body">{PROVIDER_LABEL[provider]}</span>
-                  </OptionCard>
+            // Detected coding agents — a READ-ONLY list (name + status). Choosing
+            // which one to use is the next step (create-agent), not here.
+            <div className="flex flex-col" style={{ gap: "var(--sp-2_5)" }}>
+              <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
+                {okRuntimes.map((r) => (
+                  <StatusRow
+                    key={r}
+                    state="ok"
+                    label={
+                      <>
+                        <span className="font-medium" style={{ color: "var(--fg)" }}>
+                          {runtimeProviderLabel(r)}
+                        </span>{" "}
+                        · ready
+                      </>
+                    }
+                  />
                 ))}
               </div>
+              <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+                {COPY.connectComputer.detectedBridge}
+              </p>
             </div>
           )}
         </>

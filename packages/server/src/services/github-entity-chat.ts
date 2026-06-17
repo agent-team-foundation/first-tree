@@ -14,6 +14,7 @@ import {
   githubEntityKeyCandidates,
   githubEntityKeysEquivalent,
 } from "./github-entity-key.js";
+import type { EntityState, EntityStateSeed } from "./github-entity-state.js";
 
 const log = createLogger("GithubEntityChat");
 
@@ -64,6 +65,60 @@ export function isCreationEvent(eventType: string, action: string): boolean {
 }
 
 /**
+ * Reviewer-reuse routing (S9, deliver-once-per-chat). When an involved
+ * `(human, delegate)` pair is NOT yet mapped to this entity but the entity
+ * already has a **single** bound chat where BOTH the human and the delegate
+ * are already speakers, the event routes into that chat instead of minting a
+ * sibling one — and **no mapping row is written**. The pair sees the entity's
+ * events through chat membership, and `deliverNormalizedEvent` dedups so the
+ * chat receives one card whose wake-set includes this delegate.
+ *
+ * Returns the chat id when exactly one such chat exists; null when there is
+ * none, or when the candidate is ambiguous (≥2 bound chats both speak in),
+ * in which case the caller mints a fresh chat via `resolveTargetChat` (the
+ * strict per-`(human, delegate)` path — we never guess). Preserves S1 (the
+ * chat follows, not the person) and S7 (no followed chat is dropped).
+ */
+export async function findReuseChatForInvolved(
+  db: Database,
+  organizationId: string,
+  entity: GithubEntity,
+  humanAgentId: string,
+  delegateAgentId: string,
+): Promise<string | null> {
+  const candidateKeys = githubEntityKeyCandidates(entity.type, entity.key);
+  const boundChats = await db
+    .selectDistinct({ chatId: githubEntityChatMappings.chatId })
+    .from(githubEntityChatMappings)
+    .where(
+      and(
+        eq(githubEntityChatMappings.organizationId, organizationId),
+        eq(githubEntityChatMappings.entityType, entity.type),
+        inArray(githubEntityChatMappings.entityKey, candidateKeys),
+      ),
+    );
+  if (boundChats.length === 0) return null;
+
+  const reusable: string[] = [];
+  for (const { chatId } of boundChats) {
+    const speakerRows = await db
+      .select({ agentId: chatMembership.agentId })
+      .from(chatMembership)
+      .where(
+        and(
+          eq(chatMembership.chatId, chatId),
+          eq(chatMembership.accessMode, "speaker"),
+          inArray(chatMembership.agentId, [humanAgentId, delegateAgentId]),
+        ),
+      );
+    const ids = new Set(speakerRows.map((r) => r.agentId));
+    if (ids.has(humanAgentId) && ids.has(delegateAgentId)) reusable.push(chatId);
+    if (reusable.length > 1) break;
+  }
+  return reusable.length === 1 ? (reusable[0] ?? null) : null;
+}
+
+/**
  * Resolve which chat a GitHub event for (human, delegate, entity) belongs to.
  *
  * Three-step strategy from docs/webhook-routing-design.md §4.4:
@@ -106,6 +161,12 @@ export async function resolveTargetChat(
      * chat-proliferation behaviour.
      */
     isMentionMatched: boolean;
+    /**
+     * State derived from the current webhook payload. Used only when this
+     * resolution writes a new mapping for the same entity; existing rows are
+     * updated by the pre-delivery state-sync path.
+     */
+    entityStateSeed?: EntityStateSeed | null;
   },
 ): Promise<{ chatId: string; created: boolean; boundVia: BoundVia } | null> {
   const {
@@ -120,6 +181,7 @@ export async function resolveTargetChat(
   } = params;
   const entity = normalizeGithubEntity(rawEntity);
   const relatedEntities = rawRelatedEntities.map(normalizeGithubEntity);
+  const entityState = stateSeedForEntity(params.entityStateSeed ?? null, entity);
 
   // (a) Direct hit.
   const direct = await lookupMapping(db, organizationId, humanAgentId, delegateAgentId, entity);
@@ -143,6 +205,7 @@ export async function resolveTargetChat(
       entity,
       chatId: humanScoped.chatId,
       boundVia: "human_fallback",
+      entityState,
     });
     return { chatId: inserted.chatId, created: false, boundVia: inserted.boundVia };
   }
@@ -158,6 +221,7 @@ export async function resolveTargetChat(
       entity,
       chatId: linked.chatId,
       boundVia: "fixes_link",
+      entityState,
     });
     // If the insert lost a race, our re-read returns the winner's row.
     return { chatId: inserted.chatId, created: false, boundVia: inserted.boundVia };
@@ -189,6 +253,7 @@ export async function resolveTargetChat(
     entity,
     chatId: chat.id,
     boundVia: "direct",
+    entityState,
   });
   return { chatId: inserted.chatId, created: inserted.chatId === chat.id, boundVia: inserted.boundVia };
 }
@@ -226,7 +291,7 @@ async function lookupMapping(
  * Multiple rows can legitimately exist when the same human created the entity
  * via one delegate and later got fanned out via another delegate's
  * `delegateMention` configuration. Pick deterministically:
- *   1. `entity_state = 'open'` rows first (active conversation).
+ *   1. `entity_state IN ('open', 'draft')` rows first (active conversation).
  *   2. Then earliest `bound_at` — the original chat is the canonical thread.
  */
 async function lookupMappingByHuman(
@@ -250,7 +315,7 @@ async function lookupMappingByHuman(
     )
     .orderBy(
       desc(sql`${githubEntityChatMappings.entityKey} = ${canonicalKey}`),
-      desc(sql`${githubEntityChatMappings.entityState} = 'open'`),
+      desc(sql`${githubEntityChatMappings.entityState} IN ('open', 'draft')`),
       asc(githubEntityChatMappings.boundAt),
     )
     .limit(1);
@@ -268,7 +333,7 @@ export async function insertMappingIfAbsent(
     chatId: string;
     boundVia: BoundVia;
     /** Upstream lifecycle state to seed the row with; defaults to "open". */
-    entityState?: "open" | "closed" | "merged";
+    entityState?: EntityState;
   },
 ): Promise<{ chatId: string; boundVia: BoundVia; inserted: boolean }> {
   const entity = normalizeGithubEntity(params.entity);
@@ -288,6 +353,10 @@ export async function insertMappingIfAbsent(
       chatId: params.chatId,
       boundVia: params.boundVia,
       ...(params.entityState ? { entityState: params.entityState } : {}),
+      // Seed the human label from whatever the caller carried (webhook payload
+      // or follow-time GitHub fetch). Null degrades to the entityKey link; the
+      // webhook handler later backfills/refreshes it via `setEntityTitle`.
+      ...(entity.title && entity.title.length > 0 ? { title: entity.title } : {}),
     })
     .onConflictDoNothing({
       target: [
@@ -510,4 +579,11 @@ export async function refreshGithubChatTopic(db: Database, chatId: string, entit
 function normalizeGithubEntity(entity: GithubEntity): GithubEntity {
   const key = canonicalizeGithubEntityKey(entity.type, entity.key);
   return key === entity.key ? entity : { ...entity, key };
+}
+
+function stateSeedForEntity(seed: EntityStateSeed | null, entity: GithubEntity): EntityState | undefined {
+  if (!seed) return undefined;
+  if (seed.entityType !== entity.type) return undefined;
+  if (!githubEntityKeysEquivalent(entity.type, seed.entityKey, entity.key)) return undefined;
+  return seed.state;
 }

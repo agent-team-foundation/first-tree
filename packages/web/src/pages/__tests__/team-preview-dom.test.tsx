@@ -156,7 +156,7 @@ describe("team preview page", () => {
 
     await click(buttonByText(container, "All"));
     await click(buttonByText(container, "7d"));
-    expect(container.textContent).toContain("4.5M");
+    expect(container.textContent).toContain("1.4M");
 
     const search = container.querySelector<HTMLInputElement>('input[placeholder="Search name or @handle"]');
     if (!search) throw new Error("Search input missing");

@@ -18,7 +18,7 @@ function createMockHandler(overrides?: Partial<AgentHandler>): AgentHandler {
   return {
     start: vi.fn().mockResolvedValue("session-id-mock"),
     resume: vi.fn().mockResolvedValue("session-id-mock"),
-    inject: vi.fn(),
+    inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -85,7 +85,7 @@ function deferred(): { promise: Promise<void>; resolve: () => void; reject: (err
 }
 
 describe("SessionManager runtime projection from inbox coordinator work", () => {
-  it("projects active unsettled work as working and settles to idle only after ACK confirms", async () => {
+  it("projects only processing owned work as working and returns to idle before ACK confirms", async () => {
     const events: Array<{ chatId: string; state: string }> = [];
     let capturedCtx: SessionContext | undefined;
     let capturedMessage: SessionMessage | undefined;
@@ -105,13 +105,17 @@ describe("SessionManager runtime projection from inbox coordinator work", () => 
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-a" }));
+    expect(events).toContainEqual({ chatId: "chat-a", state: "idle" });
+    expect(sm.getAggregateRuntimeState()).toBe("idle");
+
+    if (!capturedMessage) throw new Error("expected captured message");
+    capturedCtx?.markMessagesConsumed(capturedMessage);
     expect(events).toContainEqual({ chatId: "chat-a", state: "working" });
     expect(sm.getAggregateRuntimeState()).toBe("working");
 
-    if (!capturedMessage) throw new Error("expected captured message");
     const finish = capturedCtx?.finishTurn(capturedMessage, { status: "success", terminal: true });
     await Promise.resolve();
-    expect(events[events.length - 1]).toEqual({ chatId: "chat-a", state: "working" });
+    expect(events[events.length - 1]).toEqual({ chatId: "chat-a", state: "idle" });
 
     ack.resolve();
     await finish;
@@ -146,8 +150,8 @@ describe("SessionManager runtime projection from inbox coordinator work", () => 
     if (!capturedMessage) throw new Error("expected captured message");
     await capturedCtx?.finishTurn(capturedMessage, { status: "success", terminal: true });
 
-    expect(events[events.length - 1]).toEqual({ chatId: "chat-a", state: "working" });
-    expect(sm.getAggregateRuntimeState()).toBe("working");
+    expect(events[events.length - 1]).toEqual({ chatId: "chat-a", state: "idle" });
+    expect(sm.getAggregateRuntimeState()).toBe("idle");
     expect(recoverChat).toHaveBeenCalledWith("chat-a");
 
     const later = sm.dispatch(mockEntry({ id: 2, chatId: "chat-a" }));
@@ -157,7 +161,7 @@ describe("SessionManager runtime projection from inbox coordinator work", () => 
     await later;
 
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-a" }));
-    expect(handler.inject).toHaveBeenCalledWith(expect.objectContaining({ id: "msg-2" }));
+    expect(handler.inject).toHaveBeenCalledWith(expect.objectContaining({ id: "msg-2" }), expect.anything());
 
     await sm.shutdown();
   });
@@ -178,7 +182,7 @@ describe("SessionManager runtime projection from inbox coordinator work", () => 
     await sm.shutdown();
   });
 
-  it("keeps idle reaper from suspending unsettled work before hard cap", async () => {
+  it("does not let open delivery debt hold the idle reaper until hard cap", async () => {
     vi.useFakeTimers();
     try {
       const handler = createMockHandler();
@@ -190,14 +194,14 @@ describe("SessionManager runtime projection from inbox coordinator work", () => 
       await sm.dispatch(mockEntry({ id: 1, chatId: "chat-thinking" }));
       await vi.advanceTimersByTimeAsync(20_000);
 
-      expect(handler.suspend).not.toHaveBeenCalled();
+      expect(handler.suspend).toHaveBeenCalled();
       await sm.shutdown();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("hard cap suspends and ACKs only the consumed prefix", async () => {
+  it("processingStarted but non-terminal work is recovered on idle suspend without ACK", async () => {
     vi.useFakeTimers();
     try {
       const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
@@ -226,8 +230,7 @@ describe("SessionManager runtime projection from inbox coordinator work", () => 
       await vi.advanceTimersByTimeAsync(30_000);
 
       expect(handler.suspend).toHaveBeenCalledTimes(1);
-      expect(ackEntry).toHaveBeenCalledTimes(1);
-      expect(ackEntry).toHaveBeenCalledWith(1);
+      expect(ackEntry).not.toHaveBeenCalled();
       expect(ackEntry).not.toHaveBeenCalledWith(2);
       expect(recoverChat).toHaveBeenCalledWith("chat-stuck");
 

@@ -93,6 +93,27 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
     expect(state?.skills).toEqual([...TREE_SKILL_NAMES].sort());
   });
 
+  it("removes retired First Tree skill payloads from previous managed state", () => {
+    const retired = ["first-tree", "first-tree-context", "first-tree-sync", "first-tree-github"];
+    for (const name of retired) plantManagedSkill(workspace, name);
+    writeManagedState(workspace, {
+      schemaVersion: 1,
+      cliVersion: "test",
+      updatedAt: new Date(0).toISOString(),
+      skills: [...TREE_SKILL_NAMES, ...retired],
+    });
+
+    installFirstTreeSkills({ workspacePath: workspace, bundledSkillsRoot });
+
+    for (const name of retired) {
+      expect(existsSync(join(workspace, ".agents", "skills", name))).toBe(false);
+      expect(() => lstatSync(join(workspace, ".claude", "skills", name))).toThrow();
+    }
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-write", "SKILL.md"))).toBe(true);
+    expect(lstatSync(join(workspace, ".claude", "skills", "first-tree-write")).isSymbolicLink()).toBe(true);
+    expect(readManagedState(workspace)?.skills).toEqual([...TREE_SKILL_NAMES].sort());
+  });
+
   it("leaves a user-added skill alone — only names in the recorded prev state are removed", () => {
     // The CLI never recorded `my-custom` as installed, so even though
     // it's not in TREE_SKILL_NAMES the reconcile path must not touch it.

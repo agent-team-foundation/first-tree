@@ -1,26 +1,38 @@
-import type { Message, OpenQuestionItem, OpenQuestionRequest, RequestResolution } from "@first-tree/shared";
-import { MENTION_REGEX, openQuestionRequestSchema, requestResolutionSchema } from "@first-tree/shared";
+import type { AskRequest, Message, RequestResolution } from "@first-tree/shared";
+import { askRequestSchema, MENTION_REGEX, requestResolutionSchema } from "@first-tree/shared";
 
 /**
- * Lifecycle of a `format="request"` message. Derived from the message thread —
- * NOT stored on the message (the server keeps no lifecycle state). Resolution
- * is driven by an EXPLICIT `metadata.resolves` signal (see
- * `requestResolutionSchema`), never by `inReplyTo` — which is now pure
- * threading, so a "chat about this" back-and-forth can thread under the
- * question without resolving it. See proposals/group-chat-unified-send §D1.
+ * Lifecycle of a `format="request"` message ("ask"). Derived from the message
+ * thread — NOT stored on the message. Resolution is driven by an EXPLICIT
+ * `metadata.resolves` signal (see `requestResolutionSchema`), never by
+ * `inReplyTo` (pure threading).
  *   - `open`       — no reply yet. Counts toward the needs_you dot.
- *   - `discussing` — threaded replies exist (a "chat about this" exchange) but
- *                    no explicit resolution yet. Still counts toward the dot —
- *                    the question is being clarified, not answered.
- *   - `resolved`   — a message carries `metadata.resolves` with
- *                    `kind="answered"` pointing at this request (the target's
- *                    clean answer, or the asking agent's `chat send --answer`).
- *   - `closed`     — same, with `kind="closed"` (the asking agent withdrew it
- *                    via `chat send --close`). Closing is explicit; re-asking opens a
- *                    new independent question and never auto-supersedes.
- * Only the target or the asking agent can resolve (mirrors the server's authz).
+ *   - `discussing` — threaded (non-resolving) replies exist; still counts.
+ *   - `resolved`   — a `metadata.resolves` with `kind="answered"` from the
+ *                    target human (the web answer) — or a legacy asker-authored
+ *                    row (compat; see below).
+ *   - `closed`     — same, `kind="closed"` (legacy/server-only; no surface
+ *                    produces it now).
+ * NEW resolutions are human-only: the server accepts a `resolves` write only
+ * from the target, and an agent (including the asker) cannot answer or close a
+ * question. The reader additionally honors a resolution authored by the asker
+ * for backward-compat with rows written before the refinement (the server
+ * idempotency scan does the same), so a legacy asker-resolved request does not
+ * re-block the human.
+ *
+ * The ask itself is the message BODY (`content`); `metadata.request` carries
+ * only the answer affordance (`options` + `multiSelect`). The answer is free
+ * text (selected option labels and/or a typed note), recorded in the resolving
+ * reply's `content` — never structured.
  */
 export type RequestState = "open" | "discussing" | "resolved" | "closed";
+
+export type RequestLifecycleProjection = {
+  state: RequestState;
+  /** Option labels the answer selected (for the resolved card's echo). */
+  selectedLabels: string[];
+  closeReason: string | null;
+};
 
 /** Read the resolved `@`-mention uuids from a message's metadata. */
 export function readMentions(metadata: Record<string, unknown> | null | undefined): string[] {
@@ -30,18 +42,9 @@ export function readMentions(metadata: Record<string, unknown> | null | undefine
 
 /**
  * Whether `content` *starts* with a mention token for any of `names` — the
- * shape the server's `normalizeMentionsInContent` produces (`@target ` prepended
- * at index 0).
- *
- * Deliberately leading-only, not an anywhere-scan: `rehypeMentions` skips
- * `<code>`/`<pre>`/`<a>`, so a raw anywhere-scan would report a mention that the
- * body never actually chips (e.g. `` `@target` ``, a fenced block, or
- * `[@target](…)`). A token at index 0, by contrast, can never sit inside code
- * or a link (those need a leading `` ` `` / `[`), so it is always chippable —
- * making this a render-faithful, false-positive-free signal. Every other shape
- * (mid-body, code, link) conservatively returns false, so the caller keeps its
- * metadata-derived target. Uses the same shared `MENTION_REGEX` (sticky-anchored
- * to index 0) and case-insensitive resolution as the renderer.
+ * shape the server's `normalizeMentionsInContent` produces. Leading-only and
+ * render-faithful (see `rehypeMentions`), so it never reports a mention the body
+ * does not actually chip.
  */
 export function contentStartsWithMention(content: unknown, names: readonly string[]): boolean {
   if (typeof content !== "string" || names.length === 0) return false;
@@ -52,11 +55,17 @@ export function contentStartsWithMention(content: unknown, names: readonly strin
   return new Set(names.map((n) => n.toLowerCase())).has(m[1].toLowerCase());
 }
 
-/** Parse `metadata.request` into the structured ask; `null` when absent/malformed. */
-export function readRequestPayload(metadata: Record<string, unknown> | null | undefined): OpenQuestionRequest | null {
-  const raw = metadata?.request;
-  const parsed = openQuestionRequestSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+/**
+ * Read `metadata.request` into the ask's answer affordance. A well-formed
+ * payload yields its `options` + `multiSelect`. Anything else — absent metadata,
+ * or a legacy/retired shape (e.g. the old `{ subject?, questions: [...] }`) —
+ * falls back to a **free-text ask** (`{ multiSelect: false }`), so an
+ * already-open question is always answerable and never stranded with no web
+ * answer surface (its open-request red dot would otherwise never clear).
+ */
+export function readRequestPayload(metadata: Record<string, unknown> | null | undefined): AskRequest {
+  const parsed = askRequestSchema.safeParse(metadata?.request);
+  return parsed.success ? parsed.data : { multiSelect: false };
 }
 
 /** Parse `metadata.resolves` into the explicit resolution signal; `null` when absent/malformed. */
@@ -66,48 +75,65 @@ export function readResolution(metadata: Record<string, unknown> | null | undefi
 }
 
 /**
+ * Recover which option labels an answer selected, from the resolving reply's
+ * `content`. A label counts as selected when it appears as a token in the
+ * content (the answer composer joins selected labels into the reply). Used only
+ * for the resolved card's selection echo, so a loose substring match is fine.
+ */
+export function recoverSelectedLabels(replyContent: unknown, options: readonly { label: string }[]): string[] {
+  if (typeof replyContent !== "string" || options.length === 0) return [];
+  const text = replyContent;
+  return options.map((o) => o.label).filter((label) => text.includes(label));
+}
+
+/**
  * Derive the request's lifecycle from the surrounding messages. An explicit
  * `metadata.resolves` wins; absent that, threaded replies mean `discussing`,
- * and a bare request means `open`. Resolution counts only from the target (a
- * direct answer) or the asking agent (answer/close after the discussion) —
- * mirrors the server's authz, so a stray `resolves` from anyone else can't flip
- * the card.
+ * and a bare request means `open`. A resolution counts from the target human
+ * (new resolutions are human-only) or, for backward-compat, the asker (legacy
+ * rows) — mirroring the server's idempotency resolver scope.
  */
 export function deriveRequestState(request: Message, thread: readonly Message[]): RequestState {
+  return deriveRequestLifecycleProjection(request, thread).state;
+}
+
+export function deriveRequestLifecycleProjection(
+  request: Message,
+  thread: readonly Message[],
+): RequestLifecycleProjection {
   const targets = readMentions(request.metadata);
+  // NEW resolutions are human-only — the server accepts a `metadata.resolves`
+  // write only from the target. But the lifecycle READER must also honor a
+  // resolution authored by the asker, because pre-refinement history can contain
+  // asker-authored resolution rows (back when an agent could `--answer`/`--close`).
+  // The server idempotency scan still counts those, so the Web must agree — else
+  // a legacy request the asker already resolved would re-block the target as an
+  // unanswered takeover even though its red-dot is cleared. A NEW asker
+  // resolution never reaches a reader (it is rejected at the write path), so this
+  // branch only ever honors legacy rows.
   const canResolve = (senderId: string): boolean => senderId === request.senderId || targets.includes(senderId);
   let discussing = false;
   for (const m of thread) {
     const res = readResolution(m.metadata);
     if (res && res.request === request.id && canResolve(m.senderId)) {
-      return res.kind === "answered" ? "resolved" : "closed";
+      if (res.kind === "answered") {
+        const payload = readRequestPayload(request.metadata);
+        return {
+          state: "resolved",
+          selectedLabels: payload.options ? recoverSelectedLabels(m.content, payload.options) : [],
+          closeReason: null,
+        };
+      }
+      return { state: "closed", selectedLabels: [], closeReason: res.reason ?? null };
     }
-    // A threaded reply that is NOT a resolution is a "chat about this"
-    // discussion turn — the question is being clarified, not answered.
     if (m.id !== request.id && m.inReplyTo === request.id) discussing = true;
   }
-  return discussing ? "discussing" : "open";
+  return { state: discussing ? "discussing" : "open", selectedLabels: [], closeReason: null };
 }
 
-/**
- * The optional human-readable reason from the message that CLOSED this request
- * (`metadata.resolves.kind="closed"`). `null` when the request isn't closed or
- * the close carried no reason. Used for the closed card's copy.
- */
+/** The optional human-readable reason from the message that CLOSED this request. */
 export function readCloseReason(request: Message, thread: readonly Message[]): string | null {
-  const targets = readMentions(request.metadata);
-  for (const m of thread) {
-    const res = readResolution(m.metadata);
-    if (
-      res &&
-      res.request === request.id &&
-      res.kind === "closed" &&
-      (m.senderId === request.senderId || targets.includes(m.senderId))
-    ) {
-      return res.reason ?? null;
-    }
-  }
-  return null;
+  return deriveRequestLifecycleProjection(request, thread).closeReason;
 }
 
 /** Viewer is "related" to a request iff they are the asker or the single target. */
@@ -119,7 +145,7 @@ export function isRelatedViewer(request: Message, viewerAgentId: string | null |
 
 /**
  * Default expand state: unrelated viewers always collapse; related viewers see
- * `open`/`resolved` expanded and `closed` collapsed. (User can toggle either way.)
+ * `open`/`resolved` expanded and `closed` collapsed.
  */
 export function defaultExpanded(state: RequestState, related: boolean): boolean {
   if (!related) return false;
@@ -127,11 +153,8 @@ export function defaultExpanded(state: RequestState, related: boolean): boolean 
 }
 
 /**
- * Core scan shared by `findThreadableRequestId` and `findDockableRequest`:
- * the most recent OPEN or DISCUSSING `format="request"` directed at the
- * viewer, optionally restricted to requests raised by `fromSenders`. One
- * definition of "the live question" keeps the composer's thread-on-reply
- * behavior and the dock's pin choice agreeing by construction.
+ * Core scan: the most recent OPEN or DISCUSSING `format="request"` directed at
+ * the viewer, optionally restricted to `fromSenders`.
  */
 function findLiveRequest(
   thread: readonly Message[],
@@ -139,7 +162,6 @@ function findLiveRequest(
   fromSenders?: ReadonlySet<string>,
 ): Message | null {
   if (!viewerAgentId) return null;
-  // `thread` is oldest-first; walk from the newest so the latest live question wins.
   for (let i = thread.length - 1; i >= 0; i--) {
     const m = thread[i];
     if (!m || m.format !== "request") continue;
@@ -153,13 +175,9 @@ function findLiveRequest(
 
 /**
  * When `viewer` is about to send a message mentioning `mentionedIds`, find the
- * most recent OPEN or DISCUSSING request directed at them and raised by one of
- * the mentioned agents — so a plain composer reply that @-mentions the asking
- * agent threads onto the question (sets `inReplyTo`). This is the "chat about
- * this" path: the reply threads under the question for context but does NOT
- * resolve it — resolution needs an explicit `metadata.resolves` (written by the
- * card's answer block, or the agent's `chat send --answer`/`--close`). Returns
- * the request's message id, or `null` when there's no such live question.
+ * most recent OPEN/DISCUSSING request directed at them and raised by one of the
+ * mentioned agents — so a plain composer reply that @-mentions the asking agent
+ * threads onto the question (sets `inReplyTo`) without resolving it.
  */
 export function findThreadableRequestId(
   thread: readonly Message[],
@@ -170,98 +188,53 @@ export function findThreadableRequestId(
   return findLiveRequest(thread, viewerAgentId, new Set(mentionedIds))?.id ?? null;
 }
 
-/**
- * The request the composer dock pins: the most recent OPEN or DISCUSSING
- * `format="request"` directed at the viewer. The dock owns answering for
- * exactly this one (the timeline card suppresses its inline answer block via
- * `suppressAnswerBlock`); any older live request keeps its inline block as
- * the fallback. Returns `null` when nothing needs the viewer's answer.
- */
+/** The most recent OPEN/DISCUSSING `format="request"` directed at the viewer. */
 export function findDockableRequest(thread: readonly Message[], viewerAgentId: string | null): Message | null {
   return findLiveRequest(thread, viewerAgentId);
 }
 
 /**
- * The composer text a clean option selection produces. `selections` is keyed
- * by PROMPT (the same shape `recoverAnswerSelections` returns, so draft ⇄
- * selection round-trips losslessly). A single single-select question fills
- * just the option text (what you click is exactly what you send); several
- * questions fill one canonical `"<prompt> → <answer>"` line per answered
- * single-select question so the sent content parses back via
- * `parseAnswerSelections` for the resolved card's echo. Free-text questions
- * never contribute — they are answered by typing, which goes through the
- * agent-judgment path.
+ * The request the viewer is BLOCKED on: the OLDEST (FIFO) `open`/`discussing`
+ * `format="request"` directed at the viewer. The blocking UI takes over the
+ * pane, hides every later timeline item, and only lifts once it resolves.
+ * Watchers / non-targets never block.
  */
-export function buildAnswerDraft(payload: OpenQuestionRequest, selections: Record<string, string>): string {
-  const qs = payload.questions;
-  const only = qs.length === 1 ? qs[0] : undefined;
-  if (only && only.kind === "single") return selections[only.prompt] ?? "";
-  return qs
-    .filter((q) => q.kind === "single" && selections[q.prompt])
-    .map((q) => `${q.prompt} → ${selections[q.prompt]}`)
-    .join("\n");
-}
-
-/**
- * Every required question is answered by an option selection (`selections`
- * keyed by prompt). A required free-text question can never satisfy this — a
- * typed answer is judged by the asking agent, not direct-resolved by the
- * composer.
- */
-export function allRequiredSelected(payload: OpenQuestionRequest, selections: Record<string, string>): boolean {
-  return payload.questions.every((q) => !q.required || (q.kind === "single" && Boolean(selections[q.prompt])));
-}
-
-/**
- * Recover the chosen answers from a resolving message's content, keyed by
- * prompt. Canonical `"<prompt> → <answer>"` lines parse first; the fallback
- * accepts the bare option text the composer dock sends for a one-question
- * request (the box shows exactly the clicked option, so that is what lands in
- * history). Returns `{}` when nothing matches — callers render "answered".
- */
-export function recoverAnswerSelections(
-  replyContent: unknown,
-  questions: readonly OpenQuestionItem[],
-): Record<string, string> {
-  const parsed = parseAnswerSelections(
-    replyContent,
-    questions.map((q) => q.prompt),
-  );
-  if (Object.keys(parsed).length > 0) return parsed;
-  const only = questions.length === 1 ? questions[0] : undefined;
-  if (only && only.kind === "single" && typeof replyContent === "string") {
-    const text = replyContent.trim();
-    if (only.options.includes(text)) return { [only.prompt]: text };
+export function findBlockingRequest(thread: readonly Message[], viewerAgentId: string | null): Message | null {
+  if (!viewerAgentId) return null;
+  for (const m of thread) {
+    if (m.format !== "request") continue;
+    if (!readMentions(m.metadata).includes(viewerAgentId)) continue;
+    // Every `format="request"` row is answerable — a well-formed payload via its
+    // options, a legacy/malformed one via the free-text fallback in
+    // `readRequestPayload`. We never skip a live request, so an already-open
+    // question (including ones written under the retired schema) keeps a takeover
+    // and its red dot can always be cleared.
+    const st = deriveRequestState(m, thread);
+    if (st === "open" || st === "discussing") return m;
   }
-  return {};
+  return null;
 }
 
 /**
- * Parse the chosen answers out of a resolving reply's content. The answer
- * composer writes one `"<prompt> → <answer>"` line per question; we map each
- * back to its question by exact prompt match. Returns `{}` when the content
- * isn't a string or no line matches (e.g. a free-form reply typed in the
- * composer) — callers then render without a selection highlight.
+ * Whether the viewer has answered enough to send. One ask, two channels: at
+ * least one selected option label OR any free text. Drives the Reply button.
  */
-export function parseAnswerSelections(replyContent: unknown, prompts: readonly string[]): Record<string, string> {
-  if (typeof replyContent !== "string") return {};
-  // Match each line against the known prompts as PREFIXES (longest first),
-  // not by splitting on the first " → " — a prompt that itself contains
-  // " → " (e.g. "Migrate v1 → v2 now?") would otherwise break the
-  // buildAnswerDraft round-trip. The separator tolerates extra whitespace
-  // around the arrow, matching historical hand-formatted replies.
-  const byLength = [...prompts].sort((a, b) => b.length - a.length);
-  const out: Record<string, string> = {};
-  for (const rawLine of replyContent.split("\n")) {
-    const line = rawLine.trim();
-    for (const prompt of byLength) {
-      if (!line.startsWith(prompt)) continue;
-      const sep = /^\s+→\s+(.*)$/.exec(line.slice(prompt.length));
-      if (sep?.[1] !== undefined) {
-        out[prompt] = sep[1].trim();
-        break;
-      }
-    }
-  }
-  return out;
+export function allRequiredAnswered(
+  _payload: AskRequest,
+  selectedLabels: readonly string[],
+  freeText: string,
+): boolean {
+  return selectedLabels.length > 0 || freeText.trim().length > 0;
+}
+
+/**
+ * Build the resolving reply's `content` from the two answer channels — the
+ * selected option `selectedLabels` and the typed `freeText` ("Other"). Selected
+ * labels join on one line; any free text follows on its own line. The answer is
+ * plain text — option picks and the note are not separately structured.
+ */
+export function buildResolveAnswer(_payload: AskRequest, selectedLabels: readonly string[], freeText: string): string {
+  const picked = selectedLabels.join(", ");
+  const note = freeText.trim();
+  return [picked, note].filter((s) => s.length > 0).join("\n");
 }

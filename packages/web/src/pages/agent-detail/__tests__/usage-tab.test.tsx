@@ -88,7 +88,6 @@ function createContext(overrides: Partial<AgentDetailContext> = {}): AgentDetail
     boundClientLabel: "gandy-macbook",
     setupRuntimeProvider: "claude-code",
     onOpenBindDialog: () => undefined,
-    onOpenRebindDialog: () => undefined,
     bindClientPending: false,
     saveIdentity: async () => undefined,
     refreshAgent: async () => undefined,
@@ -270,13 +269,13 @@ describe("UsageTab", () => {
     expect(container.textContent).toContain("Active days");
     expect(container.textContent).toContain("Peak day");
     expect(container.textContent).toContain("Recent turns");
-    expect(container.textContent).toContain("Daily total tokens. Darker cells mean more usage.");
-    expect(activityCells.find((cell) => cell.getAttribute("aria-label")?.includes("10.5K total tokens"))).toBeDefined();
+    expect(container.textContent).toContain("Daily active tokens. Darker cells mean more usage.");
+    expect(activityCells.find((cell) => cell.getAttribute("aria-label")?.includes("9.5K active tokens"))).toBeDefined();
     expect(container.textContent).toContain("Your most recent turns from the last 30 days.");
     expect(container.textContent).toContain("Launch planning");
     expect(container.textContent).toContain("private chat");
     expect(container.textContent).toContain("claude-code/sonnet");
-    expect(container.textContent).toContain("46.2K");
+    expect(container.textContent).toContain("16.2K");
     expect(usageMocks.getAgentUsageSummary).toHaveBeenCalledWith("agent-1", "30d");
     expect(usageMocks.getAgentUsageTurns).toHaveBeenCalledWith("agent-1", {
       window: "30d",

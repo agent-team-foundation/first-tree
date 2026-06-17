@@ -22,6 +22,7 @@ import type { Command } from "commander";
 import { fail } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
 import {
+  CapabilityRefresher,
   ClientRuntime,
   COMMAND_VERSION,
   createApiNameResolver,
@@ -243,26 +244,38 @@ export function registerDaemonStartCommand(daemon: Command): void {
           runtime.addAgent(name, agentConfig);
         }
 
-        await runtime.start();
-
-        // Post-register capabilities upload — the `clients` row only exists
-        // after the `client:register` WS handshake, so we run the PATCH here
-        // instead of pre-flight. Best-effort: a transient failure logs and
-        // moves on; agents still bind, and a subsequent restart retries.
-        if (probedCapabilities) {
-          try {
+        // Runtime-capability refresh as a single probing model. The refresher
+        // owns BOTH the WS-reconnect re-probe AND a bounded, backoff-scheduled
+        // background poll that runs while the daemon stays connected — the gap
+        // this fixes: the startup snapshot goes stale the instant the operator
+        // installs / logs into a provider, and with no reconnect there was
+        // otherwise no refresh until a restart or a manual `daemon probe`. The
+        // poll re-probes only while a provider is non-`ok` and stops once every
+        // provider is `ok`; reconnect and poll share one in-flight guard so
+        // providers are never launched concurrently. Uploads are deduped.
+        const capabilityRefresher = new CapabilityRefresher({
+          initial: probedCapabilities,
+          upload: async (capabilities) => {
             const accessToken = await ensureFreshAccessToken();
             await uploadClientCapabilities({
               serverUrl: config.server.url,
               accessToken,
               clientId: config.client.id,
-              capabilities: probedCapabilities,
+              capabilities,
             });
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            print.status("⚠️", `capabilities upload skipped: ${msg}`);
-          }
-        }
+          },
+          log: (symbol, msg) => print.status(symbol, msg),
+        });
+        runtime.onReconnect(() => capabilityRefresher.onReconnect());
+
+        await runtime.start();
+
+        // Post-register capabilities upload + arm the background poll — the
+        // `clients` row only exists after the `client:register` WS handshake,
+        // so the first PATCH runs here rather than pre-flight. Best-effort: a
+        // transient failure logs and moves on; agents still bind, and the poll
+        // (or a later restart) retries.
+        await capabilityRefresher.start();
 
         // Post-register slash-command skill upload. Phase 1B scope is
         // user-global Claude Code skills — every claude-code agent on this
@@ -327,6 +340,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // Graceful shutdown
         const shutdown = async () => {
           print.line("\n  Shutting down...\n");
+          capabilityRefresher.stop();
           runtime.unwatchAgentsDir();
           await runtime.stop();
           process.exit(0);

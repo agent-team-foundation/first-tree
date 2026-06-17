@@ -761,6 +761,7 @@ function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): Onboardi
     hasAgent: true,
     selectedRepoUrls: ["https://github.com/acme/web.git"],
     setSelectedRepoUrls: () => undefined,
+    hasRepoDraft: true,
     treeMode: "existing",
     setTreeMode: () => undefined,
     treeUrl: "https://github.com/acme/context-tree",
@@ -1095,6 +1096,7 @@ describe("page SSR smoke coverage", () => {
       renderPage(
         <ChatRightSidebar
           chatId="chat-1"
+          description={null}
           participants={CHAT_PARTICIPANTS}
           participantsLoading={false}
           managedByMe={new Map([["agent-1", true]])}
@@ -1189,7 +1191,6 @@ describe("page SSR smoke coverage", () => {
     const { ConnectCommandPanel } = await import("../../components/connect-command-panel.js");
     const { ConnectStuckPanel } = await import("../../components/connect-stuck-panel.js");
     const { CommandBox, FlowNote, RepoPicker, StatusRow, WorkingState } = await import("../onboarding/flow-ui.js");
-    const { InstallGuide, ShowMeHow, TerminalGuide } = await import("../onboarding/guides.js");
     const { GithubConnectedPage } = await import("../onboarding/github-connected.js");
     const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
     const { StepConnectComputer } = await import("../onboarding/steps/step-connect-computer.js");
@@ -1214,17 +1215,12 @@ describe("page SSR smoke coverage", () => {
         />
         <ConnectCommandPanel command={null} phase="error" errorContent="Could not mint a token" />
         <ConnectStuckPanel />
-        <ShowMeHow>
-          <TerminalGuide command="first-tree-dev login token" />
-          <InstallGuide />
-        </ShowMeHow>
       </>,
     );
     expect(html).toContain("first-tree login token");
     expect(html).toContain("Heads up");
     expect(html).toContain("gandy-macbook connected");
     expect(html).toContain("Install Node.js");
-    expect(html).toContain("Pick repos");
 
     // The install-popup landing page (auto-closes the script-opened tab; the
     // effect is a no-op under SSR). Confirms it renders + carries role=status.
@@ -1249,7 +1245,9 @@ describe("page SSR smoke coverage", () => {
     expect(
       await renderOnboardingStep(<StepCreateAgent />, { activeStep: "create-agent", agentPhase: "timeout" }),
     ).toContain("online yet");
-    expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain("Pick repos");
+    expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain(
+      "Loading your repos",
+    );
     expect(await renderOnboardingStep(<StepKickoff />, { activeStep: "kickoff" })).toContain(
       "Your agent&#x27;s ready to get to work",
     );

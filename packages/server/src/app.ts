@@ -79,10 +79,10 @@ import {
 import { broadcastToAdmins } from "./services/admin-broadcast.js";
 import { expiryToSeconds } from "./services/auth.js";
 import { type BackgroundTasks, createBackgroundTasks } from "./services/background-tasks.js";
+import { invalidateChatAudienceLocal, registerChatAudienceDispatcher } from "./services/chat-audience-cache.js";
 import { registerChatMessageDispatcher } from "./services/chat-projection.js";
 import { createCommandVersionPoller } from "./services/command-version-poller.js";
 import { createConfigService } from "./services/config-service.js";
-import { forceDisconnect } from "./services/connection-manager.js";
 import { repairMembershipHumanMirrors } from "./services/membership.js";
 import { createNotifier, type Notifier } from "./services/notifier.js";
 import { ensureDefaultOrganization } from "./services/organization.js";
@@ -658,16 +658,17 @@ export async function buildApp(config: Config) {
       .notifyChatMessage(chatId, messageId)
       .catch((err) => createLogger("chat-message-kick").warn({ err, chatId, messageId }, "chat:message kick failed"));
   });
-  notifier.onAgentDetach(({ agentId, clientId, reason }) => {
-    const disconnected = forceDisconnect(agentId, reason, clientId);
-    if (disconnected) {
-      app.log.info(
-        { agentId, clientId, reason, instanceId: config.instanceId },
-        "agent detach notification disconnected local runtime",
-      );
-    }
+  // Cross-replica chat-audience invalidation. Membership-mutation paths call
+  // `invalidateChatAudience`, which fans out through this dispatcher; every
+  // replica's listener (below) drops its local audience cache so none keeps
+  // serving a stale audience that would drop `chat:message` pushes to a
+  // just-added member for up to the cache TTL.
+  registerChatAudienceDispatcher((chatId) => {
+    notifier
+      .notifyChatAudience(chatId)
+      .catch((err) => createLogger("chat-audience-kick").warn({ err, chatId }, "chat:audience kick failed"));
   });
-
+  notifier.onChatAudience(({ chatId }) => invalidateChatAudienceLocal(chatId));
   // Start notifier and background tasks on server start.
   app.addHook("onReady", async () => {
     // Ensure the default organization exists (idempotent)

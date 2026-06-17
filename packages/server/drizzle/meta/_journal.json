@@ -453,8 +453,36 @@
     {
       "idx": 64,
       "version": "7",
-      "when": 1781517328943,
-      "tag": "0064_legal_daredevil",
+      "when": 1781575626795,
+      "tag": "0064_superb_betty_brant",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1781592028868,
+      "tag": "0065_outgoing_penance",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1781663934468,
+      "tag": "0066_lowly_scorpion",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1781668714974,
+      "tag": "0067_military_warpath",
+      "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1781694471890,
+      "tag": "0068_brief_phantom_reporter",
       "breakpoints": true
     }
   ]

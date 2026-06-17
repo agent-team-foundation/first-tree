@@ -1,7 +1,7 @@
 import type { InboxEntryWithMessage } from "@first-tree/shared";
 import type { pino } from "../observability/logger.js";
 import { Deduplicator } from "./deduplicator.js";
-import type { SessionMessage, TurnOutcome } from "./handler.js";
+import type { SessionMessage, TerminalRejectionEvidence, TurnOutcome } from "./handler.js";
 
 export type DeliveryWork = {
   chatId: string;
@@ -24,7 +24,7 @@ export type WorkSnapshot = {
   admissionPending: boolean;
 };
 
-type DeliveryPhase = "tracked" | "accepted" | "consumed" | "ackPending";
+type DeliveryPhase = "open" | "owned" | "terminal";
 type RecoveryDebt = "none" | "required" | "running";
 
 type TrackedDelivery = {
@@ -32,6 +32,18 @@ type TrackedDelivery = {
   messageId: string;
   dedupKey: string;
   phase: DeliveryPhase;
+  processingStartedAt?: number;
+  terminalOutcome?: {
+    status: "success" | "error";
+    errorKind?: "deterministic" | "transient" | "unknown";
+    handledAt: number;
+    evidence?: TerminalRejectionEvidence;
+  };
+  ackAttempt?: {
+    throughEntryId: number;
+    reason: string;
+    startedAt: number;
+  };
 };
 
 type ChatInboxLedger = {
@@ -71,9 +83,23 @@ export class InboxDeliveryCoordinator {
       return { kind: "recovering" };
     }
 
+    const activeByEntryId = ledger.entries.find((tracked) => tracked.entryId === entry.id);
+    if (activeByEntryId) {
+      this.config.log.debug(
+        { chatId, messageId, entryId: entry.id, phase: activeByEntryId.phase },
+        "redelivery observed for active ledger entry",
+      );
+      if (activeByEntryId.phase === "terminal") {
+        void this.ackThrough(chatId, activeByEntryId.entryId, "redelivery_terminal_retry", {
+          requireTerminalPrefix: true,
+        });
+      }
+      return { kind: "duplicate-in-flight" };
+    }
+
     const dedupKey = this.dedupKey(chatId, messageId);
     if (this.deduplicator.isDuplicate(dedupKey)) {
-      const stillInFlight = ledger.entries.some((tracked) => tracked.entryId === entry.id);
+      const stillInFlight = ledger.entries.some((tracked) => tracked.messageId === messageId);
       this.config.log.debug({ chatId, messageId, entryId: entry.id, stillInFlight }, "duplicate message observed");
       if (stillInFlight) return { kind: "duplicate-in-flight" };
       this.config.log.debug(
@@ -82,17 +108,17 @@ export class InboxDeliveryCoordinator {
       );
     }
 
-    ledger.entries.push({ entryId: entry.id, messageId, dedupKey, phase: "tracked" });
+    ledger.entries.push({ entryId: entry.id, messageId, dedupKey, phase: "open" });
     ledger.entries.sort((a, b) => a.entryId - b.entryId);
     this.emitWorkChanged(chatId);
     return { kind: "deliver", work: { chatId, entryId: entry.id, messageId } };
   }
 
-  shouldRecoverBeforeDispatch(chatId: string, hasHealthyLiveHandler: boolean, hasLocalSessionRecord: boolean): boolean {
+  shouldRecoverBeforeDispatch(chatId: string, hasHealthyLiveHandler: boolean, hasLocalRecoveryRisk: boolean): boolean {
     const ledger = this.ledgers.get(chatId);
     if (ledger?.recoveryActivationReady) return false;
     if (ledger?.recoveryDebt === "required" || ledger?.recoveryDebt === "running") return true;
-    return Boolean(this.config.recoverChat) && hasLocalSessionRecord && !hasHealthyLiveHandler;
+    return Boolean(this.config.recoverChat) && hasLocalRecoveryRisk && !hasHealthyLiveHandler;
   }
 
   takeRecoveryActivationReady(chatId: string): boolean {
@@ -177,11 +203,11 @@ export class InboxDeliveryCoordinator {
     return next;
   }
 
-  markAccepted(work: DeliveryWork): boolean {
+  markOwned(work: DeliveryWork): boolean {
     const tracked = this.findEntry(work.chatId, work.entryId);
     if (!tracked) return false;
-    if (tracked.phase === "tracked") {
-      tracked.phase = "accepted";
+    if (tracked.phase === "open") {
+      tracked.phase = "owned";
       this.emitWorkChanged(work.chatId);
     }
     return true;
@@ -191,16 +217,20 @@ export class InboxDeliveryCoordinator {
     return this.findEntry(work.chatId, work.entryId) !== null;
   }
 
-  markConsumed(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void {
+  markProcessingStarted(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void {
     const ledger = this.ledgers.get(chatId);
     if (!ledger || ledger.entries.length === 0) return;
-    const consumedIds = this.messageEntryIds(chatId, messages);
-    if (consumedIds.size === 0) return;
+    const entryIds = this.messageEntryIds(chatId, messages);
+    if (entryIds.size === 0) return;
     let changed = false;
     for (const tracked of ledger.entries) {
-      if (!consumedIds.has(tracked.entryId)) continue;
-      if (tracked.phase === "tracked" || tracked.phase === "accepted") {
-        tracked.phase = "consumed";
+      if (!entryIds.has(tracked.entryId)) continue;
+      if (tracked.phase === "open") {
+        tracked.phase = "owned";
+        changed = true;
+      }
+      if (tracked.phase === "owned" && tracked.processingStartedAt === undefined) {
+        tracked.processingStartedAt = Date.now();
         changed = true;
       }
     }
@@ -210,15 +240,39 @@ export class InboxDeliveryCoordinator {
   async finishTurn(
     chatId: string,
     messages: SessionMessage | readonly SessionMessage[],
-    _outcome: TurnOutcome,
+    outcome: TurnOutcome,
   ): Promise<void> {
-    this.markConsumed(chatId, messages);
     const throughEntryId = this.lastMessageEntryId(chatId, messages);
     if (throughEntryId === undefined) {
       this.config.log.warn({ chatId }, "turn completion ignored because no inboxEntryId was provided");
       return;
     }
-    await this.ackThrough(chatId, throughEntryId, "finish_turn", { requireConsumedPrefix: true });
+    this.markTerminal(chatId, messages, outcome);
+    await this.ackThrough(chatId, throughEntryId, "finish_turn", { requireTerminalPrefix: true });
+  }
+
+  async terminalRejected(
+    chatId: string,
+    messages: SessionMessage | readonly SessionMessage[],
+    reason: string,
+    evidence: TerminalRejectionEvidence,
+  ): Promise<void> {
+    const throughEntryId = this.lastMessageEntryId(chatId, messages);
+    if (throughEntryId === undefined) {
+      this.config.log.warn({ chatId, reason }, "terminal rejection ignored because no inboxEntryId was provided");
+      return;
+    }
+    this.markTerminal(
+      chatId,
+      messages,
+      {
+        status: "error",
+        terminal: true,
+        errorKind: "deterministic",
+      },
+      evidence,
+    );
+    await this.ackThrough(chatId, throughEntryId, "terminal_rejected", { requireTerminalPrefix: true });
   }
 
   retryTurn(chatId: string, messages: SessionMessage | readonly SessionMessage[], reason: string): void {
@@ -233,23 +287,66 @@ export class InboxDeliveryCoordinator {
     const ledger = this.ledgers.get(chatId);
     if (!ledger || ledger.entries.length === 0) return;
 
-    let consumedPrefixCount = 0;
+    let terminalPrefixCount = 0;
     for (const tracked of ledger.entries) {
-      if (tracked.phase !== "consumed" && tracked.phase !== "ackPending") break;
-      consumedPrefixCount++;
+      if (tracked.phase !== "terminal") break;
+      terminalPrefixCount++;
     }
 
-    if (consumedPrefixCount > 0) {
-      const lastConsumed = ledger.entries[consumedPrefixCount - 1];
-      if (lastConsumed) {
-        await this.ackThrough(chatId, lastConsumed.entryId, `${reason}:consumed_prefix`, {
-          requireConsumedPrefix: true,
+    if (terminalPrefixCount > 0) {
+      const lastTerminal = ledger.entries[terminalPrefixCount - 1];
+      if (lastTerminal) {
+        await this.ackThrough(chatId, lastTerminal.entryId, `${reason}:terminal_prefix`, {
+          requireTerminalPrefix: true,
         });
       }
     }
 
     const remaining = this.ledgers.get(chatId)?.entries ?? [];
     if (remaining.length > 0) await this.markRecoveryDebt(chatId, reason);
+  }
+
+  async prepareOperatorSuspend(chatId: string): Promise<void> {
+    const ledger = this.ledgers.get(chatId);
+    if (!ledger || ledger.entries.length === 0) return;
+
+    let resolvablePrefixCount = 0;
+    let changed = false;
+    const handledAt = Date.now();
+    for (const tracked of ledger.entries) {
+      if (tracked.phase === "terminal") {
+        resolvablePrefixCount++;
+        continue;
+      }
+      if (tracked.phase === "owned" && tracked.processingStartedAt !== undefined) {
+        tracked.phase = "terminal";
+        tracked.terminalOutcome = {
+          status: "error",
+          errorKind: "deterministic",
+          handledAt,
+        };
+        resolvablePrefixCount++;
+        changed = true;
+        continue;
+      }
+      break;
+    }
+    if (changed) this.emitWorkChanged(chatId);
+
+    if (resolvablePrefixCount > 0) {
+      const lastResolvable = ledger.entries[resolvablePrefixCount - 1];
+      if (lastResolvable) {
+        await this.ackThrough(chatId, lastResolvable.entryId, "operator_suspended:resolved_prefix", {
+          requireTerminalPrefix: true,
+          requestRecoveryOnAckFailure: false,
+        });
+      }
+    }
+
+    const remaining = this.ledgers.get(chatId)?.entries ?? [];
+    if (remaining.length > 0) {
+      await this.markRecoveryDebt(chatId, "operator_suspended:deferred_tail", { requestNow: false });
+    }
   }
 
   prepareEvict(chatId: string, reason: string): void {
@@ -262,24 +359,37 @@ export class InboxDeliveryCoordinator {
     const ledger = this.ledgers.get(chatId);
     if (!ledger || ledger.entries.length === 0) return;
 
-    let acceptedPrefixCount = 0;
+    let terminalPrefixCount = 0;
     for (const tracked of ledger.entries) {
-      if (tracked.phase === "tracked") break;
-      acceptedPrefixCount++;
+      if (tracked.phase !== "terminal") break;
+      terminalPrefixCount++;
     }
-    if (acceptedPrefixCount > 0) {
-      const lastAccepted = ledger.entries[acceptedPrefixCount - 1];
-      if (lastAccepted) await this.ackThrough(chatId, lastAccepted.entryId, "terminate");
+    if (terminalPrefixCount > 0) {
+      const lastTerminal = ledger.entries[terminalPrefixCount - 1];
+      if (lastTerminal) {
+        await this.ackThrough(chatId, lastTerminal.entryId, "terminate", { requireTerminalPrefix: true });
+      }
     }
 
     const remaining = this.ledgers.get(chatId)?.entries ?? [];
-    if (remaining.length > 0) await this.markRecoveryDebt(chatId, "terminate_unaccepted_remainder");
+    if (remaining.length > 0) await this.markRecoveryDebt(chatId, "terminate_non_terminal_remainder");
   }
 
   hasUnsettledWork(chatId: string): boolean {
     const ledger = this.ledgers.get(chatId);
     if (!ledger) return false;
     return ledger.entries.length > 0 || ledger.recoveryDebt !== "none" || ledger.admissionQueue !== null;
+  }
+
+  hasProcessingOwnedWork(chatId: string): boolean {
+    const ledger = this.ledgers.get(chatId);
+    if (!ledger) return false;
+    return ledger.entries.some((entry) => entry.phase === "owned" && entry.processingStartedAt !== undefined);
+  }
+
+  hasRecoveryDebt(chatId: string): boolean {
+    const ledger = this.ledgers.get(chatId);
+    return ledger?.recoveryDebt !== undefined && ledger.recoveryDebt !== "none";
   }
 
   snapshot(chatId: string): WorkSnapshot {
@@ -299,7 +409,7 @@ export class InboxDeliveryCoordinator {
     chatId: string,
     throughEntryId: number,
     reason: string,
-    opts: { requireConsumedPrefix?: boolean } = {},
+    opts: { requireTerminalPrefix?: boolean; requestRecoveryOnAckFailure?: boolean } = {},
   ): Promise<void> {
     const ledger = this.ledgers.get(chatId);
     if (!ledger) return;
@@ -326,7 +436,7 @@ export class InboxDeliveryCoordinator {
     chatId: string,
     throughEntryId: number,
     reason: string,
-    opts: { requireConsumedPrefix?: boolean },
+    opts: { requireTerminalPrefix?: boolean; requestRecoveryOnAckFailure?: boolean },
   ): Promise<void> {
     const ledger = this.ledgers.get(chatId);
     if (!ledger || ledger.entries.length === 0) return;
@@ -344,10 +454,7 @@ export class InboxDeliveryCoordinator {
     }
 
     const ackPrefix = ledger.entries.slice(0, index + 1);
-    if (
-      opts.requireConsumedPrefix &&
-      ackPrefix.some((tracked) => tracked.phase === "tracked" || tracked.phase === "accepted")
-    ) {
+    if (opts.requireTerminalPrefix && ackPrefix.some((tracked) => tracked.phase !== "terminal")) {
       this.config.log.warn(
         {
           chatId,
@@ -355,15 +462,15 @@ export class InboxDeliveryCoordinator {
           reason,
           prefix: ackPrefix.map((entry) => ({ entryId: entry.entryId, phase: entry.phase })),
         },
-        "ACK-through blocked because delivery prefix has unconsumed entries",
+        "ACK-through blocked because delivery prefix has non-terminal entries",
       );
-      await this.markRecoveryDebt(chatId, `${reason}:unconsumed_prefix_gap`);
+      await this.markRecoveryDebt(chatId, `${reason}:non_terminal_prefix_gap`);
       return;
     }
     let changed = false;
     for (const tracked of ackPrefix) {
-      if (tracked.phase !== "ackPending") {
-        tracked.phase = "ackPending";
+      if (!tracked.ackAttempt || tracked.ackAttempt.throughEntryId !== throughEntryId) {
+        tracked.ackAttempt = { throughEntryId, reason, startedAt: Date.now() };
         changed = true;
       }
     }
@@ -376,13 +483,15 @@ export class InboxDeliveryCoordinator {
       const current = this.ledgers.get(chatId);
       if (current) {
         for (const tracked of current.entries) {
-          if (tracked.entryId <= throughEntryId && tracked.phase === "ackPending") {
-            tracked.phase = "consumed";
+          if (tracked.entryId <= throughEntryId) {
+            tracked.ackAttempt = undefined;
           }
         }
       }
       this.emitWorkChanged(chatId);
-      void this.markRecoveryDebt(chatId, `${reason}:ack_failed`);
+      void this.markRecoveryDebt(chatId, `${reason}:ack_failed`, {
+        requestNow: opts.requestRecoveryOnAckFailure ?? true,
+      });
       return;
     }
 
@@ -400,7 +509,7 @@ export class InboxDeliveryCoordinator {
     this.emitWorkChanged(chatId);
   }
 
-  private async markRecoveryDebt(chatId: string, reason: string): Promise<void> {
+  private async markRecoveryDebt(chatId: string, reason: string, opts: { requestNow?: boolean } = {}): Promise<void> {
     const ledger = this.ledger(chatId);
     if (ledger.recoveryDebt !== "required") {
       ledger.recoveryDebt = "required";
@@ -410,15 +519,17 @@ export class InboxDeliveryCoordinator {
       { chatId, reason, entryIds: ledger.entries.map((entry) => entry.entryId) },
       "chat has unsettled inbox work; waiting for recovery redelivery",
     );
+    if (opts.requestNow === false) return;
     await this.requestRecovery(chatId, reason);
   }
 
   private clearEntriesForRecoverySuccess(chatId: string): void {
     const ledger = this.ledger(chatId);
-    for (const tracked of ledger.entries) {
+    const nonTerminal = ledger.entries.filter((tracked) => tracked.phase !== "terminal");
+    for (const tracked of nonTerminal) {
       this.deduplicator.drop(tracked.dedupKey);
     }
-    ledger.entries = [];
+    ledger.entries = ledger.entries.filter((tracked) => tracked.phase === "terminal");
   }
 
   private findEntry(chatId: string, entryId: number): TrackedDelivery | null {
@@ -442,6 +553,36 @@ export class InboxDeliveryCoordinator {
       if (message.inboxEntryId !== undefined) throughEntryId = message.inboxEntryId;
     }
     return throughEntryId;
+  }
+
+  private markTerminal(
+    chatId: string,
+    messages: SessionMessage | readonly SessionMessage[],
+    outcome: TurnOutcome,
+    evidence?: TerminalRejectionEvidence,
+  ): void {
+    const ledger = this.ledgers.get(chatId);
+    if (!ledger || ledger.entries.length === 0) return;
+    const terminalIds = this.messageEntryIds(chatId, messages);
+    if (terminalIds.size === 0) return;
+    let changed = false;
+    for (const tracked of ledger.entries) {
+      if (!terminalIds.has(tracked.entryId)) continue;
+      if (tracked.phase !== "terminal") {
+        tracked.phase = "terminal";
+        changed = true;
+      }
+      if (!tracked.terminalOutcome) {
+        tracked.terminalOutcome = {
+          status: outcome.status,
+          errorKind: outcome.errorKind,
+          handledAt: Date.now(),
+          evidence,
+        };
+        changed = true;
+      }
+    }
+    if (changed) this.emitWorkChanged(chatId);
   }
 
   private ledger(chatId: string): ChatInboxLedger {

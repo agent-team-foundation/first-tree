@@ -130,14 +130,16 @@ describe("messaging E2E — group-chat mention scenarios", () => {
       metadata: { mentions: [b1.uuid] },
     });
 
-    // b1's runtime processes, then auto-forwards with mentions=[a1, b3].
+    // b1's runtime processes, then auto-forwards mentioning the agent peer b3.
+    // (An agent reply does not address the human a1 directly — `chat send` is
+    // agent-directed; a1 stays in the loop as a full-mode participant.)
     await pollInbox(app.db, b1.inboxId, 10);
     await sendMessage(app.db, chat.id, b1.uuid, {
       source: "api",
       format: "text",
       content: "rough plan. @b3 can you sanity-check?",
       inReplyTo: ping.message.id,
-      metadata: { mentions: [a1.uuid, b3.uuid] },
+      metadata: { mentions: [b3.uuid] },
     });
 
     // Each observer polls its inbox for both messages.

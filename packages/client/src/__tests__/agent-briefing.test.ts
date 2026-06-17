@@ -1,4 +1,6 @@
-import { readdirSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -309,62 +311,40 @@ describe("buildAgentBriefing — # Team Prompt / # Agent Prompt (structured prom
 describe("buildAgentBriefing — # Required Reading (unconditional skill-load mandate)", () => {
   // The inline briefing is a routing index, not a substitute for the
   // skill payloads. `# Required Reading` is the hard mandate that
-  // guarantees `first-tree` and `first-tree-context` get loaded on
+  // guarantees `first-tree-write` gets loaded on
   // every task — otherwise progressive disclosure (keyword-triggered)
   // can silently skip them and the agent acts without the rules in
-  // those skills (daemon lifecycle, tree concept model, hard write
-  // rules, etc.).
+  // that skill (tree concept model, hard write rules, etc.).
 
-  it("emits the # Required Reading section for tree-bound agents with MUST framing and both skill names", () => {
+  it("emits the # Required Reading section for tree-bound agents with MUST framing and the write skill", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
 
     expect(briefing).toContain("# Required Reading");
-    // Hard-mandate anchors — progressive disclosure is opt-in by
-    // default; this block makes the two routing-critical skills
-    // mandatory regardless of what the user types.
-    expect(briefing).toMatch(/you MUST\s+load both skills below/);
-    expect(briefing).toContain("**`first-tree`**");
-    expect(briefing).toContain("**`first-tree-context`**");
+    expect(briefing).toMatch(/you MUST\s+load \*\*`first-tree-write`\*\*/);
+    expect(briefing).toContain("source-system boundary");
+    expect(briefing).toContain("Hard Rules + Double Test");
     // Claude Code's transcript exposes a skill listing, but native skill-body
     // injection is still provider-owned. The briefing must give a direct
     // filesystem fallback so "unconditional" is actionable even when the
     // provider only listed the skill names.
-    expect(briefing).toContain(`${AGENT_HOME}/.agents/skills/first-tree/SKILL.md`);
-    expect(briefing).toContain(`${AGENT_HOME}/.agents/skills/first-tree-context/SKILL.md`);
-    // Bootstrapping framing — the mandate IS the first step of the
-    // skill-described pre-task hygiene, not "even before" those
-    // checks (which would be self-contradictory: you can't run the
-    // checks before you've read the skill that lists them).
-    expect(briefing).toMatch(/loading them \*\*is\*\* the first step of the[\s\n]+pre-task hygiene/);
-    // Briefing↔skill split: minimum mechanics inline, durable rules
-    // in full in the skills. Honest about the partial summarisation
-    // (chat send mechanics are in the briefing's Communication block;
-    // write-side gate is in `## Writing the Tree`) — the briefing
-    // can't claim "not duplicated" without contradicting itself.
+    expect(briefing).toContain(`${AGENT_HOME}/.agents/skills/first-tree-write/SKILL.md`);
     expect(briefing).toMatch(/minimum\s+mechanics you need to operate at all/);
-    expect(briefing).toMatch(/durable\s+rules in full/);
-    expect(briefing).toMatch(/only summarising the slices/);
-    // The cost-of-skipping list names what's actually missing from
-    // the inline briefing (the daemon-lifecycle invariants, the full
-    // Communication Principles, source-system boundary, Hard Rules +
-    // Double Test) — not a blanket "not duplicated" claim.
-    expect(briefing).toMatch(/daemon-lifecycle invariants/);
-    expect(briefing).toMatch(/Hard Rules \+ Double Test/);
-    expect(briefing).toMatch(/either omits or only summarises/);
+    expect(briefing).toMatch(/inline briefing only summarises/);
     // Calls out the on-demand-only sibling so the agent doesn't
     // over-load every First Tree family skill on every task.
     expect(briefing).toContain("`first-tree-read`");
-    expect(briefing).toContain("`first-tree-sync`");
+    expect(briefing).toContain("`first-tree-seed`");
+    expect(briefing).not.toContain(`${AGENT_HOME}/.agents/skills/first-tree/SKILL.md`);
+    expect(briefing).not.toContain(`${AGENT_HOME}/.agents/skills/first-tree-context/SKILL.md`);
   });
 
   it("places # Required Reading immediately after # Working in First Tree (its CLI Overview tail) and before # Context Tree", () => {
     // Placement rationale: the agent first reads the inline
     // workspace-collab basics (chat send, working directory,
     // communication) it needs to operate at all, then hits the hard
-    // mandate to load `first-tree` + `first-tree-context` before any
-    // real work. The mandate sits adjacent to `# Context Tree` because
-    // those skills cover the shared runtime and tree concept/write
-    // rules for that section.
+    // mandate to load `first-tree-write` before any real work. The
+    // mandate sits adjacent to `# Context Tree` because that skill covers
+    // the tree concept/write rules for that section.
     const payload = {
       kind: "claude-code" as const,
       model: "",
@@ -406,7 +386,7 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(briefing).not.toContain("# Required Reading");
   });
 
-  it("flags `first-tree` and `first-tree-context` as unconditional in the ## First Tree Family map (consistent with # Required Reading)", () => {
+  it("flags `first-tree-write` as unconditional in the ## First Tree Family map (consistent with # Required Reading)", () => {
     // The Skill Map's framing has to match the # Required Reading
     // mandate, otherwise the agent gets contradictory signals
     // (progressive-disclosure-only vs. unconditional). Pin both
@@ -415,25 +395,21 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
     const familyMap = briefing.slice(briefing.indexOf("## First Tree Family"));
 
-    // Head paragraph explicitly names both unconditional skills and
+    // Head paragraph explicitly names the unconditional skill and
     // points back at the # Required Reading anchor.
     expect(familyMap).toMatch(
-      /`first-tree` and `first-tree-context` are \*\*unconditional\*\* — load\s+them on every task per `# Required Reading` above\./,
+      /`first-tree-write` is \*\*unconditional\*\* — load it on every task per\s+`# Required Reading` above\./,
     );
 
-    // Both unconditional rows must carry the "unconditional" label
+    // The unconditional row must carry the "unconditional" label
     // inline so the table is self-explanatory even when read in
     // isolation.
-    const firstTreeRow = familyMap.match(/\|\s*`first-tree`\s*\|[^\n]*/)?.[0] ?? "";
-    expect(firstTreeRow).toContain("unconditional");
-    expect(firstTreeRow).toContain("`# Required Reading`");
-
-    const contextRow = familyMap.match(/\|\s*`first-tree-context`\s*\|[^\n]*/)?.[0] ?? "";
-    expect(contextRow).toContain("unconditional");
-    expect(contextRow).toContain("`# Required Reading`");
-    expect(contextRow).toContain("concept model");
-    expect(contextRow).toContain("source-driven tree writes");
-    expect(contextRow).not.toContain("read context before acting");
+    const writeRow = familyMap.match(/\|\s*`first-tree-write`\s*\|[^\n]*/)?.[0] ?? "";
+    expect(writeRow).toContain("unconditional");
+    expect(writeRow).toContain("`# Required Reading`");
+    expect(writeRow).toContain("concept model");
+    expect(writeRow).toContain("source-driven tree writes");
+    expect(writeRow).not.toContain("read context before acting");
 
     // On-demand rows must NOT pick up the unconditional label by
     // accident — they're triggered by keyword / task signal.
@@ -441,72 +417,35 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(readRow).not.toContain("unconditional");
     expect(readRow).toContain("before acting");
 
-    const syncRow = familyMap.match(/\|\s*`first-tree-sync`\s*\|[^\n]*/)?.[0] ?? "";
-    expect(syncRow).not.toContain("unconditional");
+    const seedRow = familyMap.match(/\|\s*`first-tree-seed`\s*\|[^\n]*/)?.[0] ?? "";
+    expect(seedRow).not.toContain("unconditional");
   });
 });
 
 describe("buildAgentBriefing — # Working in First Tree subsections", () => {
-  it("emits the runtime intro block with output-stream / chat-send full decoupling, transitional mirror fact, courtesy-send guard, Issue #389", () => {
+  it("emits the runtime intro block: agent-directed chat send, ask/update for humans, courtesy-send guard, Issue #389", () => {
     const briefing = buildAgentBriefing(makeOpts());
 
-    // Output stream and chat send are two separate channels — the
-    // briefing must never tie agent behavior on one to activity on the
-    // other. yuezengwu 2026-06-10: "chat send 和 output streaming
-    // 完全解耦，不应当有任何互相影响。在系统 message 里记录是过渡状态，
-    // 未来 output streaming 不进入 message" — "完全解耦" is the future
-    // direction; the briefing must be honest that today's runtime still
-    // mirrors the output stream as a transitional system row (the two
-    // channels DO interact today via that mirror).
-    expect(briefing).toContain("Your output stream is your reasoning trace");
-    expect(briefing).toMatch(/separate channel from[\s\n]+`?chat send`?/);
-    expect(briefing).toContain("To reach a teammate");
-    expect(briefing).toContain("first-tree chat send <name>");
-    expect(briefing).toContain("only delivery path you should rely on");
+    // `chat send` is agent-directed; a human is reached only via `chat ask`
+    // (decisions) or `chat update --description` (progress), never a plain send.
+    expect(briefing).toContain("To make an agent act, use `first-tree chat send <name>`");
+    expect(briefing).toContain("first-tree chat ask <human>");
+    expect(briefing).toContain("first-tree chat update --description");
+    expect(briefing).toMatch(/server rejects a `?chat send`? to a human/);
 
-    // Coupling guard — the false present-tense claim "the two never
-    // interact" must not appear today (mirror = interaction). The
-    // honest framing is "separate channel" today + "two fully decoupled
-    // channels" as the future direction (see below).
-    expect(briefing).not.toMatch(/never[\s\n]+interact/);
+    // yuezengwu 2026-06-16: all output-streaming framing is removed from the
+    // briefing — no reasoning-trace channel, no `agent-final-text` mirror, no
+    // "separate channel" / "reach path" / "decoupled channels" phrasing survives.
+    expect(briefing).not.toMatch(/output stream/i);
+    expect(briefing).not.toMatch(/reasoning trace/i);
+    expect(briefing).not.toContain("agent-final-text");
+    expect(briefing).not.toMatch(/separate channel/i);
+    expect(briefing).not.toMatch(/reach path/i);
+    expect(briefing).not.toMatch(/decoupled channels/i);
 
-    // Transitional system behavior — the runtime currently mirrors
-    // non-empty final output into chat history as a silent
-    // `agent-final-text` row that does NOT wake other agents. The
-    // briefing acknowledges the fact and names the runtime-retirement
-    // track + the "two fully decoupled channels" future direction, but
-    // issues NO instruction conditioning the agent's output on chat-
-    // send activity (that would re-couple the channels at the agent
-    // layer). The note wraps across template-literal lines, so use
-    // regex matches that tolerate intra-bullet whitespace / newlines.
-    expect(briefing).toMatch(/non-empty[\s\n]+final[\s\n]+output is currently[\s\n]+mirrored/);
-    expect(briefing).toContain("agent-final-text");
-    expect(briefing).toMatch(/does[\s\n]+NOT[\s\n]+wake other agents/);
-    expect(briefing).toMatch(/runtime-retirement[\s\n]+track/);
-    expect(briefing).toMatch(/future direction[\s\n]+is[\s\n]+two fully decoupled[\s\n]+channels/);
-    expect(briefing).toMatch(/not a reach path/);
-
-    // Coupling guard — these phrasings would condition agent output on
-    // chat-send activity. They MUST NOT appear in the briefing under the
-    // full-decoupling principle.
-    //
-    // Note: these are *regression* guards for the specific phrasings the
-    // PR removed (ad40745d's "don't restate ..." / "don't rely on ... for
-    // delivery"). Principle-level enforcement against *any* future
-    // re-coupling phrasing (e.g. "after chat send, keep final output
-    // minimal" / "if you just chat-send-ed, end the turn") is human-review
-    // only; mechanical guards cannot recognise every paraphrase.
-    expect(briefing).not.toMatch(/don't restate/i);
-    expect(briefing).not.toMatch(/don't rely on it for delivery/i);
-
-    // Courtesy-send guard (the brake stays on the *send* side, not the
-    // output side; result-sink's empty-output guard is a runtime safety
-    // belt, not the contract).
+    // Courtesy-send guard stays — the brake is on the *send* side.
     expect(briefing).toContain("Don't fire a courtesy");
     expect(briefing).toContain("end the turn without sending");
-    // No bare "output nothing" prescription survives. The transitional
-    // mirror is named in the descriptive sentence, not in an instruction
-    // that suppresses agent output.
     expect(briefing).not.toMatch(/\boutput nothing\b/);
 
     // Issue #389: pin the anti-double-encode rule.
@@ -583,7 +522,7 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // Read goes through a worktree, not the clone path; skills scan there too.
     expect(briefing).toContain("Read through a worktree, not the clone path.");
     expect(briefing).toContain("first-tree-seed");
-    expect(briefing).toContain("first-tree-sync");
+    expect(briefing).not.toContain("first-tree-sync");
     expect(briefing).toContain("fetch origin");
     expect(briefing).toContain("origin/main");
     // Fail-closed repoint guard — carries main's #1058 invariant (a source
@@ -597,6 +536,114 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // Reuse is now CONDITIONAL on the origin matching — not an unconditional
     // "reuse the existing path as-is".
     expect(briefing).toContain("**If it matches**, reuse the clone");
+    // One-time legacy-layout migration: an agent provisioned under the old
+    // non-bare-checkout-at-workspace-root layout gets a safe, scoped recipe
+    // to retire it — drop only clean + already-merged worktrees, then the
+    // checkout — and is told to stay inside its OWN workspace.
+    expect(briefing).toContain("One-time legacy-layout migration");
+    expect(briefing).toContain("never reach into a sibling agent's");
+    expect(briefing).toContain("merge-base --is-ancestor <wt-HEAD> origin/<default>");
+    // P0 (issue #1086): the retire target must be mechanically constrained, not
+    // hand-filled. A path preflight derives `$legacy` from the manifest and
+    // proves it is exactly the intended legacy checkout before the git-state
+    // gates run — resolve workspace root from `.first-tree/workspace.json`,
+    // realpath + immediate-child check, reject reserved workspace dirs and
+    // symlinks, require the toplevel/non-bare/origin to all match.
+    expect(briefing).toContain('[ -f "$d/.first-tree/workspace.json" ]');
+    expect(briefing).toContain("assert_legacy_target() {");
+    expect(briefing).toContain("reserved workspace dir");
+    expect(briefing).toContain(".first-tree|source-repos|worktrees|context-tree)");
+    // Every gate runs against `$candidate`, never `$legacy`.
+    expect(briefing).toContain('real=$(realpath "$candidate")');
+    expect(briefing).toContain("reject: target is the workspace root");
+    expect(briefing).toContain("is not an immediate child of");
+    expect(briefing).toContain('git -C "$candidate" rev-parse --show-toplevel');
+    expect(briefing).toContain("rev-parse --is-bare-repository");
+    expect(briefing).toContain('git -C "$candidate" remote get-url origin');
+    // Blocker (yuezengwu / codex-bot on PR #1087): `$legacy` is cleared on entry
+    // and only published after EVERY gate passes, so a rejected/failed call can
+    // never leave a stale target for the git-state gates that follow.
+    expect(briefing).toContain("name=$1 want=$2 legacy= candidate=$WS/$name");
+    expect(briefing).toContain("  legacy=$candidate");
+    // Blocker (codex-assistant on PR #1087, per #1086): the origin compare is
+    // canonical — `.git` and the https/http/ssh/git/scp transport forms all
+    // collapse to host/path, so a legitimate checkout cloned via a different URL
+    // form is not rejected as wrong-origin (behaviorally exercised below).
+    expect(briefing).toContain("canon_url() {");
+    expect(briefing).toContain('[ "$(canon_url "$got")" = "$(canon_url "$want")" ]');
+    // The candidate path is derived per declared source and baked from the
+    // manifest, so the agent never hand-fills a naked `<legacy>` placeholder.
+    expect(briefing).toContain("assert_legacy_target 'api' 'git@github.com:example/api.git'");
+    expect(briefing).toContain("assert_legacy_target 'web' 'git@github.com:example/web.git'");
+    // Git-state gates now run against the validated `$legacy` variable, not a
+    // raw `<legacy>` placeholder.
+    expect(briefing).toContain('git -C "$legacy" status --porcelain');
+    expect(briefing).toContain("merge-base --is-ancestor HEAD origin/<default>");
+    // P1 (codex-assistant, PR #1083 follow-up): the retire also destroys
+    // local-only history the working-tree/HEAD checks don't see — branches not
+    // checked out in any worktree, and stashes. Guard those too before delete.
+    expect(briefing).toContain('git -C "$legacy" branch --no-merged origin/<default>');
+    expect(briefing).toContain('git -C "$legacy" stash list');
+    expect(briefing).toContain("only after ALL of the above are clear");
+    // P0 (issue #1086): the final destructive action is a reversible quarantine
+    // move, not an in-place irreversible `rm -rf`; deletion is a separate
+    // human-confirmed step.
+    expect(briefing).toContain('mv -- "$legacy" "$legacy.retired.$(date +%Y%m%d%H%M%S)"');
+    expect(briefing).not.toContain("rm -rf <legacy>");
+    expect(briefing).toContain("a separate step a human confirms");
+    // The context-tree symlink case points at the existing Tree Location block.
+    expect(briefing).toMatch(/`context-tree` \*\*symlink\*\* migrates the same/);
+  });
+
+  it("preflight canon_url collapses .git / https / http / ssh / git / scp origin forms for the same repo but not a different one (issue #1086)", () => {
+    const briefing = buildAgentBriefing(
+      makeOpts({
+        sourceRepos: [{ absolutePath: `${AGENT_HOME}/source-repos/api`, url: "https://github.com/org/api" }],
+      }),
+    );
+    // Extract the shipped `canon_url` shell function verbatim from the recipe
+    // and exercise it — a string assertion alone cannot prove the transport
+    // forms actually collapse. codex-assistant (PR #1087) asked for a test that
+    // accepts equivalent SSH/HTTPS origins while still rejecting a different repo.
+    // Use plain indexOf/slice rather than a regex — a backtracking pattern over
+    // the (analysis-uncontrolled) briefing string trips the ReDoS check.
+    const fnStart = briefing.indexOf("canon_url() {\n");
+    expect(fnStart).toBeGreaterThanOrEqual(0);
+    const fnEnd = briefing.indexOf("\n}", fnStart);
+    expect(fnEnd).toBeGreaterThan(fnStart);
+    const canonFn = briefing.slice(fnStart, fnEnd + 2);
+
+    // Run the shipped function from a script file with the URL passed as a
+    // positional argument — never interpolated into a shell command string — so
+    // the test exercises the real `sed` pipeline without constructing a command
+    // from a variable (which a static-analysis command-injection check flags).
+    const dir = mkdtempSync(join(tmpdir(), "canon-url-"));
+    try {
+      const scriptPath = join(dir, "canon.sh");
+      writeFileSync(scriptPath, `${canonFn}\ncanon_url "$1"\n`);
+      const canon = (url: string): string => execFileSync("sh", [scriptPath, url], { encoding: "utf8" }).trim();
+
+      const key = canon("https://github.com/agent-team-foundation/first-tree.git");
+      expect(key).toBe("github.com/agent-team-foundation/first-tree");
+      const sameRepo = [
+        "https://github.com/agent-team-foundation/first-tree.git",
+        "https://github.com/agent-team-foundation/first-tree",
+        "http://github.com/agent-team-foundation/first-tree",
+        "git@github.com:agent-team-foundation/first-tree.git",
+        "git@github.com:agent-team-foundation/first-tree",
+        "ssh://git@github.com/agent-team-foundation/first-tree.git",
+        "git://github.com/agent-team-foundation/first-tree.git",
+      ];
+      for (const url of sameRepo) {
+        expect(canon(url), `expected ${url} to canonicalize to ${key}`).toBe(key);
+      }
+      // Genuinely different repos must NOT collapse to the same canonical key —
+      // canonicalization stays fail-closed (no false-accept of another repo).
+      expect(canon("https://github.com/agent-team-foundation/other")).not.toBe(key);
+      expect(canon("git@gitlab.com:agent-team-foundation/first-tree.git")).not.toBe(key);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("omits the Source Repositories block when no repos are predeclared", () => {
@@ -610,11 +657,11 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
   it("emits Communication, Workspace Collaboration, Asking Humans, Chat Topic & Description, and CLI Overview subsections", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("## Communication");
-    // Chat-send contract: every teammate reach (human plain / human request /
-    // agent) goes through chat send; the courtesy-send guard prevents echo
-    // loops without touching the agent's output stream.
-    expect(briefing).toMatch(/\*\*Reaching a human in this chat\*\*/);
+    // Communication routing: `chat send` is agent-directed; a human is reached
+    // via `chat ask` (decisions) or `chat update --description` (progress). The
+    // courtesy-send guard prevents echo loops.
     expect(briefing).toMatch(/\*\*Asking a human\*\*/);
+    expect(briefing).toMatch(/\*\*Reporting progress to a human\*\*/);
     expect(briefing).toMatch(/\*\*Reaching an agent to make them act\*\*/);
     expect(briefing).toContain("chat invite <name>");
     expect(briefing).toContain("stage or role handoff inside the same task stays in this chat");
@@ -623,28 +670,45 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("After an agent handoff, continue only independent work");
     expect(briefing).toContain("do not poll status");
     expect(briefing).toContain("Don't fire a courtesy");
-    expect(briefing).toContain("reasoning trace");
-    // Fallback block was retired in the chat-send-contract pass — the
-    // contract now is "always chat send for cross-participant", so the
-    // "drop to conservative mode" branch is redundant.
     expect(briefing).not.toContain("**Fallback**");
 
     expect(briefing).toContain("## Workspace Collaboration");
-    expect(briefing).toContain("`first-tree` skill");
+    expect(briefing).toContain("first-tree chat --help");
 
     expect(briefing).toContain("## Asking Humans");
-    // Asking Humans now prescribes the structured request mechanism instead of
-    // the old "[pending redesign, 自行判断]" stub.
-    expect(briefing).toMatch(/chat send <human> --request/);
-    expect(briefing).toContain("--question");
+    // Asking Humans prescribes `chat ask` (the request mechanism moved off
+    // `chat send`). The ask schema is body-is-the-ask + optional `--options`
+    // JSON (NOT the retired `--question`/`--option`/`--close` flags). `chat ask`
+    // is ask-ONLY: the human resolves in the web UI, so the briefing carries no
+    // CLI resolution flag.
+    expect(briefing).toMatch(/chat ask <human>/);
+    expect(briefing).toContain("body IS the ask");
+    expect(briefing).toContain("--options");
+    expect(briefing).toContain("--multi-select");
+    expect(briefing).toMatch(/cannot.*mark a question answered or close it/i);
+    expect(briefing).not.toContain("--answer");
+    expect(briefing).not.toContain("--question");
+    expect(briefing).not.toContain("--close");
+    // Usage discipline: `chat ask` is ONLY for a genuine user decision that
+    // can't be inferred — never a progress / permission check.
+    expect(briefing).toMatch(/genuinely the user's to make/);
+    expect(briefing).toMatch(/Do NOT use it for progress or[\s\n]+permission checks/);
+    expect(briefing).toContain("can I continue?");
 
     expect(briefing).toContain("## Chat Topic & Description");
-    expect(briefing).toContain("first-tree chat set-topic");
-    // The combined block documents setting the description through the same
-    // command, and carries the description discipline keys.
-    expect(briefing).toContain("set-topic --description");
-    expect(briefing).toMatch(/name the current task/);
+    expect(briefing).toContain("first-tree chat update");
+    // The block documents updating the description independently through
+    // `chat update`, and carries the upgraded description discipline keys
+    // (human-facing status report + Markdown), with set-topic kept as a
+    // deprecated alias.
+    expect(briefing).toContain("chat update --description");
+    expect(briefing).toMatch(/status report/);
+    expect(briefing).toMatch(/deprecated alias/);
     expect(briefing).toMatch(/Self-locate/);
+    expect(briefing).toContain("Once set, leave the topic unchanged");
+    expect(briefing).toContain("stable topic helps humans find the chat");
+    expect(briefing).not.toContain("Rename only");
+    expect(briefing).not.toContain("subject itself changed");
     // The Chat Topic block points at the Current Chat Context block at the
     // BOTTOM of the briefing (not "above" as in the pre-restructure
     // copy).
@@ -660,25 +724,22 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("first-tree github follow <url>");
     // The single exception: clearly unrelated to the chat's task.
     expect(briefing).toMatch(/clearly unrelated to this\s+chat's task/);
-    // Unfollow is human-explicit-stop or closed attention span.
+    // Unfollow is human-explicit-stop only, not a PR/Issue completion ritual.
     expect(briefing).toContain("first-tree github unfollow <entity>");
     expect(briefing).toMatch(/human explicitly asks to stop tracking/);
+    expect(briefing).toMatch(/Do not proactively unfollow\s+merely because a PR or Issue completed/);
     // Creation never auto-follows — the extractor is gone (#979).
     expect(briefing).toMatch(/there\s+is no auto-binding/);
   });
 
-  it("gates the GitHub Entity Attention full-guide pointer: skill for tree-bound, --help for tree-less", () => {
-    // Tree-less agents have no First Tree skill payloads on disk
-    // (`installFirstTreeIntegration` is tree-gated), so the block must not
-    // point them at `first-tree-github` — same discipline as the gated
-    // # Required Reading and First Tree Family map.
+  it("keeps the GitHub Entity Attention full-guide pointer on CLI help", () => {
     const treeless = buildAgentBriefing(makeOpts());
     expect(treeless).not.toContain("`first-tree-github` skill");
     expect(treeless).toContain("first-tree github follow --help");
 
     const treeBound = buildAgentBriefing(makeOpts({ contextTreePath: "/var/lib/context-trees/example" }));
-    expect(treeBound).toContain("`first-tree-github` skill");
-    expect(treeBound).not.toContain("github follow --help");
+    expect(treeBound).not.toContain("`first-tree-github` skill");
+    expect(treeBound).toContain("first-tree github follow --help");
   });
 
   it("uses the channel-resolved binary name in the surviving chat-send invariant", () => {
@@ -813,16 +874,16 @@ describe("buildAgentBriefing — # Context Tree", () => {
     const writingBlock = briefing.slice(briefing.indexOf("## Writing the Tree"));
 
     // The surviving rows must point at shipped skills.
-    expect(writingBlock).toContain("`first-tree-context`");
-    expect(writingBlock).toContain("`first-tree-sync`");
+    expect(writingBlock).toContain("`first-tree-write`");
 
     // Retired skills must not appear:
-    //   - `first-tree-write` was folded into `first-tree-context` under
-    //     the simplify-context-skill pass (PR #843).
+    //   - `first-tree-context` was replaced by `first-tree-write`.
+    //   - `first-tree-sync` has no shipped replacement in this pass.
     //   - `first-tree-onboarding` was retired with the old tree
     //     provisioning commands.
     //   - `first-tree-github-scan` predates both and never shipped.
-    expect(writingBlock).not.toContain("`first-tree-write`");
+    expect(writingBlock).not.toContain("`first-tree-context`");
+    expect(writingBlock).not.toContain("`first-tree-sync`");
     expect(writingBlock).not.toContain("`first-tree-onboarding`");
     expect(writingBlock).not.toContain("`first-tree-github-scan`");
   });

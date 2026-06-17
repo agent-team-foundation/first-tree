@@ -46,7 +46,7 @@ const repoRoot = (() => {
   throw new Error("Could not locate repo root from drift-guard test");
 })();
 
-const SHIPPED_SKILLS = ["first-tree", "first-tree-context", "first-tree-read", "first-tree-sync", "first-tree-seed"];
+const SHIPPED_SKILLS = ["first-tree-write", "first-tree-read", "first-tree-seed"];
 
 const RETIRED_TREE_SUBCOMMANDS = [
   "status",
@@ -145,16 +145,23 @@ function findRetiredHitsInBash(file: string): Array<{ subcommand: string; line: 
  * under `skills/<name>/agents/*.yaml` and `skills/<name>/agents/*.yml`.
  * They are NOT bash blocks but they tell composer / runtime what to
  * route an agent at. PR #848 review (baixiaohang R2) caught a stale
- * routing line in `skills/first-tree-context/agents/openai.yaml` that
+ * routing line in a retired skill's `agents/openai.yaml` that
  * the markdown-only scan missed — this list of retired skill names is
  * the drift-guard contract for those files.
  */
 const RETIRED_SKILL_NAMES = [
+  "first-tree",
+  "first-tree-context",
+  "first-tree-sync",
+  "first-tree-github",
   "first-tree-onboarding",
-  "first-tree-write",
   "first-tree-github-scan",
   "first-tree-cloud",
 ] as const;
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
 
 function listAgentMetadataFiles(skillsRoot: string): string[] {
   const out: string[] = [];
@@ -261,9 +268,9 @@ describe("retired tree subcommand drift guard", () => {
     // prompt. Any reference to a retired skill name (e.g. the previous
     // `first-tree-onboarding` payload) routes users at something that
     // is no longer on disk; PR #848 review (baixiaohang R2) flagged
-    // exactly this class of drift in `first-tree-context/agents/
-    // openai.yaml`. The repo-root markdown / bash drift guard above
-    // missed it because the file is YAML, not markdown.
+    // exactly this class of drift in retired skill metadata. The
+    // repo-root markdown / bash drift guard above missed it because the
+    // file is YAML, not markdown.
     const skillsRoot = join(repoRoot, "skills");
     const failures: Array<{ file: string; skill: string; line: number; snippet: string }> = [];
     for (const yamlPath of listAgentMetadataFiles(skillsRoot)) {
@@ -271,10 +278,10 @@ describe("retired tree subcommand drift guard", () => {
       for (let i = 0; i < lines.length; i += 1) {
         const line = lines[i] ?? "";
         for (const skill of RETIRED_SKILL_NAMES) {
-          // Word-boundary match so a comment that says "first-tree-onboarding
-          // was retired" inside a literal explainer would still fail —
-          // skill metadata should not name a retired skill at all.
-          const re = new RegExp(`\\b${skill}\\b`, "u");
+          // Treat hyphen as part of the token boundary so retired
+          // `first-tree` does not false-positive on current
+          // `first-tree-write`.
+          const re = new RegExp(`(^|[^A-Za-z0-9-])${escapeRegExp(skill)}($|[^A-Za-z0-9-])`, "u");
           if (re.test(line)) {
             failures.push({ file: relative(repoRoot, yamlPath), skill, line: i + 1, snippet: line.trim() });
           }
@@ -284,7 +291,7 @@ describe("retired tree subcommand drift guard", () => {
     if (failures.length > 0) {
       const detail = failures.map((f) => `  ${f.file}:${f.line}: \`${f.skill}\` — ${f.snippet}`).join("\n");
       throw new Error(
-        `Retired skill name resurfaced in shipped agent-metadata YAML (composer will route at a skill that is not on disk):\n${detail}\n\nRewrite to use a surviving skill (\`first-tree\`, \`first-tree-context\`, \`first-tree-read\`, \`first-tree-sync\`, \`first-tree-seed\`) or to the operator-handoff phrasing, or extend RETIRED_SKILL_NAMES if a skill is intentionally being un-retired.`,
+        `Retired skill name resurfaced in shipped agent-metadata YAML (composer will route at a skill that is not on disk):\n${detail}\n\nRewrite to use a surviving skill (\`first-tree-write\`, \`first-tree-read\`, \`first-tree-seed\`) or to the operator-handoff phrasing, or extend RETIRED_SKILL_NAMES if a skill is intentionally being un-retired.`,
       );
     }
   });

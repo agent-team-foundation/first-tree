@@ -131,24 +131,19 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     expect(briefing).toContain("Follow the local implementation plan.");
     expect(briefing).toContain("## Current Chat Context");
     expect(briefing).toContain("# Working in First Tree");
-    // The long-form Sending Messages CLI usage lives in the top-level
-    // first-tree skill; the Communication decision guide stays inline
-    // because first-tree is not in CORE_SKILL_NAMES (tree-less agents
-    // would otherwise lose it).
+    // The Communication decision guide stays inline because tree-less agents
+    // do not have First Tree family skill payloads installed.
     expect(briefing).toContain("## Communication");
     expect(briefing).toContain("## Workspace Collaboration");
-    expect(briefing).toContain("`first-tree` skill");
+    expect(briefing).toContain("first-tree-staging chat --help");
     expect(briefing).toContain("first-tree-staging chat send");
-    // Chat-send contract + transitional-mirror system fact. The
-    // briefing names two independent channels (output stream / chat
-    // send) and acknowledges the runtime's current mirror as a silent
-    // `agent-final-text` row that does NOT wake other agents. The
-    // "does NOT wake other agents" string is preserved here as a
-    // runtime *fact* (not a final-text-contract action) — it is the
-    // mechanical reason chat send is the only reach path.
-    expect(briefing).toContain("only delivery path you should rely on");
-    expect(briefing).toContain("Your output stream is your reasoning trace");
-    expect(briefing).toMatch(/does[\s\n]+NOT[\s\n]+wake other agents/);
+    // `chat send` is agent-directed; humans are reached via `chat ask`
+    // (decisions) / `chat update --description` (progress). No output-stream
+    // or `agent-final-text` mirror framing survives in the briefing.
+    expect(briefing).toContain("first-tree-staging chat ask <human>");
+    expect(briefing).toContain("first-tree-staging chat update --description");
+    expect(briefing).not.toMatch(/output stream/i);
+    expect(briefing).not.toContain("agent-final-text");
     // The new Skill Map and Context Tree section are now part of every
     // briefing — pin both so a regenerator dropping them doesn't slip past
     // review.

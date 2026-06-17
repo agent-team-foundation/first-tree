@@ -1,6 +1,7 @@
-import { Check, CircleAlert, Copy, ExternalLink, Info, Lock } from "lucide-react";
-import type { ReactNode } from "react";
+import { Check, CircleAlert, Copy, ExternalLink, Info, Lock, Search, X } from "lucide-react";
+import { type ReactNode, useMemo, useState } from "react";
 import type { GithubRepo } from "../../api/github.js";
+import { FirstTreeLogo } from "../../components/first-tree-logo.js";
 import { Button } from "../../components/ui/button.js";
 import { useCopyFeedback } from "../../lib/use-copy-feedback.js";
 import { cn } from "../../lib/utils.js";
@@ -27,6 +28,49 @@ export function StepHeading({ title, why }: { title: string; why?: string | null
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The shared "ceremonial welcome" hero used by the journey's two openers — the
+ * admin opening (StepTeam) and the invitee landing (StepWelcome): a centered
+ * brand mark, the greeting, and a one-line value subtitle. `subtitle` is a
+ * ReactNode so the invitee can emphasize the just-joined team name inline. The
+ * 35rem cap keeps the subtitle on a comfortable measure (≈ one line on desktop)
+ * while still wrapping freely on narrow widths (no nowrap).
+ */
+export function WelcomeHero({ title, subtitle }: { title: string; subtitle: ReactNode }) {
+  return (
+    <div className="flex flex-col items-center" style={{ gap: "var(--sp-2_5)" }}>
+      <FirstTreeLogo width={42} height={47} style={{ color: "var(--brand-dim)" }} />
+      <h1
+        className="text-headline font-semibold"
+        style={{ margin: "var(--sp-3) 0 0", color: "var(--fg)", textAlign: "center" }}
+      >
+        {title}
+      </h1>
+      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", textAlign: "center", maxWidth: "35rem" }}>
+        {subtitle}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * One quiet line of orientation under a welcome hero: a bold count leads, then
+ * the steps in sequence. Used on the journey bookends (team / welcome), which
+ * render no progress bar — so this is the only "what's next". The count is
+ * derived from `steps` so it can never drift out of sync with the list.
+ */
+export function StepRoadmap({ steps }: { steps: readonly string[] }) {
+  return (
+    <p className="text-label" style={{ margin: 0, color: "var(--fg-4)", textAlign: "center" }}>
+      <span className="font-semibold" style={{ color: "var(--brand-dim)" }}>
+        {steps.length} steps
+      </span>
+      {"  ·  "}
+      {steps.join("  →  ")}
+    </p>
   );
 }
 
@@ -396,6 +440,164 @@ export function RepoPicker({
           </SelectableRow>
         );
       })}
+    </div>
+  );
+}
+
+function shortRepoName(fullName: string): string {
+  const i = fullName.lastIndexOf("/");
+  return i >= 0 ? fullName.slice(i + 1) : fullName;
+}
+
+/**
+ * Token/combobox repo picker (onboarding): selected repos render as removable
+ * chips INSIDE the search field; typing filters the list below (which never
+ * hides the chips). Multi-select, default none. Identity key is `cloneUrl`.
+ */
+export function RepoTokenPicker({
+  repos,
+  selected,
+  onToggle,
+  onClear,
+}: {
+  repos: readonly GithubRepo[];
+  selected: readonly string[];
+  onToggle: (cloneUrl: string) => void;
+  onClear: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? repos.filter((r) => r.fullName.toLowerCase().includes(q)) : repos;
+  }, [repos, query]);
+  const selectedRepos = repos.filter((r) => selected.includes(r.cloneUrl));
+
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-2_5)" }}>
+      {/* Token field — chips inside + a grow search input. */}
+      <div
+        className="flex items-center flex-wrap"
+        style={{
+          gap: "var(--sp-2)",
+          padding: "var(--sp-1_5) var(--sp-2_5)",
+          borderRadius: "var(--radius-input)",
+          border: "var(--hairline) solid var(--border)",
+          background: "var(--bg)",
+        }}
+      >
+        <Search className="h-4 w-4" style={{ color: "var(--fg-4)", flexShrink: 0 }} aria-hidden="true" />
+        {selectedRepos.map((r) => (
+          <span
+            key={r.cloneUrl}
+            className="inline-flex items-center text-caption font-medium"
+            style={{
+              gap: "var(--sp-1)",
+              padding: "var(--sp-0_5) var(--sp-1) var(--sp-0_5) var(--sp-2)",
+              borderRadius: "var(--radius-chip)",
+              background: "var(--brand-bg)",
+              color: "var(--brand-dim)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {shortRepoName(r.fullName)}
+            <button
+              type="button"
+              onClick={() => onToggle(r.cloneUrl)}
+              aria-label={`Remove ${r.fullName}`}
+              className="inline-flex items-center justify-center"
+              style={{
+                width: "var(--sp-3_5)",
+                height: "var(--sp-3_5)",
+                borderRadius: "var(--radius-full)",
+                border: 0,
+                background: "transparent",
+                color: "var(--brand-dim)",
+                cursor: "pointer",
+              }}
+            >
+              <X className="h-3 w-3" aria-hidden="true" />
+            </button>
+          </span>
+        ))}
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={selected.length > 0 ? "Add repos…" : "Search repos…"}
+          aria-label="Search repos"
+          className="text-body"
+          style={{
+            flex: 1,
+            minWidth: "8rem",
+            border: 0,
+            outline: "none",
+            background: "transparent",
+            color: "var(--fg)",
+          }}
+        />
+      </div>
+
+      {selected.length > 0 && (
+        <div className="flex items-center justify-between" style={{ gap: "var(--sp-2)" }}>
+          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
+            {selected.length} selected
+          </span>
+          <button
+            type="button"
+            onClick={onClear}
+            className="text-caption font-medium"
+            style={{ border: 0, background: "transparent", color: "var(--primary)", cursor: "pointer" }}
+          >
+            Clear all
+          </button>
+        </div>
+      )}
+
+      <div
+        className="flex flex-col"
+        style={{
+          gap: "var(--sp-0_5)",
+          overflowY: "auto",
+          padding: "var(--sp-1)",
+          borderRadius: "var(--radius-input)",
+          border: "var(--hairline) solid var(--border-faint)",
+          maxHeight: "min(40rem, calc(100vh - 33rem))",
+          flexShrink: 0,
+        }}
+      >
+        {filtered.length === 0 ? (
+          <p className="text-label" style={{ margin: 0, padding: "var(--sp-3) var(--sp-2_5)", color: "var(--fg-4)" }}>
+            No repos match “{query}”.
+          </p>
+        ) : (
+          filtered.map((repo) => {
+            const active = selected.includes(repo.cloneUrl);
+            const slash = repo.fullName.lastIndexOf("/");
+            const repoOwner = slash >= 0 ? repo.fullName.slice(0, slash + 1) : "";
+            const repoName = slash >= 0 ? repo.fullName.slice(slash + 1) : repo.fullName;
+            return (
+              <SelectableRow key={repo.cloneUrl} checked={active} onToggle={() => onToggle(repo.cloneUrl)}>
+                <span
+                  className="font-medium"
+                  style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >
+                  {repoOwner && <span style={{ color: "var(--fg-4)" }}>{repoOwner}</span>}
+                  <span style={{ color: active ? "var(--fg)" : "var(--fg-2)" }}>{repoName}</span>
+                </span>
+                {repo.private && (
+                  <span
+                    role="img"
+                    title="Private repository"
+                    aria-label="Private repository"
+                    style={{ display: "inline-flex", flexShrink: 0 }}
+                  >
+                    <Lock className="h-3.5 w-3.5" style={{ color: "var(--fg-4)" }} />
+                  </span>
+                )}
+              </SelectableRow>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }

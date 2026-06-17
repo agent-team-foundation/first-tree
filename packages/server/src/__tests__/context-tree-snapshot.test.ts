@@ -124,6 +124,7 @@ Body`);
         changedAt: "2026-05-08T00:00:00.000Z",
         changedBy: "alice",
         summary: "remove old guidance",
+        prNumber: null,
       },
     ];
 
@@ -333,5 +334,82 @@ Body`);
     expect(contextTreeSnapshotTestInternals.redactSecret("fatal: token github_pat_secret123 failed")).toBe(
       "fatal: token [redacted] failed",
     );
+  });
+
+  it("parses the trailing PR number from a merge commit subject", () => {
+    const { parsePrNumber } = contextTreeSnapshotTestInternals;
+    expect(parsePrNumber("feat: record team deletion semantics (#514)")).toBe(514);
+    // GitHub "Create a merge commit" style subject.
+    expect(parsePrNumber("Merge pull request #514 from gandy/tenancy")).toBe(514);
+    // A subject referencing several PRs takes the last `(#N)` — the merge ref.
+    expect(parsePrNumber("revert: undo (#12), reapplied via (#999)")).toBe(999);
+    expect(parsePrNumber("docs: no pull request reference here")).toBeNull();
+    // A bare `#123` (not parenthesized) is an issue mention, not the PR ref.
+    expect(parsePrNumber("fix: mentions #123 inline")).toBeNull();
+    expect(parsePrNumber(null)).toBeNull();
+  });
+
+  it("derives git write rows: PR/risk mapped, agent attribution left null, newest first", () => {
+    const node: ContextTreeNode = {
+      id: "file:system/x.md",
+      path: "system/x",
+      sourcePath: "system/x.md",
+      title: "X Decision",
+      kind: "leaf",
+      owners: [],
+      parentId: "dir:system",
+      preview: null,
+      relatedNodeIds: [],
+      affectedContextArea: "system",
+      changeType: null,
+      changedAtCommit: null,
+    };
+    const changes: ContextTreeChange[] = [
+      {
+        path: "system/x.md",
+        nodeId: "file:system/x.md",
+        type: "edited",
+        commit: "a".repeat(40),
+        changedAt: "2026-06-15T09:00:00.000Z",
+        changedBy: "gandy-coder",
+        summary: "record team deletion semantics",
+        prNumber: 514,
+      },
+      {
+        path: "system/gone.md",
+        nodeId: "removed:system/gone.md",
+        type: "removed",
+        commit: "b".repeat(40),
+        changedAt: "2026-06-15T11:00:00.000Z",
+        changedBy: "alice",
+        summary: null,
+        prNumber: null,
+      },
+    ];
+
+    const events = contextTreeSnapshotTestInternals.buildWriteEvents(changes, [node]);
+
+    // Sorted newest-first by commit time.
+    expect(events.map((e) => e.nodePath)).toEqual(["system/gone", "system/x"]);
+
+    const write = events.find((e) => e.prNumber === 514);
+    expect(write).toMatchObject({
+      nodePath: "system/x",
+      title: "X Decision",
+      changeType: "edited",
+      summary: "record team deletion semantics",
+      riskLevel: "low",
+      authorName: "gandy-coder",
+      commit: "a".repeat(40),
+      prNumber: 514,
+      // Git alone cannot say which agent — attribution is reconciled later.
+      agentId: null,
+      agentName: null,
+      agentAvatarColorToken: null,
+    });
+
+    const removed = events.find((e) => e.changeType === "removed");
+    expect(removed?.riskLevel).toBe("high");
+    expect(removed?.authorName).toBe("alice");
   });
 });

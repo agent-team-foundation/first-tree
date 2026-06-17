@@ -75,6 +75,12 @@ const DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT = 8;
  * single-transaction megabatch.
  */
 const INBOX_BACKLOG_BATCH_LIMIT = 50;
+/**
+ * Low-frequency safety net for missed PG NOTIFY events while the WebSocket
+ * remains online. The durable queue is still `inbox_entries`; this only adds a
+ * bounded extra trigger for sockets this server instance already owns.
+ */
+const INBOX_BACKLOG_REPAIR_INTERVAL_MS = 30_000;
 
 const wsMessageSchema = z.object({
   type: z.string(),
@@ -314,6 +320,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
        * the ACK/recover race.
        */
       let inboxOperationQueue: Promise<void> = Promise.resolve();
+      const lastInboxRepairDrainAtByAgent = new Map<string, number>();
 
       function isAgentStillRoutedHere(agentId: string): boolean {
         return (
@@ -466,16 +473,34 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           chainInboxDelivery(agentId, () => drainBacklogForAgent(agentId, inboxId, { source: "notify", messageId }));
       }
 
+      function maybeRepairInboxBacklog(agentId: string, inboxId: string): void {
+        if (socket.readyState !== socket.OPEN) return;
+        if (!isAgentStillRoutedHere(agentId)) return;
+
+        const now = Date.now();
+        const lastRepairAt = lastInboxRepairDrainAtByAgent.get(agentId) ?? 0;
+        if (now - lastRepairAt < INBOX_BACKLOG_REPAIR_INTERVAL_MS) return;
+        lastInboxRepairDrainAtByAgent.set(agentId, now);
+
+        chainInboxDelivery(agentId, () => drainBacklogForAgent(agentId, inboxId, { source: "repair" })).catch((err) => {
+          app.log.error({ err, agentId, inboxId }, "inbox backlog repair crashed");
+        });
+      }
+
       /**
        * Drain up to `INBOX_BACKLOG_BATCH_LIMIT` pending entries for an agent
        * over the current WS. Normal scheduling is capped by the per-chat
        * fairness window; the agent-wide cap is only a high-water fuse.
        *
-       * Used in two places:
+       * Used in four places:
        *   1. Right after `agent:bound` — covers reconnects where NOTIFYs
        *      were dropped while the socket was offline.
        *   2. Right after an `inbox:ack` — top up the in-flight slot just
        *      freed, in case the previous NOTIFY was dropped at-cap.
+       *   3. On `inbox:recover` — reset and redeliver one chat's unacked
+       *      recovery debt.
+       *   4. Low-frequency bound-socket repair — drains durable pending
+       *      notify rows when PG NOTIFY was missed but the socket stayed up.
        *
        * Delivery operations are serialized on the socket, so budget checks and the
        * subsequent claim/send loop observe one consistent per-socket in-flight
@@ -486,7 +511,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         inboxId: string,
         trigger?:
           | { source: "notify"; messageId: string }
-          | { source: "bind" | "ack" }
+          | { source: "bind" | "ack" | "repair" }
           | { source: "recover"; chatId: string },
       ): Promise<void> {
         if (socket.readyState !== socket.OPEN) return;
@@ -552,6 +577,21 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         } catch (err) {
           app.log.error({ err, agentId, inboxId, limit }, "claim backlog for WS push failed");
           return;
+        }
+
+        if (trigger?.source === "repair" && entries.length > 0) {
+          app.log.info(
+            {
+              source: "repair",
+              agentId,
+              inboxId,
+              drained: entries.length,
+              inFlightCount: inFlight,
+              globalCap: inboxMaxInFlightPerAgent,
+              chatCap: inboxMaxInFlightPerAgentChat,
+            },
+            "inbox backlog repair drained pending notify rows",
+          );
         }
 
         for (const entry of entries) {
@@ -969,6 +1009,19 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               }
 
+              // Reject a runtime-provider mismatch BEFORE any first-bind claim.
+              // The claim below is the one-shot NULL → ID that fixes an agent's
+              // client for life (re-bind is removed), so a client running a
+              // different runtime must never be allowed to pin an unbound agent
+              // — otherwise it claims the agent, gets rejected here, and no
+              // other client can recover it (they would only see WRONG_CLIENT).
+              // The client repair path re-fetches authoritative state and
+              // respawns the right handler before retrying the bind.
+              if (bindRequest.runtimeType !== agent.runtimeProvider) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.RUNTIME_PROVIDER_MISMATCH);
+                return;
+              }
+
               // First-bind path: agent.clientId is NULL (e.g. created before
               // the operator brought up a client, or migrated from pre-M1 with
               // no presence record). The race-safe UPDATE returns 0 rows if
@@ -988,15 +1041,6 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               } else if (!agent.clientUserId || agent.clientUserId !== session.userId) {
                 sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
-                return;
-              }
-
-              // Reject if the connecting client is running a different runtime
-              // provider than the one pinned on the agent. The client repair
-              // path will re-fetch authoritative state and respawn the right
-              // handler before retrying the bind.
-              if (bindRequest.runtimeType !== agent.runtimeProvider) {
-                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.RUNTIME_PROVIDER_MISMATCH);
                 return;
               }
 
@@ -1090,6 +1134,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 app.log.info({ clientId, agentId }, "stale agent:unbind ignored for global binding");
               }
               boundAgents.delete(agentId);
+              lastInboxRepairDrainAtByAgent.delete(agentId);
               clearInboxInFlightForAgent(agentId);
 
               socket.send(JSON.stringify({ type: "agent:unbound", agentId }));
@@ -1464,6 +1509,11 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     .filter((id) => isAgentStillRoutedHere(id))
                     .map((id) => presenceService.touchAgent(app.db, id)),
                 );
+                for (const info of boundAgents.values()) {
+                  if (isAgentStillRoutedHere(info.agentId)) {
+                    maybeRepairInboxBacklog(info.agentId, info.inboxId);
+                  }
+                }
               }
               socket.send(JSON.stringify({ type: "heartbeat:ack" }));
             }
@@ -1483,6 +1533,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           notifier.unsubscribe(info.inboxId, socket);
         }
         boundAgents.clear();
+        lastInboxRepairDrainAtByAgent.clear();
         inboxInFlightByAgent.clear();
         inboxInFlightOwnersByEntryId.clear();
 

@@ -363,10 +363,14 @@ export function WorkspacePage() {
 
 function clearDocPreviewParams(params: URLSearchParams): void {
   params.delete("docChat");
+  params.delete("docMsg");
+  // Current owner of which doc is open (attachment-ref model).
+  params.delete("docAttachment");
+  // Legacy params from the pre-convergence `docPath` model — still cleared so
+  // an in-flight URL minted before the migration also clears cleanly.
   params.delete("docAgent");
   params.delete("docPath");
   params.delete("docBase");
-  params.delete("docMsg");
 }
 
 /**

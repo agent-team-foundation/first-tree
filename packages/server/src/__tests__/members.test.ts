@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { agents as agentsTable } from "../db/schema/agents.js";
 import { members as membersTable } from "../db/schema/members.js";
+import { users as usersTable } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import * as memberService from "../services/member.js";
 import { repairMembershipHumanMirrors } from "../services/membership.js";
@@ -50,11 +51,31 @@ describe("Members API", () => {
       const req = await authedRequest(app);
       const res = await req("GET", "/api/v1/members");
       expect(res.statusCode).toBe(200);
-      const body = res.json<Array<{ id: string; username: string; role: string }>>();
+      const body = res.json<Array<{ id: string; username: string; role: string; avatarUrl: string | null }>>();
       expect(body.length).toBeGreaterThanOrEqual(1);
       expect(body[0]).toHaveProperty("username");
       expect(body[0]).toHaveProperty("role");
       expect(body[0]).toHaveProperty("agentId");
+      expect(body[0]).toHaveProperty("avatarUrl");
+    });
+
+    it("returns a member's user avatar URL when present", async () => {
+      const app = getApp();
+      const req = await authedRequest(app);
+      const createRes = await req("POST", "/api/v1/members", {
+        username: `avatar-member-${Date.now()}`,
+        displayName: "Avatar Member",
+        role: "member",
+      });
+      expect(createRes.statusCode).toBe(201);
+      const created = createRes.json<{ userId: string }>();
+      const avatarUrl = "https://avatars.example.test/u/avatar-member.png";
+      await app.db.update(usersTable).set({ avatarUrl }).where(eq(usersTable.id, created.userId));
+
+      const res = await req("GET", "/api/v1/members");
+      expect(res.statusCode).toBe(200);
+      const body = res.json<Array<{ userId: string; avatarUrl: string | null }>>();
+      expect(body.find((member) => member.userId === created.userId)?.avatarUrl).toBe(avatarUrl);
     });
   });
 
@@ -68,11 +89,19 @@ describe("Members API", () => {
         role: "member",
       });
       expect(res.statusCode).toBe(201);
-      const body = res.json<{ id: string; username: string; password: string; role: string; agentId: string }>();
+      const body = res.json<{
+        id: string;
+        username: string;
+        password: string;
+        role: string;
+        agentId: string;
+        avatarUrl: string | null;
+      }>();
       expect(body.password).toBeDefined();
       expect(body.password.length).toBeGreaterThan(0);
       expect(body.role).toBe("member");
       expect(body.agentId).toBeDefined();
+      expect(body.avatarUrl).toBeNull();
     });
 
     it("rejects duplicate username in same org", async () => {

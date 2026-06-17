@@ -16,6 +16,8 @@ export {
   normalizeDocLinkPath,
   parseWorkspaceDocKey,
 } from "./lib/doc-path.js";
+// -- GitHub-style identicon avatar generator (shared by web Avatar fallback; pure, browser + Node safe) --
+export { type IdenticonSvgOptions, identiconCells, identiconSvg } from "./lib/identicon.js";
 export {
   extractMentions,
   MENTION_REGEX,
@@ -59,8 +61,6 @@ export {
   legacyWireAgentTypeSchema,
   listAgentsQuerySchema,
   RESERVED_AGENT_NAMES,
-  type RebindAgent,
-  rebindAgentSchema,
   type UpdateAgent,
   updateAgentSchema,
 } from "./schemas/agent.js";
@@ -134,6 +134,16 @@ export {
   type UploadAttachmentResponse,
   uploadAttachmentResponseSchema,
 } from "./schemas/attachment.js";
+export {
+  ATTACHMENT_KINDS,
+  type AttachmentKind,
+  type AttachmentRef,
+  attachmentKindSchema,
+  attachmentRefSchema,
+  attachmentRefsFromMetadata,
+  isAttachmentRef,
+  MAX_MESSAGE_ATTACHMENT_REFS,
+} from "./schemas/attachment-ref.js";
 export {
   type ConnectTokenExchange,
   type ConnectTokenResponse,
@@ -282,6 +292,7 @@ export {
   type ContextTreeUpdate,
   type ContextTreeUsageEvent,
   type ContextTreeUsageSummary,
+  type ContextTreeWriteEvent,
   contextTreeChangeSchema,
   contextTreeChangeTypeSchema,
   contextTreeEdgeKindSchema,
@@ -307,6 +318,7 @@ export {
   contextTreeUpdateSchema,
   contextTreeUsageEventSchema,
   contextTreeUsageSummarySchema,
+  contextTreeWriteEventSchema,
   type InitializeContextTreeRequest,
   type InitializeContextTreeResponse,
   initializeContextTreeRequestSchema,
@@ -445,13 +457,8 @@ export {
   type GetMeDocResponse,
   getMeDocResponseSchema,
   getMeDocSchema,
-  MAX_DOC_SNAPSHOT_BYTES,
-  MAX_DOC_SNAPSHOTS_PER_MESSAGE,
   MAX_FAILED_DOC_MENTION_RAW_LEN,
   MAX_FAILED_DOC_MENTIONS_PER_MESSAGE,
-  MAX_TOTAL_DOC_SNAPSHOT_BYTES,
-  type SnapshotDoc,
-  snapshotDocSchema,
   type WorkspaceDocRef,
   workspaceDocRefSchema,
 } from "./schemas/me-doc.js";
@@ -495,6 +502,10 @@ export {
   updateMyProfileSchema,
 } from "./schemas/member.js";
 export {
+  type AskOption,
+  type AskRequest,
+  askOptionSchema,
+  askRequestSchema,
   type ClientMessage,
   clientMessageSchema,
   MESSAGE_FORMATS,
@@ -507,10 +518,6 @@ export {
   messagePurposeSchema,
   messageSchema,
   messageSourceSchema,
-  type OpenQuestionItem,
-  type OpenQuestionRequest,
-  openQuestionItemSchema,
-  openQuestionRequestSchema,
   type ParticipantMode,
   type PrecedingMessage,
   participantModeSchema,

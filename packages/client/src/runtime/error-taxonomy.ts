@@ -234,6 +234,19 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
       message: shape.message ?? "Refresh token rejected",
     };
   }
+  // The claude-code-tui runtime throws this when its detached `claude` start
+  // parks on an interactive login / re-auth wall it cannot keystroke past. No
+  // amount of retrying fixes it — a human must re-authenticate — so it's
+  // permanent (stops the otherwise-infinite transient retry loop and surfaces
+  // the session as errored).
+  if (shape.name === "ClaudeTuiLoginRequiredError") {
+    return {
+      kind: ERROR_KINDS.PERMANENT,
+      strategy: NONE,
+      reasonCode: "claude_login_required",
+      message: shape.message ?? "Claude TUI requires re-authentication (run /login)",
+    };
+  }
   if (isCodexBinaryMissingError(err)) {
     return {
       kind: ERROR_KINDS.PERMANENT,

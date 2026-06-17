@@ -12,8 +12,10 @@ read-only: it uses `first-tree tree tree` to find relevant tree files, then
 uses the agent's native file-reading capability to read their content and
 summarize the constraints that matter for the user's task.
 
-Use `first-tree-context` for tree writes from a source artifact. Use
-`first-tree-sync` for broad drift audits.
+Use `first-tree-write` for tree writes from a source artifact. This
+skill does not own broad drift audits; when the user asks whether the
+tree is generally up to date, report that no shipped broad-audit skill
+is available and ask for a specific source artifact or scope.
 
 ## Workflow
 

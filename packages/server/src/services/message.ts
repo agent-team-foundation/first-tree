@@ -9,7 +9,7 @@ import {
   scanMentionTokens,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -21,7 +21,7 @@ import { createLogger, messageAttrs, withSpan } from "../observability/index.js"
 import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
-import { validateDocumentContext } from "./doc-snapshots.js";
+import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
 
 const log = createLogger("message");
 
@@ -128,6 +128,22 @@ export type SendMessageOptions = {
    */
   addressedToAgentIds?: readonly string[];
   /**
+   * Agent IDs to **exclude from the notify (wake) set** even when they would
+   * otherwise be woken via `metadata.mentions` or `addressedToAgentIds`.
+   * Generic trusted-delivery capability, decoupled from `senderId`: the
+   * suppressed agent still receives a `notify=false` inbox row (the message
+   * still lands in history / replays as context), it is simply not woken.
+   *
+   * Today's caller is `github-delivery.deliverNormalizedEvent`, which passes
+   * the event's actor agent so an agent is never woken by its own GitHub
+   * action (echo suppression) — without binding that exclusion to `senderId`
+   * (the actor is frequently not a speaker of the target chat, so it must not
+   * be the chat-local sender). See `system/cloud/github/github-entity-chat-binding.md`
+   * S2. `purpose === "agent-final-text"` still forces silent for everyone;
+   * this only narrows the notify set within the non-silenced branch.
+   */
+  suppressNotifyAgentIds?: readonly string[];
+  /**
    * Trusted-internal opt-in for writing `metadata.systemSender`. The web UI
    * uses that key to re-attribute a row to a synthetic "GitHub" sender
    * (avatar + name override) instead of the row's actual `senderId`. To
@@ -185,10 +201,7 @@ export function preflightMessageSendIntent(input: {
   }
 
   const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
-  validateDocumentContext(incomingMeta, {
-    chatId,
-    participantSlugs: new Set(participants.map((p) => p.name?.toLowerCase()).filter((n): n is string => Boolean(n))),
-  });
+  validateDocumentContext(incomingMeta);
   if (incomingMeta.resolves !== undefined && !requestResolutionSchema.safeParse(incomingMeta.resolves).success) {
     throw new BadRequestError(
       'Malformed "metadata.resolves": expected {request: <messageId>, kind: "answered"|"closed", reason?}.',
@@ -268,6 +281,25 @@ export function preflightMessageSendIntent(input: {
     const target = participantsById.get(targetId);
     if (!target || target.type !== "human") {
       throw new BadRequestError("A 'request' message must be directed at a human member.");
+    }
+  }
+
+  // An agent may address a human ONLY as a `request` (an ask via `chat ask`). A
+  // plain agent→human send has no channel: humans are reached with `chat ask`
+  // (decisions/approval) or `chat update --description` (progress). The only
+  // exempt shape is the silent `agent-final-text` mirror (it addresses no one —
+  // an agent's own response surfaced for human observers). An agent CANNOT
+  // resolve a question either: resolution is human-only (the web answer), so a
+  // resolution-carrying agent send is not exempt here and is also refused by the
+  // resolution authorization below.
+  if (senderType !== "human" && data.format !== MESSAGE_FORMATS.REQUEST && data.purpose !== "agent-final-text") {
+    const humanTarget = mentionTargets.map((id) => participantsById.get(id)).find((p) => p?.type === "human");
+    if (humanTarget) {
+      const label = humanTarget.displayName || humanTarget.name || "that human";
+      throw new BadRequestError(
+        `An agent cannot \`chat send\` a human (addressed ${label}). Ask a human with ` +
+          "`chat ask` (a decision/approval/answer), or report progress with `chat update --description`.",
+      );
     }
   }
 
@@ -414,6 +446,14 @@ async function sendMessageInner(
     });
     const { content: outboundContent, metadata: metadataToStore, mentionedAgentIds: mergedMentions } = prepared;
 
+    // 2b. Validate generic attachment refs (`metadata.attachments[]`) against
+    //     the blob store: each referenced attachment must exist and its
+    //     declared mime/size must match the stored row. Async (DB lookup), so
+    //     it runs here rather than in the sync preflight. Byte integrity is
+    //     checked client-side at render via `ref.sha256`; uploader != sender by
+    //     design (see validateMessageAttachmentRefs).
+    await validateMessageAttachmentRefs(tx, metadataToStore);
+
     // 3. Store the message (with merged metadata + normalised content).
     // UUID v7 per the "UUID v7 as Message ID" architecture rule in
     // CLAUDE.md — time-ordered so message id lex order matches creation
@@ -453,6 +493,11 @@ async function sendMessageInner(
     //      nobody is woken.
     const mentionSet = new Set(mergedMentions);
     const addressedSet = new Set(options.addressedToAgentIds ?? []);
+    // Generic echo / wake-exclusion: agents here still get a `notify=false`
+    // inbox row (message lands), they are just not woken. Decoupled from
+    // `senderId` so a non-member actor can be excluded without being made the
+    // chat-local sender. See SendMessageOptions.suppressNotifyAgentIds.
+    const suppressNotifySet = new Set(options.suppressNotifyAgentIds ?? []);
     // Build a single fan-out structure that carries agentId alongside the
     // inbox row. agentId is needed by the post-tx session-activation step
     // (Step 1b) but is not part of the inbox_entries schema — it's stripped
@@ -463,7 +508,10 @@ async function sendMessageInner(
       .map((p) => ({
         agentId: p.agentId,
         inboxId: p.inboxId,
-        notify: !prepared.forceSilentFanOut && (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)),
+        notify:
+          !prepared.forceSilentFanOut &&
+          (addressedSet.has(p.agentId) || mentionSet.has(p.agentId)) &&
+          !suppressNotifySet.has(p.agentId),
       }));
 
     if (fanout.length > 0) {
@@ -488,8 +536,8 @@ async function sendMessageInner(
     if (!msg) throw new Error("Unexpected: INSERT RETURNING produced no row");
 
     // 6. Chat-first workspace projection (append-only, post-fan-out).
-    //    Updates chats.last_message_*, increments speaker + watcher mention
-    //    counters. New code; no existing path is modified — see
+    //    Updates chats.last_message_*, increments the directly-mentioned human
+    //    speaker's unread-mention counter (plus the agent-final-text bump). See
     //    first-tree-context:agent-hub/web-console.md "Risk Constraints".
     // Chat-list preview: prefer string content (text/markdown) verbatim;
     // fall back to the caption of a batched image send (`format: "file"`
@@ -519,12 +567,12 @@ async function sendMessageInner(
     //      +1 — ANY `format=request` opens a question for its single human
     //           target. (A request-shaped reply also +1's — it is a new,
     //           independently-answerable question; it does NOT auto-close the
-    //           one it replies to. Superseding is now an explicit close.)
+    //           one it replies to. Both stay open, worked oldest-first.)
     //      -1 — an EXPLICIT resolution: a message carrying `metadata.resolves`
-    //           pointed at a prior open question (the human's clean answer, or
-    //           the asking agent's `chat send --answer`/`--close`). `inReplyTo`
-    //           no longer resolves anything — it is pure threading, so a
-    //           "chat about this" discussion can thread under the question
+    //           pointed at a prior open question. Resolution is human-only — the
+    //           target's web answer; an agent (even the asker) cannot resolve.
+    //           `inReplyTo` no longer resolves anything — it is pure threading,
+    //           so a "chat about this" discussion can thread under the question
     //           without clearing the red dot. Idempotent — only the first
     //           resolution decrements; `GREATEST(0, …)` floors at zero.
     const requestTarget = mergedMentions[0];
@@ -567,27 +615,31 @@ async function sendMessageInner(
         parent.format === MESSAGE_FORMATS.REQUEST && parentMentions.length === 1 ? parentMentions[0] : undefined;
       if (typeof target !== "string") {
         throw new BadRequestError(
-          `Cannot resolve "${requestId}": it is not a tracked request. Only messages sent with --request can be answered or closed.`,
+          `Cannot resolve "${requestId}": it is not a tracked request. Only a question raised with \`chat ask\` can be answered.`,
         );
       }
-      // Only the target (a direct answer) or the asking agent (answer/close
-      // after judging the discussion) may resolve a question.
-      if (senderId !== target && senderId !== parent.senderId) {
-        throw new ForbiddenError("Only the question's target or the asking agent may resolve it.");
+      // Resolution is human-only: ONLY the target human resolves it, by
+      // answering in the web UI. An agent — including the asker — cannot mark a
+      // question answered or close it; an agent reaches the human only by asking.
+      // (The send guard above already refuses an agent→human send that is not an
+      // ask; this is the authoritative authz for the resolution itself.)
+      if (senderId !== target) {
+        throw new ForbiddenError("Only the question's target may resolve it — the human answers in the web UI.");
       }
       // Idempotency: only the FIRST resolution decrements (exclude the row we
       // just inserted). A prior resolution is any other message in this chat
-      // whose `metadata.resolves.request` points at the same question — but
-      // ONLY from an authorized resolver (the target or the asker). Without
-      // the sender scope, any participant could pre-write a stray
-      // `metadata.resolves` for this question (which itself never decrements,
-      // being unauthorized) and have it count as a "prior", permanently
-      // blocking the legitimate resolution from clearing the red dot.
-      // (Unauthorized resolves are rejected above nowadays, but rows written
-      // before that gate existed may still be present — keep the scope.)
-      // A re-resolve of an already-resolved question stays a soft success:
-      // it threads as a confirmation and simply skips the decrement, so the
-      // human-answers-while-agent-closes race never errors either side.
+      // whose `metadata.resolves.request` points at the same question, from a
+      // sender in the resolver scope. The scope is the target human (the only
+      // authorized resolver now) PLUS the asker — the asker is kept ONLY to
+      // recognize legacy pre-gate rows it may have written back when an agent
+      // could resolve; it can no longer write a NEW resolution (the authz above
+      // rejects it). The scope matters because, without it, any participant
+      // could pre-write a stray `metadata.resolves` (itself never decrementing,
+      // being unauthorized) that would count as a "prior" and permanently block
+      // the legitimate resolution from clearing the red dot. A re-resolve of an
+      // already-resolved question stays a soft success: it threads as a
+      // confirmation and simply skips the decrement, so a duplicate human answer
+      // never errors.
       const resolvers = [target, parent.senderId];
       const priors = await tx
         .select({ id: messages.id })
@@ -742,4 +794,45 @@ export async function listMessages(db: Database, chatId: string, limit: number, 
   const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
 
   return { items, nextCursor };
+}
+
+/**
+ * Every `format=request` message in `chatId` directed at `viewerAgentId` (its
+ * single human target) that has NO authorized resolution yet — i.e. the
+ * viewer's currently-open questions, oldest-first.
+ *
+ * "Open" mirrors the `open_request_count` decrement rule in `sendMessage`:
+ * resolution is human-only, so a request is resolved iff a later message in the
+ * chat carries `metadata.resolves.request = <this id>` with a valid kind from an
+ * authorized resolver — the target (the viewer) or the asker. Anything else
+ * (a bare threaded reply, a stray `resolves` from a third party) leaves it open.
+ *
+ * This is deliberately WINDOW-INDEPENDENT: it is the source the blocking
+ * answer UI uses so an open ask that has scrolled past the latest message page
+ * still surfaces (the timeline fetch is capped + unpaginated). Oldest-first so
+ * the caller's FIFO blocking pick matches the client's `findBlockingRequest`.
+ */
+export async function listOpenRequestsForViewer(
+  db: Database,
+  chatId: string,
+  viewerAgentId: string,
+): Promise<(typeof messages.$inferSelect)[]> {
+  return db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.chatId, chatId),
+        eq(messages.format, MESSAGE_FORMATS.REQUEST),
+        sql`${messages.metadata} -> 'mentions' @> jsonb_build_array(${viewerAgentId}::text)`,
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${messages} AS resolver
+          WHERE resolver.chat_id = ${messages.chatId}
+            AND resolver.metadata -> 'resolves' ->> 'request' = ${messages.id}::text
+            AND (resolver.metadata -> 'resolves' ->> 'kind') IN ('answered', 'closed')
+            AND resolver.sender_id IN (${messages.senderId}, ${viewerAgentId})
+        )`,
+      ),
+    )
+    .orderBy(asc(messages.createdAt));
 }

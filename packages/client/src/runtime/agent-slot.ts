@@ -35,7 +35,14 @@ type ConnectionListener =
   | { event: "inbox:deliver"; fn: (inboxId: string, frame: InboxDeliverFrame) => void }
   | { event: "agent:bound"; fn: (agent: { agentId: string }) => void }
   | { event: "agent:unbound"; fn: (agentId: string, reason?: string) => void }
-  | { event: "session:command"; fn: (cmd: { agentId: string; chatId: string; type: string }) => void }
+  | {
+      event: "session:command";
+      fn: (cmd: {
+        agentId: string;
+        chatId: string;
+        type: "session:suspend" | "session:resume" | "session:terminate";
+      }) => void;
+    }
   | { event: "session:reconcile:result"; fn: (result: SessionReconcileResult) => void };
 
 export class AgentSlot {
@@ -241,13 +248,15 @@ export class AgentSlot {
         onSessionRuntimeChange: (chatId, state) => this.reportSessionRuntime(chatId, state),
       });
 
-      const onCommand = (cmd: { agentId: string; chatId: string; type: string }) => {
+      const onCommand = (cmd: {
+        agentId: string;
+        chatId: string;
+        type: "session:suspend" | "session:resume" | "session:terminate";
+      }) => {
         if (cmd.agentId === this.config.agentId && this.sessionManager) {
-          this.sessionManager
-            .handleCommand(cmd.chatId, cmd.type as "session:suspend" | "session:terminate")
-            .catch((err) => {
-              this.logger.error({ err, chatId: cmd.chatId, type: cmd.type }, "session command error");
-            });
+          this.sessionManager.handleCommand(cmd.chatId, cmd.type).catch((err) => {
+            this.logger.error({ err, chatId: cmd.chatId, type: cmd.type }, "session command error");
+          });
         }
       };
       this.clientConnection.on("session:command", onCommand);

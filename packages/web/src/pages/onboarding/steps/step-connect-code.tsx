@@ -1,13 +1,13 @@
+import type { GithubAppInstallationOutput } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Check, ChevronRight, Github } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { ArrowRight, Building2, Check, Github, User } from "lucide-react";
+import { useEffect, useState } from "react";
 import { ApiError } from "../../../api/client.js";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../../../api/github-app.js";
 import { Button } from "../../../components/ui/button.js";
 import { COPY } from "../copy.js";
-import { FlowHint, RepoPicker, StatusRow } from "../flow-ui.js";
-import { InstallGuide, InstallTroubleshooting, ShowMeHow } from "../guides.js";
+import { FlowHint, RepoPicker, RepoTokenPicker, StatusRow } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
@@ -38,7 +38,7 @@ const INSTALL_ATTEMPT_KEY = "onboarding:connect-code:install-attempt";
  * with no prop (friction, not a block) — unchanged.
  */
 export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
-  const { organizationId, goNext, selectedRepoUrls, setSelectedRepoUrls } = useOnboardingFlow();
+  const { organizationId, goNext, selectedRepoUrls, setSelectedRepoUrls, hasRepoDraft } = useOnboardingFlow();
   const [installError, setInstallError] = useState<"not_configured" | "not_admin" | "generic" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
   // Whether the user has actually kicked off an install (this tab). We only
@@ -71,8 +71,6 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
     if (installed) window.sessionStorage.removeItem(INSTALL_ATTEMPT_KEY);
   }, [installed]);
 
-  const [helpOpen, setHelpOpen] = useState(false);
-
   // Team-by-default: the admin picks from the team's *org* code, sourced
   // from the GitHub App installation's repo grant (not the admin's personal
   // `/user/repos`). Only repos the agent can actually reach show up.
@@ -90,18 +88,17 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
   const loadFailed = !!reposQuery.error;
   const hasPickableRepos = !reposQuery.error && (reposQuery.data?.length ?? 0) > 0;
 
-  // Default the picker to every granted repo so the user doesn't re-pick what
-  // they just granted on GitHub (they can narrow by unchecking). One-shot when
-  // repos first load — after that we never fight a deliberate "none".
-  const preselectedRef = useRef(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: one-shot on first repo load; reads selection at fire time
+  // Default to NONE selected: the user actively picks which repos to share
+  // (paired with the "Skip for now" out + the no-repo consequence hint). When
+  // resuming a saved draft, keep the user's choices but drop repos the GitHub
+  // App no longer grants.
   useEffect(() => {
-    if (preselectedRef.current) return;
     const loaded = reposQuery.data;
-    if (!loaded || loaded.length === 0) return;
-    preselectedRef.current = true;
-    if (selectedRepoUrls.length === 0) setSelectedRepoUrls(loaded.map((r) => r.cloneUrl));
-  }, [reposQuery.data]);
+    if (!hasRepoDraft || !loaded || loaded.length === 0) return;
+    const grantedUrls = new Set(loaded.map((r) => r.cloneUrl));
+    const pruned = selectedRepoUrls.filter((url) => grantedUrls.has(url));
+    if (pruned.length !== selectedRepoUrls.length) setSelectedRepoUrls(pruned);
+  }, [hasRepoDraft, reposQuery.data, selectedRepoUrls, setSelectedRepoUrls]);
 
   const handleConnect = async (): Promise<void> => {
     if (!organizationId) return;
@@ -167,18 +164,20 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
   if (!installed) {
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        <PhaseNav phase="connect" />
-        {/* Intro is now embedded into the step `why` via STEP_COPY — no
-            separate reassurance paragraph (folded into why) and no
-            "alreadyInstalledHint" (the share-link affordance below covers
-            the same recovery path more clearly). */}
+        {/* One merged step (no in-step phase bar): Install → the repo list
+            appears in place. Intro/why live in STEP_COPY. */}
 
         {installError === "not_configured" || installError === "not_admin" ? (
           <>
             <FlowHint>{recovery ? COPY.connectCode.cantConnectRecovery : COPY.connectCode.cantConnect}</FlowHint>
             {/* Recovery has no skip — a repo is mandatory. A blocked admin
-                leaves via the shell's "Back to workspace". */}
-            {!recovery && <ContinueWithout onClick={goNext} />}
+                leaves via the shell's "Back to workspace". Onboarding: the same
+                unified "Skip for now" quiet link as every other skip in this step. */}
+            {!recovery && (
+              <Button type="button" variant="link" className="h-auto self-start p-0 text-label" onClick={goNext}>
+                {COPY.skipForNow}
+              </Button>
+            )}
           </>
         ) : (
           <>
@@ -228,21 +227,22 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
                 if the GitHub tab didn't work, "Start over" re-mints (the only
                 safe way to retry — see the CTA-lock note above). */}
             {attempted ? (
-              // One row: the live "waiting" status plus the re-mint retry as a
-              // quiet inline link (the GitHub tab can fail silently; re-minting
-              // is the only safe retry — see the CTA-lock note above).
-              <div className="flex items-center" style={{ gap: "var(--sp-2_5)", flexWrap: "wrap" }}>
-                <StatusRow state="waiting" label={COPY.connectCode.waiting} />
-                <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleStartOver}>
-                  {COPY.connectCode.restartInstall}
-                </Button>
+              // Stuck recovery (replaces the old "Need help?" disclosure): the
+              // live "waiting" status + a re-mint retry, plus the one genuinely
+              // useful, non-obvious explanation — non-owners' installs need an
+              // org owner's approval before they connect.
+              <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
+                <div className="flex items-center" style={{ gap: "var(--sp-2_5)", flexWrap: "wrap" }}>
+                  <StatusRow state="waiting" label={COPY.connectCode.waiting} />
+                  <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={handleStartOver}>
+                    {COPY.connectCode.restartInstall}
+                  </Button>
+                </div>
+                <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
+                  {COPY.connectCode.troubleshootBody}
+                </p>
               </div>
             ) : null}
-
-            <ShowMeHow open={helpOpen} onToggle={setHelpOpen}>
-              <InstallGuide />
-              <InstallTroubleshooting />
-            </ShowMeHow>
           </>
         )}
       </div>
@@ -252,7 +252,19 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
   // ── Connected — pick the project ─────────────────────────────────────
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-      <PhaseNav phase="pick" />
+      {/* Confirm WHICH GitHub account/org the App landed on — the install
+          account is whoever's github.com session was active at install time,
+          not necessarily the First Tree login account, so name it explicitly
+          before the repo pick. */}
+      {installQuery.data && (
+        <ConnectedBanner
+          installation={installQuery.data}
+          // Show the granted-repo count once the list has actually resolved —
+          // including 0 (loaded-but-empty is a real, informative count). Stay
+          // null while loading or on error, where a count would be a guess.
+          repoCount={reposQuery.isSuccess ? (reposQuery.data?.length ?? 0) : null}
+        />
+      )}
 
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
         {/* The "which repos" prompt only makes sense when there's a list to
@@ -288,8 +300,17 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
           </div>
         ) : (reposQuery.data?.length ?? 0) === 0 ? (
           <FlowHint>{recovery ? COPY.connectCode.noReposRecovery : COPY.connectCode.noRepos}</FlowHint>
-        ) : (
+        ) : recovery ? (
+          // Recovery (/build-tree) keeps the plain list picker.
           <RepoPicker repos={reposQuery.data ?? []} selected={selectedRepoUrls} onToggle={toggleRepo} fill />
+        ) : (
+          // Onboarding: search + selected-chips-in-field token picker, default none.
+          <RepoTokenPicker
+            repos={reposQuery.data ?? []}
+            selected={selectedRepoUrls}
+            onToggle={toggleRepo}
+            onClear={() => setSelectedRepoUrls([])}
+          />
         )}
       </div>
 
@@ -323,16 +344,15 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
           // picker area already explains why, so no extra line.
           <>
             {hasPickableRepos && <FlowHint>{COPY.connectCode.noRepoConsequence}</FlowHint>}
-            {/* A quiet text link: clearly clickable (persistent underline, no
-                button chrome) but never the prominent path, so picking a repo
-                stays obvious. Never disabled. */}
+            {/* Unified skip: same "Skip for now" label + quiet link style as the
+                pre-connect skip, so the skip reads identically in every state. */}
             <Button
               type="button"
               variant="link"
               className="h-auto self-start p-0 text-label underline underline-offset-2"
               onClick={goNext}
             >
-              {COPY.connectCode.continueNoProject}
+              {COPY.skipForNow}
             </Button>
           </>
         )}
@@ -342,70 +362,57 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
 }
 
 /**
- * In-step two-phase indicator (Connect GitHub → Pick repos) so the user can see
- * this step is two parts and where they are. Numbered/checked to mirror the
- * GuideSteps badges; distinct from the shell's overall "Step N of M" (no number
- * counter here, to avoid a competing step count).
+ * Post-install confirmation banner: names the GitHub account/org the App is now
+ * connected to (plus the granted-repo count once the list loads). The install
+ * account is set by whichever github.com session was active at install time —
+ * which need not be the account the user signed into First Tree with — so
+ * surfacing it here lets the user catch a wrong-account/org install before they
+ * pick repos. Mirrors the Settings → GitHub "Connected as" idiom (account icon +
+ * login + type chip) for visual consistency.
  */
-function PhaseNav({ phase }: { phase: "connect" | "pick" }) {
-  const activeIndex = phase === "connect" ? 0 : 1;
+function ConnectedBanner({
+  installation,
+  repoCount,
+}: {
+  installation: GithubAppInstallationOutput;
+  repoCount: number | null;
+}) {
+  const AccountIcon = installation.accountType === "Organization" ? Building2 : User;
   return (
-    <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
-      {COPY.connectCode.phases.map((label, i) => {
-        const state = i < activeIndex ? "done" : i === activeIndex ? "active" : "todo";
-        return (
-          <Fragment key={label}>
-            {i > 0 && (
-              <ChevronRight
-                className="h-3.5 w-3.5"
-                style={{ color: "var(--fg-4)", flexShrink: 0 }}
-                aria-hidden="true"
-              />
-            )}
-            <span className="inline-flex items-center text-label" style={{ gap: "var(--sp-1_5)" }}>
-              <span
-                aria-hidden="true"
-                className="mono inline-flex items-center justify-center"
-                style={{
-                  width: "var(--sp-4)",
-                  height: "var(--sp-4)",
-                  flexShrink: 0,
-                  borderRadius: "var(--radius-full)",
-                  background:
-                    state === "active"
-                      ? "var(--primary)"
-                      : state === "done"
-                        ? "color-mix(in oklch, var(--primary) 14%, transparent)"
-                        : "transparent",
-                  border: state === "todo" ? "var(--hairline) solid var(--border-strong)" : "none",
-                  color: state === "active" ? "var(--primary-on)" : "var(--primary)",
-                }}
-              >
-                {state === "done" ? <Check className="h-3 w-3" /> : i + 1}
-              </span>
-              <span
-                style={{
-                  color: state === "active" ? "var(--fg)" : "var(--fg-4)",
-                  fontWeight: state === "active" ? 600 : 400,
-                }}
-              >
-                {label}
-              </span>
-            </span>
-          </Fragment>
-        );
-      })}
-    </div>
-  );
-}
-
-function ContinueWithout({ onClick }: { onClick: () => void }) {
-  return (
-    <div className="flex">
-      <Button type="button" variant="outline" onClick={onClick}>
-        <span>{COPY.connectCode.continueWithout}</span>
-        <ArrowRight className="h-4 w-4" />
-      </Button>
+    <div
+      className="flex items-center"
+      style={{
+        gap: "var(--sp-2)",
+        padding: "var(--sp-2) var(--sp-3)",
+        background: "var(--bg-sunken)",
+        borderRadius: "var(--radius-input)",
+        flexWrap: "wrap",
+      }}
+    >
+      <Check className="h-4 w-4" style={{ color: "var(--primary)", flexShrink: 0 }} aria-hidden="true" />
+      <span className="text-label" style={{ color: "var(--fg-3)" }}>
+        {COPY.connectCode.connected.label}
+      </span>
+      <AccountIcon className="h-4 w-4" style={{ color: "var(--fg-2)", flexShrink: 0 }} aria-hidden="true" />
+      <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
+        {installation.accountLogin}
+      </span>
+      <span
+        className="text-label"
+        style={{
+          padding: "var(--sp-0_5) var(--sp-1_5)",
+          background: "var(--bg)",
+          borderRadius: "var(--radius-input)",
+          color: "var(--fg-3)",
+        }}
+      >
+        {installation.accountType}
+      </span>
+      {repoCount !== null && (
+        <span className="text-label" style={{ color: "var(--fg-4)", marginLeft: "auto" }}>
+          {COPY.connectCode.connected.repoCount(repoCount)}
+        </span>
+      )}
     </div>
   );
 }
