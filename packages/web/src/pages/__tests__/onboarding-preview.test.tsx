@@ -75,6 +75,30 @@ describe("onboarding preview review surface", () => {
     ).toBe(true);
   });
 
+  it("keeps GitHub preview states visually distinct", async () => {
+    const { ONBOARDING_PREVIEW_SCENARIOS } = await import("../onboarding-preview.js");
+
+    const adminGithubStateIds = ONBOARDING_PREVIEW_SCENARIOS.filter(
+      (scenario) => scenario.role === "admin" && scenario.group === "GitHub states",
+    ).map((scenario) => scenario.id);
+
+    expect(adminGithubStateIds).toEqual([
+      "admin-code-notinstalled",
+      "admin-code-err-cantconnect",
+      "admin-code-err-generic",
+      "admin-code-waiting",
+      "admin-code-loading",
+      "admin-code-norepos",
+      "admin-code-loadfailed",
+      "admin-code-repos-user",
+    ]);
+    expect(
+      ONBOARDING_PREVIEW_SCENARIOS.some(
+        (scenario) => /Need help|stuck|403|503/.test(scenario.label) && scenario.group === "GitHub states",
+      ),
+    ).toBe(false);
+  });
+
   it("uses URL params for shareable role, view, and scenario selection", async () => {
     window.history.replaceState(null, "", "/preview/onboarding?role=invitee&view=states&scenario=inv-ko-not-ready");
 

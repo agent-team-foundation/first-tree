@@ -241,7 +241,7 @@ type NetProfile = {
   /** GET /orgs/:id/github-app-installation — 200 vs 404 */
   installed?: boolean;
   /** When true, the installation query never resolves (stays loading) — used to
-      hold the post-click "Waiting for GitHub…" state without it flipping to stuck. */
+      hold the post-click "Waiting for GitHub…" state while the preview polls. */
   installPending?: boolean;
   /** Which account the App is installed on, driving the connected-confirmation
       banner: `org` (default) installs on the `acme` org; `user` installs on a
@@ -398,16 +398,15 @@ type WizardSpec = {
   /** Override the rendered body (used for transient working states). */
   body?: ReactNode;
   /**
-   * Seed the connect-code "returned from GitHub without an install" marker so
-   * the post-attempt stuck path fires (auto-opens Need help? after the
-   * component's short delay). Mirrors the per-tab key StepConnectCode sets.
+   * Seed the connect-code install-attempt marker so the post-click waiting
+   * status appears. Mirrors the per-tab key StepConnectCode sets.
    */
   seedInstallAttempt?: boolean;
   /**
-   * Render connect-computer in its "stuck" state (help auto-opens, label flips
-   * to "Taking a while?"). The real state is gated on a 75s internal timer
-   * (STUCK_AFTER_MS) that fixtures can't force, so the preview seeds it directly
-   * via StepConnectComputer's `initialStuck` prop.
+   * Render connect-computer in its "stuck" state so the Node.js recovery line
+   * appears. The real state is gated on a 75s internal timer (STUCK_AFTER_MS)
+   * that fixtures can't force, so the preview seeds it directly via
+   * StepConnectComputer's `initialStuck` prop.
    */
   connectStuck?: boolean;
 };
@@ -509,7 +508,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   },
   {
     id: "admin-cc-stuck",
-    label: "Waiting · stuck (Need help)",
+    label: "Waiting · Node.js hint",
     group: "Computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.waiting }, connectStuck: true },
@@ -563,18 +562,11 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     wizard: { step: "connect-code", net: { installed: false } },
   },
   {
-    id: "admin-code-err-notconfigured",
-    label: "Install error · can't connect · 503 (click Install)",
+    id: "admin-code-err-cantconnect",
+    label: "Install error · can't connect (click Install)",
     group: "GitHub states",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false, installUrlError: 503 } },
-  },
-  {
-    id: "admin-code-err-notadmin",
-    label: "Install error · can't connect · 403 (click Install)",
-    group: "GitHub states",
-    role: "admin",
-    wizard: { step: "connect-code", net: { installed: false, installUrlError: 403 } },
   },
   {
     id: "admin-code-err-generic",
@@ -588,17 +580,9 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     label: "Waiting for GitHub (after click)",
     group: "GitHub states",
     role: "admin",
-    // installPending keeps the install query loading so it holds "Waiting for
-    // GitHub…" without the 5s stuck timer firing; seedInstallAttempt marks the
-    // click so the status shows (pre-click there's nothing to wait for).
+    // installPending keeps the install query loading; seedInstallAttempt marks
+    // the click so the status shows (pre-click there's nothing to wait for).
     wizard: { step: "connect-code", net: { installPending: true }, seedInstallAttempt: true },
-  },
-  {
-    id: "admin-code-stuck",
-    label: "Came back without install (stuck → Need help)",
-    group: "GitHub states",
-    role: "admin",
-    wizard: { step: "connect-code", net: { installed: false }, seedInstallAttempt: true },
   },
   {
     id: "admin-code-loading",
@@ -639,7 +623,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
 
   {
     id: "admin-ko-noproject",
-    label: "No repo",
+    label: "No Context Tree finale",
     group: "Kickoff states",
     role: "admin",
     wizard: { step: "kickoff", flow: { selectedRepoUrls: [] } },
@@ -820,10 +804,11 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
 
   {
     id: "inv-ko-not-ready",
-    label: "Team not ready",
+    label: "Team not ready · missing setup",
     group: "Kickoff states",
     role: "invitee",
-    // Either signal missing → the one not-ready screen (here: no tree + no install).
+    // Missing tree, missing GitHub install, or an uncertain probe all collapse to
+    // the one not-ready screen; the invitee cannot fix those separately here.
     wizard: { step: "kickoff", net: { contextTree: null, installExists: false } },
   },
   {
