@@ -52,6 +52,9 @@ describe("GitHub OAuth onboarding flow", () => {
     // The callback carries the resolved org back so the web selects it
     // (overriding any stale localStorage org) — here the freshly-minted team.
     expect(params.get("org")).toBe(orgRow.id);
+    // A fresh solo signup is a deliberate destination — pinned so the SPA
+    // activates the just-minted org rather than a stale last-used selection.
+    expect(params.get("orgPinned")).toBe("1");
 
     // The new user is its admin.
     const memberRows = await app.db.select().from(members).where(eq(members.organizationId, orgRow.id));
@@ -255,6 +258,8 @@ describe("GitHub OAuth invite-only single-org entry gate", () => {
     // The invited org is carried back in the fragment so the web makes it the
     // active selection instead of dropping the invitee into a stale org.
     expect(params.get("org")).toBe(allowedOrganizationId);
+    // An invite redemption is a deliberate destination — pinned.
+    expect(params.get("orgPinned")).toBe("1");
 
     const userId = await findGithubUserId(app, "1201");
     const memberRows = await app.db.select().from(members).where(eq(members.userId, userId));
@@ -324,6 +329,9 @@ describe("GitHub OAuth invite-only single-org entry gate", () => {
     const fragment = res.headers.location?.split("#")[1] ?? "";
     const params = new URLSearchParams(fragment);
     expect(params.get("joinPath")).toBe("returning");
+    // A plain returning sign-in is NOT pinned: the SPA keeps the user's
+    // own last-used org selection rather than activating the callback org.
+    expect(params.get("orgPinned")).toBeNull();
   });
 });
 

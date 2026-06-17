@@ -424,6 +424,13 @@ async function completeOauthFlow(
   const inviteMatch = /^\/invite\/([^/?#]+)/.exec(next);
   let resolved = false;
   let resolvedOrganizationId: string | null = null;
+  // Whether the resolved org is a *deliberate* destination the SPA must
+  // activate (invite link, fresh solo signup, or an App-install target),
+  // versus a plain returning sign-in whose org the client restores from its
+  // own last-used selection. `joinPath` cannot carry this on its own: the
+  // App-install target path keeps `joinPath="returning"` (it reuses the
+  // caller's Settings `next`) yet still names a specific org to pin.
+  let orgPinned = false;
 
   if (inviteMatch?.[1]) {
     const token = inviteMatch[1];
@@ -452,6 +459,7 @@ async function completeOauthFlow(
     joinPath = "invite";
     resolved = true;
     resolvedOrganizationId = inv.organizationId;
+    orgPinned = true;
     // Drop the now-consumed invite path; land on the team dashboard so the
     // onboarding modal can layer on top.
     next = "/";
@@ -529,7 +537,12 @@ async function completeOauthFlow(
     resolved = true;
     resolvedOrganizationId = targetOrganizationId;
     // joinPath stays "returning"; keep caller's `next` (the Settings page)
-    // so the panel re-renders with the now-bound installation.
+    // so the panel re-renders with the now-bound installation. Pin the org
+    // explicitly: this is a deliberate App-install destination, so the SPA
+    // must activate the just-bound org even though the join path reads as a
+    // returning sign-in — otherwise a concurrent org switch in another tab
+    // would land the Settings page on the user's last-used org instead.
+    orgPinned = true;
   } else {
     const primary = await pickPrimaryMembership(app.db, userId);
     if (primary) {
@@ -553,6 +566,7 @@ async function completeOauthFlow(
       joinPath = "solo";
       resolved = true;
       resolvedOrganizationId = personal.organizationId;
+      orgPinned = true;
       next = "/";
       // Onboarding funnel: structured log marker. Picked up by logfire/otel
       // pipelines via `event: "onboarding.team_created"` for funnel views.
@@ -633,10 +647,12 @@ async function completeOauthFlow(
   const tokens = await signTokensForUser(app.config.secrets.jwtSecret, userId, app.config.auth);
 
   // Carry the org this callback resolved to (the invited org for an invite
-  // link, otherwise the user's primary/personal org) so the web can make it
-  // the active selection. Without this the client keeps whatever stale org
-  // sits in `localStorage.selectedOrganizationId`, dropping an invitee into
-  // their *previous* org instead of the one they just joined.
+  // link, an App-install target, otherwise the user's primary/personal org)
+  // so the web can make it the active selection. `orgPinned=1` marks the
+  // deliberate destinations (invite / solo / install-target) the SPA must
+  // activate; without it the client keeps its own last-used selection, which
+  // is the intended behaviour for a plain returning sign-in but would drop an
+  // invitee — or an install-return — into their *previous* org.
   const fragmentParams: Record<string, string> = {
     access: tokens.accessToken,
     refresh: tokens.refreshToken,
@@ -644,6 +660,7 @@ async function completeOauthFlow(
     joinPath,
   };
   if (resolvedOrganizationId) fragmentParams.org = resolvedOrganizationId;
+  if (orgPinned) fragmentParams.orgPinned = "1";
   const fragment = new URLSearchParams(fragmentParams).toString();
   return reply.redirect(`/auth/github/complete#${fragment}`, 302);
 }
