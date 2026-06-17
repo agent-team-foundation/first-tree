@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
+import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting, putContextTreeSetting } from "../../../api/org-settings.js";
@@ -203,17 +204,52 @@ function AdminKickoff({
         });
         return;
       }
+
+      // Re-validate the selection against the CURRENT GitHub App grant list
+      // before writing any team repo resource. `selectedRepoUrls` may be a
+      // restored per-org draft, and the connect-code prune only runs when that
+      // step mounts — a flow resumed directly at kickoff (persisted step index)
+      // would otherwise register a repo removed from the installation since the
+      // user picked it. Reuses connect-code's cached repo list; on a fetch
+      // failure we don't block kickoff (downstream registration still verifies).
+      let repos = selectedRepoUrls;
+      if (organizationId) {
+        try {
+          const granted = await queryClient.fetchQuery({
+            queryKey: ["onboarding", "org-github-repos", organizationId],
+            queryFn: () => listOrgGithubRepos(organizationId),
+          });
+          const grantedUrls = new Set(granted.map((r) => r.cloneUrl));
+          repos = selectedRepoUrls.filter((url) => grantedUrls.has(url));
+        } catch {
+          // Transient GitHub read failure — proceed with the user's selection
+          // rather than block the finale on a grant-list refresh.
+        }
+      }
+
+      // Everything the user picked is gone from the installation → nothing to
+      // seed a tree from, so fall to the intro path instead of provisioning a
+      // tree from repos the app can no longer access.
+      if (repos.length === 0) {
+        await runKickoff({
+          bootstrap: NO_REPO_BOOTSTRAP,
+          orgWrites: null,
+          treeMode: "new",
+          organizationId,
+          complete: completeAndEnterChat,
+        });
+        return;
+      }
+
       const useExisting = treeMode === "existing";
       const detectedUrl = treeUrl.trim();
-      const bootstrap = useExisting
-        ? buildBindBootstrap(selectedRepoUrls, detectedUrl)
-        : buildCreateBootstrap(selectedRepoUrls);
+      const bootstrap = useExisting ? buildBindBootstrap(repos, detectedUrl) : buildCreateBootstrap(repos);
       await runKickoff({
         bootstrap,
         orgWrites: organizationId
           ? {
               organizationId,
-              sourceRepos: selectedRepoUrls,
+              sourceRepos: repos,
               contextTreeUrl: useExisting ? detectedUrl : null,
             }
           : null,

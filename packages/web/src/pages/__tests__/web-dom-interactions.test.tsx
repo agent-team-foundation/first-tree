@@ -1836,6 +1836,40 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(inviteeReady.root);
   });
 
+  it("prunes a no-longer-granted repo at kickoff before writing team resources", async () => {
+    // A flow can resume directly at kickoff (persisted step index) without ever
+    // mounting StepConnectCode, so connect-code's grant prune never runs. The
+    // kickoff handler must re-validate the (possibly stale) selection against the
+    // current grant list, so a repo removed from the installation since the user
+    // picked it is never registered as a team repo resource.
+    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    // Current grants are web + api (GITHUB_REPOS); the draft also carries a repo
+    // the app no longer grants.
+    githubMocks.listOrgGithubRepos.mockResolvedValue(GITHUB_REPOS);
+    const view = await renderOnboardingDom(<StepKickoff />, {
+      activeStep: "kickoff",
+      selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
+      treeMode: "existing",
+      treeUrl: "https://github.com/acme/context-tree",
+    });
+    await waitForText("Your agent's ready to get to work", view.container);
+    await click(
+      ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
+        null) as HTMLButtonElement | null,
+    );
+    await waitForText("Starting your agent", view.container);
+    // web is still granted → written; the stale repo is pruned → never written.
+    expect(resourceMocks.createTeamResourceForOrg).toHaveBeenCalledWith(
+      "org-1",
+      expect.objectContaining({ payload: { url: "https://github.com/acme/web.git" } }),
+    );
+    expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalledWith(
+      "org-1",
+      expect.objectContaining({ payload: { url: "https://github.com/acme/gone.git" } }),
+    );
+    await unmountRoot(view.root);
+  });
+
   it("edits MCP server rows through validation, stdio, and HTTP submissions", async () => {
     const { McpSection } = await import("../agent-detail/mcp-section.js");
     const onAdd = vi.fn();
