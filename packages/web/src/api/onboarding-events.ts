@@ -1,4 +1,9 @@
-import type { OnboardingEvent, OnboardingEventName } from "@first-tree/shared";
+import type {
+  KickoffOnboarding,
+  KickoffOnboardingResult,
+  OnboardingEvent,
+  OnboardingEventName,
+} from "@first-tree/shared";
 import { api } from "./client.js";
 
 /**
@@ -40,4 +45,18 @@ export async function markOnboardingCompleted(organizationId?: string): Promise<
   } catch {
     // intentionally swallowed — see jsdoc
   }
+}
+
+/**
+ * Run the idempotent server-side onboarding kickoff: create-or-reuse the first
+ * chat, send the bootstrap message if the chat is empty, and stamp completion —
+ * all in one request. Replaces the browser-orchestrated create-chat → send →
+ * stamp sequence, whose mid-way failure could leave an orphan chat, a duplicate
+ * bootstrap, or a completion stamp decoupled from the chat actually existing.
+ *
+ * NOT best-effort: a failure here means the kickoff didn't happen, so the caller
+ * surfaces it and lets the user retry (the endpoint is safe to re-run).
+ */
+export async function kickoffOnboarding(args: KickoffOnboarding): Promise<KickoffOnboardingResult> {
+  return api.post<KickoffOnboardingResult>("/me/onboarding/kickoff", args);
 }

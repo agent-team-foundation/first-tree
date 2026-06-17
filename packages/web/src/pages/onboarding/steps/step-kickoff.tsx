@@ -1,10 +1,10 @@
+import type { KickoffKind } from "@first-tree/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import { createAgentChat, sendChatMessage } from "../../../api/chats.js";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
-import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
+import { kickoffOnboarding, reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting, putContextTreeSetting } from "../../../api/org-settings.js";
 import { createTeamResourceForOrg, listTeamResourcesForOrg } from "../../../api/resources.js";
 import { Button } from "../../../components/ui/button.js";
@@ -41,6 +41,10 @@ async function runKickoff(args: {
   /** The selected org — scopes agent resolution so the seed never lands on an
    *  agent from a different org (notably the build-tree recovery surface). */
   organizationId: string | null;
+  /** "intro" = meet-only (no tree work); "tree" = wake the agent to seed/read
+   *  the Context Tree. Part of the server idempotency key so an intro chat and a
+   *  later build-tree kickoff for the same agent don't collapse into one. */
+  kind: KickoffKind;
   joinPath?: "invite";
   complete: (chatId: string) => Promise<void>;
 }): Promise<void> {
@@ -88,25 +92,25 @@ async function runKickoff(args: {
     }
   }
 
-  const chat = await createAgentChat(agent.uuid);
-  try {
-    // `createAgentChat` constructs a 1:1 chat with the bootstrap agent —
-    // declare the agent as the explicit recipient so the server's
-    // explicit-recipient enforcement check passes (the legacy 1:1 implicit-wake
-    // bypass is gone). Without this, the kickoff message would 400.
-    await sendChatMessage(chat.id, args.bootstrap, [agent.uuid]);
-  } catch (err) {
-    // Non-fatal: the chat exists; the agent introduces itself when the user
-    // types. Log so operators can triage a silently-missing first message.
-    console.warn("onboarding: failed to send kickoff bootstrap message", err);
-  }
+  // Create-or-reuse the kickoff chat, send the bootstrap, and stamp completion
+  // in one idempotent server call. Folding these three steps server-side means a
+  // mid-way failure (closed tab, dropped network) no longer strands the user in
+  // a half-finished state: a retry — including the build-tree recovery surface —
+  // converges on the same chat and a single completion stamp. A failure here is
+  // surfaced to the caller (the kickoff didn't happen) rather than swallowed.
+  const { chatId } = await kickoffOnboarding({
+    ...(args.organizationId ? { organizationId: args.organizationId } : {}),
+    agentUuid: agent.uuid,
+    bootstrap: args.bootstrap,
+    kind: args.kind,
+  });
   void reportOnboardingEvent("tree_chat_started", {
     agentUuid: agent.uuid,
-    chatId: chat.id,
+    chatId,
     treeMode: args.treeMode,
     ...(args.joinPath ? { joinPath: args.joinPath } : {}),
   });
-  await args.complete(chat.id);
+  await args.complete(chatId);
 }
 
 /**
@@ -200,6 +204,7 @@ function AdminKickoff({
           orgWrites: null,
           treeMode: "new",
           organizationId,
+          kind: "intro",
           complete: completeAndEnterChat,
         });
         return;
@@ -250,6 +255,7 @@ function AdminKickoff({
           orgWrites: null,
           treeMode: "new",
           organizationId,
+          kind: "intro",
           complete: completeAndEnterChat,
         });
         return;
@@ -269,6 +275,7 @@ function AdminKickoff({
           : null,
         treeMode: useExisting ? "existing" : "new",
         organizationId,
+        kind: "tree",
         complete: completeAndEnterChat,
       });
       // The kickoff just provisioned/confirmed the team's tree binding
@@ -472,6 +479,7 @@ function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls
         orgWrites: null,
         treeMode: "existing",
         organizationId,
+        kind: "tree",
         joinPath: "invite",
         complete: completeAndEnterChat,
       });
@@ -534,6 +542,7 @@ function InviteeBlocked({ title, why, status }: { title: string; why: string; st
         orgWrites: null, // never mutate team config as an invitee
         treeMode: "existing",
         organizationId,
+        kind: "intro",
         joinPath: "invite",
         complete: completeAndEnterChat,
       });

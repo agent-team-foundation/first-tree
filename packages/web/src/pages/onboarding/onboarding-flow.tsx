@@ -227,11 +227,13 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
 
   const completeAndEnterChat = useCallback(
     async (chatId: string) => {
-      // Stamp the terminal flag, then land in the freshly-created chat. The
-      // write is idempotent and already flips optimistic client state, so
-      // never let a transient failure strand the user — always navigate.
+      // The DURABLE completion stamp is now written server-side, atomically with
+      // the kickoff chat, inside POST /me/onboarding/kickoff (called just before
+      // this). This client call is only an OPTIMISTIC local flip so the Settings
+      // → Onboarding entry disappears without waiting for the next /me refetch —
+      // hence it stays best-effort and we always navigate even if it fails.
       //
-      // Deliberately NOT `dismissOnboarding()`: completion now writes a
+      // Deliberately NOT `dismissOnboarding()`: completion writes a
       // membership-scoped suppress stamp with reason="completed". Reusing the
       // finish-later path here would blur the reason semantics that keep new
       // memberships eligible for first-need onboarding.

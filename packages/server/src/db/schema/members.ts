@@ -1,4 +1,5 @@
-import { index, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { check, index, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core";
 import { agents } from "./agents.js";
 import { organizations } from "./organizations.js";
 import { users } from "./users.js";
@@ -44,5 +45,17 @@ export const members = pgTable(
     unique("uq_members_user_org").on(table.userId, table.organizationId),
     index("idx_members_user").on(table.userId),
     index("idx_members_org").on(table.organizationId),
+    /**
+     * Onboarding completion implies suppression. Every completion path writes
+     * `onboarding_completed_at` AND `onboarding_suppressed_at` (reason="completed")
+     * together — the audit stamp and the redirect-gate move as one. This check
+     * makes that invariant a schema fact instead of an app-layer convention, so a
+     * future write that stamps completion without suppression (the class of bug
+     * migration 0062 fixed) fails closed rather than silently stranding the user.
+     */
+    check(
+      "ck_members_completed_implies_suppressed",
+      sql`${table.onboardingCompletedAt} IS NULL OR ${table.onboardingSuppressedAt} IS NOT NULL`,
+    ),
   ],
 );
