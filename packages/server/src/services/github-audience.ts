@@ -118,15 +118,20 @@ export type AudienceTarget = {
  * already subscribed, appends a `new` row.
  *
  * Echo filtering runs after the union:
- *   - actor = `agent`: no row is dropped — every mapped chat keeps the card
- *     as the public record of what happened. Instead, each row is annotated
- *     with `actorAgentId` so Stage 3 passes the actor as
+ *   - actor = `agent`: no row is dropped for echo — every mapped chat keeps
+ *     the card as the public record of what happened. Instead, each row is
+ *     annotated with `actorAgentId` so Stage 3 passes the actor as
  *     `suppressNotifyAgentIds` (the actor isn't woken / red-dotted by its own
  *     action, other recipients are notified normally; the actor still gets a
  *     silent row). Dropping rows here used to conflate "should this chat get
  *     the card" with "should this recipient be notified" and silently killed
  *     delivery to multi-participant chats whose only routing entry had the
- *     actor on one side (#942).
+ *     actor on one side (#942). The one row this branch DOES drop is the
+ *     creator carve-out: on a creation event (`kind: "opened"`) the actor's
+ *     OWN `kind: "new"` involvement is removed — a creator never gets a
+ *     dispatcher-minted chat for the entity it just opened; it binds that
+ *     entity via explicit `github follow`. This is a delivery-side drop of a
+ *     would-be fresh chat, not an echo/notification concern.
  *   - actor = `our-app-bot`: `kind: "existing"` rows are kept so follow-up
  *     events on entities the agent opened still reach the chat through the
  *     subscription path; `kind: "new"` rows are dropped to avoid forking a
@@ -327,7 +332,28 @@ export async function resolveAudience(
     // identity-based echo cannot reliably tell an agent's own write from a
     // human's. Notification-layer exclusion is best-effort — at worst it
     // re-wakes the actor once; it never drops an event.
-    return audience.map((a) => ({ ...a, actorAgentId: actor.agentId }));
+    //
+    // Creator carve-out: a creation event ("opened" — `pull_request.opened`,
+    // `issues.opened`, `discussion.created`) never mints a *fresh* chat for
+    // its own creator. The creator IS the actor; it binds the entity it just
+    // created through an explicit `github follow` (an `agent_declared`
+    // mapping), which arrives on the subscribed path as a `kind: "existing"`
+    // row and survives the #766 opened carve-out as the creation-confirmation
+    // card. Minting a second, dispatcher-owned chat for the same creator on
+    // the same PR (because the creator self-assigned / self-@mentioned in the
+    // opened payload) is a duplicate — it surfaced once #942 stopped
+    // echo-dropping the actor's audience row. So drop ONLY the actor's own
+    // `kind: "new"` involvement, and ONLY on creation events. Other involved
+    // humans (a reviewer/assignee who is NOT the creator) still get their
+    // chat, the actor's `existing` subscriptions (its followed chat) are
+    // untouched, and non-creation self-mentions — an agent pinging its own
+    // delegate in a comment (#345) — still route. This filtering is part of
+    // before-delivery audience resolution (Stage 2), so it completes before
+    // any chat is minted or card is sent (S8).
+    const isCreation = event.kind === "opened";
+    return audience
+      .filter((a) => !(isCreation && a.kind === "new" && a.humanAgentId === actor.agentId))
+      .map((a) => ({ ...a, actorAgentId: actor.agentId }));
   }
   return audience;
 }

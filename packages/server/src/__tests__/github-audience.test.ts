@@ -822,6 +822,153 @@ describe("resolveAudience", () => {
     });
   });
 
+  it("creator carve-out: drops the actor's own kind:new involvement on a creation (opened) event", async () => {
+    // Regression for the dispatcher-mints-a-second-chat bug. An agent opens a
+    // PR under its own GitHub identity and self-assigns (or self-@mentions) in
+    // the opened payload, so its login lands in `involves`. The creator binds
+    // the PR through `github follow`; the dispatcher must NOT *also* mint a
+    // separate chat for the same creator. Once #942 stopped echo-dropping the
+    // actor's audience row, that fresh `kind: "new"` row survived and forked a
+    // duplicate chat. The creator carve-out drops it before delivery, leaving
+    // an empty audience (nothing else is involved) — equivalent to the
+    // already-accepted "opened with nobody else involved → confirmation card
+    // is lost, the creator already knows it opened" outcome.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const creatorName = `creator-${randomUUID().slice(0, 6)}`;
+    await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: creatorName,
+      delegateMention: delegate,
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#600",
+        actorLogin: creatorName,
+        involves: [{ githubLogin: creatorName, reason: "assigned" }],
+        kind: "opened",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toEqual([]);
+  });
+
+  it("creator carve-out: keeps a DIFFERENT involved human's fresh chat when the creator also self-targets on opened", async () => {
+    // Only the *creator's own* fresh involvement is dropped. A genuinely
+    // different human named in the same opened payload (assignee / @mention)
+    // is a real directed signal and still gets its `kind: "new"` chat, carrying
+    // the creator's id as `actorAgentId` so Stage 3 keeps the actor out of the
+    // notification wake-set.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const creatorDelegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-creator-${randomUUID().slice(0, 6)}`,
+    });
+    const creatorName = `creator-${randomUUID().slice(0, 6)}`;
+    const creator = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: creatorName,
+      delegateMention: creatorDelegate,
+    });
+    const otherDelegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-other-${randomUUID().slice(0, 6)}`,
+    });
+    const otherName = `other-${randomUUID().slice(0, 6)}`;
+    const other = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: otherName,
+      delegateMention: otherDelegate,
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#601",
+        actorLogin: creatorName,
+        involves: [
+          { githubLogin: creatorName, reason: "assigned" },
+          { githubLogin: otherName, reason: "mentioned" },
+        ],
+        kind: "opened",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toHaveLength(1);
+    expect(audience[0]?.humanAgentId).toBe(other);
+    expect(audience[0]?.kind).toBe("new");
+    expect(audience[0]?.actorAgentId).toBe(creator);
+  });
+
+  it("creator carve-out: keeps the creator's own declared follow chat on opened, drops only the duplicate", async () => {
+    // The real-world shape: the creator followed the PR (`agent_declared`)
+    // AND self-assigned in the opened payload. The existing followed chat must
+    // survive (the #766 declared carve-out keeps its opened confirmation card,
+    // annotated with the actor for notify suppression); only the would-be
+    // second `kind: "new"` chat for the same creator is dropped.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const creatorName = `creator-${randomUUID().slice(0, 6)}`;
+    const creator = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: creatorName,
+      delegateMention: delegate,
+    });
+    const chatId = await seedChat(app, admin.organizationId, creator);
+    await seedMapping(app, {
+      orgId: admin.organizationId,
+      humanId: creator,
+      delegateId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#602",
+      chatId,
+      boundVia: "agent_declared",
+    });
+
+    const audience = await resolveAudience(
+      app.db,
+      makeEvent({
+        orgId: admin.organizationId,
+        entityType: "pull_request",
+        entityKey: "owner/repo#602",
+        actorLogin: creatorName,
+        involves: [{ githubLogin: creatorName, reason: "assigned" }],
+        kind: "opened",
+      }),
+      "first-tree",
+    );
+
+    expect(audience).toHaveLength(1);
+    expect(audience[0]?.kind).toBe("existing");
+    expect(audience[0]?.chatId).toBe(chatId);
+    expect(audience[0]?.actorAgentId).toBe(creator);
+  });
+
   it("skips an involve whose delegate target is inactive (suspended/deleted)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
