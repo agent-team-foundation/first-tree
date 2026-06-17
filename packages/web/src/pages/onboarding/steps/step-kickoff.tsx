@@ -415,8 +415,15 @@ function InviteeKickoff() {
     return <InviteeNotReady />;
   }
 
-  const { treeUrl, hasInstallation } = teamQuery.data;
-  return resolveInviteeKickoffState({ treeUrl, hasInstallation }) === "ready" ? (
+  const { treeUrl, hasInstallation, installationKnown } = teamQuery.data;
+  // "ready" requires an AUTHORITATIVE install=true. `hasInstallation` is optimistic
+  // on a failed probe (null → true) so the query keeps polling instead of flapping
+  // — but we must NOT render the ready launch (which reads the tree and would 403
+  // without an installation) until the probe actually confirms one. Until then,
+  // not-ready holds: it offers an intro-only "meet your agent" (no git op, no 403)
+  // and keeps polling, so it advances to ready on its own once install is confirmed.
+  const installed = installationKnown && hasInstallation;
+  return resolveInviteeKickoffState({ treeUrl, hasInstallation: installed }) === "ready" ? (
     <InviteeReady treeUrl={treeUrl} />
   ) : (
     <InviteeNotReady />

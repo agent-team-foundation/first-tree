@@ -1811,6 +1811,16 @@ describe("web DOM interaction coverage", () => {
     expect(inviteeNoInstall.flow.completeAndEnterChat).toHaveBeenCalled();
     await unmountRoot(inviteeNoInstall.root);
 
+    // Invitee · tree present but the install probe FAILS (unknown) → hold in
+    // not-ready, never render "ready"/Start working. An optimistic hasInstallation
+    // (null → true) must not launch tree-reading without an authoritative
+    // install=true, or the agent would 403 on its first git op.
+    githubAppMocks.getGithubAppInstallationExists.mockRejectedValueOnce(new Error("probe failed"));
+    const inviteeProbeFail = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
+    await waitForText("Your team is still setting up", inviteeProbeFail.container);
+    expect(findButton(inviteeProbeFail.container, "Start working")).toBeNull();
+    await unmountRoot(inviteeProbeFail.root);
+
     // Invitee · ready (tree + install) → a single launch, no repo selection. The
     // agent already inherits the team's recommended repos.
     const inviteeReady = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
