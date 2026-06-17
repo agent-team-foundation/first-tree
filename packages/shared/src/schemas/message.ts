@@ -171,9 +171,11 @@ export type MessagePurpose = z.infer<typeof messagePurposeSchema>;
  * intent tag that the server consumes for enforcement and does NOT persist,
  * so this boolean is the only durable post-save signal distinguishing a
  * silent final-text mirror from a deliberate agent `chat send`. Server-owned:
- * stamped only for genuine final-text mirrors and never honored from inbound
- * client metadata. The web reads it to optionally hide final-text rows behind
- * a staging-only view toggle; absent / false on every other message.
+ * stamped only for a genuine mirror (a NON-HUMAN sender with the final-text
+ * purpose) and never honored from inbound client metadata, so a human/web send
+ * carrying `purpose` cannot masquerade as one. The web reads it to optionally
+ * hide final-text rows behind a staging-only view toggle; absent / false on
+ * every other message.
  */
 export const AGENT_FINAL_TEXT_METADATA_KEY = "agentFinalText";
 

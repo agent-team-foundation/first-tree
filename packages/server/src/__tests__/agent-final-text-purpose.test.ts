@@ -126,6 +126,29 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
     expect(r.message.metadata.agentFinalText).toBeUndefined();
   });
 
+  it("does NOT mark a human/web send carrying purpose='agent-final-text' (sender-type gate, R5)", async () => {
+    // `purpose` rides the shared sendMessage schema, so the human/web route
+    // (`POST /chats/:id/messages`, source="web") can set it. Such a send still
+    // takes the silent enforcement profile, but must NOT be persisted as a
+    // final-text mirror — otherwise a human send could be hidden by the toggle.
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const peer = await createTestAgent(app, { name: `r5-${crypto.randomUUID().slice(0, 6)}` });
+
+    const { chatId } = await createMeChat(app.db, admin.humanAgentUuid, admin.organizationId, {
+      participantIds: [peer.agent.uuid],
+    });
+
+    const r = await sendMessage(app.db, chatId, admin.humanAgentUuid, {
+      source: "web",
+      format: "text",
+      content: "human pretending to be final text",
+      purpose: "agent-final-text",
+    });
+
+    expect(r.message.metadata.agentFinalText).toBeUndefined();
+  });
+
   it("still 400s when purpose is absent and no mentions declared (regression guard for the enforce rule)", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
