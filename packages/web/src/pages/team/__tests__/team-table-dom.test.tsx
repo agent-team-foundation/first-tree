@@ -85,6 +85,7 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
     kind: "agent",
     agent: agent({ uuid: "agent-1", name: "nova", displayName: "Nova", runtimeState: "idle" }),
     managerLabel: "Gandy",
+    managerAvatarUrl: "https://avatars.example.test/u/gandy.png",
     isOwnedBySelf: true,
   };
   const design: AgentRow = {
@@ -100,6 +101,7 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
       runtimeState: "working",
     }),
     managerLabel: "Alice",
+    managerAvatarUrl: null,
     isOwnedBySelf: false,
   };
   const humans: HumanRow[] = [
@@ -221,9 +223,10 @@ describe("TeamTable", () => {
     expect(container.textContent).toContain("Gandy");
     expect(container.textContent).toContain("Admin");
     expect(container.textContent).toContain("—");
-    expect(container.querySelector('img[alt="Gandy"]')?.getAttribute("src")).toBe(
+    expect([...container.querySelectorAll('img[alt="Gandy"]')].map((img) => img.getAttribute("src"))).toEqual([
       "https://avatars.example.test/u/gandy.png",
-    );
+      "https://avatars.example.test/u/gandy.png",
+    ]);
 
     await click(container.querySelector('[aria-label="Open Nova"]'));
     expect(props.onAgentDetails).toHaveBeenCalledWith("agent-1");
