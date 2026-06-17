@@ -1,4 +1,4 @@
-import type { AgentVisibility, GithubAppInstallationOutput, ResourceRow } from "@first-tree/shared";
+import type { AgentVisibility, GithubAppInstallationOutput } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { HubClient } from "../api/activity.js";
@@ -253,14 +253,6 @@ type NetProfile = {
   /** GET /orgs/:id/settings/context_tree → { repo } */
   contextTree?: string | null | "pending";
   /**
-   * Team-recommended repos the invitee inherits. Served as ResourceRow[] from
-   * GET /orgs/:id/resources (what listTeamResourcesForOrg actually calls since
-   * the Resources Phase 1 refactor); InviteeKickoff filters to
-   * type==="repo" && defaultEnabled==="recommended" — non-empty picks the
-   * "works with your team's repos" ready copy, empty the intro copy.
-   */
-  sourceRepos?: string[];
-  /**
    * GET /orgs/:id/github-app-installation/install-url — when set, the install
    * URL mint fails with this status, so clicking "Install on GitHub"
    * surfaces the matching installError state (503 → not_configured, 403 →
@@ -287,26 +279,6 @@ function reposResponse(outcome: RepoOutcome | undefined): Promise<Response> | Re
   if (outcome === "scope") return statusResponse(403, JSON.stringify({ error: "missing project read permission" }));
   if (outcome === "neterror") return Promise.reject(new TypeError("Failed to fetch"));
   return jsonResponse({ repos: outcome ?? [] });
-}
-
-/** A team-recommended repo resource, matching what GET /orgs/:id/resources returns. */
-function teamRepoResource(url: string, i: number): ResourceRow {
-  return {
-    id: `res-${i}`,
-    organizationId: ORG_ID,
-    type: "repo",
-    scope: "team",
-    ownerAgentId: null,
-    name: url.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, ""),
-    repoCanonicalKey: null,
-    defaultEnabled: "recommended",
-    status: "active",
-    payload: { url },
-    createdBy: "preview",
-    updatedBy: "preview",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  };
 }
 
 /** Map a request path (with `/api/v1` prefix) to a canned response, or null to fall through. */
@@ -340,9 +312,6 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
   if (p === `/orgs/${ORG_ID}/settings/context_tree`) {
     if (activeNet.contextTree === "pending") return new Promise<Response>(() => {});
     return jsonResponse({ repo: activeNet.contextTree ?? null });
-  }
-  if (p === `/orgs/${ORG_ID}/resources`) {
-    return jsonResponse((activeNet.sourceRepos ?? []).map((url, i) => teamRepoResource(url, i)));
   }
   // Build-tree recovery agent picker. uuid v7 is time-ordered, so the larger
   // string is the "newest" the panel defaults to.
@@ -850,18 +819,12 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   },
 
   {
-    id: "inv-ko-waiting",
-    label: "Waiting for team",
+    id: "inv-ko-not-ready",
+    label: "Team not ready",
     group: "Kickoff states",
     role: "invitee",
-    wizard: { step: "kickoff", net: { installExists: true } },
-  },
-  {
-    id: "inv-ko-noinstall",
-    label: "No code connection",
-    group: "Kickoff states",
-    role: "invitee",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: false } },
+    // Either signal missing → the one not-ready screen (here: no tree + no install).
+    wizard: { step: "kickoff", net: { contextTree: null, installExists: false } },
   },
   {
     id: "inv-ko-ready",
@@ -869,14 +832,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     group: "Invitee happy path",
     role: "invitee",
     view: "flow",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [REPO_WEB, REPO_API] } },
-  },
-  {
-    id: "inv-ko-ready-norepos",
-    label: "Ready · no team repos (intro)",
-    group: "Kickoff states",
-    role: "invitee",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [] } },
+    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true } },
   },
   {
     id: "inv-ko-starting",

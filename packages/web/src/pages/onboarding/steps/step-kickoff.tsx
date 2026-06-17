@@ -6,7 +6,7 @@ import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { kickoffOnboarding, reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting, putContextTreeSetting } from "../../../api/org-settings.js";
-import { createTeamResourceForOrg, listTeamResourcesForOrg } from "../../../api/resources.js";
+import { createTeamResourceForOrg } from "../../../api/resources.js";
 import { Button } from "../../../components/ui/button.js";
 import {
   buildBindBootstrap,
@@ -22,16 +22,6 @@ import { resolveInviteeKickoffState } from "../steps.js";
 
 const NO_REPO_BOOTSTRAP =
   "Introduce yourself to the team — what can you help with, and what's a good first thing for me to try?";
-
-function teamRecommendedRepoUrls(resources: Awaited<ReturnType<typeof listTeamResourcesForOrg>>): string[] {
-  return resources
-    .filter((resource) => resource.type === "repo" && resource.defaultEnabled === "recommended")
-    .map((resource) => {
-      const payload = resource.payload as { url?: unknown };
-      return typeof payload.url === "string" ? payload.url : null;
-    })
-    .filter((url): url is string => Boolean(url));
-}
 
 /** Shared "create the chat + send the first task + finish" sequence. */
 async function runKickoff(args: {
@@ -295,13 +285,31 @@ function AdminKickoff({
 
   if (phase === "starting") return <StartingState />;
 
-  // No repo connected — nothing to seed a tree from, so this is honestly just
-  // "meet your agent". A quiet affordance points back to connect-code (the only
-  // way to give the team a Context Tree), not a silent "do it later in Settings".
+  // No repo connected — same state as "no Context Tree". The title is honest
+  // (the agent works, but the team has no tree), and the recovery — go back to
+  // connect-code and connect GitHub — lives INLINE in the body (not a separate
+  // orphaned link below the CTA), the same pre/link/post idiom as create-agent's
+  // "reconnect it".
   if (!hasRepos) {
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-        <StepHeading title={COPY.kickoff.noProjectTitle} why={COPY.kickoff.noProjectBody} />
+        <StepHeading
+          title={COPY.kickoff.noProjectTitle}
+          why={
+            <>
+              {COPY.kickoff.noProjectBody.pre}
+              <button
+                type="button"
+                className="font-medium underline underline-offset-2"
+                style={{ color: "var(--primary)" }}
+                onClick={() => goTo(sequence.indexOf("connect-code"))}
+              >
+                {COPY.kickoff.noProjectBody.link}
+              </button>
+              {COPY.kickoff.noProjectBody.post}
+            </>
+          }
+        />
         <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
           {error && (
             <FlowHint tone="error" role="alert">
@@ -314,17 +322,6 @@ function AdminKickoff({
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
-          {/* Standalone affordance back to connect-code (where they can pick a
-              repo, then Continue returns here with one). A persistent underline
-              makes it read as a clickable link, not a heading. */}
-          <Button
-            type="button"
-            variant="link"
-            className="h-auto self-start p-0 text-label underline underline-offset-2"
-            onClick={() => goTo(sequence.indexOf("connect-code"))}
-          >
-            {COPY.kickoff.connectRepoAffordance}
-          </Button>
         </div>
       </div>
     );
@@ -368,31 +365,24 @@ function AdminKickoff({
 
 function InviteeKickoff() {
   const { organizationId } = useOnboardingFlow();
-  // Fetch tree config, team repos, and installation existence together.
-  // The installation bit drives the "no-installation" sub-state, which catches
-  // "admin set up the tree but never connected GitHub" before the invitee
-  // launches and the agent hits a 403 on its first git op.
+  // The team is "ready" only with BOTH a Context Tree and a GitHub connection;
+  // either missing → "not-ready". The install bit matters because a tree without
+  // an installation would 403 the agent's first git op, so we hold rather than
+  // launch into a broken state.
   //
-  // We use the dedicated /github-app-installation/exists endpoint here
-  // (returns `{ exists: boolean }`, member-readable) rather than the full
-  // installation GET — that one is admin-gated (requireOrgAdmin), so as a
-  // non-admin invitee it would 403. Round 1 of codex review caught that
-  // mapping 403→"missing" blocks every invitee of a healthy team; round 2
-  // caught that mapping 403→"installed" makes the new safeguard
-  // unreachable. The /exists endpoint side-steps both by exposing just the
-  // presence bit to members. Any unexpected error here falls through to
-  // `hasInstallation: true` so a transient blip never bounces the user
-  // into the wrong sub-state.
+  // We use the dedicated /github-app-installation/exists endpoint here (returns
+  // `{ exists: boolean }`, member-readable) rather than the full installation
+  // GET — that one is admin-gated (requireOrgAdmin), so as a non-admin invitee
+  // it would 403. Three-state probe: true = installed, false = confirmed
+  // missing, null = probe failed (network blip, 5xx). The null sentinel is kept
+  // distinct from `false` so the refetchInterval below can tell "don't know yet"
+  // from "known missing", and so a transient blip never flips a ready team into
+  // not-ready.
   const teamQuery = useQuery({
     queryKey: ["onboarding", "team-config", organizationId],
     queryFn: async () => {
-      const [tree, resources, installResult] = await Promise.all([
+      const [tree, installResult] = await Promise.all([
         getContextTreeSetting(organizationId ?? ""),
-        listTeamResourcesForOrg(organizationId ?? ""),
-        // Three-state result: true = installed, false = server confirmed
-        // missing, null = probe failed (network blip, 5xx). The null
-        // sentinel is distinct from `false` so refetchInterval below can
-        // tell "we don't know yet" from "we know it's missing".
         getGithubAppInstallationExists(organizationId ?? "").catch<null>((err) => {
           console.warn("onboarding: installation-exists probe failed", err);
           return null;
@@ -400,30 +390,24 @@ function InviteeKickoff() {
       ]);
       return {
         treeUrl: tree.repo ?? "",
-        teamRepoUrls: teamRecommendedRepoUrls(resources),
-        // Optimistic on uncertainty: don't bounce the user into
-        // no-installation on a transient blip. The refetchInterval below
-        // keeps polling until we have an authoritative answer; if that
-        // answer is `false` the UI will flip into no-installation on the
-        // next tick. Codex round-2 review caught the original bug where
-        // catch→true plus "stop polling when hasInstallation truthy"
-        // wedged the query in a success state forever on the first error.
+        // Optimistic on uncertainty: a probe failure (null) counts as installed
+        // so a blip doesn't bounce a ready team into not-ready. `installationKnown`
+        // gates the polling so we keep checking until the answer is authoritative.
         hasInstallation: installResult !== false,
         installationKnown: installResult !== null,
       };
     },
     enabled: !!organizationId,
-    // Keep polling while anything's still unknown OR the admin hasn't
-    // finished. Stop only once we have a tree URL AND an authoritative
-    // (non-null) install probe result. Without the `installationKnown`
-    // gate, a transient error on first probe would set hasInstallation=true
-    // and then stop polling — wedging the user out of the no-installation
-    // safeguard for the rest of the session.
+    // Poll until the team is genuinely ready: a tree URL AND an authoritative
+    // (non-null) probe that came back installed. While either is missing or
+    // unknown, keep polling — so the moment the admin finishes whichever half
+    // was missing, this flips to "ready" on its own (the old code stopped
+    // polling once the tree appeared, stranding the no-install case).
     refetchInterval: (query) => {
       const d = query.state.data;
       if (!d) return 5000;
-      if (!d.treeUrl) return 5000;
       if (!d.installationKnown) return 5000;
+      if (!d.treeUrl || !d.hasInstallation) return 5000;
       return false;
     },
   });
@@ -432,23 +416,25 @@ function InviteeKickoff() {
     return <StatusRow state="waiting" label="Checking what your team has set up…" />;
   }
 
-  // Read failure → waiting; the query keeps polling so a transient blip
+  // Read failure → not-ready; the query keeps polling so a transient blip
   // resolves on its own.
   if (teamQuery.isError || !teamQuery.data) {
-    return <InviteeWaiting />;
+    return <InviteeNotReady />;
   }
 
-  const { treeUrl, teamRepoUrls, hasInstallation } = teamQuery.data;
-  const state = resolveInviteeKickoffState({ treeUrl, hasInstallation });
-
-  switch (state) {
-    case "waiting":
-      return <InviteeWaiting />;
-    case "no-installation":
-      return <InviteeNoInstallation />;
-    case "ready":
-      return <InviteeReady treeUrl={treeUrl} teamRepoUrls={teamRepoUrls} />;
-  }
+  const { treeUrl, hasInstallation, installationKnown } = teamQuery.data;
+  // "ready" requires an AUTHORITATIVE install=true. `hasInstallation` is optimistic
+  // on a failed probe (null → true) so the query keeps polling instead of flapping
+  // — but we must NOT render the ready launch (which reads the tree and would 403
+  // without an installation) until the probe actually confirms one. Until then,
+  // not-ready holds: it offers an intro-only "meet your agent" (no git op, no 403)
+  // and keeps polling, so it advances to ready on its own once install is confirmed.
+  const installed = installationKnown && hasInstallation;
+  return resolveInviteeKickoffState({ treeUrl, hasInstallation: installed }) === "ready" ? (
+    <InviteeReady treeUrl={treeUrl} />
+  ) : (
+    <InviteeNotReady />
+  );
 }
 
 /**
@@ -456,16 +442,13 @@ function InviteeKickoff() {
  * connection, so there's nothing left to set up — and nothing to pick: the
  * agent already inherits the team's `recommended` repo resources automatically
  * (they're enabled for every org agent). This mirrors the admin finale as a
- * pure launch. The kickoff message names the team's repos when there are any,
- * otherwise it's an intro; either way the agent enters a real chat. `orgWrites`
- * stays null — an invitee never mutates team config.
+ * pure launch into a real chat. `orgWrites` stays null — an invitee never
+ * mutates team config.
  */
-function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls: string[] }) {
+function InviteeReady({ treeUrl }: { treeUrl: string }) {
   const { organizationId, completeAndEnterChat } = useOnboardingFlow();
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
-
-  const hasRepos = teamRepoUrls.length > 0;
 
   const handleStart = async (): Promise<void> => {
     setError(null);
@@ -493,10 +476,7 @@ function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      <StepHeading
-        title={COPY.kickoff.inviteeReadyTitle}
-        why={hasRepos ? COPY.kickoff.inviteeReadyWithRepos : COPY.kickoff.inviteeReadyNoRepos}
-      />
+      <StepHeading title={COPY.kickoff.inviteeReadyTitle} why={COPY.kickoff.inviteeReadyBody} />
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
         {error && (
           <FlowHint tone="error" role="alert">
@@ -515,20 +495,19 @@ function InviteeReady({ treeUrl, teamRepoUrls }: { treeUrl: string; teamRepoUrls
 }
 
 /**
- * Shared body for the two "team isn't ready yet" sub-states: `waiting` (admin
- * hasn't created the Context Tree) and `no-installation` (tree exists but no
- * GitHub App is connected). Both are blocked on the admin and both poll +
- * advance on their own the moment the admin finishes — so the only thing the
- * invitee can DO here is not wait: meet their agent now.
+ * Invitee · the team's workspace isn't ready yet — either no Context Tree or no
+ * GitHub connection. We don't split those: in both cases the invitee is blocked
+ * on the admin and can't act on it, so one screen covers both. The kickoff query
+ * keeps polling, so this advances to `ready` on its own the moment the admin
+ * finishes whichever half was missing.
  *
  * "Meet your agent" runs an intro-only kickoff (`runKickoff` with no repo → an
  * agent that introduces itself, repos connectable later from Settings), the same
  * launch the `ready` state uses. Routing it through `completeAndEnterChat` — not
  * `finishLater` — means the button lands the user in a real chat WITH the agent,
- * instead of dropping them into an empty workspace. The two states differ only
- * in copy, so they share this body; split them again if their actions diverge.
+ * instead of dropping them into an empty workspace.
  */
-function InviteeBlocked({ title, why, status }: { title: string; why: string; status: string }) {
+function InviteeNotReady() {
   const { organizationId, completeAndEnterChat } = useOnboardingFlow();
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -556,43 +535,27 @@ function InviteeBlocked({ title, why, status }: { title: string; why: string; st
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      {/* Heading carries the screen; the pulsing StatusRow is the "still
-          watching, will advance on its own" signal. */}
-      <StepHeading title={title} why={why} />
+      <StepHeading title={COPY.invitee.notReadyTitle} why={COPY.invitee.notReadyBody} />
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        <StatusRow state="waiting" label={status} />
         {error && (
           <FlowHint tone="error" role="alert">
             {error}
           </FlowHint>
         )}
+        {/* "Meet your agent" is the PRIMARY action, not an escape hatch: the
+            common not-ready case (admin finished without a tree) never resolves,
+            so the real path forward is to start now. The auto-advance — if the
+            team does finish — is the quiet status footnote below, never the
+            headline. */}
         <div className="flex">
-          <Button type="button" variant="outline" onClick={() => void handleMeet()}>
-            {COPY.invitee.startAnyway}
+          <Button type="button" variant="cta" onClick={() => void handleMeet()}>
+            <span>{COPY.invitee.startAnyway}</span>
+            <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
+        <StatusRow state="waiting" label={COPY.invitee.notReadyStatus} />
       </div>
     </div>
-  );
-}
-
-function InviteeWaiting() {
-  return (
-    <InviteeBlocked
-      title={COPY.invitee.waitingTitle}
-      why={COPY.invitee.waitingBody}
-      status={COPY.invitee.waitingStatus}
-    />
-  );
-}
-
-function InviteeNoInstallation() {
-  return (
-    <InviteeBlocked
-      title={COPY.invitee.noInstallTitle}
-      why={COPY.invitee.noInstallBody}
-      status={COPY.invitee.noInstallStatus}
-    />
   );
 }
 

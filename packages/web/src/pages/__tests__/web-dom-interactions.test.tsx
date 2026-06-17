@@ -1797,24 +1797,34 @@ describe("web DOM interaction coverage", () => {
     expect(adminNoProject.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
     await unmountRoot(adminNoProject.root);
 
-    // Invitee · waiting (no team tree yet) → "Meet your agent" now lands in a real
+    // Invitee · not-ready via no team tree → "Meet your agent" lands in a real
     // chat (runKickoff → completeAndEnterChat), not finishLater.
     orgSettingsMocks.getContextTreeSetting.mockResolvedValueOnce({ repo: "", branch: null });
-    const inviteeWaiting = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
-    await waitForText("Waiting for your team to set up", inviteeWaiting.container);
-    await click(findButton(inviteeWaiting.container, "Meet your agent"));
-    await waitForText("Starting your agent", inviteeWaiting.container);
-    expect(inviteeWaiting.flow.completeAndEnterChat).toHaveBeenCalled();
-    await unmountRoot(inviteeWaiting.root);
+    const inviteeNoTree = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
+    await waitForText("Your team is still setting up", inviteeNoTree.container);
+    await click(findButton(inviteeNoTree.container, "Meet your agent"));
+    await waitForText("Starting your agent", inviteeNoTree.container);
+    expect(inviteeNoTree.flow.completeAndEnterChat).toHaveBeenCalled();
+    await unmountRoot(inviteeNoTree.root);
 
-    // Invitee · no installation (tree set, GitHub not connected) → hold + the same
-    // "meet your agent" bailout. No share-link/Copy affordance anymore.
+    // Invitee · not-ready via no installation (tree set, GitHub not connected) →
+    // the same single not-ready screen + "meet your agent" bailout.
     githubAppMocks.getGithubAppInstallationExists.mockResolvedValueOnce(false);
     const inviteeNoInstall = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
-    await waitForText("your team's repo isn't connected yet", inviteeNoInstall.container);
+    await waitForText("Your team is still setting up", inviteeNoInstall.container);
     await click(findButton(inviteeNoInstall.container, "Meet your agent"));
     expect(inviteeNoInstall.flow.completeAndEnterChat).toHaveBeenCalled();
     await unmountRoot(inviteeNoInstall.root);
+
+    // Invitee · tree present but the install probe FAILS (unknown) → hold in
+    // not-ready, never render "ready"/Start working. An optimistic hasInstallation
+    // (null → true) must not launch tree-reading without an authoritative
+    // install=true, or the agent would 403 on its first git op.
+    githubAppMocks.getGithubAppInstallationExists.mockRejectedValueOnce(new Error("probe failed"));
+    const inviteeProbeFail = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
+    await waitForText("Your team is still setting up", inviteeProbeFail.container);
+    expect(findButton(inviteeProbeFail.container, "Start working")).toBeNull();
+    await unmountRoot(inviteeProbeFail.root);
 
     // Invitee · ready (tree + install) → a single launch, no repo selection. The
     // agent already inherits the team's recommended repos.

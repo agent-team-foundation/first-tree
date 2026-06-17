@@ -310,7 +310,7 @@ export const COPY = {
     // Context-Tree lecture; the term is named once, lightly.
     newTitle: "Your agent's ready to get to work",
     newWhy: (repoCount: number): string =>
-      `It'll start by reading your ${repoCount === 1 ? "repo" : `${repoCount} repos`} and drafting your team's Context Tree — the shared memory that lets every agent work like it already knows your project.`,
+      `It'll read your ${repoCount === 1 ? "repo" : `${repoCount} repos`} and draft your team's Context Tree — shared memory every agent works from.`,
     startBuilding: "Build tree & start",
 
     // admin · the team already has a Context Tree (re-run / second admin /
@@ -318,16 +318,23 @@ export const COPY = {
     // instead of seeding.
     existingTitle: "Your agent's ready to get to work",
     existingWhy: (repoCount: number): string =>
-      `Your team already has a Context Tree — your agent will get oriented and start working on your ${repoCount === 1 ? "repo" : `${repoCount} repos`}.`,
+      `Your team already has a Context Tree — your agent gets oriented and starts on your ${repoCount === 1 ? "repo" : `${repoCount} repos`}.`,
     startExisting: "Start",
 
-    // admin · no repo connected (connect-code skipped / 0 picked). Nothing to
-    // seed from, so this is honestly "meet your agent" — not a tree moment. The
-    // affordance points back to connecting a repo (the only way to give the team
-    // a Context Tree), not a silent "do it later in Settings".
-    noProjectTitle: "Your agent's ready",
-    noProjectBody: "No repo connected, so your agent will start with a quick intro.",
-    connectRepoAffordance: "Want a team Context Tree? Connect a repo",
+    // admin · no repo connected (connect-code skipped / 0 picked). "No repo" and
+    // "no Context Tree" are the same state, so frame it as the tree being absent
+    // (the value), not the mechanism. The title is honest, not a "you're done"
+    // celebration — the agent works, but the team has no Context Tree yet. The
+    // recovery is inline in the body: "Connect GitHub" routes back to connect-code
+    // (install + pick a repo), the same pre/link/post idiom as create-agent's
+    // "reconnect it". The agent stays usable now (Meet your agent), so this nudges
+    // toward the tree without blocking the lighter start.
+    noProjectTitle: "Your agent's ready — but your team has no Context Tree yet",
+    noProjectBody: {
+      pre: "No repo connected, so your agent will start with a quick intro. ",
+      link: "Connect GitHub",
+      post: " to build your team's Context Tree.",
+    },
     startChatting: "Meet your agent",
 
     // invitee · ready (team has a tree + a GitHub connection). Replaces the old
@@ -335,21 +342,24 @@ export const COPY = {
     // automatically (recommended team resources are enabled for every org
     // agent), so there is nothing to select.
     inviteeReadyTitle: "Your agent's ready to go",
-    // Deliberately does NOT name specific repos or claim guaranteed access: an
-    // agent clones a team repo with the host machine's git credentials (no org
-    // token is injected), so a joining member without access to a private team
-    // repo can't reach it. "works with your team's repos" stays true regardless.
-    inviteeReadyWithRepos: "Your team's all set up — your agent works with your team's repos and shared Context Tree.",
-    // No "add from Settings": connecting team repos is admin-only, and this is
-    // shown to a joining member, so it must not imply they can do it themselves.
-    inviteeReadyNoRepos:
-      "Your team's all set up — your agent will start with a quick intro. An admin can connect team repos anytime.",
+    // Names what the agent actually has — the team's repos + shared Context Tree —
+    // because onboarding is where we teach that concept, and a joining teammate
+    // benefits from knowing their agent isn't a blank assistant. One line for every
+    // ready case (the agent inherits the team's recommended repos automatically,
+    // so there's nothing to pick). Deliberately doesn't claim specific repo ACCESS:
+    // an agent clones with the host's git credentials, so "works with your team's
+    // repos" stays true regardless — a member without access to a private repo just
+    // can't reach that one.
+    inviteeReadyBody: "Your team's all set up — your agent works with your team's repos and shared Context Tree.",
     startWorking: "Start working",
 
     // shared launch transition
     starting: "Starting your agent…",
   },
-  /** invitee welcome + blocked states */
+  /** invitee · ceremonial welcome + the one not-ready (blocked-on-admin) state.
+   *  The not-ready screen covers both "no Context Tree" and "no GitHub
+   *  connection" — the invitee can't act on either, and it advances on its own
+   *  once the admin finishes. */
   invitee: {
     // The invitee's ceremonial welcome (mirrors the admin opening). `welcomeBody`
     // brackets the team name (rendered bold in StepWelcome); the one-line
@@ -366,17 +376,15 @@ export const COPY = {
       post: " — let's bring your coding agent (Claude Code, Codex) onto the team.",
     },
     nextSteps: ["Install First Tree", "Create your first agent", "Start working"],
-    waitingTitle: "Waiting for your team to set up",
-    waitingBody:
-      "Your team's admin is still setting up repos and a Context Tree. This page updates on its own as soon as they're done.",
-    waitingStatus: "Watching for updates…",
-    // admin set up a tree but never connected the GitHub App; without an
-    // installation every git op the agent runs would 403, so we hold here.
-    noInstallTitle: "Almost there — your team's repo isn't connected yet",
-    noInstallBody:
-      "Your team's admin set up the Context Tree but hasn't connected a repo on GitHub yet. Your agent needs that connection to do real work.",
-    noInstallStatus: "Watching for the connection…",
-    // Bailout on the blocked screens — meet your agent now (an intro chat)
+    // Title states the fact; the body leads with the action, not the wait. In the
+    // default-none world the most common not-ready cause is "admin finished
+    // without a tree", which never resolves — so "Meet your agent" is the real
+    // path forward (the primary CTA), and the auto-advance is a quiet conditional
+    // footnote (notReadyStatus), never a "coming soon" promise the team may break.
+    notReadyTitle: "Your team is still setting up",
+    notReadyBody: "No need to wait — meet your agent now.",
+    notReadyStatus: "This page continues on its own if your team finishes setup.",
+    // The primary action on the not-ready screen — start an intro chat now
     // instead of waiting on the team.
     startAnyway: "Meet your agent",
   },
