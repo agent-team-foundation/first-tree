@@ -10,6 +10,7 @@ type MemberListItem = {
   createdAt: string;
   username: string;
   displayName: string;
+  avatarUrl: string | null;
   /** Derived from the member's most recent message (口径 B); null = never active. */
   lastActiveAt: string | null;
 };

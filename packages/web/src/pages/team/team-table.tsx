@@ -34,6 +34,7 @@ export type HumanRow = {
   agentId: string;
   username: string;
   displayName: string;
+  avatarUrl: string | null;
   role: string;
   isSelf: boolean;
   delegate: {
@@ -692,7 +693,7 @@ function HumanRowView(props: TeamTableProps & { compact: boolean; row: HumanRow 
         displayName={row.displayName}
         handle={row.username}
         handleTone="neutral"
-        avatarUrl={null}
+        avatarUrl={row.avatarUrl}
         seed={row.id}
         selfTag={row.isSelf}
         adminBadge={row.role === "admin"}
@@ -719,7 +720,7 @@ function HumanRowView(props: TeamTableProps & { compact: boolean; row: HumanRow 
         displayName={row.displayName}
         handle={row.username}
         handleTone="neutral"
-        avatarUrl={null}
+        avatarUrl={row.avatarUrl}
         seed={row.id}
         selfTag={row.isSelf}
         adminBadge={row.role === "admin"}

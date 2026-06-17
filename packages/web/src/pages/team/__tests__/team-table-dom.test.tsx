@@ -109,6 +109,7 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
       agentId: "human-self",
       username: "gandy",
       displayName: "Gandy",
+      avatarUrl: "https://avatars.example.test/u/gandy.png",
       role: "admin",
       isSelf: true,
       delegate: { uuid: "agent-1", name: "nova", displayName: "Nova", colorToken: null, avatarImageUrl: null },
@@ -121,6 +122,7 @@ function createProps(overrides: Partial<TeamTableProps> = {}): TeamTableProps {
       agentId: "human-alice",
       username: "alice",
       displayName: "Alice",
+      avatarUrl: null,
       role: "member",
       isSelf: false,
       delegate: null,
@@ -219,6 +221,9 @@ describe("TeamTable", () => {
     expect(container.textContent).toContain("Gandy");
     expect(container.textContent).toContain("Admin");
     expect(container.textContent).toContain("—");
+    expect(container.querySelector('img[alt="Gandy"]')?.getAttribute("src")).toBe(
+      "https://avatars.example.test/u/gandy.png",
+    );
 
     await click(container.querySelector('[aria-label="Open Nova"]'));
     expect(props.onAgentDetails).toHaveBeenCalledWith("agent-1");
@@ -254,6 +259,7 @@ describe("TeamTable", () => {
           agentId: "human-self",
           username: "gandy",
           displayName: "Gandy",
+          avatarUrl: "https://avatars.example.test/u/gandy-compact.png",
           role: "member",
           isSelf: true,
           delegate: null,
@@ -272,6 +278,9 @@ describe("TeamTable", () => {
     const { container, root } = await renderDom(<TeamTable {...props} />);
     expect(container.textContent).toContain("No agents match this search.");
     expect(container.textContent).toContain("Set delegate");
+    expect(container.querySelector('img[alt="Gandy"]')?.getAttribute("src")).toBe(
+      "https://avatars.example.test/u/gandy-compact.png",
+    );
 
     const selfRow = container.querySelector('[aria-label="Open Gandy"]');
     await act(async () => {

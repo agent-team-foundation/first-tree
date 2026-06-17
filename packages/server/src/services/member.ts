@@ -140,6 +140,7 @@ export async function createMember(db: Database, orgId: string, data: CreateMemb
       lastActiveAt: null,
       username: data.username,
       displayName: data.displayName,
+      avatarUrl: existingUser?.avatarUrl ?? null,
       // Only return password for new users
       ...(password ? { password } : { notice: "Existing user — use their current password to log in" }),
     };
@@ -158,6 +159,7 @@ export async function listMembers(db: Database, orgId: string) {
       createdAt: members.createdAt,
       username: users.username,
       displayName: users.displayName,
+      avatarUrl: users.avatarUrl,
     })
     .from(members)
     .innerJoin(users, eq(members.userId, users.id))
@@ -187,6 +189,7 @@ export async function getMember(db: Database, id: string) {
       createdAt: members.createdAt,
       username: users.username,
       displayName: users.displayName,
+      avatarUrl: users.avatarUrl,
     })
     .from(members)
     .innerJoin(users, eq(members.userId, users.id))

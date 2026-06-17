@@ -180,6 +180,8 @@ type MemberListItem = {
   createdAt: string;
   username: string;
   displayName: string;
+  avatarUrl: string | null;
+  lastActiveAt: string | null;
 };
 
 function agent(overrides: Partial<Agent> = {}): Agent {
@@ -216,6 +218,8 @@ function member(overrides: Partial<MemberListItem> = {}): MemberListItem {
     createdAt: overrides.createdAt ?? NOW,
     username: overrides.username ?? "gandy",
     displayName: overrides.displayName ?? "Gandy",
+    avatarUrl: overrides.avatarUrl ?? null,
+    lastActiveAt: overrides.lastActiveAt ?? null,
   };
 }
 
@@ -322,6 +326,7 @@ const MEMBERS = [
     role: "member",
     username: "alice",
     displayName: "Alice",
+    avatarUrl: "https://avatars.example.test/u/alice.png",
   }),
 ];
 
@@ -498,6 +503,9 @@ describe("TeamPage", () => {
     expect(container.textContent).toContain("Invite link");
     expect(container.textContent).toContain("Design Critique");
     expect(container.querySelector('[title="claude-code @ gandy-macbook"]')).not.toBeNull();
+    expect(container.querySelector('img[alt="Alice"]')?.getAttribute("src")).toBe(
+      "https://avatars.example.test/u/alice.png",
+    );
 
     await click(exactButton(container, "New agent"));
     await waitForText(document.body, "Mock New Agent");
