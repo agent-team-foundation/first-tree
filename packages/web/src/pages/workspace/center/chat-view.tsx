@@ -38,6 +38,7 @@ import {
   type ImageBatchRefContent,
   type ImageRefContent,
   listChatMessages,
+  listChatOpenRequests,
   type MessageWithDelivery,
   type PaginatedMessages,
   patchChatEngagement,
@@ -1221,6 +1222,17 @@ export function ChatView({
     refetchInterval: 5_000,
   });
 
+  // The viewer's open questions in this chat, fetched independently of the
+  // capped 50-message timeline window above. The blocking answer UI unions
+  // these into its derivation (`blockingMessages`) so an open ask that has
+  // scrolled past the latest page still surfaces. Same 5s poll + WS
+  // invalidation as the timeline; the query usually returns 0–1 rows.
+  const { data: openRequestsData } = useQuery({
+    queryKey: ["chat-open-requests", chatId],
+    queryFn: () => listChatOpenRequests(chatId),
+    refetchInterval: 5_000,
+  });
+
   // Fetch newest events first so the turn-grouping filter always sees the
   // latest `turn_end` even in chats with thousands of total events. The
   // timeline renderer later sorts by timestamp, so the fetch order is moot
@@ -1771,9 +1783,22 @@ export function ChatView({
   // `dockPayload` is non-null whenever `dockRequest` is set: every open request —
   // including ones written under the retired schema — stays answerable and its
   // red dot can be cleared.
+  // Union the server's window-independent open requests with the loaded
+  // timeline before deriving the block, so an open ask that scrolled past the
+  // latest 50 messages still blocks. Dedup by id; the loaded message WINS over
+  // the open-requests row (it may carry an optimistic resolving reply, or the
+  // resolving reply itself, that lifts the block the instant the viewer answers).
+  const blockingMessages = useMemo<MessageWithDelivery[]>(() => {
+    const open = openRequestsData?.items ?? [];
+    if (open.length === 0) return mergedMessages;
+    const byId = new Map<string, MessageWithDelivery>();
+    for (const r of open) byId.set(r.id, r);
+    for (const m of mergedMessages) byId.set(m.id, m);
+    return Array.from(byId.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }, [openRequestsData, mergedMessages]);
   const dockRequest = useMemo(
-    () => (readOnly ? null : findBlockingRequest(mergedMessages, myAgentId)),
-    [readOnly, mergedMessages, myAgentId],
+    () => (readOnly ? null : findBlockingRequest(blockingMessages, myAgentId)),
+    [readOnly, blockingMessages, myAgentId],
   );
   const dockPayload = useMemo(() => (dockRequest ? readRequestPayload(dockRequest.metadata) : null), [dockRequest]);
   // Requests the viewer chose to Skip this session — the AskTakeover dismisses,

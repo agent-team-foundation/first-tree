@@ -39,6 +39,7 @@ const attachmentMocks = vi.hoisted(() => ({
 const chatMocks = vi.hoisted(() => ({
   getChat: vi.fn(),
   listChatMessages: vi.fn(),
+  listChatOpenRequests: vi.fn(),
   patchChatEngagement: vi.fn(),
   readFileAsBase64: vi.fn(),
   renameChat: vi.fn(),
@@ -666,6 +667,7 @@ beforeEach(() => {
   attachmentMocks.uploadImageAttachment.mockResolvedValue({ id: "uploaded-image", mimeType: "image/png", size: 42 });
   chatMocks.getChat.mockResolvedValue(chatDetail());
   chatMocks.listChatMessages.mockResolvedValue(BASE_MESSAGES);
+  chatMocks.listChatOpenRequests.mockResolvedValue({ items: [] });
   chatMocks.patchChatEngagement.mockResolvedValue({ chatId: "chat-1", engagementStatus: "active" });
   chatMocks.readFileAsBase64.mockResolvedValue("image-base64");
   chatMocks.renameChat.mockResolvedValue({ id: "chat-1", topic: "Renamed launch" });
@@ -1039,6 +1041,48 @@ describe("ChatView", () => {
       inReplyTo: "req-enter",
       resolves: { request: "req-enter", kind: "answered" },
     });
+
+    await act(async () => root.unmount());
+  });
+
+  it("surfaces a buried open ask (outside the message window) via the open-requests source", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // An open ask that is NOT in the loaded 50-message timeline — only the
+    // window-independent open-requests source knows about it.
+    const buriedAsk = message({
+      id: "req-buried",
+      senderId: "agent-1",
+      format: "request",
+      content: "Approve the migration?",
+      metadata: {
+        mentions: ["human-agent-self"],
+        request: {
+          options: [
+            { label: "Approve", description: "go" },
+            { label: "Hold", description: "wait" },
+          ],
+        },
+      },
+      createdAt: "2026-05-28T11:00:00.000Z",
+    });
+    chatMocks.listChatOpenRequests.mockResolvedValue({ items: [buriedAsk] });
+
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      // Timeline seeded WITHOUT the request — it is past the loaded window.
+      (client) => seedChat(client, chatDetail(), messages([])),
+      "/",
+    );
+
+    await act(async () => {
+      queryClient.setQueryData(["chat-open-requests", "chat-1"], { items: [buriedAsk] });
+    });
+    await flush();
+
+    // The blocking takeover still appears, driven by the open-requests source.
+    await waitForText(container, "Approve the migration?");
+    expect(buttonByText(container, "Reply")).toBeTruthy();
+    expect(buttonByText(container, "Skip")).toBeTruthy();
 
     await act(async () => root.unmount());
   });

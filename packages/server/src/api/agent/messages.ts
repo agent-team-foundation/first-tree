@@ -90,4 +90,16 @@ export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
       nextCursor: result.nextCursor,
     };
   });
+
+  // The caller's currently-open questions in this chat, window-independent —
+  // the blocking answer UI reads this so an open ask that scrolled past the
+  // (capped, unpaginated) message page still surfaces.
+  app.get<{ Params: { chatId: string } }>("/:chatId/open-requests", async (request) => {
+    const identity = requireAgent(request);
+    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+    const items = await messageService.listOpenRequestsForViewer(app.db, request.params.chatId, identity.uuid);
+    return {
+      items: items.map((m) => ({ ...m, createdAt: m.createdAt.toISOString() })),
+    };
+  });
 }

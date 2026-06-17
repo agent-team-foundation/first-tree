@@ -9,7 +9,7 @@ import {
   scanMentionTokens,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -794,4 +794,45 @@ export async function listMessages(db: Database, chatId: string, limit: number, 
   const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
 
   return { items, nextCursor };
+}
+
+/**
+ * Every `format=request` message in `chatId` directed at `viewerAgentId` (its
+ * single human target) that has NO authorized resolution yet — i.e. the
+ * viewer's currently-open questions, oldest-first.
+ *
+ * "Open" mirrors the `open_request_count` decrement rule in `sendMessage`:
+ * resolution is human-only, so a request is resolved iff a later message in the
+ * chat carries `metadata.resolves.request = <this id>` with a valid kind from an
+ * authorized resolver — the target (the viewer) or the asker. Anything else
+ * (a bare threaded reply, a stray `resolves` from a third party) leaves it open.
+ *
+ * This is deliberately WINDOW-INDEPENDENT: it is the source the blocking
+ * answer UI uses so an open ask that has scrolled past the latest message page
+ * still surfaces (the timeline fetch is capped + unpaginated). Oldest-first so
+ * the caller's FIFO blocking pick matches the client's `findBlockingRequest`.
+ */
+export async function listOpenRequestsForViewer(
+  db: Database,
+  chatId: string,
+  viewerAgentId: string,
+): Promise<(typeof messages.$inferSelect)[]> {
+  return db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.chatId, chatId),
+        eq(messages.format, MESSAGE_FORMATS.REQUEST),
+        sql`${messages.metadata} -> 'mentions' @> jsonb_build_array(${viewerAgentId}::text)`,
+        sql`NOT EXISTS (
+          SELECT 1 FROM ${messages} AS resolver
+          WHERE resolver.chat_id = ${messages.chatId}
+            AND resolver.metadata -> 'resolves' ->> 'request' = ${messages.id}::text
+            AND (resolver.metadata -> 'resolves' ->> 'kind') IN ('answered', 'closed')
+            AND resolver.sender_id IN (${messages.senderId}, ${viewerAgentId})
+        )`,
+      ),
+    )
+    .orderBy(asc(messages.createdAt));
 }

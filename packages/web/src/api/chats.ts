@@ -222,3 +222,12 @@ export function listChatMessages(
   const query = qs.toString();
   return api.get<PaginatedMessages>(`/chats/${encodeURIComponent(chatId)}/messages${query ? `?${query}` : ""}`);
 }
+
+/**
+ * The viewer's currently-open questions (`format=request` directed at them, not
+ * yet resolved) in a chat — window-independent, so the blocking answer UI can
+ * surface an open ask that has scrolled past the latest message page.
+ */
+export function listChatOpenRequests(chatId: string): Promise<{ items: Message[] }> {
+  return api.get<{ items: Message[] }>(`/chats/${encodeURIComponent(chatId)}/open-requests`);
+}
