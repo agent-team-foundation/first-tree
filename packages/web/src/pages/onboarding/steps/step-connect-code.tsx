@@ -262,7 +262,10 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
       {installQuery.data && (
         <ConnectedBanner
           installation={installQuery.data}
-          repoCount={hasPickableRepos ? (reposQuery.data?.length ?? null) : null}
+          // Show the granted-repo count once the list has actually resolved —
+          // including 0 (loaded-but-empty is a real, informative count). Stay
+          // null while loading or on error, where a count would be a guess.
+          repoCount={reposQuery.isSuccess ? (reposQuery.data?.length ?? 0) : null}
         />
       )}
 
