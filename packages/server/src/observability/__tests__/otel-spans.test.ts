@@ -25,7 +25,12 @@ import {
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { currentSpanId, currentTraceId, withSpan } from "../otel-helpers.js";
-import { bodyCaptureOnSendHook } from "../request-context.js";
+import {
+  attachRequestContext,
+  bodyCaptureOnSendHook,
+  stampAgentResource,
+  stampClientResource,
+} from "../request-context.js";
 
 const exporter = new InMemorySpanExporter();
 const provider = new BasicTracerProvider({
@@ -55,6 +60,19 @@ afterAll(async () => {
 beforeEach(() => {
   exporter.reset();
 });
+
+function makeRequestWithRootSpan(span: Span, fields: Record<string, unknown> = {}): FastifyRequest {
+  return {
+    ...fields,
+    openTelemetry: () => ({ activeSpan: span, tracer: null, context: otelContext.active() }),
+  } as unknown as FastifyRequest;
+}
+
+function findFinishedSpan(traceId: string): ReadableSpan {
+  const finished = exporter.getFinishedSpans().find((s) => s.spanContext().traceId === traceId);
+  if (!finished) throw new Error("expected matching finished span, got none");
+  return finished;
+}
 
 describe("currentTraceId / currentSpanId", () => {
   it("return undefined when no span is active", () => {
@@ -101,6 +119,59 @@ describe("withSpan exception recording", () => {
     expect(exceptionEvents[0]?.attributes?.["exception.type"]).toBe("Error");
     expect(exceptionEvents[0]?.attributes?.["exception.message"]).toBe("kaboom");
     expect(span.status.code).toBe(2 /* SpanStatusCode.ERROR */);
+  });
+});
+
+describe("request context span attributes", () => {
+  it("stamps client id from the selected agent identity", async () => {
+    const tracer = trace.getTracer("test");
+    const span = tracer.startSpan("http-agent");
+    const traceId = span.spanContext().traceId;
+
+    const request = makeRequestWithRootSpan(span, {
+      user: { userId: "user-1" },
+      agent: {
+        uuid: "agent-1",
+        name: "developer",
+        organizationId: "org-1",
+        inboxId: "inbox-1",
+        clientId: "client-1",
+      },
+    });
+
+    await attachRequestContext(request, {} as FastifyReply);
+    span.end();
+
+    const finished = findFinishedSpan(traceId);
+    expect(finished.attributes[FIRST_TREE_ATTR.USER_ID]).toBe("user-1");
+    expect(finished.attributes[FIRST_TREE_ATTR.AGENT_ID]).toBe("agent-1");
+    expect(finished.attributes[FIRST_TREE_ATTR.CLIENT_ID]).toBe("client-1");
+    expect(finished.attributes["agent.inbox_id"]).toBe("inbox-1");
+  });
+
+  it("stamps client id from agent and client resource helpers", () => {
+    const tracer = trace.getTracer("test");
+
+    const agentSpan = tracer.startSpan("http-agent-resource");
+    const agentTraceId = agentSpan.spanContext().traceId;
+    stampAgentResource(makeRequestWithRootSpan(agentSpan), {
+      uuid: "agent-2",
+      inboxId: "inbox-2",
+      clientId: "client-2",
+    });
+    agentSpan.end();
+
+    const clientSpan = tracer.startSpan("http-client-resource");
+    const clientTraceId = clientSpan.spanContext().traceId;
+    stampClientResource(makeRequestWithRootSpan(clientSpan), "client-3");
+    clientSpan.end();
+
+    const agentFinished = findFinishedSpan(agentTraceId);
+    expect(agentFinished.attributes[FIRST_TREE_ATTR.AGENT_ID]).toBe("agent-2");
+    expect(agentFinished.attributes[FIRST_TREE_ATTR.CLIENT_ID]).toBe("client-2");
+
+    const clientFinished = findFinishedSpan(clientTraceId);
+    expect(clientFinished.attributes[FIRST_TREE_ATTR.CLIENT_ID]).toBe("client-3");
   });
 });
 

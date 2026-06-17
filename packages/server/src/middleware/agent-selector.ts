@@ -96,6 +96,7 @@ export function agentSelectorHook(db: Database) {
       name: row.name,
       organizationId: row.organizationId,
       inboxId: row.inboxId,
+      clientId: row.clientId,
     };
   };
 }

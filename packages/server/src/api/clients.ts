@@ -1,6 +1,7 @@
 import { updateClientCapabilitiesSchema } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
 import type { FastifyInstance } from "fastify";
+import { stampClientResource } from "../observability/request-context.js";
 import { requireUser } from "../scope/require-user.js";
 import { expiryToSeconds } from "../services/auth.js";
 import * as clientService from "../services/client.js";
@@ -16,8 +17,10 @@ import { clientCommandVersionHint } from "./client-command-version.js";
 export async function clientRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { clientId: string } }>("/:clientId", async (request) => {
     const { userId } = requireUser(request);
-    await clientService.assertClientOwner(app.db, request.params.clientId, { userId });
-    const client = await clientService.getClient(app.db, request.params.clientId);
+    const { clientId } = request.params;
+    stampClientResource(request, clientId);
+    await clientService.assertClientOwner(app.db, clientId, { userId });
+    const client = await clientService.getClient(app.db, clientId);
     if (!client) throw new Error("unreachable: client missing after owner check");
     const metadata = (client.metadata ?? {}) as Record<string, unknown>;
     const capabilities =
@@ -43,15 +46,18 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch<{ Params: { clientId: string } }>("/:clientId/capabilities", async (request, reply) => {
     const { userId } = requireUser(request);
-    await clientService.assertClientOwner(app.db, request.params.clientId, { userId });
+    const { clientId } = request.params;
+    stampClientResource(request, clientId);
+    await clientService.assertClientOwner(app.db, clientId, { userId });
     const body = updateClientCapabilitiesSchema.parse(request.body);
-    await clientService.updateClientCapabilities(app.db, request.params.clientId, body.capabilities);
+    await clientService.updateClientCapabilities(app.db, clientId, body.capabilities);
     return reply.status(204).send();
   });
 
   app.post<{ Params: { clientId: string } }>("/:clientId/disconnect", async (request) => {
     const { userId } = requireUser(request);
     const { clientId } = request.params;
+    stampClientResource(request, clientId);
     await clientService.assertClientOwner(app.db, clientId, { userId });
     const agentIds = forceDisconnectClient(clientId);
     await clientService.disconnectClient(app.db, clientId);
@@ -61,6 +67,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { clientId: string } }>("/:clientId", async (request, reply) => {
     const { userId } = requireUser(request);
     const { clientId } = request.params;
+    stampClientResource(request, clientId);
     await clientService.assertClientOwner(app.db, clientId, { userId });
     await clientService.retireClient(app.db, clientId);
     forceDisconnectClient(clientId);
