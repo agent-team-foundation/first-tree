@@ -23,7 +23,7 @@
  * cluster key.
  */
 
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 
@@ -66,8 +66,14 @@ export type SetEntityTitleInput = {
   organizationId: string;
   /** Must match `entityType` on the mapping table, e.g. `"pull_request"` / `"issue"`. */
   entityType: string;
-  /** Stable cluster key, e.g. `"owner/repo#42"`. */
-  entityKey: string;
+  /**
+   * Stable cluster key(s) to match. A single key (the webhook path's exact
+   * `owner/repo#N`) or a candidate list. Pass the candidate set from
+   * `githubEntityKeyCandidates` so a legacy discussion row stored as
+   * `owner/repo#discussion-N` is matched alongside its canonical `owner/repo#N`
+   * form — otherwise an exact-only match leaves the legacy row's title stale.
+   */
+  entityKey: string | string[];
   /** Human label from the current webhook payload. */
   title: string;
 };
@@ -84,7 +90,8 @@ export type SetEntityTitleInput = {
  */
 export async function setEntityTitle(db: Database, input: SetEntityTitleInput): Promise<{ updated: number }> {
   const title = input.title.trim();
-  if (!input.organizationId || !input.entityType || !input.entityKey || title.length === 0) {
+  const keys = (Array.isArray(input.entityKey) ? input.entityKey : [input.entityKey]).filter((k) => k.length > 0);
+  if (!input.organizationId || !input.entityType || keys.length === 0 || title.length === 0) {
     return { updated: 0 };
   }
   const updated = await db
@@ -94,7 +101,9 @@ export async function setEntityTitle(db: Database, input: SetEntityTitleInput): 
       and(
         eq(githubEntityChatMappings.organizationId, input.organizationId),
         eq(githubEntityChatMappings.entityType, input.entityType),
-        eq(githubEntityChatMappings.entityKey, input.entityKey),
+        // `inArray` handles the single-key webhook case (one-element list) and
+        // the candidate-list follow case uniformly.
+        inArray(githubEntityChatMappings.entityKey, keys),
       ),
     )
     .returning({ chatId: githubEntityChatMappings.chatId });

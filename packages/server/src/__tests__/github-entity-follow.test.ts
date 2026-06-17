@@ -304,7 +304,10 @@ describe("github-entity-follow", () => {
       boundVia: "direct",
     });
     const fetcher = makeFetcher({
-      "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
+      // The discussion route must precede the repo route: makeFetcher matches
+      // by substring, and `/repos/acme/api` is a prefix of the discussion URL,
+      // so the less-specific repo route would otherwise shadow it (and strip
+      // the title). Real GitHub has no such ambiguity.
       "/repos/Acme/Api/discussions/42": () =>
         json({
           number: 42,
@@ -312,6 +315,7 @@ describe("github-entity-follow", () => {
           title: "RFC",
           html_url: "https://github.com/Acme/Api/discussions/42",
         }),
+      "/repos/acme/api": () => json({ full_name: "Acme/Api" }),
     });
 
     const rebound = await declareEntityFollow(app.db, deps(fetcher), {
@@ -321,10 +325,17 @@ describe("github-entity-follow", () => {
     expect(rebound.outcome).toBe("rebound");
 
     const rows = await app.db
-      .select({ entityKey: githubEntityChatMappings.entityKey, chatId: githubEntityChatMappings.chatId })
+      .select({
+        entityKey: githubEntityChatMappings.entityKey,
+        chatId: githubEntityChatMappings.chatId,
+        title: githubEntityChatMappings.title,
+      })
       .from(githubEntityChatMappings)
       .where(eq(githubEntityChatMappings.entityType, "discussion"));
-    expect(rows).toEqual([{ entityKey: "Acme/Api#discussion-42", chatId: newChat }]);
+    // The legacy key (`#discussion-42`) is matched by the candidate-key title
+    // refresh, so the moved row carries the follow-time title — not just when a
+    // future webhook happens to touch it.
+    expect(rows).toEqual([{ entityKey: "Acme/Api#discussion-42", chatId: newChat, title: "RFC" }]);
   });
 
   it("R11: a merged PR is followable and its terminal state is recorded", async () => {

@@ -447,7 +447,10 @@ export async function declareEntityFollow(
     await setEntityTitle(db, {
       organizationId: params.organizationId,
       entityType: entity.entityType,
-      entityKey: entity.entityKey,
+      // Candidate keys (not just the canonical one) so a legacy discussion row
+      // stored as `owner/repo#discussion-N` — which rebind moves via the same
+      // candidate set — also gets its title refreshed.
+      entityKey: githubEntityKeyCandidates(entity.entityType, entity.entityKey),
       title: entity.title,
     });
   }
