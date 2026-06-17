@@ -707,23 +707,6 @@ describe("inbox WS data-plane claim helpers", () => {
     ]);
   });
 
-  it("ackEntryByIdForBoundAgents rejects an ack-through when an earlier notify=true row failed", async () => {
-    const app = getApp();
-    const { a2, rows } = await seedDeliverables(app, 2);
-    const first = rows[0];
-    const second = rows[1];
-    if (!first || !second) throw new Error("expected two inbox rows");
-
-    await app.db.update(inboxEntries).set({ status: "failed" }).where(eq(inboxEntries.id, first.id));
-    await app.db
-      .update(inboxEntries)
-      .set({ status: "delivered", deliveredAt: new Date() })
-      .where(eq(inboxEntries.id, second.id));
-
-    const rejected = await inboxService.ackEntryByIdForBoundAgents(app.db, second.id, [a2.agent.inboxId]);
-    expect(rejected).toEqual({ ok: false, reason: "prefix_gap" });
-  });
-
   it("ackEntryByIdForBoundAgents commits only delivered rows after an already-acked prefix", async () => {
     const app = getApp();
     const { a2, messageIds, rows } = await seedDeliverables(app, 2);
@@ -823,21 +806,6 @@ describe("inbox WS data-plane claim helpers", () => {
 
     const accepted = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [a2.agent.inboxId]);
     expect(accepted).toEqual({ ok: false, reason: "prefix_gap" });
-  });
-
-  it("ackEntryByIdForBoundAgents rejects terminal failed rows", async () => {
-    const app = getApp();
-    const { a2, messageId } = await seedDeliverable(app);
-
-    const [entry] = await app.db
-      .update(inboxEntries)
-      .set({ status: "failed" })
-      .where(eq(inboxEntries.messageId, messageId))
-      .returning();
-    if (!entry) throw new Error("seed entry missing");
-
-    const rejected = await inboxService.ackEntryByIdForBoundAgents(app.db, entry.id, [a2.agent.inboxId]);
-    expect(rejected).toEqual({ ok: false, reason: "prefix_gap" });
   });
 
   it("ackEntryByIdForBoundAgents short-circuits on empty inbox list", async () => {

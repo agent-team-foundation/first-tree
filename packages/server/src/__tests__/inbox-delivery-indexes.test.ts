@@ -28,6 +28,23 @@ describe("inbox delivery indexes", () => {
     expect(rows[0]?.indexdef).toContain("USING btree (message_id, status)");
   });
 
+  it("constrains inbox entry status to active delivery states", async () => {
+    const rows = await getDb().execute<{ definition: string }>(sql`
+      SELECT pg_get_constraintdef(oid) AS definition
+      FROM pg_constraint
+      WHERE conrelid = 'inbox_entries'::regclass
+        AND conname = 'ck_inbox_entries_status'
+    `);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.definition).toContain("status = ANY");
+    expect(rows[0]?.definition).toContain("pending");
+    expect(rows[0]?.definition).toContain("delivered");
+    expect(rows[0]?.definition).toContain("acked");
+    expect(rows[0]?.definition).not.toContain("failed");
+    expect(rows[0]?.definition).toContain("NOT VALID");
+  });
+
   it("creates the chat_id/agent_id index used by chat agent status lookups", async () => {
     const rows = await getDb().execute<{ indexdef: string }>(sql`
       SELECT indexdef
