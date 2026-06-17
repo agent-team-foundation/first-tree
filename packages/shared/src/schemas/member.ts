@@ -15,6 +15,7 @@ export const memberSchema = z.object({
   agentId: z.string(),
   role: memberRoleSchema,
   createdAt: z.string(),
+  avatarUrl: z.string().nullable(),
   /**
    * ISO timestamp the member was last active, *derived* from the most recent
    * message sent by their human agent (no dedicated column — read-time

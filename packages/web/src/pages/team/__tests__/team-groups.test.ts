@@ -39,6 +39,7 @@ const member = (id: string, agentId: string, displayName: string, role = "member
   agentId,
   username: displayName.toLowerCase(),
   displayName,
+  avatarUrl: null,
   role,
   createdAt: "2026-01-01T00:00:00.000Z",
   lastActiveAt: null,
@@ -109,6 +110,17 @@ describe("buildTeamData", () => {
     const never = humans.find((h) => h.id === "member-2");
     expect(active?.lastActiveLabel).toBeTruthy();
     expect(never?.lastActiveLabel).toBeNull();
+  });
+
+  it("passes member avatarUrl through to the human row", () => {
+    const avatarUrl = "https://avatars.example.test/u/ada.png";
+    const { humans } = buildTeamData({
+      ...base,
+      members: [{ ...member("member-1", "human-1", "Ada"), avatarUrl }],
+      agents: [],
+      agentByUuid: new Map(),
+    });
+    expect(humans[0]?.avatarUrl).toBe(avatarUrl);
   });
 
   it("partitions agents into Public/Private with own agents pinned first", () => {

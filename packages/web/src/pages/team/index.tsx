@@ -59,6 +59,7 @@ type MemberListItem = {
   displayName: string;
   role: string;
   createdAt: string;
+  avatarUrl: string | null;
   /** Derived from the member's most recent message; null = never active. */
   lastActiveAt: string | null;
 };
@@ -516,6 +517,7 @@ export function buildTeamData(args: {
         agentId: m.agentId,
         username: m.username,
         displayName: m.displayName,
+        avatarUrl: m.avatarUrl,
         role: m.role,
         isSelf,
         delegate: resolveDelegate(m.agentId),
