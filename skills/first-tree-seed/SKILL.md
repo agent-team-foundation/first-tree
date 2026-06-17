@@ -3,7 +3,7 @@ name: first-tree-seed
 version: 0.2.0
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: One-time bootstrap for a brand-new, still-empty Context Tree. Delivers an initial top + second-level domain skeleton drawn from the bound source repos (PR1, user approves), then initial leaf-node content for each approved domain with explicit coverage reporting (PR2). Use right after Cloud onboarding provisions the workspace and tree repo. Refuses on any populated tree. Do not use to write an incremental update from a specific PR / doc / note — that is `first-tree-context`. Do not use to audit drift on an existing tree — that is `first-tree-sync`.
+description: One-time bootstrap for a brand-new, still-empty Context Tree. Delivers an initial top + second-level domain skeleton drawn from the bound source repos (PR1, user approves), then initial leaf-node content for each approved domain with explicit coverage reporting (PR2). Use right after Cloud onboarding provisions the workspace and tree repo. Refuses on any populated tree. Do not use to write an incremental update from a specific PR / doc / note — that is `first-tree-write`. Do not use for broad maintenance or drift-audit work on an existing tree.
 ---
 
 # First Tree — Seed
@@ -13,31 +13,27 @@ provisioned Context Tree. It owns the one-time bootstrap from "Cloud
 just gave me an empty tree repo" to "the tree has real top + second
 level structure plus initial leaf nodes drawn from the bound source
 repos". Every subsequent write — one PR at a time, one decision at a
-time — belongs to `first-tree-context`, not here.
+time — belongs to `first-tree-write`, not here.
 
 ## When To Use This Skill
 
 | Use `first-tree-seed`                                                 | Use a different skill                                                                                |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Cloud onboarding finished; the tree repo is empty (no top-level dirs) | The tree already has a domain structure → `first-tree-context` (incremental write)                   |
-| First content pass on the bound sources                               | Audit drift between merged code and an existing tree → `first-tree-sync`                             |
+| Cloud onboarding finished; the tree repo is empty (no top-level dirs) | The tree already has a domain structure → `first-tree-write` (incremental source-driven write)       |
+| First content pass on the bound sources                               | Broad maintenance or drift-audit work on an existing tree                                            |
 | Invoked by name — by a human, or by a future kickoff prompt once Cloud provisions before sending (see Trigger) | Workspace is unbound → surface to a human (binding is a web-console operator action, not an agent's) |
 
 The skill is **single-shot per tree**. If a previous seed already
 landed (PR1 merged), do not re-run; route any further work through
-`first-tree-context` or `first-tree-sync`.
+`first-tree-write` or a focused maintenance task.
 
 ## Required Reading
 
-Before drafting anything, load these two skills. The hard rules they
-carry govern every node this skill writes — seed does not invent its
-own rules, it observes the existing ones during a special lifecycle
-phase.
+Before drafting anything, load this skill. The hard rules it carries
+govern every node this skill writes — seed does not invent its own
+rules, it observes the existing ones during a special lifecycle phase.
 
-1. **`../first-tree/SKILL.md`** — pre-task hygiene (workspace binding,
-   tree HEAD freshness, role-fork), communication principles, daemon
-   invariants. Run the three pre-task checks before any tier-0 read.
-2. **`../first-tree-context/SKILL.md`** — the Context Tree operating
+1. **`../first-tree-write/SKILL.md`** — the Context Tree operating
    guide. Carries the source-system boundary, the Double Test, the
    Content Model (what / why / who), Node Shape, Hard Rules 1–9.
    **Every node this skill creates must satisfy those hard rules.**
@@ -57,8 +53,8 @@ new-tree onboarding at a skill that refuses; that wiring is tracked
 as a separate Cloud-side change.
 
 Once the seed has landed, the same self-check fails and the skill
-refuses; route subsequent work through `first-tree-context` or
-`first-tree-sync`.
+refuses; route subsequent source-driven work through `first-tree-write`
+or handle maintenance with a focused task and explicit scope.
 
 ### Self-check before starting (all must pass; stop on any failure)
 
@@ -77,8 +73,9 @@ refuses; route subsequent work through `first-tree-context` or
      dotfile-prefixed dir.
 
    If any of those fail, the tree is non-empty — refuse with a
-   one-line explanation pointing at `first-tree-context` /
-   `first-tree-sync`. Do **not** prompt the user to clear the tree
+   one-line explanation pointing at `first-tree-write` for incremental
+   source-driven writes or asking for a focused maintenance scope. Do
+   **not** prompt the user to clear the tree
    yourself; deleting nodes is human-owned.
 3. **All declared sources present on disk.** Each source clone lives at
    `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>` — the
@@ -210,11 +207,11 @@ Aggregate observations across all sources, then abstract:
   sources; listing OFF candidates shows the user what was looked at
   and rejected, which is itself information.
 
-The `first-tree-context` hard rule "add a directory only when ≥3
+The `first-tree-write` hard rule "add a directory only when ≥3
 leaves are present or expected" applies as written. Phase 1 may open
 a domain when ≥3 leaves are **foreseeable**; Phase 2's job is to
 land them. There is no separate "provisional" lifecycle — a domain
-that ends Phase 2 with 0 leaves is ordinary `first-tree-sync` work
+that ends Phase 2 with 0 leaves is ordinary follow-up maintenance
 later.
 
 ### User confirmation
@@ -258,7 +255,7 @@ echo back. "open system and ops, skip customer, also add compliance"
 is a complete answer; interpret it and restate the final set in one
 line before writing.
 
-**This user-checklist step is what satisfies `first-tree-context`'s
+**This user-checklist step is what satisfies `first-tree-write`'s
 "top-level domains require explicit human-owner approval" rule.**
 The main agent proposes candidates with evidence; the human is the
 one who actually opens each one. Without an explicit "yes" from the
@@ -333,7 +330,7 @@ Notes on defaults:
   top-level domain names (one entry per opened domain). Validator
   requires non-empty.
 - Do **not** set `lastReviewed`. That field marks owner-reviewed
-  state and is written by `first-tree-sync` after a real review;
+  state and is written only after a real owner review;
   stamping it on a bootstrap node makes unreviewed content look
   reviewed and hides it from future audits.
 - Do **not** set `decisionLocksCode` (defaults false).
@@ -349,7 +346,7 @@ Notes on defaults:
   user's reason if given). Do not list the source PRs / commits — the
   audit trail is `git log`.
 - Run `first-tree tree verify --tree-path <tree>` locally before
-  opening the PR. Non-zero exit blocks (`first-tree-context` Hard
+  opening the PR. Non-zero exit blocks (`first-tree-write` Hard
   Rule 5).
 - Stop after the PR is open. Do **not** start Phase 2 work until the
   user has explicitly merged PR1.
@@ -507,10 +504,10 @@ Each sub-agent receives:
 - The list of bound sources and their on-disk paths.
 - The time budget (default 15 minutes wall-clock; the main agent
   may set a lower budget for thin domains).
-- The hard rules from `first-tree-context` (loaded by reference).
+- The hard rules from `first-tree-write` (loaded by reference).
 - The **leaf shape target**: **up to ~60 lines** per leaf, structured
   as `## Decision` / `## Rationale` / `## Constraints` (matching
-  `first-tree-context`'s node shape; omit a section you don't need).
+  `first-tree-write`'s node shape; omit a section you don't need).
   Shorter is better when the signal is thin — a six-line node that
   captures the decision cleanly beats a sixty-line node that buries
   it; do not pad to hit a length. Consistently longer is a smell
@@ -549,7 +546,7 @@ holds, whichever comes first:
 - **Twelve leaves drafted in this domain.** Empirical cap from
   observing real seed runs; not a hard architectural limit. A single
   seed pass should not create a sixty-leaf domain — defer the rest
-  to `first-tree-context` writes after the user has reviewed PR2.
+  to `first-tree-write` writes after the user has reviewed PR2.
   Adjust in a future skill version if real usage shows the number is
   consistently too low or too high.
 
@@ -635,12 +632,13 @@ After all sub-agents return:
      sub-agent.
   2. **Escalations** — items sub-agents flagged as out of scope.
   3. **Known gaps** — the union of all per-domain known gaps.
-  4. **Next steps** — point the user at `first-tree-context` for any
-     follow-up writes and `first-tree-sync` for periodic drift audits.
+  4. **Next steps** — point the user at `first-tree-write` for any
+     follow-up source-driven writes and describe any broad maintenance
+     gaps as focused follow-up tasks.
 
 After PR2 opens, the seed skill is done. Subsequent writes are owned
-by `first-tree-context`; subsequent drift audits by
-`first-tree-sync`.
+by `first-tree-write`; subsequent maintenance uses focused tasks with
+explicit scope.
 
 ### Recovery path: PR1 merged, Phase 2 abandoned
 
@@ -650,23 +648,22 @@ ends up with real structure but zero leaves. **This is not a
 re-seed condition** — the seed self-check sees a populated tree
 (`<tree>/<domain>/NODE.md` files exist) and refuses. Instead:
 
-- Future writes go through `first-tree-context` one source at a
+- Future writes go through `first-tree-write` one source at a
   time, exactly as they would on any other live tree.
-- A team that wants to back-fill the missing leaf content can
-  invoke `first-tree-sync` to scan for `code-not-synced/substantive`
-  drift; sync's hand-off back to `first-tree-context` then performs
-  the writes one source at a time.
+- A team that wants to back-fill the missing leaf content can ask for
+  a focused maintenance pass with explicit source scopes; any actual
+  writes still go through `first-tree-write` one source at a time.
 
 Communicate this fallback to the user in PR1's body so the choice
 is visible: "If you merge PR1 without coming back for Phase 2, the
 tree is fully usable but empty; later writes go through
-`first-tree-context` / `first-tree-sync`."
+`first-tree-write` or a focused maintenance follow-up."
 
 ---
 
 ## Hard Rules
 
-These are inherited from `first-tree-context` and listed here only to
+These are inherited from `first-tree-write` and listed here only to
 make them visible at the seed-specific surface.
 
 - **Smallest correct edit.** A six-line NODE.md that captures the
@@ -682,7 +679,7 @@ make them visible at the seed-specific surface.
   `git log`. Do not preface a node with "Originally we…" or
   "Update 2026-XX-XX:".
 - **`first-tree tree verify` must pass before PR1 and PR2 land.**
-  Hard Rule 5 from `first-tree-context`. Non-zero exit blocks the
+  Hard Rule 5 from `first-tree-write`. Non-zero exit blocks the
   commit.
 - **Ownership changes go through humans.** Phase 1 sets `owners` to
   the workspace's primary owner as the default; reassignment is the
@@ -704,15 +701,10 @@ make them visible at the seed-specific surface.
   domain has weak evidence and the user does not opt it in, leave it
   out.
 - Run twice on the same tree. If PR1 has already merged, hand off
-  to `first-tree-context` or `first-tree-sync`.
+  to `first-tree-write` or a focused maintenance task.
 
 ## References
 
-- [`../first-tree/SKILL.md`](../first-tree/SKILL.md) — pre-task
-  hygiene, communication principles, CLI namespace map
-- [`../first-tree-context/SKILL.md`](../first-tree-context/SKILL.md)
+- [`../first-tree-write/SKILL.md`](../first-tree-write/SKILL.md)
   — Context Tree operating guide, Hard Rules 1–9, Node Shape,
   source-system boundary
-- [`../first-tree-sync/SKILL.md`](../first-tree-sync/SKILL.md) —
-  ongoing drift audit, owned hand-off back into
-  `first-tree-context`

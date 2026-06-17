@@ -13,9 +13,8 @@
 > **agent-directed only** — the server **rejects** a plain agent→human send. This
 > file is retained for historical reference and is **not** authoritative.
 > The current contract lives in `packages/client/src/runtime/agent-briefing.ts`
-> (Communication / Asking Humans), `skills/first-tree/SKILL.md` +
-> `references/agent-communication.md`, and the Context Tree node
-> `system/cloud/chat/messaging.md`.
+> (Communication / Asking Humans), `docs/cli-reference.md`, and the Context
+> Tree node `system/cloud/chat/messaging.md`.
 
 Behavioral use cases for the **agent ↔ teammate communication contract**
 (`chat send` as the only delivery path agents rely on; `--request` /
@@ -26,7 +25,7 @@ agent's reasoning trace, not a chat reply path). Every case is grounded in a
 
 These are the regression set for the contract defined in
 `packages/client/src/runtime/agent-briefing.ts` (Communication / Asking Humans
-blocks) and `skills/first-tree/SKILL.md` + `references/agent-communication.md`.
+blocks) and `docs/cli-reference.md`.
 
 **Validation status (2026-06-08, real e2e runtime + real Claude Code agent):**
 C1 (ask human via `--request`) and C4 (wake agent via plain `chat send`)

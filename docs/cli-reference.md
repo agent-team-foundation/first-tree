@@ -400,9 +400,9 @@ webhook event stream into the chat (one routing line, chat-scoped);
 `unfollow` explicitly stops this chat from tracking the entity and severs
 every line wired into the chat for that entity, however it was created.
 Creating a PR or issue never follows it automatically — declare the
-dependency explicitly, immediately after creation. Decision guidance
-(when to follow / not follow / unfollow, 409 handling) lives in the
-`first-tree-github` skill.
+dependency explicitly, immediately after creation. Use
+`first-tree github follow --help` / `first-tree github unfollow --help`
+for the full flag surface and conflict handling.
 
 ```
 first-tree github
@@ -544,7 +544,7 @@ relative/path.md [Title]
 ```
 
 Directory labels end with `/`. The repository root line uses the repo
-directory name, for example `first-tree-context/ [Context Tree] -> Root
+directory name, for example `context-tree/ [Context Tree] -> Root
 index for the First Tree context tree.`. When `description` is missing,
 the `-> Description` suffix is omitted.
 
