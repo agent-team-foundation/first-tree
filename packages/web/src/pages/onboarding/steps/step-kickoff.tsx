@@ -210,7 +210,7 @@ function AdminKickoff({
       // restored per-org draft, and the connect-code prune only runs when that
       // step mounts — a flow resumed directly at kickoff (persisted step index)
       // would otherwise register a repo removed from the installation since the
-      // user picked it. Reuses connect-code's cached repo list.
+      // user picked it.
       //
       // Fail CLOSED: if we can't read the current grant list (no_installation,
       // suspended, not_configured, upstream 5xx) we cannot prove the selected
@@ -224,14 +224,15 @@ function AdminKickoff({
           .fetchQuery({
             queryKey: ["onboarding", "org-github-repos", organizationId],
             queryFn: () => listOrgGithubRepos(organizationId),
-            // Within one onboarding session grants don't change, so reuse the
-            // list connect-code just fetched instead of re-reading GitHub on
-            // every "Start". That keeps the normal connect-code → kickoff path
-            // off a live read a transient blip could fail (which fail-closed
-            // would turn into a hard block). A genuine resume-at-kickoff is a
-            // fresh page load with an empty in-memory cache, so it still fetches
-            // and validates here.
-            staleTime: 5 * 60 * 1000,
+            // No `staleTime`: this is the AUTHORITATIVE write-path check, so it
+            // must read the current grant list every time, never a cached one.
+            // The QueryClient is an app-level singleton and `finishLater` is SPA
+            // navigation (not a reload), so the connect-code cache stays alive —
+            // reusing it could pass a list minutes-stale relative to grants that
+            // changed in another tab / GitHub settings, and write a removed repo.
+            // A redundant read on the normal connect-code → kickoff path is the
+            // accepted cost of correctness here.
+            staleTime: 0,
           })
           .catch(() => {
             throw new Error("Couldn't check your repositories with GitHub just now. Try again in a moment.");

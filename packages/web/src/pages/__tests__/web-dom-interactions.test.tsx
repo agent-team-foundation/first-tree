@@ -484,11 +484,14 @@ function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): Onboardi
 async function renderOnboardingDom(
   element: ReactElement,
   overrides: Partial<OnboardingFlowValue> = {},
+  seed?: (queryClient: QueryClient) => void,
 ): Promise<{ container: HTMLElement; root: Root; flow: OnboardingFlowValue }> {
   const { OnboardingFlowContext } = await import("../onboarding/onboarding-flow.js");
   const flow = createFlowValue(overrides);
   const rendered = await renderDom(
     <OnboardingFlowContext.Provider value={flow}>{element}</OnboardingFlowContext.Provider>,
+    "/",
+    seed,
   );
   return { ...rendered, flow };
 }
@@ -1892,6 +1895,67 @@ describe("web DOM interaction coverage", () => {
     expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
     expect(chatApiMocks.createAgentChat).not.toHaveBeenCalled();
     expect(view.flow.completeAndEnterChat).not.toHaveBeenCalled();
+    await unmountRoot(view.root);
+  });
+
+  it("kickoff grant check is authoritative — ignores a stale cached grant list", async () => {
+    // The QueryClient is an app-level singleton and finishLater is SPA nav, so a
+    // grant list connect-code cached earlier can still be in the cache when the
+    // user resumes at kickoff — possibly minutes stale. The write-path check
+    // must read CURRENT grants, not trust the cache (guards against re-adding a
+    // staleTime). Seed the cache with a stale list that still contains a repo
+    // that has since been removed; assert the live read prunes it anyway.
+    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    // Current grants (live) are web + api; the stale cache still has `gone`.
+    githubMocks.listOrgGithubRepos.mockResolvedValue(GITHUB_REPOS);
+    const view = await renderOnboardingDom(
+      <StepKickoff />,
+      {
+        activeStep: "kickoff",
+        selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
+        treeMode: "existing",
+        treeUrl: "https://github.com/acme/context-tree",
+      },
+      (queryClient) => {
+        queryClient.setQueryData(
+          ["onboarding", "org-github-repos", "org-1"],
+          [
+            {
+              fullName: "acme/web",
+              cloneUrl: "https://github.com/acme/web.git",
+              htmlUrl: "",
+              private: false,
+              defaultBranch: "main",
+              pushedAt: NOW,
+            },
+            {
+              fullName: "acme/gone",
+              cloneUrl: "https://github.com/acme/gone.git",
+              htmlUrl: "",
+              private: false,
+              defaultBranch: "main",
+              pushedAt: NOW,
+            },
+          ],
+        );
+      },
+    );
+    await waitForText("Your agent's ready to get to work", view.container);
+    await click(
+      ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
+        null) as HTMLButtonElement | null,
+    );
+    await waitForText("Starting your agent", view.container);
+    // Live read returned web + api → `gone` is pruned despite being in the cache.
+    expect(githubMocks.listOrgGithubRepos).toHaveBeenCalled();
+    expect(resourceMocks.createTeamResourceForOrg).toHaveBeenCalledWith(
+      "org-1",
+      expect.objectContaining({ payload: { url: "https://github.com/acme/web.git" } }),
+    );
+    expect(resourceMocks.createTeamResourceForOrg).not.toHaveBeenCalledWith(
+      "org-1",
+      expect.objectContaining({ payload: { url: "https://github.com/acme/gone.git" } }),
+    );
     await unmountRoot(view.root);
   });
 
