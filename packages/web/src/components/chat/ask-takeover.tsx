@@ -10,8 +10,11 @@
  *     multi = checkbox; each shows label + description, and `preview` when
  *     selected) plus an always-present free-text "Other" input — or, when the ask
  *     carries no options, a single free-text box;
- *   - the Skip / Reply actions follow the answer content (Skip dismisses for now,
- *     the open-request persists; Reply resolves with the composed answer).
+ *   - the Skip / Reply actions follow the answer content. Both RESOLVE the
+ *     question: Reply sends the composed answer; Skip sends a "skipped" answer
+ *     (the caller's `onSkip` writes the resolving reply) so the asking agent
+ *     unblocks rather than waiting on a never-answered question. There is no
+ *     "dismiss but keep it open" path — skip is an answer, not a deferral.
  *
  * The answer is plain text: selected option labels join on one line, any typed
  * note follows — `buildResolveAnswer` owns the format. This is the ONLY way to
@@ -38,7 +41,7 @@ export function AskTakeover({
   sending?: boolean;
   /** Resolve the question with the composed answer content. */
   onReply: (content: string) => void;
-  /** Dismiss the takeover without answering (the open-request persists). */
+  /** Resolve the question with a "skipped" answer (caller sends the reply). */
   onSkip: () => void;
 }) {
   const options = payload.options;

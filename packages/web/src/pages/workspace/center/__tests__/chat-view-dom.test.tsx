@@ -1087,6 +1087,54 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("Skip resolves the question with a skipped answer (no temporary dismiss)", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const dockMessages = messages([
+      message({
+        id: "req-skip",
+        senderId: "agent-1",
+        format: "request",
+        content: "Pick the deploy color.",
+        metadata: {
+          mentions: ["human-agent-self"],
+          request: {
+            options: [
+              { label: "Blue-green", description: "blue-green deploy" },
+              { label: "Rolling update", description: "rolling deploy" },
+            ],
+          },
+        },
+        createdAt: "2026-05-28T12:00:00.000Z",
+      }),
+    ]);
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), messages([])),
+      "/",
+    );
+
+    await act(async () => {
+      queryClient.setQueryData(["chat-messages", "chat-1"], dockMessages);
+    });
+    await flush();
+    await waitForText(container, "Skip");
+
+    // Skip is always enabled and resolves the question with a skipped answer —
+    // it does NOT just dismiss the overlay (the open request would persist).
+    expect(buttonByText(container, "Skip")?.disabled).toBe(false);
+    await click(buttonByText(container, "Skip"));
+    await waitForCondition(
+      () => chatMocks.sendChatMessage.mock.calls.length > 0,
+      "Expected Skip to resolve the question",
+    );
+    expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "(Skipped — no answer provided.)", ["agent-1"], {
+      inReplyTo: "req-skip",
+      resolves: { request: "req-skip", kind: "answered" },
+    });
+
+    await act(async () => root.unmount());
+  });
+
   it("enables Send and resolves when an option question is answered with free text (no option picked)", async () => {
     const { ChatView } = await import("../chat-view.js");
     const dockMessages = messages([

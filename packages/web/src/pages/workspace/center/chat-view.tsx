@@ -1801,13 +1801,11 @@ export function ChatView({
     [readOnly, blockingMessages, myAgentId],
   );
   const dockPayload = useMemo(() => (dockRequest ? readRequestPayload(dockRequest.metadata) : null), [dockRequest]);
-  // Requests the viewer chose to Skip this session — the AskTakeover dismisses,
-  // but the open-request / red dot persists and it reappears on next visit.
-  const [skippedRequestIds, setSkippedRequestIds] = useState<ReadonlySet<string>>(() => new Set<string>());
   // The full-coverage ask card is active (and owns answering) iff a question
-  // blocks me and I haven't skipped it. While active it drives the timeline
-  // truncation below; on Skip it clears so the timeline becomes legible again.
-  const askOverlayActive = dockRequest != null && dockPayload != null && !skippedRequestIds.has(dockRequest.id);
+  // blocks me. Both Reply and Skip resolve the question (Skip sends a "skipped"
+  // answer — see the `onSkip` handler), so the overlay clears the moment the
+  // resolving reply lands; there is no "dismiss but keep it open" path.
+  const askOverlayActive = dockRequest != null && dockPayload != null;
   const dockRequestId = askOverlayActive ? dockRequest.id : undefined;
   useEffect(() => {
     if (!dockRequestId || draft !== "@" || !autoPrimedDraftRef.current) return;
@@ -2806,9 +2804,11 @@ export function ChatView({
         >
           {/* The ask pops up as a card INSIDE the workspace body — offset below
               the (stable, single-row) topic header so the header and the
-              right rail stay visible. Owns answering: Reply resolves; Skip
-              dismisses for this session (the red dot persists). Keyed by request
-              id so its answer state resets when the blocking question changes. */}
+              right rail stay visible. Owns answering: Reply resolves with the
+              composed answer; Skip ALSO resolves, sending a "skipped" answer so
+              the asking agent unblocks and the red dot clears (skip is an answer,
+              not a temporary dismiss). Keyed by request id so its answer state
+              resets when the blocking question changes. */}
           {askOverlayActive && dockRequest && dockPayload ? (
             <div style={{ position: "absolute", top: 52, left: 0, right: 0, bottom: 0, zIndex: 30 }}>
               <AskTakeover
@@ -2825,7 +2825,18 @@ export function ChatView({
                     resolves: { request: dockRequest.id, kind: "answered" },
                   })
                 }
-                onSkip={() => setSkippedRequestIds((prev) => new Set(prev).add(dockRequest.id))}
+                onSkip={() =>
+                  // Skip is an answer, not a dismiss: send a resolving reply
+                  // (kind="answered") carrying a "skipped" body so the open
+                  // request resolves, the red dot clears, and the asking agent
+                  // unblocks and proceeds with its own judgment.
+                  sendMut.mutate({
+                    content: "(Skipped — no answer provided.)",
+                    mentions: [dockRequest.senderId],
+                    inReplyTo: dockRequest.id,
+                    resolves: { request: dockRequest.id, kind: "answered" },
+                  })
+                }
               />
             </div>
           ) : null}
