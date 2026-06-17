@@ -115,13 +115,16 @@ export const COPY = {
   hideSetup: "Hide setup",
   /** team (opening / welcome) states */
   team: {
-    // Concise imperative label, consistent with create-agent's "Name your agent".
-    nameLabel: "Name your team",
-    // A brief one-line "what's next" preview above Get started (the two-column
-    // split was dropped) — orients the admin without weight. The steps are the
-    // admin journey after team: install → create agent → connect GitHub.
-    nextPrefix: "Next: ",
+    // The ceremonial admin opening. This bookend renders no progress bar, so the
+    // single-line roadmap below the hero (StepRoadmap, which derives the "N
+    // steps" count from this list) is the only orientation. The admin journey
+    // after team: install → create agent → connect GitHub.
     nextSteps: ["Install First Tree", "Create your first agent", "Connect to GitHub"],
+    // A warm question that doubles as the field's label, sitting on its own line
+    // above the input — so the pre-filled value is unmistakably the team's name
+    // (a bare box with only a "rename" hint left the field's purpose ambiguous).
+    // The question framing also implies the pre-filled name is editable.
+    nameLead: "What should we call your team?",
   },
   /** connect-code states */
   connectCode: {
@@ -368,12 +371,22 @@ export const COPY = {
     // shared launch transition
     starting: "Starting your agent…",
   },
-  /** invitee blocked states — the team isn't ready yet (no tree, or no GitHub) */
+  /** invitee welcome + blocked states */
   invitee: {
-    // Brief "what's next" one-liner above the welcome step's Get started, mirroring
-    // the admin team step. Invitee journey has no connect-code (they inherit team
-    // repos): install → create agent → start working.
-    nextPrefix: "Next: ",
+    // The invitee's ceremonial welcome (mirrors the admin opening). `welcomeBody`
+    // brackets the team name (rendered bold in StepWelcome); the one-line
+    // roadmap (StepRoadmap) derives its "N steps" count from `nextSteps`. The
+    // invitee journey has no connect-code (they inherit the team's repos):
+    // install → create agent → start working.
+    welcomeBody: {
+      pre: "You're now part of ",
+      // A single warm value line that names the coding agent (Claude Code,
+      // Codex) — symmetric with the admin opening's subtitle, and true to the
+      // "connect your existing coding agent" framing. Deliberately does NOT
+      // restate the roadmap's "Create your first agent" or echo the Get started
+      // CTA — the roadmap + button carry the action; this carries the welcome.
+      post: " — let's bring your coding agent (Claude Code, Codex) onto the team.",
+    },
     nextSteps: ["Install First Tree", "Create your first agent", "Start working"],
     waitingTitle: "Waiting for your team to set up",
     waitingBody:
