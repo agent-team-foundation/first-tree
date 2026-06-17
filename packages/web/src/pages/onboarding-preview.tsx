@@ -1,4 +1,4 @@
-import type { AgentVisibility, ResourceRow } from "@first-tree/shared";
+import type { AgentVisibility, GithubAppInstallationOutput, ResourceRow } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useMemo, useState } from "react";
 import type { HubClient } from "../api/activity.js";
@@ -97,6 +97,34 @@ const REPOS: GithubRepo[] = [
     pushedAt: NOW_ISO,
   },
 ];
+
+// GET /orgs/:id/github-app-installation — the bound installation. The connect-code
+// "connected" confirmation reads accountLogin / accountType off this; repos come
+// from the separate repositories endpoint. Installed on the `acme` org to match
+// the REPOS fixtures (acme/web, acme/api…).
+const INSTALLATION: GithubAppInstallationOutput = {
+  installationId: 139563599,
+  accountType: "Organization",
+  accountLogin: "acme",
+  accountGithubId: 4242,
+  permissions: { contents: "read", metadata: "read" },
+  events: ["push"],
+  suspended: false,
+  manageUrl: "https://github.com/organizations/acme/settings/installations/139563599",
+  createdAt: NOW_ISO,
+  updatedAt: NOW_ISO,
+};
+// Personal-account variant: the App landed on the installer's own GitHub user,
+// not the team org — the "did this go to the right place?" case the banner exists
+// to surface.
+const INSTALLATION_USER: GithubAppInstallationOutput = {
+  ...INSTALLATION,
+  installationId: 139563600,
+  accountType: "User",
+  accountLogin: "gandy",
+  accountGithubId: 4243,
+  manageUrl: "https://github.com/settings/installations/139563600",
+};
 
 const NOOP = (): void => {};
 const ASYNC_NOOP = async (): Promise<void> => {};
@@ -197,6 +225,11 @@ type NetProfile = {
   /** When true, the installation query never resolves (stays loading) — used to
       hold the post-click "Waiting for GitHub…" state without it flipping to stuck. */
   installPending?: boolean;
+  /** Which account the App is installed on, driving the connected-confirmation
+      banner: `org` (default) installs on the `acme` org; `user` installs on a
+      personal account — the case where the install account differs from the
+      team's repos, which the banner is meant to make visible. */
+  installAccount?: "org" | "user";
   /** GET /orgs/:id/github-app-installation/exists */
   installExists?: boolean;
   /** GET /orgs/:id/settings/context_tree → { repo } */
@@ -275,7 +308,7 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
   if (p === `/orgs/${ORG_ID}/github-app-installation`) {
     if (activeNet.installPending) return new Promise<Response>(() => {});
     return activeNet.installed
-      ? jsonResponse({ installed: true })
+      ? jsonResponse(activeNet.installAccount === "user" ? INSTALLATION_USER : INSTALLATION)
       : statusResponse(404, "No GitHub App installation is bound to this team");
   }
   if (p === `/orgs/${ORG_ID}/github-app-installation/exists`) {
@@ -557,10 +590,17 @@ const SCENARIOS: Scenario[] = [
   },
   {
     id: "admin-code-repos",
-    label: "Pick repos",
+    label: "Pick repos · org install",
     group: "4 · Connect code",
     role: "admin",
-    wizard: { step: "connect-code", net: { installed: true, repos: REPOS } },
+    wizard: { step: "connect-code", net: { installed: true, repos: REPOS, installAccount: "org" } },
+  },
+  {
+    id: "admin-code-repos-user",
+    label: "Pick repos · personal-account install",
+    group: "4 · Connect code",
+    role: "admin",
+    wizard: { step: "connect-code", net: { installed: true, repos: REPOS, installAccount: "user" } },
   },
 
   {
