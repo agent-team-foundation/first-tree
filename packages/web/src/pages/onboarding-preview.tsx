@@ -1,6 +1,6 @@
 import type { AgentVisibility, GithubAppInstallationOutput, ResourceRow } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { HubClient } from "../api/activity.js";
 import type { GithubRepo } from "../api/github.js";
 import { InviteAcceptCard, InviteAcceptError, InviteAcceptShell, InviteAcceptSkeleton } from "./invite-accept.js";
@@ -389,6 +389,15 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
 // ────────────────────────────────────────────────────────────────────────────
 
 type Role = OnboardingPath;
+type PreviewView = "flow" | "states" | "experiments";
+
+const PREVIEW_VIEWS: Array<{ id: PreviewView; label: string; subtitle: string }> = [
+  { id: "flow", label: "Flow", subtitle: "Primary journey. Real components, mocked state." },
+  { id: "states", label: "States", subtitle: "State inventory. Real components, mocked state." },
+  { id: "experiments", label: "Experiments", subtitle: "Design experiments. Not production components." },
+];
+
+const DEFAULT_VIEW: PreviewView = "flow";
 
 type WizardSpec = {
   step: StepId;
@@ -426,112 +435,126 @@ type Scenario = {
   label: string;
   group: string;
   role: Role;
+  /** Defaults to `states`; mark only primary flow and experiments explicitly. */
+  view?: PreviewView;
   wizard?: WizardSpec;
   invite?: ReactNode;
   /** A self-contained design mockup rendered full-bleed (no shell wrap). */
   mockup?: ReactNode;
 };
 
-const SCENARIOS: Scenario[] = [
+export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   // ── ADMIN ──────────────────────────────────────────────────────────────
-  { id: "admin-team", label: "Name your team", group: "1 · Team", role: "admin", wizard: { step: "team" } },
+  {
+    id: "admin-team",
+    label: "Welcome / name team",
+    group: "Admin happy path",
+    role: "admin",
+    view: "flow",
+    wizard: { step: "team" },
+  },
   {
     id: "admin-team-steps-a",
     label: "Steps preview · A list",
-    group: "★ Team steps preview (mockup)",
+    group: "Team welcome experiments",
     role: "admin",
+    view: "experiments",
     mockup: <MockTeamStepsA />,
   },
   {
     id: "admin-team-steps-b",
     label: "Steps preview · B one-liner",
-    group: "★ Team steps preview (mockup)",
+    group: "Team welcome experiments",
     role: "admin",
+    view: "experiments",
     mockup: <MockTeamStepsB />,
   },
   {
     id: "admin-welcome-ceremonial",
     label: "Welcome · ceremonial",
-    group: "★ Team steps preview (mockup)",
+    group: "Team welcome experiments",
     role: "admin",
+    view: "experiments",
     mockup: <MockWelcomeCeremonial />,
   },
 
   {
     id: "admin-cc-waiting",
-    label: "Waiting for computer",
-    group: "2 · Connect computer",
+    label: "Install First Tree",
+    group: "Admin happy path",
     role: "admin",
+    view: "flow",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.waiting } },
   },
   {
     id: "admin-cc-tokenerr",
     label: "Connect-token error",
-    group: "2 · Connect computer",
+    group: "Computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.tokenError } },
   },
   {
     id: "admin-cc-detecting",
     label: "Connected · detecting",
-    group: "2 · Connect computer",
+    group: "Computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.detecting } },
   },
   {
     id: "admin-cc-noruntime",
     label: "Connected · no coding agent",
-    group: "2 · Connect computer",
+    group: "Computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.noRuntime } },
   },
   {
     id: "admin-cc-ready",
     label: "Connected · ready (1 coding agent)",
-    group: "2 · Connect computer",
+    group: "Computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.ready } },
   },
   {
     id: "admin-cc-ready-multi",
     label: "Connected · ready (multiple coding agents)",
-    group: "2 · Connect computer",
+    group: "Computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.readyMulti } },
   },
   {
     id: "admin-cc-stuck",
     label: "Waiting · stuck (Need help)",
-    group: "2 · Connect computer",
+    group: "Computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.waiting }, connectStuck: true },
   },
 
   {
     id: "admin-ca-form",
-    label: "Form (idle)",
-    group: "3 · Create agent",
+    label: "Create first agent",
+    group: "Admin happy path",
     role: "admin",
+    view: "flow",
     wizard: { step: "create-agent", flow: { computer: COMPUTER.ready, agentPhase: "idle" } },
   },
   {
     id: "admin-ca-creating",
     label: "Creating…",
-    group: "3 · Create agent",
+    group: "Agent creation states",
     role: "admin",
     wizard: { step: "create-agent", flow: { computer: COMPUTER.ready, agentPhase: "creating" } },
   },
   {
     id: "admin-ca-timeout",
     label: "Timeout",
-    group: "3 · Create agent",
+    group: "Agent creation states",
     role: "admin",
     wizard: { step: "create-agent", flow: { computer: COMPUTER.ready, agentPhase: "timeout" } },
   },
   {
     id: "admin-ca-error",
     label: "Create error",
-    group: "3 · Create agent",
+    group: "Agent creation states",
     role: "admin",
     wizard: {
       step: "create-agent",
@@ -541,7 +564,7 @@ const SCENARIOS: Scenario[] = [
   {
     id: "admin-ca-computer-lost",
     label: "Form · computer disconnected",
-    group: "3 · Create agent",
+    group: "Agent creation states",
     role: "admin",
     wizard: { step: "create-agent", flow: { computer: COMPUTER.waiting, agentPhase: "idle" } },
   },
@@ -549,35 +572,35 @@ const SCENARIOS: Scenario[] = [
   {
     id: "admin-code-notinstalled",
     label: "Not installed",
-    group: "4 · Connect code",
+    group: "GitHub states",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false } },
   },
   {
     id: "admin-code-err-notconfigured",
     label: "Install error · can't connect · 503 (click Install)",
-    group: "4 · Connect code",
+    group: "GitHub states",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false, installUrlError: 503 } },
   },
   {
     id: "admin-code-err-notadmin",
     label: "Install error · can't connect · 403 (click Install)",
-    group: "4 · Connect code",
+    group: "GitHub states",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false, installUrlError: 403 } },
   },
   {
     id: "admin-code-err-generic",
     label: "Install error · generic (click Install)",
-    group: "4 · Connect code",
+    group: "GitHub states",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false, installUrlError: 500 } },
   },
   {
     id: "admin-code-waiting",
     label: "Waiting for GitHub (after click)",
-    group: "4 · Connect code",
+    group: "GitHub states",
     role: "admin",
     // installPending keeps the install query loading so it holds "Waiting for
     // GitHub…" without the 5s stuck timer firing; seedInstallAttempt marks the
@@ -587,42 +610,43 @@ const SCENARIOS: Scenario[] = [
   {
     id: "admin-code-stuck",
     label: "Came back without install (stuck → Need help)",
-    group: "4 · Connect code",
+    group: "GitHub states",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false }, seedInstallAttempt: true },
   },
   {
     id: "admin-code-loading",
     label: "Loading repos",
-    group: "4 · Connect code",
+    group: "GitHub states",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: true, repos: "pending" } },
   },
   {
     id: "admin-code-norepos",
     label: "No repos",
-    group: "4 · Connect code",
+    group: "GitHub states",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: true, repos: [] } },
   },
   {
     id: "admin-code-loadfailed",
     label: "Load failed",
-    group: "4 · Connect code",
+    group: "GitHub states",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: true, repos: "neterror" } },
   },
   {
     id: "admin-code-repos",
-    label: "Pick repos · org install",
-    group: "4 · Connect code",
+    label: "Connect GitHub / pick repos",
+    group: "Admin happy path",
     role: "admin",
+    view: "flow",
     wizard: { step: "connect-code", net: { installed: true, repos: REPOS, installAccount: "org" } },
   },
   {
     id: "admin-code-repos-user",
     label: "Pick repos · personal-account install",
-    group: "4 · Connect code",
+    group: "GitHub states",
     role: "admin",
     wizard: { step: "connect-code", net: { installed: true, repos: REPOS, installAccount: "user" } },
   },
@@ -630,35 +654,36 @@ const SCENARIOS: Scenario[] = [
   {
     id: "admin-ko-noproject",
     label: "No repo",
-    group: "5 · Kickoff",
+    group: "Kickoff states",
     role: "admin",
     wizard: { step: "kickoff", flow: { selectedRepoUrls: [] } },
   },
   {
     id: "admin-ko-new",
-    label: "New tree (default)",
-    group: "5 · Kickoff",
+    label: "Kickoff / new tree",
+    group: "Admin happy path",
     role: "admin",
+    view: "flow",
     wizard: { step: "kickoff", flow: { selectedRepoUrls: [REPO_WEB], treeMode: "new" }, net: { contextTree: null } },
   },
   {
     id: "admin-ko-existing",
     label: "Existing (auto-detected)",
-    group: "5 · Kickoff",
+    group: "Kickoff states",
     role: "admin",
     wizard: { step: "kickoff", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: TREE_URL } },
   },
   {
     id: "admin-ko-checking",
     label: "Checking team setup",
-    group: "5 · Kickoff",
+    group: "Kickoff states",
     role: "admin",
     wizard: { step: "kickoff", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: "pending" } },
   },
   {
     id: "admin-ko-starting",
     label: "Starting…",
-    group: "5 · Kickoff",
+    group: "Kickoff states",
     role: "admin",
     wizard: {
       step: "kickoff",
@@ -674,7 +699,7 @@ const SCENARIOS: Scenario[] = [
   {
     id: "admin-bt-connect",
     label: "Connect code (repo required)",
-    group: "6 · Build tree (recovery)",
+    group: "Build tree recovery",
     role: "admin",
     wizard: {
       step: "connect-code",
@@ -688,7 +713,7 @@ const SCENARIOS: Scenario[] = [
   {
     id: "admin-bt-build",
     label: "Build + pick agent (kickoff)",
-    group: "6 · Build tree (recovery)",
+    group: "Build tree recovery",
     role: "admin",
     wizard: {
       step: "kickoff",
@@ -705,22 +730,23 @@ const SCENARIOS: Scenario[] = [
   {
     id: "inv-link-loading",
     label: "Loading",
-    group: "0 · Invite link (pre-login)",
+    group: "Invite link states",
     role: "invitee",
     invite: <InviteAcceptSkeleton />,
   },
   {
     id: "inv-link-invalid",
     label: "Invalid / expired",
-    group: "0 · Invite link (pre-login)",
+    group: "Invite link states",
     role: "invitee",
     invite: <InviteAcceptError message="This invitation is no longer valid" />,
   },
   {
     id: "inv-link-signedout",
-    label: "Signed out",
-    group: "0 · Invite link (pre-login)",
+    label: "Invite link / signed out",
+    group: "Invitee happy path",
     role: "invitee",
+    view: "flow",
     invite: (
       <InviteAcceptCard
         preview={PREVIEW}
@@ -735,7 +761,7 @@ const SCENARIOS: Scenario[] = [
   {
     id: "inv-link-signedin",
     label: "Signed in · join",
-    group: "0 · Invite link (pre-login)",
+    group: "Invite link states",
     role: "invitee",
     invite: (
       <InviteAcceptCard
@@ -751,7 +777,7 @@ const SCENARIOS: Scenario[] = [
   {
     id: "inv-link-switch",
     label: "Team switch warning",
-    group: "0 · Invite link (pre-login)",
+    group: "Invite link states",
     role: "invitee",
     invite: (
       <InviteAcceptCard
@@ -767,7 +793,7 @@ const SCENARIOS: Scenario[] = [
   {
     id: "inv-link-exp-days",
     label: "Expiry · days",
-    group: "0 · Invite link (pre-login)",
+    group: "Invite link states",
     role: "invitee",
     invite: (
       <InviteAcceptCard
@@ -783,7 +809,7 @@ const SCENARIOS: Scenario[] = [
   {
     id: "inv-link-exp-hours",
     label: "Expiry · hours (urgent)",
-    group: "0 · Invite link (pre-login)",
+    group: "Invite link states",
     role: "invitee",
     invite: (
       <InviteAcceptCard
@@ -799,133 +825,46 @@ const SCENARIOS: Scenario[] = [
 
   {
     id: "inv-welcome",
-    label: "Welcome to the team",
-    group: "1 · Welcome",
+    label: "Welcome",
+    group: "Invitee happy path",
     role: "invitee",
+    view: "flow",
     wizard: { step: "welcome", flow: { teamDisplayName: "Acme Inc" } },
-  },
-
-  {
-    id: "inv-cc-waiting",
-    label: "Waiting for computer",
-    group: "2 · Connect computer",
-    role: "invitee",
-    wizard: { step: "connect-computer", flow: { computer: COMPUTER.waiting } },
-  },
-  {
-    id: "inv-cc-tokenerr",
-    label: "Connect-token error",
-    group: "2 · Connect computer",
-    role: "invitee",
-    wizard: { step: "connect-computer", flow: { computer: COMPUTER.tokenError } },
-  },
-  {
-    id: "inv-cc-detecting",
-    label: "Connected · detecting",
-    group: "2 · Connect computer",
-    role: "invitee",
-    wizard: { step: "connect-computer", flow: { computer: COMPUTER.detecting } },
-  },
-  {
-    id: "inv-cc-noruntime",
-    label: "Connected · no coding agent",
-    group: "2 · Connect computer",
-    role: "invitee",
-    wizard: { step: "connect-computer", flow: { computer: COMPUTER.noRuntime } },
-  },
-  {
-    id: "inv-cc-ready",
-    label: "Connected · ready (1 coding agent)",
-    group: "2 · Connect computer",
-    role: "invitee",
-    wizard: { step: "connect-computer", flow: { computer: COMPUTER.ready } },
-  },
-  {
-    id: "inv-cc-ready-multi",
-    label: "Connected · ready (multiple coding agents)",
-    group: "2 · Connect computer",
-    role: "invitee",
-    wizard: { step: "connect-computer", flow: { computer: COMPUTER.readyMulti } },
-  },
-  {
-    id: "inv-cc-stuck",
-    label: "Waiting · stuck (Need help)",
-    group: "2 · Connect computer",
-    role: "invitee",
-    wizard: { step: "connect-computer", flow: { computer: COMPUTER.waiting }, connectStuck: true },
-  },
-
-  {
-    id: "inv-ca-form",
-    label: "Form (idle)",
-    group: "3 · Create agent",
-    role: "invitee",
-    wizard: { step: "create-agent", flow: { computer: COMPUTER.ready, agentPhase: "idle" } },
-  },
-  {
-    id: "inv-ca-creating",
-    label: "Creating…",
-    group: "3 · Create agent",
-    role: "invitee",
-    wizard: { step: "create-agent", flow: { computer: COMPUTER.ready, agentPhase: "creating" } },
-  },
-  {
-    id: "inv-ca-timeout",
-    label: "Timeout",
-    group: "3 · Create agent",
-    role: "invitee",
-    wizard: { step: "create-agent", flow: { computer: COMPUTER.ready, agentPhase: "timeout" } },
-  },
-  {
-    id: "inv-ca-error",
-    label: "Create error",
-    group: "3 · Create agent",
-    role: "invitee",
-    wizard: {
-      step: "create-agent",
-      flow: { computer: COMPUTER.ready, agentPhase: "idle", agentError: "Couldn't create your agent" },
-    },
-  },
-  {
-    id: "inv-ca-computer-lost",
-    label: "Form · computer disconnected",
-    group: "3 · Create agent",
-    role: "invitee",
-    wizard: { step: "create-agent", flow: { computer: COMPUTER.waiting, agentPhase: "idle" } },
   },
 
   {
     id: "inv-ko-waiting",
     label: "Waiting for team",
-    group: "4 · Kickoff (start work)",
+    group: "Kickoff states",
     role: "invitee",
     wizard: { step: "kickoff", net: { installExists: true } },
   },
   {
     id: "inv-ko-noinstall",
     label: "No code connection",
-    group: "4 · Kickoff (start work)",
+    group: "Kickoff states",
     role: "invitee",
     wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: false } },
   },
   {
     id: "inv-ko-ready",
-    label: "Ready · team has repos",
-    group: "4 · Kickoff (start work)",
+    label: "Start working",
+    group: "Invitee happy path",
     role: "invitee",
+    view: "flow",
     wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [REPO_WEB, REPO_API] } },
   },
   {
     id: "inv-ko-ready-norepos",
     label: "Ready · no team repos (intro)",
-    group: "4 · Kickoff (start work)",
+    group: "Kickoff states",
     role: "invitee",
     wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true, sourceRepos: [] } },
   },
   {
     id: "inv-ko-starting",
     label: "Starting…",
-    group: "4 · Kickoff (start work)",
+    group: "Kickoff states",
     role: "invitee",
     wizard: { step: "kickoff", body: <WorkingState label={COPY.kickoff.starting} /> },
   },
@@ -1056,16 +995,79 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
 // Page (switcher + main panel)
 // ────────────────────────────────────────────────────────────────────────────
 
+function scenarioView(scenario: Scenario): PreviewView {
+  return scenario.view ?? "states";
+}
+
+function scenariosFor(role: Role, view: PreviewView): Scenario[] {
+  return ONBOARDING_PREVIEW_SCENARIOS.filter((scenario) => scenario.role === role && scenarioView(scenario) === view);
+}
+
+function hasScenarios(role: Role, view: PreviewView): boolean {
+  return scenariosFor(role, view).length > 0;
+}
+
+function firstScenario(role: Role, view: PreviewView): Scenario | undefined {
+  return scenariosFor(role, view)[0];
+}
+
+function normalizeView(role: Role, requested: PreviewView): PreviewView {
+  return hasScenarios(role, requested) ? requested : DEFAULT_VIEW;
+}
+
+function isRole(value: string | null): value is Role {
+  return value === "admin" || value === "invitee";
+}
+
+function isPreviewView(value: string | null): value is PreviewView {
+  return value === "flow" || value === "states" || value === "experiments";
+}
+
+function initialPreviewSelection(): { role: Role; scenarioId: string; view: PreviewView } {
+  const params = new URLSearchParams(window.location.search);
+  const roleParam = params.get("role");
+  const viewParam = params.get("view");
+  const role: Role = isRole(roleParam) ? roleParam : "admin";
+  const requestedView: PreviewView = isPreviewView(viewParam) ? viewParam : DEFAULT_VIEW;
+  const view = normalizeView(role, requestedView);
+  const scenarioId = params.get("scenario") ?? firstScenario(role, view)?.id ?? "";
+  return { role, view, scenarioId };
+}
+
 export function OnboardingPreviewPage() {
-  const [role, setRole] = useState<Role>("admin");
-  const roleScenarios = useMemo(() => SCENARIOS.filter((s) => s.role === role), [role]);
-  const [scenarioId, setScenarioId] = useState<string>(roleScenarios[0]?.id ?? "");
+  const initial = useMemo(() => initialPreviewSelection(), []);
+  const [role, setRole] = useState<Role>(initial.role);
+  const [view, setView] = useState<PreviewView>(initial.view);
+  const roleScenarios = useMemo(() => scenariosFor(role, view), [role, view]);
+  const [scenarioId, setScenarioId] = useState<string>(initial.scenarioId);
 
   const active = roleScenarios.find((s) => s.id === scenarioId) ?? roleScenarios[0];
+  const activeView = PREVIEW_VIEWS.find((item) => item.id === view) ?? PREVIEW_VIEWS[0];
+
+  useEffect(() => {
+    if (!active) return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("role", role);
+    params.set("view", view);
+    params.set("scenario", active.id);
+    const next = `${window.location.pathname}?${params.toString()}`;
+    if (`${window.location.pathname}${window.location.search}` !== next) {
+      window.history.replaceState(null, "", next);
+    }
+  }, [active, role, view]);
 
   const switchRole = (next: Role): void => {
+    const nextView = normalizeView(next, view);
     setRole(next);
-    const first = SCENARIOS.find((s) => s.role === next);
+    setView(nextView);
+    const first = firstScenario(next, nextView);
+    if (first) setScenarioId(first.id);
+  };
+
+  const switchView = (next: PreviewView): void => {
+    if (!hasScenarios(role, next)) return;
+    setView(next);
+    const first = firstScenario(role, next);
     if (first) setScenarioId(first.id);
   };
 
@@ -1081,7 +1083,10 @@ export function OnboardingPreviewPage() {
   }
 
   return (
-    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--bg)" }}>
+    <div
+      id="onboarding-preview-root"
+      style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--bg)" }}
+    >
       <aside
         style={{
           width: 288,
@@ -1098,7 +1103,7 @@ export function OnboardingPreviewPage() {
             Onboarding · Preview
           </h1>
           <p className="text-label" style={{ margin: "var(--sp-1) 0 0", color: "var(--fg-4)" }}>
-            DEV-only. Real components, mocked state.
+            {activeView?.subtitle}
           </p>
         </div>
 
@@ -1141,7 +1146,39 @@ export function OnboardingPreviewPage() {
           </div>
         </div>
 
-        {/* Axis 2 — scenario list, grouped by step */}
+        {/* Axis 2 — review surface */}
+        <div style={{ padding: "0 var(--sp-4) var(--sp-3)" }}>
+          <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+            {PREVIEW_VIEWS.map((item) => {
+              const on = view === item.id;
+              const disabled = !hasScenarios(role, item.id);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => switchView(item.id)}
+                  disabled={disabled}
+                  className="text-label font-medium"
+                  style={{
+                    width: "100%",
+                    padding: "var(--sp-1_5) var(--sp-2)",
+                    borderRadius: "var(--radius-input)",
+                    border: "var(--hairline) solid var(--border-faint)",
+                    cursor: disabled ? "not-allowed" : "pointer",
+                    textAlign: "left",
+                    background: on ? "color-mix(in oklch, var(--primary) 10%, var(--bg-raised))" : "var(--bg)",
+                    color: disabled ? "var(--fg-4)" : on ? "var(--fg)" : "var(--fg-3)",
+                    opacity: disabled ? 0.55 : 1,
+                  }}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Axis 3 — scenario list, grouped by review-oriented section */}
         <nav style={{ padding: "0 var(--sp-2) var(--sp-4)", flex: 1 }}>
           {roleScenarios.map((s, i) => {
             const newGroup = i === 0 || roleScenarios[i - 1]?.group !== s.group;
@@ -1204,6 +1241,15 @@ export function OnboardingPreviewPage() {
 }
 
 function ThemeToggle() {
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    document.documentElement.classList.contains("dark") ? "dark" : "light",
+  );
+  const applyTheme = (next: "light" | "dark"): void => {
+    setTheme(next);
+    document.documentElement.classList.toggle("dark", next === "dark");
+    window.localStorage.setItem("theme", next);
+  };
+
   return (
     <div
       style={{
@@ -1215,26 +1261,41 @@ function ThemeToggle() {
       }}
     >
       <span className="text-label mono" style={{ color: "var(--fg-4)" }}>
-        theme
+        Theme
       </span>
-      <button
-        type="button"
-        className="text-caption mono"
-        onClick={() => {
-          const dark = document.documentElement.classList.toggle("dark");
-          window.localStorage.setItem("theme", dark ? "dark" : "light");
-        }}
+      <div
+        className="flex"
         style={{
-          padding: "var(--sp-1) var(--sp-2)",
-          border: "var(--hairline) solid var(--border)",
+          gap: 2,
+          padding: 2,
           borderRadius: "var(--radius-input)",
-          background: "var(--bg-hover)",
-          color: "var(--fg-2)",
-          cursor: "pointer",
+          border: "var(--hairline) solid var(--border-faint)",
+          background: "var(--bg-sunken)",
         }}
       >
-        toggle
-      </button>
+        {(["light", "dark"] as const).map((item) => {
+          const on = theme === item;
+          return (
+            <button
+              key={item}
+              type="button"
+              className="text-caption mono"
+              onClick={() => applyTheme(item)}
+              style={{
+                padding: "var(--sp-1) var(--sp-2)",
+                border: 0,
+                borderRadius: "var(--radius-chip)",
+                background: on ? "var(--bg-raised)" : "transparent",
+                color: on ? "var(--fg)" : "var(--fg-3)",
+                cursor: "pointer",
+                textTransform: "capitalize",
+              }}
+            >
+              {item}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -1653,6 +1653,12 @@ body:has([role="dialog"][data-state="open"]) hearback-widget {
   display: none;
 }
 
+/* Onboarding preview is a visual-review surface; the injected feedback FAB
+   overlaps the mocked app chrome and pollutes review screenshots. */
+body:has(#onboarding-preview-root) hearback-widget {
+  display: none;
+}
+
 /* Mention chip — pill style for rendered sent messages (rehype-mentions
  * plugin). The composer mirror overlay uses `.mention-text` instead
  * (see below) because any horizontal padding / background offset on
