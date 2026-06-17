@@ -468,6 +468,7 @@ function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): Onboardi
     hasAgent: true,
     selectedRepoUrls: ["https://github.com/acme/web.git"],
     setSelectedRepoUrls: vi.fn(),
+    hasRepoDraft: true,
     treeMode: "existing",
     setTreeMode: vi.fn(),
     treeUrl: "https://github.com/acme/context-tree",
@@ -1586,6 +1587,83 @@ describe("web DOM interaction coverage", () => {
       ) ?? null,
     );
     expect(notConfigured.flow.goNext).toHaveBeenCalled();
+  });
+
+  it("auto-selects all granted repos with no draft, but preserves a resumed draft", async () => {
+    const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
+    const connectedInstall = {
+      installationId: 42,
+      accountLogin: "acme",
+      accountType: "Organization" as const,
+      accountGithubId: 123,
+      repositorySelection: "selected" as const,
+      permissions: {},
+      events: [],
+      suspended: false,
+      manageUrl: "https://github.com/organizations/acme/settings/installations/42",
+      createdAt: NOW,
+      updatedAt: NOW,
+    };
+    githubAppMocks.getGithubAppInstallation.mockResolvedValue(connectedInstall);
+
+    // No saved draft (first visit) → the picker defaults to every granted repo,
+    // so the user doesn't re-pick what they just granted on GitHub.
+    const freshSet = vi.fn();
+    const noDraft = await renderOnboardingDom(<StepConnectCode />, {
+      activeStep: "connect-code",
+      selectedRepoUrls: [],
+      hasRepoDraft: false,
+      setSelectedRepoUrls: freshSet,
+    });
+    await waitForText("acme/web", noDraft.container);
+    await waitForCondition(
+      () =>
+        freshSet.mock.calls.some(
+          ([arg]) =>
+            Array.isArray(arg) &&
+            arg.length === 2 &&
+            arg.includes("https://github.com/acme/web.git") &&
+            arg.includes("git@github.com:acme/api.git"),
+        ),
+      "auto-select all granted repos when there's no draft",
+    );
+    await unmountRoot(noDraft.root);
+
+    // Resumed draft (user narrowed to just one repo earlier, then bailed before
+    // kickoff) → no auto-select; the saved selection is left untouched instead
+    // of being clobbered back to "all granted".
+    const resumedSet = vi.fn();
+    const withDraft = await renderOnboardingDom(<StepConnectCode />, {
+      activeStep: "connect-code",
+      selectedRepoUrls: ["https://github.com/acme/web.git"],
+      hasRepoDraft: true,
+      setSelectedRepoUrls: resumedSet,
+    });
+    await waitForText("acme/web", withDraft.container);
+    await flush();
+    expect(resumedSet).not.toHaveBeenCalled();
+    await unmountRoot(withDraft.root);
+
+    // Resumed draft carrying a repo the GitHub App no longer grants (uninstall /
+    // changed grant between bailout and resume) → prune it against the current
+    // grant list so a stale URL can't ride into kickoff. acme/web is still
+    // granted; the gone repo is dropped.
+    const prunedSet = vi.fn();
+    const staleDraft = await renderOnboardingDom(<StepConnectCode />, {
+      activeStep: "connect-code",
+      selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
+      hasRepoDraft: true,
+      setSelectedRepoUrls: prunedSet,
+    });
+    await waitForText("acme/web", staleDraft.container);
+    await waitForCondition(
+      () =>
+        prunedSet.mock.calls.some(
+          ([arg]) => Array.isArray(arg) && arg.length === 1 && arg[0] === "https://github.com/acme/web.git",
+        ),
+      "prune a no-longer-granted repo from a resumed draft",
+    );
+    await unmountRoot(staleDraft.root);
   });
 
   it("falls back to a full-page redirect when the install popup is blocked", async () => {

@@ -899,6 +899,7 @@ function baseFlow(path: OnboardingPath): OnboardingFlowValue {
     hasAgent: false,
     selectedRepoUrls: [],
     setSelectedRepoUrls: NOOP,
+    hasRepoDraft: false,
     treeMode: "new",
     setTreeMode: NOOP,
     treeUrl: "",

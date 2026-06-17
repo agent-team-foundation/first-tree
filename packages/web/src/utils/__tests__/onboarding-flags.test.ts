@@ -6,7 +6,9 @@ import {
   clearOnboardingSessionFlags,
   markOnboardingResume,
   readOnboardingAgentUuid,
+  readOnboardingSelectedRepos,
   writeOnboardingAgentUuid,
+  writeOnboardingSelectedRepos,
 } from "../onboarding-flags.js";
 
 function createStorage(): Storage {
@@ -71,5 +73,57 @@ describe("onboarding session flags", () => {
     expect(() => markOnboardingResume("solo")).not.toThrow();
     expect(() => clearOnboardingJoinPath()).not.toThrow();
     expect(() => clearOnboardingSessionFlags()).not.toThrow();
+    expect(readOnboardingSelectedRepos("org-1")).toBeNull();
+    expect(() => writeOnboardingSelectedRepos("org-1", ["x"])).not.toThrow();
+  });
+});
+
+describe("onboarding selected-repos draft", () => {
+  const WEB = "https://github.com/acme/web.git";
+  const API = "git@github.com:acme/api.git";
+  const URLS = [WEB, API];
+
+  it("round-trips a per-org draft and distinguishes absent from empty", () => {
+    // No draft yet → null (so connect-code knows to auto-select all granted).
+    expect(readOnboardingSelectedRepos("org-1")).toBeNull();
+
+    writeOnboardingSelectedRepos("org-1", URLS);
+    expect(readOnboardingSelectedRepos("org-1")).toEqual(URLS);
+
+    // A deliberate "deselect everything" is an empty array, NOT null — the
+    // distinction the connect-code preselect gate depends on.
+    writeOnboardingSelectedRepos("org-1", []);
+    expect(readOnboardingSelectedRepos("org-1")).toEqual([]);
+
+    // null clears the key back to "no draft".
+    writeOnboardingSelectedRepos("org-1", null);
+    expect(readOnboardingSelectedRepos("org-1")).toBeNull();
+  });
+
+  it("keeps drafts independent per org", () => {
+    writeOnboardingSelectedRepos("org-1", [WEB]);
+    writeOnboardingSelectedRepos("org-2", [API]);
+    expect(readOnboardingSelectedRepos("org-1")).toEqual([WEB]);
+    expect(readOnboardingSelectedRepos("org-2")).toEqual([API]);
+  });
+
+  it("is swept by clearOnboardingSessionFlags (onboarding:* namespace)", () => {
+    writeOnboardingSelectedRepos("org-1", URLS);
+    clearOnboardingSessionFlags();
+    expect(readOnboardingSelectedRepos("org-1")).toBeNull();
+  });
+
+  it("returns null for malformed or non-string-array stored values", () => {
+    sessionStorage.setItem("onboarding:selectedRepos:org-1", "not json");
+    expect(readOnboardingSelectedRepos("org-1")).toBeNull();
+    sessionStorage.setItem("onboarding:selectedRepos:org-1", JSON.stringify([1, 2]));
+    expect(readOnboardingSelectedRepos("org-1")).toBeNull();
+    sessionStorage.setItem("onboarding:selectedRepos:org-1", JSON.stringify({ url: "x" }));
+    expect(readOnboardingSelectedRepos("org-1")).toBeNull();
+  });
+
+  it("ignores a missing org id", () => {
+    expect(readOnboardingSelectedRepos("")).toBeNull();
+    expect(() => writeOnboardingSelectedRepos("", URLS)).not.toThrow();
   });
 });

@@ -1,8 +1,12 @@
 import type { AgentVisibility } from "@first-tree/shared";
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
-import { writeOnboardingAgentUuid } from "../../utils/onboarding-flags.js";
+import {
+  readOnboardingSelectedRepos,
+  writeOnboardingAgentUuid,
+  writeOnboardingSelectedRepos,
+} from "../../utils/onboarding-flags.js";
 import {
   clampStepIndex,
   getStepSequence,
@@ -52,6 +56,14 @@ export type OnboardingFlowValue = {
 
   selectedRepoUrls: string[];
   setSelectedRepoUrls: (next: string[]) => void;
+  /**
+   * True once a per-org repo-selection draft exists (the user has touched the
+   * picker, or a saved draft was restored on resume). The connect-code step
+   * reads this to decide whether to auto-select all granted repos: it only does
+   * so when there is NO draft, so a resumed narrowing — to a subset or to none —
+   * is never overwritten back to "all".
+   */
+  hasRepoDraft: boolean;
   treeMode: TreeMode;
   setTreeMode: (next: TreeMode) => void;
   treeUrl: string;
@@ -173,7 +185,41 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
     user?.username ? `${user.username}'s assistant` : "Assistant",
   );
   const [visibility, setVisibility] = useState<AgentVisibility>("organization");
-  const [selectedRepoUrls, setSelectedRepoUrls] = useState<string[]>([]);
+  // Hydrate the repo selection from this org's saved draft so a bailout before
+  // kickoff (top-bar "finish later", a refresh, a mid-flow navigation) resumes
+  // with the picked repos instead of losing them. `null` draft → empty (the
+  // connect-code step will auto-select all granted repos); a non-null draft —
+  // including `[]` — is a deliberate selection we restore verbatim.
+  const [selectedRepoUrls, setSelectedRepoUrlsState] = useState<string[]>(() =>
+    organizationId ? (readOnboardingSelectedRepos(organizationId) ?? []) : [],
+  );
+  const [hasRepoDraft, setHasRepoDraft] = useState<boolean>(() =>
+    organizationId ? readOnboardingSelectedRepos(organizationId) !== null : false,
+  );
+  // Which org's draft is loaded into state. A late-arriving organizationId (the
+  // `/me` round-trip resolves after first paint) or an org switch hydrates that
+  // org's draft exactly once — not on every render, so an in-progress edit is
+  // never clobbered back to the stored value.
+  const hydratedDraftOrgRef = useRef<string | null>(organizationId);
+  useEffect(() => {
+    if (!organizationId || hydratedDraftOrgRef.current === organizationId) return;
+    hydratedDraftOrgRef.current = organizationId;
+    const draft = readOnboardingSelectedRepos(organizationId);
+    setHasRepoDraft(draft !== null);
+    setSelectedRepoUrlsState(draft ?? []);
+  }, [organizationId]);
+
+  // Wrap the setter so every change writes through to the per-org draft and
+  // marks a draft as present. The formal team-resource write still happens only
+  // at kickoff — this is the in-flight draft that survives a bailout.
+  const setSelectedRepoUrls = useCallback(
+    (next: string[]) => {
+      setSelectedRepoUrlsState(next);
+      setHasRepoDraft(true);
+      if (organizationId) writeOnboardingSelectedRepos(organizationId, next);
+    },
+    [organizationId],
+  );
   const [treeMode, setTreeMode] = useState<TreeMode>("new");
   const [treeUrl, setTreeUrl] = useState<string>("");
   const [treeAutoInitDone, setTreeAutoInitDone] = useState(false);
@@ -195,6 +241,12 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       // can't read a stale cross-org agent (the org filter in
       // resolveOnboardingAgent only catches that when the org id is known).
       writeOnboardingAgentUuid(null);
+      // The selection has now been consumed by kickoff (written as team repo
+      // resources), so drop the in-flight draft — a later same-tab onboarding
+      // in this org starts clean rather than resurrecting a stale pick. Only
+      // completion clears it; `finishLater` deliberately keeps it so the user
+      // resumes their selection.
+      if (organizationId) writeOnboardingSelectedRepos(organizationId, null);
       try {
         await markOnboardingCompleted();
       } catch {
@@ -205,7 +257,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       }
       navigate(`/?c=${encodeURIComponent(chatId)}`);
     },
-    [path, markOnboardingCompleted, navigate],
+    [path, organizationId, markOnboardingCompleted, navigate],
   );
 
   const finishLater = useCallback(async () => {
@@ -240,6 +292,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       hasAgent: orgStep === "completed" || createdAgentUuid !== null,
       selectedRepoUrls,
       setSelectedRepoUrls,
+      hasRepoDraft,
       treeMode,
       setTreeMode,
       treeUrl,
@@ -272,6 +325,8 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       createdAgentUuid,
       orgStep,
       selectedRepoUrls,
+      setSelectedRepoUrls,
+      hasRepoDraft,
       treeMode,
       treeUrl,
       treeAutoInitDone,
