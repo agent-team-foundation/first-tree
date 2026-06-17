@@ -1511,12 +1511,11 @@ describe("web DOM interaction coverage", () => {
       setSelectedRepoUrls,
       goNext: vi.fn(),
     });
-    await waitForText("Which repos should your agent work on?", connected.container);
+    await waitForText("Repos your agent can use", connected.container);
     await waitForText("acme/web", connected.container);
-    // 0 repos picked but the list is pickable → friction: the consequence line
-    // shows and the strong primary "Continue" is absent (only the quiet
-    // "Skip for now" link remains; never disabled).
-    await waitForText("Pick a repo so your agent can build your team's Context Tree", connected.container);
+    // 0 repos picked but the list is pickable → no strong primary "Continue"
+    // (only the quiet "Skip for now" link remains; never disabled). The old
+    // no-repo consequence line was dropped, so there's nothing extra to assert.
     expect([...connected.container.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Continue")).toBe(
       false,
     );
