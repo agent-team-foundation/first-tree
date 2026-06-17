@@ -1,4 +1,5 @@
 import {
+  AGENT_FINAL_TEXT_METADATA_KEY,
   extractCaption,
   imageBatchRefContentSchema,
   imageRefContentSchema,
@@ -345,9 +346,24 @@ export function preflightMessageSendIntent(input: {
     }
   }
 
+  // Persist the final-text intent as a durable metadata flag. `purpose` is a
+  // send-time-only tag that the server consumes above but never stores, so
+  // without this stamp the web cannot tell a silent `agent-final-text` mirror
+  // apart from a deliberate agent `chat send`. The flag is SERVER-OWNED: strip
+  // any inbound client-supplied value, then set it true only for a genuine
+  // final-text mirror. The staging-only "hide agent final text" view toggle
+  // filters on it.
+  const metadataSansFlag =
+    AGENT_FINAL_TEXT_METADATA_KEY in metadataToStore
+      ? Object.fromEntries(Object.entries(metadataToStore).filter(([key]) => key !== AGENT_FINAL_TEXT_METADATA_KEY))
+      : metadataToStore;
+  const storedMetadata = isAgentFinalText
+    ? { ...metadataSansFlag, [AGENT_FINAL_TEXT_METADATA_KEY]: true }
+    : metadataSansFlag;
+
   return {
     content: outboundContent,
-    metadata: metadataToStore,
+    metadata: storedMetadata,
     mentionedAgentIds: mergedMentions,
     isAgentFinalText,
     forceSilentFanOut: purposeProfile.forceSilentFanOut,

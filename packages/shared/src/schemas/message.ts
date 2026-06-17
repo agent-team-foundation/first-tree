@@ -164,6 +164,24 @@ export type RequestResolution = z.infer<typeof requestResolutionSchema>;
 export const messagePurposeSchema = z.enum(["agent-final-text"]);
 export type MessagePurpose = z.infer<typeof messagePurposeSchema>;
 
+/**
+ * Metadata flag the server stamps on a STORED message when it was sent with
+ * `purpose: "agent-final-text"` (the runtime's per-turn final-text mirror —
+ * see client `runtime/result-sink.ts`). `purpose` itself is a send-time-only
+ * intent tag that the server consumes for enforcement and does NOT persist,
+ * so this boolean is the only durable post-save signal distinguishing a
+ * silent final-text mirror from a deliberate agent `chat send`. Server-owned:
+ * stamped only for genuine final-text mirrors and never honored from inbound
+ * client metadata. The web reads it to optionally hide final-text rows behind
+ * a staging-only view toggle; absent / false on every other message.
+ */
+export const AGENT_FINAL_TEXT_METADATA_KEY = "agentFinalText";
+
+/** True when a stored message's metadata marks it as an agent final-text mirror. */
+export function isAgentFinalTextMetadata(metadata: Record<string, unknown> | null | undefined): boolean {
+  return metadata?.[AGENT_FINAL_TEXT_METADATA_KEY] === true;
+}
+
 export const sendMessageSchema = z.object({
   format: messageFormatSchema.default("text"),
   content: z.unknown(),

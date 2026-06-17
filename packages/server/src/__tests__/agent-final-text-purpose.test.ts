@@ -81,6 +81,51 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
     }
   });
 
+  it("persists metadata.agentFinalText=true so the web can identify final-text mirror rows", async () => {
+    const app = getApp();
+    const owner = await createTestAgent(app, { type: "human" });
+    const peerA = await createTestAgent(app, { type: "agent" });
+    const peerB = await createTestAgent(app, { type: "agent" });
+
+    const chat = await createChat(app.db, owner.agent.uuid, {
+      type: "group",
+      participantIds: [peerA.agent.uuid, peerB.agent.uuid],
+    });
+
+    const r = await sendMessage(app.db, chat.id, peerA.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "i am done — turn ended",
+      purpose: "agent-final-text",
+    });
+
+    expect(r.message.metadata.agentFinalText).toBe(true);
+  });
+
+  it("does NOT mark a normal agent send, and strips a client-smuggled agentFinalText flag", async () => {
+    const app = getApp();
+    const owner = await createTestAgent(app, { type: "human" });
+    const peerA = await createTestAgent(app, { type: "agent" });
+    const peerB = await createTestAgent(app, { type: "agent" });
+
+    const chat = await createChat(app.db, owner.agent.uuid, {
+      type: "group",
+      participantIds: [peerA.agent.uuid, peerB.agent.uuid],
+    });
+
+    // A deliberate agent send (has a recipient, no purpose) that tries to
+    // smuggle the flag in via metadata. The flag is server-owned, so it must
+    // be stripped — a real `chat send` must never look like a final-text row.
+    const r = await sendMessage(app.db, chat.id, peerA.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: `@${peerB.agent.name} please look`,
+      metadata: { mentions: [peerB.agent.uuid], agentFinalText: true },
+    });
+
+    expect(r.message.metadata.agentFinalText).toBeUndefined();
+  });
+
   it("still 400s when purpose is absent and no mentions declared (regression guard for the enforce rule)", async () => {
     const app = getApp();
     const owner = await createTestAgent(app, { type: "human" });
