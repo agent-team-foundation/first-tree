@@ -9,6 +9,7 @@ export type AgentIdentity = {
   name: string | null;
   organizationId: string;
   inboxId: string;
+  clientId: string | null;
 };
 
 declare module "fastify" {
