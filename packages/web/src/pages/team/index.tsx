@@ -464,6 +464,7 @@ export function buildTeamData(args: {
     !search || a.displayName.toLowerCase().includes(search) || (a.name ?? "").toLowerCase().includes(search);
   const matchHuman = (m: MemberListItem) =>
     !search || m.displayName.toLowerCase().includes(search) || m.username.toLowerCase().includes(search);
+  const memberById = new Map(members.map((m) => [m.id, m]));
 
   const visible = (a: Agent) => {
     // Members only see their own private agents; admins see all.
@@ -477,6 +478,7 @@ export function buildTeamData(args: {
     kind: "agent",
     agent: a,
     managerLabel: a.managerId ? resolveMember(a.managerId) : null,
+    managerAvatarUrl: a.managerId ? (memberById.get(a.managerId)?.avatarUrl ?? null) : null,
     isOwnedBySelf: a.managerId === selfMemberId,
   });
 

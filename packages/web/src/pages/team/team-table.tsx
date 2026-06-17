@@ -54,6 +54,7 @@ export type AgentRow = {
   kind: "agent";
   agent: Agent;
   managerLabel: string | null;
+  managerAvatarUrl: string | null;
   isOwnedBySelf: boolean;
 };
 
@@ -423,7 +424,7 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
     onAgentDetails,
     getAgentMenuActions,
   } = props;
-  const { agent, managerLabel, isOwnedBySelf } = row;
+  const { agent, managerLabel, managerAvatarUrl, isOwnedBySelf } = row;
   const clientHost = agent.clientId ? (clientHostMap.get(agent.clientId) ?? null) : null;
   const usage = usageByAgentId ? (usageByAgentId.get(agent.uuid) ?? null) : null;
   // Row-click opens Details, so "Details" leaves the menu; the kebab holds the
@@ -472,7 +473,13 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
         hasTaglineSlot={false}
       />
       <div className="grid items-center min-w-0" style={{ gridTemplateColumns: AGENT_MIDDLE_GRID, gap: "var(--sp-4)" }}>
-        <OwnerCell managerLabel={managerLabel} managerId={agent.managerId} isSelf={isOwnedBySelf} dim={dimOwner} />
+        <OwnerCell
+          managerLabel={managerLabel}
+          managerId={agent.managerId}
+          managerAvatarUrl={managerAvatarUrl}
+          isSelf={isOwnedBySelf}
+          dim={dimOwner}
+        />
         <RunsOnCell provider={agent.runtimeProvider} host={clientHost} />
         <UsageCell usage={usage} loading={usageLoading} />
       </div>
@@ -485,11 +492,13 @@ function AgentRowView(props: TeamTableProps & { compact: boolean; row: AgentRow;
 function OwnerCell({
   managerLabel,
   managerId,
+  managerAvatarUrl,
   isSelf,
   dim,
 }: {
   managerLabel: string | null;
   managerId: string | null;
+  managerAvatarUrl: string | null;
   isSelf: boolean;
   dim: boolean;
 }) {
@@ -500,12 +509,12 @@ function OwnerCell({
       </span>
     );
   }
-  // The owner's small avatar precedes the name to make the human⇄agent
-  // ownership link legible at a glance; it's seeded by the manager's member id,
-  // so it matches that same person's avatar in the Human section.
+  // The owner's small avatar precedes the name to make the human-agent
+  // ownership link legible at a glance. Use the real member avatar when
+  // available, and keep the member-id seed as the stable fallback.
   return (
     <div className="flex items-center min-w-0" style={{ gap: "var(--sp-1_5)", opacity: dim ? 0.5 : 1 }}>
-      <Avatar name={managerLabel} seed={managerId ?? managerLabel} size={RELATION_AVATAR_SIZE} />
+      <Avatar name={managerLabel} src={managerAvatarUrl} seed={managerId ?? managerLabel} size={RELATION_AVATAR_SIZE} />
       {isSelf ? (
         <span className="text-body font-semibold truncate" style={{ color: "var(--fg)" }}>
           You
