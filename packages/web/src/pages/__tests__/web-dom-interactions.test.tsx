@@ -1468,10 +1468,10 @@ describe("web DOM interaction coverage", () => {
     const openSpy = vi.spyOn(window, "open").mockReturnValue(installTab as unknown as Window);
 
     const disconnected = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install on GitHub", disconnected.container);
+    await waitForText("Install First Tree on GitHub", disconnected.container);
     await click(
       [...disconnected.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Install on GitHub"),
+        button.textContent?.includes("Install First Tree on GitHub"),
       ) ?? null,
     );
     expect(githubAppMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding/connected");
@@ -1515,7 +1515,7 @@ describe("web DOM interaction coverage", () => {
     await waitForText("acme/web", connected.container);
     // 0 repos picked but the list is pickable → friction: the consequence line
     // shows and the strong primary "Continue" is absent (only the quiet
-    // "Continue without a repo" link remains; never disabled).
+    // "Skip for now" link remains; never disabled).
     await waitForText("Pick a repo so your agent can build your team's Context Tree", connected.container);
     expect([...connected.container.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Continue")).toBe(
       false,
@@ -1527,7 +1527,7 @@ describe("web DOM interaction coverage", () => {
     expect(setSelectedRepoUrls).toHaveBeenCalledWith(["https://github.com/acme/web.git"]);
     await click(
       [...connected.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Continue without a repo"),
+        button.textContent?.includes("Skip for now"),
       ) ?? null,
     );
     expect(connected.flow.goNext).toHaveBeenCalled();
@@ -1577,22 +1577,22 @@ describe("web DOM interaction coverage", () => {
 
     githubAppMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "not configured"));
     const notConfigured = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install on GitHub", notConfigured.container);
+    await waitForText("Install First Tree on GitHub", notConfigured.container);
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Install on GitHub"),
+        button.textContent?.includes("Install First Tree on GitHub"),
       ) ?? null,
     );
     await waitForText("Couldn't connect a repo here right now", notConfigured.container);
     await click(
       [...notConfigured.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Continue without a repo"),
+        button.textContent?.includes("Skip for now"),
       ) ?? null,
     );
     expect(notConfigured.flow.goNext).toHaveBeenCalled();
   });
 
-  it("auto-selects all granted repos with no draft, but preserves a resumed draft", async () => {
+  it("defaults to no selection with no draft, and preserves then prunes a resumed draft", async () => {
     const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
     const connectedInstall = {
       installationId: 42,
@@ -1609,8 +1609,9 @@ describe("web DOM interaction coverage", () => {
     };
     githubAppMocks.getGithubAppInstallation.mockResolvedValue(connectedInstall);
 
-    // No saved draft (first visit) → the picker defaults to every granted repo,
-    // so the user doesn't re-pick what they just granted on GitHub.
+    // No saved draft (first visit) → default to NONE selected; the user actively
+    // picks which repos to share (paired with the "Skip for now" out + the
+    // no-repo consequence hint). The picker never auto-selects on their behalf.
     const freshSet = vi.fn();
     const noDraft = await renderOnboardingDom(<StepConnectCode />, {
       activeStep: "connect-code",
@@ -1619,17 +1620,8 @@ describe("web DOM interaction coverage", () => {
       setSelectedRepoUrls: freshSet,
     });
     await waitForText("acme/web", noDraft.container);
-    await waitForCondition(
-      () =>
-        freshSet.mock.calls.some(
-          ([arg]) =>
-            Array.isArray(arg) &&
-            arg.length === 2 &&
-            arg.includes("https://github.com/acme/web.git") &&
-            arg.includes("git@github.com:acme/api.git"),
-        ),
-      "auto-select all granted repos when there's no draft",
-    );
+    await flush();
+    expect(freshSet).not.toHaveBeenCalled();
     await unmountRoot(noDraft.root);
 
     // Resumed draft (user narrowed to just one repo earlier, then bailed before
@@ -1684,10 +1676,10 @@ describe("web DOM interaction coverage", () => {
     githubAppMocks.getGithubAppInstallUrl.mockClear();
 
     const blocked = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install on GitHub", blocked.container);
+    await waitForText("Install First Tree on GitHub", blocked.container);
     await click(
       [...blocked.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("Install on GitHub"),
+        button.textContent?.includes("Install First Tree on GitHub"),
       ) ?? null,
     );
     // Blocked path redirects THIS tab, so it must come back to the wizard
@@ -1706,10 +1698,10 @@ describe("web DOM interaction coverage", () => {
     githubAppMocks.getGithubAppInstallUrl.mockClear();
 
     const view = await renderOnboardingDom(<StepConnectCode />, { activeStep: "connect-code" });
-    await waitForText("Install on GitHub", view.container);
+    await waitForText("Install First Tree on GitHub", view.container);
     const installBtn = (): HTMLButtonElement | null =>
       [...view.container.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
-        b.textContent?.includes("Install on GitHub"),
+        b.textContent?.includes("Install First Tree on GitHub"),
       ) ?? null;
 
     await click(installBtn());

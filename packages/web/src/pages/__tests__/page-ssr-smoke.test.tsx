@@ -1191,7 +1191,6 @@ describe("page SSR smoke coverage", () => {
     const { ConnectCommandPanel } = await import("../../components/connect-command-panel.js");
     const { ConnectStuckPanel } = await import("../../components/connect-stuck-panel.js");
     const { CommandBox, FlowNote, RepoPicker, StatusRow, WorkingState } = await import("../onboarding/flow-ui.js");
-    const { InstallGuide, ShowMeHow, TerminalGuide } = await import("../onboarding/guides.js");
     const { GithubConnectedPage } = await import("../onboarding/github-connected.js");
     const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
     const { StepConnectComputer } = await import("../onboarding/steps/step-connect-computer.js");
@@ -1216,17 +1215,12 @@ describe("page SSR smoke coverage", () => {
         />
         <ConnectCommandPanel command={null} phase="error" errorContent="Could not mint a token" />
         <ConnectStuckPanel />
-        <ShowMeHow>
-          <TerminalGuide command="first-tree-dev login token" />
-          <InstallGuide />
-        </ShowMeHow>
       </>,
     );
     expect(html).toContain("first-tree login token");
     expect(html).toContain("Heads up");
     expect(html).toContain("gandy-macbook connected");
     expect(html).toContain("Install Node.js");
-    expect(html).toContain("Pick repos");
 
     // The install-popup landing page (auto-closes the script-opened tab; the
     // effect is a no-op under SSR). Confirms it renders + carries role=status.
@@ -1235,9 +1229,7 @@ describe("page SSR smoke coverage", () => {
     expect(connectedHtml).toContain("close this tab");
     expect(connectedHtml).toContain('role="status"');
 
-    expect(await renderOnboardingStep(<StepTeam />, { activeStep: "team" })).toContain(
-      "What should we call your team?",
-    );
+    expect(await renderOnboardingStep(<StepTeam />, { activeStep: "team" })).toContain("Name your team");
     expect(await renderOnboardingStep(<StepWelcome />, { path: "invitee", activeStep: "welcome" })).toContain("Acme");
     expect(await renderOnboardingStep(<StepConnectComputer />, { activeStep: "connect-computer" })).toContain(
       "gandy-macbook",
@@ -1251,7 +1243,9 @@ describe("page SSR smoke coverage", () => {
     expect(
       await renderOnboardingStep(<StepCreateAgent />, { activeStep: "create-agent", agentPhase: "timeout" }),
     ).toContain("online yet");
-    expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain("Pick repos");
+    expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain(
+      "Loading your repos",
+    );
     expect(await renderOnboardingStep(<StepKickoff />, { activeStep: "kickoff" })).toContain(
       "Your agent&#x27;s ready to get to work",
     );
