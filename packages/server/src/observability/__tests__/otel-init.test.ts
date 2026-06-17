@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { initTelemetry, isTelemetryEnabled, parseHeaderString, shutdownTelemetry } from "../logfire-init.js";
+import {
+  initTelemetry,
+  isTelemetryEnabled,
+  parseHeaderString,
+  shutdownTelemetry,
+  undiciSpanNameForRequest,
+  updateKnownUndiciSpanName,
+} from "../logfire-init.js";
 import { normalizeAttrs } from "../otel-helpers.js";
 
 describe("normalizeAttrs", () => {
@@ -121,6 +128,71 @@ describe("parseHeaderString", () => {
   it("handles realistic Logfire-style token header", () => {
     const out = parseHeaderString("Authorization=Bearer pylf_v1_us_xyzABC123==");
     expect(out).toEqual({ Authorization: "Bearer pylf_v1_us_xyzABC123==" });
+  });
+});
+
+describe("undici span naming", () => {
+  it("names OpenRouter chat completions by method and path without host or query", () => {
+    const name = undiciSpanNameForRequest({
+      method: "POST",
+      origin: "https://openrouter.ai",
+      path: "/api/v1/chat/completions?ignored=true",
+    });
+
+    expect(name).toBe("POST /api/v1/chat/completions");
+  });
+
+  it("keeps provider-specific API prefixes while normalizing trailing slash", () => {
+    const name = undiciSpanNameForRequest({
+      method: "post",
+      origin: "https://api.openai.com",
+      path: "/v1/chat/completions/",
+    });
+
+    expect(name).toBe("POST /v1/chat/completions");
+  });
+
+  it("does not rename unrelated outbound requests", () => {
+    const name = undiciSpanNameForRequest({
+      method: "POST",
+      origin: "https://api.github.com",
+      path: "/repos/agent-team-foundation/first-tree/issues",
+    });
+
+    expect(name).toBeUndefined();
+  });
+
+  it("does not put arbitrary dynamic path prefixes into span names", () => {
+    const name = undiciSpanNameForRequest({
+      method: "POST",
+      origin: "https://example.test",
+      path: "/openai/deployments/prod-main/chat/completions",
+    });
+
+    expect(name).toBeUndefined();
+  });
+
+  it("does not rename malformed undici request data", () => {
+    expect(undiciSpanNameForRequest({ method: "POST", origin: "not a url", path: "://bad" })).toBeUndefined();
+    expect(undiciSpanNameForRequest({ method: "POST", origin: "https://openrouter.ai" })).toBeUndefined();
+  });
+
+  it("updates only known undici span names", () => {
+    const calls: string[] = [];
+    const span = { updateName: (name: string) => calls.push(name) };
+
+    updateKnownUndiciSpanName(span, {
+      method: "POST",
+      origin: "https://openrouter.ai",
+      path: "/api/v1/chat/completions",
+    });
+    updateKnownUndiciSpanName(span, {
+      method: "GET",
+      origin: "https://openrouter.ai",
+      path: "/api/v1/models",
+    });
+
+    expect(calls).toEqual(["POST /api/v1/chat/completions"]);
   });
 });
 

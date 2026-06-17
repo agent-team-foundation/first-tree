@@ -30,6 +30,18 @@ const log = createLogger("Telemetry");
 
 const TRACER_VERSION = "0.1.0";
 
+const CHAT_COMPLETIONS_PATH_RE = /^\/(?:(?:api\/)?v\d+\/)?chat\/completions$/;
+
+type UndiciRequestLike = {
+  origin?: unknown;
+  path?: unknown;
+  method?: unknown;
+};
+
+type SpanNameUpdater = {
+  updateName(name: string): void;
+};
+
 export type TracingConfig = {
   endpoint: string;
   headers: string;
@@ -75,6 +87,39 @@ function deriveBaseUrl(endpoint: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function normalizeRequestMethod(method: unknown): string | undefined {
+  if (typeof method !== "string") return undefined;
+  const normalized = method.trim().toUpperCase();
+  return normalized || undefined;
+}
+
+function normalizePathname(pathname: string): string {
+  if (pathname.length > 1 && pathname.endsWith("/")) return pathname.slice(0, -1);
+  return pathname;
+}
+
+export function undiciSpanNameForRequest(request: UndiciRequestLike): string | undefined {
+  const method = normalizeRequestMethod(request.method);
+  if (!method || typeof request.origin !== "string" || typeof request.path !== "string") return undefined;
+
+  let url: URL;
+  try {
+    url = new URL(request.path, request.origin);
+  } catch {
+    return undefined;
+  }
+
+  const pathname = normalizePathname(url.pathname);
+  if (!CHAT_COMPLETIONS_PATH_RE.test(pathname)) return undefined;
+
+  return `${method} ${pathname}`;
+}
+
+export function updateKnownUndiciSpanName(span: SpanNameUpdater, request: UndiciRequestLike): void {
+  const spanName = undiciSpanNameForRequest(request);
+  if (spanName) span.updateName(spanName);
 }
 
 /**
@@ -175,6 +220,9 @@ export async function initTelemetry(config: TracingConfig | undefined, instanceI
       "@opentelemetry/instrumentation-http": { enabled: false },
       "@opentelemetry/instrumentation-net": { enabled: false },
       "@opentelemetry/instrumentation-dns": { enabled: false },
+      "@opentelemetry/instrumentation-undici": {
+        requestHook: updateKnownUndiciSpanName,
+      },
     },
   });
 
