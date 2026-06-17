@@ -144,18 +144,45 @@ export const AuthContext = createContext<AuthContextValue | null>(null);
 
 const SELECTED_ORG_KEY = "first-tree:selectedOrganizationId";
 
-function readSelectedOrgId(): string | null {
+// The persisted org selection is scoped per user — keyed by `${SELECTED_ORG_KEY}:${userId}`
+// — so a shared browser never lets one account inherit another's last-used team
+// (two accounts can be members of the same org, so validating "is an active
+// membership" is not enough). The userId comes from the access token's `sub`
+// claim (a plain JWT, no decode lib needed) so the first-paint pre-seed can read
+// the right key before /me resolves.
+function userIdFromToken(): string | null {
   try {
-    return localStorage.getItem(SELECTED_ORG_KEY);
+    const payload = getStoredTokens()?.accessToken?.split(".")[1];
+    if (!payload) return null;
+    const decoded: unknown = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
+    if (typeof decoded === "object" && decoded !== null && "sub" in decoded) {
+      const sub = decoded.sub;
+      return typeof sub === "string" ? sub : null;
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
-function writeSelectedOrgId(value: string | null): void {
+function orgStorageKey(userId: string): string {
+  return `${SELECTED_ORG_KEY}:${userId}`;
+}
+
+function readSelectedOrgId(userId: string | null): string | null {
+  if (!userId) return null;
   try {
-    if (value === null) localStorage.removeItem(SELECTED_ORG_KEY);
-    else localStorage.setItem(SELECTED_ORG_KEY, value);
+    return localStorage.getItem(orgStorageKey(userId));
+  } catch {
+    return null;
+  }
+}
+
+function writeSelectedOrgId(userId: string | null, value: string | null): void {
+  if (!userId) return;
+  try {
+    if (value === null) localStorage.removeItem(orgStorageKey(userId));
+    else localStorage.setItem(orgStorageKey(userId), value);
   } catch {
     // localStorage may be denied in private mode — ignore.
   }
@@ -167,7 +194,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<MeUser | null>(null);
   const [memberships, setMemberships] = useState<MeMembership[]>([]);
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(() => {
-    const init = readSelectedOrgId();
+    const init = readSelectedOrgId(userIdFromToken());
     // Sync the API client's module-level override on first paint so the
     // first wave of requests (made before fetchMe resolves) already carries
     // the correct `?organizationId=` query (codex P1 #2 fix).
@@ -185,7 +212,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     clearStoredTokens();
-    writeSelectedOrgId(null);
+    // Keep the persisted last-used org (no writeSelectedOrgId(null) here) so a
+    // returning sign-in lands back in the org this user left rather than their
+    // most-recently-joined one. It's stored per-user (keyed by the token's
+    // `sub`), so a different account on the same browser can never inherit it.
+    // Clear only the in-memory + API-client selection so nothing org-scoped
+    // fires before the next fetchMe reconciles.
     setApiSelectedOrganizationId(null);
     queryClient.clear();
     // Drop per-tab onboarding flags so the next login (different user, or
@@ -221,16 +253,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // stale "you've joined {team}" headline that no longer fits.
       if (nextStep === "completed") clearOnboardingJoinPath();
 
-      // Reconcile selectedOrgId: stored value wins if still valid, else
-      // /me's `defaultOrganizationId`, else the first active membership.
+      // Reconcile selectedOrgId, each candidate only if it's still an active
+      // membership: (1) the in-memory selection, (2) this user's persisted
+      // last-used org — survives logout so a returning user lands back in the
+      // org they left — then (3) /me's `defaultOrganizationId` (most-recent),
+      // (4) the first active membership.
+      const userId = data.user?.id ?? null;
       setSelectedOrgId((prev) => {
-        const valid = prev && ms.some((m) => m.organizationId === prev) ? prev : null;
-        if (valid) {
-          setApiSelectedOrganizationId(valid);
-          return valid;
+        const isMember = (id: string | null): id is string => !!id && ms.some((m) => m.organizationId === id);
+        const prevValid = isMember(prev) ? prev : null;
+        const stored = readSelectedOrgId(userId);
+        const storedValid = isMember(stored) ? stored : null;
+        const candidate = prevValid ?? storedValid;
+        if (candidate) {
+          writeSelectedOrgId(userId, candidate);
+          setApiSelectedOrganizationId(candidate);
+          return candidate;
         }
         const fallback = data.defaultOrganizationId ?? ms[0]?.organizationId ?? null;
-        writeSelectedOrgId(fallback);
+        writeSelectedOrgId(userId, fallback);
         setApiSelectedOrganizationId(fallback);
         return fallback;
       });
@@ -267,7 +308,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Pure client-side switch — the /orgs/:orgId/* routes probe
       // membership in real time on every request, so a stale or
       // unauthorized selection just yields a clean 403 from the next call.
-      writeSelectedOrgId(organizationId);
+      // Persist under the current user's key (token `sub`) so the selection
+      // is restored only for this account.
+      writeSelectedOrgId(userIdFromToken(), organizationId);
       setApiSelectedOrganizationId(organizationId);
       // Drop every cached React Query result keyed off the previous org —
       // the next render refetches with the new prefix so a non-default org

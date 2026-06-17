@@ -2,7 +2,7 @@ import { type AgentChatStatus, agentChatStatusSchema } from "@first-tree/shared"
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { chatAgentStatusQueryKey } from "../api/agent-status.js";
-import { getStoredTokens, refreshAccessToken } from "../api/client.js";
+import { getApiSelectedOrganizationId, getStoredTokens, refreshAccessToken } from "../api/client.js";
 import { upsertAgentStatus } from "../lib/agent-status-view.js";
 
 type WsMessage = {
@@ -277,16 +277,13 @@ function connect() {
   const tokens = getStoredTokens();
   if (!tokens?.accessToken) return;
 
-  // Resolve the selected org from localStorage. The org-scoped admin WS
-  // path is `/api/v1/orgs/:orgId/ws/`. If no org is selected yet, skip
-  // connecting — the hook reconnects automatically once the auth
-  // context populates `selectedOrganizationId`.
-  let orgId: string | null = null;
-  try {
-    orgId = localStorage.getItem("first-tree:selectedOrganizationId");
-  } catch {
-    orgId = null;
-  }
+  // Resolve the selected org from the API client's live value (kept in sync by
+  // the AuthProvider). The org-scoped admin WS path is
+  // `/api/v1/orgs/:orgId/ws/`. Reading localStorage directly is wrong now that
+  // the persisted key is per-user; the API-client value is the single source of
+  // truth. If no org is selected yet, skip connecting — the hook reconnects once
+  // the auth context populates the selection.
+  const orgId = getApiSelectedOrganizationId();
   if (!orgId) return;
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
