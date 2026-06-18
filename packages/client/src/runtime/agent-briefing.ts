@@ -4,8 +4,6 @@ import {
   type PromptSection,
 } from "@first-tree/shared";
 import type { PredeclaredSourceRepo } from "./bootstrap.js";
-import type { ChatContext } from "./chat-context.js";
-import { renderChatContextSection } from "./chat-context-section.js";
 import { getCliBinding } from "./cli-binding.js";
 import type { AgentIdentity } from "./handler.js";
 import { buildResourceSkillsBriefing } from "./resource-skills.js";
@@ -26,7 +24,6 @@ function shellQuote(value: string): string {
 export type BuildAgentBriefingOptions = {
   identity: AgentIdentity;
   payload: AgentRuntimeConfigPayload | null;
-  chatContext: ChatContext | undefined;
   workspacePath: string;
   sourceRepos: ReadonlyArray<PredeclaredSourceRepo>;
   contextTreePath: string | null;
@@ -46,11 +43,10 @@ export type BuildAgentBriefingOptions = {
  * for `AGENTS.md`) and Claude Code (which loads `CLAUDE.md` via
  * `settingSources: ["project"]`) read the same content.
  *
- * Section order — stable per-agent content first, per-chat content last —
- * so the prompt cache stays warm across sibling chats of the same agent.
- * Issue #808 tracks moving the last block (Current Chat Context) off the
- * per-agent file entirely; until that lands it stays here at the bottom
- * so the rest of the briefing remains cacheable.
+ * This file is shared by every chat for the same agent home, so it must only
+ * carry stable agent-level / org-level content. Per-chat material such as
+ * Current Chat Context is injected by each provider/session path instead of
+ * being written here.
  *
  * Every heading carries a provenance tag so a reader (human or agent) can
  * tell which source owns each section and where to edit it — this is the
@@ -77,7 +73,6 @@ export type BuildAgentBriefingOptions = {
  *   6. `# Context Tree (First Tree Managed)`   — per binding, with subsections:
  *        Core Model · Reading the Tree · Writing the Tree · Tree Location
  *   7. `# Skills (First Tree Managed)`         — Team Skills (if any) + First Tree Family
- *   8. `## Current Chat Context (First Tree Managed, per-chat)` — per-chat (issue #808 will move it out)
  */
 export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   const sections: string[] = [];
@@ -129,12 +124,6 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
 
   const skillsBlock = skillsSection(opts.workspacePath, opts.payload, opts.contextTreePath);
   if (skillsBlock) sections.push(skillsBlock);
-
-  // Per-chat block — last, until issue #808 moves it off the per-agent
-  // file. `renderChatContextSection` returns null when the fetch degraded;
-  // we omit the section entirely in that case.
-  const chatBlock = renderChatContextSection(opts.chatContext);
-  if (chatBlock) sections.push(chatBlock.trimEnd());
 
   return `${sections.join("\n\n")}\n`;
 }
@@ -753,9 +742,9 @@ independently:
   as **Markdown**, and shows by default at the top of the chat's right
   sidebar.
 
-Both current values appear in the "Current Chat Context" block at the
-bottom of this briefing as explicit \`Topic: <value>\` / \`Description:
-<value>\` or the sentinel \`(unset ...)\`.
+Both current values appear in the provider-injected "Current Chat Context"
+JSON payload as \`topic\` / \`description\` properties, with \`null\` meaning
+unset.
 
     ${bin} chat update --topic "<short label>"
     ${bin} chat update --description "<task background + plan + progress>"

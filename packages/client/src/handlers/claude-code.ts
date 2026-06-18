@@ -22,6 +22,7 @@ import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { type PredeclaredSourceRepo, writeAgentBriefing } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { renderChatContextPrompt } from "../runtime/chat-context-section.js";
 import { resolveContextTreeRelativePath, toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import {
   type ContextTreeGitWriteTracker,
@@ -614,6 +615,11 @@ export type ClaudeQueryConfigOptions = {
   model?: string;
   mcpServers?: Record<string, McpServerConfig>;
   effort?: EffortLevel;
+  systemPrompt?: {
+    type: "preset";
+    preset: "claude_code";
+    append?: string;
+  };
 };
 
 /**
@@ -622,23 +628,34 @@ export type ClaudeQueryConfigOptions = {
  * unit-testable; the session-bound options (env, canUseTool, abortController,
  * sessionId/resume) stay inline in `buildQuery`.
  *
- * Per-agent prompt instructions, working-directory convention, source-repo
- * list, and Current Chat Context land in `<cwd>/AGENTS.md` (which `CLAUDE.md`
- * symlinks to). The Claude Code SDK loads CLAUDE.md via `settingSources:
- * ["project"]`, so the briefing file is the single channel — there is no
- * SDK-side `systemPrompt.append` anymore.
+ * Per-agent prompt instructions, working-directory convention, and source-repo
+ * list land in `<cwd>/AGENTS.md` (which `CLAUDE.md` symlinks to). Per-chat
+ * Current Chat Context is appended through the SDK `systemPrompt` channel so
+ * concurrent chats sharing one agent home cannot overwrite each other's
+ * context in the shared briefing file.
  *
  * Reasoning effort: the claude variant's `""` is an inherit sentinel — when
  * set we omit the `effort` option so the SDK falls back to the operator's local
  * `~/.claude/settings.json` effortLevel (preserving pre-feature behavior). A
  * non-empty value is passed explicitly and overrides that local setting.
  */
-export function buildClaudeQueryOptions(payload: AgentRuntimeConfigPayload | undefined): ClaudeQueryConfigOptions {
+export function buildClaudeQueryOptions(
+  payload: AgentRuntimeConfigPayload | undefined,
+  chatContext?: ChatContext,
+): ClaudeQueryConfigOptions {
   const options: ClaudeQueryConfigOptions = {};
   if (payload?.model) options.model = payload.model;
   if (payload?.mcpServers.length) options.mcpServers = mapMcpServers(payload);
   if (payload?.kind === "claude-code" && payload.reasoningEffort) {
     options.effort = payload.reasoningEffort;
+  }
+  const chatPrompt = renderChatContextPrompt(chatContext);
+  if (chatPrompt) {
+    options.systemPrompt = {
+      type: "preset",
+      preset: "claude_code",
+      append: chatPrompt,
+    };
   }
   return options;
 }
@@ -693,8 +710,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let appliedPayload: AgentRuntimeConfigPayload | null = null;
   /**
    * Latest chat-context snapshot for the active session. Used to build the
-   * per-turn system-prompt block injected via `systemPrompt.append`. Cleared
-   * when the session ends or `start()` runs for a fresh session.
+   * session/resume system-prompt block injected via `systemPrompt.append`.
+   * Cleared when the session ends or `start()` runs for a fresh session.
    */
   let chatContextForPrompt: ChatContext | undefined;
   const queuedInjectedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
@@ -1079,12 +1096,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // SDK 0.2.84 defaults to isolation mode — no filesystem settings are
         // read. We opt into both `user` and `project`:
         //   - `project` loads the workspace CLAUDE.md (symlinked to AGENTS.md
-        //     written by `writeAgentBriefing`). That single briefing carries
-        //     identity, the per-agent prompt.append, working-dir convention,
-        //     source-repo list, Current Chat Context, operating instructions,
-        //     domain map, and the First Tree Agent Runtime block — the entire
-        //     channel that used to split between SDK `systemPrompt.append` and
-        //     a stable CLAUDE.md is now this one file.
+        //     written by `writeAgentBriefing`). That shared briefing carries
+        //     stable agent-level content: identity, prompt.append,
+        //     working-dir convention, source-repo list, operating
+        //     instructions, domain map, and the First Tree Agent Runtime block.
+        //     Per-chat Current Chat Context is appended below through the SDK
+        //     `systemPrompt` channel so sibling chats do not race on one file.
         //   - `user` inherits the operator's local `~/.claude/settings.json`
         //     so their Claude Code customizations (thinking mode, effortLevel,
         //     outputStyle, statusLine, plugins, skills, hooks, MCP servers)
@@ -1101,7 +1118,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         ...(claudeCodeExecutable ? { pathToClaudeCodeExecutable: claudeCodeExecutable } : {}),
         // model / mcpServers / effort — the config-derived slice. `effort: ""`
         // (inherit) is omitted so the SDK uses the local effortLevel.
-        ...buildClaudeQueryOptions(payload),
+        ...buildClaudeQueryOptions(payload, chatContextForPrompt),
       },
     });
   }
@@ -1482,11 +1499,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Best-effort chat-context fetch for the identity-injection path. Failures
+   * Best-effort chat-context fetch for the provider prompt path. Failures
    * are logged but never bubble — bootstrap continues with `undefined` and
-   * the agent simply loses the "Current Chat Context" block (graceful
-   * degradation; the Communication block in the `# Working in First Tree`
-   * section of AGENTS.md still tells it to fall back to conservative mode).
+   * the agent simply loses the "Current Chat Context" block for this session.
    */
   async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
     try {
@@ -1534,10 +1549,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   /**
    * Build the unified briefing for the current session state — agent identity,
-   * the latest `prompt.append`, source-repo list, the latest chat-context
-   * snapshot, and the Context Tree / runtime sections. The handler rebuilds
-   * this on every start/resume and on config hot-switch so AGENTS.md (and the
-   * CLAUDE.md symlink the Claude Code SDK reads) is always current.
+   * the latest `prompt.append`, source-repo list, and the Context Tree /
+   * runtime sections. The handler rebuilds this on every start/resume and on
+   * config hot-switch so AGENTS.md (and the CLAUDE.md symlink the Claude Code
+   * SDK reads) is always current. Per-chat context is injected separately via
+   * `systemPrompt.append`.
    */
   function currentBriefing(
     sessionCtx: SessionContext,
@@ -1547,7 +1563,6 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
       payload: payload ?? null,
-      chatContext: chatContextForPrompt,
       workspacePath: workspace,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
@@ -1568,8 +1583,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    *     the new tree state.
    *
    * The unified briefing is rewritten on every call regardless of the drift
-   * decision — chat context and the agent payload may have changed between
-   * sessions for the same agent home.
+   * decision — the agent payload may have changed between sessions for the
+   * same agent home.
    *
    * `workspaceId` for the integrate shell-out is the agent name — the home
    * directory is per-agent, so the skill identity stays stable across chats.
@@ -1607,12 +1622,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // boundary marker on first call; afterwards it is a no-op.
       cwd = acquireAgentHome(workspaceRoot);
 
-      // Resolve the per-chat inputs that drive the unified briefing BEFORE
-      // bootstrap: the briefing is the single channel that materialises agent
-      // identity, payload.prompt.append, source-repo list, and Current Chat
-      // Context for the Claude Code SDK (read via `settingSources:
-      // ["project"]` from CLAUDE.md → AGENTS.md). Bootstrap must therefore
-      // see fully-resolved inputs.
+      // Resolve chat-context and source repos before spawning the SDK:
+      // source repos are rendered into the shared briefing, while chat-context
+      // is appended through the SDK system prompt channel in buildQuery().
       const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
       const chatContext = await fetchChatContextOrLog(sessionCtx);
       chatContextForPrompt = chatContext;
@@ -1686,11 +1698,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // We DO refresh the briefing (writeAgentBriefing only touches the
         // AGENTS.md file + CLAUDE.md symlink, not `.first-tree-workspace/`,
         // the legacy `.agent/`, or source repos) because under the
-        // unified-briefing redesign the SDK no longer has a
-        // `systemPrompt.append` path — without this rewrite a legacy resume
-        // would only see the stale v1.x stable CLAUDE.md, dropping the
-        // current `prompt.append`, resource-skill briefing, and Current Chat
-        // Context the previous per-turn SDK append used to deliver.
+        // unified-briefing redesign AGENTS.md carries the current agent-level
+        // prompt and resource-skill briefing. Current Chat Context is delivered
+        // separately via `systemPrompt.append`.
         // `sourceReposForPrompt` stays `[]` here on purpose: the declared
         // paths are derived against the agent home, not the legacy cwd, so
         // the briefing's Source Repositories section is omitted for legacy

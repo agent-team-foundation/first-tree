@@ -89,7 +89,7 @@ describe("bootstrapWorkspace", () => {
     expect(data.delegateMention).toBe("owner");
     expect(data.serverUrl).toBe("http://localhost:8000");
     // Per agent-session-cwd-redesign: identity.json holds agent-level state
-    // only. chatId / chatContext now live in the per-turn system prompt.
+    // only. chatId / chatContext now live in provider/session prompt injection.
     expect("chatId" in data).toBe(false);
     expect("chatContext" in data).toBe(false);
   });
@@ -300,10 +300,9 @@ describe("bootstrapWorkspace", () => {
   });
 
   // Per-chat fields (chatId, participants, topic) intentionally have no
-  // on-disk home — they flow through the unified briefing's per-turn
-  // `## Current Chat Context` block, exercised by the buildAgentBriefing
-  // tests. Issue #808 tracks moving that block off the per-agent file
-  // entirely.
+  // on-disk home — they flow through provider/session Current Chat Context
+  // injection. The shared AGENTS.md / CLAUDE.md briefing must stay stable
+  // across sibling chats of the same agent.
 
   it("overwrites existing files on re-bootstrap", () => {
     const workspace = join(tmpBase, "ws-overwrite");

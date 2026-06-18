@@ -391,9 +391,8 @@ export type BootstrapOptions = {
  * Writes identity.json into `.first-tree-workspace/`. Per the
  * agent-session-cwd-redesign (proposals/2026-05-19) **only agent-level stable
  * fields** live in identity.json; per-chat data (chatId, participants) flows
- * through the unified per-turn briefing file written by {@link
- * writeAgentBriefing} (which the handler invokes on every start/resume after
- * computing the briefing content via {@link buildAgentBriefing}).
+ * through provider/session prompt injection, not through identity.json or the
+ * shared briefing written by {@link writeAgentBriefing}.
  *
  * The bootstrap no longer stages AGENT.md / NODE.md copies under the legacy
  * `.agent/context/` tree and no longer emits `.agent/tools.md`. The unified
