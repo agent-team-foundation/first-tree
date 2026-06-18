@@ -164,12 +164,12 @@ export function SummarySectionPreviewPage() {
       </div>
 
       <Group title="1 · Light — Before vs After">
-        <Col label="Before" note="prose-sm default · oversized headings · enlarged body">
+        <Col label="Before" note="prose-sm default · oversized headings (h1 30 / h2 20)">
           <div style={RAIL}>
             <BeforeSection />
           </div>
         </Col>
-        <Col label="After" note="body --text-body · h1/h2 --text-subtitle · weight-led">
+        <Col label="After (current)" note="all 14 · headings semibold(600) · weight-only">
           <div style={RAIL}>
             <DescriptionSection description={SAMPLE} capped={false} />
           </div>
