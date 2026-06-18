@@ -16,6 +16,7 @@ import {
   MentionLabel,
   useMentionAutocomplete,
 } from "../../../components/mention-autocomplete.js";
+import { clearDraft, type DraftSnapshot, loadDraft, newChatDraftScope, saveDraft } from "../../../lib/draft-store.js";
 import { useAgentIdentityMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useDebouncedValue } from "../../../lib/use-debounced-value.js";
@@ -79,18 +80,33 @@ export function NewChatDraft({
   initialParticipantIds?: string[];
 }) {
   const queryClient = useQueryClient();
-  const { agentId: myAgentId, memberId: myMemberId } = useAuth();
+  const { agentId: myAgentId, memberId: myMemberId, organizationId } = useAuth();
   const agentIdentity = useAgentIdentityMap();
 
-  const [chips, setChips] = useState<string[]>([]);
-  const [draft, setDraft] = useState("");
+  // Browser-local unsent-draft cache for this compose context (org + seed
+  // participants, mirroring the center-panel remount key). Read once at first
+  // render so later writes never feed back into the initial value.
+  const draftScope = useMemo(
+    () => newChatDraftScope(organizationId, initialParticipantIds),
+    [organizationId, initialParticipantIds],
+  );
+  const initialDraftRef = useRef<DraftSnapshot | null | undefined>(undefined);
+  if (initialDraftRef.current === undefined) {
+    initialDraftRef.current = loadDraft(draftScope);
+  }
+  const restoredDraft = initialDraftRef.current;
+
+  const [chips, setChips] = useState<string[]>(() => restoredDraft?.participantIds ?? []);
+  const [draft, setDraft] = useState(() => restoredDraft?.text ?? "");
   const [cursor, setCursor] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const seededDefaultRef = useRef(false);
+  // Skip the default-delegate seed when a stored draft was restored — its
+  // chips (if any) are the user's own choice and must not be overwritten.
+  const seededDefaultRef = useRef(restoredDraft != null);
   const pickerContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -281,6 +297,15 @@ export function NewChatDraft({
     if (defaultId) setChips([defaultId]);
   }, [orgAgentsPage?.items, myAgentId, chips.length, initialParticipantIds]);
 
+  // Persist unsent body + chosen participants for this compose context so
+  // navigating away and back (or a reload) restores the draft. saveDraft gates
+  // on a non-empty trimmed body, so chip-only state is never stored and
+  // emptying the body clears the entry; we also clear explicitly on send below
+  // because onCreated unmounts this component before the effect could flush.
+  useEffect(() => {
+    saveDraft(draftScope, { text: draft, participantIds: chips });
+  }, [draftScope, draft, chips]);
+
   const bodyMentions = useMemo(() => {
     const ps: MentionParticipant[] = candidates.map((c) => ({ agentId: c.agentId, name: c.name }));
     return extractMentions(draft, ps);
@@ -411,6 +436,7 @@ export function NewChatDraft({
       return created.chatId;
     },
     onSuccess: (chatId) => {
+      clearDraft(draftScope);
       setDraft("");
       setChips([]);
       clearImages();
