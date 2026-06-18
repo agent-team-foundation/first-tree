@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CapabilityEntry, CapabilityRuntimeSource } from "@first-tree/shared";
+import { smokeCodexAppServer } from "../codex-app-server-client.js";
 import {
   type CodexExecutableVerification,
   findCodexExecutableOnPath,
@@ -370,6 +371,56 @@ async function defaultCodexDoctorSmoke(binary: string): Promise<SmokeOutcome> {
   return { state: "error", error: "`codex doctor --json` produced unparseable output" };
 }
 
+type CodexHandlerEngine = "app-server" | "sdk" | "auto";
+
+type CodexAppServerSmoke = (binary: string, env: NodeJS.ProcessEnv) => Promise<void>;
+
+type CodexDoctorSmoke = (binary: string) => Promise<SmokeOutcome>;
+
+function codexHandlerEngineFromEnv(env: NodeJS.ProcessEnv): CodexHandlerEngine {
+  const raw = env.FIRST_TREE_CODEX_HANDLER_ENGINE?.trim().toLowerCase();
+  if (raw === "app-server" || raw === "sdk" || raw === "auto") return raw;
+  if (env.NODE_ENV === "test" || env.VITEST) return "sdk";
+  return "auto";
+}
+
+async function tryCodexAppServerSmoke(
+  binary: string,
+  env: NodeJS.ProcessEnv,
+  appServerSmoke: CodexAppServerSmoke,
+): Promise<string | null> {
+  try {
+    await appServerSmoke(binary, env);
+    return null;
+  } catch (err) {
+    return `codex app-server initialize failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+}
+
+async function defaultCodexEngineSmoke(
+  binary: string,
+  env: NodeJS.ProcessEnv,
+  appServerSmoke: CodexAppServerSmoke = smokeCodexAppServer,
+  doctorSmoke: CodexDoctorSmoke = defaultCodexDoctorSmoke,
+): Promise<SmokeOutcome> {
+  const engine = codexHandlerEngineFromEnv(env);
+  if (engine === "sdk") return doctorSmoke(binary);
+
+  const appServerError = await tryCodexAppServerSmoke(binary, env, appServerSmoke);
+  if (!appServerError) return doctorSmoke(binary);
+  if (engine === "app-server") return { state: "error", error: appServerError };
+
+  const sdkOutcome = await doctorSmoke(binary);
+  const fallbackError =
+    sdkOutcome.error && sdkOutcome.error.length > 0
+      ? `${appServerError}; SDK fallback also failed: ${sdkOutcome.error}`
+      : `${appServerError}; using @openai/codex-sdk fallback without active-turn steer`;
+  if (sdkOutcome.state === "ok") {
+    return { ...sdkOutcome, degraded: true, error: fallbackError };
+  }
+  return { ...sdkOutcome, error: fallbackError };
+}
+
 async function defaultLoginStatus(binary: string): Promise<AuthPrecheckOutcome> {
   // Real, free, fast (~0.1s): exit 0 when logged in, exit 1 + "Not logged in"
   // otherwise. This replaces the legacy `existsSync(auth.json)` heuristic that
@@ -383,6 +434,8 @@ async function defaultLoginStatus(binary: string): Promise<AuthPrecheckOutcome> 
 export type CodexProbeDeps = {
   resolveRuntimeBinary?: (env?: NodeJS.ProcessEnv) => Promise<CodexBinaryResolution>;
   loginStatus?: (binary: string) => Promise<AuthPrecheckOutcome>;
+  appServerSmoke?: CodexAppServerSmoke;
+  doctorSmoke?: CodexDoctorSmoke;
   runSmoke?: (binary: string) => Promise<SmokeOutcome>;
   env?: NodeJS.ProcessEnv;
 };
@@ -396,14 +449,17 @@ export type CodexProbeDeps = {
  *      PATH) and launch-verify it. Reports `runtimeSource` / `runtimePath`.
  *   2. auth precheck — `codex login status` (free). CODEX_API_KEY short-cuts
  *      it: an explicit key overrides whatever login state auth.json carries.
- *   3. smoke — `codex doctor --json`: real authenticated handshake against
- *      the provider endpoint; the only path to a non-degraded `ok`.
+ *   3. smoke — aligned with FIRST_TREE_CODEX_HANDLER_ENGINE: sdk only runs
+ *      `codex doctor --json`; app-server requires app-server initialize before
+ *      doctor; auto reports SDK fallback as available but degraded if app-server
+ *      initialize fails.
  */
 export async function probeCodexCapability(deps: CodexProbeDeps = {}): Promise<CapabilityEntry> {
   const env = deps.env ?? process.env;
   const resolveRuntimeBinary = deps.resolveRuntimeBinary ?? resolveCodexRuntimeBinary;
   const loginStatus = deps.loginStatus ?? defaultLoginStatus;
-  const runSmoke = deps.runSmoke ?? defaultCodexDoctorSmoke;
+  const runSmoke =
+    deps.runSmoke ?? ((binary: string) => defaultCodexEngineSmoke(binary, env, deps.appServerSmoke, deps.doctorSmoke));
 
   let resolvedBinary: string | undefined;
 

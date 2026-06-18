@@ -140,6 +140,7 @@ export async function runLaunchProbe(stages: LaunchProbeStages): Promise<Capabil
           sdkVersion: version,
           authMethod: method,
           ...(smoke.degraded ? { degraded: true } : {}),
+          ...(smoke.error ? { error: truncateError(smoke.error) } : {}),
         });
       case "unauthenticated":
         return done({
