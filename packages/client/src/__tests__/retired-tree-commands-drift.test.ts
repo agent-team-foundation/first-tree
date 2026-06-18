@@ -238,7 +238,6 @@ describe("retired tree subcommand drift guard", () => {
         metadata: {},
       },
       payload: null,
-      chatContext: undefined,
       workspacePath: "/tmp/drift-guard",
       sourceRepos: [],
       contextTreePath: null,

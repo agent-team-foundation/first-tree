@@ -210,7 +210,7 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     const logs: string[] = [];
     const finishedBatches: string[][] = [];
     const m2Retries: Array<{ ids: string[]; reason: string }> = [];
-    const retireActiveSession = vi.fn();
+    const failSessionForRecovery = vi.fn();
     let resolveM2FormatStarted!: () => void;
     const m2FormatStarted = new Promise<void>((resolve) => {
       resolveM2FormatStarted = resolve;
@@ -262,7 +262,7 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
         const batch = Array.isArray(messages) ? messages : [messages];
         finishedBatches.push(batch.map((message) => message.id));
       },
-      retireActiveSession,
+      failSessionForRecovery,
     };
 
     await handler.start(
@@ -303,7 +303,7 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
 
     expect(finishedBatches).toEqual([["m1"]]);
     expect(m2Retries).toEqual([{ ids: ["m2"], reason: "claude_retry_exhausted_tail_recovery" }]);
-    expect(retireActiveSession).toHaveBeenCalledWith("claude_retry_exhausted");
+    expect(failSessionForRecovery).toHaveBeenCalledWith("claude_retry_exhausted", expect.any(String));
     const lastTurnEnd = emitted.filter((event) => event.kind === "turn_end").at(-1);
     if (!lastTurnEnd || lastTurnEnd.kind !== "turn_end") throw new Error("expected turn_end event");
     expect(lastTurnEnd.payload.status).toBe("error");

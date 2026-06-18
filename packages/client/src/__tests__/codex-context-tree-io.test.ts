@@ -8,7 +8,7 @@ import {
   collectCodexFileChangePaths,
   toolFileRefsForTerminalCodexTool,
   toolFileRefsFromCodexFileChange,
-} from "../handlers/codex.js";
+} from "../handlers/codex/index.js";
 import { toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import { clearGitRepoIdentityCacheForTests } from "../runtime/git-repo-identity.js";
 

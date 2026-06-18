@@ -38,7 +38,6 @@ function makeOpts(overrides?: Partial<BuildAgentBriefingOptions>): BuildAgentBri
   return {
     identity: makeIdentity(),
     payload: null,
-    chatContext: undefined,
     workspacePath: AGENT_HOME,
     sourceRepos: [],
     contextTreePath: null,
@@ -47,27 +46,21 @@ function makeOpts(overrides?: Partial<BuildAgentBriefingOptions>): BuildAgentBri
 }
 
 describe("buildAgentBriefing — top-level structure & section order", () => {
-  it("emits sections in stable→volatile order with the per-chat block last", () => {
-    // Tree-bound + chat-context-bearing case so every header in the
-    // expected order list is present; tree-less / no-chat-context cases
-    // are exercised in their dedicated describe blocks below.
+  it("emits stable shared sections without per-chat Current Chat Context", () => {
+    // Tree-bound case so every shared header in the expected order list is
+    // present; tree-less cases are exercised in their dedicated describe
+    // blocks below. Per-chat context is provider/session injected and must not
+    // appear in this shared file.
     const briefing = buildAgentBriefing(
       makeOpts({
         contextTreePath: "/var/lib/context-trees/example",
-        chatContext: {
-          chatId: "chat-1",
-          title: "ship redesign",
-          topic: "ship redesign",
-          description: null,
-          participants: [{ name: "alice", displayName: "Alice", type: "human" }],
-        },
       }),
     );
 
     // Per-agent header ordering invariant: every # / ## that is part of the
-    // briefing skeleton must appear in this order, with the per-chat
-    // `## Current Chat Context` block at the bottom so the prompt cache
-    // stays warm across sibling chats.
+    // briefing skeleton must appear in this order. Runtime-injected
+    // per-chat context is deliberately absent so the prompt cache stays warm
+    // and sibling chats cannot overwrite each other through AGENTS.md.
     // Runtime-injected sections carry the `(First Tree Managed)` provenance
     // suffix so an agent reading the assembled file can tell which sections
     // its prompt config does NOT own (the anti-"copy AGENTS.md back into
@@ -91,7 +84,6 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "## Tree Location (agent-managed clone)",
       "# Skills (First Tree Managed)",
       "## First Tree Family",
-      "## Current Chat Context (First Tree Managed, per-chat)",
     ];
     let last = -1;
     for (const header of expectedOrder) {
@@ -101,6 +93,8 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       expect(idx, `header "${header}" missing or out of order`).toBeGreaterThan(last);
       last = idx;
     }
+    expect(briefing).not.toContain("## Current Chat Context");
+    expect(briefing).not.toContain("Chat ID:");
   });
 
   it("opens with the generated-file banner: marker + edit map for Team / Agent Prompt", () => {
@@ -709,10 +703,10 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("stable topic helps humans find the chat");
     expect(briefing).not.toContain("Rename only");
     expect(briefing).not.toContain("subject itself changed");
-    // The Chat Topic block points at the Current Chat Context block at the
-    // BOTTOM of the briefing (not "above" as in the pre-restructure
-    // copy).
-    expect(briefing).toContain("at the\nbottom of this briefing");
+    // The Chat Topic block points at provider-injected per-chat context, not
+    // a block written into this shared briefing file.
+    expect(briefing).toContain('provider-injected "Current Chat Context"');
+    expect(briefing).not.toContain("bottom of this briefing");
   });
 
   it("emits the GitHub Entity Attention block with the follow-after-create default inline (not skill-gated)", () => {
@@ -1066,30 +1060,11 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
   });
 });
 
-describe("buildAgentBriefing — ## Current Chat Context (per-chat tail)", () => {
-  it("appends the Current Chat Context block when chatContext is provided", () => {
-    const briefing = buildAgentBriefing(
-      makeOpts({
-        chatContext: {
-          chatId: "chat-123",
-          title: "ship redesign",
-          topic: "ship redesign",
-          description: "implementing the redesign; mockups approved, building components",
-          participants: [
-            { name: "alice", displayName: "Alice", type: "human" },
-            { name: "bob-bot", displayName: "Bob Bot", type: "agent" },
-          ],
-        },
-      }),
-    );
-    expect(briefing).toContain("## Current Chat Context");
-    expect(briefing).toContain("Chat ID: chat-123");
-    expect(briefing).toContain("@alice");
-    expect(briefing).toContain("@bob-bot");
-  });
-
-  it("omits the Current Chat Context block when chatContext is undefined (degraded fetch)", () => {
-    const briefing = buildAgentBriefing(makeOpts({ chatContext: undefined }));
+describe("buildAgentBriefing — provider-injected Current Chat Context boundary", () => {
+  it("never writes per-chat Current Chat Context into the shared briefing", () => {
+    const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).not.toContain("## Current Chat Context");
+    expect(briefing).not.toContain("Chat ID:");
+    expect(briefing).not.toContain("Participants:");
   });
 });

@@ -490,7 +490,7 @@ describe("SessionManager", () => {
     await sm.shutdown();
   });
 
-  it("routes recovery redelivery through resume after a handler retires its dead active consumer", async () => {
+  it("routes recovery redelivery through resume after a handler fails its dead active consumer", async () => {
     const ackEntry = mockAckEntry();
     const recoverChat = vi.fn().mockResolvedValue(undefined);
     let startCtx: SessionContext | undefined;
@@ -524,7 +524,7 @@ describe("SessionManager", () => {
 
     await startToken.complete(startMessage, { status: "success", terminal: true });
     injectedToken.retry(injectedMessage, "claude_retry_exhausted_tail_recovery");
-    startCtx.retireActiveSession?.("claude_retry_exhausted");
+    startCtx.failSessionForRecovery?.("claude_retry_exhausted", "session-id-mock");
 
     expect(sm.activeCount).toBe(0);
     expect(sm.getSessionRuntimeStates()).toEqual([]);

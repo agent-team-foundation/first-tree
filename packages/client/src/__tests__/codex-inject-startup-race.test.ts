@@ -72,6 +72,7 @@ vi.mock("@openai/codex-sdk", () => {
 vi.mock("../runtime/bootstrap.js", () => ({
   FIRST_TREE_RUNTIME_DIR: ".first-tree-workspace",
   FIRST_TREE_WORKSPACE_MARKER: ".first-tree-workspace",
+  IDENTITY_JSON_REL: join(".first-tree-workspace", "identity.json"),
   bootstrapWorkspace: vi.fn(),
   deepEqualIdentity: vi.fn(() => true),
   ensureWorkspaceRuntimeDir: vi.fn((workspacePath: string) => {
@@ -98,11 +99,51 @@ vi.mock("../runtime/chat-context.js", () => ({
   }),
 }));
 
-import { createCodexHandler } from "../handlers/codex.js";
+import { createCodexHandler } from "../handlers/codex/index.js";
 
 const AGENT_ID = "019e71c9-88d2-70be-be67-fdb033b2ef0b";
 
 let workspaceRoot: string;
+
+type FakeAppServerRequest = {
+  method: string;
+  params: unknown;
+};
+
+class StartupFakeAppServerClient {
+  readonly requests: FakeAppServerRequest[] = [];
+  stderr = "";
+  isClosed = false;
+  shutdownCalls = 0;
+  failThreadStart = false;
+  failTurnStart = false;
+
+  async request(method: string, params?: unknown): Promise<unknown> {
+    this.requests.push({ method, params });
+    if (method === "thread/start") {
+      if (this.failThreadStart) throw new Error("thread/start rejected");
+      return { thread: { id: "thread-app-server" } };
+    }
+    if (method === "thread/resume") {
+      return { thread: { id: "thread-app-server" } };
+    }
+    if (method === "turn/start") {
+      if (this.failTurnStart) throw new Error("turn/start rejected after request");
+      return { turn: { id: "turn-app-server", status: "inProgress", items: [], error: null } };
+    }
+    if (method === "turn/interrupt") {
+      return {};
+    }
+    return {};
+  }
+
+  notify(): void {}
+
+  shutdown(): void {
+    this.shutdownCalls += 1;
+    this.isClosed = true;
+  }
+}
 
 function makeMessage(id: string, content: string): SessionMessage {
   return {
@@ -151,6 +192,25 @@ function makeContext(
       onFinishTurn(Array.isArray(messages) ? messages.length : 1);
     },
   };
+}
+
+function makeAutoHandler(fake: StartupFakeAppServerClient) {
+  return createCodexHandler({
+    workspaceRoot,
+    codexHandlerEngine: "auto",
+    codexRuntimeBinaryResolver: async () => ({
+      ok: true,
+      binary: "/tmp/fake-codex",
+      runtimeSource: "path",
+      runtimePath: "/tmp/fake-codex",
+      version: "0.0.0-test",
+    }),
+    codexAppServerClientFactory: async () => fake,
+  });
+}
+
+function messageIds(messages: SessionMessage | readonly SessionMessage[]): string[] {
+  return (Array.isArray(messages) ? messages : [messages]).map((message) => message.id);
 }
 
 async function waitFor(assertion: () => boolean): Promise<void> {
@@ -207,9 +267,143 @@ describe("codex handler startup inject queue", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(state.runInputs).toHaveLength(2);
+    expect(String(state.runInputs[0])).toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[0])).toContain('"chatId": "chat-startup-race"');
     expect(String(state.runInputs[0])).toContain("first");
+    expect(String(state.runInputs[1])).not.toContain("<first-tree-current-chat-context");
     expect(String(state.runInputs[1])).toContain("second");
     expect(completedCounts).toEqual([1, 1]);
+
+    await handler.shutdown();
+  });
+
+  it("does not let queued injects consume startup chat context while the first input is still formatting", async () => {
+    const completedCounts: Array<number | undefined> = [];
+    let releaseFirstFormat = (_value: string): void => {
+      throw new Error("first format promise was not captured");
+    };
+    let firstFormatStarted = (): void => {};
+    const firstFormatStartedPromise = new Promise<void>((resolve) => {
+      firstFormatStarted = resolve;
+    });
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext(
+      (count) => {
+        completedCounts.push(count);
+      },
+      {
+        formatInboundContent: vi.fn<SessionContext["formatInboundContent"]>((message) => {
+          if (message.id === "m1") {
+            firstFormatStarted();
+            return new Promise<string>((resolve) => {
+              releaseFirstFormat = resolve;
+            });
+          }
+          return Promise.resolve(
+            typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+          );
+        }),
+      },
+    );
+
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await firstFormatStartedPromise;
+
+    handler.inject(makeMessage("m2", "second"));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(state.runInputs).toHaveLength(0);
+
+    releaseFirstFormat("first");
+    await startPromise;
+    await waitFor(() => state.runInputs.length === 2);
+
+    expect(String(state.runInputs[0])).toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[0])).toContain('"chatId": "chat-startup-race"');
+    expect(String(state.runInputs[0])).toContain("first");
+    expect(String(state.runInputs[0])).not.toContain("second");
+    expect(String(state.runInputs[1])).not.toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[1])).toContain("second");
+    expect(completedCounts).toEqual([1, 1]);
+
+    await handler.shutdown();
+  });
+
+  it("retries queued app-server startup injects before falling back to the SDK handler", async () => {
+    const fake = new StartupFakeAppServerClient();
+    fake.failThreadStart = true;
+    const completedCounts: Array<number | undefined> = [];
+    const retried: Array<{ ids: string[]; reason: string }> = [];
+    const handler = makeAutoHandler(fake);
+    const ctx = makeContext(
+      (count) => {
+        completedCounts.push(count);
+      },
+      {
+        retryTurn: (messages, reason) => {
+          retried.push({ ids: messageIds(messages), reason });
+        },
+      },
+    );
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await Promise.resolve();
+
+    expect(handler.inject(makeMessage("m2", "second"))).toMatchObject({ kind: "owned", mode: "queued" });
+
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await startPromise;
+
+    expect(fake.shutdownCalls).toBe(1);
+    expect(retried).toEqual([{ ids: ["m2"], reason: "codex_shutdown_before_terminal" }]);
+    expect(state.runInputs).toHaveLength(1);
+    expect(String(state.runInputs[0])).toContain("first");
+    expect(String(state.runInputs[0])).not.toContain("second");
+    expect(completedCounts).toEqual([1]);
+
+    await handler.shutdown();
+  });
+
+  it("does not auto-fallback to SDK after turn/start has been requested", async () => {
+    const fake = new StartupFakeAppServerClient();
+    fake.failTurnStart = true;
+    const retried: Array<{ ids: string[]; reason: string }> = [];
+    const handler = makeAutoHandler(fake);
+    const ctx = makeContext(() => {}, {
+      retryTurn: (messages, reason) => {
+        retried.push({ ids: messageIds(messages), reason });
+      },
+    });
+
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+
+    expect(fake.requests.some((request) => request.method === "turn/start")).toBe(true);
+    expect(retried).toEqual([{ ids: ["m1"], reason: "codex_app_server_turn_start_unknown_custody_failed" }]);
+    expect(state.runInputs).toHaveLength(0);
+    expect(fake.shutdownCalls).toBe(1);
 
     await handler.shutdown();
   });
@@ -238,9 +432,46 @@ describe("codex handler startup inject queue", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(state.runInputs).toHaveLength(2);
+    expect(String(state.runInputs[0])).toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[0])).toContain('"chatId": "chat-startup-race"');
+    expect(String(state.runInputs[1])).not.toContain("<first-tree-current-chat-context");
     expect(String(state.runInputs[1])).toContain("second");
     expect(String(state.runInputs[1])).toContain("third");
     expect(completedCounts).toEqual([1, 2]);
+
+    await handler.shutdown();
+  });
+
+  it("applies resume chat context to the next injected turn only when resume has no message", async () => {
+    const completedCounts: Array<number | undefined> = [];
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => {
+      completedCounts.push(count);
+    });
+
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.resume(undefined, "thread-test", ctx);
+
+    handler.inject(makeMessage("m1", "first after resume"));
+    await waitFor(() => state.runInputs.length === 1);
+
+    expect(String(state.runInputs[0])).toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[0])).toContain('"chatId": "chat-startup-race"');
+    expect(String(state.runInputs[0])).toContain("first after resume");
+
+    handler.inject(makeMessage("m2", "second after resume"));
+    await waitFor(() => state.runInputs.length === 2);
+
+    expect(String(state.runInputs[1])).not.toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[1])).toContain("second after resume");
+    expect(completedCounts).toEqual([1, 1]);
 
     await handler.shutdown();
   });

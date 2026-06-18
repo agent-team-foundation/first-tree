@@ -7,6 +7,7 @@ import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
 import type { PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
+import { renderChatContextPrompt } from "../../runtime/chat-context-section.js";
 import { createContextTreeGitWriteTracker } from "../../runtime/context-tree-git-status.js";
 import {
   type AgentHandler,
@@ -158,11 +159,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   let ctx: SessionContext | null = null;
   let configTempDir: string | null = null;
   const queuedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
-  // Per-chat state captured at session start — feeds the unified briefing
-  // (AGENTS.md / CLAUDE.md symlink) that claude reads at startup via
-  // `--setting-sources user,project`. The TUI handler can't update the
-  // briefing mid-thread (claude is a persistent process holding the file
-  // contents in memory), so we snapshot once per startClaude().
+  // Per-chat state captured at session start — fed to claude via
+  // `--append-system-prompt-file`. The TUI handler can't update system prompt
+  // mid-thread (claude is a persistent process), so we snapshot once per
+  // startClaude().
   let chatContextForPrompt: ChatContext | undefined;
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
 
@@ -181,17 +181,16 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Build the unified briefing for the current session — agent identity,
-   * payload.prompt.append, source-repo list, chat context, and the Context
-   * Tree / runtime sections. Materialised by {@link ensureAgentBootstrap} as
-   * `<cwd>/AGENTS.md` (with `<cwd>/CLAUDE.md` symlinked to it) before claude
-   * spawns; the CLI then loads CLAUDE.md via `--setting-sources user,project`.
+   * Build the shared briefing for the current session — agent identity,
+   * payload.prompt.append, source-repo list, and the Context Tree / runtime
+   * sections. Materialised by {@link ensureAgentBootstrap} as `<cwd>/AGENTS.md`
+   * (with `<cwd>/CLAUDE.md` symlinked to it) before claude spawns; per-chat
+   * context is appended through the CLI system prompt file.
    */
   function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
       payload,
-      chatContext: chatContextForPrompt,
       workspacePath: workspaceCwd,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
@@ -252,9 +251,16 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       args.push("--strict-mcp-config");
     }
 
-    // The unified briefing is delivered via `<cwd>/CLAUDE.md` (symlink to
+    const chatPrompt = renderChatContextPrompt(chatContextForPrompt);
+    if (chatPrompt) {
+      const chatPromptPath = join(tempDir, "current-chat-context.md");
+      writeFileSync(chatPromptPath, chatPrompt, "utf-8");
+      args.push("--append-system-prompt-file", shellQuote(chatPromptPath));
+    }
+
+    // The shared briefing is delivered via `<cwd>/CLAUDE.md` (symlink to
     // AGENTS.md) which `--setting-sources user,project` instructs claude to
-    // load at startup. No `--append-system-prompt` is needed anymore.
+    // load at startup. Per-chat context is delivered separately above.
     args.push("--setting-sources", "user,project");
 
     return args.join(" ");
@@ -653,11 +659,10 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
           const resolvedPayload = await loadPayload(sessionCtx);
           const payload = resolvedPayload ?? defaultPayload();
 
-          // Per-chat material flows through the unified briefing
-          // (`<cwd>/AGENTS.md`, with `<cwd>/CLAUDE.md` symlinked to it). Resolve
-          // chat-context and source repos BEFORE bootstrap so the briefing the
-          // shared `ensureAgentBootstrap` materialises is fully populated; claude
-          // then reads CLAUDE.md once on spawn via `--setting-sources project`.
+          // Resolve chat-context and source repos before spawning claude:
+          // source repos are rendered into the shared briefing, while
+          // chat-context is written to the per-session append-system-prompt
+          // file consumed by startClaude().
           chatContextForPrompt = await fetchChatContextOrLog(sessionCtx);
           // Pure declaration — the agent itself clones/refreshes the repos per
           // its briefing protocol; the listed paths may not exist yet.

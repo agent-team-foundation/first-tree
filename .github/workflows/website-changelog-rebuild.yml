@@ -1,0 +1,28 @@
+# When a release is published, ping the website's Vercel deploy hook so
+# first-tree.ai rebuilds: /changelog re-prerenders with the new release in
+# the static HTML and the sitemap <lastmod> updates. The page also shows
+# new releases instantly via its client-side fetch — this rebuild is for
+# crawlers (SEO + non-JS LLM bots), so a few minutes of build latency is fine.
+name: Rebuild website changelog on release
+
+on:
+  release:
+    types: [published]
+
+# This job only POSTs to an external Vercel hook — it never needs the
+# repo GITHUB_TOKEN, so drop all default token permissions.
+permissions: {}
+
+jobs:
+  trigger-website-rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Vercel deploy hook
+        env:
+          DEPLOY_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "VERCEL_DEPLOY_HOOK_URL secret is not set" >&2; exit 1
+          fi
+          curl -fsS -X POST "$DEPLOY_HOOK" > /dev/null
+          echo "Website rebuild triggered for ${GITHUB_REF_NAME}"

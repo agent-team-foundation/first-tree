@@ -21,12 +21,12 @@ export type AgentBootstrapParams = {
   sessionCtx: SessionContext;
   contextTreePath: string | null;
   /**
-   * Pre-rendered briefing for this turn. Built by {@link buildAgentBriefing}
+   * Pre-rendered shared briefing. Built by {@link buildAgentBriefing}
    * and written to `<workspace>/AGENTS.md` on every start/resume (CLAUDE.md is
-   * symlinked to it). The briefing changes per chat — Current Chat Context,
-   * participants, and the latest agent config payload all flow through this
-   * parameter — so callers MUST recompute it before every call instead of
-   * caching across sessions.
+   * symlinked to it). The latest agent config payload and source-repo
+   * declaration flow through this parameter, so callers recompute it before
+   * every call. Per-chat Current Chat Context is injected by provider/session
+   * prompt paths and must not be written into this shared file.
    */
   briefing: string;
   /**
@@ -92,10 +92,10 @@ function ensureStableIdentity(workspace: string, sessionCtx: SessionContext, con
  * changed tree or a client upgrade forces a refresh, while the steady-state
  * path is a cheap identity check.
  *
- * The unified briefing is **always rewritten** on every call, irrespective of
- * drift — it carries per-chat content (chat ID, participants, source-repo
- * list, current payload prompt.append) that changes between sessions for the
- * same agent home. See proposal §⓪.3 for the race window this accepts.
+ * The shared briefing is **always rewritten** on every call, irrespective of
+ * drift, so source-repo declarations and current payload prompt.append changes
+ * surface promptly for the same agent home. Per-chat context is intentionally
+ * outside this file.
  */
 export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   const { workspace, sessionCtx, contextTreePath, briefing, currentSourceRepoNames } = params;

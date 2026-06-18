@@ -134,7 +134,7 @@ type SessionCommandType = "session:suspend" | "session:resume" | "session:termin
  * agent home:
  *   1. CODEX legacy chats. The codex handler has NO legacy-cwd branch:
  *      `start()` and `resume()` both use `acquireAgentHome` (see
- *      `handlers/codex.ts`; #530 left codex alone because its transcripts are
+ *      `handlers/codex/`; #530 left codex alone because its transcripts are
  *      not cwd-keyed). Pre-#506 codex still created `<workspaceRoot>/<chatId>/`,
  *      and those dirs persist (`cleanWorkspaces` is a no-op), so every legacy
  *      codex chat hits this divergence.
@@ -810,16 +810,30 @@ export class SessionManager {
     return true;
   }
 
-  private retireActiveSessionFromHandler(chatId: string, reason: string): void {
+  private failSessionForRecovery(chatId: string, reason: string, sessionId?: string): void {
     const entry = this.sessions.get(chatId);
-    if (!entry || entry.status !== "active") return;
-    this.config.log.info({ chatId, reason }, "active session retired by handler");
-    entry.status = "suspended";
-    this._activeCount = Math.max(0, this._activeCount - 1);
+    if (!entry) return;
+
+    this.clearRetryState(entry);
+    const resumeSessionId = sessionId || entry.claudeSessionId || entry.retryFromEvicted?.claudeSessionId || "";
+    if (resumeSessionId) {
+      this.addEvictedMapping(chatId, {
+        claudeSessionId: resumeSessionId,
+        lastActivity: entry.lastActivity,
+      });
+    }
+    if (entry.status === "active") {
+      this._activeCount = Math.max(0, this._activeCount - 1);
+    }
+
+    this.inboxDelivery.prepareEvict(chatId, reason);
+    this.sessions.delete(chatId);
     this.sessionRuntimeStates.delete(chatId);
+    this.currentTrigger.delete(chatId);
+    this.notifySessionState(chatId, "errored");
+    this.config.log.warn({ chatId, reason }, "session failed locally; recovery will use a fresh handler");
     this.recomputeRuntimeState();
     this.persistRegistry();
-    this.notifySessionState(chatId, "suspended");
     this.drainPendingQueue();
   }
 
@@ -1051,17 +1065,20 @@ export class SessionManager {
       const token = this.createDeliveryToken(chatId);
       if (evicted) {
         const receipt = normalizeResumeReceipt(await handler.resume(message, evicted.claudeSessionId, ctx, token));
+        if (this.sessions.get(chatId) !== entry) return;
         entry.claudeSessionId = receipt.sessionId;
         if (receipt.route) this.markRouteOwned(chatId, message, receipt.route);
         this.config.log.info({ chatId, sessionId: entry.claudeSessionId }, "session resumed from eviction");
       } else {
         const receipt = normalizeStartReceipt(await handler.start(message, ctx, token));
+        if (this.sessions.get(chatId) !== entry) return;
         entry.claudeSessionId = receipt.sessionId;
         this.markRouteOwned(chatId, message, receipt.route);
         this.config.log.info({ chatId, sessionId: entry.claudeSessionId }, "session created");
       }
       this.persistRegistry();
     } catch (err) {
+      if (this.sessions.get(chatId) !== entry) return;
       const phase: "start" | "resume" = evicted ? "resume" : "start";
       const classification = classify(err, { source: "session" });
       const handled = this.handleSessionFailure({
@@ -1122,12 +1139,14 @@ export class SessionManager {
       const resumeResult = token
         ? await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx, token)
         : await entry.handler.resume(message ?? undefined, entry.claudeSessionId, ctx);
+      if (this.sessions.get(entry.chatId) !== entry) return;
       const receipt = normalizeResumeReceipt(resumeResult);
       entry.claudeSessionId = receipt.sessionId;
       if (message && receipt.route) this.markRouteOwned(entry.chatId, message, receipt.route);
       this.config.log.info({ chatId: entry.chatId, sessionId: entry.claudeSessionId }, "session resumed");
       this.persistRegistry();
     } catch (err) {
+      if (this.sessions.get(entry.chatId) !== entry) return;
       const classification = classify(err, { source: "session" });
       const handled = this.handleSessionFailure({
         entry,
@@ -1358,6 +1377,7 @@ export class SessionManager {
         const resumeResult = token
           ? await newHandler.resume(resumeMessage ?? undefined, previousSessionId, ctx, token)
           : await newHandler.resume(resumeMessage ?? undefined, previousSessionId, ctx);
+        if (this.sessions.get(chatId) !== entry) return;
         const receipt = normalizeResumeReceipt(resumeResult);
         entry.claudeSessionId = receipt.sessionId;
         if (resumeMessage && receipt.route) this.markRouteOwned(chatId, resumeMessage, receipt.route);
@@ -1365,6 +1385,7 @@ export class SessionManager {
         // No resume key yet — fall back to fresh start.
         const message = resumeMessage ?? buildEmptySessionMessage(chatId);
         const receipt = normalizeStartReceipt(await newHandler.start(message, ctx, this.createDeliveryToken(chatId)));
+        if (this.sessions.get(chatId) !== entry) return;
         entry.claudeSessionId = receipt.sessionId;
         this.markRouteOwned(chatId, message, receipt.route);
       }
@@ -1397,6 +1418,7 @@ export class SessionManager {
       this.drainRetryQueuedMessages(entry);
       this.persistRegistry();
     } catch (err) {
+      if (this.sessions.get(chatId) !== entry) return;
       const classification = classify(err, { source: "session" });
       const handled = this.handleSessionFailure({
         entry,
@@ -1878,8 +1900,8 @@ export class SessionManager {
         this.inboxDelivery.retryTurn(chatId, messages, reason);
         this.projectSessionRuntime(chatId);
       },
-      retireActiveSession: (reason) => {
-        this.retireActiveSessionFromHandler(chatId, reason);
+      failSessionForRecovery: (reason, sessionId) => {
+        this.failSessionForRecovery(chatId, reason, sessionId);
       },
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),

@@ -165,12 +165,12 @@ export type SessionContext = HandlerContext & {
   retryTurn: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
 
   /**
-   * Handler-internal fatal paths can close their provider consumer after they
-   * have settled the consumed prefix and marked any tail for recovery. This
-   * releases the active runtime slot so same-socket recovery redelivery resumes
-   * a live provider query instead of injecting into a dead consumer.
+   * Drop the current live handler after it has fenced an unknown-custody
+   * provider failure and marked the affected inbox work for recovery. The
+   * optional session id lets recovery resume provider context from a fresh
+   * handler instead of routing redelivery back into the dead one.
    */
-  retireActiveSession?: (reason: string) => void;
+  failSessionForRecovery?: (reason: string, sessionId?: string) => void;
 
   /**
    * Build env for CLI sub-processes that shell out to the First Tree CLI.
