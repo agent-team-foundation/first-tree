@@ -6,17 +6,35 @@ import {
 } from "@first-tree/client";
 import type { ClientCapabilities } from "@first-tree/shared";
 
+const EMPTY_OMITTED_KEYS = new Set<string>();
+const VOLATILE_CAPABILITY_FIELDS = new Set(["detectedAt", "latencyMs"]);
+
 /**
  * Stable JSON stringify — sorts object keys so two capability snapshots that
- * differ only in key order serialize identically. Used to dedupe uploads: a
- * re-probe that produced the same snapshot must not re-PATCH the server.
+ * differ only in key order serialize identically.
  */
 export function stableCapabilitiesJson(value: unknown): string {
+  return stableCapabilitiesJsonWithOmittedKeys(value, EMPTY_OMITTED_KEYS);
+}
+
+/**
+ * Stable semantic snapshot for upload / backoff decisions. Probe timestamps and
+ * durations change on every run, but they do not mean the server-visible runtime
+ * readiness changed.
+ */
+export function stableCapabilitySyncJson(value: unknown): string {
+  return stableCapabilitiesJsonWithOmittedKeys(value, VOLATILE_CAPABILITY_FIELDS);
+}
+
+function stableCapabilitiesJsonWithOmittedKeys(value: unknown, omittedKeys: ReadonlySet<string>): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map((item) => stableCapabilitiesJson(item)).join(",")}]`;
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableCapabilitiesJsonWithOmittedKeys(item, omittedKeys)).join(",")}]`;
+  }
   return `{${Object.entries(value)
+    .filter(([key]) => !omittedKeys.has(key))
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([key, item]) => `${JSON.stringify(key)}:${stableCapabilitiesJson(item)}`)
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableCapabilitiesJsonWithOmittedKeys(item, omittedKeys)}`)
     .join(",")}}`;
 }
 
@@ -67,7 +85,7 @@ export class CapabilityRefresher {
   private readonly revalidate: typeof revalidateCapabilities;
 
   private snapshot: ClientCapabilities | null;
-  private lastUploadedJson: string | null = null;
+  private lastUploadedSyncJson: string | null = null;
   private inFlight = false;
   /** A reconnect that landed while a refresh was in flight, to be drained (in
    * reconnect mode) once the current refresh finishes — never dropped, so the
@@ -134,10 +152,10 @@ export class CapabilityRefresher {
   }
 
   private async uploadIfChanged(capabilities: ClientCapabilities): Promise<boolean> {
-    const nextJson = stableCapabilitiesJson(capabilities);
-    if (this.lastUploadedJson === nextJson) return false;
+    const nextJson = stableCapabilitySyncJson(capabilities);
+    if (this.lastUploadedSyncJson === nextJson) return false;
     await this.deps.upload(capabilities);
-    this.lastUploadedJson = nextJson;
+    this.lastUploadedSyncJson = nextJson;
     return true;
   }
 
@@ -167,7 +185,7 @@ export class CapabilityRefresher {
           modeLabel = "poll";
         }
         probed = true;
-        const changed = stableCapabilitiesJson(next) !== stableCapabilitiesJson(previous);
+        const changed = stableCapabilitySyncJson(next) !== stableCapabilitySyncJson(previous);
         this.snapshot = next;
         // Upload is tracked separately from the probe: a probe that recovered a
         // provider to `ok` but whose PATCH failed must NOT let the poll stop —
@@ -176,10 +194,9 @@ export class CapabilityRefresher {
         let uploadFailed = false;
         try {
           const uploaded = await this.uploadIfChanged(next);
-          this.deps.log(
-            "•",
-            `runtime capabilities re-probed (${modeLabel})${uploaded ? " and uploaded" : "; unchanged, upload skipped"}`,
-          );
+          if (uploaded) {
+            this.deps.log("•", `runtime capabilities re-probed (${modeLabel}) and uploaded`);
+          }
         } catch (uploadErr) {
           uploadFailed = true;
           this.deps.log("⚠️", `capabilities upload skipped: ${message(uploadErr)}`);
@@ -236,7 +253,7 @@ export class CapabilityRefresher {
     const snap = this.snapshot;
     if (!snap) return true;
     if (hasNonOkProvider(snap)) return true;
-    return stableCapabilitiesJson(snap) !== this.lastUploadedJson;
+    return stableCapabilitySyncJson(snap) !== this.lastUploadedSyncJson;
   }
 }
 

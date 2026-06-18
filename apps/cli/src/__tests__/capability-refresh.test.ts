@@ -1,6 +1,10 @@
 import type { CapabilityEntry, ClientCapabilities } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CapabilityRefresher, type CapabilityRefresherDeps } from "../core/capability-refresh.js";
+import {
+  CapabilityRefresher,
+  type CapabilityRefresherDeps,
+  stableCapabilitySyncJson,
+} from "../core/capability-refresh.js";
 
 /**
  * The refresher unifies the daemon's two capability-refresh triggers — the WS
@@ -44,6 +48,20 @@ const codexMissing = (): ClientCapabilities => ({
 
 const BASE = 100;
 const MAX = 400;
+
+describe("stableCapabilitySyncJson", () => {
+  it("ignores volatile probe metadata", () => {
+    expect(
+      stableCapabilitySyncJson({
+        codex: missing({ detectedAt: "2026-06-17T00:00:15.000Z", latencyMs: 15 }),
+      }),
+    ).toBe(
+      stableCapabilitySyncJson({
+        codex: missing({ detectedAt: "2026-06-17T00:05:15.000Z", latencyMs: 925 }),
+      }),
+    );
+  });
+});
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -118,7 +136,7 @@ describe("CapabilityRefresher", () => {
   });
 
   it("skips the upload when a poll produces an unchanged snapshot, and backs off", async () => {
-    const { refresher, upload, revalidate } = makeRefresher({ initial: codexMissing() });
+    const { refresher, upload, log, revalidate } = makeRefresher({ initial: codexMissing() });
     revalidate.mockResolvedValue(codexMissing()); // never changes
 
     await refresher.start();
@@ -128,12 +146,37 @@ describe("CapabilityRefresher", () => {
     await vi.advanceTimersByTimeAsync(BASE);
     expect(revalidate).toHaveBeenCalledTimes(1);
     expect(upload).toHaveBeenCalledTimes(1);
+    expect(log).not.toHaveBeenCalled();
 
     // Nothing fires before the backed-off interval elapses.
     await vi.advanceTimersByTimeAsync(BASE);
     expect(revalidate).toHaveBeenCalledTimes(1);
 
     // Second poll at 2×BASE.
+    await vi.advanceTimersByTimeAsync(BASE);
+    expect(revalidate).toHaveBeenCalledTimes(2);
+    expect(upload).toHaveBeenCalledTimes(1);
+    refresher.stop();
+  });
+
+  it("backs off without uploading when only volatile probe metadata changes", async () => {
+    const { refresher, upload, log, revalidate } = makeRefresher({ initial: codexMissing() });
+    revalidate.mockResolvedValue({
+      ...codexMissing(),
+      codex: missing({ detectedAt: "2026-06-17T00:00:15.000Z", latencyMs: 15 }),
+    });
+
+    await refresher.start();
+    expect(upload).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(BASE);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect(log).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(BASE);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+
     await vi.advanceTimersByTimeAsync(BASE);
     expect(revalidate).toHaveBeenCalledTimes(2);
     expect(upload).toHaveBeenCalledTimes(1);
