@@ -2099,4 +2099,31 @@ describe("web DOM interaction coverage", () => {
 
     await unmountRoot(root);
   });
+
+  it("keeps the env dialog open and preserves input when the save fails", async () => {
+    const { EnvSection } = await import("../agent-detail/env-section.js");
+    // onSave never invokes onSuccess (simulates a rejected/409 save); the page
+    // surfaces the failure via the saveError prop.
+    const onSave = vi.fn();
+    const { container, root } = await renderDom(<EnvSection items={[]} onSave={onSave} saveError="Save failed" />);
+
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Add")) ?? null);
+    await waitForText("Add environment variable", document.body);
+    const key = document.body.querySelector<HTMLInputElement>("#env-key");
+    const value = document.body.querySelector<HTMLInputElement>("#env-value");
+    if (!key || !value) throw new Error("Env fields missing");
+    await setValue(key, "API_KEY");
+    await setValue(value, "v1");
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
+
+    // The save was attempted, but because it never confirmed the dialog stays
+    // open with the typed value intact (no silent data loss) and shows the error.
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("Add environment variable");
+    expect(document.body.querySelector<HTMLInputElement>("#env-key")?.value).toBe("API_KEY");
+    expect(document.body.querySelector<HTMLInputElement>("#env-value")?.value).toBe("v1");
+    expect(document.body.textContent).toContain("Save failed");
+
+    await unmountRoot(root);
+  });
 });

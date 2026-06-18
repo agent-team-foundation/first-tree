@@ -133,7 +133,13 @@ export function RuntimeTab() {
           <EnvSection
             items={config.payload.env}
             onSave={(next, opts) => configSave.save({ env: next }, { field: "env", onSuccess: opts?.onSuccess })}
-            disabled={editsDisabled}
+            disabled={ctx.agent.status !== "active"}
+            saving={configSave.pending}
+            saveError={
+              configSave.conflict
+                ? "This agent's configuration was updated elsewhere — reloaded the latest values. Re-enter and try again."
+                : configSave.saveError
+            }
             saved={envSaved}
           />
         </div>

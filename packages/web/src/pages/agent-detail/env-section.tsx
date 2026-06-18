@@ -35,8 +35,12 @@ export type EnvSectionProps = {
   items: EnvEntry[];
   /** Persist the full next env array. `onSuccess` fires only after the server confirms. */
   onSave: (nextEnv: EnvEntry[], opts?: { onSuccess?: () => void }) => void;
-  /** Disabled while a save is in flight or the agent is inactive. */
+  /** The agent is inactive (suspended) — hide edit affordances. */
   disabled?: boolean;
+  /** A config save is in flight — serialize edits and show the dialog's submit as pending. */
+  saving?: boolean;
+  /** Last save failure / conflict message, surfaced inside the open dialog. */
+  saveError?: string | null;
   /** Flash "Saved" next to the title after a successful immediate write. */
   saved?: boolean;
 };
@@ -48,9 +52,12 @@ type DialogState =
   | { mode: "restore"; initial: EnvEntry }
   | null;
 
-export function EnvSection({ items, onSave, disabled, saved }: EnvSectionProps) {
+export function EnvSection({ items, onSave, disabled, saving, saveError, saved }: EnvSectionProps) {
   const { addToast } = useToast();
   const [dialog, setDialog] = useState<DialogState>(null);
+  // Edits are blocked while suspended, and serialized while a save is in flight
+  // so a second edit can't race the config version.
+  const busy = disabled || saving;
   // Per-row reveal of sensitive values. Only works for values that are still
   // plaintext in the cache (a just-added secret in the optimistic window before
   // the server response redacts it). Persisted sensitive values are stored as
@@ -97,16 +104,18 @@ export function EnvSection({ items, onSave, disabled, saved }: EnvSectionProps) 
 
   const handleSubmit = (value: EnvEntry) => {
     if (!dialog) return;
-    if (dialog.mode === "edit") {
-      onSave(items.map((e) => (e.key === dialog.initial.key ? value : e)));
-    } else {
-      // add + restore both append (a restored entry is not in the list).
-      onSave([...itemsRef.current, value]);
-    }
-    setDialog(null);
+    // add + restore both append (a restored entry is not in the list); edit replaces.
+    const next =
+      dialog.mode === "edit"
+        ? items.map((e) => (e.key === dialog.initial.key ? value : e))
+        : [...itemsRef.current, value];
+    // Close only after the save confirms — a failed save (409 / network) keeps
+    // the dialog open with the typed value intact, which matters most for
+    // secrets (their ciphertext can't be recovered once lost).
+    onSave(next, { onSuccess: () => setDialog(null) });
   };
 
-  const action = !disabled ? (
+  const action = !busy ? (
     <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
       <Plus className="h-3.5 w-3.5" /> Add variable
     </Button>
@@ -141,7 +150,7 @@ export function EnvSection({ items, onSave, disabled, saved }: EnvSectionProps) 
                 key={item.key}
                 onEdit={() => setDialog({ mode: "edit", initial: item })}
                 onDelete={() => handleDelete(item)}
-                disabled={disabled}
+                disabled={busy}
               >
                 <span className="font-mono font-medium">{item.key}</span>
                 <span className="font-mono text-caption text-muted-foreground truncate max-w-xs">{rendered}</span>
@@ -179,6 +188,8 @@ export function EnvSection({ items, onSave, disabled, saved }: EnvSectionProps) 
           // persisted secret may leave it empty to keep the existing ciphertext.
           allowKeepExisting={dialog.mode === "edit" && canKeepExistingSensitiveValue(dialog.initial)}
           forbiddenKeys={keysExcept(dialog.mode === "edit" ? dialog.initial.key : null)}
+          submitting={saving}
+          saveError={saveError}
           onSubmit={handleSubmit}
         />
       )}
@@ -193,6 +204,10 @@ type EnvDialogProps = {
   title?: string;
   allowKeepExisting: boolean;
   forbiddenKeys: ReadonlySet<string>;
+  /** A save triggered by this dialog is in flight. */
+  submitting?: boolean;
+  /** Server-side save failure to show inside the dialog (the dialog stays open). */
+  saveError?: string | null;
   onSubmit: (value: EnvEntry) => void;
 };
 
@@ -220,7 +235,17 @@ export function resolveEnvDialogValue(input: {
   return { ok: true, value: input.value };
 }
 
-function EnvDialog({ open, onOpenChange, initial, title, allowKeepExisting, forbiddenKeys, onSubmit }: EnvDialogProps) {
+function EnvDialog({
+  open,
+  onOpenChange,
+  initial,
+  title,
+  allowKeepExisting,
+  forbiddenKeys,
+  submitting,
+  saveError,
+  onSubmit,
+}: EnvDialogProps) {
   const [key, setKey] = useState(initial?.key ?? "");
   const [value, setValue] = useState(envDialogInitialValue(initial, allowKeepExisting));
   const [sensitive, setSensitive] = useState(initial?.sensitive ?? false);
@@ -304,11 +329,14 @@ function EnvDialog({ open, onOpenChange, initial, title, allowKeepExisting, forb
             Sensitive values cannot be viewed after saving. If you need to verify, save a new value.
           </p>
           {err && <p className="text-body text-destructive">{err}</p>}
+          {!err && saveError && <p className="text-body text-destructive">{saveError}</p>}
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
               Cancel
             </Button>
-            <Button type="submit">{initial ? "Done" : "Add"}</Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "Saving…" : initial ? "Done" : "Add"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>
