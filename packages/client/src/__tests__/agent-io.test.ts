@@ -1,11 +1,15 @@
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import type { ChatParticipantDetail } from "@first-tree/shared";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildAgentEnv,
   createParticipantCache,
   formatInboundContent,
   resolveSenderLabel,
 } from "../runtime/agent-io.js";
+import { setCliBinding } from "../runtime/cli-binding.js";
 import type { SessionMessage } from "../runtime/handler.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
@@ -32,6 +36,10 @@ function mkSdk(listImpl?: () => Promise<ChatParticipantDetail[]>): FirstTreeHubS
   } as unknown as FirstTreeHubSDK;
   return sdk;
 }
+
+afterEach(() => {
+  setCliBinding({ binName: "first-tree", packageName: "first-tree" });
+});
 
 describe("resolveSenderLabel", () => {
   const ps = [
@@ -354,6 +362,83 @@ describe("buildAgentEnv", () => {
     expect(env.FIRST_TREE_AGENT_ID).toBe("agent-a");
     expect(env.FIRST_TREE_INBOX_ID).toBe("inbox-a");
     expect(env.FIRST_TREE_CHAT_ID).toBe("chat-1");
+  });
+
+  it("prepends FIRST_TREE_HOME/bin to PATH for channel-local CLI resolution", () => {
+    const parent = {
+      FIRST_TREE_HOME: "/first-tree-home",
+      PATH: `/usr/bin${delimiter}/first-tree-home/bin${delimiter}/opt/bin`,
+    } as NodeJS.ProcessEnv;
+    const env = buildAgentEnv(parent, {
+      sdk: { serverUrl: "http://first-tree" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+    });
+    expect(env.PATH).toBe(`/first-tree-home/bin${delimiter}/usr/bin${delimiter}/opt/bin`);
+  });
+
+  it("logs once when the channel-local CLI binary is not resolvable", () => {
+    setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
+    const home = mkdtempSync(join(tmpdir(), "first-tree-agent-env-"));
+    const logs: string[] = [];
+    const parent = { FIRST_TREE_HOME: home, PATH: "/usr/bin" } as NodeJS.ProcessEnv;
+    const ctx = {
+      sdk: { serverUrl: "http://first-tree" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "agent" as const,
+        visibility: "organization" as const,
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+      log: (msg: string) => logs.push(msg),
+    };
+
+    buildAgentEnv(parent, ctx);
+    buildAgentEnv(parent, ctx);
+
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("first-tree-staging");
+    expect(logs[0]).toContain(join(home, "bin"));
+  });
+
+  it("does not warn when the channel-local CLI binary exists", () => {
+    setCliBinding({ binName: "first-tree-dev", packageName: null });
+    const home = mkdtempSync(join(tmpdir(), "first-tree-agent-env-"));
+    const binDir = join(home, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const binPath = join(binDir, "first-tree-dev");
+    writeFileSync(binPath, "#!/bin/sh\n");
+    chmodSync(binPath, 0o755);
+    const logs: string[] = [];
+
+    buildAgentEnv({ FIRST_TREE_HOME: home, PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
+      sdk: { serverUrl: "http://first-tree" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+      log: (msg) => logs.push(msg),
+    });
+
+    expect(logs).toEqual([]);
   });
 
   it("overrides any pre-existing FIRST_TREE_* value in the parent env", () => {
