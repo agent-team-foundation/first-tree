@@ -173,8 +173,8 @@ describe("claude-code-tui suspend queued recovery", () => {
     expect(promptPath).toBeTruthy();
     if (!promptPath) throw new Error("missing append-system-prompt-file path");
     const prompt = readFileSync(promptPath, "utf-8");
-    expect(prompt).toContain("## Current Chat Context");
-    expect(prompt).toContain("Chat ID: chat-tui-suspend-queued-recovery");
+    expect(prompt).toContain('<first-tree-current-chat-context format="json">');
+    expect(prompt).toContain('"chatId": "chat-tui-suspend-queued-recovery"');
 
     await handler.suspend();
     await start;

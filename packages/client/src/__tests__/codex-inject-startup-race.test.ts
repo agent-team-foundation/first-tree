@@ -207,7 +207,70 @@ describe("codex handler startup inject queue", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(state.runInputs).toHaveLength(2);
+    expect(String(state.runInputs[0])).toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[0])).toContain('"chatId": "chat-startup-race"');
     expect(String(state.runInputs[0])).toContain("first");
+    expect(String(state.runInputs[1])).not.toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[1])).toContain("second");
+    expect(completedCounts).toEqual([1, 1]);
+
+    await handler.shutdown();
+  });
+
+  it("does not let queued injects consume startup chat context while the first input is still formatting", async () => {
+    const completedCounts: Array<number | undefined> = [];
+    let releaseFirstFormat = (_value: string): void => {
+      throw new Error("first format promise was not captured");
+    };
+    let firstFormatStarted = (): void => {};
+    const firstFormatStartedPromise = new Promise<void>((resolve) => {
+      firstFormatStarted = resolve;
+    });
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext(
+      (count) => {
+        completedCounts.push(count);
+      },
+      {
+        formatInboundContent: vi.fn<SessionContext["formatInboundContent"]>((message) => {
+          if (message.id === "m1") {
+            firstFormatStarted();
+            return new Promise<string>((resolve) => {
+              releaseFirstFormat = resolve;
+            });
+          }
+          return Promise.resolve(
+            typeof message.content === "string" ? message.content : JSON.stringify(message.content),
+          );
+        }),
+      },
+    );
+
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await firstFormatStartedPromise;
+
+    handler.inject(makeMessage("m2", "second"));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(state.runInputs).toHaveLength(0);
+
+    releaseFirstFormat("first");
+    await startPromise;
+    await waitFor(() => state.runInputs.length === 2);
+
+    expect(String(state.runInputs[0])).toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[0])).toContain('"chatId": "chat-startup-race"');
+    expect(String(state.runInputs[0])).toContain("first");
+    expect(String(state.runInputs[0])).not.toContain("second");
+    expect(String(state.runInputs[1])).not.toContain("<first-tree-current-chat-context");
     expect(String(state.runInputs[1])).toContain("second");
     expect(completedCounts).toEqual([1, 1]);
 
@@ -238,9 +301,46 @@ describe("codex handler startup inject queue", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(state.runInputs).toHaveLength(2);
+    expect(String(state.runInputs[0])).toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[0])).toContain('"chatId": "chat-startup-race"');
+    expect(String(state.runInputs[1])).not.toContain("<first-tree-current-chat-context");
     expect(String(state.runInputs[1])).toContain("second");
     expect(String(state.runInputs[1])).toContain("third");
     expect(completedCounts).toEqual([1, 2]);
+
+    await handler.shutdown();
+  });
+
+  it("applies resume chat context to the next injected turn only when resume has no message", async () => {
+    const completedCounts: Array<number | undefined> = [];
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => {
+      completedCounts.push(count);
+    });
+
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.resume(undefined, "thread-test", ctx);
+
+    handler.inject(makeMessage("m1", "first after resume"));
+    await waitFor(() => state.runInputs.length === 1);
+
+    expect(String(state.runInputs[0])).toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[0])).toContain('"chatId": "chat-startup-race"');
+    expect(String(state.runInputs[0])).toContain("first after resume");
+
+    handler.inject(makeMessage("m2", "second after resume"));
+    await waitFor(() => state.runInputs.length === 2);
+
+    expect(String(state.runInputs[1])).not.toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[1])).toContain("second after resume");
+    expect(completedCounts).toEqual([1, 1]);
 
     await handler.shutdown();
   });

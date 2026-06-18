@@ -743,8 +743,8 @@ independently:
   sidebar.
 
 Both current values appear in the provider-injected "Current Chat Context"
-block as explicit \`Topic: <value>\` / \`Description:
-<value>\` or the sentinel \`(unset ...)\`.
+JSON payload as \`topic\` / \`description\` properties, with \`null\` meaning
+unset.
 
     ${bin} chat update --topic "<short label>"
     ${bin} chat update --description "<task background + plan + progress>"

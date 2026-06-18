@@ -227,8 +227,8 @@ describe("Phase E · agent cwd redesign — end-to-end invariants", () => {
     const briefing = readFileSync(agentsMdPath, "utf-8");
     const lastOptions = capturedSdkOptions[capturedSdkOptions.length - 1]?.options;
     const systemPrompt = lastOptions?.systemPrompt as { append?: string } | undefined;
-    expect(systemPrompt?.append).toContain("## Current Chat Context");
-    expect(systemPrompt?.append).toContain("Chat ID: chat-e4");
+    expect(systemPrompt?.append).toContain('<first-tree-current-chat-context format="json">');
+    expect(systemPrompt?.append).toContain('"chatId": "chat-e4"');
 
     // New redesign sections — must be present.
     // (Section headers were tightened in the AGENTS.md restructure follow-up:

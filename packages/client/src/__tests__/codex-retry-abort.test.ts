@@ -207,8 +207,8 @@ describe("codex handler retry abort cleanup", () => {
     );
 
     expect(state.runInputs).toHaveLength(1);
-    expect(String(state.runInputs[0])).toContain("<first-tree-current-chat-context>");
-    expect(String(state.runInputs[0])).toContain("Chat ID: chat-retry-abort");
+    expect(String(state.runInputs[0])).toContain("<first-tree-current-chat-context");
+    expect(String(state.runInputs[0])).toContain('"chatId": "chat-retry-abort"');
     expect(String(state.runInputs[0])).toContain("first");
     expect(state.lateAbortAfterClose).toBe(false);
 
@@ -222,7 +222,7 @@ describe("codex handler retry abort cleanup", () => {
     }
 
     expect(state.runInputs).toHaveLength(2);
-    expect(String(state.runInputs[1])).toContain("Chat ID: chat-retry-abort");
+    expect(String(state.runInputs[1])).toContain('"chatId": "chat-retry-abort"');
     expect(String(state.runInputs[1])).toContain("first");
     expect(state.signals).toHaveLength(2);
     expect(sendMessage).toHaveBeenCalledTimes(1);

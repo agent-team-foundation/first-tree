@@ -480,8 +480,16 @@ export const createCodexHandler: HandlerFactory = (config) => {
   });
   let drainScheduled = false;
   let drainInProgress = false;
+  let initialTurnPreparing = false;
   const queuedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
-  let chatContextForPrompt: ChatContext | undefined;
+  /**
+   * One-shot provider context for Codex. Codex SDK exposes no system-prompt
+   * channel, so the session/resume chat context is prepended to the next
+   * provider turn input and then cleared. Retries of that same turn reuse the
+   * already-wrapped input; later queued/injected user turns do not receive a
+   * repeated context block.
+   */
+  let pendingChatContextPrompt: string | null = null;
   /**
    * Predeclared source repos the agent config declares — pure declaration
    * (`declaredSourceRepos`), no git. Surfaced in the per-session AGENTS.md
@@ -563,8 +571,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Best-effort chat-context fetch for the identity-injection path. Failures
-   * are logged but never bubble — bootstrap continues with `undefined`.
+   * Best-effort chat-context fetch for the provider/session injection path.
+   * Failures are logged but never bubble — bootstrap continues with no
+   * Current Chat Context prompt for this session/resume boundary.
    */
   async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
     try {
@@ -579,8 +588,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
     return sessionCtx.formatInboundContent(message).then((text) => text);
   }
 
-  function withChatContext(input: Input): Input {
-    const chatPrompt = renderChatContextPrompt(chatContextForPrompt);
+  function consumePendingChatContext(input: Input): Input {
+    const chatPrompt = pendingChatContextPrompt;
+    pendingChatContextPrompt = null;
     if (!chatPrompt) return input;
     if (typeof input === "string") return `${chatPrompt}\n\n${input}`;
     return [{ type: "text", text: chatPrompt }, ...input];
@@ -787,6 +797,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       token.retry(messages, "codex_missing_thread");
       return;
     }
+    const providerInput = consumePendingChatContext(input);
 
     token.processingStarted(messages);
     const abort = new AbortController();
@@ -827,7 +838,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
         try {
           try {
-            const streamed = await activeThread.runStreamed(withChatContext(input), { signal: attemptAbort.signal });
+            const streamed = await activeThread.runStreamed(providerInput, { signal: attemptAbort.signal });
             for await (const event of streamed.events) {
               if (attemptAbort.signal.aborted) break;
               sessionCtx.recordProviderActivity();
@@ -1114,12 +1125,19 @@ export const createCodexHandler: HandlerFactory = (config) => {
 
   function scheduleQueuedMessagesDrain(): void {
     if (drainScheduled || drainInProgress) return;
-    if (queuedMessages.length === 0 || !ctx || !thread || currentTurnPromise) return;
+    if (queuedMessages.length === 0 || !ctx || !thread || currentTurnPromise || initialTurnPreparing) return;
 
     drainScheduled = true;
     setImmediate(() => {
       drainScheduled = false;
-      if (drainInProgress || queuedMessages.length === 0 || !ctx || !thread || currentTurnPromise) {
+      if (
+        drainInProgress ||
+        queuedMessages.length === 0 ||
+        !ctx ||
+        !thread ||
+        currentTurnPromise ||
+        initialTurnPreparing
+      ) {
         scheduleQueuedMessagesDrain();
         return;
       }
@@ -1224,7 +1242,7 @@ export const createCodexHandler: HandlerFactory = (config) => {
       }
 
       const chatContext = await fetchChatContextOrLog(sessionCtx);
-      chatContextForPrompt = chatContext;
+      pendingChatContextPrompt = renderChatContextPrompt(chatContext);
 
       // gitRepos first so the shared briefing can list the predeclared
       // source-repo paths the agent should know about.
@@ -1245,8 +1263,16 @@ export const createCodexHandler: HandlerFactory = (config) => {
       prevCumulativeUsage = null;
       threadIsFresh = true;
 
-      const input = await toCodexInput(message, sessionCtx);
-      await runTurn(input, sessionCtx, [message], deliveryToken);
+      initialTurnPreparing = true;
+      let initialTurnCompleted = false;
+      try {
+        const input = await toCodexInput(message, sessionCtx);
+        await runTurn(input, sessionCtx, [message], deliveryToken);
+        initialTurnCompleted = true;
+      } finally {
+        initialTurnPreparing = false;
+        if (initialTurnCompleted) scheduleQueuedMessagesDrain();
+      }
 
       // Codex assigns thread_id via `thread.started` during the first turn;
       // fall back to whatever `Thread` exposes if the event was missed.
@@ -1286,9 +1312,9 @@ export const createCodexHandler: HandlerFactory = (config) => {
       }
 
       // Re-fetch chat-context every resume so newly-joined participants
-      // surface in the per-turn provider prompt.
+      // surface at the next session/resume provider turn.
       const chatContext = await fetchChatContextOrLog(sessionCtx);
-      chatContextForPrompt = chatContext;
+      pendingChatContextPrompt = renderChatContextPrompt(chatContext);
 
       declareSourceRepos(payload, cwd);
       await materializeResourceSkills(cwd, payload, sessionCtx);
@@ -1305,8 +1331,16 @@ export const createCodexHandler: HandlerFactory = (config) => {
       currentModel = payload.model || "";
 
       if (message) {
-        const input = await toCodexInput(message, sessionCtx);
-        await runTurn(input, sessionCtx, [message], deliveryToken);
+        initialTurnPreparing = true;
+        let initialTurnCompleted = false;
+        try {
+          const input = await toCodexInput(message, sessionCtx);
+          await runTurn(input, sessionCtx, [message], deliveryToken);
+          initialTurnCompleted = true;
+        } finally {
+          initialTurnPreparing = false;
+          if (initialTurnCompleted) scheduleQueuedMessagesDrain();
+        }
       }
       return hasExplicitDeliveryToken
         ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
@@ -1338,6 +1372,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
       currentTurnPromise = null;
       thread = null;
       codex = null;
+      initialTurnPreparing = false;
+      pendingChatContextPrompt = null;
     },
 
     async shutdown() {
@@ -1367,6 +1403,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
       cwd = null;
       threadId = null;
       ctx = null;
+      initialTurnPreparing = false;
+      pendingChatContextPrompt = null;
       queuedMessages.length = 0;
     },
   } satisfies AgentHandler;

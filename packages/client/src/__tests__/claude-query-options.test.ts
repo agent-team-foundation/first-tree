@@ -67,8 +67,8 @@ describe("buildClaudeQueryOptions", () => {
         preset: "claude_code",
       }),
     );
-    expect(opts.systemPrompt?.append).toContain("## Current Chat Context");
-    expect(opts.systemPrompt?.append).toContain("Chat ID: chat-claude");
-    expect(opts.systemPrompt?.append).toContain("@alice");
+    expect(opts.systemPrompt?.append).toContain('<first-tree-current-chat-context format="json">');
+    expect(opts.systemPrompt?.append).toContain('"chatId": "chat-claude"');
+    expect(opts.systemPrompt?.append).toContain('"name": "alice"');
   });
 });

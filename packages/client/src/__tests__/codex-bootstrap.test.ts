@@ -198,9 +198,9 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
 
     const promptA = renderChatContextPrompt(chatA);
     const promptB = renderChatContextPrompt(chatB);
-    expect(promptA).toContain("Chat ID: chat-a");
+    expect(promptA).toContain('"chatId": "chat-a"');
     expect(promptA).not.toContain("chat-b");
-    expect(promptB).toContain("Chat ID: chat-b");
+    expect(promptB).toContain('"chatId": "chat-b"');
     expect(promptB).not.toContain("chat-a");
   });
 });
