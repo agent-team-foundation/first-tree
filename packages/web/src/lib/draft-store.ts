@@ -150,10 +150,11 @@ export function clearDraft(scope: string): void {
  * `sendChatId` can resolve AFTER the user switched to `currentChatId`; the
  * rejected text must never be restored into the current composer then — it
  * belongs to a different chat, and the in-chat draft state is shared across
- * chats. Returns `true` when it parked the text in the originating chat's own
- * cache (the caller must leave the live composer untouched); returns `false`
- * when the user is still in the originating chat, so the caller restores the
- * text into the live composer as usual.
+ * chats. Returns `true` when the user has switched away — the caller must
+ * leave the live composer untouched; the rejected text is parked in the
+ * originating chat's own cache unless a newer draft already lives there.
+ * Returns `false` when the user is still in the originating chat, so the
+ * caller restores the text into the live composer as usual.
  */
 export function parkFailedDraftIfSwitched(
   userId: string | null,
@@ -162,7 +163,10 @@ export function parkFailedDraftIfSwitched(
   text: string,
 ): boolean {
   if (currentChatId === sendChatId) return false;
-  // saveDraft no-ops on empty text, so a blank rollback parks nothing.
-  saveDraft(chatDraftScope(userId, sendChatId), { text });
+  const scope = chatDraftScope(userId, sendChatId);
+  // Park the rejected text in the originating chat, but never clobber a newer
+  // draft the user has since typed there (mirrors the same-chat rollback's
+  // "only restore into an empty composer" guard). saveDraft no-ops on empty.
+  if (loadDraft(scope) === null) saveDraft(scope, { text });
   return true;
 }
