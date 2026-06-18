@@ -8,6 +8,7 @@ name: Rebuild website changelog on release
 on:
   release:
     types: [published]
+  workflow_dispatch: # allow a manual rebuild from the Actions tab (and to test the hook)
 
 # This job only POSTs to an external Vercel hook — it never needs the
 # repo GITHUB_TOKEN, so drop all default token permissions.
