@@ -1083,11 +1083,11 @@ export function ChatView({
   // Always-current chat id for async send rollbacks: a send that FAILS after
   // the user switched chats must restore its rejected text into the originating
   // chat, never the one now in view (the draft state is shared and ChatView
-  // isn't remounted on switch).
+  // isn't remounted on switch). Written during render (not a passive effect) so
+  // it is already current on the first committed frame after a switch; only
+  // read inside async callbacks, never to compute render output.
   const chatIdRef = useRef(chatId);
-  useEffect(() => {
-    chatIdRef.current = chatId;
-  }, [chatId]);
+  chatIdRef.current = chatId;
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);

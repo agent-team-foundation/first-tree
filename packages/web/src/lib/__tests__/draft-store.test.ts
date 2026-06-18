@@ -141,6 +141,14 @@ describe("parkFailedDraftIfSwitched", () => {
     expect(loadDraft(chatDraftScope("user-1", "chat-a"))).toBeNull();
   });
 
+  it("does not clobber a newer draft already in the originating chat", () => {
+    // User switched back to chat-a, typed a replacement, then left again before
+    // the in-flight send failed — the stale rollback must not overwrite it.
+    saveDraft(chatDraftScope("user-1", "chat-a"), { text: "newer draft" });
+    expect(parkFailedDraftIfSwitched("user-1", "chat-a", "chat-b", "stale failed text")).toBe(true);
+    expect(loadDraft(chatDraftScope("user-1", "chat-a"))?.text).toBe("newer draft");
+  });
+
   it("parks the failed text in the originating chat when the user switched away", () => {
     // Send started in chat-a, but the user is now viewing chat-b.
     expect(parkFailedDraftIfSwitched("user-1", "chat-a", "chat-b", "retry me")).toBe(true);
