@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   observedInputs: [] as string[],
   pendingResults: [] as unknown[],
   waiters: [] as Array<() => void>,
+  coalesceFirstResultAfterInputs: null as number | null,
 }));
 
 function wakeQuery(): void {
@@ -31,6 +32,10 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
       for await (const sdkMsg of args.prompt) {
         state.observedInputs.push(flattenContent(sdkMsg.message.content));
         const turn = state.observedInputs.length;
+        if (state.coalesceFirstResultAfterInputs !== null) {
+          if (turn < state.coalesceFirstResultAfterInputs) continue;
+          state.coalesceFirstResultAfterInputs = null;
+        }
         state.pendingResults.push({
           type: "result",
           subtype: "success",
@@ -153,6 +158,7 @@ beforeEach(() => {
   state.observedInputs.length = 0;
   state.pendingResults.length = 0;
   state.waiters.length = 0;
+  state.coalesceFirstResultAfterInputs = null;
   state.chatContextPromise = new Promise((resolve) => {
     state.resolveChatContext = resolve;
   });
@@ -163,6 +169,7 @@ afterEach(() => {
   state.chatContextPromise = null;
   state.resolveChatContext = null;
   state.pendingResults.length = 0;
+  state.coalesceFirstResultAfterInputs = null;
   wakeQuery();
 });
 
@@ -191,11 +198,11 @@ describe("claude-code handler startup inject queue", () => {
 
     await startPromise;
     await waitFor(() => state.observedInputs.length === 2);
-    await waitFor(() => completedCounts.length === 2);
+    await waitFor(() => completedCounts.length === 1);
 
     expect(state.observedInputs[0]).toContain("first");
     expect(state.observedInputs[1]).toContain("second");
-    expect(completedCounts).toEqual([undefined, undefined]);
+    expect(completedCounts).toEqual([undefined]);
 
     await handler.shutdown();
   });
@@ -244,6 +251,43 @@ describe("claude-code handler startup inject queue", () => {
     expect(state.observedInputs[1]).toContain("second");
     expect(state.observedInputs[2]).toContain("third");
     expect(completedCounts).toEqual([undefined, undefined, undefined]);
+
+    await handler.shutdown();
+  });
+
+  it("settles coalesced SDK inputs as one provider turn", async () => {
+    state.coalesceFirstResultAfterInputs = 2;
+    const finishedBatches: string[][] = [];
+    const processingStarted: string[] = [];
+    const handler = createClaudeCodeHandler({ workspaceRoot });
+    const ctx = makeContext(() => {});
+    ctx.markMessagesConsumed = (messages) => {
+      const batch = Array.isArray(messages) ? messages : [messages];
+      processingStarted.push(...batch.map((message) => message.id));
+    };
+    ctx.finishTurn = async (messages) => {
+      const batch = Array.isArray(messages) ? messages : [messages];
+      finishedBatches.push(batch.map((message) => message.id));
+    };
+
+    state.resolveChatContext?.({
+      chatId: "chat-claude-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+    handler.inject(makeMessage("m2", "second"));
+
+    await waitFor(() => state.observedInputs.length === 2);
+    await waitFor(() => finishedBatches.length === 1);
+
+    expect(state.observedInputs[0]).toContain("first");
+    expect(state.observedInputs[1]).toContain("second");
+    expect(processingStarted).toEqual(["m1", "m2"]);
+    expect(finishedBatches).toEqual([["m1", "m2"]]);
 
     await handler.shutdown();
   });
