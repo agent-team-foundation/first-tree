@@ -114,6 +114,7 @@ import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from 
 import { isNavigableWebHref } from "../../../lib/safe-href.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
+import { useChatDraftText } from "../../../lib/use-chat-draft-text.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
@@ -1073,8 +1074,11 @@ export function ChatView({
    * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
    */
   const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
-  const { agentId: myAgentId, memberId: myMemberId } = useAuth();
-  const [draft, setDraft] = useState("");
+  const { agentId: myAgentId, memberId: myMemberId, user } = useAuth();
+  // Unsent draft text, cached per user + chat in browser-local storage so it
+  // survives chat switches and reloads (ChatView is not remounted on switch).
+  // Clearing the draft on send empties its stored entry.
+  const [draft, setDraft] = useChatDraftText(user?.id ?? null, chatId);
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -1888,7 +1892,7 @@ export function ChatView({
       if (!el || el.value !== "") return;
       el.setSelectionRange(0, 0);
     });
-  }, [dockRequestId, draft]);
+  }, [dockRequestId, draft, setDraft]);
   // Reset the per-question answer state when the block moves to a DIFFERENT
   // request (the current one resolved, or a newer one became the oldest live
   // question). Selections always reset; the free-text draft is dropped only on
@@ -2669,6 +2673,7 @@ export function ChatView({
     displayName,
     requiresMention,
     readOnly,
+    setDraft,
   ]);
 
   /** AgentIds the draft text addresses via `@<name>` tokens, resolved
