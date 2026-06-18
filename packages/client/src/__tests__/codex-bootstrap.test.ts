@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildCodexAgentBriefing } from "../handlers/codex/index.js";
 import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER } from "../runtime/bootstrap.js";
 import type { ChatContext } from "../runtime/chat-context.js";
+import { renderChatContextPrompt } from "../runtime/chat-context-section.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
 
 // The unified briefing builder (`runtime/agent-briefing.ts`) reads the
@@ -90,7 +91,7 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     expect(existsSync(join(workspacePath, "CLAUDE.md"))).toBe(false);
   });
 
-  it("inlines First Tree tools and messaging rules into the unified briefing", () => {
+  it("inlines stable First Tree tools and messaging rules into the shared briefing", () => {
     setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
     const chatContext: ChatContext = {
       chatId: "chat-1",
@@ -129,7 +130,9 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     expect(briefing).toContain("Codex Developer");
     expect(briefing).toContain("## Agent-Specific Prompt");
     expect(briefing).toContain("Follow the local implementation plan.");
-    expect(briefing).toContain("## Current Chat Context");
+    expect(briefing).not.toContain("## Current Chat Context");
+    expect(briefing).not.toContain("Chat ID: chat-1");
+    expect(briefing).not.toContain("@baixiaohang");
     expect(briefing).toContain("# Working in First Tree");
     // The Communication decision guide stays inline because tree-less agents
     // do not have First Tree family skill payloads installed.
@@ -158,5 +161,46 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     expect(briefing).not.toContain("# First Tree Agent Runtime");
     expect(briefing).not.toContain("# Working Directory Convention");
     expect(briefing).not.toContain("## Agent-Specific Behavior");
+  });
+
+  it("keeps same-agent concurrent chat contexts out of the shared briefing", () => {
+    const identity = {
+      agentId: "codex-developer",
+      inboxId: "inbox_codex-developer",
+      displayName: "Codex Developer",
+      type: "agent" as const,
+      visibility: "organization" as const,
+      delegateMention: null,
+      metadata: {},
+    };
+    const payload = codexPayload({ prompt: { append: "Stable agent prompt." } });
+    const chatA: ChatContext = {
+      chatId: "chat-a",
+      title: "Chat A",
+      topic: "Chat A",
+      description: null,
+      participants: [{ name: "alice", displayName: "Alice", type: "human" }],
+    };
+    const chatB: ChatContext = {
+      chatId: "chat-b",
+      title: "Chat B",
+      topic: "Chat B",
+      description: null,
+      participants: [{ name: "bob", displayName: "Bob", type: "human" }],
+    };
+
+    const briefingA = buildCodexAgentBriefing(identity, payload, chatA, "/workspaces/codex-developer", [], null);
+    const briefingB = buildCodexAgentBriefing(identity, payload, chatB, "/workspaces/codex-developer", [], null);
+
+    expect(briefingA).toBe(briefingB);
+    expect(briefingA).not.toContain("chat-a");
+    expect(briefingA).not.toContain("chat-b");
+
+    const promptA = renderChatContextPrompt(chatA);
+    const promptB = renderChatContextPrompt(chatB);
+    expect(promptA).toContain('"chatId": "chat-a"');
+    expect(promptA).not.toContain("chat-b");
+    expect(promptB).toContain('"chatId": "chat-b"');
+    expect(promptB).not.toContain("chat-a");
   });
 });

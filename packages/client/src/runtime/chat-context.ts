@@ -51,8 +51,8 @@ export type ChatContext = {
  *   - `GET /agent/chats/:chatId/participants` — participant rows with names
  *
  * Throws on either HTTP failure so the caller (handler) can log + degrade
- * to the no-context path. The bootstrap branch then writes neither the
- * identity.json `chatContext` field nor the CLAUDE.md / AGENTS.md section.
+ * to the no-context path. The handler then writes neither the identity.json
+ * `chatContext` field nor a provider/session Current Chat Context prompt.
  */
 export async function fetchChatContext(
   sdk: Pick<FirstTreeHubSDK, "getChatDetail" | "listChatParticipants">,

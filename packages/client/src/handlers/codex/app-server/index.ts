@@ -6,6 +6,7 @@ import type { AgentConfigCache } from "../../../runtime/agent-config-cache.js";
 import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../../../runtime/bootstrap.js";
 import { type CodexBinaryResolution, resolveCodexRuntimeBinary } from "../../../runtime/capabilities/codex.js";
 import { type ChatContext, fetchChatContext } from "../../../runtime/chat-context.js";
+import { renderChatContextPrompt } from "../../../runtime/chat-context-section.js";
 import {
   type ContextTreeAttribution,
   resolveContextTreeRelativePath,
@@ -30,12 +31,7 @@ import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../..
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../../runtime/workspace.js";
 import { formatAuthHint, isCodexAuthError } from "../../auth-error-hint.js";
 import { resolveTurnSettlement } from "../../turn-settlement.js";
-import {
-  buildCodexThreadOptions,
-  collectCodexFileChangePaths,
-  detectAgentsMdConcurrentWrite,
-  isTransientCodexErrorMessage,
-} from "../sdk.js";
+import { buildCodexThreadOptions, collectCodexFileChangePaths, isTransientCodexErrorMessage } from "../sdk.js";
 import {
   CodexAppServerClient,
   type CodexAppServerClientOptions,
@@ -136,6 +132,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let drainPostTurnInProgress = false;
   let drainPostTurnScheduled = false;
   let shutdownRequested = false;
+  let pendingChatContextPrompt: string | null = null;
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
 
   const steerQueue: QueueEntry[] = [];
@@ -186,16 +183,10 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     return cfg;
   }
 
-  function buildBriefing(
-    sessionCtx: SessionContext,
-    payload: AgentRuntimeConfigPayload,
-    chatContext: ChatContext | undefined,
-    workspaceCwd: string,
-  ): string {
+  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
       payload,
-      chatContext,
       workspacePath: workspaceCwd,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
@@ -224,7 +215,6 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     payload: AgentRuntimeConfigPayload,
     payloadResolved: boolean,
   ): void {
-    detectAgentsMdConcurrentWrite(workspace, Date.now(), (m) => sessionCtx.log(m));
     ensureAgentBootstrapShared({
       workspace,
       sessionCtx,
@@ -265,9 +255,10 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     cwd = acquireAgentHome(workspaceRoot);
     const { payload, resolved } = await resolvePayload(sessionCtx);
     const chatContext = await fetchChatContextOrLog(sessionCtx);
+    pendingChatContextPrompt = renderChatContextPrompt(chatContext);
     declareSourceRepos(payload, cwd);
     await materializeResourceSkills(cwd, payload, sessionCtx);
-    const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
+    const briefing = buildBriefing(sessionCtx, payload, cwd);
     ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resolved);
     markWorkspaceInitComplete(cwd);
     currentModel = payload.model || "";
@@ -648,12 +639,13 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       return;
     }
 
+    const providerInputText = consumePendingChatContext(inputText);
     gitWriteTracker.captureBaseline();
     let result: unknown;
     try {
       result = await client.request("turn/start", {
         threadId,
-        input: [textInput(inputText)],
+        input: [textInput(providerInputText)],
         ...(cwd ? { cwd } : {}),
         approvalPolicy: "never",
         model: currentModel || null,
@@ -690,6 +682,13 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       turnSettlementInProgress = false;
       schedulePostTurnDrain();
     }
+  }
+
+  function consumePendingChatContext(inputText: string): string {
+    const chatPrompt = pendingChatContextPrompt;
+    pendingChatContextPrompt = null;
+    if (!chatPrompt) return inputText;
+    return `${chatPrompt}\n\n${inputText}`;
   }
 
   async function createCurrentTurn(
@@ -1050,6 +1049,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       await interruptCurrentTurn();
       await appServer?.shutdown();
       appServer = null;
+      pendingChatContextPrompt = null;
     },
 
     async shutdown() {
@@ -1065,6 +1065,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       cwd = null;
       threadId = null;
       ctx = null;
+      pendingChatContextPrompt = null;
     },
   } satisfies AgentHandler;
 };

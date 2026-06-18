@@ -19,6 +19,7 @@ import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
 import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
+import { renderChatContextPrompt } from "../../runtime/chat-context-section.js";
 import {
   createCodexClientWithBinaryFallback,
   formatCodexBinaryMissingMessage,
@@ -101,64 +102,6 @@ const RETRY_MULTIPLIER = 3;
 const USAGE_LIMIT_NOTICE =
   "⚠️ My runtime has reached its usage limit, so I couldn't process the message you just sent. " +
   "Please resend it once the limit resets.";
-
-/**
- * Concurrent-write detection window for the per-chat AGENTS.md briefing.
- *
- * Codex CLI reads AGENTS.md once at thread startup; the handler rewrites it
- * on every start/resume because there is no per-turn prompt-injection API
- * (see proposal §⓪.3 risk acceptance / §④ race-window decision). Two chats
- * starting for the same agent within this window almost certainly raced —
- * the second writer clobbered the first briefing before the codex CLI got
- * to read it. We log instead of locking because the operational signal
- * ("wrong chat context surfaces in codex") is the actionable thing; the
- * fix lives upstream (per-turn prompt API).
- *
- * **1000 ms chosen empirically (PR #600 review nit #2):** the bootstrap
- * pipeline (git mirror prepare → `bootstrapWorkspace` → briefing rewrite)
- * runs in roughly 200 ms-1 s when the mirror is warm. A tighter window
- * (the original 100 ms) systematically MISSED the most dangerous form of
- * the race — two chats triggering `ensureCodexBootstrap` within the same
- * bootstrap envelope — so we widen to cover that. Conversely, two writes
- * spaced more than 1 s apart are unlikely to share a CLI read window. We
- * accept a small chance of false positives (e.g. fast resume followed by
- * fast resume from the same chat) over false negatives, because the log
- * line is diagnostic-only — no behaviour change.
- */
-const AGENTS_MD_RACE_WINDOW_MS = 1000;
-
-/**
- * Module-level so the race detector spans every handler instance for the
- * same agent home (each chat creates its own handler). Cleared per-test
- * via `__resetCodexHandlerStateForTests`.
- */
-const lastAgentsMdWriteAt = new Map<string, number>();
-
-/** Test-only: reset module-level race-detector state between vitest cases. */
-export function __resetCodexHandlerStateForTests(): void {
-  lastAgentsMdWriteAt.clear();
-}
-
-/**
- * Record an AGENTS.md write and surface a warning when one fires inside the
- * `AGENTS_MD_RACE_WINDOW_MS` of the previous write for the same workspace —
- * the codex CLI reads AGENTS.md once at thread startup, so two writers
- * inside this window mean the second one almost certainly clobbered the
- * first briefing before the CLI got to read it. Exported so the behaviour
- * is unit-testable without going through the full handler bootstrap path.
- */
-export function detectAgentsMdConcurrentWrite(workspace: string, now: number, log: (msg: string) => void): void {
-  const prevWrite = lastAgentsMdWriteAt.get(workspace);
-  if (prevWrite !== undefined && now - prevWrite < AGENTS_MD_RACE_WINDOW_MS) {
-    log(
-      `codex AGENTS.md concurrent write detected workspace=${workspace} ` +
-        `gap_ms=${now - prevWrite} — another chat may have overwritten this briefing ` +
-        `before codex CLI read it (proposal §⓪.3 race window). ` +
-        `If chat-context surfaces wrong agent state, this is the cause.`,
-    );
-  }
-  lastAgentsMdWriteAt.set(workspace, now);
-}
 
 /**
  * HTTP status-code matchers anchored at word boundaries so unrelated
@@ -367,7 +310,7 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
 export function buildCodexAgentBriefing(
   identity: AgentIdentity,
   payload: AgentRuntimeConfigPayload,
-  chatContext: ChatContext | undefined,
+  _chatContext: ChatContext | undefined,
   workspaceCwd: string,
   sourceRepos: ReadonlyArray<PredeclaredSourceRepo>,
   contextTreePath: string | null = null,
@@ -375,7 +318,6 @@ export function buildCodexAgentBriefing(
   return buildAgentBriefing({
     identity,
     payload,
-    chatContext,
     workspacePath: workspaceCwd,
     sourceRepos,
     contextTreePath,
@@ -538,7 +480,16 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
   });
   let drainScheduled = false;
   let drainInProgress = false;
+  let initialTurnPreparing = false;
   const queuedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
+  /**
+   * One-shot provider context for Codex. Codex SDK exposes no system-prompt
+   * channel, so the session/resume chat context is prepended to the next
+   * provider turn input and then cleared. Retries of that same turn reuse the
+   * already-wrapped input; later queued/injected user turns do not receive a
+   * repeated context block.
+   */
+  let pendingChatContextPrompt: string | null = null;
   /**
    * Predeclared source repos the agent config declares — pure declaration
    * (`declaredSourceRepos`), no git. Surfaced in the per-session AGENTS.md
@@ -607,16 +558,10 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     return message;
   }
 
-  function buildBriefing(
-    sessionCtx: SessionContext,
-    payload: AgentRuntimeConfigPayload,
-    chatContext: ChatContext | undefined,
-    workspaceCwd: string,
-  ): string {
+  function buildBriefing(sessionCtx: SessionContext, payload: AgentRuntimeConfigPayload, workspaceCwd: string): string {
     return buildAgentBriefing({
       identity: sessionCtx.agent,
       payload,
-      chatContext,
       workspacePath: workspaceCwd,
       sourceRepos: sourceReposForPrompt,
       contextTreePath,
@@ -626,8 +571,9 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Best-effort chat-context fetch for the identity-injection path. Failures
-   * are logged but never bubble — bootstrap continues with `undefined`.
+   * Best-effort chat-context fetch for the provider/session injection path.
+   * Failures are logged but never bubble — bootstrap continues with no
+   * Current Chat Context prompt for this session/resume boundary.
    */
   async function fetchChatContextOrLog(sessionCtx: SessionContext): Promise<ChatContext | undefined> {
     try {
@@ -640,6 +586,14 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
 
   function toCodexInput(message: SessionMessage, sessionCtx: SessionContext): Promise<Input> {
     return sessionCtx.formatInboundContent(message).then((text) => text);
+  }
+
+  function consumePendingChatContext(input: Input): Input {
+    const chatPrompt = pendingChatContextPrompt;
+    pendingChatContextPrompt = null;
+    if (!chatPrompt) return input;
+    if (typeof input === "string") return `${chatPrompt}\n\n${input}`;
+    return [{ type: "text", text: chatPrompt }, ...input];
   }
 
   /**
@@ -843,6 +797,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       token.retry(messages, "codex_missing_thread");
       return;
     }
+    const providerInput = consumePendingChatContext(input);
 
     token.processingStarted(messages);
     const abort = new AbortController();
@@ -883,7 +838,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
 
         try {
           try {
-            const streamed = await activeThread.runStreamed(input, { signal: attemptAbort.signal });
+            const streamed = await activeThread.runStreamed(providerInput, { signal: attemptAbort.signal });
             for await (const event of streamed.events) {
               if (attemptAbort.signal.aborted) break;
               sessionCtx.recordProviderActivity();
@@ -1170,12 +1125,19 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
 
   function scheduleQueuedMessagesDrain(): void {
     if (drainScheduled || drainInProgress) return;
-    if (queuedMessages.length === 0 || !ctx || !thread || currentTurnPromise) return;
+    if (queuedMessages.length === 0 || !ctx || !thread || currentTurnPromise || initialTurnPreparing) return;
 
     drainScheduled = true;
     setImmediate(() => {
       drainScheduled = false;
-      if (drainInProgress || queuedMessages.length === 0 || !ctx || !thread || currentTurnPromise) {
+      if (
+        drainInProgress ||
+        queuedMessages.length === 0 ||
+        !ctx ||
+        !thread ||
+        currentTurnPromise ||
+        initialTurnPreparing
+      ) {
         scheduleQueuedMessagesDrain();
         return;
       }
@@ -1229,18 +1191,6 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     }
   }
 
-  /**
-   * Bootstrap wrapper around the shared {@link ensureAgentBootstrapShared}
-   * helper that adds codex's AGENTS.md concurrent-write detector.
-   *
-   * 🔥 RACE WINDOW (proposal §⓪.3 accepted): the codex CLI reads AGENTS.md
-   * once at thread startup, so two writers landing inside the race window
-   * mean the second writer likely clobbered the first briefing before codex
-   * read it. Claude Code has the same property now that the briefing is the
-   * single channel, but Codex still hits this most visibly because there is
-   * no per-turn prompt API to update mid-thread — debug "wrong chat context
-   * surfaces in codex" symptoms by looking here first.
-   */
   function ensureCodexBootstrap(
     workspace: string,
     sessionCtx: SessionContext,
@@ -1248,7 +1198,6 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     payload: AgentRuntimeConfigPayload,
     payloadResolved: boolean,
   ): void {
-    detectAgentsMdConcurrentWrite(workspace, Date.now(), (m) => sessionCtx.log(m));
     ensureAgentBootstrapShared({
       workspace,
       sessionCtx,
@@ -1293,13 +1242,14 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       }
 
       const chatContext = await fetchChatContextOrLog(sessionCtx);
+      pendingChatContextPrompt = renderChatContextPrompt(chatContext);
 
-      // gitRepos first so the per-chat briefing can list the predeclared
+      // gitRepos first so the shared briefing can list the predeclared
       // source-repo paths the agent should know about.
       declareSourceRepos(payload, cwd);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
-      const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
+      const briefing = buildBriefing(sessionCtx, payload, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, payloadResolved);
       markWorkspaceInitComplete(cwd);
 
@@ -1313,8 +1263,16 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       prevCumulativeUsage = null;
       threadIsFresh = true;
 
-      const input = await toCodexInput(message, sessionCtx);
-      await runTurn(input, sessionCtx, [message], deliveryToken);
+      initialTurnPreparing = true;
+      let initialTurnCompleted = false;
+      try {
+        const input = await toCodexInput(message, sessionCtx);
+        await runTurn(input, sessionCtx, [message], deliveryToken);
+        initialTurnCompleted = true;
+      } finally {
+        initialTurnPreparing = false;
+        if (initialTurnCompleted) scheduleQueuedMessagesDrain();
+      }
 
       // Codex assigns thread_id via `thread.started` during the first turn;
       // fall back to whatever `Thread` exposes if the event was missed.
@@ -1354,14 +1312,14 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       }
 
       // Re-fetch chat-context every resume so newly-joined participants
-      // surface in AGENTS.md. The sentinel still gates the expensive
-      // `<binName> tree skill install` shell-out.
+      // surface at the next session/resume provider turn.
       const chatContext = await fetchChatContextOrLog(sessionCtx);
+      pendingChatContextPrompt = renderChatContextPrompt(chatContext);
 
       declareSourceRepos(payload, cwd);
       await materializeResourceSkills(cwd, payload, sessionCtx);
 
-      const briefing = buildBriefing(sessionCtx, payload, chatContext, cwd);
+      const briefing = buildBriefing(sessionCtx, payload, cwd);
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resumePayloadResolved);
       markWorkspaceInitComplete(cwd);
 
@@ -1373,8 +1331,16 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       currentModel = payload.model || "";
 
       if (message) {
-        const input = await toCodexInput(message, sessionCtx);
-        await runTurn(input, sessionCtx, [message], deliveryToken);
+        initialTurnPreparing = true;
+        let initialTurnCompleted = false;
+        try {
+          const input = await toCodexInput(message, sessionCtx);
+          await runTurn(input, sessionCtx, [message], deliveryToken);
+          initialTurnCompleted = true;
+        } finally {
+          initialTurnPreparing = false;
+          if (initialTurnCompleted) scheduleQueuedMessagesDrain();
+        }
       }
       return hasExplicitDeliveryToken
         ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
@@ -1406,6 +1372,8 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       currentTurnPromise = null;
       thread = null;
       codex = null;
+      initialTurnPreparing = false;
+      pendingChatContextPrompt = null;
     },
 
     async shutdown() {
@@ -1435,6 +1403,8 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       cwd = null;
       threadId = null;
       ctx = null;
+      initialTurnPreparing = false;
+      pendingChatContextPrompt = null;
       queuedMessages.length = 0;
     },
   } satisfies AgentHandler;

@@ -3,14 +3,12 @@ import { CodexAppServerStartupError, createCodexAppServerHandler } from "./app-s
 import { createCodexSdkHandler } from "./sdk.js";
 
 export {
-  __resetCodexHandlerStateForTests,
   appendGitStatusDeltaRefs,
   buildCodexAgentBriefing,
   buildCodexThreadOptions,
   collectCodexFileChangePaths,
   computePerTurnUsageDelta,
   createCodexSdkHandler,
-  detectAgentsMdConcurrentWrite,
   isTransientCodexErrorMessage,
   toolFileRefsForTerminalCodexTool,
   toolFileRefsFromCodexFileChange,

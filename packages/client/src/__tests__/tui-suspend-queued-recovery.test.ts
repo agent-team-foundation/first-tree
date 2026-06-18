@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -94,6 +94,7 @@ vi.mock("../handlers/claude-code-tui/transcript-tail.js", () => ({
 }));
 
 import { createClaudeCodeTuiHandler } from "../handlers/claude-code-tui/index.js";
+import { newSession } from "../handlers/claude-code-tui/tmux-session.js";
 
 const AGENT_ID = "019eca71-0000-7000-8000-000000000001";
 const CHAT_ID = "chat-tui-suspend-queued-recovery";
@@ -144,6 +145,7 @@ async function waitFor(assertion: () => boolean): Promise<void> {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   state.workspaceRoot = mkdtempSync(join(tmpdir(), "ft-tui-suspend-queue-"));
   state.pasteTexts.length = 0;
   state.lastPasteOrdinal = 0;
@@ -155,6 +157,30 @@ afterEach(() => {
 });
 
 describe("claude-code-tui suspend queued recovery", () => {
+  it("starts claude with per-session Current Chat Context via append-system-prompt-file", async () => {
+    const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
+    const ctx = makeContext();
+    const first = makeMessage("m1", "active turn");
+
+    const start = handler.start(first, ctx);
+    await waitFor(() => vi.mocked(newSession).mock.calls.length > 0);
+
+    const command = vi.mocked(newSession).mock.calls[0]?.[0].command ?? "";
+    expect(command).toContain("--append-system-prompt-file");
+    const match = command.match(/--append-system-prompt-file\s+(\S+)/);
+    expect(match).not.toBeNull();
+    const promptPath = match?.[1];
+    expect(promptPath).toBeTruthy();
+    if (!promptPath) throw new Error("missing append-system-prompt-file path");
+    const prompt = readFileSync(promptPath, "utf-8");
+    expect(prompt).toContain('<first-tree-current-chat-context format="json">');
+    expect(prompt).toContain('"chatId": "chat-tui-suspend-queued-recovery"');
+
+    await handler.suspend();
+    await start;
+    await handler.shutdown();
+  });
+
   it("drops handler-local queued injects on suspend so recovered messages are not pasted twice", async () => {
     const handler = createClaudeCodeTuiHandler({ workspaceRoot: state.workspaceRoot, clientId: "client-test" });
     const ctx = makeContext();
