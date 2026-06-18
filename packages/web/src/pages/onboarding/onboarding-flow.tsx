@@ -91,24 +91,39 @@ export const OnboardingFlowContext = createContext<OnboardingFlowValue | null>(n
 // Remember the active step for the tab's lifetime so a full-page round-trip
 // (notably the GitHub App install redirect to github.com and back) returns
 // the user exactly where they were instead of resetting to step 1.
-const STEP_KEY = (path: OnboardingPath) => `onboarding:stepIndex:${path}`;
+//
+// Scoped by org as well as path: a returning admin can run the admin flow for
+// more than one team in the same tab (create team A, then create team B), and
+// team A's saved position must not carry into team B and skip it past
+// create-agent. A null org (`/me` not resolved yet, so there is no team to
+// scope to) disables persistence and falls back to the inferred step — safe
+// because the provider mounts only after `/me` loads (see onboarding-page.tsx),
+// so anyone actually in the flow already has a resolved org.
+const STEP_KEY = (path: OnboardingPath, orgId: string | null): string | null =>
+  orgId ? `onboarding:stepIndex:${path}:${orgId}` : null;
 
-function readPersistedStep(path: OnboardingPath): number | null {
+function readPersistedStep(path: OnboardingPath, orgId: string | null): number | null {
   if (typeof window === "undefined") return null;
-  const raw = window.sessionStorage.getItem(STEP_KEY(path));
+  const key = STEP_KEY(path, orgId);
+  if (key === null) return null;
+  const raw = window.sessionStorage.getItem(key);
   if (raw === null) return null;
   const n = Number.parseInt(raw, 10);
   return Number.isInteger(n) ? n : null;
 }
 
-function writePersistedStep(path: OnboardingPath, index: number): void {
+function writePersistedStep(path: OnboardingPath, orgId: string | null, index: number): void {
   if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(STEP_KEY(path), String(index));
+  const key = STEP_KEY(path, orgId);
+  if (key === null) return;
+  window.sessionStorage.setItem(key, String(index));
 }
 
-function clearPersistedStep(path: OnboardingPath): void {
+function clearPersistedStep(path: OnboardingPath, orgId: string | null): void {
   if (typeof window === "undefined") return;
-  window.sessionStorage.removeItem(STEP_KEY(path));
+  const key = STEP_KEY(path, orgId);
+  if (key === null) return;
+  window.sessionStorage.removeItem(key);
 }
 
 export function OnboardingFlowProvider({ path, children }: { path: OnboardingPath; children: ReactNode }) {
@@ -152,13 +167,13 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
     // Resume a persisted position, but never drop *behind* what the server
     // can prove (so a stale marker can't strand a user before their real
     // progress).
-    const persisted = readPersistedStep(path);
+    const persisted = readPersistedStep(path, organizationId);
     return clampStepIndex(path, persisted === null ? inferred : Math.max(inferred, persisted));
   });
 
   useEffect(() => {
-    writePersistedStep(path, activeIndex);
-  }, [path, activeIndex]);
+    writePersistedStep(path, organizationId, activeIndex);
+  }, [path, organizationId, activeIndex]);
 
   const goTo = useCallback((index: number) => setActiveIndex(clampStepIndex(path, index)), [path]);
   const goNext = useCallback(() => setActiveIndex((i) => clampStepIndex(path, i + 1)), [path]);
@@ -237,7 +252,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       // membership-scoped suppress stamp with reason="completed". Reusing the
       // finish-later path here would blur the reason semantics that keep new
       // memberships eligible for first-need onboarding.
-      clearPersistedStep(path);
+      clearPersistedStep(path, organizationId);
       // Clear the per-tab agent-uuid stash now that the kickoff has resolved and
       // used it — so a later same-tab onboarding/recovery in a DIFFERENT org
       // can't read a stale cross-org agent (the org filter in
