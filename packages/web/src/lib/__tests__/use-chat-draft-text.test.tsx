@@ -3,7 +3,7 @@
 import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createDomHarness, type DomHarness } from "../../test-utils/dom-harness.js";
-import { loadDraft, saveDraft } from "../draft-store.js";
+import { chatDraftScope, loadDraft, saveDraft } from "../draft-store.js";
 import { useChatDraftText } from "../use-chat-draft-text.js";
 
 let h: DomHarness;
@@ -15,10 +15,11 @@ beforeEach(() => {
 afterEach(() => h.cleanup());
 
 /** Probe: surfaces the hook's draft text and buttons to mutate it. Rendering
- *  it with a changing `chatId` (same element type at the root) reconciles in
- *  place — it does NOT remount — which is exactly how ChatView switches chats. */
-function Probe({ chatId }: { chatId: string }) {
-  const [draft, setDraft] = useChatDraftText(chatId);
+ *  it with a changing `chatId` / `userId` (same element type at the root)
+ *  reconciles in place — it does NOT remount — which is exactly how ChatView
+ *  switches chats (and how a re-login swaps the user without a fresh mount). */
+function Probe({ userId = "user-1", chatId }: { userId?: string; chatId: string }) {
+  const [draft, setDraft] = useChatDraftText(userId, chatId);
   return (
     <div>
       <span data-testid="draft">{draft}</span>
@@ -46,18 +47,18 @@ async function click(testid: string): Promise<void> {
 }
 
 describe("useChatDraftText", () => {
-  it("seeds the initial value from the stored draft for the chat", async () => {
-    saveDraft("chat-a", { text: "preexisting" });
+  it("seeds the initial value from the stored draft for the user + chat", async () => {
+    saveDraft(chatDraftScope("user-1", "chat-a"), { text: "preexisting" });
     h.render(<Probe chatId="chat-a" />);
     await h.flush();
     expect(draftText()).toBe("preexisting");
   });
 
-  it("persists typed text under the chat scope", async () => {
+  it("persists typed text under the user + chat scope", async () => {
     h.render(<Probe chatId="chat-a" />);
     await click("type");
     expect(draftText()).toBe("body-chat-a");
-    expect(loadDraft("chat-a")?.text).toBe("body-chat-a");
+    expect(loadDraft(chatDraftScope("user-1", "chat-a"))?.text).toBe("body-chat-a");
   });
 
   it("swaps drafts on chat switch without leaking across chats", async () => {
@@ -70,7 +71,7 @@ describe("useChatDraftText", () => {
     expect(draftText()).toBe("");
 
     await click("type"); // stored under chat-b
-    expect(loadDraft("chat-b")?.text).toBe("body-chat-b");
+    expect(loadDraft(chatDraftScope("user-1", "chat-b"))?.text).toBe("body-chat-b");
 
     // Back to chat-a → its draft is restored, chat-a's text was never lost.
     h.render(<Probe chatId="chat-a" />);
@@ -78,12 +79,22 @@ describe("useChatDraftText", () => {
     expect(draftText()).toBe("body-chat-a");
   });
 
+  it("does not leak a draft across users on the same chat", async () => {
+    h.render(<Probe userId="user-1" chatId="chat-a" />);
+    await click("type"); // stored under user-1 / chat-a
+
+    // A different account opens the same chat in the same browser → empty.
+    h.render(<Probe userId="user-2" chatId="chat-a" />);
+    await h.flush();
+    expect(draftText()).toBe("");
+  });
+
   it("clears the stored draft when emptied (mirrors clearing on send)", async () => {
     h.render(<Probe chatId="chat-a" />);
     await click("type");
-    expect(loadDraft("chat-a")).not.toBeNull();
+    expect(loadDraft(chatDraftScope("user-1", "chat-a"))).not.toBeNull();
     await click("clear");
     expect(draftText()).toBe("");
-    expect(loadDraft("chat-a")).toBeNull();
+    expect(loadDraft(chatDraftScope("user-1", "chat-a"))).toBeNull();
   });
 });

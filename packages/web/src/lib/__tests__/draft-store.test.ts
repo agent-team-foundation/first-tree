@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { clearDraft, loadDraft, newChatDraftScope, saveDraft } from "../draft-store.js";
+import { chatDraftScope, clearDraft, loadDraft, newChatDraftScope, saveDraft } from "../draft-store.js";
 
 const STORAGE_KEY = "first-tree:chat-drafts:v1";
 
@@ -99,12 +99,31 @@ describe("robustness", () => {
   });
 });
 
-describe("newChatDraftScope", () => {
-  it("encodes org + seed participants", () => {
-    expect(newChatDraftScope("org-7", ["a", "b"])).toBe("new:org-7:a,b");
+describe("scope helpers", () => {
+  it("chatDraftScope encodes user + chat", () => {
+    expect(chatDraftScope("user-1", "chat-9")).toBe("u:user-1:chat:chat-9");
   });
 
-  it("falls back to no-org and empty participants", () => {
-    expect(newChatDraftScope(null)).toBe("new:no-org:");
+  it("chatDraftScope falls back to anon when no user", () => {
+    expect(chatDraftScope(null, "chat-9")).toBe("u:anon:chat:chat-9");
+  });
+
+  it("newChatDraftScope encodes user + org + seed participants", () => {
+    expect(newChatDraftScope("user-1", "org-7", ["a", "b"])).toBe("u:user-1:new:org-7:a,b");
+  });
+
+  it("newChatDraftScope falls back to anon / no-org / empty participants", () => {
+    expect(newChatDraftScope(null, null)).toBe("u:anon:new:no-org:");
+  });
+
+  it("keeps drafts isolated per user (no cross-account leak on a shared browser)", () => {
+    // User A's draft for a chat must be invisible to user B in the same chat.
+    saveDraft(chatDraftScope("user-a", "chat-1"), { text: "A's secret" });
+    expect(loadDraft(chatDraftScope("user-b", "chat-1"))).toBeNull();
+    expect(loadDraft(chatDraftScope("user-a", "chat-1"))?.text).toBe("A's secret");
+
+    // Same for the new-chat composer within one org.
+    saveDraft(newChatDraftScope("user-a", "org-1"), { text: "A's new chat" });
+    expect(loadDraft(newChatDraftScope("user-b", "org-1"))).toBeNull();
   });
 });

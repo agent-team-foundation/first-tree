@@ -80,15 +80,16 @@ export function NewChatDraft({
   initialParticipantIds?: string[];
 }) {
   const queryClient = useQueryClient();
-  const { agentId: myAgentId, memberId: myMemberId, organizationId } = useAuth();
+  const { agentId: myAgentId, memberId: myMemberId, organizationId, user } = useAuth();
   const agentIdentity = useAgentIdentityMap();
 
-  // Browser-local unsent-draft cache for this compose context (org + seed
-  // participants, mirroring the center-panel remount key). Read once at first
+  // Browser-local unsent-draft cache for this compose context (user + org +
+  // seed participants, mirroring the center-panel remount key). User-scoped so
+  // a shared browser never restores another account's draft. Read once at first
   // render so later writes never feed back into the initial value.
   const draftScope = useMemo(
-    () => newChatDraftScope(organizationId, initialParticipantIds),
-    [organizationId, initialParticipantIds],
+    () => newChatDraftScope(user?.id ?? null, organizationId, initialParticipantIds),
+    [user?.id, organizationId, initialParticipantIds],
   );
   const initialDraftRef = useRef<DraftSnapshot | null | undefined>(undefined);
   if (initialDraftRef.current === undefined) {

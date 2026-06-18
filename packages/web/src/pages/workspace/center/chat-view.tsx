@@ -1074,11 +1074,11 @@ export function ChatView({
    * `ChatRowAvatar` on the left rail (both feed `resolveAvatarHue`).
    */
   const agentColorToken = useCallback((id: string) => agentIdentity(id)?.avatarColorToken ?? null, [agentIdentity]);
-  const { agentId: myAgentId, memberId: myMemberId } = useAuth();
-  // Unsent draft text, cached per chat in browser-local storage so it survives
-  // chat switches and reloads (ChatView is not remounted on switch). Clearing
-  // the draft on send empties its stored entry.
-  const [draft, setDraft] = useChatDraftText(chatId);
+  const { agentId: myAgentId, memberId: myMemberId, user } = useAuth();
+  // Unsent draft text, cached per user + chat in browser-local storage so it
+  // survives chat switches and reloads (ChatView is not remounted on switch).
+  // Clearing the draft on send empties its stored entry.
+  const [draft, setDraft] = useChatDraftText(user?.id ?? null, chatId);
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);

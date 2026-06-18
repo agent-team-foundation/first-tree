@@ -80,11 +80,28 @@ function prune(map: DraftMap): DraftMap {
   return Object.fromEntries(entries.slice(0, MAX_ENTRIES));
 }
 
-/** Stable storage scope for the "new chat" composer. Mirrors the remount key
- *  used by the center-panel router (org + seed participants) so each distinct
+/** Per-user prefix so a shared browser never restores another account's draft
+ *  after a logout/login on the same profile — `logout()` clears tokens and
+ *  query state, not this store. Mirrors the userId-bucketed selected-org
+ *  storage in auth-context (`first-tree:selectedOrganizationId:<userId>`). */
+function userPrefix(userId: string | null): string {
+  return `u:${userId ?? "anon"}`;
+}
+
+/** Storage scope for the in-chat composer: per user, per chat. */
+export function chatDraftScope(userId: string | null, chatId: string): string {
+  return `${userPrefix(userId)}:chat:${chatId}`;
+}
+
+/** Storage scope for the "new chat" composer: per user, per (org, seed
+ *  participants) — mirroring the center-panel remount key so each distinct
  *  compose context keeps its own draft. */
-export function newChatDraftScope(organizationId: string | null, withIds?: readonly string[]): string {
-  return `new:${organizationId ?? "no-org"}:${(withIds ?? []).join(",")}`;
+export function newChatDraftScope(
+  userId: string | null,
+  organizationId: string | null,
+  withIds?: readonly string[],
+): string {
+  return `${userPrefix(userId)}:new:${organizationId ?? "no-org"}:${(withIds ?? []).join(",")}`;
 }
 
 /** Read the stored draft for `scope`, or `null` when none is stored. */
