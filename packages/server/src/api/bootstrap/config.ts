@@ -10,6 +10,13 @@ export async function bootstrapConfigRoutes(app: FastifyInstance): Promise<void>
    * installation without a caller, so the field is surfaced as `null`.
    */
   app.get("/config", async () => {
-    return { allowedOrg: null as string | null, serverCommandVersion: app.commandVersion() };
+    return {
+      allowedOrg: null as string | null,
+      serverCommandVersion: app.commandVersion(),
+      // Release channel this server speaks (`dev` | `staging` | `prod`). Lets
+      // the web gate channel-scoped affordances (e.g. the staging-only "hide
+      // agent final text" view toggle) without shipping prod-visible dev UI.
+      channel: app.config.channel,
+    };
   });
 }

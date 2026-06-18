@@ -502,12 +502,14 @@ export {
   updateMyProfileSchema,
 } from "./schemas/member.js";
 export {
+  AGENT_FINAL_TEXT_METADATA_KEY,
   type AskOption,
   type AskRequest,
   askOptionSchema,
   askRequestSchema,
   type ClientMessage,
   clientMessageSchema,
+  isAgentFinalTextMetadata,
   MESSAGE_FORMATS,
   MESSAGE_SOURCES,
   type Message,
