@@ -710,8 +710,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let appliedPayload: AgentRuntimeConfigPayload | null = null;
   /**
    * Latest chat-context snapshot for the active session. Used to build the
-   * per-turn system-prompt block injected via `systemPrompt.append`. Cleared
-   * when the session ends or `start()` runs for a fresh session.
+   * session/resume system-prompt block injected via `systemPrompt.append`.
+   * Cleared when the session ends or `start()` runs for a fresh session.
    */
   let chatContextForPrompt: ChatContext | undefined;
   const queuedInjectedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
