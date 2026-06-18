@@ -490,6 +490,57 @@ describe("SessionManager", () => {
     await sm.shutdown();
   });
 
+  it("routes recovery redelivery through resume after a handler retires its dead active consumer", async () => {
+    const ackEntry = mockAckEntry();
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    let startCtx: SessionContext | undefined;
+    let startMessage: SessionMessage | undefined;
+    let startToken: DeliveryToken | undefined;
+    let injectedMessage: SessionMessage | undefined;
+    let injectedToken: DeliveryToken | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx, token) => {
+        startCtx = ctx;
+        startMessage = message;
+        startToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "processing" } as const };
+      }),
+      inject: vi.fn((message, token) => {
+        injectedMessage = message;
+        injectedToken = token;
+        return { kind: "owned", mode: "queued" } as const;
+      }),
+      resume: vi.fn(async () => {
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "processing" } as const };
+      }),
+    });
+    const sm = createSessionManager({ handler, ackEntry, recoverChat });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-dead", messageId: "msg-1" }));
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-dead", messageId: "msg-2" }));
+    if (!startCtx || !startMessage || !startToken || !injectedMessage || !injectedToken) {
+      throw new Error("expected captured start and inject state");
+    }
+
+    await startToken.complete(startMessage, { status: "success", terminal: true });
+    injectedToken.retry(injectedMessage, "claude_retry_exhausted_tail_recovery");
+    startCtx.retireActiveSession?.("claude_retry_exhausted");
+
+    expect(sm.activeCount).toBe(0);
+    expect(sm.getSessionRuntimeStates()).toEqual([]);
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-dead", messageId: "msg-2" }));
+    expect(recoverChat).toHaveBeenCalledWith("chat-dead");
+    expect(handler.resume).not.toHaveBeenCalled();
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-dead", messageId: "msg-2" }));
+
+    expect(handler.inject).toHaveBeenCalledTimes(1);
+    expect(handler.resume).toHaveBeenCalledTimes(1);
+
+    await sm.shutdown();
+  });
+
   it("creates separate sessions for different chats", async () => {
     const handlers: AgentHandler[] = [];
     const factory: HandlerFactory = () => {

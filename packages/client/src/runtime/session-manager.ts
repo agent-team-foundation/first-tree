@@ -810,6 +810,19 @@ export class SessionManager {
     return true;
   }
 
+  private retireActiveSessionFromHandler(chatId: string, reason: string): void {
+    const entry = this.sessions.get(chatId);
+    if (!entry || entry.status !== "active") return;
+    this.config.log.info({ chatId, reason }, "active session retired by handler");
+    entry.status = "suspended";
+    this._activeCount = Math.max(0, this._activeCount - 1);
+    this.sessionRuntimeStates.delete(chatId);
+    this.recomputeRuntimeState();
+    this.persistRegistry();
+    this.notifySessionState(chatId, "suspended");
+    this.drainPendingQueue();
+  }
+
   private errorCompletionRetryReason(outcome: TurnOutcome): string | null {
     if (outcome.status === "success") return null;
     if (outcome.completion === "consumed") return null;
@@ -1864,6 +1877,9 @@ export class SessionManager {
       retryTurn: (messages, reason) => {
         this.inboxDelivery.retryTurn(chatId, messages, reason);
         this.projectSessionRuntime(chatId);
+      },
+      retireActiveSession: (reason) => {
+        this.retireActiveSessionFromHandler(chatId, reason);
       },
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),

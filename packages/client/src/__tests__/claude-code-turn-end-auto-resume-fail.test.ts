@@ -210,6 +210,7 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
     const logs: string[] = [];
     const finishedBatches: string[][] = [];
     const retriedBatches: Array<{ ids: string[]; reason: string }> = [];
+    const retireActiveSession = vi.fn();
     let resolveM2Pushed!: () => void;
     const m2Pushed = new Promise<void>((resolve) => {
       resolveM2Pushed = resolve;
@@ -249,6 +250,7 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
         const batch = Array.isArray(messages) ? messages : [messages];
         retriedBatches.push({ ids: batch.map((message) => message.id), reason });
       },
+      retireActiveSession,
     };
 
     await handler.start(
@@ -278,6 +280,7 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
 
     expect(finishedBatches).toEqual([["m1"]]);
     expect(retriedBatches).toEqual([{ ids: ["m2"], reason: "claude_auto_resume_failed_tail_recovery" }]);
+    expect(retireActiveSession).toHaveBeenCalledWith("claude_auto_resume_failed");
     const lastTurnEnd = emitted.filter((event) => event.kind === "turn_end").at(-1);
     if (!lastTurnEnd || lastTurnEnd.kind !== "turn_end") throw new Error("expected turn_end event");
     expect(lastTurnEnd.payload.status).toBe("error");

@@ -1080,6 +1080,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     }
   }
 
+  function retireFatalSession(sessionCtx: SessionContext, reason: string): void {
+    sessionCtx.retireActiveSession?.(reason);
+  }
+
   /**
    * Rebuild the SDK query in resume mode AND re-push every input already handed
    * to the previous query's controller for the still-unclosed turn, preserving
@@ -1472,6 +1476,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // "permanent → ack".
             await ackTurnClose("error", "retry_exhausted_notice_posted");
             retryBufferedMessages("claude_retry_exhausted_tail_recovery");
+            retireFatalSession(sessionCtx, "claude_retry_exhausted");
             return;
           }
 
@@ -1522,6 +1527,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // bind-reset replay. Per design §4 "permanent → ack".
             await ackTurnClose("error", "auto_resume_failed_notice_posted");
             retryBufferedMessages("claude_auto_resume_failed_tail_recovery");
+            retireFatalSession(sessionCtx, "claude_auto_resume_failed");
             return;
           }
         }
