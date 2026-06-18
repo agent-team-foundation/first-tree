@@ -15,8 +15,8 @@ import { resolveTabPath } from "./tabs.js";
  * of avatar-over-name items (the current agent selected). The Team anchor lives
  * OUTSIDE the scroll container, so the only "back to the roster" exit stays put
  * no matter how far right you scroll through a long agent list. Switching agents
- * (and Team) goes through `onNavigate` = the page's `guardedNavigate`, so an
- * unsaved config draft prompts a confirm before leaving.
+ * (and Team) goes through `onNavigate` = the page's `navigateAway` (plain
+ * navigate — every setting saves immediately, so leaving is never destructive).
  *
  * Scope follows the Team page's All/Mine preference (shared `agent-filter`
  * module), read once on mount — the filter can only change on the Team page,

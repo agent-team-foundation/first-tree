@@ -1,6 +1,6 @@
 import { deriveRepoLocalPath, formatRepoCoordinate } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useMemo } from "react";
+import type { ReactNode } from "react";
 import { Navigate } from "react-router";
 import { getContextTreeSetting } from "../../api/org-settings.js";
 import { useAuth } from "../../auth/auth-context.js";
@@ -12,21 +12,13 @@ import { ModelSection } from "./model-section.js";
 import { ReasoningEffortSection } from "./reasoning-effort-section.js";
 import { ResourceRowView } from "./resource-row.js";
 import { RuntimeSection } from "./runtime-section.js";
-import { sectionAnchorId } from "./save-bar.js";
 import { titleWithSemantics } from "./save-semantics.js";
 
 export function RuntimeTab() {
   const ctx = useAgentDetailContext();
-  const envOtherKeys = useMemo(() => {
-    const active = ctx.draft.draft.env.filter((i) => i.status !== "deleted");
-    return (exceptKey: string | null): ReadonlySet<string> =>
-      new Set(active.filter((i) => i.key !== exceptKey).map((i) => i.value.key));
-  }, [ctx.draft.draft.env]);
   // Code repositories are part of the workspace this agent runs in, so they live
-  // on Environment now (not Tools & skills). Unlike model/effort/env, repo
-  // changes save IMMEDIATELY through the agent-resources API — they're NOT part
-  // of the SaveBar draft. The shared `["agent-resources", uuid]` cache keeps this
-  // in sync with the Tools & skills tab (skills + MCP).
+  // on Environment now (not Tools & skills). The shared `["agent-resources", uuid]`
+  // cache keeps this in sync with the Tools & skills tab (skills + MCP).
   // Gate on canEditConfig (not just !isHuman): non-editors hit the redirect
   // below, so there's no point firing an agent-resources GET for them.
   const repos = useAgentResources(ctx.uuid, { enabled: !!ctx.uuid && ctx.canEditConfig });
@@ -36,6 +28,15 @@ export function RuntimeTab() {
   // /agents/:uuid/runtime would otherwise render a blank page; redirect to
   // Profile, which now hosts agent lifecycle controls (suspend / delete).
   if (!ctx.canEditConfig) return <Navigate to="../profile" replace />;
+
+  const { config, configSave } = ctx;
+  // Edits disable while a save is in flight, so the next PATCH always sees the
+  // version the previous one wrote back — no self-conflicting 409 on rapid edits.
+  const editsDisabled = ctx.agent.status !== "active" || configSave.pending;
+  const modelSettingsSaved =
+    configSave.justSaved && (configSave.savedField === "model" || configSave.savedField === "effort");
+  const envSaved = configSave.justSaved && configSave.savedField === "env";
+
   return (
     <>
       {ctx.configLoading && (
@@ -50,9 +51,8 @@ export function RuntimeTab() {
       )}
       {/* Section order follows the conceptual grouping (runtime → workspace):
           Execution → Model settings → Repositories → Context tree → Env vars.
-          Save semantics aren't carried by physical adjacency — each section keeps
-          its own immediate / draft tag — so the order is free to read top-down. */}
-      {ctx.config && (
+          Every section saves immediately. */}
+      {config && (
         <RuntimeSection
           runtimeProvider={ctx.setupRuntimeProvider}
           computerLabel={ctx.boundClientLabel}
@@ -64,39 +64,36 @@ export function RuntimeTab() {
         />
       )}
 
-      {/* Model settings (draft — stages into the SaveBar). */}
-      {ctx.config && (
+      {config && (
         <div style={{ marginTop: "var(--sp-8)" }}>
-          <Section
-            title={titleWithSemantics("Model settings", "draft")}
-            description="Model and reasoning settings remain drafts until saved from the Save bar."
-          >
-            <div id={sectionAnchorId("model")}>
-              <ModelSection
-                value={ctx.draft.draft.model}
-                baseline={ctx.config?.payload.model ?? ""}
-                onChange={ctx.draft.setModel}
-                onRevert={ctx.draft.revertModel}
-                disabled={ctx.agent.status !== "active"}
-                provider={ctx.setupRuntimeProvider}
-              />
-            </div>
-            <div id={sectionAnchorId("effort")}>
-              <ReasoningEffortSection
-                value={ctx.draft.draft.reasoningEffort}
-                baseline={ctx.config?.payload.reasoningEffort ?? ""}
-                onChange={ctx.draft.setReasoningEffort}
-                onRevert={ctx.draft.revertReasoningEffort}
-                disabled={ctx.agent.status !== "active"}
-                provider={ctx.setupRuntimeProvider}
-              />
-            </div>
+          <Section title={titleWithSemantics("Model settings", modelSettingsSaved)}>
+            <ModelSection
+              value={config.payload.model}
+              onChange={(v) => configSave.save({ model: v }, { field: "model" })}
+              disabled={editsDisabled}
+              provider={ctx.setupRuntimeProvider}
+            />
+            <ReasoningEffortSection
+              value={config.payload.reasoningEffort}
+              onChange={(v) => configSave.save({ reasoningEffort: v }, { field: "effort" })}
+              disabled={editsDisabled}
+              provider={ctx.setupRuntimeProvider}
+            />
           </Section>
+          {configSave.conflict ? (
+            <p className="text-body" style={{ color: "var(--state-blocked)", margin: "var(--sp-2) 0 0" }}>
+              This agent's configuration was updated elsewhere; reloaded the latest values.
+            </p>
+          ) : configSave.saveError ? (
+            <p className="text-body" style={{ color: "var(--state-error)", margin: "var(--sp-2) 0 0" }}>
+              Failed to save: {configSave.saveError}
+            </p>
+          ) : null}
         </div>
       )}
 
-      {/* Repositories (immediate — saves on add/remove, not via the SaveBar). */}
-      <div id={sectionAnchorId("git")} style={{ marginTop: "var(--sp-8)" }}>
+      {/* Repositories — saves immediately on add/remove via the agent-resources API. */}
+      <div style={{ marginTop: "var(--sp-8)" }}>
         {repos.isLoading ? (
           <div className="text-body" style={{ color: "var(--fg-3)" }}>
             Loading repositories…
@@ -113,7 +110,7 @@ export function RuntimeTab() {
             pending={repos.pending}
             onMutate={repos.mutateBindings}
             saved={repos.justSaved}
-            onNavigateAway={ctx.guardedNavigate}
+            onNavigateAway={ctx.navigateAway}
           />
         )}
         {repos.saveError ? (
@@ -130,17 +127,14 @@ export function RuntimeTab() {
         <ContextTreeRow />
       </div>
 
-      {/* Environment variables (draft — stages into the SaveBar). */}
-      {ctx.config && (
-        <div id={sectionAnchorId("env")} style={{ marginTop: "var(--sp-8)" }}>
+      {/* Environment variables — saves immediately on add / edit / delete. */}
+      {config && (
+        <div style={{ marginTop: "var(--sp-8)" }}>
           <EnvSection
-            items={ctx.draft.draft.env}
-            otherKeys={envOtherKeys}
-            onAdd={ctx.draft.addEnv}
-            onUpdate={ctx.draft.updateEnv}
-            onDelete={ctx.draft.deleteEnv}
-            onUndoDelete={ctx.draft.undoDeleteEnv}
-            disabled={ctx.agent.status !== "active"}
+            items={config.payload.env}
+            onSave={(next, opts) => configSave.save({ env: next }, { field: "env", onSuccess: opts?.onSuccess })}
+            disabled={editsDisabled}
+            saved={envSaved}
           />
         </div>
       )}

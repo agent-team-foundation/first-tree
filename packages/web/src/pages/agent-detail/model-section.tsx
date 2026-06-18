@@ -1,13 +1,11 @@
 import type { RuntimeProvider } from "@first-tree/shared";
 import { useMemo } from "react";
-import { Button } from "../../components/ui/button.js";
-import { DraftStatusChip } from "../../components/ui/draft-status-chip.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
 import { ConfigRow } from "./flat-section.js";
 
 /**
- * Model — an inline dropdown with a "changed" hint and Revert. No inline save:
- * the page Save Bar handles submission.
+ * Model — an inline dropdown. Selecting a value saves it immediately (onChange),
+ * consistent with every other control on the page; there is no draft / Save Bar.
  */
 
 export type ModelOption = SelectOption;
@@ -51,9 +49,7 @@ const MODEL_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
 
 export type ModelSectionProps = {
   value: string;
-  baseline: string;
   onChange: (v: string) => void;
-  onRevert: () => void;
   disabled?: boolean;
   /** Runtime this agent runs on — drives the option list and help copy. */
   provider?: RuntimeProvider;
@@ -61,15 +57,7 @@ export type ModelSectionProps = {
 
 const UNSET_OPTION: ModelOption = { value: "", label: "(unset — inherits local)" };
 
-export function ModelSection({
-  value,
-  baseline,
-  onChange,
-  onRevert,
-  disabled,
-  provider = "claude-code",
-}: ModelSectionProps) {
-  const dirty = value !== baseline;
+export function ModelSection({ value, onChange, disabled, provider = "claude-code" }: ModelSectionProps) {
   const presetOptions = MODEL_OPTIONS_BY_PROVIDER[provider];
 
   const items = useMemo<ModelOption[]>(() => {
@@ -81,18 +69,7 @@ export function ModelSection({
   }, [presetOptions, value]);
 
   return (
-    <ConfigRow
-      label="Model"
-      description={MODEL_HELP_BY_PROVIDER[provider]}
-      meta={dirty ? <DraftStatusChip status="modified" /> : null}
-      action={
-        dirty ? (
-          <Button size="xs" variant="ghost" onClick={onRevert} disabled={disabled}>
-            Revert
-          </Button>
-        ) : null
-      }
-    >
+    <ConfigRow label="Model" description={MODEL_HELP_BY_PROVIDER[provider]}>
       <Select options={items} value={value} onChange={onChange} disabled={disabled} mono aria-label="Model" />
     </ConfigRow>
   );

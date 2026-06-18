@@ -2,53 +2,33 @@ import { Check } from "lucide-react";
 import { useEffect, useState } from "react";
 
 /**
- * The two save semantics on the agent-detail page, made explicit (PR2 P0).
- * Every section is one of exactly two kinds, with ONE canonical label each so
- * the distinction reads at a glance:
- *   - immediate: writes land as soon as you make them (identity, appearance,
- *     computer bind, repositories, skills, MCP, instructions).
- *   - draft: changes are staged and committed together from the Save bar
- *     (model, reasoning effort, environment variables).
+ * Every section on the agent-detail page now saves immediately, so there is no
+ * longer a save-semantics distinction to explain — the old "Applies immediately /
+ * Saved from the Save bar" tags are gone. What remains is a transient "Saved"
+ * check that flashes next to a section title right after a successful write.
  */
-export type SaveSemanticsKind = "immediate" | "draft";
 
-const LABELS: Record<SaveSemanticsKind, string> = {
-  immediate: "Applies immediately",
-  draft: "Saved from the Save bar",
-};
-
-/**
- * Quiet tag rendered next to a section title. For immediate sections it flips to
- * a transient "Saved" check right after a successful write (drive `saved` from
- * `useJustSaved`); draft sections never flash here — the Save bar owns their
- * saved state.
- */
-export function SaveSemanticsTag({ kind, saved = false }: { kind: SaveSemanticsKind; saved?: boolean }) {
-  if (saved && kind === "immediate") {
-    return (
-      <span
-        className="inline-flex items-center gap-1 text-caption font-normal"
-        style={{ color: "var(--success)" }}
-        role="status"
-      >
-        <Check className="h-3 w-3" />
-        Saved
-      </span>
-    );
-  }
+/** Transient "Saved" check shown next to a section title after a successful immediate write. */
+export function SavedFlash({ saved = false }: { saved?: boolean }) {
+  if (!saved) return null;
   return (
-    <span className="text-caption font-normal" style={{ color: "var(--fg-4)" }}>
-      {LABELS[kind]}
+    <span
+      className="inline-flex items-center gap-1 text-caption font-normal"
+      style={{ color: "var(--success)" }}
+      role="status"
+    >
+      <Check className="h-3 w-3" />
+      Saved
     </span>
   );
 }
 
-/** Compose a section title with its save-semantics tag in one inline row. */
-export function titleWithSemantics(title: string, kind: SaveSemanticsKind, saved?: boolean) {
+/** Compose a section title with its transient "Saved" flash in one inline row. */
+export function titleWithSemantics(title: string, saved?: boolean) {
   return (
     <span className="inline-flex items-baseline gap-2">
       <span>{title}</span>
-      <SaveSemanticsTag kind={kind} saved={saved} />
+      <SavedFlash saved={saved} />
     </span>
   );
 }
@@ -56,8 +36,7 @@ export function titleWithSemantics(title: string, kind: SaveSemanticsKind, saved
 /**
  * Tracks a brief "just saved" window for an immediate-save surface. Returns the
  * flag plus a `markSaved` to call from a mutation's success path. Centralized so
- * every immediate surface flashes the same 2.5s confirmation (mirrors the
- * SaveBar's own justSaved timing).
+ * every immediate surface flashes the same 2.5s confirmation.
  */
 export function useJustSaved(): { justSaved: boolean; markSaved: () => void } {
   // Tick-based, not a plain boolean: each markSaved bumps `tick`, which re-runs

@@ -75,11 +75,18 @@ function createContext(overrides: Partial<AgentDetailContext> = {}): AgentDetail
     isHuman: baseAgent.type === "human",
     canManageAgent: true,
     canEditConfig: true,
-    guardedNavigate: vi.fn(),
-    draft: {} as AgentDetailContext["draft"],
+    navigateAway: vi.fn(),
     config: undefined,
     configLoading: false,
     configError: null,
+    configSave: {
+      save: vi.fn(),
+      pending: false,
+      saveError: null,
+      conflict: false,
+      justSaved: false,
+      savedField: null,
+    },
     clientStatus: undefined,
     clientStatusLoading: false,
     clientStatusError: null,
@@ -98,9 +105,6 @@ function createContext(overrides: Partial<AgentDetailContext> = {}): AgentDetail
     onSuspend: () => undefined,
     onReactivate: () => undefined,
     onDelete: () => undefined,
-    dryRunText: null,
-    dryRunPending: false,
-    onRunDryRun: () => undefined,
     ...overrides,
   };
 }
@@ -286,7 +290,7 @@ describe("UsageTab", () => {
       [...container.querySelectorAll("button")].find((button) => button.textContent === "Launch planning") ?? null,
     );
     // Opening a chat from Usage goes through the leave guard, not raw navigate.
-    expect(contextMock.value?.guardedNavigate).toHaveBeenCalledWith("/?chat=chat-1");
+    expect(contextMock.value?.navigateAway).toHaveBeenCalledWith("/?chat=chat-1");
 
     await act(async () => root.unmount());
   });

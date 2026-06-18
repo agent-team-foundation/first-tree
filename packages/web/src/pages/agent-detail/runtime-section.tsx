@@ -41,7 +41,7 @@ export function RuntimeSection(props: RuntimeSectionProps) {
   const copy = RUNTIME_COPY[props.runtimeProvider];
   return (
     <Section
-      title={titleWithSemantics("Execution", "immediate")}
+      title={titleWithSemantics("Execution")}
       description="Runtime is set when the agent is created; the computer is bound once and is then fixed."
     >
       <ComputerRow

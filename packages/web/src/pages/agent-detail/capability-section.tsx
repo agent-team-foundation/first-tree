@@ -140,7 +140,7 @@ export function ResourceTypeSection(props: {
   const rows = data.effective[resourceBucket(type)];
   return (
     <Section
-      title={titleWithSemantics(typeLabel(type), "immediate", saved)}
+      title={titleWithSemantics(typeLabel(type), saved)}
       count={rows.length}
       description={type === "mcp" ? "From the MCP servers you connect." : undefined}
       action={

@@ -1,7 +1,5 @@
 import type { RuntimeProvider } from "@first-tree/shared";
 import { useMemo } from "react";
-import { Button } from "../../components/ui/button.js";
-import { DraftStatusChip } from "../../components/ui/draft-status-chip.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
 import { ConfigRow } from "./flat-section.js";
 
@@ -45,9 +43,7 @@ const EFFORT_HELP_BY_PROVIDER: Record<RuntimeProvider, string> = {
 
 export type ReasoningEffortSectionProps = {
   value: string;
-  baseline: string;
   onChange: (v: string) => void;
-  onRevert: () => void;
   disabled?: boolean;
   /** Runtime this agent runs on — drives the option list and help copy. */
   provider?: RuntimeProvider;
@@ -55,13 +51,10 @@ export type ReasoningEffortSectionProps = {
 
 export function ReasoningEffortSection({
   value,
-  baseline,
   onChange,
-  onRevert,
   disabled,
   provider = "claude-code",
 }: ReasoningEffortSectionProps) {
-  const dirty = value !== baseline;
   const presetOptions = EFFORT_OPTIONS_BY_PROVIDER[provider];
 
   const items = useMemo<SelectOption[]>(() => {
@@ -75,18 +68,7 @@ export function ReasoningEffortSection({
   }, [presetOptions, value]);
 
   return (
-    <ConfigRow
-      label="Reasoning effort"
-      description={EFFORT_HELP_BY_PROVIDER[provider]}
-      meta={dirty ? <DraftStatusChip status="modified" /> : null}
-      action={
-        dirty ? (
-          <Button size="xs" variant="ghost" onClick={onRevert} disabled={disabled}>
-            Revert
-          </Button>
-        ) : null
-      }
-    >
+    <ConfigRow label="Reasoning effort" description={EFFORT_HELP_BY_PROVIDER[provider]}>
       <Select
         options={items}
         value={value}
