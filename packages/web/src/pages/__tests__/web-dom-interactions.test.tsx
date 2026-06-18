@@ -2,7 +2,7 @@
 
 import type { Agent, MeMembership } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, type ReactElement, type ReactNode } from "react";
+import { act, type ReactElement, type ReactNode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2121,6 +2121,51 @@ describe("web DOM interaction coverage", () => {
     expect(document.body.textContent).toContain("Add environment variable");
     expect(document.body.querySelector<HTMLInputElement>("#env-key")?.value).toBe("API_KEY");
     expect(document.body.querySelector<HTMLInputElement>("#env-value")?.value).toBe("v1");
+    expect(document.body.textContent).toContain("Save failed");
+
+    await unmountRoot(root);
+  });
+
+  it("blocks every dismiss path while an env save is pending, then preserves input on failure", async () => {
+    const { EnvSection } = await import("../agent-detail/env-section.js");
+    let setSaving: (v: boolean) => void = () => {};
+    const onSave = vi.fn(); // never confirms — simulates an in-flight then failed save
+    function Harness() {
+      const [saving, setSavingState] = useState(false);
+      setSaving = setSavingState;
+      return <EnvSection items={[]} onSave={onSave} saving={saving} saveError={saving ? null : "Save failed"} />;
+    }
+    const { container, root } = await renderDom(<Harness />);
+
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Add")) ?? null);
+    await waitForText("Add environment variable", document.body);
+    const key = document.body.querySelector<HTMLInputElement>("#env-key");
+    const value = document.body.querySelector<HTMLInputElement>("#env-value");
+    if (!key || !value) throw new Error("Env fields missing");
+    await setValue(key, "API_KEY");
+    await setValue(value, "s3cr3t");
+    const sensitive = document.body.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (sensitive) await click(sensitive);
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
+    expect(onSave).toHaveBeenCalledTimes(1);
+
+    // The save is now in flight.
+    await act(async () => setSaving(true));
+
+    // The Radix close (X), Escape, and outside click all route through the
+    // dialog's onOpenChange — none of them may dismiss it mid-save.
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Close") ?? null);
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(document.body.textContent).toContain("Add environment variable");
+    expect(document.body.querySelector<HTMLInputElement>("#env-key")?.value).toBe("API_KEY");
+
+    // Save resolves as a failure → dialog still open, secret intact, error shown.
+    await act(async () => setSaving(false));
+    expect(document.body.textContent).toContain("Add environment variable");
+    expect(document.body.querySelector<HTMLInputElement>("#env-key")?.value).toBe("API_KEY");
+    expect(document.body.querySelector<HTMLInputElement>("#env-value")?.value).toBe("s3cr3t");
     expect(document.body.textContent).toContain("Save failed");
 
     await unmountRoot(root);

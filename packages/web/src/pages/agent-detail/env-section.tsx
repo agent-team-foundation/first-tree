@@ -271,7 +271,17 @@ function EnvDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // While a save is in flight, ignore EVERY dismiss path — the Radix close
+        // (X), Escape, outside click, and Cancel all funnel through here. Closing
+        // would unmount the form and lose the typed value (unrecoverable for a
+        // secret); the dialog only closes on a confirmed save (via onSuccess).
+        if (submitting && !next) return;
+        onOpenChange(next);
+      }}
+    >
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{initial ? "Edit environment variable" : "Add environment variable"}</DialogTitle>
