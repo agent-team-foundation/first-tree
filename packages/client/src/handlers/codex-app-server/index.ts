@@ -618,6 +618,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     shutdownRequested = true;
     retryQueuedMessages(reason);
     const client = appServer;
+    const resumeThreadId = threadId ?? undefined;
     appServer = null;
     threadId = null;
     pendingNotificationsByTurn.clear();
@@ -626,7 +627,9 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         err instanceof Error ? err.message : String(err)
       }`,
     );
-    await client?.shutdown();
+    const shutdown = client?.shutdown();
+    sessionCtx.failSessionForRecovery?.(reason, resumeThreadId);
+    await shutdown;
   }
 
   async function runTurnFromText(

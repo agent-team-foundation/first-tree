@@ -138,6 +138,7 @@ function makeContext(
   opts: {
     finishTurn?: SessionContext["finishTurn"];
     retryTurn?: SessionContext["retryTurn"];
+    failSessionForRecovery?: SessionContext["failSessionForRecovery"];
     emitEvent?: SessionContext["emitEvent"];
     formatInboundContent?: SessionContext["formatInboundContent"];
     sendMessage?: ReturnType<typeof vi.fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>>;
@@ -164,6 +165,7 @@ function makeContext(
     ...mockCtxPlumbing({ sendMessage }, "chat-app-server"),
     ...(opts.finishTurn ? { finishTurn: opts.finishTurn } : {}),
     ...(opts.retryTurn ? { retryTurn: opts.retryTurn } : {}),
+    ...(opts.failSessionForRecovery ? { failSessionForRecovery: opts.failSessionForRecovery } : {}),
     ...(opts.formatInboundContent ? { formatInboundContent: opts.formatInboundContent } : {}),
   };
 }
@@ -371,12 +373,13 @@ describe("codex app-server handler", () => {
     const fake = new FakeAppServerClient();
     fake.turnStartError = new CodexAppServerTransportError("codex app-server request timed out: turn/start");
     const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const failSessionForRecovery = vi.fn<(reason: string, sessionId?: string) => void>();
     const finishTurn = vi.fn<SessionContext["finishTurn"]>();
     const sendMessage = vi
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
       .mockResolvedValue(undefined);
     const handler = makeHandler(fake);
-    const ctx = makeContext({ retryTurn, finishTurn, sendMessage });
+    const ctx = makeContext({ retryTurn, finishTurn, failSessionForRecovery, sendMessage });
 
     await handler.start(makeMessage("m1", "first"), ctx);
 
@@ -384,6 +387,10 @@ describe("codex app-server handler", () => {
     expect(retryTurn).toHaveBeenCalledWith(
       [makeMessage("m1", "first")],
       "codex_app_server_turn_start_unknown_custody_transient",
+    );
+    expect(failSessionForRecovery).toHaveBeenCalledWith(
+      "codex_app_server_turn_start_unknown_custody_transient",
+      "thread-app-server",
     );
     expect(finishTurn).not.toHaveBeenCalled();
 
@@ -400,12 +407,13 @@ describe("codex app-server handler", () => {
     const fake = new FakeAppServerClient();
     fake.steerError = new CodexAppServerTransportError("codex app-server request timed out: turn/steer");
     const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const failSessionForRecovery = vi.fn<(reason: string, sessionId?: string) => void>();
     const finishTurn = vi.fn<SessionContext["finishTurn"]>();
     const sendMessage = vi
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
       .mockResolvedValue(undefined);
     const handler = makeHandler(fake);
-    const ctx = makeContext({ retryTurn, finishTurn, sendMessage });
+    const ctx = makeContext({ retryTurn, finishTurn, failSessionForRecovery, sendMessage });
 
     const startPromise = handler.start(makeMessage("m1", "first"), ctx);
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
@@ -417,6 +425,10 @@ describe("codex app-server handler", () => {
     expect(retryTurn).toHaveBeenCalledWith(
       [makeMessage("m1", "first"), makeMessage("m2", "second")],
       "codex_app_server_steer_unknown_custody_transient",
+    );
+    expect(failSessionForRecovery).toHaveBeenCalledWith(
+      "codex_app_server_steer_unknown_custody_transient",
+      "thread-app-server",
     );
     expect(finishTurn).not.toHaveBeenCalled();
 
