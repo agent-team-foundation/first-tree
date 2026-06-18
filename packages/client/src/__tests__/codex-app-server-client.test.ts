@@ -2,7 +2,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { CodexAppServerClient } from "../runtime/codex-app-server-client.js";
+import { CodexAppServerClient } from "../handlers/codex/app-server/client.js";
 
 function makeChild(exitOnSignals: readonly NodeJS.Signals[] = []) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams & {

@@ -1,28 +1,20 @@
 import { isAbsolute, resolve } from "node:path";
 import type { AgentRuntimeConfigPayload, SessionEvent, ToolFileRef } from "@first-tree/shared";
-import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
-import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
-import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
-import { type CodexBinaryResolution, resolveCodexRuntimeBinary } from "../../runtime/capabilities/codex.js";
-import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
-import {
-  CodexAppServerClient,
-  type CodexAppServerClientOptions,
-  type CodexAppServerNotification,
-  CodexAppServerRpcError,
-  type CodexAppServerTransportError,
-  isCodexAppServerTransientError,
-} from "../../runtime/codex-app-server-client.js";
+import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../../../runtime/agent-bootstrap.js";
+import { buildAgentBriefing } from "../../../runtime/agent-briefing.js";
+import type { AgentConfigCache } from "../../../runtime/agent-config-cache.js";
+import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../../../runtime/bootstrap.js";
+import { type CodexBinaryResolution, resolveCodexRuntimeBinary } from "../../../runtime/capabilities/codex.js";
+import { type ChatContext, fetchChatContext } from "../../../runtime/chat-context.js";
 import {
   type ContextTreeAttribution,
   resolveContextTreeRelativePath,
   toolFileRefsFromShellCommand,
-} from "../../runtime/context-tree-file-refs.js";
+} from "../../../runtime/context-tree-file-refs.js";
 import {
   type ContextTreeGitWriteTracker,
   createContextTreeGitWriteTracker,
-} from "../../runtime/context-tree-git-status.js";
+} from "../../../runtime/context-tree-git-status.js";
 import type {
   AgentHandler,
   DeliveryToken,
@@ -31,19 +23,27 @@ import type {
   SessionContext,
   SessionMessage,
   TurnConsumedErrorReason,
-} from "../../runtime/handler.js";
-import { deliveryTokenFromSessionContext } from "../../runtime/handler.js";
-import { materializeResourceSkills } from "../../runtime/resource-skills.js";
-import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
-import { formatAuthHint, isCodexAuthError } from "../auth-error-hint.js";
+} from "../../../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../../../runtime/handler.js";
+import { materializeResourceSkills } from "../../../runtime/resource-skills.js";
+import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../../runtime/source-repos.js";
+import { acquireAgentHome, markWorkspaceInitComplete } from "../../../runtime/workspace.js";
+import { formatAuthHint, isCodexAuthError } from "../../auth-error-hint.js";
+import { resolveTurnSettlement } from "../../turn-settlement.js";
 import {
   buildCodexThreadOptions,
   collectCodexFileChangePaths,
   detectAgentsMdConcurrentWrite,
   isTransientCodexErrorMessage,
-} from "../codex.js";
-import { resolveTurnSettlement } from "../turn-settlement.js";
+} from "../sdk.js";
+import {
+  CodexAppServerClient,
+  type CodexAppServerClientOptions,
+  type CodexAppServerNotification,
+  CodexAppServerRpcError,
+  type CodexAppServerTransportError,
+  isCodexAppServerTransientError,
+} from "./client.js";
 
 type CodexConfigValue = string | number | boolean | null | CodexConfigValue[] | CodexConfigObject;
 type CodexConfigObject = { [key: string]: CodexConfigValue };

@@ -14,26 +14,26 @@ import {
   type ThreadOptions,
   type Usage,
 } from "@openai/codex-sdk";
-import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../runtime/agent-briefing.js";
-import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
-import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
+import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../../runtime/agent-bootstrap.js";
+import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
+import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
+import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
+import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
 import {
   createCodexClientWithBinaryFallback,
   formatCodexBinaryMissingMessage,
   isCodexBinaryMissingError,
-} from "../runtime/codex-binary.js";
+} from "../../runtime/codex-binary.js";
 import {
   type ContextTreeAttribution,
   resolveContextTreeRelativePath,
   toolFileRefsFromShellCommand,
-} from "../runtime/context-tree-file-refs.js";
+} from "../../runtime/context-tree-file-refs.js";
 import {
   type ContextTreeGitWriteTracker,
   createContextTreeGitWriteTracker,
-} from "../runtime/context-tree-git-status.js";
-import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
+} from "../../runtime/context-tree-git-status.js";
+import { resolveGitRepoTargetPath } from "../../runtime/git-local-path.js";
 import type {
   AgentHandler,
   AgentIdentity,
@@ -42,14 +42,13 @@ import type {
   SessionContext,
   SessionMessage,
   TurnConsumedErrorReason,
-} from "../runtime/handler.js";
-import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
-import { materializeResourceSkills } from "../runtime/resource-skills.js";
-import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
-import { formatAuthHint, isCodexAuthError } from "./auth-error-hint.js";
-import { CodexAppServerStartupError, createCodexAppServerHandler } from "./codex-app-server/index.js";
-import { resolveTurnSettlement } from "./turn-settlement.js";
+} from "../../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../../runtime/handler.js";
+import { materializeResourceSkills } from "../../runtime/resource-skills.js";
+import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
+import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
+import { formatAuthHint, isCodexAuthError } from "../auth-error-hint.js";
+import { resolveTurnSettlement } from "../turn-settlement.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -1437,84 +1436,6 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       threadId = null;
       ctx = null;
       queuedMessages.length = 0;
-    },
-  } satisfies AgentHandler;
-};
-
-type CodexHandlerEngine = "app-server" | "sdk" | "auto";
-
-function codexHandlerEngineFromEnv(env: NodeJS.ProcessEnv = process.env): CodexHandlerEngine {
-  const raw = env.FIRST_TREE_CODEX_HANDLER_ENGINE?.trim().toLowerCase();
-  if (raw === "app-server" || raw === "sdk" || raw === "auto") return raw;
-  if (env.NODE_ENV === "test" || env.VITEST) return "sdk";
-  return "auto";
-}
-
-function readCodexHandlerEngine(value: unknown): CodexHandlerEngine | null {
-  if (value === "app-server" || value === "sdk" || value === "auto") return value;
-  return null;
-}
-
-export const createCodexHandler: HandlerFactory = (config) => {
-  const engine = readCodexHandlerEngine(config.codexHandlerEngine) ?? codexHandlerEngineFromEnv();
-  if (engine === "sdk") return createCodexSdkHandler(config);
-  if (engine === "app-server") return createCodexAppServerHandler(config);
-
-  let active: AgentHandler = createCodexAppServerHandler(config);
-  let usingFallback = false;
-
-  function switchToSdk(): AgentHandler {
-    usingFallback = true;
-    active = createCodexSdkHandler(config);
-    return active;
-  }
-
-  async function closeAppServerBeforeFallback(ctx: SessionContext, err: CodexAppServerStartupError): Promise<void> {
-    const appServerHandler = active;
-    try {
-      await appServerHandler.shutdown();
-    } catch (shutdownErr) {
-      ctx.log(
-        `codex app-server shutdown before fallback failed after ${err.stage}: ${
-          shutdownErr instanceof Error ? shutdownErr.message : String(shutdownErr)
-        }`,
-      );
-    }
-  }
-
-  return {
-    async start(message, ctx, token) {
-      try {
-        return await active.start(message, ctx, token);
-      } catch (err) {
-        if (usingFallback || !(err instanceof CodexAppServerStartupError)) throw err;
-        await closeAppServerBeforeFallback(ctx, err);
-        ctx.log(`${err.message}; falling back to @openai/codex-sdk handler`);
-        return switchToSdk().start(message, ctx, token);
-      }
-    },
-
-    async resume(message, sessionId, ctx, token) {
-      try {
-        return await active.resume(message, sessionId, ctx, token);
-      } catch (err) {
-        if (usingFallback || !(err instanceof CodexAppServerStartupError)) throw err;
-        await closeAppServerBeforeFallback(ctx, err);
-        ctx.log(`${err.message}; falling back to @openai/codex-sdk handler`);
-        return switchToSdk().resume(message, sessionId, ctx, token);
-      }
-    },
-
-    inject(message, token) {
-      return active.inject(message, token);
-    },
-
-    suspend() {
-      return active.suspend();
-    },
-
-    shutdown() {
-      return active.shutdown();
     },
   } satisfies AgentHandler;
 };

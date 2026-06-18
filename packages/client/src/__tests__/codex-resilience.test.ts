@@ -4,7 +4,7 @@ import {
   computePerTurnUsageDelta,
   detectAgentsMdConcurrentWrite,
   isTransientCodexErrorMessage,
-} from "../handlers/codex.js";
+} from "../handlers/codex/index.js";
 
 const usage = (input: number, cached: number, output: number, reasoning = 0) => ({
   input_tokens: input,

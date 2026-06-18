@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCodexAppServerHandler } from "../handlers/codex-app-server/index.js";
-import { CodexAppServerRpcError, CodexAppServerTransportError } from "../runtime/codex-app-server-client.js";
+import { CodexAppServerRpcError, CodexAppServerTransportError } from "../handlers/codex/app-server/client.js";
+import { createCodexAppServerHandler } from "../handlers/codex/app-server/index.js";
 import type { SessionContext, SessionMessage } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 

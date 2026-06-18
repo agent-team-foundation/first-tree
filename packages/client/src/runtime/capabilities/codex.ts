@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CapabilityEntry, CapabilityRuntimeSource } from "@first-tree/shared";
-import { smokeCodexAppServer } from "../codex-app-server-client.js";
+import { smokeCodexAppServer } from "../../handlers/codex/app-server/client.js";
 import {
   type CodexExecutableVerification,
   findCodexExecutableOnPath,
