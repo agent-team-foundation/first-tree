@@ -19,11 +19,10 @@ function claudePayload(
 }
 
 describe("buildClaudeQueryOptions", () => {
-  // Per the unified-briefing redesign the SDK query no longer carries a
-  // `systemPrompt.append` — agent identity / prompt.append / chat context all
-  // ship through `<cwd>/CLAUDE.md` (symlinked to AGENTS.md, written by
-  // `writeAgentBriefing`). buildClaudeQueryOptions therefore covers only the
-  // model / mcp / reasoning-effort slice.
+  // Stable agent identity / prompt.append ship through `<cwd>/CLAUDE.md`
+  // (symlinked to AGENTS.md). Per-chat Current Chat Context is injected
+  // through SDK `systemPrompt.append` so sibling chats sharing one agent home
+  // cannot race on the shared briefing file.
 
   it("returns an empty slice when there is no payload", () => {
     expect(buildClaudeQueryOptions(undefined)).toEqual({});
@@ -52,5 +51,24 @@ describe("buildClaudeQueryOptions", () => {
 
   it("omits model when empty (defers to SDK / local settings)", () => {
     expect("model" in buildClaudeQueryOptions(claudePayload({ model: "" }))).toBe(false);
+  });
+
+  it("appends per-chat Current Chat Context through the SDK system prompt channel", () => {
+    const opts = buildClaudeQueryOptions(claudePayload(), {
+      chatId: "chat-claude",
+      title: "Claude routing",
+      topic: "Claude routing",
+      description: "testing provider prompt injection",
+      participants: [{ name: "alice", displayName: "Alice", type: "human" }],
+    });
+    expect(opts.systemPrompt).toEqual(
+      expect.objectContaining({
+        type: "preset",
+        preset: "claude_code",
+      }),
+    );
+    expect(opts.systemPrompt?.append).toContain("## Current Chat Context");
+    expect(opts.systemPrompt?.append).toContain("Chat ID: chat-claude");
+    expect(opts.systemPrompt?.append).toContain("@alice");
   });
 });

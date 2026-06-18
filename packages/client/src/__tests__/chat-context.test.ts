@@ -1,7 +1,7 @@
 import type { ChatDetail, ChatParticipantDetail } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
 import { fetchChatContext } from "../runtime/chat-context.js";
-import { renderChatContextSection } from "../runtime/chat-context-section.js";
+import { renderChatContextPrompt, renderChatContextSection } from "../runtime/chat-context-section.js";
 
 function mkParticipant(extras: Partial<ChatParticipantDetail>): ChatParticipantDetail {
   return {
@@ -324,5 +324,24 @@ describe("renderChatContextSection", () => {
     expect(md.toLowerCase()).not.toContain("access_mode");
     expect(md.toLowerCase()).not.toContain("role=");
     expect(md.toLowerCase()).not.toContain("mode=");
+  });
+});
+
+describe("renderChatContextPrompt", () => {
+  it("wraps Current Chat Context as runtime-authored provider/session context", () => {
+    const prompt = renderChatContextPrompt({
+      chatId: "chat-1",
+      title: "ship v1",
+      topic: "ship v1",
+      description: "cutting the v1 release",
+      participants: [{ name: "alice", displayName: "Alice", type: "human" }],
+    });
+    expect(prompt).not.toBeNull();
+    if (!prompt) return;
+    expect(prompt).toContain("<first-tree-current-chat-context>");
+    expect(prompt).toContain("not user-authored content");
+    expect(prompt).toContain("## Current Chat Context");
+    expect(prompt).toContain("Chat ID: chat-1");
+    expect(prompt).toContain("</first-tree-current-chat-context>");
   });
 });
