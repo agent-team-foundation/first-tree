@@ -33,8 +33,8 @@ import { titleWithSemantics } from "./save-semantics.js";
 
 export type EnvSectionProps = {
   items: EnvEntry[];
-  /** Persist the full next env array. `onSuccess` fires only after the server confirms. */
-  onSave: (nextEnv: EnvEntry[], opts?: { onSuccess?: () => void }) => void;
+  /** Persist the full next env array. `onSuccess` fires after the server confirms; `onError` on failure. */
+  onSave: (nextEnv: EnvEntry[], opts?: { onSuccess?: () => void; onError?: () => void }) => void;
   /** The agent is inactive (suspended) — hide edit affordances. */
   disabled?: boolean;
   /** A config save is in flight — serialize edits and show the dialog's submit as pending. */
@@ -90,6 +90,11 @@ export function EnvSection({ items, onSave, disabled, saving, saveError, saved }
             : undefined,
           action: entry.sensitive ? undefined : { label: "Undo", onClick: () => onSave([...itemsRef.current, entry]) },
         });
+      },
+      // A row delete has no open dialog to host an inline error, so surface the
+      // failure as a toast right here (the optimistic removal is rolled back).
+      onError: () => {
+        addToast({ title: `Couldn't remove ${entry.key}`, description: "The change wasn't saved — try again." });
       },
     });
   };
@@ -287,6 +292,9 @@ function EnvDialog({
           <DialogTitle>{initial ? "Edit environment variable" : "Add environment variable"}</DialogTitle>
           <DialogDescription>Saved immediately when you submit.</DialogDescription>
         </DialogHeader>
+        {/* Every input disables while a save is in flight (`submitting`), so a value
+            typed in the pending window can't be silently dropped when the earlier
+            request resolves and closes the dialog. */}
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="env-key">Key</Label>
@@ -296,7 +304,7 @@ function EnvDialog({
               onChange={(e) => setKey(e.target.value.toUpperCase())}
               placeholder="OPENAI_API_KEY"
               className="font-mono"
-              disabled={!!initial}
+              disabled={!!initial || submitting}
             />
             {initial && <p className="text-caption text-muted-foreground">Key can't be renamed — delete and re-add.</p>}
           </div>
@@ -312,6 +320,7 @@ function EnvDialog({
                 allowKeepExisting ? "Leave empty to keep existing value" : sensitive ? "new secret" : "value"
               }
               className="font-mono"
+              disabled={submitting}
             />
           </div>
           <label className="flex items-center gap-2 text-body">
@@ -320,7 +329,7 @@ function EnvDialog({
               checked={sensitive}
               onChange={(e) => setSensitive(e.target.checked)}
               className="h-4 w-4"
-              disabled={!!initial && initial.sensitive}
+              disabled={(!!initial && initial.sensitive) || submitting}
             />
             Mark as sensitive (encrypted at rest, never displayed again)
           </label>

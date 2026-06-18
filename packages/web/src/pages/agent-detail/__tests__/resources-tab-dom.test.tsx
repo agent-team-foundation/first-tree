@@ -97,6 +97,7 @@ function context(overrides: Partial<AgentDetailContext> = {}): AgentDetailContex
       pending: false,
       saveError: null,
       conflict: false,
+      errorField: null,
       justSaved: false,
       savedField: null,
     },

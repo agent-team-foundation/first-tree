@@ -142,6 +142,7 @@ describe("useAgentConfigSave", () => {
     expect(cached?.version).toBe(1);
     expect(latest?.conflict).toBe(true);
     expect(latest?.saveError).toBeNull();
+    expect(latest?.errorField).toBe("model");
   });
 
   it("surfaces a non-conflict error and rolls back", async () => {
@@ -156,5 +157,27 @@ describe("useAgentConfigSave", () => {
     expect(queryClient.getQueryData<AgentRuntimeConfig>(KEY)?.payload.reasoningEffort).toBe("medium");
     expect(latest?.conflict).toBe(false);
     expect(latest?.saveError).toContain("boom");
+    expect(latest?.errorField).toBe("effort");
+  });
+
+  it("invokes the per-call onError and clears errorField on the next successful save", async () => {
+    apiMocks.updateAgentConfig.mockRejectedValueOnce(new ApiError(500, "nope"));
+    await renderHook();
+    const onError = vi.fn();
+
+    await act(async () => {
+      latest?.save({ env: [] }, { field: "env", onError });
+    });
+    await flush();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(latest?.errorField).toBe("env");
+
+    apiMocks.updateAgentConfig.mockResolvedValueOnce(config({ model: "opus" }, 2));
+    await act(async () => {
+      latest?.save({ model: "opus" }, { field: "model" });
+    });
+    await flush();
+    expect(latest?.errorField).toBeNull();
+    expect(latest?.savedField).toBe("model");
   });
 });
