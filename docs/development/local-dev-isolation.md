@@ -37,11 +37,12 @@ first-tree-dev daemon status
 journalctl --user -u first-tree-dev -f
 ```
 
-After editing any source file, re-run `./scripts/dev-install.sh` (it
-rebuilds dist) and restart the daemon if it's already running:
+After editing any source file, re-run `./scripts/dev-install.sh`; it
+rebuilds dist and restarts the installed dev daemon so the running
+service picks up the new build:
 
 ```bash
-./scripts/dev-install.sh && first-tree-dev daemon restart
+./scripts/dev-install.sh
 ```
 
 After login, on Linux:
