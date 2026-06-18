@@ -31,6 +31,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
  */
 
 const ORIGINAL_PROMPT = "please reply";
+const SECOND_PROMPT = "and include context";
 const FAKE_API_ERROR_TEXT =
   "API Error: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()";
 
@@ -39,6 +40,27 @@ const FAKE_API_ERROR_TEXT =
 // them in observation order so the test can assert the same prompt was
 // replayed on the second attempt.
 const observedInputMessages: Array<{ attempt: number; content: string }> = [];
+const requiredInputsBeforeResultByAttempt = new Map<number, number>();
+const resultReleaseGates = new Map<number, Promise<void>>();
+
+function resetSdkMockState(): void {
+  attemptIdx = 0;
+  observedInputMessages.length = 0;
+  requiredInputsBeforeResultByAttempt.clear();
+  resultReleaseGates.clear();
+}
+
+function requiredInputsForAttempt(attempt: number): number {
+  return requiredInputsBeforeResultByAttempt.get(attempt) ?? 1;
+}
+
+async function waitForObservedInputs(attempt: number, count: number): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (observedInputMessages.filter((message) => message.attempt === attempt).length < count) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for attempt ${attempt} inputs`);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
 
 function makeWrappedStreamErrorQuery(
   promptIterable: AsyncIterable<{ message: { content: unknown } }>,
@@ -47,12 +69,17 @@ function makeWrappedStreamErrorQuery(
   let yielded = false;
   // Eagerly drain the input iterable in the background so the
   // handler-side `inputController.push(...)` reaches us — without this,
-  // the test never sees what got pushed.
+  // the test never sees what got pushed. Stop after the attempt-specific
+  // count so a test can leave a pushed tail buffered but not provider-entered.
   void (async () => {
+    const maxInputsToDrain = requiredInputsForAttempt(attempt);
+    let drained = 0;
     for await (const sdkMsg of promptIterable) {
       const content = sdkMsg.message?.content;
       const flat = typeof content === "string" ? content : JSON.stringify(content);
       observedInputMessages.push({ attempt, content: flat });
+      drained++;
+      if (drained >= maxInputsToDrain) break;
     }
   })();
   return {
@@ -60,6 +87,8 @@ function makeWrappedStreamErrorQuery(
       return {
         next: async (): Promise<IteratorResult<unknown>> => {
           if (yielded) return { value: undefined, done: true };
+          await waitForObservedInputs(attempt, requiredInputsForAttempt(attempt));
+          await resultReleaseGates.get(attempt);
           yielded = true;
           // Yield a "success" subtype with the wrapped API-error text —
           // the handler's `detectStreamApiError` sniff will classify
@@ -124,8 +153,7 @@ function buildCache() {
 
 describe("claude-code handler — transient stream-error retry replays user message", () => {
   it("re-pushes the original prompt into the rebuilt InputController so the SDK isn't left idle", async () => {
-    attemptIdx = 0;
-    observedInputMessages.length = 0;
+    resetSdkMockState();
 
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const emitted: SessionEvent[] = [];
@@ -203,6 +231,193 @@ describe("claude-code handler — transient stream-error retry replays user mess
     const turnEnds = emitted.filter((e) => e.kind === "turn_end");
     expect(turnEnds.length).toBeGreaterThan(0);
     const lastTurnEnd = turnEnds[turnEnds.length - 1];
+    if (!lastTurnEnd || lastTurnEnd.kind !== "turn_end") throw new Error("expected turn_end event");
+    expect(lastTurnEnd.payload.status).toBe("error");
+  });
+
+  it("replays every provider-entered input in a coalesced transient retry", async () => {
+    resetSdkMockState();
+    requiredInputsBeforeResultByAttempt.set(1, 2);
+    requiredInputsBeforeResultByAttempt.set(2, 2);
+    requiredInputsBeforeResultByAttempt.set(3, 2);
+
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const emitted: SessionEvent[] = [];
+    const logs: string[] = [];
+    const finishedBatches: string[][] = [];
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const ctx: SessionContext = {
+      agent: {
+        agentId: AGENT_ID,
+        inboxId: "inbox-test",
+        displayName: "test",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
+      chatId: "chat-stream-retry",
+      log: (m) => logs.push(m),
+      recordProviderActivity: () => {},
+      emitEvent: (e) => emitted.push(e),
+      ...mockCtxPlumbing({ sendMessage }, "chat-stream-retry"),
+      finishTurn: async (messages) => {
+        const batch = Array.isArray(messages) ? messages : [messages];
+        finishedBatches.push(batch.map((message) => message.id));
+      },
+    };
+
+    await handler.start(
+      {
+        id: "m1",
+        chatId: "chat-stream-retry",
+        senderId: "user-1",
+        format: "text",
+        content: ORIGINAL_PROMPT,
+        metadata: null,
+      },
+      ctx,
+    );
+    handler.inject({
+      id: "m2",
+      chatId: "chat-stream-retry",
+      senderId: "user-1",
+      format: "text",
+      content: SECOND_PROMPT,
+      metadata: null,
+    });
+
+    await waitForObservedInputs(2, 2);
+    await waitForObservedInputs(3, 2);
+    await handler.suspend();
+    await new Promise((r) => setImmediate(r));
+
+    expect(logs.some((l) => l.includes("Attempting auto-resume (retry 1/"))).toBe(true);
+
+    const attempt2Inputs = observedInputMessages.filter((message) => message.attempt === 2);
+    expect(attempt2Inputs.map((message) => message.content)).toEqual([
+      expect.stringContaining(ORIGINAL_PROMPT),
+      expect.stringContaining(SECOND_PROMPT),
+    ]);
+
+    const attempt3Inputs = observedInputMessages.filter((message) => message.attempt === 3);
+    expect(attempt3Inputs.map((message) => message.content)).toEqual([
+      expect.stringContaining(ORIGINAL_PROMPT),
+      expect.stringContaining(SECOND_PROMPT),
+    ]);
+
+    expect(finishedBatches).toEqual([["m1", "m2"]]);
+    const lastTurnEnd = emitted.filter((event) => event.kind === "turn_end").at(-1);
+    if (!lastTurnEnd || lastTurnEnd.kind !== "turn_end") throw new Error("expected turn_end event");
+    expect(lastTurnEnd.payload.status).toBe("error");
+  });
+
+  it("replays a pushed tail input that had not entered the provider before a transient retry", async () => {
+    resetSdkMockState();
+    requiredInputsBeforeResultByAttempt.set(1, 1);
+    requiredInputsBeforeResultByAttempt.set(2, 2);
+    requiredInputsBeforeResultByAttempt.set(3, 2);
+    let releaseAttempt1!: () => void;
+    resultReleaseGates.set(
+      1,
+      new Promise((resolve) => {
+        releaseAttempt1 = resolve;
+      }),
+    );
+
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const emitted: SessionEvent[] = [];
+    const logs: string[] = [];
+    const finishedBatches: string[][] = [];
+    let resolveM2Pushed!: () => void;
+    const m2Pushed = new Promise<void>((resolve) => {
+      resolveM2Pushed = resolve;
+    });
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const plumbing = mockCtxPlumbing({ sendMessage }, "chat-stream-retry");
+    const ctx: SessionContext = {
+      agent: {
+        agentId: AGENT_ID,
+        inboxId: "inbox-test",
+        displayName: "test",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
+      chatId: "chat-stream-retry",
+      log: (m) => logs.push(m),
+      recordProviderActivity: () => {},
+      emitEvent: (e) => emitted.push(e),
+      ...plumbing,
+      formatInboundContent: async (message) => {
+        const formatted = await plumbing.formatInboundContent(message);
+        if (message.id === "m2") setImmediate(resolveM2Pushed);
+        return formatted;
+      },
+      finishTurn: async (messages) => {
+        const batch = Array.isArray(messages) ? messages : [messages];
+        finishedBatches.push(batch.map((message) => message.id));
+      },
+    };
+
+    await handler.start(
+      {
+        id: "m1",
+        chatId: "chat-stream-retry",
+        senderId: "user-1",
+        format: "text",
+        content: ORIGINAL_PROMPT,
+        metadata: null,
+      },
+      ctx,
+    );
+    await waitForObservedInputs(1, 1);
+    handler.inject({
+      id: "m2",
+      chatId: "chat-stream-retry",
+      senderId: "user-1",
+      format: "text",
+      content: SECOND_PROMPT,
+      metadata: null,
+    });
+    await m2Pushed;
+    releaseAttempt1();
+
+    await waitForObservedInputs(2, 2);
+    await waitForObservedInputs(3, 2);
+    await handler.suspend();
+    await new Promise((r) => setImmediate(r));
+
+    expect(logs.some((l) => l.includes("Attempting auto-resume (retry 1/"))).toBe(true);
+
+    const attempt1Inputs = observedInputMessages.filter((message) => message.attempt === 1);
+    expect(attempt1Inputs.map((message) => message.content)).toEqual([expect.stringContaining(ORIGINAL_PROMPT)]);
+
+    const attempt2Inputs = observedInputMessages.filter((message) => message.attempt === 2);
+    expect(attempt2Inputs.map((message) => message.content)).toEqual([
+      expect.stringContaining(ORIGINAL_PROMPT),
+      expect.stringContaining(SECOND_PROMPT),
+    ]);
+
+    const attempt3Inputs = observedInputMessages.filter((message) => message.attempt === 3);
+    expect(attempt3Inputs.map((message) => message.content)).toEqual([
+      expect.stringContaining(ORIGINAL_PROMPT),
+      expect.stringContaining(SECOND_PROMPT),
+    ]);
+
+    expect(finishedBatches).toEqual([["m1", "m2"]]);
+    const lastTurnEnd = emitted.filter((event) => event.kind === "turn_end").at(-1);
     if (!lastTurnEnd || lastTurnEnd.kind !== "turn_end") throw new Error("expected turn_end event");
     expect(lastTurnEnd.payload.status).toBe("error");
   });

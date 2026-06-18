@@ -18,27 +18,83 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
  * chat with no visible signal that the agent had crashed.
  */
 
-// Every query() call returns an iterator that throws on first .next() — the
-// handler should retry up to MAX_RETRIES (= 2) times, hitting three failures
-// total, then bail through the retry-exhausted branch.
-vi.mock("@anthropic-ai/claude-agent-sdk", () => {
-  const makeFailingQuery = () => ({
+// Every query() call returns an iterator that throws after consuming a
+// configurable prompt prefix. The handler should retry up to MAX_RETRIES
+// (= 2) times, hitting three failures total, then bail through the
+// retry-exhausted branch.
+const SECOND_PROMPT = "tail prompt";
+const observedInputMessages: Array<{ attempt: number; content: string }> = [];
+const requiredInputsBeforeThrowByAttempt = new Map<number, number>();
+const throwReleaseGates = new Map<number, Promise<void>>();
+
+function resetSdkMockState(): void {
+  attemptIdx = 0;
+  observedInputMessages.length = 0;
+  requiredInputsBeforeThrowByAttempt.clear();
+  throwReleaseGates.clear();
+}
+
+function requiredInputsForAttempt(attempt: number): number {
+  return requiredInputsBeforeThrowByAttempt.get(attempt) ?? 1;
+}
+
+async function waitForObservedInputs(attempt: number, count: number): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (observedInputMessages.filter((message) => message.attempt === attempt).length < count) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for attempt ${attempt} inputs`);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+async function waitForCondition(label: string, predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+function makeFailingQuery(promptIterable: AsyncIterable<{ message: { content: unknown } }>, attempt: number) {
+  void (async () => {
+    const maxInputsToDrain = requiredInputsForAttempt(attempt);
+    let drained = 0;
+    for await (const sdkMsg of promptIterable) {
+      const content = sdkMsg.message?.content;
+      const flat = typeof content === "string" ? content : JSON.stringify(content);
+      observedInputMessages.push({ attempt, content: flat });
+      drained++;
+      if (drained >= maxInputsToDrain) break;
+    }
+  })();
+  return {
     [Symbol.asyncIterator]() {
       return {
         next: async () => {
+          await waitForObservedInputs(attempt, requiredInputsForAttempt(attempt));
+          await throwReleaseGates.get(attempt);
           throw new Error("sdk transport crashed");
         },
       };
     },
     close: () => {},
     setModel: async () => {},
-  });
-  return { query: () => makeFailingQuery() };
+  };
+}
+
+let attemptIdx = 0;
+
+vi.mock("@anthropic-ai/claude-agent-sdk", () => {
+  return {
+    query: (args: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
+      attemptIdx += 1;
+      return makeFailingQuery(args.prompt, attemptIdx);
+    },
+  };
 });
 
 import { createClaudeCodeHandler } from "../handlers/claude-code.js";
 import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
-import type { SessionContext } from "../runtime/handler.js";
+import type { DeliveryToken, SessionContext } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 const AGENT_ID = "019d9a97-90b0-716b-8317-a8c0be8430da";
@@ -68,6 +124,8 @@ function buildCache() {
 
 describe("claude-code handler — retry-exhausted surfacing", () => {
   it("emits error + turn_end:error and finishes the in-flight entry after MAX_RETRIES", async () => {
+    resetSdkMockState();
+
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const emitted: SessionEvent[] = [];
     const finishTurnCalled = vi.fn();
@@ -134,7 +192,126 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     expect(errIdx).toBeLessThan(turnEndIdx);
   });
 
+  it("retries an unentered tail after retry exhaustion settles the provider-entered prefix", async () => {
+    resetSdkMockState();
+    requiredInputsBeforeThrowByAttempt.set(1, 1);
+    requiredInputsBeforeThrowByAttempt.set(2, 1);
+    requiredInputsBeforeThrowByAttempt.set(3, 1);
+    let releaseAttempt1!: () => void;
+    throwReleaseGates.set(
+      1,
+      new Promise((resolve) => {
+        releaseAttempt1 = resolve;
+      }),
+    );
+
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const emitted: SessionEvent[] = [];
+    const logs: string[] = [];
+    const finishedBatches: string[][] = [];
+    const m2Retries: Array<{ ids: string[]; reason: string }> = [];
+    const failSessionForRecovery = vi.fn();
+    let resolveM2FormatStarted!: () => void;
+    const m2FormatStarted = new Promise<void>((resolve) => {
+      resolveM2FormatStarted = resolve;
+    });
+    let releaseM2Format!: () => void;
+    const m2FormatRelease = new Promise<void>((resolve) => {
+      releaseM2Format = resolve;
+    });
+    const m2Token: DeliveryToken = {
+      processingStarted: vi.fn(),
+      complete: vi.fn(async () => {}),
+      retry: (messages, reason) => {
+        const batch = Array.isArray(messages) ? messages : [messages];
+        m2Retries.push({ ids: batch.map((message) => message.id), reason });
+      },
+      terminalRejected: vi.fn(async () => {}),
+    };
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const plumbing = mockCtxPlumbing({ sendMessage }, "chat-retry");
+    const ctx: SessionContext = {
+      agent: {
+        agentId: AGENT_ID,
+        inboxId: "inbox-test",
+        displayName: "test",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
+      chatId: "chat-retry",
+      log: (m) => logs.push(m),
+      recordProviderActivity: () => {},
+      emitEvent: (e) => emitted.push(e),
+      ...plumbing,
+      formatInboundContent: async (message) => {
+        const formatted = await plumbing.formatInboundContent(message);
+        if (message.id === "m2") {
+          resolveM2FormatStarted();
+          await m2FormatRelease;
+        }
+        return formatted;
+      },
+      finishTurn: async (messages) => {
+        const batch = Array.isArray(messages) ? messages : [messages];
+        finishedBatches.push(batch.map((message) => message.id));
+      },
+      failSessionForRecovery,
+    };
+
+    await handler.start(
+      { id: "m1", chatId: "chat-retry", senderId: "u", format: "text", content: "hi", metadata: null },
+      ctx,
+    );
+    await waitForObservedInputs(1, 1);
+    handler.inject(
+      {
+        id: "m2",
+        chatId: "chat-retry",
+        senderId: "u",
+        format: "text",
+        content: SECOND_PROMPT,
+        metadata: null,
+      },
+      m2Token,
+    );
+    await m2FormatStarted;
+    releaseAttempt1();
+
+    await waitForObservedInputs(3, 1);
+    await waitForCondition("retry-exhausted tail recovery", () => m2Retries.length > 0);
+    releaseM2Format();
+    await handler.suspend();
+    await new Promise((r) => setImmediate(r));
+
+    expect(logs.some((l) => l.includes("Attempting auto-resume (retry 1/"))).toBe(true);
+
+    const attempt1Inputs = observedInputMessages.filter((message) => message.attempt === 1);
+    expect(attempt1Inputs.map((message) => message.content)).toEqual([expect.stringContaining("hi")]);
+
+    const attempt2Inputs = observedInputMessages.filter((message) => message.attempt === 2);
+    expect(attempt2Inputs.map((message) => message.content)).toEqual([expect.stringContaining("hi")]);
+
+    const attempt3Inputs = observedInputMessages.filter((message) => message.attempt === 3);
+    expect(attempt3Inputs.map((message) => message.content)).toEqual([expect.stringContaining("hi")]);
+
+    expect(finishedBatches).toEqual([["m1"]]);
+    expect(m2Retries).toEqual([{ ids: ["m2"], reason: "claude_retry_exhausted_tail_recovery" }]);
+    expect(failSessionForRecovery).toHaveBeenCalledWith("claude_retry_exhausted", expect.any(String));
+    const lastTurnEnd = emitted.filter((event) => event.kind === "turn_end").at(-1);
+    if (!lastTurnEnd || lastTurnEnd.kind !== "turn_end") throw new Error("expected turn_end event");
+    expect(lastTurnEnd.payload.status).toBe("error");
+  });
+
   it("still returns when emitEvent throws", async () => {
+    resetSdkMockState();
+
     const sendMessage = vi.fn().mockResolvedValue(undefined);
 
     const cache = buildCache();

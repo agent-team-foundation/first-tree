@@ -48,6 +48,24 @@ import { consumedErrorOutcome } from "./turn-settlement.js";
 
 const MAX_RETRIES = 2;
 
+type PendingAckMessage = {
+  message: SessionMessage;
+  token: DeliveryToken;
+  providerEntered: boolean;
+};
+
+type PendingSdkInput = {
+  sdkMessage: SDKUserMessage;
+  pendingAck: PendingAckMessage | null;
+};
+
+type QueuedInjectedMessage = {
+  message: SessionMessage;
+  token: DeliveryToken;
+  recoveryReason?: string;
+  recoveryRetried?: boolean;
+};
+
 /**
  * Bug 6: thrown by `consumeOutput` when an SDK "success" result message
  * actually contains an API error string (e.g. "API Error: socket
@@ -699,7 +717,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   let cwd: string | null = null;
   let claudeSessionId: string | null = null;
   let currentQuery: Query | null = null;
-  let inputController: InputController<SDKUserMessage> | null = null;
+  let inputController: InputController<PendingSdkInput> | null = null;
   let abortController: AbortController | null = null;
   let consumerDone: Promise<void> | null = null;
   let retryCount = 0;
@@ -714,9 +732,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * Cleared when the session ends or `start()` runs for a fresh session.
    */
   let chatContextForPrompt: ChatContext | undefined;
-  const queuedInjectedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
-  const pendingAckMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
+  const queuedInjectedMessages: QueuedInjectedMessage[] = [];
+  const pendingAckMessages: PendingAckMessage[] = [];
   let injectDrainInProgress = false;
+  let drainingInjectedMessage: QueuedInjectedMessage | null = null;
+  let inputRecoveryReason: string | null = null;
   /**
    * Predeclared source repos the agent config declares at
    * `<agentHome>/source-repos/<localPath>/`. Pure declaration (`declaredSourceRepos`) —
@@ -728,48 +748,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    */
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
   /**
-   * The most recently pushed SDK user message, kept around as the replay
-   * payload for the transient stream-API retry path. Stashed at every
-   * `inputController.push` site (start / resume / inject) so a
-   * `claude_socket_closed` retry can re-push it into the rebuilt query —
-   * without this, `respawnQuery()` would leave the new `InputController`
-   * empty and the SDK subprocess would hang idle (resume mode loads
-   * conversation history but still needs a new user message to drive
-   * the next turn). We stash the already-converted SDK form (rather
-   * than the raw `SessionMessage`) so the retry path stays synchronous
-   * and timing-compatible with the existing consumer-loop catch block.
-   * Cleared once `ackTurnClose()` acks the entry — turn fully processed,
-   * no further replay needed.
-   *
-   * Invariant — single-consumer loop: this stash is safe ONLY because
-   * the catch → respawn → re-push sequence in `consumeOutput` is
-   * synchronous (no `await` between the sniff-throw catch entry and
-   * `respawnQuery`'s push). The interleaving inject() runs on its own
-   * `void maybeSwitchConfig().finally(...)` microtask and updates the
-   * stash via the same write site, so a properly-ordered consumer-loop
-   * iteration is the *only* reader and writer at any synchronous step.
-   * If future work ever introduces a second concurrent consumer (e.g.
-   * parallel turn execution, multi-`spawnQuery` fan-out), this stash
-   * must be redesigned per-consumer or the retry must own its own
-   * captured copy — otherwise an inject from chat N can overwrite a
-   * stash that chat M's retry is about to replay.
-   *
-   * Tolerated same-chat race — inject mid-retry: an inject()'s
-   * `toSDKUserMessage` await can interleave with a consumer-triggered
-   * transient retry. Sequence: consumer sniff-hit → respawn replays
-   * the PRIOR stash into the new query → inject's await resolves →
-   * inject overwrites stash and pushes the new prompt. The rebuilt
-   * query then sees `[replayed_prior_prompt, injected_new_prompt]`
-   * as two consecutive user messages. The replayed prompt is already
-   * in the resumed conversation history, so the model perceives a
-   * one-message duplicate before processing the inject — recoverable,
-   * not a correctness break. Avoiding this would require either
-   * draining inject through a queue gated on the consumer's catch
-   * state or making the retry path async — both have larger blast
-   * radius than the duplicate-message symptom. Documented per PR #648
-   * reviewer observation #1.
+   * SDK inputs pushed into the active query that have not reached a terminal
+   * turn boundary yet. Transient retry must replay the whole unclosed pushed
+   * buffer, including a tail input the old query accepted into its controller
+   * but crashed before the provider pulled. ACK eligibility is stricter and is
+   * tracked separately by `PendingAckMessage.providerEntered`.
    */
-  let stashedSdkMessage: SDKUserMessage | null = null;
+  const unclosedSdkInputs: PendingSdkInput[] = [];
 
   async function toSDKUserMessage(
     message: SessionMessage,
@@ -932,58 +917,126 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Single helper for "turn closed → finish the pending inbox message AND
-   * drop the replay stash". The two operations are paired everywhere a
-   * turn finishes (success / sniff-permanent / forward-error / no-result /
-   * non-success subtype / MAX_RETRIES / respawn-fail) — folding them into
-   * one call keeps the invariant "stash lives only as long as the turn
-   * still might need a replay" enforced in one place. Use the raw
+   * Single helper for "turn closed → finish the provider-entered inbox
+   * prefix AND drop settled inputs from the replay buffer". The two
+   * operations are paired everywhere a turn finishes (success /
+   * sniff-permanent / forward-error / no-result / non-success subtype /
+   * MAX_RETRIES / respawn-fail) — folding them into one call keeps the
+   * invariant "input replay lives only as long as the turn still might need a
+   * replay" enforced in one place. Use the raw
    * `finishTurn(message, ...)` directly for per-message terminal
    * failures (e.g. inject's `toSDKUserMessage` catch) where the semantics is
    * "commit this single inbox message, NOT close the active SDK turn".
    */
+  function pendingProviderEnteredPrefix(): PendingAckMessage[] {
+    const prefix: PendingAckMessage[] = [];
+    for (const pending of pendingAckMessages) {
+      if (!pending.providerEntered) break;
+      prefix.push(pending);
+    }
+    return prefix;
+  }
+
+  function isCurrentPendingPrefix(batch: readonly PendingAckMessage[]): boolean {
+    return batch.every((pending, index) => pendingAckMessages[index] === pending);
+  }
+
   async function ackTurnClose(
     status: "success" | "error",
     reason: Parameters<typeof consumedErrorOutcome>[0] = "provider_clean_error",
+    providerEnteredPrefix: readonly PendingAckMessage[] = pendingProviderEnteredPrefix(),
   ): Promise<void> {
-    const pending = pendingAckMessages.shift();
-    if (pending) {
+    const fallbackErrorPending =
+      status === "error" && providerEnteredPrefix.length === 0 ? pendingAckMessages[0] : undefined;
+    const batch =
+      providerEnteredPrefix.length > 0
+        ? [...providerEnteredPrefix]
+        : fallbackErrorPending
+          ? [fallbackErrorPending]
+          : [];
+    let settledBatch: PendingAckMessage[] = [];
+    if (batch.length > 0 && isCurrentPendingPrefix(batch)) {
+      pendingAckMessages.splice(0, batch.length);
+      const messages = batch.map((pending) => pending.message);
+      const tail = batch[batch.length - 1];
       const outcome = status === "success" ? { status, terminal: true } : consumedErrorOutcome(reason);
-      await pending.token.complete(pending.message, outcome);
+      await tail?.token.complete(messages, outcome);
+      settledBatch = batch;
     }
-    markCurrentPendingMessageProcessingStarted();
-    stashedSdkMessage = null;
+    if (settledBatch.length > 0) {
+      const settled = new Set(settledBatch);
+      for (let index = unclosedSdkInputs.length - 1; index >= 0; index--) {
+        const input = unclosedSdkInputs[index];
+        if (input?.pendingAck && settled.has(input.pendingAck)) unclosedSdkInputs.splice(index, 1);
+      }
+    }
   }
 
-  function pushPendingAckMessage(message: SessionMessage, token: DeliveryToken): void {
-    const wasEmpty = pendingAckMessages.length === 0;
-    pendingAckMessages.push({ message, token });
-    if (wasEmpty) token.processingStarted(message);
+  function createPendingSdkInput(
+    sdkMessage: SDKUserMessage,
+    message: SessionMessage,
+    token: DeliveryToken,
+  ): PendingSdkInput {
+    return {
+      sdkMessage,
+      pendingAck: { message, token, providerEntered: false },
+    };
   }
 
-  function markCurrentPendingMessageProcessingStarted(): void {
-    const current = pendingAckMessages[0];
-    if (current) current.token.processingStarted(current.message);
+  function pushPendingSdkInput(input: PendingSdkInput): void {
+    if (input.pendingAck) pendingAckMessages.push(input.pendingAck);
+    unclosedSdkInputs.push(input);
+    inputController?.push(input);
+  }
+
+  function markProviderEntered(input: PendingSdkInput): void {
+    const pending = input.pendingAck;
+    if (!pending || pending.providerEntered) return;
+    pending.providerEntered = true;
+    pending.token.processingStarted(pending.message);
+  }
+
+  async function* providerPromptInputs(inputs: AsyncIterable<PendingSdkInput>): AsyncIterable<SDKUserMessage> {
+    for await (const input of inputs) {
+      markProviderEntered(input);
+      yield input.sdkMessage;
+    }
+  }
+
+  function retryInjectedItem(item: QueuedInjectedMessage, reason: string): void {
+    item.recoveryReason = reason;
+    if (item.recoveryRetried) return;
+    item.recoveryRetried = true;
+    item.token.retry(item.message, reason);
+  }
+
+  function recoverIfInputClosed(item: QueuedInjectedMessage): boolean {
+    const reason = item.recoveryReason ?? inputRecoveryReason;
+    if (!reason) return false;
+    retryInjectedItem(item, reason);
+    return true;
   }
 
   async function pushInjectedMessage(
-    message: SessionMessage,
+    item: QueuedInjectedMessage,
     sessionCtx: SessionContext,
     sessionId: string,
-    token: DeliveryToken,
   ): Promise<void> {
+    const { message, token } = item;
+    if (recoverIfInputClosed(item)) return;
     try {
       await maybeSwitchConfig(sessionCtx);
     } catch (err) {
       sessionCtx.log(`maybeSwitchConfig errored: ${err instanceof Error ? err.message : String(err)}`);
     }
+    if (recoverIfInputClosed(item)) return;
 
     try {
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
-      stashedSdkMessage = sdkMsg;
-      inputController?.push(sdkMsg);
-      pushPendingAckMessage(message, token);
+      if (recoverIfInputClosed(item)) return;
+      pushPendingSdkInput(createPendingSdkInput(sdkMsg, message, token));
     } catch (err) {
+      if (recoverIfInputClosed(item)) return;
       sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
       // The SDK has not seen this input yet, so there is no durable terminal
       // evidence. Keep it recoverable instead of ACKing through `complete`.
@@ -1004,11 +1057,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         ) {
           const queued = queuedInjectedMessages.shift();
           if (!queued) continue;
+          drainingInjectedMessage = queued;
           try {
-            await pushInjectedMessage(queued.message, sessionCtx, sessionId, queued.token);
+            await pushInjectedMessage(queued, sessionCtx, sessionId);
           } catch (err) {
             sessionCtx.log(`inject drain failed: ${err instanceof Error ? err.message : String(err)}`);
-            queued.token.retry(queued.message, "claude_inject_drain_failed");
+            retryInjectedItem(queued, "claude_inject_drain_failed");
+          } finally {
+            if (drainingInjectedMessage === queued) drainingInjectedMessage = null;
           }
         }
       } finally {
@@ -1021,19 +1077,34 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   function retryBufferedMessages(reason: string): void {
+    inputRecoveryReason = reason;
+    unclosedSdkInputs.length = 0;
+    const pending = pendingAckMessages.splice(0);
+    const drainingIsPending =
+      drainingInjectedMessage !== null &&
+      pending.some(
+        (pendingItem) =>
+          pendingItem.message === drainingInjectedMessage?.message &&
+          pendingItem.token === drainingInjectedMessage.token,
+      );
+    if (drainingInjectedMessage && !drainingIsPending) retryInjectedItem(drainingInjectedMessage, reason);
     const queued = queuedInjectedMessages.splice(0);
     for (const item of queued) {
-      item.token.retry(item.message, reason);
+      retryInjectedItem(item, reason);
     }
-    const pending = pendingAckMessages.splice(0);
     for (const item of pending) {
       item.token.retry(item.message, reason);
     }
   }
 
+  function failFatalSessionForRecovery(sessionCtx: SessionContext, reason: string): void {
+    sessionCtx.failSessionForRecovery?.(reason, claudeSessionId ?? undefined);
+  }
+
   /**
-   * Rebuild the SDK query in resume mode AND re-push the pending user
-   * message so the freshly built `InputController` is non-empty. The
+   * Rebuild the SDK query in resume mode AND re-push every input already handed
+   * to the previous query's controller for the still-unclosed turn, preserving
+   * coalesced-input order. The
    * caller (the outer consumer loop's catch block) keeps owning the
    * for-await, so we deliberately do NOT start a new consumer here —
    * spawning one would create two parallel loops both consuming the
@@ -1042,22 +1113,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * unbounded recursion). Configuration (`applied*`) is preserved
    * across the retry — only the SDK query is recycled.
    *
-   * Stays synchronous — the converted SDK payload is stashed at push
-   * time so the retry path doesn't need to re-run `toSDKUserMessage`
-   * (which is async and would shift the consumer-loop timing).
-   *
-   * `stashedSdkMessage` is `null` only in the corner case where the
-   * session was started via `handler.resume(undefined, ...)` (admin-
-   * triggered resume with no new user input) and the SDK happened to
-   * crash before processing anything. In that case we still rebuild
-   * the query, but without a replay message the SDK will be back to
-   * waiting on stdin — acceptable for the admin-resume edge case, and
-   * the next user message will drive it normally.
+   * Stays synchronous — the converted SDK payloads are already held in
+   * `unclosedSdkInputs`, so the retry path doesn't need to re-run
+   * `toSDKUserMessage` (which is async and would shift the consumer-loop
+   * timing). An empty replay buffer is possible for an admin-triggered resume
+   * with no user input; in that case the rebuilt query waits for the next
+   * input normally.
    */
   function respawnQuery(sessionId: string, sessionCtx: SessionContext): void {
     buildQuery(sessionId, sessionCtx, sessionId);
-    if (stashedSdkMessage) {
-      inputController?.push(stashedSdkMessage);
+    const replay = unclosedSdkInputs.slice();
+    for (const input of replay) {
+      inputController?.push(input);
     }
   }
 
@@ -1074,7 +1141,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   function buildQuery(sessionId: string, sessionCtx: SessionContext, resume?: string): void {
-    inputController = new InputController<SDKUserMessage>();
+    inputRecoveryReason = null;
+    inputController = new InputController<PendingSdkInput>();
     abortController = new AbortController();
 
     // Step 6: M1 hard-codes bypassPermissions per PRD §5.1.6 (permission mode
@@ -1084,7 +1152,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     const payload = agentConfigCache?.get(sessionCtx.agent.agentId)?.payload;
 
     currentQuery = claudeQuery({
-      prompt: inputController.iterable,
+      prompt: providerPromptInputs(inputController.iterable),
       options: {
         sessionId: resume ? undefined : sessionId,
         resume,
@@ -1239,6 +1307,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             }
 
             if (isResultMessage(message)) {
+              const providerEnteredPrefix = pendingProviderEnteredPrefix();
               emitTokenUsageFromResult(message, sessionCtx);
               if (message.subtype === "success") {
                 // Auto-bridge: forward result text back to the chat and close
@@ -1299,7 +1368,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // Permanent stream API failure — ack so the server
                     // doesn't redeliver a message that would just produce
                     // the same error. Retry was exhausted upstream.
-                    await ackTurnClose("error", "stream_api_error_posted");
+                    await ackTurnClose("error", "stream_api_error_posted", providerEnteredPrefix);
                   } else {
                     // Genuine success — reset retry budget for the next turn.
                     // Do NOT reset on the sniff-hit branches above: a wrapped
@@ -1316,7 +1385,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       sessionCtx.log("Result forwarded to chat");
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                       // Turn closed cleanly — drain in-flight inbox entries.
-                      await ackTurnClose("success");
+                      await ackTurnClose("success", "provider_clean_error", providerEnteredPrefix);
                     } catch (err) {
                       const reason = err instanceof Error ? err.message : String(err);
                       sessionCtx.log(`Failed to forward result: ${reason}`);
@@ -1341,7 +1410,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       // counter when an unrelated future stream error
                       // fires.
                       retryCount = 0;
-                      await ackTurnClose("error", "forward_failed");
+                      await ackTurnClose("error", "forward_failed", providerEnteredPrefix);
                     }
                   }
                 } else {
@@ -1349,7 +1418,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                   // Same reset rationale as the forward-success branch above.
                   retryCount = 0;
                   sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
-                  await ackTurnClose("success");
+                  await ackTurnClose("success", "provider_clean_error", providerEnteredPrefix);
                 }
               } else {
                 const errors = message.errors ? message.errors.join("; ") : message.subtype;
@@ -1366,7 +1435,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
                 // SDK reported a turn-level error (non-success subtype):
                 // redelivery would just hit the same error — ack.
-                await ackTurnClose("error", "provider_clean_error");
+                await ackTurnClose("error", "provider_clean_error", providerEnteredPrefix);
               }
               // Reset the auth-hint flag only on a SUCCESSFUL result. This
               // gives a clean slate for the next turn once auth is clearly
@@ -1423,17 +1492,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // never re-dispatches and never gets acked. Per design §4
             // "permanent → ack".
             await ackTurnClose("error", "retry_exhausted_notice_posted");
+            retryBufferedMessages("claude_retry_exhausted_tail_recovery");
+            failFatalSessionForRecovery(sessionCtx, "claude_retry_exhausted");
             return;
           }
 
           // Automatic retry — rebuild the SDK query in resume mode AND re-push
-          // the pending user message into the freshly built InputController.
+          // the unclosed inputs into the freshly built InputController.
           // The old `respawnQuery()` only did the rebuild; the new controller
           // was empty so the SDK subprocess just hung idle waiting for a
           // prompt that never came (it had the resumed conversation history
-          // but nothing to drive the next turn). Replaying `stashedSdkMessage`
-          // is the missing half — the SDK sees the same user message it was
-          // half-way through processing and re-runs the turn.
+          // but nothing to drive the next turn). Replaying the unclosed input
+          // buffer is the missing half — the SDK sees the same user messages
+          // it was processing, including any pushed tail it had not pulled yet.
           //
           // We stay inside THIS consumer loop on purpose: spawning a fresh
           // consumer (via `handler.resume` or `spawnQuery`) would create two
@@ -1472,6 +1543,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // ack the row would loop in `delivered` forever, deduped on every
             // bind-reset replay. Per design §4 "permanent → ack".
             await ackTurnClose("error", "auto_resume_failed_notice_posted");
+            retryBufferedMessages("claude_auto_resume_failed_tail_recovery");
+            failFatalSessionForRecovery(sessionCtx, "claude_auto_resume_failed");
             return;
           }
         }
@@ -1643,17 +1716,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       sessionCtx.log(
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
       );
-      // Convert + stash BEFORE spawning the consumer loop. The consumer
-      // may race to first iteration before the post-spawn push lands —
-      // and if a wrapped stream-API error fires before we've stashed,
-      // the retry path's `respawnQuery` would have nothing to replay
-      // into the rebuilt InputController. See the
-      // `claude-code-stream-error-retry-replay.test.ts` regression.
+      // Convert before spawning the consumer loop, then stash/push
+      // synchronously after the query exists. This preserves the retry
+      // replay payload while still attaching ACK metadata before the SDK can
+      // pull the prompt.
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, claudeSessionId);
-      stashedSdkMessage = sdkMsg;
       spawnQuery(claudeSessionId, sessionCtx);
-      inputController?.push(sdkMsg);
-      pushPendingAckMessage(message, deliveryToken);
+      pushPendingSdkInput(createPendingSdkInput(sdkMsg, message, deliveryToken));
       scheduleInjectedMessagesDrain(sessionCtx, claudeSessionId);
 
       sessionCtx.log(`Session started (${claudeSessionId})`);
@@ -1714,12 +1783,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         let sdkMsg: SDKUserMessage | null = null;
         if (message) {
           sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
-          stashedSdkMessage = sdkMsg;
         }
         spawnQuery(sessionId, sessionCtx, sessionId);
         if (sdkMsg) {
-          inputController?.push(sdkMsg);
-          if (message) pushPendingAckMessage(message, deliveryToken);
+          if (message) pushPendingSdkInput(createPendingSdkInput(sdkMsg, message, deliveryToken));
         }
         scheduleInjectedMessagesDrain(sessionCtx, sessionId);
         sessionCtx.log(`Session resumed at legacy cwd (${sessionId})`);
@@ -1760,12 +1827,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         let freshSdkMsg: SDKUserMessage | null = null;
         if (message) {
           freshSdkMsg = await toSDKUserMessage(message, sessionCtx, freshSessionId);
-          stashedSdkMessage = freshSdkMsg;
         }
         spawnQuery(freshSessionId, sessionCtx);
         if (freshSdkMsg) {
-          inputController?.push(freshSdkMsg);
-          if (message) pushPendingAckMessage(message, deliveryToken);
+          if (message) pushPendingSdkInput(createPendingSdkInput(freshSdkMsg, message, deliveryToken));
         }
         scheduleInjectedMessagesDrain(sessionCtx, freshSessionId);
         sessionCtx.log(`Session started (${freshSessionId}, replacing ${sessionId})`);
@@ -1778,12 +1843,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       let resumeSdkMsg: SDKUserMessage | null = null;
       if (message) {
         resumeSdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
-        stashedSdkMessage = resumeSdkMsg;
       }
       spawnQuery(sessionId, sessionCtx, sessionId);
       if (resumeSdkMsg) {
-        inputController?.push(resumeSdkMsg);
-        if (message) pushPendingAckMessage(message, deliveryToken);
+        if (message) pushPendingSdkInput(createPendingSdkInput(resumeSdkMsg, message, deliveryToken));
       }
       scheduleInjectedMessagesDrain(sessionCtx, sessionId);
 
@@ -1826,10 +1889,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       }
 
       abortController = null;
-      // The session is no longer active — any pending replay message would
-      // be moot. Resume goes through `handler.resume(message, sessionId)`
-      // which re-stashes from its own argument.
-      stashedSdkMessage = null;
+      // The session is no longer active — any pending replay inputs would be
+      // moot. Resume goes through `handler.resume(message, sessionId)`, which
+      // builds a fresh replay buffer from its own pushed inputs.
       retryBufferedMessages("claude_suspend_before_terminal");
       injectDrainInProgress = false;
     },

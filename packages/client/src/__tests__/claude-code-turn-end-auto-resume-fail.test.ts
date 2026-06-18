@@ -22,21 +22,69 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // First query() call returns a failing iterator (drives the consumer loop
 // into its retry-catch). respawnQuery's next query() call throws
 // SYNCHRONOUSLY, triggering the auto-resume-failed branch.
+const SECOND_PROMPT = "tail prompt";
 let queryCallCount = 0;
-vi.mock("@anthropic-ai/claude-agent-sdk", () => {
-  const makeFailingQuery = () => ({
+const observedInputMessages: Array<{ attempt: number; content: string }> = [];
+const requiredInputsBeforeThrowByAttempt = new Map<number, number>();
+const throwReleaseGates = new Map<number, Promise<void>>();
+
+function resetSdkMockState(): void {
+  queryCallCount = 0;
+  observedInputMessages.length = 0;
+  requiredInputsBeforeThrowByAttempt.clear();
+  throwReleaseGates.clear();
+}
+
+function requiredInputsForAttempt(attempt: number): number {
+  return requiredInputsBeforeThrowByAttempt.get(attempt) ?? 1;
+}
+
+async function waitForObservedInputs(attempt: number, count: number): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (observedInputMessages.filter((message) => message.attempt === attempt).length < count) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for attempt ${attempt} inputs`);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+async function waitForCondition(label: string, predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+}
+
+function makeFailingQuery(promptIterable: AsyncIterable<{ message: { content: unknown } }>, attempt: number) {
+  void (async () => {
+    const maxInputsToDrain = requiredInputsForAttempt(attempt);
+    let drained = 0;
+    for await (const sdkMsg of promptIterable) {
+      const content = sdkMsg.message?.content;
+      const flat = typeof content === "string" ? content : JSON.stringify(content);
+      observedInputMessages.push({ attempt, content: flat });
+      drained++;
+      if (drained >= maxInputsToDrain) break;
+    }
+  })();
+  return {
     [Symbol.asyncIterator]() {
       return {
         next: async () => {
+          await waitForObservedInputs(attempt, requiredInputsForAttempt(attempt));
+          await throwReleaseGates.get(attempt);
           throw new Error("initial sdk transport crash");
         },
       };
     },
     close: () => {},
     setModel: async () => {},
-  });
+  };
+}
+
+vi.mock("@anthropic-ai/claude-agent-sdk", () => {
   return {
-    query: () => {
+    query: (args: { prompt: AsyncIterable<{ message: { content: unknown } }> }) => {
       queryCallCount += 1;
       if (queryCallCount >= 2) {
         // Synchronous throw — buildQuery has no try/catch around the `query()`
@@ -44,7 +92,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
         // the auto-resume-failed catch.
         throw new Error("respawn build failed: sdk module unavailable");
       }
-      return makeFailingQuery();
+      return makeFailingQuery(args.prompt, queryCallCount);
     },
   };
 });
@@ -81,7 +129,8 @@ function buildCache() {
 
 describe("claude-code handler — auto-resume failure surfacing", () => {
   it("emits error + turn_end:error and finishes the in-flight entry when respawnQuery throws", async () => {
-    queryCallCount = 0;
+    resetSdkMockState();
+
     const sendMessage = vi.fn().mockResolvedValue(undefined);
     const emitted: SessionEvent[] = [];
     const finishTurnCalled = vi.fn();
@@ -143,5 +192,97 @@ describe("claude-code handler — auto-resume failure surfacing", () => {
     // and the in-process Deduplicator collapses every bind-reset replay
     // (entry → server → push → dispatch dedup skip → never re-acked).
     expect(finishTurnCalled).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries an unentered tail after auto-resume failure settles the provider-entered prefix", async () => {
+    resetSdkMockState();
+    requiredInputsBeforeThrowByAttempt.set(1, 1);
+    let releaseAttempt1!: () => void;
+    throwReleaseGates.set(
+      1,
+      new Promise((resolve) => {
+        releaseAttempt1 = resolve;
+      }),
+    );
+
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const emitted: SessionEvent[] = [];
+    const logs: string[] = [];
+    const finishedBatches: string[][] = [];
+    const retriedBatches: Array<{ ids: string[]; reason: string }> = [];
+    const failSessionForRecovery = vi.fn();
+    let resolveM2Pushed!: () => void;
+    const m2Pushed = new Promise<void>((resolve) => {
+      resolveM2Pushed = resolve;
+    });
+
+    const cache = buildCache();
+    await cache.refresh(AGENT_ID);
+
+    const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+    const plumbing = mockCtxPlumbing({ sendMessage }, "chat-resume-fail");
+    const ctx: SessionContext = {
+      agent: {
+        agentId: AGENT_ID,
+        inboxId: "inbox-test",
+        displayName: "test",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
+      chatId: "chat-resume-fail",
+      log: (m) => logs.push(m),
+      recordProviderActivity: () => {},
+      emitEvent: (e) => emitted.push(e),
+      ...plumbing,
+      formatInboundContent: async (message) => {
+        const formatted = await plumbing.formatInboundContent(message);
+        if (message.id === "m2") setImmediate(resolveM2Pushed);
+        return formatted;
+      },
+      finishTurn: async (messages) => {
+        const batch = Array.isArray(messages) ? messages : [messages];
+        finishedBatches.push(batch.map((message) => message.id));
+      },
+      retryTurn: (messages, reason) => {
+        const batch = Array.isArray(messages) ? messages : [messages];
+        retriedBatches.push({ ids: batch.map((message) => message.id), reason });
+      },
+      failSessionForRecovery,
+    };
+
+    await handler.start(
+      { id: "m1", chatId: "chat-resume-fail", senderId: "u", format: "text", content: "hi", metadata: null },
+      ctx,
+    );
+    await waitForObservedInputs(1, 1);
+    handler.inject({
+      id: "m2",
+      chatId: "chat-resume-fail",
+      senderId: "u",
+      format: "text",
+      content: SECOND_PROMPT,
+      metadata: null,
+    });
+    await m2Pushed;
+    releaseAttempt1();
+
+    await waitForCondition("auto-resume failed tail recovery", () => retriedBatches.length > 0);
+    await handler.suspend();
+    await new Promise((r) => setImmediate(r));
+
+    expect(logs.some((l) => l.includes("Auto-resume failed: respawn build failed"))).toBe(true);
+
+    const attempt1Inputs = observedInputMessages.filter((message) => message.attempt === 1);
+    expect(attempt1Inputs.map((message) => message.content)).toEqual([expect.stringContaining("hi")]);
+
+    expect(finishedBatches).toEqual([["m1"]]);
+    expect(retriedBatches).toEqual([{ ids: ["m2"], reason: "claude_auto_resume_failed_tail_recovery" }]);
+    expect(failSessionForRecovery).toHaveBeenCalledWith("claude_auto_resume_failed", expect.any(String));
+    const lastTurnEnd = emitted.filter((event) => event.kind === "turn_end").at(-1);
+    if (!lastTurnEnd || lastTurnEnd.kind !== "turn_end") throw new Error("expected turn_end event");
+    expect(lastTurnEnd.payload.status).toBe("error");
   });
 });
