@@ -1,16 +1,10 @@
 import type { RuntimeProvider } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageSquare, Monitor } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { type HubClient, listClients } from "./../api/activity.js";
-import {
-  type ClientStatusInfo,
-  dryRunAgentConfig,
-  getAgentClientStatus,
-  getAgentConfig,
-  updateAgentConfig,
-} from "./../api/agent-config.js";
+import { type ClientStatusInfo, getAgentClientStatus, getAgentConfig } from "./../api/agent-config.js";
 import { deleteAgent, getAgent, reactivateAgent, suspendAgent, updateAgent } from "./../api/agents.js";
 import { ApiError } from "./../api/client.js";
 import { listAgentSessions } from "./../api/sessions.js";
@@ -36,28 +30,15 @@ import { AgentSwitcherStrip } from "./agent-detail/agent-switcher-strip.js";
 import { useAgentResources } from "./agent-detail/capability-section.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
-import { SaveBar, sectionAnchorId } from "./agent-detail/save-bar.js";
-import { deriveSaveHint } from "./agent-detail/save-hint.js";
 import { buildTabs, type TabDef } from "./agent-detail/tabs.js";
-import { type DraftSectionName, useConfigDraft } from "./agent-detail/use-config-draft.js";
+import { useAgentConfigSave } from "./agent-detail/use-agent-config-save.js";
 import { useLegacyAnchorRedirect } from "./agent-detail/use-legacy-anchor-redirect.js";
-
-const SECTION_TO_TAB: Record<DraftSectionName, string> = {
-  model: "runtime",
-  effort: "runtime",
-  mcp: "capabilities",
-  env: "runtime",
-  // Repos render on the Environment (runtime) tab now, alongside env vars.
-  git: "runtime",
-};
 
 export function AgentDetailPage() {
   const params = useParams<{ uuid: string }>();
   // Remount the whole page on agent switch. The switcher navigates in place
   // (only `:uuid` changes), so the route element stays mounted; without a key the
-  // previous agent's config draft, pending-nav, and dialog state would leak into
-  // the next agent — notably useConfigDraft only re-seeds from null, so a clean
-  // switch would otherwise render/save agent A's model/env against agent B.
+  // previous agent's dialog / bind state would leak into the next agent.
   return <AgentDetailPageView key={params.uuid ?? ""} />;
 }
 
@@ -128,64 +109,12 @@ function AgentDetailPageView() {
   // cache, so their useAgentResources calls become cache hits.
   const toolsResources = useAgentResources(uuid, { enabled: !!uuid && agentQuery.data?.type !== "human" });
 
-  const draft = useConfigDraft(cfgQuery.data);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [conflictMsg, setConflictMsg] = useState<string | null>(null);
+  // Immediate-save controller for model / reasoning effort / env. Lives in the
+  // shell (not the Runtime tab) so its "Saved" flash and pending state survive a
+  // tab switch and a deferred Undo toast can still call `save`.
+  const configSave = useAgentConfigSave(uuid);
+
   const [dangerError, setDangerError] = useState<string | null>(null);
-  const [remoteReloading, setRemoteReloading] = useState(false);
-  const [justSaved, setJustSaved] = useState(false);
-
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      if (!cfgQuery.data) throw new Error("config not loaded");
-      const patch = draft.buildPayloadPatch();
-      return updateAgentConfig(uuid, { expectedVersion: cfgQuery.data.version, payload: patch });
-    },
-    onSuccess: (next) => {
-      queryClient.setQueryData(["agent-config", uuid], next);
-      draft.resetToConfig(next);
-      setSaveError(null);
-      setConflictMsg(null);
-      setJustSaved(true);
-    },
-    onError: (err) => {
-      setJustSaved(false);
-      if (err instanceof ApiError && err.status === 409) {
-        setConflictMsg("Someone else saved a newer version while you were editing.");
-        setSaveError(null);
-        return;
-      }
-      setSaveError(err instanceof Error ? err.message : String(err));
-    },
-  });
-
-  useEffect(() => {
-    if (!justSaved) return;
-    const t = setTimeout(() => setJustSaved(false), 2500);
-    return () => clearTimeout(t);
-  }, [justSaved]);
-  useEffect(() => {
-    if (draft.summary.anyDirty) setJustSaved(false);
-  }, [draft.summary.anyDirty]);
-
-  const resetDraftToConfig = draft.resetToConfig;
-  const reloadRemote = useCallback(async () => {
-    setSaveError(null);
-    setRemoteReloading(true);
-    try {
-      const latest = await queryClient.fetchQuery({
-        queryKey: ["agent-config", uuid],
-        queryFn: () => getAgentConfig(uuid),
-        staleTime: 0,
-      });
-      resetDraftToConfig(latest);
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setRemoteReloading(false);
-      setConflictMsg(null);
-    }
-  }, [queryClient, uuid, resetDraftToConfig]);
 
   const identityUpdateMutation = useMutation({
     mutationFn: (patch: Parameters<typeof updateAgent>[1]) => updateAgent(uuid, patch),
@@ -241,47 +170,10 @@ function AgentDetailPageView() {
     onError: (err) => setBindClientError(err instanceof Error ? err.message : String(err)),
   });
 
-  const [discardDialogOpen, setDiscardDialogOpen] = useState(false);
-
-  // Leave guard. react-router's `useBlocker` is unavailable here — the app uses
-  // a declarative <BrowserRouter>, not a data router, so useBlocker throws via
-  // its useDataRouterContext invariant. Instead we collar this page's own "leave"
-  // entries and confirm before discarding the config draft: breadcrumb, back,
-  // Chat, the in-page "Manage in Settings" / "Open Computers" links, and PR3's
-  // agent switcher (via the context-exposed `guardedNavigate`). beforeunload
-  // still covers hard exits (refresh / close).
-  // Known gaps (follow-up; the only clean fix is a data-router migration, which
-  // is a separate app-wide change): the GLOBAL top nav (Workspace / Context /
-  // Team / Settings in layout.tsx) and browser back/forward (popstate) route
-  // around this guard — beforeunload doesn't catch SPA popstate either.
-  const [pendingNav, setPendingNav] = useState<string | null>(null);
-  const guardedNavigate = useCallback(
-    (to: string) => {
-      if (draft.summary.anyDirty) setPendingNav(to);
-      else navigate(to);
-    },
-    [draft.summary.anyDirty, navigate],
-  );
-
-  const [dryRunText, setDryRunText] = useState<string | null>(null);
-  const dryRunMutation = useMutation({
-    mutationFn: () => dryRunAgentConfig(uuid, draft.buildPayloadPatch()),
-    onSuccess: (result) => {
-      const lines = result.diff.length ? result.diff.map((d) => `${d.op} ${d.path}`).join("\n") : "(no changes)";
-      setDryRunText(lines);
-    },
-    onError: (err) => setDryRunText(`Dry run failed: ${err instanceof Error ? err.message : String(err)}`),
-  });
-
-  useEffect(() => {
-    if (!draft.summary.anyDirty) return;
-    const handler = (e: BeforeUnloadEvent) => {
-      e.preventDefault();
-      e.returnValue = "";
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
-  }, [draft.summary.anyDirty]);
+  // Every setting saves immediately, so leaving the page is never destructive —
+  // this is just `navigate`, exposed to controls that leave the current agent
+  // (switcher, Chat, Usage deep links, "Manage in Settings", "Open Computers").
+  const navigateAway = useCallback((to: string) => navigate(to), [navigate]);
 
   const isHumanLocal = agentQuery.data?.type === "human";
 
@@ -303,12 +195,6 @@ function AgentDetailPageView() {
     io.observe(el);
     return () => io.disconnect();
   }, [isHumanLocal]);
-
-  const dirtyTabs = useMemo(() => {
-    const set = new Set<string>();
-    for (const s of draft.summary.dirtySections) set.add(SECTION_TO_TAB[s]);
-    return set;
-  }, [draft.summary.dirtySections]);
 
   const tabBadges = useMemo<Record<string, number>>(() => {
     const badges: Record<string, number> = {};
@@ -415,12 +301,6 @@ function AgentDetailPageView() {
 
   const shortId = agent.uuid.slice(0, 8);
 
-  const saveHint = deriveSaveHint({
-    activeSessions,
-    isUnclaimed,
-    isOffline,
-  });
-
   const boundClientId = clientStatus?.clientId ?? null;
   const boundClient: HubClient | null = boundClientId
     ? (allClientsQuery.data?.find((c) => c.id === boundClientId) ?? null)
@@ -446,11 +326,11 @@ function AgentDetailPageView() {
     isHuman,
     canManageAgent,
     canEditConfig,
-    guardedNavigate,
-    draft,
+    navigateAway,
     config: cfgQuery.data,
     configLoading: cfgQuery.isLoading,
     configError: cfgQuery.error,
+    configSave,
     clientStatus,
     clientStatusLoading: clientStatusInitialLoading,
     clientStatusError,
@@ -471,9 +351,6 @@ function AgentDetailPageView() {
     onSuspend: () => suspendMutation.mutate(),
     onReactivate: () => reactivateMutation.mutate(),
     onDelete: () => deleteMutation.mutate(),
-    dryRunText,
-    dryRunPending: dryRunMutation.isPending,
-    onRunDryRun: () => dryRunMutation.mutate(),
   };
 
   return (
@@ -491,13 +368,12 @@ function AgentDetailPageView() {
           }}
         >
           {/* Agent switcher (vertical-B) replaces the breadcrumb: jump between agents
-              (and back to Team) without losing the agent context. Leaving via it is
-              leave-guarded. */}
+              (and back to Team) without losing the agent context. */}
           {/* sp-3 gap to the title row: the switcher is demoted nav above the
               page's primary identity, so it sits a touch apart rather than crowding
               the title (part of the 16/12 top rhythm). */}
           <div style={{ marginBottom: "var(--sp-3)" }}>
-            <AgentSwitcherStrip currentAgent={agent} currentTabPath={currentTabPath} onNavigate={guardedNavigate} />
+            <AgentSwitcherStrip currentAgent={agent} currentTabPath={currentTabPath} onNavigate={navigateAway} />
           </div>
           <div className="flex w-full items-center gap-2">
             {/* Primary identity avatar — the largest on the page (switcher nav 28,
@@ -535,7 +411,7 @@ function AgentDetailPageView() {
                 size="xs"
                 onClick={() => {
                   const search = new URLSearchParams({ c: "draft", with: agent.uuid });
-                  guardedNavigate(`/?${search.toString()}`);
+                  navigateAway(`/?${search.toString()}`);
                 }}
                 title="Start a chat with this agent"
                 aria-label="Start chat"
@@ -561,7 +437,7 @@ function AgentDetailPageView() {
         />
       )}
 
-      <TabsNav tabs={tabs} agentUuid={uuid} currentTabKey={currentTabKey} dirtyTabs={dirtyTabs} badges={tabBadges} />
+      <TabsNav tabs={tabs} agentUuid={uuid} currentTabKey={currentTabKey} badges={tabBadges} />
 
       <div
         className="w-full flex-1"
@@ -581,69 +457,6 @@ function AgentDetailPageView() {
         <Outlet context={outletContext} />
       </div>
 
-      {canEditConfig && (
-        <SaveBar
-          summary={draft.summary}
-          saveHint={saveHint}
-          conflictMessage={conflictMsg}
-          errorMessage={saveError}
-          saving={saveMutation.isPending}
-          reloadingRemote={remoteReloading}
-          justSaved={justSaved}
-          onSave={() => saveMutation.mutate()}
-          onDiscard={() => {
-            if (!draft.summary.anyDirty) return;
-            setDiscardDialogOpen(true);
-          }}
-          onReloadRemote={() => {
-            void reloadRemote();
-          }}
-          onJumpTo={(section) => {
-            // Same-agent navigation (no leave guard), then scroll the dirty
-            // section into view — the tab alone lands at the top, which after the
-            // Environment zoning can be far above env / model.
-            navigate(`/agents/${uuid}/${SECTION_TO_TAB[section]}`, { replace: true });
-            setTimeout(() => {
-              document.getElementById(sectionAnchorId(section))?.scrollIntoView({ behavior: "smooth", block: "start" });
-            }, 50);
-          }}
-        />
-      )}
-
-      <ConfirmDialog
-        open={discardDialogOpen}
-        onOpenChange={setDiscardDialogOpen}
-        title="Discard unsaved changes?"
-        description="Your unsaved Model / Environment changes will be reverted to the last saved baseline."
-        confirmLabel="Discard changes"
-        destructive
-        onConfirm={() => {
-          draft.resetAll();
-          setSaveError(null);
-          setConflictMsg(null);
-          setDiscardDialogOpen(false);
-        }}
-      />
-
-      <ConfirmDialog
-        open={pendingNav !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingNav(null);
-        }}
-        title="Leave with unsaved changes?"
-        description="Your unsaved Model / Environment changes will be discarded if you leave this agent."
-        confirmLabel="Discard & leave"
-        destructive
-        onConfirm={() => {
-          const to = pendingNav;
-          draft.resetAll();
-          setSaveError(null);
-          setConflictMsg(null);
-          setPendingNav(null);
-          if (to) navigate(to);
-        }}
-      />
-
       <Dialog
         open={bindClientOpen}
         onOpenChange={(open) => {
@@ -658,9 +471,7 @@ function AgentDetailPageView() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Bind computer</DialogTitle>
-            <DialogDescription>
-              Pin this agent to a connected computer. The bind applies immediately and is not part of draft save.
-            </DialogDescription>
+            <DialogDescription>Pin this agent to a connected computer. The bind applies immediately.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             {clientsQuery.isLoading ? (
@@ -676,7 +487,7 @@ function AgentDetailPageView() {
                 clients={clientsQuery.data ?? []}
                 selected={bindClientSelected}
                 onSelect={setBindClientSelected}
-                onOpenComputers={() => guardedNavigate("/settings/computers")}
+                onOpenComputers={() => navigateAway("/settings/computers")}
               />
             )}
             {bindClientError && (
@@ -709,13 +520,11 @@ function TabsNav({
   tabs,
   agentUuid,
   currentTabKey,
-  dirtyTabs,
   badges,
 }: {
   tabs: TabDef[];
   agentUuid: string;
   currentTabKey: string;
-  dirtyTabs: ReadonlySet<string>;
   badges: Record<string, number>;
 }) {
   const navigate = useNavigate();
@@ -734,13 +543,13 @@ function TabsNav({
     setEdges({ left: el.scrollLeft > 1, right: el.scrollLeft < maxScroll - 1 });
   }, []);
 
-  // Keep the active tab in view when the route changes (e.g. SaveBar "Jump to",
-  // or a deep link to a tab that sits off the right edge on a narrow screen) and
-  // recompute the overflow fades.
+  // Keep the active tab in view when the route changes (e.g. a deep link to a
+  // tab that sits off the right edge on a narrow screen) and recompute the
+  // overflow fades.
   // `currentTabKey`, `tabs` and `badges` are intentional dependencies even though
   // the body reads the active tab from the DOM rather than these variables:
-  //  - currentTabKey: programmatic route changes (SaveBar "Jump to", a deep link
-  //    to an off-screen tab) must re-scroll the active tab into view.
+  //  - currentTabKey: programmatic route changes (a deep link to an off-screen
+  //    tab) must re-scroll the active tab into view.
   //  - tabs / badges: changing the tab set or a tab's badge changes the row's
   //    scrollWidth, which ResizeObserver (it watches the box, not scrollWidth)
   //    doesn't catch — so recompute the edge fades when they change.
@@ -812,7 +621,6 @@ function TabsNav({
                 role="tab"
                 aria-selected={active}
                 active={active}
-                dirty={dirtyTabs.has(t.key)}
                 onClick={() => navigate(`/agents/${agentUuid}/${t.path}`, { replace: true })}
                 className="shrink-0 whitespace-nowrap"
               >
@@ -844,45 +652,6 @@ function TabEdgeFade({ side }: { side: "left" | "right" }) {
         background: `linear-gradient(to ${side === "left" ? "right" : "left"}, var(--bg-raised), transparent)`,
       }}
     />
-  );
-}
-
-/**
- * Simple confirm dialog for the discard-draft action. The delete-agent flow
- * has its own type-the-name guard inside DangerZone.
- */
-function ConfirmDialog(props: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  title: string;
-  description: ReactNode;
-  confirmLabel: string;
-  onConfirm: () => void;
-  pending?: boolean;
-  destructive?: boolean;
-}) {
-  return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{props.title}</DialogTitle>
-          <DialogDescription>{props.description}</DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button type="button" variant="ghost" onClick={() => props.onOpenChange(false)} disabled={props.pending}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant={props.destructive ? "destructive" : "default"}
-            onClick={props.onConfirm}
-            disabled={props.pending}
-          >
-            {props.pending ? "Working…" : props.confirmLabel}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 

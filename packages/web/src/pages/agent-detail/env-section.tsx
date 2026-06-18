@@ -1,6 +1,6 @@
 import { ENV_REDACTED_PLACEHOLDER, type EnvEntry } from "@first-tree/shared";
 import { Eye, EyeOff, Lock, Plus } from "lucide-react";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Button } from "../../components/ui/button.js";
 import {
   Dialog,
@@ -13,34 +13,56 @@ import {
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Section } from "../../components/ui/section.js";
+import { useToast } from "../../components/ui/toast.js";
 import { ListRow } from "./list-row.js";
 import { ResourceEmptyState } from "./resource-empty-state.js";
 import { titleWithSemantics } from "./save-semantics.js";
-import type { DraftListItem } from "./use-config-draft.js";
 
 /**
- * Redesign §5.6 — Environment Variables list. Sensitive values never show
- * plaintext once saved; an empty value in the edit dialog means "keep the
- * existing ciphertext" (stored as `***` placeholder).
+ * Redesign §5.6 — Environment Variables list. Every change saves IMMEDIATELY
+ * (add / edit / delete each PATCH the full env array), like the rest of the page.
+ * The dialog is the natural commit point — values are validated and an entry is
+ * only formed on submit — so there is no per-keystroke save and no draft.
+ *
+ * Sensitive values never show plaintext once saved; an empty value in the edit
+ * dialog means "keep the existing ciphertext" (stored as the `***` placeholder).
+ * Deleting a non-secret offers a transient Undo via toast; a deleted secret
+ * can't be undone (its ciphertext is gone), so the toast says so and the user
+ * re-adds it with a fresh value.
  */
 
 export type EnvSectionProps = {
-  items: Array<DraftListItem<EnvEntry>>;
-  otherKeys: (exceptKey: string | null) => ReadonlySet<string>;
-  onAdd: (value: EnvEntry) => void;
-  onUpdate: (key: string, value: EnvEntry) => void;
-  onDelete: (key: string) => void;
-  onUndoDelete: (key: string) => void;
+  items: EnvEntry[];
+  /** Persist the full next env array. `onSuccess` fires only after the server confirms. */
+  onSave: (nextEnv: EnvEntry[], opts?: { onSuccess?: () => void }) => void;
+  /** The agent is inactive (suspended) — hide edit affordances. */
   disabled?: boolean;
+  /** A config save is in flight — serialize edits and show the dialog's submit as pending. */
+  saving?: boolean;
+  /** Last save failure / conflict message, surfaced inside the open dialog. */
+  saveError?: string | null;
+  /** Flash "Saved" next to the title after a successful immediate write. */
+  saved?: boolean;
 };
 
-export function EnvSection(props: EnvSectionProps) {
-  const [dialog, setDialog] = useState<{ mode: "add" } | { mode: "edit"; key: string; initial: EnvEntry } | null>(null);
-  // Per-row reveal of sensitive values. Only works for values that still live
-  // in the draft as plaintext (newly added or explicitly re-entered). Persisted
-  // sensitive values are stored as ENV_REDACTED_PLACEHOLDER and cannot be
-  // revealed — we show a tooltip instead.
+type DialogState = { mode: "add" } | { mode: "edit"; initial: EnvEntry } | null;
+
+export function EnvSection({ items, onSave, disabled, saving, saveError, saved }: EnvSectionProps) {
+  const { addToast } = useToast();
+  const [dialog, setDialog] = useState<DialogState>(null);
+  // Edits are blocked while suspended, and serialized while a save is in flight
+  // so a second edit can't race the config version.
+  const busy = disabled || saving;
+  // Per-row reveal of sensitive values. Only works for values that are still
+  // plaintext in the cache (a just-added secret in the optimistic window before
+  // the server response redacts it). Persisted sensitive values are stored as
+  // ENV_REDACTED_PLACEHOLDER and cannot be revealed — we show a tooltip instead.
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
+  // Latest items, read inside the Undo toast closure so a restore appends to the
+  // current list rather than a snapshot captured at delete time.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
   const toggleReveal = (key: string) =>
     setRevealed((prev) => {
       const next = new Set(prev);
@@ -48,9 +70,44 @@ export function EnvSection(props: EnvSectionProps) {
       else next.add(key);
       return next;
     });
-  const activeCount = props.items.filter((i) => i.status !== "deleted").length;
 
-  const action = !props.disabled ? (
+  const keysExcept = (exceptKey: string | null): ReadonlySet<string> =>
+    new Set(items.filter((i) => i.key !== exceptKey).map((i) => i.key));
+
+  const handleDelete = (entry: EnvEntry) => {
+    const next = items.filter((e) => e.key !== entry.key);
+    onSave(next, {
+      onSuccess: () => {
+        // A secret can't be restored — its ciphertext is gone — so offer honest
+        // guidance instead of an Undo. A non-secret value IS recoverable, so its
+        // Undo re-saves through the shell-level controller (works across tabs;
+        // it doesn't touch this section's local state, which may be unmounted by
+        // the time the toast is clicked).
+        addToast({
+          title: `Removed ${entry.key}`,
+          description: entry.sensitive
+            ? "It was a secret — its value can't be recovered. Re-add it to restore."
+            : undefined,
+          action: entry.sensitive ? undefined : { label: "Undo", onClick: () => onSave([...itemsRef.current, entry]) },
+        });
+      },
+    });
+  };
+
+  const handleSubmit = (value: EnvEntry) => {
+    if (!dialog) return;
+    // edit replaces the row by key; add appends.
+    const next =
+      dialog.mode === "edit"
+        ? items.map((e) => (e.key === dialog.initial.key ? value : e))
+        : [...itemsRef.current, value];
+    // Close only after the save confirms — a failed save (409 / network) keeps
+    // the dialog open with the typed value intact, which matters most for
+    // secrets (their ciphertext can't be recovered once lost).
+    onSave(next, { onSuccess: () => setDialog(null) });
+  };
+
+  const action = !busy ? (
     <Button size="xs" variant="outline" onClick={() => setDialog({ mode: "add" })}>
       <Plus className="h-3.5 w-3.5" /> Add variable
     </Button>
@@ -58,38 +115,36 @@ export function EnvSection(props: EnvSectionProps) {
 
   return (
     <Section
-      title={titleWithSemantics("Environment variables", "draft")}
-      count={activeCount}
+      title={titleWithSemantics("Environment variables", saved)}
+      count={items.length}
       description="Injected into this agent's runtime process. Sensitive values are encrypted and hidden after save."
       action={action}
     >
       <div>
-        {props.items.length === 0 ? (
+        {items.length === 0 ? (
           <ResourceEmptyState>No environment variables configured.</ResourceEmptyState>
         ) : (
-          props.items.map((item) => {
-            const isSensitive = item.value.sensitive;
-            const isPlaceholder = item.value.value === ENV_REDACTED_PLACEHOLDER;
-            const canReveal = isSensitive && !isPlaceholder && !!item.value.value;
+          items.map((item) => {
+            const isSensitive = item.sensitive;
+            const isPlaceholder = item.value === ENV_REDACTED_PLACEHOLDER;
+            const canReveal = isSensitive && !isPlaceholder && !!item.value;
             const isRevealed = revealed.has(item.key);
             let rendered: ReactNode;
             if (!isSensitive) {
-              rendered = item.value.value || <em>(empty)</em>;
+              rendered = item.value || <em>(empty)</em>;
             } else if (canReveal && isRevealed) {
-              rendered = item.value.value;
+              rendered = item.value;
             } else {
               rendered = "••••••";
             }
             return (
               <ListRow
                 key={item.key}
-                status={item.status}
-                onEdit={() => setDialog({ mode: "edit", key: item.key, initial: item.value })}
-                onDelete={() => props.onDelete(item.key)}
-                onUndo={() => props.onUndoDelete(item.key)}
-                disabled={props.disabled}
+                onEdit={() => setDialog({ mode: "edit", initial: item })}
+                onDelete={() => handleDelete(item)}
+                disabled={busy}
               >
-                <span className="font-mono font-medium">{item.value.key}</span>
+                <span className="font-mono font-medium">{item.key}</span>
                 <span className="font-mono text-caption text-muted-foreground truncate max-w-xs">{rendered}</span>
                 {isSensitive && <Lock className="h-3 w-3 text-muted-foreground" aria-hidden />}
                 {isSensitive && (
@@ -119,17 +174,14 @@ export function EnvSection(props: EnvSectionProps) {
         <EnvDialog
           open={!!dialog}
           onOpenChange={(open) => !open && setDialog(null)}
-          initial={dialog.mode === "edit" ? dialog.initial : null}
-          allowKeepExisting={
-            dialog.mode === "edit" &&
-            canKeepExistingSensitiveValue(dialog.initial, props.items.find((item) => item.key === dialog.key)?.status)
-          }
-          forbiddenKeys={props.otherKeys(dialog.mode === "edit" ? dialog.key : null)}
-          onSubmit={(value) => {
-            if (dialog.mode === "edit") props.onUpdate(dialog.key, value);
-            else props.onAdd(value);
-            setDialog(null);
-          }}
+          initial={dialog.mode === "add" ? null : dialog.initial}
+          // Editing a persisted secret may leave the value empty to keep the
+          // existing ciphertext; adding always requires a value.
+          allowKeepExisting={dialog.mode === "edit" && canKeepExistingSensitiveValue(dialog.initial)}
+          forbiddenKeys={keysExcept(dialog.mode === "edit" ? dialog.initial.key : null)}
+          submitting={saving}
+          saveError={saveError}
+          onSubmit={handleSubmit}
         />
       )}
     </Section>
@@ -142,14 +194,15 @@ type EnvDialogProps = {
   initial: EnvEntry | null;
   allowKeepExisting: boolean;
   forbiddenKeys: ReadonlySet<string>;
+  /** A save triggered by this dialog is in flight. */
+  submitting?: boolean;
+  /** Server-side save failure to show inside the dialog (the dialog stays open). */
+  saveError?: string | null;
   onSubmit: (value: EnvEntry) => void;
 };
 
-export function canKeepExistingSensitiveValue(
-  initial: EnvEntry,
-  status: DraftListItem<EnvEntry>["status"] | undefined,
-) {
-  return initial.sensitive && initial.value === ENV_REDACTED_PLACEHOLDER && status !== undefined && status !== "added";
+export function canKeepExistingSensitiveValue(initial: EnvEntry): boolean {
+  return initial.sensitive && initial.value === ENV_REDACTED_PLACEHOLDER;
 }
 
 export function envDialogInitialValue(initial: EnvEntry | null, allowKeepExisting: boolean) {
@@ -172,7 +225,16 @@ export function resolveEnvDialogValue(input: {
   return { ok: true, value: input.value };
 }
 
-function EnvDialog({ open, onOpenChange, initial, allowKeepExisting, forbiddenKeys, onSubmit }: EnvDialogProps) {
+function EnvDialog({
+  open,
+  onOpenChange,
+  initial,
+  allowKeepExisting,
+  forbiddenKeys,
+  submitting,
+  saveError,
+  onSubmit,
+}: EnvDialogProps) {
   const [key, setKey] = useState(initial?.key ?? "");
   const [value, setValue] = useState(envDialogInitialValue(initial, allowKeepExisting));
   const [sensitive, setSensitive] = useState(initial?.sensitive ?? false);
@@ -209,13 +271,21 @@ function EnvDialog({ open, onOpenChange, initial, allowKeepExisting, forbiddenKe
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // While a save is in flight, ignore EVERY dismiss path — the Radix close
+        // (X), Escape, outside click, and Cancel all funnel through here. Closing
+        // would unmount the form and lose the typed value (unrecoverable for a
+        // secret); the dialog only closes on a confirmed save (via onSuccess).
+        if (submitting && !next) return;
+        onOpenChange(next);
+      }}
+    >
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{initial ? "Edit environment variable" : "Add environment variable"}</DialogTitle>
-          <DialogDescription>
-            Environment variables are saved with the rest of this agent's resource draft.
-          </DialogDescription>
+          <DialogDescription>Saved immediately when you submit.</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
@@ -258,11 +328,14 @@ function EnvDialog({ open, onOpenChange, initial, allowKeepExisting, forbiddenKe
             Sensitive values cannot be viewed after saving. If you need to verify, save a new value.
           </p>
           {err && <p className="text-body text-destructive">{err}</p>}
+          {!err && saveError && <p className="text-body text-destructive">{saveError}</p>}
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
               Cancel
             </Button>
-            <Button type="submit">{initial ? "Done" : "Add"}</Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "Saving…" : initial ? "Done" : "Add"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

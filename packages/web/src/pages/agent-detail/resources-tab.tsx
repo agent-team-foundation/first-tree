@@ -48,7 +48,7 @@ export function ResourcesTab() {
             resources.mutateBindings(bindings);
           }}
           saved={resources.justSaved && lastSavedType === type}
-          onNavigateAway={ctx.guardedNavigate}
+          onNavigateAway={ctx.navigateAway}
         />
       ))}
       {resources.saveError ? (

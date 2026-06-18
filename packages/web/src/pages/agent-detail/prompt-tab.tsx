@@ -128,7 +128,7 @@ export function PromptTab() {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
       <Section
-        title={titleWithSemantics("Instructions", "immediate", justSaved)}
+        title={titleWithSemantics("Instructions", justSaved)}
         description="Team and your own instructions for this agent — toggle, customize, or add your own."
         action={
           <div className="flex items-center gap-2">
@@ -139,7 +139,7 @@ export function PromptTab() {
                 pending={bindingMut.isPending}
                 onAddCustom={() => openPromptEditor(null)}
                 onEnable={enablePrompt}
-                onNavigateAway={ctx.guardedNavigate}
+                onNavigateAway={ctx.navigateAway}
               />
             ) : null}
           </div>

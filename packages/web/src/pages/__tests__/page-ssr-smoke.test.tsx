@@ -990,18 +990,15 @@ describe("page SSR smoke coverage", () => {
     }
   });
 
-  it("renders agent detail sections with populated draft rows", async () => {
+  it("renders agent detail sections (immediate-save)", async () => {
     const { AppearanceSection } = await import("../agent-detail/appearance-section.js");
     const { EnvSection } = await import("../agent-detail/env-section.js");
-    const { GitSection } = await import("../agent-detail/git-section.js");
     const { IdentitySection } = await import("../agent-detail/identity-section.js");
-    const { McpSection } = await import("../agent-detail/mcp-section.js");
     const { ModelSection } = await import("../agent-detail/model-section.js");
     const { ReasoningEffortSection } = await import("../agent-detail/reasoning-effort-section.js");
     const { RuntimeSection } = await import("../agent-detail/runtime-section.js");
 
     const noop = () => undefined;
-    const row = <T,>(key: string, value: T) => ({ key, value, baseline: value, status: "unchanged" as const });
     const rendered = renderPage(
       <>
         <IdentitySection agent={agent()} />
@@ -1012,42 +1009,16 @@ describe("page SSR smoke coverage", () => {
           canBindComputer={false}
           onBindComputer={noop}
         />
-        <ModelSection value="sonnet" baseline="opus" onChange={noop} onRevert={noop} />
-        <ReasoningEffortSection value="high" baseline="" onChange={noop} onRevert={noop} />
-        <McpSection
-          items={AGENT_CONFIG.payload.mcpServers.map((item, index) => row(`mcp-${index}`, item))}
-          otherNames={() => new Set()}
-          toolHealth={() => "working"}
-          onAdd={noop}
-          onUpdate={noop}
-          onDelete={noop}
-          onUndoDelete={noop}
-        />
-        <EnvSection
-          items={AGENT_CONFIG.payload.env.map((item, index) => row(`env-${index}`, item))}
-          otherKeys={() => new Set()}
-          onAdd={noop}
-          onUpdate={noop}
-          onDelete={noop}
-          onUndoDelete={noop}
-        />
-        <GitSection
-          items={AGENT_CONFIG.payload.gitRepos.map((item, index) => row(`git-${index}`, item))}
-          otherPaths={() => new Set()}
-          onAdd={noop}
-          onUpdate={noop}
-          onDelete={noop}
-          onUndoDelete={noop}
-        />
+        <ModelSection value="sonnet" onChange={noop} />
+        <ReasoningEffortSection value="high" onChange={noop} />
+        <EnvSection items={AGENT_CONFIG.payload.env} onSave={noop} />
       </>,
     );
 
     expect(rendered).toContain("Identity");
     expect(rendered).toContain("Appearance");
     expect(rendered).toContain("gandy-macbook");
-    expect(rendered).toContain("filesystem");
     expect(rendered).toContain("FIRST_TREE_ENV");
-    expect(rendered).toContain("https://github.com/acme/web.git");
   });
 
   it("renders workspace surfaces with seeded chat data", async () => {

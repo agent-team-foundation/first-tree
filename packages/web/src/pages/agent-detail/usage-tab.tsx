@@ -76,9 +76,7 @@ export function UsageTab(): ReactElement {
         rows={turnsQuery.data?.rows ?? []}
         isLoading={turnsQuery.isLoading}
         isError={turnsQuery.isError}
-        // Opening a chat leaves the agent — route through the leave guard so an
-        // unsaved Environment draft (carried across tabs) isn't silently lost.
-        onOpenChat={(chatId) => ctx.guardedNavigate(`/?chat=${encodeURIComponent(chatId)}`)}
+        onOpenChat={(chatId) => ctx.navigateAway(`/?chat=${encodeURIComponent(chatId)}`)}
         hasMore={turnsQuery.data?.nextCursor != null && turnsLimit < MAX_TURNS}
         loadingMore={growing}
         onShowMore={() => {

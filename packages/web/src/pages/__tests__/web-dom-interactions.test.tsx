@@ -2,7 +2,7 @@
 
 import type { Agent, MeMembership } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, type ReactElement, type ReactNode } from "react";
+import { act, type ReactElement, type ReactNode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2020,153 +2020,22 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
-  it("edits MCP server rows through validation, stdio, and HTTP submissions", async () => {
-    const { McpSection } = await import("../agent-detail/mcp-section.js");
-    const onAdd = vi.fn();
-    const onUpdate = vi.fn();
-    const onDelete = vi.fn();
-    const onUndoDelete = vi.fn();
-    const items = [
-      {
-        key: "stdio",
-        status: "unchanged" as const,
-        baseline: { name: "filesystem", transport: "stdio" as const, command: "npx", args: ["-y", "server"] },
-        value: { name: "filesystem", transport: "stdio" as const, command: "npx", args: ["-y", "server"] },
-      },
-      {
-        key: "http",
-        status: "deleted" as const,
-        baseline: { name: "docs", transport: "http" as const, url: "https://docs.example/mcp" },
-        value: { name: "docs", transport: "http" as const, url: "https://docs.example/mcp" },
-      },
-    ];
-
-    const { container, root } = await renderDom(
-      <McpSection
-        items={items}
-        otherNames={(exceptKey) => new Set(exceptKey === "stdio" ? ["docs"] : ["filesystem", "docs"])}
-        toolHealth={(name) => (name === "filesystem" ? "working" : "error")}
-        onAdd={onAdd}
-        onUpdate={onUpdate}
-        onDelete={onDelete}
-        onUndoDelete={onUndoDelete}
-      />,
-    );
-
-    expect(container.textContent).toContain("Working");
-    expect(container.textContent).toContain("will be removed on save");
-    await click(container.querySelector('button[title="Delete"]'));
-    expect(onDelete).toHaveBeenCalledWith("stdio");
-    await click(
-      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Undo")) ?? null,
-    );
-    expect(onUndoDelete).toHaveBeenCalledWith("http");
-
-    await click(
-      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Add")) ?? null,
-    );
-    await waitForText("Add MCP server", document.body);
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Add") ?? null);
-    await waitForText("Name must start alphanumeric", document.body);
-
-    const name = document.body.querySelector<HTMLInputElement>("#mcp-name");
-    const command = document.body.querySelector<HTMLInputElement>("#mcp-command");
-    const args = document.body.querySelector<HTMLTextAreaElement>("#mcp-args");
-    if (!name || !command || !args) throw new Error("MCP stdio fields missing");
-    await setValue(name, "filesystem");
-    await setValue(command, "node");
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Add") ?? null);
-    await waitForText('Another MCP server is already named "filesystem".', document.body);
-
-    await setValue(name, "browser");
-    await setValue(args, '{"bad": true}');
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Add") ?? null);
-    await waitForText("Args must be a JSON array of strings.", document.body);
-
-    await setValue(args, '["--port", "3000"]');
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Add") ?? null);
-    expect(onAdd).toHaveBeenCalledWith({
-      name: "browser",
-      transport: "stdio",
-      command: "node",
-      args: ["--port", "3000"],
-    });
-
-    await click(container.querySelector('button[title="Edit"]'));
-    await waitForText("Edit MCP server", document.body);
-    // Transport is the custom Select primitive (button trigger + portal listbox),
-    // not a native <select>: open it, then click the "http" option.
-    const transportTrigger = document.body.querySelector<HTMLButtonElement>("#mcp-transport");
-    if (!transportTrigger) throw new Error("MCP transport trigger missing");
-    await click(transportTrigger);
-    const httpOption = [...document.body.querySelectorAll('[role="option"]')].find((el) => el.textContent === "http");
-    if (!httpOption) throw new Error("MCP transport http option missing");
-    await click(httpOption);
-    await flush();
-
-    const url = document.body.querySelector<HTMLInputElement>("#mcp-url");
-    const headers = document.body.querySelector<HTMLTextAreaElement>("#mcp-headers");
-    if (!url || !headers) throw new Error("MCP http fields missing");
-    await setValue(url, "not a url");
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
-    await waitForText("URL is not valid.", document.body);
-
-    await setValue(url, "https://browser.example/mcp");
-    await setValue(headers, '{"Authorization": 123}');
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
-    await waitForText("Headers must be a JSON object with string values.", document.body);
-
-    await setValue(headers, '{"Authorization": "Bearer token"}');
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
-    expect(onUpdate).toHaveBeenCalledWith("stdio", {
-      name: "filesystem",
-      transport: "http",
-      url: "https://browser.example/mcp",
-      headers: { Authorization: "Bearer token" },
-    });
-
-    await unmountRoot(root);
-  });
-
-  it("edits environment variable rows, reveal state, and sensitive keep-existing behavior", async () => {
+  it("edits, reveals, adds, and deletes environment variables (immediate save)", async () => {
     const { ENV_REDACTED_PLACEHOLDER } = await import("@first-tree/shared");
     const { EnvSection } = await import("../agent-detail/env-section.js");
-    const onAdd = vi.fn();
-    const onUpdate = vi.fn();
-    const onDelete = vi.fn();
-    const onUndoDelete = vi.fn();
+    // onSave invokes the success callback so the delete Undo toast fires, mirroring
+    // the real controller resolving the PATCH.
+    const onSave = vi.fn((_next: unknown, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
     const items = [
-      {
-        key: "plain",
-        status: "unchanged" as const,
-        baseline: { key: "FIRST_TREE_ENV", value: "test", sensitive: false },
-        value: { key: "FIRST_TREE_ENV", value: "test", sensitive: false },
-      },
-      {
-        key: "secret",
-        status: "unchanged" as const,
-        baseline: { key: "OPENAI_API_KEY", value: ENV_REDACTED_PLACEHOLDER, sensitive: true },
-        value: { key: "OPENAI_API_KEY", value: ENV_REDACTED_PLACEHOLDER, sensitive: true },
-      },
-      {
-        key: "draft-secret",
-        status: "added" as const,
-        baseline: { key: "TOKEN", value: "secret-value", sensitive: true },
-        value: { key: "TOKEN", value: "secret-value", sensitive: true },
-      },
+      { key: "FIRST_TREE_ENV", value: "test", sensitive: false },
+      { key: "OPENAI_API_KEY", value: ENV_REDACTED_PLACEHOLDER, sensitive: true },
+      // Plaintext sensitive value (optimistic window) → revealable.
+      { key: "TOKEN", value: "secret-value", sensitive: true },
     ];
 
-    const { container, root } = await renderDom(
-      <EnvSection
-        items={items}
-        otherKeys={(exceptKey) => new Set(exceptKey === "secret" ? ["FIRST_TREE_ENV", "TOKEN"] : ["FIRST_TREE_ENV"])}
-        onAdd={onAdd}
-        onUpdate={onUpdate}
-        onDelete={onDelete}
-        onUndoDelete={onUndoDelete}
-      />,
-    );
+    const { container, root } = await renderDom(<EnvSection items={items} onSave={onSave} />);
 
+    // Reveal / hide only works for the plaintext secret, not the redacted one.
     await click(
       [...container.querySelectorAll<HTMLButtonElement>('button[aria-label="Reveal value"]')].find(
         (button) => !button.disabled,
@@ -2175,16 +2044,21 @@ describe("web DOM interaction coverage", () => {
     expect(container.textContent).toContain("secret-value");
     await click(container.querySelector('button[aria-label="Hide value"]'));
     expect(container.textContent).not.toContain("secret-value");
+
+    // Delete the non-sensitive row → saves the reduced array immediately + Undo toast.
     await click(container.querySelector('button[title="Delete"]'));
-    expect(onDelete).toHaveBeenCalledWith("plain");
+    expect(onSave.mock.calls[0]?.[0]).toEqual([items[1], items[2]]);
+    await waitForText("Removed FIRST_TREE_ENV", document.body);
+    // Undo re-adds it (non-sensitive value is recoverable).
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Undo") ?? null);
+    expect(onSave).toHaveBeenCalledTimes(2);
+    expect(onSave.mock.calls[1]?.[0]).toContainEqual({ key: "FIRST_TREE_ENV", value: "test", sensitive: false });
 
-    await click(
-      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Add")) ?? null,
-    );
+    // Add: key validation, duplicate guard, sensitive-requires-value, then save.
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Add")) ?? null);
     await waitForText("Add environment variable", document.body);
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Add") ?? null);
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
     await waitForText("Key must match", document.body);
-
     const key = document.body.querySelector<HTMLInputElement>("#env-key");
     const value = document.body.querySelector<HTMLInputElement>("#env-value");
     const sensitive = document.body.querySelector<HTMLInputElement>('input[type="checkbox"]');
@@ -2192,107 +2066,107 @@ describe("web DOM interaction coverage", () => {
     await setValue(key, "first_tree_env");
     expect(key.value).toBe("FIRST_TREE_ENV");
     await setValue(value, "duplicate");
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Add") ?? null);
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
     await waitForText('Another entry already uses key "FIRST_TREE_ENV".', document.body);
-
     await setValue(key, "NEW_SECRET");
     await setValue(value, "");
     await click(sensitive);
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Add") ?? null);
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
     await waitForText("Value is required for sensitive entries.", document.body);
     await setValue(value, "super-secret");
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Add") ?? null);
-    expect(onAdd).toHaveBeenCalledWith({ key: "NEW_SECRET", value: "super-secret", sensitive: true });
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
+    expect(onSave.mock.calls.at(-1)?.[0]).toContainEqual({ key: "NEW_SECRET", value: "super-secret", sensitive: true });
 
+    // Edit the redacted secret leaving the value empty → keeps the existing ciphertext.
     await click([...container.querySelectorAll('button[title="Edit"]')][1] ?? null);
     await waitForText("Edit environment variable", document.body);
     const editValue = document.body.querySelector<HTMLInputElement>("#env-value");
     if (!editValue) throw new Error("Env edit value missing");
     expect(editValue.placeholder).toBe("Leave empty to keep existing value");
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
-    expect(onUpdate).toHaveBeenCalledWith("secret", {
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Done") ?? null);
+    expect(onSave.mock.calls.at(-1)?.[0]).toContainEqual({
       key: "OPENAI_API_KEY",
       value: ENV_REDACTED_PLACEHOLDER,
       sensitive: true,
     });
 
+    // Deleting a persisted secret can't be undone (its ciphertext is gone) — the
+    // toast says so honestly and offers no Undo (a no-op after a tab switch).
+    await click([...container.querySelectorAll('button[title="Delete"]')][1] ?? null);
+    await waitForText("Removed OPENAI_API_KEY", document.body);
+    expect(document.body.textContent).toContain("can't be recovered");
+
     await unmountRoot(root);
   });
 
-  it("edits Git repository rows and validates derived local path collisions", async () => {
-    const { GitSection } = await import("../agent-detail/git-section.js");
-    const onAdd = vi.fn();
-    const onUpdate = vi.fn();
-    const onDelete = vi.fn();
-    const onUndoDelete = vi.fn();
-    const items = [
-      {
-        key: "web",
-        status: "unchanged" as const,
-        baseline: { url: "https://github.com/acme/web.git", localPath: "web", ref: "main" },
-        value: { url: "https://github.com/acme/web.git", localPath: "web", ref: "main" },
-      },
-      {
-        key: "api",
-        status: "deleted" as const,
-        baseline: { url: "git@github.com:acme/api.git", localPath: "api" },
-        value: { url: "git@github.com:acme/api.git", localPath: "api" },
-      },
-    ];
+  it("keeps the env dialog open and preserves input when the save fails", async () => {
+    const { EnvSection } = await import("../agent-detail/env-section.js");
+    // onSave never invokes onSuccess (simulates a rejected/409 save); the page
+    // surfaces the failure via the saveError prop.
+    const onSave = vi.fn();
+    const { container, root } = await renderDom(<EnvSection items={[]} onSave={onSave} saveError="Save failed" />);
 
-    const { container, root } = await renderDom(
-      <GitSection
-        items={items}
-        otherPaths={(exceptKey) => new Set(exceptKey === "web" ? ["api"] : ["web", "api"])}
-        onAdd={onAdd}
-        onUpdate={onUpdate}
-        onDelete={onDelete}
-        onUndoDelete={onUndoDelete}
-      />,
-    );
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Add")) ?? null);
+    await waitForText("Add environment variable", document.body);
+    const key = document.body.querySelector<HTMLInputElement>("#env-key");
+    const value = document.body.querySelector<HTMLInputElement>("#env-value");
+    if (!key || !value) throw new Error("Env fields missing");
+    await setValue(key, "API_KEY");
+    await setValue(value, "v1");
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
 
-    expect(container.textContent).toContain("@ main");
-    await click(container.querySelector('button[title="Delete"]'));
-    expect(onDelete).toHaveBeenCalledWith("web");
-    await click(
-      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Undo")) ?? null,
-    );
-    expect(onUndoDelete).toHaveBeenCalledWith("api");
+    // The save was attempted, but because it never confirmed the dialog stays
+    // open with the typed value intact (no silent data loss) and shows the error.
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("Add environment variable");
+    expect(document.body.querySelector<HTMLInputElement>("#env-key")?.value).toBe("API_KEY");
+    expect(document.body.querySelector<HTMLInputElement>("#env-value")?.value).toBe("v1");
+    expect(document.body.textContent).toContain("Save failed");
 
-    await click(
-      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Add")) ?? null,
-    );
-    await waitForText("Add Git repository", document.body);
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Add") ?? null);
-    await waitForText("URL is required.", document.body);
+    await unmountRoot(root);
+  });
 
-    const url = document.body.querySelector<HTMLInputElement>("#git-url");
-    const ref = document.body.querySelector<HTMLInputElement>("#git-ref");
-    const path = document.body.querySelector<HTMLInputElement>("#git-path");
-    if (!url || !ref || !path) throw new Error("Git fields missing");
-    await setValue(url, "https://github.com/acme/web.git");
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Add") ?? null);
-    await waitForText('Another repo already occupies local path "web".', document.body);
+  it("blocks every dismiss path while an env save is pending, then preserves input on failure", async () => {
+    const { EnvSection } = await import("../agent-detail/env-section.js");
+    let setSaving: (v: boolean) => void = () => {};
+    const onSave = vi.fn(); // never confirms — simulates an in-flight then failed save
+    function Harness() {
+      const [saving, setSavingState] = useState(false);
+      setSaving = setSavingState;
+      return <EnvSection items={[]} onSave={onSave} saving={saving} saveError={saving ? null : "Save failed"} />;
+    }
+    const { container, root } = await renderDom(<Harness />);
 
-    await setValue(url, "git@github.com:acme/docs.git");
-    await setValue(ref, "main");
-    await setValue(path, "docs-local");
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Add") ?? null);
-    expect(onAdd).toHaveBeenCalledWith({
-      url: "git@github.com:acme/docs.git",
-      ref: "main",
-      localPath: "docs-local",
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Add")) ?? null);
+    await waitForText("Add environment variable", document.body);
+    const key = document.body.querySelector<HTMLInputElement>("#env-key");
+    const value = document.body.querySelector<HTMLInputElement>("#env-value");
+    if (!key || !value) throw new Error("Env fields missing");
+    await setValue(key, "API_KEY");
+    await setValue(value, "s3cr3t");
+    const sensitive = document.body.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (sensitive) await click(sensitive);
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
+    expect(onSave).toHaveBeenCalledTimes(1);
+
+    // The save is now in flight.
+    await act(async () => setSaving(true));
+
+    // The Radix close (X), Escape, and outside click all route through the
+    // dialog's onOpenChange — none of them may dismiss it mid-save.
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Close") ?? null);
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
+    expect(document.body.textContent).toContain("Add environment variable");
+    expect(document.body.querySelector<HTMLInputElement>("#env-key")?.value).toBe("API_KEY");
 
-    await click(container.querySelector('button[title="Edit"]'));
-    await waitForText("Edit Git repository", document.body);
-    const editRef = document.body.querySelector<HTMLInputElement>("#git-ref");
-    const editPath = document.body.querySelector<HTMLInputElement>("#git-path");
-    if (!editRef || !editPath) throw new Error("Git edit fields missing");
-    await setValue(editRef, "");
-    await setValue(editPath, "");
-    await click([...document.body.querySelectorAll("button")].find((button) => button.textContent === "Done") ?? null);
-    expect(onUpdate).toHaveBeenCalledWith("web", { url: "https://github.com/acme/web.git" });
+    // Save resolves as a failure → dialog still open, secret intact, error shown.
+    await act(async () => setSaving(false));
+    expect(document.body.textContent).toContain("Add environment variable");
+    expect(document.body.querySelector<HTMLInputElement>("#env-key")?.value).toBe("API_KEY");
+    expect(document.body.querySelector<HTMLInputElement>("#env-value")?.value).toBe("s3cr3t");
+    expect(document.body.textContent).toContain("Save failed");
 
     await unmountRoot(root);
   });

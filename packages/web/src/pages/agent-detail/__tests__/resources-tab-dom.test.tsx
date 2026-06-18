@@ -8,8 +8,6 @@ import { MemoryRouter, Outlet, Route, Routes } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigRow, ConfigTableHeader } from "../flat-section.js";
 import type { AgentDetailContext } from "../layout-context.js";
-import { dirtySummaryLabel, SaveBar } from "../save-bar.js";
-import type { DraftListItem, DraftSummary, UseConfigDraftResult } from "../use-config-draft.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -83,71 +81,6 @@ function agentResources(overrides: Partial<AgentResourcesOutput> = {}): AgentRes
   };
 }
 
-function listItem<T>(key: string, value: T, status: DraftListItem<T>["status"] = "unchanged"): DraftListItem<T> {
-  return {
-    key,
-    value,
-    baseline: status === "added" ? null : value,
-    status,
-  };
-}
-
-function summary(dirtySections: DraftSummary["dirtySections"] = []): DraftSummary {
-  return {
-    anyDirty: dirtySections.length > 0,
-    dirtySections,
-    counts: {
-      model: dirtySections.includes("model") ? 1 : 0,
-      effort: dirtySections.includes("effort") ? 1 : 0,
-      mcp: dirtySections.includes("mcp") ? 1 : 0,
-      env: dirtySections.includes("env") ? 1 : 0,
-      git: dirtySections.includes("git") ? 1 : 0,
-    },
-  };
-}
-
-function draft(overrides: Partial<UseConfigDraftResult> = {}): UseConfigDraftResult {
-  return {
-    draft: {
-      model: "sonnet",
-      reasoningEffort: "medium",
-      mcp: [],
-      env: [
-        listItem("env-1", { key: "OPENAI_API_KEY", value: "secret", sensitive: true }),
-        listItem("env-2", { key: "DELETED_KEY", value: "gone", sensitive: false }, "deleted"),
-      ],
-      git: [
-        listItem("git-1", { url: "https://github.com/acme/web.git" }),
-        listItem("git-2", { url: "https://github.com/acme/api?ref=main" }),
-        listItem("git-3", { url: "https://github.com/acme/tools", localPath: "custom-tools" }, "deleted"),
-      ],
-    },
-    summary: summary(["env", "git"]),
-    modelDirty: false,
-    reasoningEffortDirty: false,
-    setModel: vi.fn(),
-    revertModel: vi.fn(),
-    setReasoningEffort: vi.fn(),
-    revertReasoningEffort: vi.fn(),
-    addMcp: vi.fn(),
-    updateMcp: vi.fn(),
-    deleteMcp: vi.fn(),
-    undoDeleteMcp: vi.fn(),
-    addEnv: vi.fn(),
-    updateEnv: vi.fn(),
-    deleteEnv: vi.fn(),
-    undoDeleteEnv: vi.fn(),
-    addGit: vi.fn(),
-    updateGit: vi.fn(),
-    deleteGit: vi.fn(),
-    undoDeleteGit: vi.fn(),
-    resetAll: vi.fn(),
-    resetToConfig: vi.fn(),
-    buildPayloadPatch: vi.fn(),
-    ...overrides,
-  };
-}
-
 function context(overrides: Partial<AgentDetailContext> = {}): AgentDetailContext {
   return {
     uuid: "agent-1",
@@ -155,11 +88,18 @@ function context(overrides: Partial<AgentDetailContext> = {}): AgentDetailContex
     isHuman: false,
     canManageAgent: true,
     canEditConfig: true,
-    guardedNavigate: vi.fn(),
-    draft: draft(overrides.draft),
+    navigateAway: vi.fn(),
     config: config(),
     configLoading: false,
     configError: null,
+    configSave: {
+      save: vi.fn(),
+      pending: false,
+      saveError: null,
+      conflict: false,
+      justSaved: false,
+      savedField: null,
+    },
     clientStatus: undefined,
     clientStatusLoading: false,
     clientStatusError: null,
@@ -178,9 +118,6 @@ function context(overrides: Partial<AgentDetailContext> = {}): AgentDetailContex
     onSuspend: vi.fn(),
     onReactivate: vi.fn(),
     onDelete: vi.fn(),
-    dryRunText: "dry run diff",
-    dryRunPending: false,
-    onRunDryRun: vi.fn(),
     ...overrides,
   };
 }
@@ -277,7 +214,7 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-describe("ResourcesTab and SaveBar", () => {
+describe("ResourcesTab", () => {
   it("renders read-only resources for non-managers and nothing for human agents", async () => {
     const layoutMocks = await import("../layout-context.js");
     const spy = vi.spyOn(layoutMocks, "useAgentDetailContext");
@@ -466,83 +403,6 @@ describe("ResourcesTab and SaveBar", () => {
     await click(container.querySelector('button[aria-label="Add MCP"]'));
     expect(document.body.textContent).toContain("No team MCP integrations to enable yet");
     expect(document.body.textContent).toContain("Manage in Settings → Resources");
-  });
-
-  it("renders SaveBar saved, error, conflict, saving, and jump actions", async () => {
-    expect(dirtySummaryLabel(summary())).toBe("");
-    expect(dirtySummaryLabel(summary(["model", "env"]))).toBe("Model · Env");
-    const onSave = vi.fn();
-    const onDiscard = vi.fn();
-    const onReloadRemote = vi.fn();
-    const onJumpTo = vi.fn();
-
-    const container = await renderElement(
-      <SaveBar
-        summary={summary(["model", "env"])}
-        saveHint="local draft"
-        conflictMessage="remote changed"
-        errorMessage="save failed"
-        saving
-        reloadingRemote
-        justSaved={false}
-        onSave={onSave}
-        onDiscard={onDiscard}
-        onReloadRemote={onReloadRemote}
-        onJumpTo={onJumpTo}
-      />,
-    );
-
-    expect(container.textContent).toContain("Configuration changes in Model, Env");
-    expect(container.textContent).not.toContain("sections with unsaved changes");
-    expect(container.textContent).toContain("local draft");
-    expect(container.textContent).toContain("remote changed");
-    expect(container.textContent).toContain("save failed");
-    expect(container.textContent).toContain("Loading latest");
-    expect(container.textContent).toContain("Saving");
-    await click([...container.querySelectorAll("button")].find((button) => button.textContent === "Model") ?? null);
-    expect(onJumpTo).toHaveBeenCalledWith("model");
-    await click(
-      [...container.querySelectorAll("button")].find((button) => button.textContent === "Discard changes") ?? null,
-    );
-    expect(onDiscard).not.toHaveBeenCalled();
-
-    await act(async () => root?.unmount());
-    root = null;
-    document.body.innerHTML = "";
-    const saved = await renderElement(
-      <SaveBar
-        summary={summary()}
-        saveHint=""
-        conflictMessage={null}
-        errorMessage={null}
-        saving={false}
-        justSaved
-        onSave={onSave}
-        onDiscard={onDiscard}
-        onReloadRemote={onReloadRemote}
-        onJumpTo={onJumpTo}
-      />,
-    );
-    expect(saved.textContent).toContain("Saved");
-
-    await act(async () => root?.unmount());
-    root = null;
-    document.body.innerHTML = "";
-    const empty = await renderElement(
-      <SaveBar
-        summary={summary()}
-        saveHint=""
-        conflictMessage={null}
-        errorMessage={null}
-        saving={false}
-        justSaved={false}
-        onSave={onSave}
-        onDiscard={onDiscard}
-        onReloadRemote={onReloadRemote}
-        onJumpTo={onJumpTo}
-      />,
-    );
-    expect(empty.textContent).toBe("");
   });
 
   it("renders flat-section row primitives", async () => {

@@ -165,7 +165,6 @@ describe("api wrapper paths", () => {
 
     await agentConfig.getAgentConfig("agent/id");
     await agentConfig.updateAgentConfig("agent/id", { expectedVersion: 3, payload: { model: "sonnet" } });
-    await agentConfig.dryRunAgentConfig("agent/id", { gitRepos: [] });
     await agentConfig.getAgentClientStatus("agent/id");
     await agentStatus.fetchChatAgentStatuses("chat/id");
 
@@ -262,7 +261,6 @@ describe("api wrapper paths", () => {
     await sessions.terminateSession("agent/id", "chat/id");
 
     expect(apiMock.get).toHaveBeenCalledWith("/agents/agent/id/config");
-    expect(apiMock.post).toHaveBeenCalledWith("/agents/agent/id/config/dry-run", { payload: { gitRepos: [] } });
     expect(apiMock.get).toHaveBeenCalledWith("/chats/chat/id/agent-status");
     expect(apiMock.get).toHaveBeenCalledWith(
       "/orgs/current/agents?limit=10&cursor=next&type=agent&query=nova&addressableOnly=true",

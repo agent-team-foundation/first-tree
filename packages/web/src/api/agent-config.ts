@@ -1,9 +1,4 @@
-import type {
-  AgentRuntimeConfig,
-  AgentRuntimeConfigDryRunResult,
-  AgentRuntimeConfigPatch,
-  UpdateAgentRuntimeConfig,
-} from "@first-tree/shared";
+import type { AgentRuntimeConfig, UpdateAgentRuntimeConfig } from "@first-tree/shared";
 import { api } from "./client.js";
 
 /**
@@ -16,11 +11,6 @@ export function getAgentConfig(agentId: string): Promise<AgentRuntimeConfig> {
 
 export function updateAgentConfig(agentId: string, body: UpdateAgentRuntimeConfig): Promise<AgentRuntimeConfig> {
   return api.patch<AgentRuntimeConfig>(`/agents/${agentId}/config`, body);
-}
-
-export type DryRunResult = AgentRuntimeConfigDryRunResult;
-export function dryRunAgentConfig(agentId: string, payload: AgentRuntimeConfigPatch): Promise<DryRunResult> {
-  return api.post<DryRunResult>(`/agents/${agentId}/config/dry-run`, { payload });
 }
 
 /** Step 10: client connectivity probe used by AgentConfigTab to render the offline banner. */

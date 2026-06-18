@@ -348,7 +348,7 @@ export function AgentDetailPreviewPage() {
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
             Code repositories live on the Environment tab now (they're part of the workspace the agent runs in). Saved
-            immediately — not part of the SaveBar draft.
+            immediately.
           </p>
           <div style={{ marginTop: "var(--sp-4)", marginBottom: "var(--sp-8)" }}>
             <ResourceTypeSection type="repo" data={RESOURCES} canEdit pending={false} onMutate={() => {}} />

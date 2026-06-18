@@ -1,7 +1,7 @@
 import type { Agent, AgentRuntimeConfig, RuntimeProvider, UpdateAgent } from "@first-tree/shared";
 import { useOutletContext } from "react-router";
 import type { ClientStatusInfo } from "../../api/agent-config.js";
-import type { UseConfigDraftResult } from "./use-config-draft.js";
+import type { AgentConfigSaveController } from "./use-agent-config-save.js";
 
 /**
  * Shared state passed from the agent-detail layout shell down to each tab via
@@ -18,17 +18,17 @@ export type AgentDetailContext = {
   canManageAgent: boolean;
   canEditConfig: boolean;
 
-  // Navigate away from this agent's detail page with the unsaved-draft leave
-  // guard applied (confirm + discard if the config draft is dirty). Use this for
-  // any control that LEAVES the current agent — notably PR3's agent switcher.
-  // Same-agent tab navigation should use plain navigate(): the draft persists.
-  guardedNavigate: (to: string) => void;
+  // Plain navigate away from this agent's detail page. Every setting now saves
+  // immediately, so there is no unsaved-draft leave guard — this is just
+  // `navigate` exposed to controls that LEAVE the current agent (the switcher,
+  // Usage deep links, "Manage in Settings", "Open Computers", Chat).
+  navigateAway: (to: string) => void;
 
-  // Config + draft (shared across Runtime / Prompt / Resources)
-  draft: UseConfigDraftResult;
+  // Config (shared across Runtime / Prompt) + its immediate-save controller.
   config: AgentRuntimeConfig | undefined;
   configLoading: boolean;
   configError: unknown;
+  configSave: AgentConfigSaveController;
 
   // Computer binding (Runtime tab "Computer" panel)
   clientStatus: ClientStatusInfo | undefined;
@@ -41,7 +41,7 @@ export type AgentDetailContext = {
   onOpenBindDialog: () => void;
   bindClientPending: boolean;
 
-  // Identity / Appearance (PATCH /agents/:uuid via dialog — bypasses SaveBar)
+  // Identity / Appearance (PATCH /agents/:uuid via dialog — saves immediately)
   saveIdentity: (patch: UpdateAgent) => Promise<void>;
   refreshAgent: () => Promise<void>;
 
@@ -53,11 +53,6 @@ export type AgentDetailContext = {
   onSuspend: () => void;
   onReactivate: () => void;
   onDelete: () => void;
-
-  // DryRun preview (Resources tab footer)
-  dryRunText: string | null;
-  dryRunPending: boolean;
-  onRunDryRun: () => void;
 };
 
 export function useAgentDetailContext(): AgentDetailContext {
