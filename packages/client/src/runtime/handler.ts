@@ -165,6 +165,14 @@ export type SessionContext = HandlerContext & {
   retryTurn: (messages: SessionMessage | readonly SessionMessage[], reason: string) => void;
 
   /**
+   * Drop the current live handler after it has fenced an unknown-custody
+   * provider failure and marked the affected inbox work for recovery. The
+   * optional session id lets recovery resume provider context from a fresh
+   * handler instead of routing redelivery back into the dead one.
+   */
+  failSessionForRecovery?: (reason: string, sessionId?: string) => void;
+
+  /**
    * Build env for CLI sub-processes that shell out to the First Tree CLI.
    * Layers First Tree envelope vars (server/agent/inbox/chat IDs) on
    * top of the parent env. Handlers pass their own cleaned `process.env`.

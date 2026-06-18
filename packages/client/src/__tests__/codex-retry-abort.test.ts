@@ -110,7 +110,7 @@ vi.mock("../runtime/chat-context.js", () => ({
   }),
 }));
 
-import { createCodexHandler } from "../handlers/codex.js";
+import { createCodexHandler } from "../handlers/codex/index.js";
 
 const AGENT_ID = "019e71c9-88d2-70be-be67-fdb033b2ef0b";
 

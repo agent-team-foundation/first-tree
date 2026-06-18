@@ -2,7 +2,7 @@ import { registerHandler } from "../runtime/handler.js";
 import { createClaudeCodeHandler } from "./claude-code.js";
 import { createClaudeCodeTuiHandler } from "./claude-code-tui/index.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
-import { createCodexHandler } from "./codex.js";
+import { createCodexHandler } from "./codex/index.js";
 
 /** Register all built-in handlers. Call once at startup. */
 export function registerBuiltinHandlers(): void {

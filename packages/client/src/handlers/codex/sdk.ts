@@ -14,27 +14,27 @@ import {
   type ThreadOptions,
   type Usage,
 } from "@openai/codex-sdk";
-import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
-import { buildAgentBriefing } from "../runtime/agent-briefing.js";
-import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
-import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../runtime/bootstrap.js";
-import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
-import { renderChatContextPrompt } from "../runtime/chat-context-section.js";
+import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../../runtime/agent-bootstrap.js";
+import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
+import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
+import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
+import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
+import { renderChatContextPrompt } from "../../runtime/chat-context-section.js";
 import {
   createCodexClientWithBinaryFallback,
   formatCodexBinaryMissingMessage,
   isCodexBinaryMissingError,
-} from "../runtime/codex-binary.js";
+} from "../../runtime/codex-binary.js";
 import {
   type ContextTreeAttribution,
   resolveContextTreeRelativePath,
   toolFileRefsFromShellCommand,
-} from "../runtime/context-tree-file-refs.js";
+} from "../../runtime/context-tree-file-refs.js";
 import {
   type ContextTreeGitWriteTracker,
   createContextTreeGitWriteTracker,
-} from "../runtime/context-tree-git-status.js";
-import { resolveGitRepoTargetPath } from "../runtime/git-local-path.js";
+} from "../../runtime/context-tree-git-status.js";
+import { resolveGitRepoTargetPath } from "../../runtime/git-local-path.js";
 import type {
   AgentHandler,
   AgentIdentity,
@@ -43,13 +43,13 @@ import type {
   SessionContext,
   SessionMessage,
   TurnConsumedErrorReason,
-} from "../runtime/handler.js";
-import { deliveryTokenFromSessionContext } from "../runtime/handler.js";
-import { materializeResourceSkills } from "../runtime/resource-skills.js";
-import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
-import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
-import { formatAuthHint, isCodexAuthError } from "./auth-error-hint.js";
-import { resolveTurnSettlement } from "./turn-settlement.js";
+} from "../../runtime/handler.js";
+import { deliveryTokenFromSessionContext } from "../../runtime/handler.js";
+import { materializeResourceSkills } from "../../runtime/resource-skills.js";
+import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
+import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
+import { formatAuthHint, isCodexAuthError } from "../auth-error-hint.js";
+import { resolveTurnSettlement } from "../turn-settlement.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -444,7 +444,7 @@ export function toolFileRefsForTerminalCodexTool(input: {
  *   - F6: `Thread` has no close/dispose — shutdown is exclusively
  *         `AbortController.abort()`.
  */
-export const createCodexHandler: HandlerFactory = (config) => {
+export const createCodexSdkHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;

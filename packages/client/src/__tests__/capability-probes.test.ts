@@ -893,6 +893,65 @@ describe("probeCodexCapability", () => {
     expect(entry.degraded).toBe(true);
     expect(entry.sdkVersion).toBe("0.134.0"); // falls back to the resolve-stage version
   });
+
+  it("FIRST_TREE_CODEX_HANDLER_ENGINE=sdk skips app-server smoke and uses the SDK doctor path", async () => {
+    const appServerSmoke = vi.fn(async () => {
+      throw new Error("app-server unavailable");
+    });
+    const doctorSmoke = vi.fn(smokeOk);
+    const entry = await probeCodexCapability({
+      resolveRuntimeBinary: bundled,
+      loginStatus: loggedIn,
+      appServerSmoke,
+      doctorSmoke,
+      env: { FIRST_TREE_CODEX_HANDLER_ENGINE: "sdk" },
+    });
+    expect(entry).toMatchObject({ state: "ok", available: true });
+    expect(entry.degraded).toBeUndefined();
+    expect(appServerSmoke).not.toHaveBeenCalled();
+    expect(doctorSmoke).toHaveBeenCalledWith("/vendor/bin/codex");
+  });
+
+  it("auto keeps codex available through SDK fallback when app-server smoke fails", async () => {
+    const appServerSmoke = vi.fn(async () => {
+      throw new Error("bad experimental protocol");
+    });
+    const doctorSmoke = vi.fn(smokeOk);
+    const entry = await probeCodexCapability({
+      resolveRuntimeBinary: bundled,
+      loginStatus: loggedIn,
+      appServerSmoke,
+      doctorSmoke,
+      env: { FIRST_TREE_CODEX_HANDLER_ENGINE: "auto" },
+    });
+    expect(entry).toMatchObject({
+      state: "ok",
+      available: true,
+      authenticated: true,
+      degraded: true,
+    });
+    expect(entry.error).toContain("bad experimental protocol");
+    expect(entry.error).toContain("@openai/codex-sdk fallback");
+    expect(appServerSmoke).toHaveBeenCalledWith("/vendor/bin/codex", { FIRST_TREE_CODEX_HANDLER_ENGINE: "auto" });
+    expect(doctorSmoke).toHaveBeenCalledWith("/vendor/bin/codex");
+  });
+
+  it("forced app-server engine reports unavailable when app-server smoke fails", async () => {
+    const appServerSmoke = vi.fn(async () => {
+      throw new Error("initialize rejected");
+    });
+    const doctorSmoke = vi.fn(smokeOk);
+    const entry = await probeCodexCapability({
+      resolveRuntimeBinary: bundled,
+      loginStatus: loggedIn,
+      appServerSmoke,
+      doctorSmoke,
+      env: { FIRST_TREE_CODEX_HANDLER_ENGINE: "app-server" },
+    });
+    expect(entry).toMatchObject({ state: "error", available: false, authenticated: false });
+    expect(entry.error).toContain("initialize rejected");
+    expect(doctorSmoke).not.toHaveBeenCalled();
+  });
 });
 
 describe("resolveBundledCodexBinary / resolveCodexRuntimeBinary (real node_modules)", () => {

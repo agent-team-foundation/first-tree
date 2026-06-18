@@ -1,6 +1,12 @@
 import type { SessionEvent, SessionState } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
+import type {
+  AgentHandler,
+  DeliveryToken,
+  HandlerFactory,
+  SessionContext,
+  SessionMessage,
+} from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { silentLogger } from "./_logger-helpers.js";
@@ -109,6 +115,11 @@ function workingHandler(sessionId = "session-after-recovery"): AgentHandler {
     suspend: vi.fn().mockResolvedValue(undefined),
     shutdown: vi.fn().mockResolvedValue(undefined),
   };
+}
+
+async function flushAsync(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
 describe("SessionManager: session-start failure signalling (F2)", () => {
@@ -249,6 +260,92 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-emit-throw" }));
     expect(working.start).toHaveBeenCalledTimes(1);
     expect(stateChanges.at(-1)).toEqual({ chatId: "chat-emit-throw", state: "active" });
+
+    await sm.shutdown();
+  });
+
+  it("drops a provider-fatal start session so recovery redelivery uses a fresh handler", async () => {
+    const chatId = "chat-provider-fatal-start";
+    const reason = "codex_app_server_turn_start_unknown_custody_transient";
+    const failed: AgentHandler = {
+      start: vi.fn(async (message, ctx, token) => {
+        token?.retry(message, reason);
+        ctx.failSessionForRecovery?.(reason, "thread-failed-start");
+        return { sessionId: "thread-failed-start", route: { kind: "owned", mode: "processing" } as const };
+      }),
+      resume: vi.fn(),
+      inject: vi.fn().mockReturnValue({ kind: "owned", mode: "queued" }),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    const recovered = workingHandler("thread-after-start-recovery");
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeSessionManager({ handlers: [failed, recovered], recoverChat });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId, messageId: "msg-start" }));
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith(chatId));
+    await flushAsync();
+
+    expect(sm.activeCount).toBe(0);
+
+    await sm.dispatch(mockEntry({ id: 1, chatId, messageId: "msg-start" }));
+
+    expect(failed.inject).not.toHaveBeenCalled();
+    expect(recovered.resume).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "msg-start" }),
+      "thread-failed-start",
+      expect.any(Object),
+      expect.any(Object),
+    );
+
+    await sm.shutdown();
+  });
+
+  it("drops a provider-fatal active session so recovery redelivery uses a fresh handler", async () => {
+    const chatId = "chat-provider-fatal-inject";
+    const reason = "codex_app_server_steer_unknown_custody_transient";
+    let startCtx: SessionContext | undefined;
+    let startToken: DeliveryToken | undefined;
+    let startMessage: SessionMessage | undefined;
+    const failed: AgentHandler = {
+      start: vi.fn(async (message, ctx, token) => {
+        startCtx = ctx;
+        startToken = token;
+        startMessage = message;
+        return { sessionId: "thread-failed-inject", route: { kind: "owned", mode: "processing" } as const };
+      }),
+      resume: vi.fn(),
+      inject: vi.fn((message) => {
+        if (!startMessage) throw new Error("start message missing");
+        startToken?.retry([startMessage, message], reason);
+        startCtx?.failSessionForRecovery?.(reason, "thread-failed-inject");
+        return { kind: "owned", mode: "queued" } as const;
+      }),
+      suspend: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+    const recovered = workingHandler("thread-after-inject-recovery");
+    const recoverChat = vi.fn<(chatId: string) => Promise<void>>().mockResolvedValue(undefined);
+    const sm = makeSessionManager({ handlers: [failed, recovered], recoverChat });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId, messageId: "msg-start" }));
+    expect(sm.activeCount).toBe(1);
+
+    await sm.dispatch(mockEntry({ id: 2, chatId, messageId: "msg-inject" }));
+    await vi.waitFor(() => expect(recoverChat).toHaveBeenCalledWith(chatId));
+    await flushAsync();
+
+    expect(sm.activeCount).toBe(0);
+
+    await sm.dispatch(mockEntry({ id: 1, chatId, messageId: "msg-start" }));
+
+    expect(failed.inject).toHaveBeenCalledTimes(1);
+    expect(recovered.resume).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "msg-start" }),
+      "thread-failed-inject",
+      expect.any(Object),
+      expect.any(Object),
+    );
 
     await sm.shutdown();
   });

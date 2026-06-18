@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computePerTurnUsageDelta, isTransientCodexErrorMessage } from "../handlers/codex.js";
+import { computePerTurnUsageDelta, isTransientCodexErrorMessage } from "../handlers/codex/index.js";
 
 const usage = (input: number, cached: number, output: number, reasoning = 0) => ({
   input_tokens: input,

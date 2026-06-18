@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentRuntimeConfigPayload } from "@first-tree/shared";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { buildCodexAgentBriefing } from "../handlers/codex.js";
+import { buildCodexAgentBriefing } from "../handlers/codex/index.js";
 import { bootstrapWorkspace, FIRST_TREE_WORKSPACE_MARKER } from "../runtime/bootstrap.js";
 import type { ChatContext } from "../runtime/chat-context.js";
 import { renderChatContextPrompt } from "../runtime/chat-context-section.js";

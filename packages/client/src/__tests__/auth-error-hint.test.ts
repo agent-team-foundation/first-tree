@@ -3,7 +3,7 @@ import { formatAuthHint, isClaudeAuthError, isCodexAuthError } from "../handlers
 
 /**
  * Locks the behavioural contract of the auth-error hint module that
- * codex.ts and claude-code.ts both consume.
+ * the codex and claude-code handlers both consume.
  *
  * `isCodexAuthError` must match every canonical wording the bundled
  * `@openai/codex` Rust binary emits when its refresh flow fails — the SDK
@@ -14,8 +14,8 @@ import { formatAuthHint, isClaudeAuthError, isCodexAuthError } from "../handlers
  * Tree is broken."
  *
  * `isClaudeAuthError` is a thin equality check against the SDK's typed
- * `SDKAssistantMessageError` union and exists mainly so codex.ts /
- * claude-code.ts share a single source of truth for the auth-failure code.
+ * `SDKAssistantMessageError` union and exists mainly so the codex and
+ * claude-code handlers share a single source of truth for the auth-failure code.
  */
 describe("isCodexAuthError", () => {
   it("matches every refresh-flow wording extracted from @openai/codex 0.125.0", () => {
