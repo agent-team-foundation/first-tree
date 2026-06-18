@@ -1,3 +1,5 @@
+import { accessSync, constants } from "node:fs";
+import { delimiter, join } from "node:path";
 import {
   type ChatParticipantDetail,
   extractCaption,
@@ -6,6 +8,7 @@ import {
   isImageRefContent,
 } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
+import { getCliBinding } from "./cli-binding.js";
 import type { AgentIdentity, SessionMessage } from "./handler.js";
 import { findImagePath } from "./image-store.js";
 
@@ -24,10 +27,11 @@ import { findImagePath } from "./image-store.js";
 
 /**
  * Build the env for CLI sub-processes that need to call `<binName> ...`.
- * Layers the First Tree envelope variables on top of the parent env. Handlers
- * that start sub-processes should call this so every one of them sees the
- * same envelope — enabling replyTo inference, access-token propagation, and
- * agent-id binding without per-handler duplication.
+ * Layers the First Tree envelope variables on top of the parent env, and keeps
+ * the channel-local CLI binary ahead of any globally installed sibling. Handlers
+ * that start sub-processes should call this so every one of them sees the same
+ * envelope — enabling replyTo inference, access-token propagation, agent-id
+ * binding, and channel-correct CLI calls without per-handler duplication.
  */
 export function buildAgentEnv(
   parentEnv: NodeJS.ProcessEnv,
@@ -68,10 +72,12 @@ export function buildAgentEnv(
       workspacesRoot: string;
       selfSlug: string;
     };
+    log?: (msg: string) => void;
   },
 ): NodeJS.ProcessEnv {
+  const env = withChannelCliOnPath(parentEnv, ctx.log);
   return {
-    ...parentEnv,
+    ...env,
     FIRST_TREE_SERVER_URL: ctx.sdk.serverUrl,
     FIRST_TREE_AGENT_ID: ctx.agent.agentId,
     FIRST_TREE_INBOX_ID: ctx.agent.inboxId,
@@ -88,6 +94,77 @@ export function buildAgentEnv(
         }
       : {}),
   };
+}
+
+const warnedCliResolutionKeys = new Set<string>();
+
+function withChannelCliOnPath(parentEnv: NodeJS.ProcessEnv, log?: (msg: string) => void): NodeJS.ProcessEnv {
+  const firstTreeHome = parentEnv.FIRST_TREE_HOME;
+  if (!firstTreeHome) {
+    warnCliResolutionOnce(
+      "missing-home",
+      log,
+      "FIRST_TREE_HOME is not set; spawned agents cannot receive the channel-local CLI on PATH",
+    );
+    return { ...parentEnv };
+  }
+
+  const binDir = join(firstTreeHome, "bin");
+  const pathKey = resolvePathKey(parentEnv);
+  const currentPath = parentEnv[pathKey] ?? "";
+  const existing = currentPath.split(delimiter).filter((part) => part.length > 0 && part !== binDir);
+  const nextPath = [binDir, ...existing].join(delimiter);
+  const env = { ...parentEnv, [pathKey]: nextPath };
+
+  const { binName } = getCliBinding();
+  if (!canResolveExecutable(binDir, binName, parentEnv)) {
+    warnCliResolutionOnce(
+      `missing-bin:${binDir}:${binName}`,
+      log,
+      `channel-local CLI ${binName} was not found at ${binDir}; spawned agents may resolve a stale or wrong-channel CLI from PATH`,
+    );
+  }
+
+  return env;
+}
+
+function resolvePathKey(env: NodeJS.ProcessEnv): string {
+  if (process.platform === "win32") {
+    if ("Path" in env) return "Path";
+    if ("PATH" in env) return "PATH";
+    if ("path" in env) return "path";
+    return "Path";
+  }
+  return "PATH";
+}
+
+function canResolveExecutable(binDir: string, binName: string, env: NodeJS.ProcessEnv): boolean {
+  for (const candidate of executableCandidates(binDir, binName, env)) {
+    try {
+      accessSync(candidate, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+      return true;
+    } catch {
+      // Keep probing.
+    }
+  }
+  return false;
+}
+
+function executableCandidates(binDir: string, binName: string, env: NodeJS.ProcessEnv): string[] {
+  const bare = join(binDir, binName);
+  if (process.platform !== "win32") return [bare];
+  const pathExts = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((ext) => ext.trim())
+    .filter(Boolean);
+  return [bare, ...pathExts.map((ext) => `${bare}${ext.toLowerCase()}`), ...pathExts.map((ext) => `${bare}${ext}`)];
+}
+
+function warnCliResolutionOnce(key: string, log: ((msg: string) => void) | undefined, message: string): void {
+  if (!log) return;
+  if (warnedCliResolutionKeys.has(key)) return;
+  warnedCliResolutionKeys.add(key);
+  log(message);
 }
 
 /** Session-scoped participant cache shared by result-sink and inbound formatter. */

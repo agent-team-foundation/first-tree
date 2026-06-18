@@ -1866,6 +1866,7 @@ export class SessionManager {
       sdk: this.config.sdk,
       agent: this.config.agentIdentity,
       chatId,
+      log,
       docContext: {
         base: docBase,
         agentHome: selfFence.agentHome,
