@@ -47,7 +47,7 @@ If your work touches HTTP routes, JWT auth, scope helpers, or anything multi-org
 Use `scripts/dev-install.sh` to install the in-tree CLI as `first-tree-dev` on PATH. The dev binary's channel identity (`first-tree-dev` / `~/.first-tree-dev/` / `first-tree-dev.service`) gives it its own home, unit, and label — coexists with whatever prod (`first-tree`) / staging (`first-tree-staging`) install you already have running.
 
 ```bash
-./scripts/dev-install.sh                  # build dist + symlink first-tree-dev / ftd into ~/.local/bin/
+./scripts/dev-install.sh                  # build dist, relink first-tree-dev / ftd, restart installed dev daemon
 first-tree-dev login <connect-token>      # token from http://127.0.0.1:8000/clients
 first-tree-dev daemon status
 ```
