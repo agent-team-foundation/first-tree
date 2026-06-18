@@ -20,10 +20,10 @@ const SAMPLE = [
   "`chat.description`（≤1500 字符）由 owning agent 维护，渲染为 markdown，承载 *背景 + 计划 + 进度*。",
   "",
   "## 进度",
-  "- 已定位根因：`prose prose-sm` 未压标题字号、且把正文撑大",
-  "- 标题收敛为「小节标签」，靠字重 + 留白做层级",
-  "  - h1 / h2 用 subtitle 档",
-  "  - h3+ 与正文齐平",
+  "- 已定位根因：默认 `prose prose-sm` 把标题撑大",
+  "- 方案：正文与标题统一一档，标题只靠字重 + 留白做层级",
+  "  - 正文保持 prose-sm 默认",
+  "  - 所有标题同档 + semibold",
   "",
   "### 风险",
   "窄栏下表格 / 代码块可能溢出：",
@@ -54,7 +54,7 @@ const LONG = [
   "",
   "## 进度",
   "- 标题层级方案定稿并实现",
-  "- 正文回归 12 档，与 rail 一致",
+  "- 正文与标题统一一档，层级只靠字重 + 留白",
   "- 预览页覆盖 before/after、暗色、capped、边角",
   "",
   "### 风险",
@@ -62,7 +62,7 @@ const LONG = [
   "- 30rem 为启发式数值，非布局自适应",
   "",
   "### 待确认",
-  "- 是否一并修「正文偷偷 14 档」属于本 PR 范围",
+  "- 折叠 cap 的触发规则是否要更直觉",
   "- 元信息需要后端补字段",
   "",
   "#### 备注",
@@ -164,12 +164,12 @@ export function SummarySectionPreviewPage() {
       </div>
 
       <Group title="1 · Light — Before vs After">
-        <Col label="Before" note="prose-sm default · oversized headings · enlarged body">
+        <Col label="Before" note="prose-sm default · oversized headings (h1 30 / h2 20)">
           <div style={RAIL}>
             <BeforeSection />
           </div>
         </Col>
-        <Col label="After" note="body --text-body · h1/h2 --text-subtitle · weight-led">
+        <Col label="After (current)" note="all 14 · headings semibold(600) · weight-only">
           <div style={RAIL}>
             <DescriptionSection description={SAMPLE} capped={false} />
           </div>
