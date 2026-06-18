@@ -134,7 +134,7 @@ type SessionCommandType = "session:suspend" | "session:resume" | "session:termin
  * agent home:
  *   1. CODEX legacy chats. The codex handler has NO legacy-cwd branch:
  *      `start()` and `resume()` both use `acquireAgentHome` (see
- *      `handlers/codex.ts`; #530 left codex alone because its transcripts are
+ *      `handlers/codex/`; #530 left codex alone because its transcripts are
  *      not cwd-keyed). Pre-#506 codex still created `<workspaceRoot>/<chatId>/`,
  *      and those dirs persist (`cleanWorkspaces` is a no-op), so every legacy
  *      codex chat hits this divergence.
