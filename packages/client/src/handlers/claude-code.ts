@@ -722,48 +722,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    */
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
   /**
-   * The most recently pushed SDK input envelope, kept around as the replay
-   * payload for the transient stream-API retry path. Stashed at every
-   * `inputController.push` site (start / resume / inject) so a
-   * `claude_socket_closed` retry can re-push it into the rebuilt query —
-   * without this, `respawnQuery()` would leave the new `InputController`
-   * empty and the SDK subprocess would hang idle (resume mode loads
-   * conversation history but still needs a new user message to drive
-   * the next turn). We stash the already-converted SDK form plus its ACK
-   * metadata (rather than the raw `SessionMessage`) so the retry path stays
-   * synchronous and timing-compatible with the existing consumer-loop catch
-   * block. Cleared once `ackTurnClose()` acks the same entry — turn fully
-   * processed, no further replay needed.
-   *
-   * Invariant — single-consumer loop: this stash is safe ONLY because
-   * the catch → respawn → re-push sequence in `consumeOutput` is
-   * synchronous (no `await` between the sniff-throw catch entry and
-   * `respawnQuery`'s push). The interleaving inject() runs on its own
-   * `void maybeSwitchConfig().finally(...)` microtask and updates the
-   * stash via the same write site, so a properly-ordered consumer-loop
-   * iteration is the *only* reader and writer at any synchronous step.
-   * If future work ever introduces a second concurrent consumer (e.g.
-   * parallel turn execution, multi-`spawnQuery` fan-out), this stash
-   * must be redesigned per-consumer or the retry must own its own
-   * captured copy — otherwise an inject from chat N can overwrite a
-   * stash that chat M's retry is about to replay.
-   *
-   * Tolerated same-chat race — inject mid-retry: an inject()'s
-   * `toSDKUserMessage` await can interleave with a consumer-triggered
-   * transient retry. Sequence: consumer sniff-hit → respawn replays
-   * the PRIOR stash into the new query → inject's await resolves →
-   * inject overwrites stash and pushes the new prompt. The rebuilt
-   * query then sees `[replayed_prior_prompt, injected_new_prompt]`
-   * as two consecutive user messages. The replayed prompt is already
-   * in the resumed conversation history, so the model perceives a
-   * one-message duplicate before processing the inject — recoverable,
-   * not a correctness break. Avoiding this would require either
-   * draining inject through a queue gated on the consumer's catch
-   * state or making the retry path async — both have larger blast
-   * radius than the duplicate-message symptom. Documented per PR #648
-   * reviewer observation #1.
+   * SDK inputs pushed into the active query that have not reached a terminal
+   * turn boundary yet. Transient retry must replay the whole unclosed pushed
+   * buffer, including a tail input the old query accepted into its controller
+   * but crashed before the provider pulled. ACK eligibility is stricter and is
+   * tracked separately by `PendingAckMessage.providerEntered`.
    */
-  let stashedSdkInput: PendingSdkInput | null = null;
+  const unclosedSdkInputs: PendingSdkInput[] = [];
 
   async function toSDKUserMessage(
     message: SessionMessage,
@@ -927,11 +892,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   /**
    * Single helper for "turn closed → finish the provider-entered inbox
-   * prefix AND drop the replay stash if that same turn owned it". The two
+   * prefix AND drop settled inputs from the replay buffer". The two
    * operations are paired everywhere a turn finishes (success /
    * sniff-permanent / forward-error / no-result / non-success subtype /
    * MAX_RETRIES / respawn-fail) — folding them into one call keeps the
-   * invariant "stash lives only as long as the turn still might need a
+   * invariant "input replay lives only as long as the turn still might need a
    * replay" enforced in one place. Use the raw
    * `finishTurn(message, ...)` directly for per-message terminal
    * failures (e.g. inject's `toSDKUserMessage` catch) where the semantics is
@@ -963,15 +928,21 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         : fallbackErrorPending
           ? [fallbackErrorPending]
           : [];
+    let settledBatch: PendingAckMessage[] = [];
     if (batch.length > 0 && isCurrentPendingPrefix(batch)) {
       pendingAckMessages.splice(0, batch.length);
       const messages = batch.map((pending) => pending.message);
       const tail = batch[batch.length - 1];
       const outcome = status === "success" ? { status, terminal: true } : consumedErrorOutcome(reason);
       await tail?.token.complete(messages, outcome);
+      settledBatch = batch;
     }
-    if (!stashedSdkInput?.pendingAck || batch.includes(stashedSdkInput.pendingAck)) {
-      stashedSdkInput = null;
+    if (settledBatch.length > 0) {
+      const settled = new Set(settledBatch);
+      for (let index = unclosedSdkInputs.length - 1; index >= 0; index--) {
+        const input = unclosedSdkInputs[index];
+        if (input?.pendingAck && settled.has(input.pendingAck)) unclosedSdkInputs.splice(index, 1);
+      }
     }
   }
 
@@ -988,7 +959,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
   function pushPendingSdkInput(input: PendingSdkInput): void {
     if (input.pendingAck) pendingAckMessages.push(input.pendingAck);
-    stashedSdkInput = input;
+    unclosedSdkInputs.push(input);
     inputController?.push(input);
   }
 
@@ -1059,6 +1030,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   function retryBufferedMessages(reason: string): void {
+    unclosedSdkInputs.length = 0;
     const queued = queuedInjectedMessages.splice(0);
     for (const item of queued) {
       item.token.retry(item.message, reason);
@@ -1070,8 +1042,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   /**
-   * Rebuild the SDK query in resume mode AND re-push the pending user
-   * message so the freshly built `InputController` is non-empty. The
+   * Rebuild the SDK query in resume mode AND re-push every input already handed
+   * to the previous query's controller for the still-unclosed turn, preserving
+   * coalesced-input order. The
    * caller (the outer consumer loop's catch block) keeps owning the
    * for-await, so we deliberately do NOT start a new consumer here —
    * spawning one would create two parallel loops both consuming the
@@ -1080,22 +1053,18 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * unbounded recursion). Configuration (`applied*`) is preserved
    * across the retry — only the SDK query is recycled.
    *
-   * Stays synchronous — the converted SDK payload is stashed at push
-   * time so the retry path doesn't need to re-run `toSDKUserMessage`
-   * (which is async and would shift the consumer-loop timing).
-   *
-   * `stashedSdkInput` is `null` only in the corner case where the
-   * session was started via `handler.resume(undefined, ...)` (admin-
-   * triggered resume with no new user input) and the SDK happened to
-   * crash before processing anything. In that case we still rebuild
-   * the query, but without a replay message the SDK will be back to
-   * waiting on stdin — acceptable for the admin-resume edge case, and
-   * the next user message will drive it normally.
+   * Stays synchronous — the converted SDK payloads are already held in
+   * `unclosedSdkInputs`, so the retry path doesn't need to re-run
+   * `toSDKUserMessage` (which is async and would shift the consumer-loop
+   * timing). An empty replay buffer is possible for an admin-triggered resume
+   * with no user input; in that case the rebuilt query waits for the next
+   * input normally.
    */
   function respawnQuery(sessionId: string, sessionCtx: SessionContext): void {
     buildQuery(sessionId, sessionCtx, sessionId);
-    if (stashedSdkInput) {
-      inputController?.push(stashedSdkInput);
+    const replay = unclosedSdkInputs.slice();
+    for (const input of replay) {
+      inputController?.push(input);
     }
   }
 
@@ -1466,13 +1435,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           }
 
           // Automatic retry — rebuild the SDK query in resume mode AND re-push
-          // the pending user message into the freshly built InputController.
+          // the unclosed inputs into the freshly built InputController.
           // The old `respawnQuery()` only did the rebuild; the new controller
           // was empty so the SDK subprocess just hung idle waiting for a
           // prompt that never came (it had the resumed conversation history
-          // but nothing to drive the next turn). Replaying `stashedSdkInput`
-          // is the missing half — the SDK sees the same user message it was
-          // half-way through processing and re-runs the turn.
+          // but nothing to drive the next turn). Replaying the unclosed input
+          // buffer is the missing half — the SDK sees the same user messages
+          // it was processing, including any pushed tail it had not pulled yet.
           //
           // We stay inside THIS consumer loop on purpose: spawning a fresh
           // consumer (via `handler.resume` or `spawnQuery`) would create two
@@ -1862,10 +1831,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       }
 
       abortController = null;
-      // The session is no longer active — any pending replay message would
-      // be moot. Resume goes through `handler.resume(message, sessionId)`
-      // which re-stashes from its own argument.
-      stashedSdkInput = null;
+      // The session is no longer active — any pending replay inputs would be
+      // moot. Resume goes through `handler.resume(message, sessionId)`, which
+      // builds a fresh replay buffer from its own pushed inputs.
       retryBufferedMessages("claude_suspend_before_terminal");
       injectDrainInProgress = false;
     },
