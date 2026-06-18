@@ -58,6 +58,13 @@ type PendingSdkInput = {
   pendingAck: PendingAckMessage | null;
 };
 
+type QueuedInjectedMessage = {
+  message: SessionMessage;
+  token: DeliveryToken;
+  recoveryReason?: string;
+  recoveryRetried?: boolean;
+};
+
 /**
  * Bug 6: thrown by `consumeOutput` when an SDK "success" result message
  * actually contains an API error string (e.g. "API Error: socket
@@ -708,9 +715,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * when the session ends or `start()` runs for a fresh session.
    */
   let chatContextForPrompt: ChatContext | undefined;
-  const queuedInjectedMessages: Array<{ message: SessionMessage; token: DeliveryToken }> = [];
+  const queuedInjectedMessages: QueuedInjectedMessage[] = [];
   const pendingAckMessages: PendingAckMessage[] = [];
   let injectDrainInProgress = false;
+  let drainingInjectedMessage: QueuedInjectedMessage | null = null;
+  let inputRecoveryReason: string | null = null;
   /**
    * Predeclared source repos the agent config declares at
    * `<agentHome>/source-repos/<localPath>/`. Pure declaration (`declaredSourceRepos`) —
@@ -977,22 +986,40 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     }
   }
 
+  function retryInjectedItem(item: QueuedInjectedMessage, reason: string): void {
+    item.recoveryReason = reason;
+    if (item.recoveryRetried) return;
+    item.recoveryRetried = true;
+    item.token.retry(item.message, reason);
+  }
+
+  function recoverIfInputClosed(item: QueuedInjectedMessage): boolean {
+    const reason = item.recoveryReason ?? inputRecoveryReason;
+    if (!reason) return false;
+    retryInjectedItem(item, reason);
+    return true;
+  }
+
   async function pushInjectedMessage(
-    message: SessionMessage,
+    item: QueuedInjectedMessage,
     sessionCtx: SessionContext,
     sessionId: string,
-    token: DeliveryToken,
   ): Promise<void> {
+    const { message, token } = item;
+    if (recoverIfInputClosed(item)) return;
     try {
       await maybeSwitchConfig(sessionCtx);
     } catch (err) {
       sessionCtx.log(`maybeSwitchConfig errored: ${err instanceof Error ? err.message : String(err)}`);
     }
+    if (recoverIfInputClosed(item)) return;
 
     try {
       const sdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
+      if (recoverIfInputClosed(item)) return;
       pushPendingSdkInput(createPendingSdkInput(sdkMsg, message, token));
     } catch (err) {
+      if (recoverIfInputClosed(item)) return;
       sessionCtx.log(`toSDKUserMessage errored: ${err instanceof Error ? err.message : String(err)}`);
       // The SDK has not seen this input yet, so there is no durable terminal
       // evidence. Keep it recoverable instead of ACKing through `complete`.
@@ -1013,11 +1040,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         ) {
           const queued = queuedInjectedMessages.shift();
           if (!queued) continue;
+          drainingInjectedMessage = queued;
           try {
-            await pushInjectedMessage(queued.message, sessionCtx, sessionId, queued.token);
+            await pushInjectedMessage(queued, sessionCtx, sessionId);
           } catch (err) {
             sessionCtx.log(`inject drain failed: ${err instanceof Error ? err.message : String(err)}`);
-            queued.token.retry(queued.message, "claude_inject_drain_failed");
+            retryInjectedItem(queued, "claude_inject_drain_failed");
+          } finally {
+            if (drainingInjectedMessage === queued) drainingInjectedMessage = null;
           }
         }
       } finally {
@@ -1030,12 +1060,21 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   function retryBufferedMessages(reason: string): void {
+    inputRecoveryReason = reason;
     unclosedSdkInputs.length = 0;
+    const pending = pendingAckMessages.splice(0);
+    const drainingIsPending =
+      drainingInjectedMessage !== null &&
+      pending.some(
+        (pendingItem) =>
+          pendingItem.message === drainingInjectedMessage?.message &&
+          pendingItem.token === drainingInjectedMessage.token,
+      );
+    if (drainingInjectedMessage && !drainingIsPending) retryInjectedItem(drainingInjectedMessage, reason);
     const queued = queuedInjectedMessages.splice(0);
     for (const item of queued) {
-      item.token.retry(item.message, reason);
+      retryInjectedItem(item, reason);
     }
-    const pending = pendingAckMessages.splice(0);
     for (const item of pending) {
       item.token.retry(item.message, reason);
     }
@@ -1081,6 +1120,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   function buildQuery(sessionId: string, sessionCtx: SessionContext, resume?: string): void {
+    inputRecoveryReason = null;
     inputController = new InputController<PendingSdkInput>();
     abortController = new AbortController();
 
@@ -1431,6 +1471,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // never re-dispatches and never gets acked. Per design §4
             // "permanent → ack".
             await ackTurnClose("error", "retry_exhausted_notice_posted");
+            retryBufferedMessages("claude_retry_exhausted_tail_recovery");
             return;
           }
 
@@ -1480,6 +1521,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             // ack the row would loop in `delivered` forever, deduped on every
             // bind-reset replay. Per design §4 "permanent → ack".
             await ackTurnClose("error", "auto_resume_failed_notice_posted");
+            retryBufferedMessages("claude_auto_resume_failed_tail_recovery");
             return;
           }
         }
