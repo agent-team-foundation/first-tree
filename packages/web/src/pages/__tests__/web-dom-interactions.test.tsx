@@ -1197,6 +1197,58 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(notAdmin.root);
   });
 
+  it("activates the callback org only when the server pins it", async () => {
+    const { OAuthCompletePage } = await import("../oauth-complete.js");
+    Object.defineProperty(window, "history", {
+      configurable: true,
+      value: { replaceState: vi.fn() },
+    });
+
+    // A pinned destination (install-return keeps joinPath="returning" yet
+    // names a specific org): the SPA must activate it, otherwise a concurrent
+    // org switch would strand the Settings page on the user's last-used org.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        hash: "#access=a&refresh=r&next=/settings/github&joinPath=returning&org=org-b&orgPinned=1",
+        pathname: "/auth/github/complete",
+      },
+    });
+    const pinnedSelect = vi.fn(async () => undefined);
+    authMock.value = {
+      ...authMock.value,
+      adoptTokens: vi.fn(async () => undefined),
+      selectOrganization: pinnedSelect,
+    };
+    const pinned = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
+    await flush();
+    expect(pinnedSelect).toHaveBeenCalledWith("org-b");
+    await unmountRoot(pinned.root);
+
+    // A plain returning sign-in carries no pin: the SPA keeps the user's own
+    // last-used org (restored by adoptTokens → fetchMe) instead of activating
+    // the callback's default org.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        ...window.location,
+        hash: "#access=a&refresh=r&next=/&joinPath=returning&org=org-default",
+        pathname: "/auth/github/complete",
+      },
+    });
+    const plainSelect = vi.fn(async () => undefined);
+    authMock.value = {
+      ...authMock.value,
+      adoptTokens: vi.fn(async () => undefined),
+      selectOrganization: plainSelect,
+    };
+    const plain = await renderDom(<OAuthCompletePage />, "/auth/github/complete");
+    await flush();
+    expect(plainSelect).not.toHaveBeenCalled();
+    await unmountRoot(plain.root);
+  });
+
   it("renders SettingsOnboardingPage resume, hide, disabled, and completed states", async () => {
     const { SettingsOnboardingPage } = await import("../settings/onboarding.js");
 

@@ -544,16 +544,14 @@ function InviteeNotReady() {
         )}
         {/* "Meet your agent" is the PRIMARY action, not an escape hatch: the
             common not-ready case (admin finished without a tree) never resolves,
-            so the real path forward is to start now. The auto-advance — if the
-            team does finish — is the quiet status footnote below, never the
-            headline. */}
+            so the real path forward is to start now. If the team does finish,
+            the page still advances on its own — quietly, no longer announced. */}
         <div className="flex">
           <Button type="button" variant="cta" onClick={() => void handleMeet()}>
             <span>{COPY.invitee.startAnyway}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
-        <StatusRow state="waiting" label={COPY.invitee.notReadyStatus} />
       </div>
     </div>
   );

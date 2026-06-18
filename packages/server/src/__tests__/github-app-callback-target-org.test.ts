@@ -177,6 +177,11 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
       // Caller's `next` is preserved (the Settings page), not rewritten to "/".
       expect(params.get("next")).toBe("/settings/github");
       expect(params.get("joinPath")).toBe("returning");
+      // The install target is a deliberate destination: even though the join
+      // path reads as "returning", the org must be pinned so the SPA activates
+      // the just-bound org instead of restoring the user's last-used one.
+      expect(params.get("org")).toBe(orgBId);
+      expect(params.get("orgPinned")).toBe("1");
     } finally {
       restore();
     }

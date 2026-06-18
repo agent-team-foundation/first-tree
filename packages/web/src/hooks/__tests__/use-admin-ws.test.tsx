@@ -11,6 +11,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const clientMocks = vi.hoisted(() => ({
   getStoredTokens: vi.fn(),
   refreshAccessToken: vi.fn(),
+  getApiSelectedOrganizationId: vi.fn(),
 }));
 
 vi.mock("../../api/client.js", () => clientMocks);
@@ -120,9 +121,9 @@ beforeEach(() => {
     value: { protocol: "https:", host: "first-tree.test" },
   });
   const storage = createStorage();
-  storage.setItem("first-tree:selectedOrganizationId", "org-1");
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
   Object.defineProperty(window, "localStorage", { configurable: true, value: storage });
+  clientMocks.getApiSelectedOrganizationId.mockReturnValue("org-1");
   clientMocks.getStoredTokens.mockReturnValue({ accessToken: "access-1", refreshToken: "refresh-1" });
   clientMocks.refreshAccessToken.mockResolvedValue({ accessToken: "access-2", refreshToken: "refresh-2" });
   root = null;

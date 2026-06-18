@@ -182,7 +182,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
   } = useAgentCreation(onAgentOnline);
 
   const [agentDisplayName, setAgentDisplayName] = useState<string>(() =>
-    user?.username ? `${user.username}'s assistant` : "Assistant",
+    user?.username ? `${user.username} assistant` : "Assistant",
   );
   const [visibility, setVisibility] = useState<AgentVisibility>("organization");
   // Hydrate the repo selection from this org's saved draft so a bailout before

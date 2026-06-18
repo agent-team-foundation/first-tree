@@ -50,11 +50,14 @@ export function OAuthCompletePage() {
     const refreshToken = params.get("refresh");
     const next = safeRedirectPath(params.get("next"));
     const joinPath = params.get("joinPath");
-    // The org this callback resolved to (invited org for an invite link).
-    // Selecting it overrides any stale `selectedOrganizationId` left in
-    // localStorage so an invitee lands in the org they just joined, not a
-    // previously-used one.
+    // The org this callback resolved to. We activate it only when the server
+    // flags it as a *deliberate* destination via `orgPinned=1` — an invite
+    // link, a fresh solo signup, or an App-install target. A plain returning
+    // sign-in carries no pin: fetchMe restores the org the user last used.
+    // (We can't key off `joinPath` here — an install-return keeps
+    // joinPath="returning" yet still pins a specific org.)
     const org = params.get("org");
+    const orgPinned = params.get("orgPinned") === "1";
     const errorCode = params.get("error");
 
     if (errorCode) {
@@ -81,9 +84,13 @@ export function OAuthCompletePage() {
 
     void (async () => {
       await adoptTokens({ accessToken, refreshToken });
-      // Set the active org BEFORE navigating so the workspace/onboarding
-      // gate evaluates against the just-joined org rather than a stale one.
-      if (org) await selectOrganization(org);
+      // Activate the resolved org BEFORE navigating only when the server pinned
+      // it (deliberate join / install-return), so the workspace/onboarding gate
+      // evaluates against the just-joined org. For a plain returning sign-in we
+      // skip it: adoptTokens → fetchMe already restored the user's last-used org
+      // (falling back to the server default when there's no valid one), and
+      // selecting here would clobber it.
+      if (org && orgPinned) await selectOrganization(org);
       navigate(next, { replace: true });
     })();
   }, [adoptTokens, selectOrganization, navigate]);

@@ -166,7 +166,7 @@ afterEach(async () => {
 
 describe("AuthProvider", () => {
   it("loads stored tokens, reconciles organization selection, and exposes current membership", async () => {
-    localStorage.setItem("first-tree:selectedOrganizationId", "org-2");
+    localStorage.setItem("first-tree:selectedOrganizationId:user-1", "org-2");
     apiMocks.getStoredTokens.mockReturnValue({ accessToken: "access", refreshToken: "refresh" });
 
     await renderAuth();
@@ -179,7 +179,7 @@ describe("AuthProvider", () => {
   });
 
   it("does not fall back to another membership's onboarding stamps when selected membership stamps are null", async () => {
-    localStorage.setItem("first-tree:selectedOrganizationId", "org-2");
+    localStorage.setItem("first-tree:selectedOrganizationId:user-1", "org-2");
     apiMocks.getStoredTokens.mockReturnValue({ accessToken: "access", refreshToken: "refresh" });
     apiMocks.apiGet.mockResolvedValueOnce({
       user: { id: "user-1", username: "gandy", displayName: "Gandy", avatarUrl: null },
@@ -224,7 +224,7 @@ describe("AuthProvider", () => {
     await act(async () => {
       await latestAuth?.selectOrganization("org-2");
     });
-    expect(localStorage.getItem("first-tree:selectedOrganizationId")).toBe("org-2");
+    expect(localStorage.getItem("first-tree:selectedOrganizationId:user-1")).toBe("org-2");
     expect(apiMocks.setApiSelectedOrganizationId).toHaveBeenCalledWith("org-2");
 
     await act(async () => {
@@ -233,6 +233,64 @@ describe("AuthProvider", () => {
     expect(apiMocks.clearStoredTokens).toHaveBeenCalled();
     expect(flagsMocks.clearOnboardingSessionFlags).toHaveBeenCalled();
     expect(latestAuth?.isAuthenticated).toBe(false);
+  });
+
+  it("keeps the persisted org across logout so a returning sign-in lands back in the last-used org", async () => {
+    // /me's default (most-recent) is org-1, but the user last used org-2.
+    localStorage.setItem("first-tree:selectedOrganizationId:user-1", "org-2");
+    apiMocks.getStoredTokens.mockReturnValue({ accessToken: "access", refreshToken: "refresh" });
+
+    await renderAuth();
+    expect(latestAuth?.currentMembership?.organizationId).toBe("org-2");
+
+    // Logout must NOT wipe the persisted org — it's how a returning sign-in
+    // restores the last-used org instead of jumping to the most-recent one.
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent("auth:logout"));
+    });
+    expect(latestAuth?.isAuthenticated).toBe(false);
+    expect(localStorage.getItem("first-tree:selectedOrganizationId:user-1")).toBe("org-2");
+
+    // Returning sign-in: fetchMe restores org-2, not the server default org-1.
+    apiMocks.setApiSelectedOrganizationId.mockClear();
+    await act(async () => {
+      await latestAuth?.adoptTokens({ accessToken: "access-2", refreshToken: "refresh-2" });
+    });
+    await flush();
+    expect(latestAuth?.currentMembership?.organizationId).toBe("org-2");
+    expect(apiMocks.setApiSelectedOrganizationId).toHaveBeenLastCalledWith("org-2");
+  });
+
+  it("falls back to the server default when the persisted org is no longer a membership", async () => {
+    // Stored org the user has since left → must fall back to /me's default.
+    localStorage.setItem("first-tree:selectedOrganizationId:user-1", "org-gone");
+    apiMocks.getStoredTokens.mockReturnValue({ accessToken: "access", refreshToken: "refresh" });
+
+    await renderAuth();
+
+    expect(latestAuth?.currentMembership?.organizationId).toBe("org-1");
+    expect(localStorage.getItem("first-tree:selectedOrganizationId:user-1")).toBe("org-1");
+  });
+
+  it("does not let a different user on the same browser inherit the previous account's org", async () => {
+    // user-1 left org-2 persisted. Now user-2 signs in on the same browser and
+    // is ALSO an active member of org-2 — so a global (non-user-scoped) key
+    // would leak. The per-user key must isolate them: user-2 lands in the
+    // server default, and user-1's stored value is untouched.
+    localStorage.setItem("first-tree:selectedOrganizationId:user-1", "org-2");
+    apiMocks.getStoredTokens.mockReturnValue({ accessToken: "access", refreshToken: "refresh" });
+    apiMocks.apiGet.mockResolvedValueOnce({
+      user: { id: "user-2", username: "other", displayName: "Other", avatarUrl: null },
+      memberships: MEMBERSHIPS,
+      defaultOrganizationId: "org-1",
+      onboarding: { step: "completed", dismissedAt: null, completedAt: "2026-05-01T00:00:00.000Z" },
+    });
+
+    await renderAuth();
+
+    expect(latestAuth?.currentMembership?.organizationId).toBe("org-1");
+    expect(localStorage.getItem("first-tree:selectedOrganizationId:user-1")).toBe("org-2");
+    expect(localStorage.getItem("first-tree:selectedOrganizationId:user-2")).toBe("org-1");
   });
 
   it("optimistically dismisses, restores, and completes onboarding with rollback on patch failure", async () => {

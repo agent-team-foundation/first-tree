@@ -48,7 +48,7 @@ const ORG_ID = "org-acme";
 // review and matches the file's existing "Gandy" persona (DEFAULT_AGENT_NAME).
 const TEAM_NAME = "Gandy's team";
 const TREE_URL = "https://github.com/acme/context-tree";
-const DEFAULT_AGENT_NAME = "Gandy's assistant";
+const DEFAULT_AGENT_NAME = "gandy assistant";
 // Mirror the real prod bootstrap shape (server fills the channel's actual
 // package + bin name — `first-tree` on prod; see api/me.ts) so the gallery
 // reads true for design review instead of showing literal <package>/<binName>

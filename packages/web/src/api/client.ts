@@ -17,6 +17,16 @@ export function setApiSelectedOrganizationId(value: string | null): void {
 }
 
 /**
+ * The currently-selected org id, as the AuthProvider keeps it in sync (mount,
+ * /me reconcile, switch, logout). The single source of truth for non-React
+ * consumers (e.g. the admin websocket) — read this instead of localStorage,
+ * which is now keyed per user and not safe to read by a fixed key.
+ */
+export function getApiSelectedOrganizationId(): string | null {
+  return selectedOrganizationId;
+}
+
+/**
  * Prefix an org-scoped path with `/orgs/<currentOrgId>/`. Use this on every
  * call that targets a resource living inside the user's currently-viewed
  * organization. Paths that aren't org-scoped (`/me/...`, `/auth/...`,
