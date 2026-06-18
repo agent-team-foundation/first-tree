@@ -144,3 +144,25 @@ export function clearDraft(scope: string): void {
     writeMap(map);
   }
 }
+
+/**
+ * Decide where a failed send's unsent text belongs. A send started in chat
+ * `sendChatId` can resolve AFTER the user switched to `currentChatId`; the
+ * rejected text must never be restored into the current composer then — it
+ * belongs to a different chat, and the in-chat draft state is shared across
+ * chats. Returns `true` when it parked the text in the originating chat's own
+ * cache (the caller must leave the live composer untouched); returns `false`
+ * when the user is still in the originating chat, so the caller restores the
+ * text into the live composer as usual.
+ */
+export function parkFailedDraftIfSwitched(
+  userId: string | null,
+  sendChatId: string,
+  currentChatId: string,
+  text: string,
+): boolean {
+  if (currentChatId === sendChatId) return false;
+  // saveDraft no-ops on empty text, so a blank rollback parks nothing.
+  saveDraft(chatDraftScope(userId, sendChatId), { text });
+  return true;
+}

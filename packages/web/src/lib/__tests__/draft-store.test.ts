@@ -1,7 +1,14 @@
 // @vitest-environment happy-dom
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { chatDraftScope, clearDraft, loadDraft, newChatDraftScope, saveDraft } from "../draft-store.js";
+import {
+  chatDraftScope,
+  clearDraft,
+  loadDraft,
+  newChatDraftScope,
+  parkFailedDraftIfSwitched,
+  saveDraft,
+} from "../draft-store.js";
 
 const STORAGE_KEY = "first-tree:chat-drafts:v1";
 
@@ -125,5 +132,30 @@ describe("scope helpers", () => {
     // Same for the new-chat composer within one org.
     saveDraft(newChatDraftScope("user-a", "org-1"), { text: "A's new chat" });
     expect(loadDraft(newChatDraftScope("user-b", "org-1"))).toBeNull();
+  });
+});
+
+describe("parkFailedDraftIfSwitched", () => {
+  it("returns false and stores nothing when still in the originating chat", () => {
+    expect(parkFailedDraftIfSwitched("user-1", "chat-a", "chat-a", "retry me")).toBe(false);
+    expect(loadDraft(chatDraftScope("user-1", "chat-a"))).toBeNull();
+  });
+
+  it("parks the failed text in the originating chat when the user switched away", () => {
+    // Send started in chat-a, but the user is now viewing chat-b.
+    expect(parkFailedDraftIfSwitched("user-1", "chat-a", "chat-b", "retry me")).toBe(true);
+    expect(loadDraft(chatDraftScope("user-1", "chat-a"))?.text).toBe("retry me");
+    // The chat now in view must be left untouched (no cross-chat leak).
+    expect(loadDraft(chatDraftScope("user-1", "chat-b"))).toBeNull();
+  });
+
+  it("parks nothing for an empty rollback even after a switch", () => {
+    expect(parkFailedDraftIfSwitched("user-1", "chat-a", "chat-b", "   ")).toBe(true);
+    expect(loadDraft(chatDraftScope("user-1", "chat-a"))).toBeNull();
+  });
+
+  it("parks under the originating user's scope only", () => {
+    parkFailedDraftIfSwitched("user-1", "chat-a", "chat-b", "retry me");
+    expect(loadDraft(chatDraftScope("user-2", "chat-a"))).toBeNull();
   });
 });

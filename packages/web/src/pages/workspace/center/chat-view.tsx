@@ -111,6 +111,7 @@ import { useReadTracker } from "../../../hooks/use-read-tracker.js";
 import { useServerChannel } from "../../../hooks/use-server-channel.js";
 import { viewOf } from "../../../lib/agent-status-view.js";
 import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from "../../../lib/doc-preview-links.js";
+import { parkFailedDraftIfSwitched } from "../../../lib/draft-store.js";
 import { isNavigableWebHref } from "../../../lib/safe-href.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
@@ -1079,6 +1080,14 @@ export function ChatView({
   // survives chat switches and reloads (ChatView is not remounted on switch).
   // Clearing the draft on send empties its stored entry.
   const [draft, setDraft] = useChatDraftText(user?.id ?? null, chatId);
+  // Always-current chat id for async send rollbacks: a send that FAILS after
+  // the user switched chats must restore its rejected text into the originating
+  // chat, never the one now in view (the draft state is shared and ChatView
+  // isn't remounted on switch).
+  const chatIdRef = useRef(chatId);
+  useEffect(() => {
+    chatIdRef.current = chatId;
+  }, [chatId]);
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -1497,9 +1506,9 @@ export function ChatView({
       const previousDraft = draft;
       setDraft("");
       const optimistic = buildOptimisticTextMessage(content, { mentions, inReplyTo, resolves });
-      if (!optimistic) return { tempId: null, previousDraft };
+      if (!optimistic) return { tempId: null, previousDraft, sendChatId: chatId, sendUserId: user?.id ?? null };
       insertOwnOptimisticMessage(optimistic);
-      return { tempId: optimistic.id, previousDraft };
+      return { tempId: optimistic.id, previousDraft, sendChatId: chatId, sendUserId: user?.id ?? null };
     },
     onSuccess: (saved, _content, ctx) => {
       if (ctx?.tempId) replaceOptimisticMessage(ctx.tempId, saved);
@@ -1553,7 +1562,12 @@ export function ChatView({
       // unconditionally would overwrite the new keystrokes (PR review
       // observation #1). Functional setState reads the latest draft inside
       // React's commit so we don't race the textarea's controlled value.
-      if (ctx?.previousDraft) setDraft((current) => (current === "" ? ctx.previousDraft : current));
+      if (
+        ctx?.previousDraft &&
+        !parkFailedDraftIfSwitched(ctx.sendUserId, ctx.sendChatId, chatIdRef.current, ctx.previousDraft)
+      ) {
+        setDraft((current) => (current === "" ? ctx.previousDraft : current));
+      }
     },
     // Resync against the server in the background so any fan-out side-effects
     // (e.g. server-rewritten content, mention resolution) eventually overwrite
@@ -1635,6 +1649,8 @@ export function ChatView({
       // Optimistic rows render into the cache below; rollback restores both
       // the textarea draft and any not-yet-acked optimistic tempIds on error.
       const previousDraft = draft;
+      const sendChatId = chatId;
+      const sendUserId = user?.id ?? null;
       setDraft("");
       clearImages();
       await queryClient.cancelQueries({ queryKey: messagesQueryKey });
@@ -1751,7 +1767,9 @@ export function ChatView({
         // Only restore the pre-send draft if the user hasn't already started
         // typing something new during the upload window (PR review
         // observation #1).
-        if (previousDraft) setDraft((current) => (current === "" ? previousDraft : current));
+        if (previousDraft && !parkFailedDraftIfSwitched(sendUserId, sendChatId, chatIdRef.current, previousDraft)) {
+          setDraft((current) => (current === "" ? previousDraft : current));
+        }
       } finally {
         setUploading(false);
       }
