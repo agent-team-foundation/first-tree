@@ -402,4 +402,64 @@ describe("onboarding hooks and flow", () => {
     await renderProbe(<Probe />);
     expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
   });
+
+  it("re-derives the step when the org changes on a still-mounted provider", async () => {
+    // The onboarding shell renders the full UserMenu for multi-team users, so a
+    // user can create/join/switch teams from inside /onboarding. That calls
+    // selectOrganization without leaving the route, so the provider does NOT
+    // remount — the org changes underneath a mounted provider.
+    const latest = { current: null as OnboardingFlowValue | null };
+
+    function Tree() {
+      function Inner() {
+        latest.current = useOnboardingFlow();
+        return <div>{latest.current.activeStep}</div>;
+      }
+      return (
+        <OnboardingFlowProvider path="admin">
+          <Inner />
+        </OnboardingFlowProvider>
+      );
+    }
+
+    // Same root + same QueryClient instance across both renders, so React
+    // reconciles (re-renders) the provider instead of remounting it.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const rerender = async () => {
+      await act(async () => {
+        root?.render(
+          <MemoryRouter initialEntries={["/onboarding"]}>
+            <QueryClientProvider client={client}>
+              <Tree />
+            </QueryClientProvider>
+          </MemoryRouter>,
+        );
+      });
+      await flush();
+    };
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    // Team A: returning admin, no agent in this org yet → create-agent; advance
+    // to connect-code, persisting team A's position.
+    authMock.value = {
+      ...authMock.value,
+      organizationId: "org-A",
+      onboardingStep: "completed",
+      currentOrgHasUsableAgent: false,
+    };
+    await rerender();
+    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
+    await act(async () => expectHookValue(latest.current).goTo(3));
+    expect(expectHookValue(latest.current).activeStep).toBe("connect-code");
+
+    // Switch to a brand-new team B (no agent) without leaving the route. The
+    // flow must re-derive for team B and land on create-agent — and must not
+    // write team A's connect-code index under team B's key.
+    authMock.value = { ...authMock.value, organizationId: "org-B" };
+    await rerender();
+    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
+    expect(sessionStorage.getItem("onboarding:stepIndex:admin:org-B")).not.toBe("3");
+  });
 });
