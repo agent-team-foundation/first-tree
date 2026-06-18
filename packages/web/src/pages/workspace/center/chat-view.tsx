@@ -1506,9 +1506,9 @@ export function ChatView({
       const previousDraft = draft;
       setDraft("");
       const optimistic = buildOptimisticTextMessage(content, { mentions, inReplyTo, resolves });
-      if (!optimistic) return { tempId: null, previousDraft, sendChatId: chatId };
+      if (!optimistic) return { tempId: null, previousDraft, sendChatId: chatId, sendUserId: user?.id ?? null };
       insertOwnOptimisticMessage(optimistic);
-      return { tempId: optimistic.id, previousDraft, sendChatId: chatId };
+      return { tempId: optimistic.id, previousDraft, sendChatId: chatId, sendUserId: user?.id ?? null };
     },
     onSuccess: (saved, _content, ctx) => {
       if (ctx?.tempId) replaceOptimisticMessage(ctx.tempId, saved);
@@ -1564,7 +1564,7 @@ export function ChatView({
       // React's commit so we don't race the textarea's controlled value.
       if (
         ctx?.previousDraft &&
-        !parkFailedDraftIfSwitched(user?.id ?? null, ctx.sendChatId, chatIdRef.current, ctx.previousDraft)
+        !parkFailedDraftIfSwitched(ctx.sendUserId, ctx.sendChatId, chatIdRef.current, ctx.previousDraft)
       ) {
         setDraft((current) => (current === "" ? ctx.previousDraft : current));
       }
@@ -1650,6 +1650,7 @@ export function ChatView({
       // the textarea draft and any not-yet-acked optimistic tempIds on error.
       const previousDraft = draft;
       const sendChatId = chatId;
+      const sendUserId = user?.id ?? null;
       setDraft("");
       clearImages();
       await queryClient.cancelQueries({ queryKey: messagesQueryKey });
@@ -1766,10 +1767,7 @@ export function ChatView({
         // Only restore the pre-send draft if the user hasn't already started
         // typing something new during the upload window (PR review
         // observation #1).
-        if (
-          previousDraft &&
-          !parkFailedDraftIfSwitched(user?.id ?? null, sendChatId, chatIdRef.current, previousDraft)
-        ) {
+        if (previousDraft && !parkFailedDraftIfSwitched(sendUserId, sendChatId, chatIdRef.current, previousDraft)) {
           setDraft((current) => (current === "" ? previousDraft : current));
         }
       } finally {
