@@ -2090,12 +2090,11 @@ describe("web DOM interaction coverage", () => {
       sensitive: true,
     });
 
-    // Deleting a persisted secret offers Undo, but restoring needs the value
-    // re-entered (the ciphertext is gone) — Undo opens the re-entry dialog.
+    // Deleting a persisted secret can't be undone (its ciphertext is gone) — the
+    // toast says so honestly and offers no Undo (a no-op after a tab switch).
     await click([...container.querySelectorAll('button[title="Delete"]')][1] ?? null);
     await waitForText("Removed OPENAI_API_KEY", document.body);
-    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Undo") ?? null);
-    await waitForText("Re-enter secret value", document.body);
+    expect(document.body.textContent).toContain("can't be recovered");
 
     await unmountRoot(root);
   });

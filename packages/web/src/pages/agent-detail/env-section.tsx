@@ -26,9 +26,9 @@ import { titleWithSemantics } from "./save-semantics.js";
  *
  * Sensitive values never show plaintext once saved; an empty value in the edit
  * dialog means "keep the existing ciphertext" (stored as the `***` placeholder).
- * Delete offers a transient Undo via toast; restoring a deleted secret requires
- * re-entering its value (the ciphertext is gone — the placeholder is not the
- * real value).
+ * Deleting a non-secret offers a transient Undo via toast; a deleted secret
+ * can't be undone (its ciphertext is gone), so the toast says so and the user
+ * re-adds it with a fresh value.
  */
 
 export type EnvSectionProps = {
@@ -45,12 +45,7 @@ export type EnvSectionProps = {
   saved?: boolean;
 };
 
-type DialogState =
-  | { mode: "add" }
-  | { mode: "edit"; initial: EnvEntry }
-  // Re-entry of a just-deleted secret (its ciphertext is unrecoverable).
-  | { mode: "restore"; initial: EnvEntry }
-  | null;
+type DialogState = { mode: "add" } | { mode: "edit"; initial: EnvEntry } | null;
 
 export function EnvSection({ items, onSave, disabled, saving, saveError, saved }: EnvSectionProps) {
   const { addToast } = useToast();
@@ -83,20 +78,17 @@ export function EnvSection({ items, onSave, disabled, saving, saveError, saved }
     const next = items.filter((e) => e.key !== entry.key);
     onSave(next, {
       onSuccess: () => {
+        // A secret can't be restored — its ciphertext is gone — so offer honest
+        // guidance instead of an Undo. A non-secret value IS recoverable, so its
+        // Undo re-saves through the shell-level controller (works across tabs;
+        // it doesn't touch this section's local state, which may be unmounted by
+        // the time the toast is clicked).
         addToast({
           title: `Removed ${entry.key}`,
-          description: entry.sensitive ? "This was a secret — restoring needs its value re-entered." : undefined,
-          action: {
-            label: "Undo",
-            onClick: () => {
-              if (entry.sensitive) {
-                // Ciphertext is gone; reopen the dialog so the value is re-entered.
-                setDialog({ mode: "restore", initial: { key: entry.key, value: "", sensitive: true } });
-              } else {
-                onSave([...itemsRef.current, entry]);
-              }
-            },
-          },
+          description: entry.sensitive
+            ? "It was a secret — its value can't be recovered. Re-add it to restore."
+            : undefined,
+          action: entry.sensitive ? undefined : { label: "Undo", onClick: () => onSave([...itemsRef.current, entry]) },
         });
       },
     });
@@ -104,7 +96,7 @@ export function EnvSection({ items, onSave, disabled, saving, saveError, saved }
 
   const handleSubmit = (value: EnvEntry) => {
     if (!dialog) return;
-    // add + restore both append (a restored entry is not in the list); edit replaces.
+    // edit replaces the row by key; add appends.
     const next =
       dialog.mode === "edit"
         ? items.map((e) => (e.key === dialog.initial.key ? value : e))
@@ -183,9 +175,8 @@ export function EnvSection({ items, onSave, disabled, saving, saveError, saved }
           open={!!dialog}
           onOpenChange={(open) => !open && setDialog(null)}
           initial={dialog.mode === "add" ? null : dialog.initial}
-          title={dialog.mode === "restore" ? "Re-enter secret value" : undefined}
-          // Restore must take a fresh value (the ciphertext is gone); edit of a
-          // persisted secret may leave it empty to keep the existing ciphertext.
+          // Editing a persisted secret may leave the value empty to keep the
+          // existing ciphertext; adding always requires a value.
           allowKeepExisting={dialog.mode === "edit" && canKeepExistingSensitiveValue(dialog.initial)}
           forbiddenKeys={keysExcept(dialog.mode === "edit" ? dialog.initial.key : null)}
           submitting={saving}
@@ -201,7 +192,6 @@ type EnvDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initial: EnvEntry | null;
-  title?: string;
   allowKeepExisting: boolean;
   forbiddenKeys: ReadonlySet<string>;
   /** A save triggered by this dialog is in flight. */
@@ -239,7 +229,6 @@ function EnvDialog({
   open,
   onOpenChange,
   initial,
-  title,
   allowKeepExisting,
   forbiddenKeys,
   submitting,
@@ -285,7 +274,7 @@ function EnvDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{title ?? (initial ? "Edit environment variable" : "Add environment variable")}</DialogTitle>
+          <DialogTitle>{initial ? "Edit environment variable" : "Add environment variable"}</DialogTitle>
           <DialogDescription>Saved immediately when you submit.</DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
