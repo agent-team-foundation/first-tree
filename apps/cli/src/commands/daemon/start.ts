@@ -39,6 +39,7 @@ import {
   promptUpdate,
   reconcileLocalRuntimeProviders,
   refreshServerUpdateTarget,
+  retireLegacyGithubScanLaunchd,
   startClientService,
   uploadAgentSkills,
   uploadClientCapabilities,
@@ -185,6 +186,23 @@ export function registerDaemonStartCommand(daemon: Command): void {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           print.status("⚠️", `agent-dir migration skipped: ${msg}`);
+        }
+
+        // One-shot cleanup of the stranded legacy `github-scan` launchd runner.
+        // Older builds left a KeepAlive launchd job that crash-loops after an
+        // upgrade relocates its binary and squats port 7878 while it loops.
+        // Best-effort + free on machines that never ran github-scan (the sweep
+        // short-circuits when its plist dir is absent); never blocks startup.
+        try {
+          const retired = retireLegacyGithubScanLaunchd({
+            log: (msg) => print.status("⚠️", `github-scan cleanup: ${msg}`),
+          });
+          if (retired.removedPlists > 0) {
+            print.status("•", `retired legacy github-scan launchd runner (${retired.removedPlists} plist removed)`);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          print.status("⚠️", `github-scan cleanup skipped: ${msg}`);
         }
 
         // Pre-flight runtime-provider reconciliation: probe local runtime SDKs
