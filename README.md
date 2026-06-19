@@ -25,7 +25,7 @@
   English | <a href="README_zh-CN.md">中文</a>
 </p>
 
-> Use this [link](https://cloud.first-tree.ai/login?utm_source=github&utm_medium=readme&utm_campaign=top-cta-app) to use [first-tree 🌳](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=top-cta-site) for **free!!!** — the most efficient way to **loopmaxx your engineering work**.
+> 🌳 use artifacts in [first-tree](https://first-tree.ai/?utm_source=github&utm_medium=readme&utm_campaign=top-cta-site) for **free** — the most efficient way for **human & agent collaboration** :D
 
 # First-Tree
 
