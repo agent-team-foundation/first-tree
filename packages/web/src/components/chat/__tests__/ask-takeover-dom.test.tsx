@@ -130,7 +130,7 @@ describe("AskTakeover", () => {
     expect(onReply).toHaveBeenCalledWith("looks risky");
   });
 
-  it("body taller than one screen scrolls while options + actions stay in the fixed region", async () => {
+  it("body + options scroll together while the Skip/Reply footer stays pinned", async () => {
     // A very long ask body — far taller than a viewport.
     const longBody = Array.from({ length: 200 }, (_, i) => `Paragraph line ${i} of the ask body.`).join("\n\n");
     const c = await renderDom(
@@ -144,29 +144,37 @@ describe("AskTakeover", () => {
 
     const dialog = c.querySelector<HTMLElement>('[role="dialog"]');
     if (!dialog) throw new Error("dialog missing");
-    // The card is a two-region column: [0] = the scrolling body, [1] = the
-    // fixed answer block. The card itself never scrolls (overflow hidden).
+    // The card is a two-region column: [0] = the scrolling region (ask body +
+    // answer surface), [1] = the pinned Skip/Reply footer. The card itself never
+    // scrolls (overflow hidden), so a tall ask clips inside the scroll region
+    // and the footer stays put — Reply is reachable at any viewport height.
     expect(dialog.style.overflow).toBe("hidden");
-    const [scrollRegion, fixedRegion] = [...dialog.children] as HTMLElement[];
-    if (!scrollRegion || !fixedRegion) throw new Error("expected a scroll region and a fixed region");
+    const [scrollRegion, footer] = [...dialog.children] as HTMLElement[];
+    if (!scrollRegion || !footer) throw new Error("expected a scroll region and a pinned footer");
 
-    // Body region: the only scroller — flex-grows and clips with overflow-y auto.
+    // Scroll region: the only scroller — flex-grows and clips with overflow-y auto.
     expect(scrollRegion.style.overflowY).toBe("auto");
     expect(scrollRegion.style.flex).toBe("1 1 auto");
     expect(scrollRegion.style.minHeight).toMatch(/^0(px)?$/);
     expect(scrollRegion.textContent).toContain("Paragraph line 0");
     expect(scrollRegion.textContent).toContain("Paragraph line 199");
 
-    // Fixed answer region: does not grow, does not scroll, and holds BOTH the
-    // options and the Skip/Reply actions — so they stay put while the body scrolls.
-    expect(fixedRegion.style.flex).toBe("0 0 auto");
-    expect(fixedRegion.style.overflowY).toBe("");
+    // The options live INSIDE the scroller, alongside the body — so a long ask
+    // plus many options can never push the controls off-screen.
+    const ship = option(c, "Ship");
+    if (!ship) throw new Error("option missing");
+    expect(scrollRegion.contains(ship)).toBe(true);
+    expect(footer.contains(ship)).toBe(false);
+
+    // Pinned footer: does not grow, does not scroll, and holds the Skip/Reply
+    // actions — so they stay reachable while the body + options scroll.
+    expect(footer.style.flex).toBe("0 0 auto");
+    expect(footer.style.overflowY).toBe("");
     const reply = btn(c, "Reply");
     const skip = btn(c, "Skip");
-    const ship = option(c, "Ship");
-    if (!reply || !skip || !ship) throw new Error("answer affordances missing");
-    for (const el of [reply, skip, ship]) {
-      expect(fixedRegion.contains(el)).toBe(true);
+    if (!reply || !skip) throw new Error("actions missing");
+    for (const el of [reply, skip]) {
+      expect(footer.contains(el)).toBe(true);
       expect(scrollRegion.contains(el)).toBe(false);
     }
   });
