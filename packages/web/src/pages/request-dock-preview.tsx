@@ -74,7 +74,7 @@ function ModeBlock({ label, payload, height = 560 }: { label: string; payload: A
           payload={payload}
           askerName="deploy-agent"
           onReply={(content) => setStatus(`Reply → ${content.replace(/\n/g, " · ")}`)}
-          onSkip={() => setStatus("Skipped (open-request persists)")}
+          onSkip={() => setStatus("Skipped → resolves the request with a skipped answer")}
         />
       </div>
       {status ? (
@@ -94,8 +94,8 @@ export function RequestDockPreviewPage() {
       </h1>
       <p className="text-body" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-4)" }}>
         The ask body and the answer surface (options + Other) share one scroll region; only the Skip / Reply footer
-        stays pinned, so Reply is reachable at any height. Reply resolves the question; Skip dismisses it for now (the
-        open-request persists).
+        stays pinned, so Reply is reachable at any height. Both resolve the question: Reply sends the composed answer,
+        Skip sends a skipped answer (there is no keep-it-open path).
       </p>
       {MODES.map((m) => (
         <ModeBlock key={m.label} label={m.label} payload={m.payload} />
