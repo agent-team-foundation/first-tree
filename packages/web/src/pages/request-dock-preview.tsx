@@ -20,36 +20,38 @@ const BODY = [
   "- The billing migration team is waiting on 20% before they cut over.",
 ].join("\n");
 
-const MODES: Record<string, { label: string; payload: AskRequest }> = {
-  single: {
-    label: "options · single",
-    payload: {
-      multiSelect: false,
-      options: [
-        { label: "Ship to 20%", description: "Proceed now — error budget is healthy and unblocks billing." },
-        {
-          label: "Hold 24h",
-          description: "Bake over the weekend; billing slips a day.",
-          preview: "# re-evaluate Monday 09:00",
-        },
-      ],
+const SINGLE_PAYLOAD: AskRequest = {
+  multiSelect: false,
+  options: [
+    { label: "Ship to 20%", description: "Proceed now — error budget is healthy and unblocks billing." },
+    {
+      label: "Hold 24h",
+      description: "Bake over the weekend; billing slips a day.",
+      preview: "# re-evaluate Monday 09:00",
     },
-  },
-  multi: {
-    label: "options · multi",
-    payload: {
-      multiSelect: true,
-      options: [
-        { label: "Web", description: "ship the web surface" },
-        { label: "CLI", description: "ship the CLI surface" },
-        { label: "API", description: "ship the public API" },
-      ],
+  ],
+};
+const MULTI_PAYLOAD: AskRequest = {
+  multiSelect: true,
+  options: [
+    { label: "Web", description: "ship the web surface" },
+    { label: "CLI", description: "ship the CLI surface" },
+    {
+      label: "API",
+      description: "ship the public API",
+      preview:
+        "https://example.invalid/qa/mobile-ask-card-very-long-preview/endpoint?token=abcdefghijklmnopqrstuvwxyz0123456789&scope=read:write:admin&note=this-is-a-deliberately-very-long-single-token-preview-to-exercise-overflow-wrap-and-scroll-clipping",
     },
-  },
-  free: { label: "free text", payload: { multiSelect: false } },
+  ],
 };
 
-function ModeBlock({ label, payload }: { label: string; payload: AskRequest }) {
+const MODES: { label: string; payload: AskRequest }[] = [
+  { label: "options · single", payload: SINGLE_PAYLOAD },
+  { label: "options · multi", payload: MULTI_PAYLOAD },
+  { label: "free text", payload: { multiSelect: false } },
+];
+
+function ModeBlock({ label, payload, height = 560 }: { label: string; payload: AskRequest; height?: number }) {
   const [status, setStatus] = useState<string | null>(null);
   return (
     <section style={{ marginBottom: "var(--sp-6)" }}>
@@ -60,7 +62,7 @@ function ModeBlock({ label, payload }: { label: string; payload: AskRequest }) {
         style={{
           position: "relative",
           marginTop: "var(--sp-2)",
-          height: 560,
+          height,
           border: "var(--hairline) solid var(--border)",
           borderRadius: "var(--radius-panel)",
           overflow: "hidden",
@@ -91,12 +93,23 @@ export function RequestDockPreviewPage() {
         AskTakeover preview
       </h1>
       <p className="text-body" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-4)" }}>
-        The ask body scrolls; options + Other + actions stay fixed below. Reply resolves the question; Skip dismisses it
-        for now (the open-request persists).
+        The ask body and the answer surface (options + Other) share one scroll region; only the Skip / Reply footer
+        stays pinned, so Reply is reachable at any height. Reply resolves the question; Skip dismisses it for now (the
+        open-request persists).
       </p>
-      {Object.entries(MODES).map(([key, m]) => (
-        <ModeBlock key={key} label={m.label} payload={m.payload} />
+      {MODES.map((m) => (
+        <ModeBlock key={m.label} label={m.label} payload={m.payload} />
       ))}
+
+      <h2 className="mono text-caption font-semibold" style={{ color: "var(--fg-3)", textTransform: "uppercase" }}>
+        cramped height — footer must stay reachable
+      </h2>
+      <p className="text-body" style={{ color: "var(--fg-3)", margin: "var(--sp-1) 0 var(--sp-4)" }}>
+        A short box (the phone case): the answer surface no longer fits, so it scrolls inside the card while the Skip /
+        Reply footer stays pinned and visible. Regression guard for the off-screen-button bug.
+      </p>
+      <ModeBlock label="options · single · short" payload={SINGLE_PAYLOAD} height={300} />
+      <ModeBlock label="options · multi · short" payload={MULTI_PAYLOAD} height={300} />
     </div>
   );
 }
