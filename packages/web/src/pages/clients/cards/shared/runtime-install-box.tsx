@@ -90,10 +90,14 @@ export function installBoxView(
   hostname: string,
 ): { headline: string; command: string } {
   if (!entry || entry.state === "missing") {
-    return {
-      headline: `Install ${PROVIDER_LABEL[provider]} and run \`${PROVIDER_LOGIN_COMMAND[provider]}\` on ${hostname}.`,
-      command: buildInstallCommand(provider),
-    };
+    // `claude-code-tui` needs the `claude` CLI AND tmux (>= 3.0); name the tmux
+    // requirement explicitly so the box isn't read as a CLI-only install (the
+    // command from `buildInstallCommand` carries the matching tmux line).
+    const headline =
+      provider === "claude-code-tui"
+        ? `Install ${PROVIDER_LABEL[provider]} (the \`claude\` CLI + tmux >= 3.0) and run \`${PROVIDER_LOGIN_COMMAND[provider]}\` on ${hostname}.`
+        : `Install ${PROVIDER_LABEL[provider]} and run \`${PROVIDER_LOGIN_COMMAND[provider]}\` on ${hostname}.`;
+    return { headline, command: buildInstallCommand(provider) };
   }
   if (entry.state === "unauthenticated") {
     return {

@@ -69,4 +69,61 @@ describe("RuntimeStateLine", () => {
     expect(dom.textContent).toContain("needs login");
     expect(dom.textContent).toContain("codex login");
   });
+
+  it("gives a concrete install command when a runtime is missing", async () => {
+    const entry: CapabilityEntry = {
+      available: false,
+      state: "missing",
+      authenticated: false,
+      sdkVersion: null,
+      authMethod: "none",
+      error: "@anthropic-ai/claude-agent-sdk bundled cli.js missing",
+      detectedAt: "2026-06-12T12:00:00.000Z",
+    };
+
+    const dom = await render(<RuntimeStateLine provider="claude-code" entry={entry} os="darwin" />);
+
+    expect(dom.textContent).toContain("Claude Code");
+    expect(dom.textContent).toContain("npm install -g @anthropic-ai/claude-code");
+    // The bare "not installed" label is replaced by an actionable hint.
+    expect(dom.textContent).not.toContain("not installed");
+  });
+
+  it("tells a Claude-Code machine that only lacks tmux to install just tmux", async () => {
+    // The `claude` CLI resolved fine; only tmux is absent, so the probe's
+    // resolve reason names tmux alone. The hint must not tell the user to
+    // reinstall the Claude CLI they already have.
+    const entry: CapabilityEntry = {
+      available: false,
+      state: "missing",
+      authenticated: false,
+      sdkVersion: "2.1.84",
+      authMethod: "none",
+      error: "tmux not found",
+      detectedAt: "2026-06-12T12:00:00.000Z",
+    };
+
+    const dom = await render(<RuntimeStateLine provider="claude-code-tui" entry={entry} os="darwin" />);
+
+    expect(dom.textContent).toContain("Claude Code CLI");
+    expect(dom.textContent).toContain("Install `tmux` (>= 3.0)");
+    expect(dom.textContent).not.toContain("npm install");
+  });
+
+  it("names both requirements when the TUI runtime is missing claude and tmux", async () => {
+    const entry: CapabilityEntry = {
+      available: false,
+      state: "missing",
+      authenticated: false,
+      sdkVersion: null,
+      authMethod: "none",
+      error: "`claude` not found (checked CLAUDE_CODE_EXECUTABLE, PATH, …); tmux not found",
+      detectedAt: "2026-06-12T12:00:00.000Z",
+    };
+
+    const dom = await render(<RuntimeStateLine provider="claude-code-tui" entry={entry} os="darwin" />);
+
+    expect(dom.textContent).toContain("@anthropic-ai/claude-code");
+    expect(dom.textContent).toContain("tmux");
+  });
 });

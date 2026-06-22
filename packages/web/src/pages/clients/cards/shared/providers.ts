@@ -77,7 +77,14 @@ export const PROVIDER_LOGIN_COMMAND: Record<RuntimeProvider, string> = {
  * box with a copy button per box.
  */
 export function buildInstallCommand(provider: RuntimeProvider): string {
-  return `npm install -g ${PROVIDER_NPM_PACKAGE[provider]}\n${PROVIDER_LOGIN_COMMAND[provider]}`;
+  const base = `npm install -g ${PROVIDER_NPM_PACKAGE[provider]}\n${PROVIDER_LOGIN_COMMAND[provider]}`;
+  if (provider === "claude-code-tui") {
+    // The tmux-driven runtime additionally needs tmux (>= 3.0). Its install
+    // command is OS-specific, so surface it as a comment line rather than guess
+    // the package manager — the npm + login lines above stay copy-paste runnable.
+    return `${base}\n# tmux (>= 3.0) is also required — e.g. brew install tmux (macOS) / apt install tmux (Linux)`;
+  }
+  return base;
 }
 
 /**
@@ -120,17 +127,36 @@ export function providerUnauthHint(provider: RuntimeProvider, os: string | null 
  * reported") — that case is suppressed in the Ready card entirely, so
  * the hint only shows when the SDK explicitly probed and confirmed the
  * runtime is not installed.
+ *
+ * `error` is the probe's verbatim resolve-stage reason. For
+ * `claude-code-tui` the runtime needs BOTH the `claude` CLI and tmux
+ * (>= 3.0), and the probe reports exactly which is missing ("tmux not
+ * found" / "`claude` not found …"). Passing it lets the hint name only the
+ * piece that is actually absent, so a machine that already has Claude Code
+ * and only lacks tmux is told to install tmux — not to reinstall the CLI
+ * it already has. When `error` is absent we fall back to naming both.
  */
-export function providerInstallHint(provider: RuntimeProvider, os: string | null | undefined): string {
+export function providerInstallHint(
+  provider: RuntimeProvider,
+  os: string | null | undefined,
+  error?: string | null,
+): string {
+  const device = osDeviceName(os);
   if (provider === "claude-code") {
-    return `Run \`npm install -g @anthropic-ai/claude-code\` on this ${osDeviceName(os)}.`;
+    return `Run \`npm install -g @anthropic-ai/claude-code\` on this ${device}.`;
   }
   if (provider === "claude-code-tui") {
-    // TUI shares the `claude` CLI install with `claude-code`, but additionally
-    // requires `tmux` (>= 3.0) so the daemon can spawn the runtime in a
-    // detached session. The capability probe in
-    // `runtime/capabilities/claude-code-tui.ts` enforces both at probe time.
-    return `Install \`@anthropic-ai/claude-code\` and \`tmux\` (>= 3.0) on this ${osDeviceName(os)}.`;
+    // The probe joins per-requirement reasons (claude + tmux) into one string;
+    // match on each so we can tailor the hint to what's genuinely missing.
+    const claudeMissing = error == null || /claude/i.test(error);
+    const tmuxMissing = error == null || /tmux/i.test(error);
+    if (tmuxMissing && !claudeMissing) {
+      return `Install \`tmux\` (>= 3.0) on this ${device}.`;
+    }
+    if (claudeMissing && !tmuxMissing) {
+      return `Run \`npm install -g @anthropic-ai/claude-code\` on this ${device}.`;
+    }
+    return `Install \`@anthropic-ai/claude-code\` and \`tmux\` (>= 3.0) on this ${device}.`;
   }
-  return `Install the OpenAI Codex CLI on this ${osDeviceName(os)}.`;
+  return `Install the OpenAI Codex CLI on this ${device}.`;
 }

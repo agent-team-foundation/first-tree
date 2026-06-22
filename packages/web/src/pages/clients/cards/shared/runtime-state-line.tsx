@@ -1,5 +1,5 @@
 import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
-import { PROVIDER_LABEL, providerUnauthHint } from "./providers.js";
+import { PROVIDER_LABEL, providerInstallHint, providerUnauthHint } from "./providers.js";
 
 /**
  * Per-runtime state line — single rendering used by every card body
@@ -49,9 +49,14 @@ export function RuntimeStateLine({
         </div>
       );
     case "missing":
+      // Lead with the concrete install action keyed to what the probe found
+      // missing — for `claude-code-tui` that may be only tmux, so a bare "not
+      // installed" would wrongly tell a Claude-Code-equipped machine to
+      // reinstall the CLI it already has. `entry.error` carries the probe's
+      // per-requirement reason; `providerInstallHint` narrows on it.
       return (
         <div className="text-body" style={{ color: "var(--fg-3)" }}>
-          <span style={{ color: "var(--fg-4)" }}>✗</span> {label} · not installed
+          <span style={{ color: "var(--fg-4)" }}>✗</span> {label} · {providerInstallHint(provider, os, entry.error)}
         </div>
       );
     case "error":
