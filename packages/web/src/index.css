@@ -1908,16 +1908,6 @@ body:has(#onboarding-preview-root) hearback-widget {
   min-width: var(--sp-20);
 }
 
-.usage-model-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px var(--sp-1_75);
-  border-radius: var(--radius-chip);
-  background: var(--bg-sunken);
-  color: var(--fg-2);
-  border: var(--hairline) solid var(--border);
-}
-
 .usage-turn-row td {
   padding: var(--sp-2_5);
   vertical-align: middle;

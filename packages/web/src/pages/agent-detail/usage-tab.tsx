@@ -434,7 +434,7 @@ function TurnsTable({
                   )}
                 </td>
                 <td>
-                  <ModelChip provider={r.provider} model={r.model} />
+                  <ModelLabel provider={r.provider} model={r.model} />
                 </td>
                 <td
                   className="mono text-body"
@@ -487,11 +487,15 @@ function fullCount(n: number): string {
   return `${n.toLocaleString("en-US")} tokens`;
 }
 
-/** Model chip — model name only (provider dropped for width); the full
- *  `provider/model` stays available on hover. */
-function ModelChip({ provider, model }: { provider: string; model: string }): ReactElement {
+/** Model name — plain mono metadata kept on a single line (no chip box);
+ *  the full `provider/model` stays available on hover. */
+function ModelLabel({ provider, model }: { provider: string; model: string }): ReactElement {
   return (
-    <span className="usage-model-chip mono text-caption" title={`${provider}/${model}`}>
+    <span
+      className="mono text-caption"
+      style={{ color: "var(--fg-3)", whiteSpace: "nowrap" }}
+      title={`${provider}/${model}`}
+    >
       {model}
     </span>
   );
