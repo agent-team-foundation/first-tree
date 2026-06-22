@@ -55,12 +55,13 @@ export const MESSAGE_FORMATS = {
    * `requestResolutionSchema`), which drives `chat_user_state.open_request_count`
    * down. The target's answer ALWAYS resolves it — picking an option OR typing
    * free text both write `resolves` (kind="answered"). NEW resolutions are
-   * human-only — the server accepts a `resolves` write only from the target, and
-   * an agent cannot post a non-ask follow-up to the human (a plain agent→human
-   * send is rejected). Lifecycle readers additionally honor a legacy
-   * asker-authored resolution row (written before the refinement) for
-   * backward-compat. `inReplyTo` itself is pure threading and never changes a
-   * question's lifecycle.
+   * human-only — the server accepts a `resolves` write only from the target. An
+   * agent CAN post a plain `chat send <human>` follow-up (an informational free
+   * reply; it carries no `resolves`, raises no red dot, and never resolves the
+   * question), but it cannot answer/close the question itself. Lifecycle readers
+   * additionally honor a legacy asker-authored resolution row (written before
+   * the refinement) for backward-compat. `inReplyTo` itself is pure threading
+   * and never changes a question's lifecycle.
    */
   REQUEST: "request",
 } as const;
