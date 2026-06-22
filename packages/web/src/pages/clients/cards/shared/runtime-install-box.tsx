@@ -16,6 +16,8 @@ type RuntimeInstallBoxProps = {
   entry: CapabilityEntry | null;
   /** Computer hostname for the diagnostic copy. */
   hostname: string;
+  /** Host OS (`darwin` / `linux` / `win32`) — keys the tmux install command. */
+  os?: string | null;
 };
 
 /**
@@ -27,9 +29,9 @@ type RuntimeInstallBoxProps = {
  * from the `ProviderRow` chips in the Ready card's CapabilityMatrix —
  * that's a state-only summary line; this is an actionable surface.
  */
-export function RuntimeInstallBox({ provider, entry, hostname }: RuntimeInstallBoxProps) {
+export function RuntimeInstallBox({ provider, entry, hostname, os }: RuntimeInstallBoxProps) {
   const label = PROVIDER_LABEL[provider];
-  const { headline, command } = installBoxView(entry, provider, hostname);
+  const { headline, command } = installBoxView(entry, provider, hostname, os);
 
   // No outer raised-bg / border / radius — the inner `InlineCommand`'s
   // sunken pre-block is the only chrome that earns its weight (commands
@@ -88,12 +90,17 @@ export function installBoxView(
   entry: CapabilityEntry | null,
   provider: RuntimeProvider,
   hostname: string,
+  os?: string | null,
 ): { headline: string; command: string } {
   if (!entry || entry.state === "missing") {
-    return {
-      headline: `Install ${PROVIDER_LABEL[provider]} and run \`${PROVIDER_LOGIN_COMMAND[provider]}\` on ${hostname}.`,
-      command: buildInstallCommand(provider),
-    };
+    // `claude-code-tui` needs the `claude` CLI AND tmux (>= 3.0); name the tmux
+    // requirement explicitly so the box isn't read as a CLI-only install (the
+    // command from `buildInstallCommand` carries the matching OS tmux line).
+    const headline =
+      provider === "claude-code-tui"
+        ? `Install ${PROVIDER_LABEL[provider]} (the \`claude\` CLI + tmux >= 3.0) and run \`${PROVIDER_LOGIN_COMMAND[provider]}\` on ${hostname}.`
+        : `Install ${PROVIDER_LABEL[provider]} and run \`${PROVIDER_LOGIN_COMMAND[provider]}\` on ${hostname}.`;
+    return { headline, command: buildInstallCommand(provider, os) };
   }
   if (entry.state === "unauthenticated") {
     return {
@@ -111,6 +118,6 @@ export function installBoxView(
   // entries out. Provide a defensive fallback that's still actionable.
   return {
     headline: `${PROVIDER_LABEL[provider]} is configured. To reinstall, run on ${hostname}:`,
-    command: buildInstallCommand(provider),
+    command: buildInstallCommand(provider, os),
   };
 }

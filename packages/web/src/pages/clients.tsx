@@ -802,7 +802,7 @@ function ProviderRow({
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-            ✗ not installed · {providerInstallHint(provider, os)}
+            ✗ {providerInstallHint(provider, os, entry.error)}
           </span>
         </div>
       );

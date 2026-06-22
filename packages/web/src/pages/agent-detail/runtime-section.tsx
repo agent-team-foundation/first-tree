@@ -28,7 +28,7 @@ const RUNTIME_COPY: Record<RuntimeProvider, { name: string; caption: string }> =
     caption: "Runs through Anthropic's Claude Code runtime.",
   },
   "claude-code-tui": {
-    name: "Claude Code (TUI)",
+    name: "Claude Code CLI",
     caption: "Runs Claude Code through tmux for terminal-native sessions.",
   },
   codex: {

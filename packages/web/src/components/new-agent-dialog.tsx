@@ -144,7 +144,7 @@ function asRuntimeProvider(provider: string): RuntimeProvider | null {
 
 /**
  * Pick the preferred runtime among the ones in `ok` state on a given
- * client. Claude Code wins over Claude Code (TUI) which wins over Codex;
+ * client. Claude Code wins over Claude Code CLI which wins over Codex;
  * if none of those is ok we fall back to whatever else the client reports
  * as ok (still narrowed to a known RuntimeProvider), then `null`.
  */
@@ -163,7 +163,7 @@ function pickPreferredRuntime(caps: ClientCapabilities): RuntimeProvider | null 
 
 function prettyRuntimeLabel(provider: RuntimeProvider): string {
   if (provider === "claude-code") return "Claude Code";
-  if (provider === "claude-code-tui") return "Claude Code (TUI)";
+  if (provider === "claude-code-tui") return "Claude Code CLI";
   if (provider === "codex") return "Codex";
   return provider;
 }
