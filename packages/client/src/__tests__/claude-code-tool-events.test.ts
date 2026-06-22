@@ -259,18 +259,26 @@ describe("createToolCallProcessor", () => {
     expect(ev.payload.text).toBe("I'll check the file");
   });
 
-  it("truncates assistant_text to 8000 chars", () => {
+  it("chunks long assistant_text across multiple events with no loss (final-text mirror retired)", () => {
     const emit = vi.fn<(event: SessionEvent) => void>();
     const processor = createToolCallProcessor(emit);
 
+    const full = "a".repeat(10_000);
     processor.onMessage({
       type: "assistant",
-      message: { role: "assistant", content: [{ type: "text", text: "a".repeat(10_000) }] },
+      message: { role: "assistant", content: [{ type: "text", text: full }] },
     });
 
-    const ev = emit.mock.calls[0]?.[0];
-    if (!ev || ev.kind !== "assistant_text") throw new Error("expected assistant_text");
-    expect(ev.payload.text.length).toBe(8000);
+    // 10_000 chars → two assistant_text events (8000 + 2000), each within the
+    // per-event cap, and concatenating them reproduces the full text exactly —
+    // session events stay the complete troubleshooting record.
+    const texts = emit.mock.calls
+      .map(([ev]) => ev)
+      .filter((ev): ev is Extract<SessionEvent, { kind: "assistant_text" }> => ev?.kind === "assistant_text")
+      .map((ev) => ev.payload.text);
+    expect(texts).toHaveLength(2);
+    for (const t of texts) expect(t.length).toBeLessThanOrEqual(8000);
+    expect(texts.join("")).toBe(full);
   });
 
   it("emits a thinking marker (no content) for thinking blocks", () => {

@@ -29,6 +29,7 @@ import { deliveryTokenFromSessionContext } from "../../../runtime/handler.js";
 import { materializeResourceSkills } from "../../../runtime/resource-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../../runtime/workspace.js";
+import { chunkAssistantText } from "../../assistant-text.js";
 import { formatAuthHint, isCodexAuthError } from "../../auth-error-hint.js";
 import { resolveTurnSettlement } from "../../turn-settlement.js";
 import { buildCodexThreadOptions, collectCodexFileChangePaths, isTransientCodexErrorMessage } from "../sdk.js";
@@ -101,7 +102,6 @@ export class CodexAppServerStartupError extends Error {
   }
 }
 
-const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 const RESULT_PREVIEW_LIMIT = 400;
 const USAGE_LIMIT_NOTICE =
   "⚠️ My runtime has reached its usage limit, so I couldn't process the message you just sent. " +
@@ -364,10 +364,12 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       case "agentMessage": {
         const text = typeof item.text === "string" ? item.text : "";
         if (!text.trim()) return;
-        sessionCtx.emitEvent({
-          kind: "assistant_text",
-          payload: { text: text.slice(0, ASSISTANT_TEXT_EVENT_LIMIT) },
-        });
+        // Chunk so the FULL assistant text is preserved across one or more
+        // events — the durable troubleshooting record now that the per-turn
+        // final-text chat mirror is retired.
+        for (const chunk of chunkAssistantText(text)) {
+          sessionCtx.emitEvent({ kind: "assistant_text", payload: { text: chunk } });
+        }
         turn.finalAgentText = text;
         return;
       }

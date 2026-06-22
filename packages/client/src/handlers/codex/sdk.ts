@@ -48,6 +48,7 @@ import { deliveryTokenFromSessionContext } from "../../runtime/handler.js";
 import { materializeResourceSkills } from "../../runtime/resource-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
+import { chunkAssistantText } from "../assistant-text.js";
 import { formatAuthHint, isCodexAuthError } from "../auth-error-hint.js";
 import { resolveTurnSettlement } from "../turn-settlement.js";
 
@@ -59,7 +60,6 @@ import { resolveTurnSettlement } from "../turn-settlement.js";
 type CodexConfigValue = string | number | boolean | CodexConfigValue[] | CodexConfigObject;
 type CodexConfigObject = { [key: string]: CodexConfigValue };
 
-const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 const RESULT_PREVIEW_LIMIT = 400;
 
 /**
@@ -644,10 +644,12 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         // the events stream with empty `assistant_text` rows. Mirrors the
         // claude-code handler's `text.trim()` guard.
         if (!item.text.trim()) return "";
-        sessionCtx.emitEvent({
-          kind: "assistant_text",
-          payload: { text: item.text.slice(0, ASSISTANT_TEXT_EVENT_LIMIT) },
-        });
+        // Chunk so the FULL assistant text is preserved across one or more
+        // events — the durable troubleshooting record now that the per-turn
+        // final-text chat mirror is retired.
+        for (const chunk of chunkAssistantText(item.text)) {
+          sessionCtx.emitEvent({ kind: "assistant_text", payload: { text: chunk } });
+        }
         return item.text;
       }
       case "command_execution": {

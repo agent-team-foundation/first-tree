@@ -42,6 +42,7 @@ import { InputController } from "../runtime/input-controller.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
+import { chunkAssistantText } from "./assistant-text.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 import { consumedErrorOutcome } from "./turn-settlement.js";
@@ -135,7 +136,6 @@ export function detectStreamApiError(text: string): { message: string } | null {
 }
 
 const TOOL_RESULT_PREVIEW_LIMIT = 400;
-const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 
 type ToolUseBlock = { type: "tool_use"; id: string; name: string; input: unknown };
 type ToolResultBlock = { type: "tool_result"; tool_use_id: string; content: unknown; is_error?: boolean };
@@ -586,10 +586,12 @@ export function createToolCallProcessor(
           } else if (isTextBlock(block)) {
             const text = block.text.trim();
             if (text.length === 0) continue;
-            emit({
-              kind: "assistant_text",
-              payload: { text: text.slice(0, ASSISTANT_TEXT_EVENT_LIMIT) },
-            });
+            // Chunk so the FULL assistant text is preserved across one or more
+            // events — the durable troubleshooting record now that the
+            // per-turn final-text chat mirror is retired.
+            for (const chunk of chunkAssistantText(text)) {
+              emit({ kind: "assistant_text", payload: { text: chunk } });
+            }
           } else if (isThinkingBlock(block)) {
             emit({ kind: "thinking", payload: {} });
           }

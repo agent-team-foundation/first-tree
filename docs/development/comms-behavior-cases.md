@@ -17,16 +17,15 @@
 > (Communication / Asking Humans), `docs/cli-reference.md`, and the Context
 > Tree node `system/cloud/chat/messaging.md`.
 
-Behavioral use cases for the **agent ↔ teammate communication contract**
-(`chat send` as the only delivery path agents rely on; `--request` /
-`--question` for asking humans; output stream outside `chat send` is the
-agent's reasoning trace, not a chat reply path). Every case is grounded in a
-**real** `yzw-assistant` session from `~/.first-tree-staging/.../workspaces/yzw-assistant`
-(2026-06-05 → 06-08); the session id is cited so the source can be re-read.
-
-These are the regression set for the contract defined in
-`packages/client/src/runtime/agent-briefing.ts` (Communication / Asking Humans
-blocks) and `docs/cli-reference.md`.
+Each case is grounded in a **real** `yzw-assistant` session from
+`~/.first-tree-staging/.../workspaces/yzw-assistant` (2026-06-05 → 06-08); the
+session id is cited so the source can be re-read. The cases were written
+against a **since-superseded** contract (`chat send --request/--question/
+--answer/--close` for asking and resolving; the output stream framed as a
+reasoning-trace channel). They are preserved ONLY as a record of how the
+communication surface evolved — **not** a regression set, **not** an eval
+oracle, and **not** an implementation reference. For the current contract use
+the sources named in the banner above.
 
 **Validation status (2026-06-08, real e2e runtime + real Claude Code agent):**
 C1 (ask human via `--request`) and C4 (wake agent via plain `chat send`)
@@ -43,7 +42,7 @@ agent) goes through explicit `chat send`. C6 flipped accordingly (was
 the agent's output stream is its reasoning trace and must not be suppressed
 for chat-related reasons.
 
-**Open-question lifecycle (current contract — blocking ask):** An open question
+**Open-question lifecycle (historical note — blocking ask):** An open question
 is a `format="request"` message — an agent asking a single human — and it raises
 a tracked red dot (`open_request_count`) on the human target AND **blocks that
 chat for them**: the web UI pins the question and hides every message after it
@@ -60,25 +59,21 @@ the question is raised with `chat ask`; **prefer a free-text question (omit
 `--options`); add `--options` only when every option is a short, single-meaning,
 mutually-exclusive pick.** See C8 for the full flow.
 
-## How to run
+## Outcome vocabulary (historical shorthand)
 
-Each case is a `(situation → expected action)` pair judged on the agent's
-**outgoing actions** for one turn. No harness exists yet; run either way:
+The `assert` columns below use these tokens. **They reference the OLD command
+surface** (`chat send --request/--answer/--close`) and the old "reasoning
+trace" framing — kept verbatim as written at the time, NOT updated to the
+current `chat ask` + human-only-resolution contract. They are reading aids for
+the historical cases, not a runnable oracle; do not load them as eval fixtures.
 
-- **LLM-judge / manual** — give a model the current `AGENTS.md` briefing + the
-  case `situation`, then check its turn against `assert`.
-- **Future eval** — the table is machine-readable enough to load as fixtures
-  (one row = one scenario; `assert` is the oracle).
-
-Outcome vocabulary (`assert` references these):
-
-| Token | Means |
+| Token | Means (as written then; superseded) |
 |---|---|
-| `REQUEST(human)` | `chat send <human> --request --question "..." [--option ...]` — a tracked ask (**human recipient only**; the server rejects a request directed at an agent) |
+| `REQUEST(human)` | `chat send <human> --request --question "..." [--option ...]` — a tracked ask (**human recipient only**; the server rejects a request directed at an agent). Today: `chat ask <human> "..." [--options ...]`. |
 | `SEND(human)` | plain `chat send <human> "..."` — reply / status to a named human |
 | `SEND(agent)` | plain `chat send <agent> "..."` — wakes an agent |
-| `RESOLVE(request)` | explicit `metadata.resolves` write that clears the red dot — `first-tree chat send ... --answer <requestId>` (`kind="answered"`) / `first-tree chat send ... --close <requestId>` (`kind="closed"`), or the human's web-UI answer |
-| `NO_SEND` | the turn does not fire any `chat send` (no `REQUEST`, no `SEND`, no `RESOLVE`). The agent's output stream / reasoning trace is unconstrained — only the *send* side is asserted here. |
+| `RESOLVE(request)` | explicit `metadata.resolves` write that clears the red dot. Shown here via `chat send ... --answer/--close`; today **resolution is human-only** (the target's web answer only — no agent resolve/close command). |
+| `NO_SEND` | the turn does not fire any `chat send` (no `REQUEST`, no `SEND`, no `RESOLVE`). |
 | `¬X` | must NOT do X |
 
 ## Case index
