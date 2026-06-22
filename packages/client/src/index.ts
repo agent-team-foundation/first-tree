@@ -54,13 +54,16 @@ export type {
 export { CHILD_CATEGORIES, getChildProcessRegistry } from "./runtime/child-process-registry.js";
 export type { CliBinding } from "./runtime/cli-binding.js";
 export { setCliBinding } from "./runtime/cli-binding.js";
-// Runtime-auth (device-code login)
+// Runtime-auth (browser OAuth primary + device-code fallback)
 export {
+  BROWSER_LOGIN_TIMEOUT_MS,
+  type CodexBrowserLoginOptions,
   type CodexDeviceAuthOptions,
   DEVICE_AUTH_TIMEOUT_MS,
   type DeviceAuthOutcome,
   type DeviceCodePrompt,
   parseDeviceCodePrompt,
+  runCodexBrowserLogin,
   runCodexDeviceAuthLogin,
   stripAnsi,
 } from "./runtime/codex-device-auth.js";

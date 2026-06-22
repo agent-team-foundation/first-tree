@@ -252,8 +252,10 @@ export {
   capabilityRuntimeSourceSchema,
   capabilityStateSchema,
   clientCapabilitiesSchema,
-  type PendingDeviceAuth,
-  pendingDeviceAuthSchema,
+  type PendingAuth,
+  type PendingAuthMethod,
+  pendingAuthMethodSchema,
+  pendingAuthSchema,
   type UpdateClientCapabilities,
   updateClientCapabilitiesSchema,
 } from "./schemas/client-capabilities.js";

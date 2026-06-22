@@ -57,7 +57,8 @@ const codexUnauth = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
 
 const codexPending = (): CapabilityEntry =>
   codexUnauth({
-    pendingDeviceAuth: {
+    pendingAuth: {
+      method: "device-code",
       verificationUrl: "https://auth.openai.com/codex/device",
       userCode: "0WYJ-KDUHH",
       expiresAt: "2099-01-01T00:00:00.000Z",
@@ -162,7 +163,7 @@ describe("CapabilityRefresher", () => {
     await vi.advanceTimersByTimeAsync(BASE);
     expect(revalidate).toHaveBeenCalledTimes(1);
     // Snapshot still carries the pending device-code…
-    expect(refresher.currentEntry("codex")?.pendingDeviceAuth).toBeDefined();
+    expect(refresher.currentEntry("codex")?.pendingAuth).toBeDefined();
     // …and the unchanged snapshot is NOT re-uploaded (no panel flicker).
     expect(upload).toHaveBeenCalledTimes(1);
     refresher.stop();
@@ -179,7 +180,7 @@ describe("CapabilityRefresher", () => {
     await vi.advanceTimersByTimeAsync(BASE);
     expect(revalidate).toHaveBeenCalledTimes(1);
     // Now the fresh (no-pending) entry wins and is uploaded.
-    expect(refresher.currentEntry("codex")?.pendingDeviceAuth).toBeUndefined();
+    expect(refresher.currentEntry("codex")?.pendingAuth).toBeUndefined();
     expect(upload).toHaveBeenCalledTimes(2);
     refresher.stop();
   });

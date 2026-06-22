@@ -6,14 +6,16 @@ import { Button } from "../../../../components/ui/button.js";
 import { PROVIDER_LABEL } from "./providers.js";
 import { deriveRuntimeAuthView, runtimeAuthIsPending } from "./runtime-auth-view.js";
 
-/** While a device-code login is in flight, re-poll capabilities this often. */
-const DEVICE_AUTH_POLL_MS = 3000;
+/** While a login is in flight, re-poll capabilities this often. */
+const AUTH_POLL_MS = 3000;
 
 /**
  * In-product runtime-auth controls for a provider card: a "Connect" button that
- * starts the daemon-side login, and a device-code panel while one is in flight.
- * Everything is probe-driven — the device code rides `entry.pendingDeviceAuth`,
- * so the panel appears/clears purely from polled capabilities, not local state.
+ * starts the daemon-side login, then a progress panel while one is in flight —
+ * "finish in your browser" for the primary browser-OAuth path, or a device-code
+ * panel for the headless fallback. Everything is probe-driven: the in-flight
+ * login rides `entry.pendingAuth`, so the panel appears/clears purely from
+ * polled capabilities, not local state.
  */
 export function RuntimeAuthControls({
   clientId,
@@ -41,7 +43,7 @@ export function RuntimeAuthControls({
     if (!pending) return;
     const id = setInterval(() => {
       void queryClient.invalidateQueries({ queryKey: ["clients"] });
-    }, DEVICE_AUTH_POLL_MS);
+    }, AUTH_POLL_MS);
     return () => clearInterval(id);
   }, [pending, queryClient]);
 
@@ -53,7 +55,8 @@ export function RuntimeAuthControls({
       <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
         <div className="text-body font-medium">{label}</div>
         <p className="text-caption" style={{ color: "var(--fg-3)", margin: 0 }}>
-          Sign in with your subscription — no separate CLI install. A one-time code appears here; finish on any device.
+          Sign in with your subscription in your browser — no separate CLI install. A sign-in page opens on this
+          computer.
         </p>
         <div>
           <Button variant="outline" size="sm" disabled={start.isPending} onClick={() => start.mutate()}>
@@ -69,11 +72,27 @@ export function RuntimeAuthControls({
     );
   }
 
+  // PRIMARY: browser OAuth in flight — the sign-in page opened on the host.
+  if (view.kind === "browser-pending") {
+    return (
+      <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
+        <div className="text-body font-medium">{label}</div>
+        <p className="text-caption" style={{ color: "var(--fg-3)", margin: 0 }}>
+          A sign-in page opened in your browser on this computer. Finish there — this updates automatically.
+        </p>
+        <p className="text-caption" style={{ color: "var(--fg-3)", margin: 0 }}>
+          Waiting for you to authorize…
+        </p>
+      </div>
+    );
+  }
+
+  // FALLBACK: device code (headless host with no browser).
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
       <div className="text-body font-medium">{label}</div>
       <p className="text-caption" style={{ color: "var(--fg-3)", margin: 0 }}>
-        Open this link on any device and enter the code:
+        This computer has no browser to sign in with. Open this link on another device and enter the code:
       </p>
       <a
         href={view.verificationUrl}

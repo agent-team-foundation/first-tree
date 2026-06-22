@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type DeviceCodePrompt,
   parseDeviceCodePrompt,
+  runCodexBrowserLogin,
   runCodexDeviceAuthLogin,
   stripAnsi,
 } from "../runtime/codex-device-auth.js";
@@ -189,7 +190,7 @@ describe("runCodexDeviceAuthLogin", () => {
 
     controller.abort();
     const outcome = await run;
-    expect(outcome).toEqual({ ok: false, reason: "aborted", error: "device-auth aborted by operator" });
+    expect(outcome).toEqual({ ok: false, reason: "aborted", error: "codex login --device-auth aborted by operator" });
     expect(child.killed).toBe(true);
   });
 
@@ -231,6 +232,54 @@ describe("runCodexDeviceAuthLogin", () => {
     const outcome = await run;
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.reason).toBe("timeout");
+    expect(child.killed).toBe(true);
+  });
+});
+
+describe("runCodexBrowserLogin (primary)", () => {
+  it("resolves ok on exit 0 (codex wrote auth.json) and surfaces a fallback URL once", async () => {
+    const child = new FakeChild();
+    const urls: string[] = [];
+    const run = runCodexBrowserLogin({
+      binary: "/bundled/codex",
+      onAuthUrl: (u) => urls.push(u),
+      spawnFn: fakeSpawn(child),
+    });
+
+    child.emitStdout("Starting local login server…\nIf it didn't open, visit https://auth.openai.com/auth?x=1\n");
+    child.emitStdout("more output https://example.com/other\n"); // must not re-fire
+    child.close(0);
+
+    await expect(run).resolves.toEqual({ ok: true });
+    expect(urls).toEqual(["https://auth.openai.com/auth?x=1"]);
+  });
+
+  it("reports exit-nonzero with the stderr tail when login fails", async () => {
+    const child = new FakeChild();
+    const run = runCodexBrowserLogin({ binary: "/bundled/codex", spawnFn: fakeSpawn(child) });
+    child.emitStderr("could not open a browser on this host\n");
+    child.close(1);
+
+    const outcome = await run;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.reason).toBe("exit-nonzero");
+      expect(outcome.error).toContain("could not open a browser");
+    }
+  });
+
+  it("resolves aborted and kills the child when the operator cancels", async () => {
+    const child = new FakeChild();
+    const controller = new AbortController();
+    const run = runCodexBrowserLogin({
+      binary: "/bundled/codex",
+      signal: controller.signal,
+      spawnFn: fakeSpawn(child),
+    });
+    controller.abort();
+    const outcome = await run;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.reason).toBe("aborted");
     expect(child.killed).toBe(true);
   });
 });

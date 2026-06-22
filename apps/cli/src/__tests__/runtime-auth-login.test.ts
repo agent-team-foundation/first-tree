@@ -1,4 +1,9 @@
-import type { CodexDeviceAuthOptions, DeviceAuthOutcome } from "@first-tree/client";
+import {
+  BROWSER_LOGIN_TIMEOUT_MS,
+  type CodexBrowserLoginOptions,
+  type CodexDeviceAuthOptions,
+  type DeviceAuthOutcome,
+} from "@first-tree/client";
 import type { CapabilityEntry } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { runRuntimeAuthLogin } from "../core/runtime-auth-login.js";
@@ -55,6 +60,8 @@ function harness(opts: {
             runtimePath: null,
             version: "0.130.0",
           } as const),
+    runBrowserLogin: async (_o: CodexBrowserLoginOptions): Promise<DeviceAuthOutcome> =>
+      opts.outcome ?? ({ ok: true } as const),
     runDeviceAuth: async (o: CodexDeviceAuthOptions): Promise<DeviceAuthOutcome> => {
       if (opts.fireDeviceCode !== false) {
         o.onDeviceCode({
@@ -72,46 +79,21 @@ function harness(opts: {
   return { calls, logs, deps };
 }
 
-describe("runRuntimeAuthLogin (codex device-auth)", () => {
-  it("publishes pending then ok in order on success", async () => {
+describe("runRuntimeAuthLogin — primary browser OAuth", () => {
+  it("publishes a browser pending then the re-probed ok entry", async () => {
     const h = harness({ outcome: { ok: true }, probeResult: okEntry() });
     await runRuntimeAuthLogin({ provider: "codex", ref: "r1" }, h.deps);
 
     expect(h.calls).toHaveLength(2);
-    // First: the device-code pending entry.
-    expect(h.calls[0]?.provider).toBe("codex");
+    // First: a browser pending (no device code), so the web shows "finish in browser".
     expect(h.calls[0]?.entry.state).toBe("unauthenticated");
-    expect(h.calls[0]?.entry.pendingDeviceAuth).toEqual({
-      verificationUrl: "https://auth.openai.com/codex/device",
-      userCode: "0WYJ-KDUHH",
-      expiresAt: new Date(NOW + 15 * 60_000).toISOString(),
+    expect(h.calls[0]?.entry.pendingAuth).toEqual({
+      method: "browser",
+      expiresAt: new Date(NOW + BROWSER_LOGIN_TIMEOUT_MS).toISOString(),
     });
     // Then: the cleared, authenticated entry from the re-probe.
     expect(h.calls[1]?.entry.state).toBe("ok");
-    expect(h.calls[1]?.entry.pendingDeviceAuth).toBeUndefined();
-  });
-
-  it("on failure without a code, only the cleared re-probe entry is published", async () => {
-    const h = harness({
-      fireDeviceCode: false,
-      outcome: { ok: false, reason: "no-prompt", error: "bad config" },
-      probeResult: unauthEntry(),
-    });
-    await runRuntimeAuthLogin({ provider: "codex", ref: "r2" }, h.deps);
-
-    expect(h.calls).toHaveLength(1);
-    expect(h.calls[0]?.entry.state).toBe("unauthenticated");
-    expect(h.calls[0]?.entry.pendingDeviceAuth).toBeUndefined();
-    expect(h.logs.some((l) => l.includes("no-prompt"))).toBe(true);
-  });
-
-  it("on unresolved binary, reflects the real (missing) state and never runs device-auth", async () => {
-    const h = harness({ resolveOk: false, probeResult: { ...unauthEntry(), state: "missing", available: false } });
-    await runRuntimeAuthLogin({ provider: "codex", ref: "r3" }, h.deps);
-
-    expect(h.calls).toHaveLength(1);
-    expect(h.calls[0]?.entry.state).toBe("missing");
-    expect(h.logs.some((l) => l.includes("binary unavailable"))).toBe(true);
+    expect(h.calls[1]?.entry.pendingAuth).toBeUndefined();
   });
 
   it("preserves the prior entry's runtimeSource/version on the pending entry", async () => {
@@ -120,15 +102,54 @@ describe("runRuntimeAuthLogin (codex device-auth)", () => {
       probeResult: okEntry(),
       current: okEntry({ state: "unauthenticated", authenticated: false, runtimeSource: "bundled" }),
     });
-    await runRuntimeAuthLogin({ provider: "codex", ref: "r4" }, h.deps);
+    await runRuntimeAuthLogin({ provider: "codex", ref: "r2" }, h.deps);
     expect(h.calls[0]?.entry.runtimeSource).toBe("bundled");
     expect(h.calls[0]?.entry.sdkVersion).toBe("0.130.0");
   });
 
+  it("on unresolved binary, reflects the real (missing) state and never logs in", async () => {
+    const h = harness({ resolveOk: false, probeResult: { ...unauthEntry(), state: "missing", available: false } });
+    await runRuntimeAuthLogin({ provider: "codex", ref: "r3" }, h.deps);
+
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]?.entry.state).toBe("missing");
+    expect(h.logs.some((l) => l.includes("binary unavailable"))).toBe(true);
+  });
+
   it("ignores providers that are not yet supported", async () => {
     const h = harness({});
-    await runRuntimeAuthLogin({ provider: "claude-code-tui", ref: "r5" }, h.deps);
+    await runRuntimeAuthLogin({ provider: "claude-code-tui", ref: "r4" }, h.deps);
     expect(h.calls).toHaveLength(0);
     expect(h.logs.some((l) => l.includes("not supported yet"))).toBe(true);
+  });
+});
+
+describe("runRuntimeAuthLogin — device-code fallback (method override)", () => {
+  it("publishes a device-code pending then ok in order on success", async () => {
+    const h = harness({ outcome: { ok: true }, probeResult: okEntry() });
+    await runRuntimeAuthLogin({ provider: "codex", method: "device-auth", ref: "d1" }, h.deps);
+
+    expect(h.calls).toHaveLength(2);
+    expect(h.calls[0]?.entry.pendingAuth).toEqual({
+      method: "device-code",
+      verificationUrl: "https://auth.openai.com/codex/device",
+      userCode: "0WYJ-KDUHH",
+      expiresAt: new Date(NOW + 15 * 60_000).toISOString(),
+    });
+    expect(h.calls[1]?.entry.state).toBe("ok");
+    expect(h.calls[1]?.entry.pendingAuth).toBeUndefined();
+  });
+
+  it("on failure without a code, only the cleared re-probe entry is published", async () => {
+    const h = harness({
+      fireDeviceCode: false,
+      outcome: { ok: false, reason: "no-prompt", error: "bad config" },
+      probeResult: unauthEntry(),
+    });
+    await runRuntimeAuthLogin({ provider: "codex", method: "device-auth", ref: "d2" }, h.deps);
+
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]?.entry.pendingAuth).toBeUndefined();
+    expect(h.logs.some((l) => l.includes("no-prompt"))).toBe(true);
   });
 });

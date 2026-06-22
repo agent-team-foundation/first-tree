@@ -1,24 +1,25 @@
 import { type ChildProcess, spawn } from "node:child_process";
 
 /**
- * Drive `codex login --device-auth` to completion on the daemon host and relay
- * its one-time device code to the operator's current screen (web console),
- * without the operator ever installing a separate `codex` CLI.
+ * Drive a codex login to completion on the daemon host and relay progress to
+ * the operator's screen (web console), without the operator installing a
+ * separate `codex` CLI.
  *
- * Why this lives here, and why it parses human text:
- * codex (verified against codex-cli 0.130.0) has **no** `--json` for the
- * device-auth flow. The subcommand prints an ANSI-coloured, human-readable
- * prompt to stdout, then polls the provider until the user authorises on
- * another device, and on success writes `~/.codex/auth.json` itself (refresh
- * token included). So the only way to surface the verification URL + user code
- * to a headless/remote operator is to spawn the binary, parse that prompt, and
- * emit it as a STRUCTURED event upstream — raw stdout is ANSI noise and is not
- * safe to forward verbatim across channels. The parse is deliberately lenient
- * (strip ANSI, loose regex) and degrades to a raw-text fallback rather than
- * hard-failing, because the prompt wording is not a stable contract.
+ * Two flows share one process skeleton ({@link runCodexLoginSubprocess}):
+ *   - PRIMARY — browser OAuth ({@link runCodexBrowserLogin}): bare `codex
+ *     login` opens the provider auth page on the host, redirects to codex's own
+ *     localhost callback, and codex writes `~/.codex/auth.json` itself. No code
+ *     to enter; First Tree never sees the token.
+ *   - FALLBACK — device code ({@link runCodexDeviceAuthLogin}): for a headless
+ *     host with no browser, `codex login --device-auth` prints a verification
+ *     URL + one-time code the user enters on another device.
  *
- * Real 0.130.0 first-screen sample this parser is built against:
+ * Why device-code parses human text: codex (verified codex-cli 0.130.0 / QA
+ * 0.140.0) has NO `--json` for device-auth; it prints an ANSI-coloured prompt.
+ * The parse is deliberately lenient (strip ANSI, loose regex) and degrades to a
+ * raw-text fallback rather than hard-failing.
  *
+ * Real 0.130.0 device-auth first screen this parser is built against:
  *   Follow these steps to sign in with ChatGPT using device code authorization:
  *   1. Open this link in your browser and sign in to your account
  *      https://auth.openai.com/codex/device
@@ -75,86 +76,63 @@ export function parseDeviceCodePrompt(rawOutput: string): DeviceCodePrompt | nul
   return prompt;
 }
 
-/** Terminal outcome of a device-auth login run. */
+/** Terminal outcome of a codex login run. */
 export type DeviceAuthOutcome =
   | { ok: true }
   | { ok: false; reason: "spawn-error" | "exit-nonzero" | "timeout" | "aborted" | "no-prompt"; error: string };
 
-export type CodexDeviceAuthOptions = {
-  /** Absolute path to the codex binary the runtime resolved (bundled or PATH). */
-  binary: string;
-  /** Environment for the child (e.g. CODEX_HOME); defaults to `process.env`. */
-  env?: NodeJS.ProcessEnv;
-  /**
-   * Fired exactly once, when the verification URL + user code are first parsed
-   * out of the child's output. This is the structured event the relay forwards
-   * to the console.
-   */
-  onDeviceCode: (prompt: DeviceCodePrompt) => void;
-  /**
-   * Raw, ANSI-stripped output, for diagnostics / a raw-text fallback when the
-   * parse never fires. Optional.
-   */
-  onRawOutput?: (chunk: string) => void;
-  /** Abort the login (operator cancelled). */
-  signal?: AbortSignal;
-  /**
-   * Hard ceiling for the whole flow. Codex states a 15-minute code expiry, so
-   * the default leaves a little headroom past that.
-   */
-  timeoutMs?: number;
-  /** Injectable spawn seam — tests pass a fake; production uses node spawn. */
-  spawnFn?: typeof spawn;
-};
-
-/** Default whole-flow ceiling: just past codex's stated 15-minute code expiry. */
+/** Default ceiling for the device-code flow: just past codex's 15-min expiry. */
 export const DEVICE_AUTH_TIMEOUT_MS = 16 * 60_000;
 
-/**
- * Spawn `codex login --device-auth`, relay the device code as a structured
- * event, and resolve when the child exits. Success (`ok: true`) means codex
- * exited 0 — codex itself has written `~/.codex/auth.json`; the caller should
- * re-run the capability probe to flip the provider to `ok`.
- *
- * Never rejects: every failure mode resolves to `{ ok: false, reason, error }`
- * so the relay layer can map it onto a provider error state with a verbatim
- * reason rather than handling a throw.
- */
-export function runCodexDeviceAuthLogin(options: CodexDeviceAuthOptions): Promise<DeviceAuthOutcome> {
-  const { binary, onDeviceCode, onRawOutput, signal } = options;
-  const env = options.env ?? process.env;
-  const timeoutMs = options.timeoutMs ?? DEVICE_AUTH_TIMEOUT_MS;
-  const spawnFn = options.spawnFn ?? spawn;
+/** Default ceiling for the browser-OAuth flow: the user signs in interactively. */
+export const BROWSER_LOGIN_TIMEOUT_MS = 5 * 60_000;
 
+type CodexLoginSubprocessOptions = {
+  binary: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  timeoutMs: number;
+  spawnFn: typeof spawn;
+  /** Human label for error messages, e.g. `codex login --device-auth`. */
+  label: string;
+  /** Called for every ANSI-stripped output chunk plus the full buffer so far. */
+  onOutput?: (cleanChunk: string, fullBuffer: string) => void;
+  /** Map a non-zero exit to a failure outcome (exit 0 is always success). */
+  classifyExit: (info: { code: number | null; stderrTail: string }) => Extract<DeviceAuthOutcome, { ok: false }>;
+};
+
+/**
+ * Shared skeleton for the codex login subprocesses: spawn, stream output to
+ * `onOutput`, enforce a timeout + abort, resolve on exit (0 → ok, else
+ * `classifyExit`). Never rejects — every failure mode resolves to a structured
+ * `{ ok: false, reason, error }` so the relay layer maps it onto a provider
+ * error state rather than handling a throw.
+ */
+function runCodexLoginSubprocess(opts: CodexLoginSubprocessOptions): Promise<DeviceAuthOutcome> {
+  const { binary, args, env, signal, timeoutMs, spawnFn, label, onOutput, classifyExit } = opts;
   return new Promise<DeviceAuthOutcome>((resolve) => {
     if (signal?.aborted) {
-      resolve({ ok: false, reason: "aborted", error: "device-auth aborted before start" });
+      resolve({ ok: false, reason: "aborted", error: `${label} aborted before start` });
       return;
     }
 
     let child: ChildProcess;
     try {
-      child = spawnFn(binary, ["login", "--device-auth"], {
-        env,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      child = spawnFn(binary, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     } catch (err) {
       resolve({ ok: false, reason: "spawn-error", error: err instanceof Error ? err.message : String(err) });
       return;
     }
 
     let buffer = "";
-    let promptFired = false;
-    let settled = false;
     let stderrTail = "";
+    let settled = false;
 
     const timer = setTimeout(() => {
-      finish({ ok: false, reason: "timeout", error: `device-auth timed out after ${timeoutMs}ms` });
+      finish({ ok: false, reason: "timeout", error: `${label} timed out after ${timeoutMs}ms` });
     }, timeoutMs);
-
-    const onAbort = (): void => {
-      finish({ ok: false, reason: "aborted", error: "device-auth aborted by operator" });
-    };
+    const onAbort = (): void => finish({ ok: false, reason: "aborted", error: `${label} aborted by operator` });
     signal?.addEventListener("abort", onAbort, { once: true });
 
     function finish(outcome: DeviceAuthOutcome): void {
@@ -162,22 +140,16 @@ export function runCodexDeviceAuthLogin(options: CodexDeviceAuthOptions): Promis
       settled = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);
-      // Kill the child on any non-clean-exit path (timeout/abort). A natural
-      // exit has already gone; SIGKILL on an already-dead pid is a harmless noop.
+      // SIGKILL on a natural-exit path hits an already-dead pid (harmless noop);
+      // on timeout/abort it tears the still-running login down.
       child.kill("SIGKILL");
       resolve(outcome);
     }
 
     function ingest(chunk: string): void {
       const clean = stripAnsi(chunk);
-      onRawOutput?.(clean);
-      buffer += chunk;
-      if (promptFired) return;
-      const prompt = parseDeviceCodePrompt(buffer);
-      if (prompt) {
-        promptFired = true;
-        onDeviceCode(prompt);
-      }
+      buffer += clean;
+      onOutput?.(clean, buffer);
     }
 
     child.stdout?.on("data", (data: Buffer) => ingest(data.toString("utf-8")));
@@ -187,20 +159,121 @@ export function runCodexDeviceAuthLogin(options: CodexDeviceAuthOptions): Promis
       ingest(text);
     });
 
-    child.on("error", (err) => {
-      finish({ ok: false, reason: "spawn-error", error: err.message });
-    });
-
+    child.on("error", (err) => finish({ ok: false, reason: "spawn-error", error: err.message }));
     child.on("close", (code) => {
-      if (code === 0) {
-        finish({ ok: true });
-        return;
-      }
-      // Exited nonzero. If we never even surfaced a code, say so explicitly —
-      // that is the parse-failure / version-drift signal the caller degrades on.
-      const reason = promptFired ? "exit-nonzero" : "no-prompt";
-      const detail = stderrTail.trim() || `codex login --device-auth exited with code ${code ?? "unknown"}`;
-      finish({ ok: false, reason, error: detail });
+      if (code === 0) finish({ ok: true });
+      else finish(classifyExit({ code, stderrTail: stderrTail.trim() }));
     });
+  });
+}
+
+export type CodexBrowserLoginOptions = {
+  /** Absolute path to the codex binary the runtime resolved (bundled or PATH). */
+  binary: string;
+  /** Environment for the child (e.g. CODEX_HOME); defaults to `process.env`. */
+  env?: NodeJS.ProcessEnv;
+  /**
+   * Fired at most once with a fallback auth URL parsed from output, so the web
+   * can offer a "didn't open? open sign-in" link if the host browser did not
+   * auto-launch. Optional.
+   */
+  onAuthUrl?: (url: string) => void;
+  /** Raw, ANSI-stripped output, for diagnostics. Optional. */
+  onRawOutput?: (chunk: string) => void;
+  /** Abort the login (operator cancelled). */
+  signal?: AbortSignal;
+  /** Hard ceiling for the interactive browser sign-in. */
+  timeoutMs?: number;
+  /** Injectable spawn seam — tests pass a fake; production uses node spawn. */
+  spawnFn?: typeof spawn;
+};
+
+const AUTH_URL_PATTERN = /https?:\/\/[^\s]+/;
+
+/**
+ * PRIMARY login: spawn bare `codex login` (browser OAuth). codex opens the
+ * provider auth page on the host, runs its own localhost callback, and writes
+ * `~/.codex/auth.json` on success (exit 0). The caller re-probes to flip the
+ * provider to `ok`. The token never transits First Tree.
+ */
+export function runCodexBrowserLogin(options: CodexBrowserLoginOptions): Promise<DeviceAuthOutcome> {
+  const { binary, onAuthUrl, onRawOutput, signal } = options;
+  let urlFired = false;
+  return runCodexLoginSubprocess({
+    binary,
+    args: ["login"],
+    env: options.env ?? process.env,
+    signal,
+    timeoutMs: options.timeoutMs ?? BROWSER_LOGIN_TIMEOUT_MS,
+    spawnFn: options.spawnFn ?? spawn,
+    label: "codex login",
+    onOutput: (clean, full) => {
+      onRawOutput?.(clean);
+      if (urlFired || !onAuthUrl) return;
+      const match = full.match(AUTH_URL_PATTERN);
+      if (match) {
+        urlFired = true;
+        onAuthUrl(match[0]);
+      }
+    },
+    classifyExit: ({ code, stderrTail }) => ({
+      ok: false,
+      reason: "exit-nonzero",
+      error: stderrTail || `codex login exited with code ${code ?? "unknown"}`,
+    }),
+  });
+}
+
+export type CodexDeviceAuthOptions = {
+  /** Absolute path to the codex binary the runtime resolved (bundled or PATH). */
+  binary: string;
+  /** Environment for the child (e.g. CODEX_HOME); defaults to `process.env`. */
+  env?: NodeJS.ProcessEnv;
+  /**
+   * Fired exactly once, when the verification URL + user code are first parsed
+   * out of the child's output. This is the structured event the relay forwards.
+   */
+  onDeviceCode: (prompt: DeviceCodePrompt) => void;
+  /** Raw, ANSI-stripped output, for diagnostics / a raw-text fallback. Optional. */
+  onRawOutput?: (chunk: string) => void;
+  /** Abort the login (operator cancelled). */
+  signal?: AbortSignal;
+  /** Hard ceiling; codex states a 15-minute code expiry. */
+  timeoutMs?: number;
+  /** Injectable spawn seam — tests pass a fake; production uses node spawn. */
+  spawnFn?: typeof spawn;
+};
+
+/**
+ * FALLBACK login (headless): spawn `codex login --device-auth`, relay the
+ * device code once parsed, resolve on exit (0 → codex wrote `~/.codex/auth.json`).
+ */
+export function runCodexDeviceAuthLogin(options: CodexDeviceAuthOptions): Promise<DeviceAuthOutcome> {
+  const { binary, onDeviceCode, onRawOutput, signal } = options;
+  let promptFired = false;
+  return runCodexLoginSubprocess({
+    binary,
+    args: ["login", "--device-auth"],
+    env: options.env ?? process.env,
+    signal,
+    timeoutMs: options.timeoutMs ?? DEVICE_AUTH_TIMEOUT_MS,
+    spawnFn: options.spawnFn ?? spawn,
+    label: "codex login --device-auth",
+    onOutput: (clean, full) => {
+      onRawOutput?.(clean);
+      if (promptFired) return;
+      const prompt = parseDeviceCodePrompt(full);
+      if (prompt) {
+        promptFired = true;
+        onDeviceCode(prompt);
+      }
+    },
+    classifyExit: ({ code, stderrTail }) => ({
+      ok: false,
+      // If we never surfaced a code, say so explicitly — the parse-failure /
+      // version-drift signal the caller degrades on.
+      reason: promptFired ? "exit-nonzero" : "no-prompt",
+      error: stderrTail || `codex login --device-auth exited with code ${code ?? "unknown"}`,
+    }),
   });
 }
