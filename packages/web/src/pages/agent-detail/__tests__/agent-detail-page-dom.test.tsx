@@ -465,9 +465,10 @@ describe("AgentDetailPage", () => {
     expect(container.textContent).toContain("Chat");
     expect([...container.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent?.trim())).toEqual([
       "Profile",
-      "Environment",
+      "Runtime",
       "Instructions",
       "Tools & skills",
+      "Repositories",
       "Usage",
     ]);
     expect(container.textContent).toContain("Always explain tradeoffs.");

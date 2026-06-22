@@ -8,6 +8,7 @@ import { ToastProvider } from "./components/ui/toast.js";
 import { PulseProvider } from "./hooks/pulse-context.js";
 import { ProfileTab } from "./pages/agent-detail/profile-tab.js";
 import { PromptTab } from "./pages/agent-detail/prompt-tab.js";
+import { RepositoriesTab } from "./pages/agent-detail/repositories-tab.js";
 import { ResourcesTab } from "./pages/agent-detail/resources-tab.js";
 import { RuntimeTab } from "./pages/agent-detail/runtime-tab.js";
 import { UsageTab } from "./pages/agent-detail/usage-tab.js";
@@ -285,6 +286,7 @@ export function App() {
                     <Route path="prompt" element={<PromptTab />} />
                     <Route path="tools" element={<Navigate to="../profile" replace />} />
                     <Route path="capabilities" element={<ResourcesTab />} />
+                    <Route path="repositories" element={<RepositoriesTab />} />
                     {/* Legacy deep links: the tab was renamed Resources → Capabilities. */}
                     <Route path="resources" element={<Navigate to="../capabilities" replace />} />
                   </Route>
