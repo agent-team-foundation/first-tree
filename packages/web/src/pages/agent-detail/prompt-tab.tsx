@@ -21,7 +21,7 @@ import { Markdown } from "../../components/ui/markdown.js";
 import { Popover } from "../../components/ui/popover.js";
 import { Section } from "../../components/ui/section.js";
 import { Textarea } from "../../components/ui/textarea.js";
-import { agentResourcesMutationHandlers, statusMarker } from "./capability-section.js";
+import { agentResourcesMutationHandlers, resourceTypeIcon, statusMarker } from "./capability-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { ResourceRowView, RowAction, type RowStatusMarker } from "./resource-row.js";
 import { sourceLabel } from "./resource-source.js";
@@ -588,6 +588,7 @@ function PromptResourceBlock(props: {
       actions={props.action}
       emptyPeek="No instructions yet."
       expandLabel="instructions"
+      leadingIcon={resourceTypeIcon("prompt")}
       expand={{
         canExpand,
         expanded: props.expanded,

@@ -8,7 +8,7 @@ import { cn } from "../../lib/utils.js";
  * so the two surfaces no longer drift visually.
  *
  * Visual hierarchy this enforces inside one tab:
- *   - title       = text-subtitle / 600   ("chapter")
+ *   - title       = text-title    / 600   ("chapter")
  *   - row label   = text-body     / 400   ("field")
  *   - description = text-caption  / 400   ("annotation")
  *
@@ -36,7 +36,10 @@ export function Section({ title, count, description, action, children, className
     <section className={cn("space-y-3", className)} style={{ marginTop: "var(--sp-1_5)" }}>
       <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center sm:gap-3">
         <div className="min-w-0">
-          <h2 className="text-subtitle font-semibold m-0" style={{ color: "var(--fg)" }}>
+          {/* Use text-title, not text-subtitle: the section heading must clearly
+              outrank a row name (text-body) — too small a step reads as an
+              undesigned flat list. Hierarchy, not a container, is what groups. */}
+          <h2 className="text-title font-semibold m-0" style={{ color: "var(--fg)" }}>
             {title}
             {count != null && (
               <span className="font-normal" style={{ color: "var(--fg-4)" }}>
@@ -53,6 +56,10 @@ export function Section({ title, count, description, action, children, className
         </div>
         {action}
       </div>
+      {/* A single top rule line, not an outlined box: per DESIGN.md Pillar 5 a
+          bordered/filled card signals "interactive/optional", so read-only config
+          content stays plain. This is the shared Section's native form, so it
+          keeps Agent Detail and Settings consistent. */}
       <div style={{ borderTop: "var(--hairline) solid var(--border)" }}>{children}</div>
     </section>
   );

@@ -10,7 +10,7 @@ import {
   skillResourcePayloadSchema,
 } from "@first-tree/shared";
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
+import { FileText, FolderGit2, Plug, Plus, Sparkles } from "lucide-react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import { useNavigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
@@ -362,8 +362,17 @@ function EffectiveRow(props: {
       peek={subtitle}
       monoPeek={monoPeek}
       actions={actions}
+      leadingIcon={resourceTypeIcon(props.row.type)}
     />
   );
+}
+
+/** Leading glyph per resource kind, so the four types read apart at a glance. */
+export function resourceTypeIcon(type: ResourceType): ReactNode {
+  if (type === "repo") return <FolderGit2 className="h-4 w-4" />;
+  if (type === "skill") return <Sparkles className="h-4 w-4" />;
+  if (type === "mcp") return <Plug className="h-4 w-4" />;
+  return <FileText className="h-4 w-4" />;
 }
 
 function AgentRepoDialog(props: {
