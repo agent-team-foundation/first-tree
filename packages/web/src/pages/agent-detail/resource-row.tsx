@@ -76,6 +76,9 @@ export function ResourceRowView(props: {
   // Expand is triggered by clicking the row heading (de-crowd), not a separate
   // chevron button — so the right cluster carries only the Switch + ⋯.
   const showCluster = !!props.toggle || hasMenu;
+  // Name the expand control after the row so multiple expanders stay
+  // distinguishable to assistive tech (not a generic "Expand instructions").
+  const expandNoun = typeof props.name === "string" && props.name ? props.name : (props.expandLabel ?? "");
   return (
     <div
       data-dimmed={props.dimmed ? "true" : undefined}
@@ -95,8 +98,8 @@ export function ResourceRowView(props: {
               aria-expanded={expanded}
               aria-label={
                 expanded
-                  ? `Collapse${props.expandLabel ? ` ${props.expandLabel}` : ""}`
-                  : `Expand${props.expandLabel ? ` ${props.expandLabel}` : ""}`
+                  ? `Collapse${expandNoun ? ` ${expandNoun}` : ""}`
+                  : `Expand${expandNoun ? ` ${expandNoun}` : ""}`
               }
               onClick={props.expand?.onToggle}
               className="block w-full text-left"
@@ -186,7 +189,9 @@ function RowHeading({
   return (
     <span className="inline-flex items-center gap-2">
       {leadingIcon ? (
-        <span className="inline-flex shrink-0 items-center" style={{ color: "var(--fg-4)" }} aria-hidden>
+        // Type glyph one step stronger than --fg-4 so the four resource kinds read
+        // apart at a glance (ux-expert trial; revert to --fg-4 if too heavy).
+        <span className="inline-flex shrink-0 items-center" style={{ color: "var(--fg-3)" }} aria-hidden>
           {leadingIcon}
         </span>
       ) : null}

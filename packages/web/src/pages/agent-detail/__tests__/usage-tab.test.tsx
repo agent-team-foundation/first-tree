@@ -94,6 +94,7 @@ function createContext(overrides: Partial<AgentDetailContext> = {}): AgentDetail
     isUnclaimed: false,
     isOffline: false,
     boundClientLabel: "gandy-macbook",
+    boundComputerOnline: true,
     setupRuntimeProvider: "claude-code",
     onOpenBindDialog: () => undefined,
     bindClientPending: false,

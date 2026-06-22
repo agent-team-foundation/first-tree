@@ -126,7 +126,7 @@ describe("ResourceRowView — converged action slots", () => {
       />,
     );
     // The heading itself is the expand trigger; clicking it fires onToggle.
-    const heading = container.querySelector('button[aria-label="Expand instructions"]');
+    const heading = container.querySelector('button[aria-label="Expand Style guide"]');
     expect(heading).toBeTruthy();
     await click(heading);
     expect(toggles).toEqual([1]);
@@ -135,6 +135,6 @@ describe("ResourceRowView — converged action slots", () => {
     const switches = buttons.filter((b) => b.getAttribute("role") === "switch");
     expect(switches).toHaveLength(1);
     // The expand control is the heading (aria-label), not a duplicate chevron button.
-    expect(buttons.filter((b) => b.getAttribute("aria-label") === "Expand instructions")).toHaveLength(1);
+    expect(buttons.filter((b) => b.getAttribute("aria-label") === "Expand Style guide")).toHaveLength(1);
   });
 });
