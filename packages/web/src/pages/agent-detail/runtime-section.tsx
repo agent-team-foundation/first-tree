@@ -3,6 +3,7 @@ import { Link2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
+import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { ConfigRow } from "./flat-section.js";
 import { titleWithSemantics } from "./save-semantics.js";
 
@@ -14,6 +15,8 @@ export type RuntimeSectionProps = {
   runtimeProvider: RuntimeProvider;
   /** Display label of the bound computer; null when no computer is bound yet. */
   computerLabel: string | null;
+  /** Whether the bound computer is currently connected; null when unknown. */
+  computerOnline?: boolean | null;
   computerStatusLoading?: boolean;
   computerStatusError?: string | null;
   /** Whether the "Bind computer" CTA should be shown (only when no client is bound and agent is active). */
@@ -22,23 +25,13 @@ export type RuntimeSectionProps = {
   onBindComputer?: () => void;
 };
 
-const RUNTIME_COPY: Record<RuntimeProvider, { name: string; caption: string }> = {
-  "claude-code": {
-    name: "Claude Code",
-    caption: "Runs through Anthropic's Claude Code runtime.",
-  },
-  "claude-code-tui": {
-    name: "Claude Code CLI",
-    caption: "Runs Claude Code through tmux for terminal-native sessions.",
-  },
-  codex: {
-    name: "Codex",
-    caption: "Runs through OpenAI's Codex CLI runtime.",
-  },
+const RUNTIME_NAME: Record<RuntimeProvider, string> = {
+  "claude-code": "Claude Code",
+  "claude-code-tui": "Claude Code CLI",
+  codex: "Codex",
 };
 
 export function RuntimeSection(props: RuntimeSectionProps) {
-  const copy = RUNTIME_COPY[props.runtimeProvider];
   return (
     <Section
       title={titleWithSemantics("Execution")}
@@ -46,23 +39,28 @@ export function RuntimeSection(props: RuntimeSectionProps) {
     >
       <ComputerRow
         computerLabel={props.computerLabel}
+        online={props.computerOnline ?? null}
         statusLoading={props.computerStatusLoading ?? false}
         statusError={props.computerStatusError ?? null}
         canBindComputer={props.canBindComputer}
         bindPending={props.bindComputerPending ?? false}
         onBindComputer={props.onBindComputer}
       />
-      <RuntimeRow name={copy.name} caption={copy.caption} />
+      <RuntimeRow name={RUNTIME_NAME[props.runtimeProvider]} />
     </Section>
   );
 }
 
-function RuntimeRow({ name, caption }: { name: string; caption: string }) {
-  return <ConfigRow label="Runtime" value={name} description={caption} />;
+// Runtime is fixed at creation, so it's a read-only label. The old per-provider
+// caption just restated the value — the section subtitle already says runtime is
+// fixed — so the row carries only `label: value`.
+function RuntimeRow({ name }: { name: string }) {
+  return <ConfigRow label="Runtime" value={name} />;
 }
 
 function ComputerRow(props: {
   computerLabel: string | null;
+  online: boolean | null;
   statusLoading: boolean;
   statusError: string | null;
   canBindComputer: boolean;
@@ -95,8 +93,23 @@ function ComputerRow(props: {
     value = "No computer bound";
     description = "Bind a connected computer before this agent can run.";
   } else {
-    description = "Runtime process and local tool access come from this computer.";
+    // Bound computer → show its live connection state instead of a static
+    // caption that just restated "this computer runs the agent".
+    description = <ComputerPresence online={props.online} />;
   }
 
   return <ConfigRow label="Computer" value={value} description={description} action={action} />;
+}
+
+// Live presence of the bound computer: a connected computer is "present" (blue,
+// per the state map), a disconnected one is offline (gray). Unknown → nothing.
+function ComputerPresence({ online }: { online: boolean | null }) {
+  if (online == null) return null;
+  const color = online ? "var(--state-idle)" : "var(--state-offline)";
+  return (
+    <span className="inline-flex items-center gap-1.5" style={{ color: "var(--fg-3)" }}>
+      <StatusGlyph colorVar={color} shape="dot" size={7} ariaLabel={online ? "Online" : "Offline"} />
+      {online ? "Online" : "Offline"}
+    </span>
+  );
 }
