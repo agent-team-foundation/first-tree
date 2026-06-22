@@ -13,6 +13,7 @@ import { ResourceTypeSection } from "./agent-detail/capability-section.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
 import { PromptTab } from "./agent-detail/prompt-tab.js";
 import { ResourcesTab } from "./agent-detail/resources-tab.js";
+import { RuntimeSection } from "./agent-detail/runtime-section.js";
 import { UsageTab } from "./agent-detail/usage-tab.js";
 
 /**
@@ -528,6 +529,30 @@ export function AgentDetailPreviewPage() {
           </p>
           <div style={{ marginTop: "var(--sp-4)" }}>
             <TabHost element={<UsageTab />} />
+          </div>
+
+          <h1 className="text-title m-0" style={{ marginTop: "var(--sp-8)", color: "var(--fg)" }}>
+            Execution — computer presence
+          </h1>
+          <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+            Runtime row is label:value only; the bound Computer row shows the computer's live connection state (online /
+            offline dot) instead of a restated caption.
+          </p>
+          <div style={{ marginTop: "var(--sp-4)" }}>
+            <RuntimeSection
+              runtimeProvider="claude-code"
+              computerLabel="gandy-macbook"
+              computerOnline={true}
+              canBindComputer={false}
+            />
+          </div>
+          <div style={{ marginTop: "var(--sp-4)" }}>
+            <RuntimeSection
+              runtimeProvider="claude-code"
+              computerLabel="gandy-macbook"
+              computerOnline={false}
+              canBindComputer={false}
+            />
           </div>
         </div>
         <button
