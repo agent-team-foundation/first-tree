@@ -151,12 +151,14 @@ export type RequestResolution = z.infer<typeof requestResolutionSchema>;
  * `POST /agent/chats/:id/messages`. Tells the server *why* this write is
  * happening so it can pick the right enforcement profile.
  *
- *   - `"agent-final-text"`: handler-initiated forward of an agent's final
- *     reply text (today: `runtime/result-sink.ts`). Lands in chat history
- *     so human observers in the web UI can see what the agent is doing,
- *     but does not wake other agents and is not subject to the group-chat
- *     `@mention required` guard — it is an agent's own response surfaced
- *     for humans, not a message addressed into the room.
+ *   - `"agent-final-text"`: a recipientless, human-observable runtime message.
+ *     It lands in chat history for human observers, does not wake other agents,
+ *     and is not subject to the group-chat `@mention required` guard — it is
+ *     surfaced for humans, not addressed into the room. The per-turn final-text
+ *     MIRROR that used to ride this purpose is RETIRED (an agent's final text is
+ *     its output stream, not a chat message — see `runtime/result-sink.ts`);
+ *     the purpose now serves deliberate handler-emitted runtime notices (e.g.
+ *     the codex usage-limit notice).
  *
  * Default-`undefined` means a regular agent-initiated send (CLI `chat send`,
  * API, etc.) and goes through the normal enforcement profile.
@@ -166,16 +168,16 @@ export type MessagePurpose = z.infer<typeof messagePurposeSchema>;
 
 /**
  * Metadata flag the server stamps on a STORED message when it was sent with
- * `purpose: "agent-final-text"` (the runtime's per-turn final-text mirror —
- * see client `runtime/result-sink.ts`). `purpose` itself is a send-time-only
- * intent tag that the server consumes for enforcement and does NOT persist,
- * so this boolean is the only durable post-save signal distinguishing a
- * silent final-text mirror from a deliberate agent `chat send`. Server-owned:
- * stamped only for a genuine mirror (a NON-HUMAN sender with the final-text
- * purpose) and never honored from inbound client metadata, so a human/web send
- * carrying `purpose` cannot masquerade as one. The web reads it to optionally
- * hide final-text rows behind a staging-only view toggle; absent / false on
- * every other message.
+ * `purpose: "agent-final-text"` (see client `runtime/result-sink.ts` for the
+ * now-retired per-turn mirror; the purpose lives on as a recipientless runtime
+ * notice). `purpose` itself is a send-time-only intent tag that the server
+ * consumes for enforcement and does NOT persist, so this boolean is the only
+ * durable post-save signal distinguishing such a message from a deliberate
+ * agent `chat send`. Server-owned: stamped only for a NON-HUMAN sender with the
+ * final-text purpose and never honored from inbound client metadata, so a
+ * human/web send carrying `purpose` cannot masquerade as one. The web reads it
+ * to optionally hide these rows behind a staging-only view toggle; absent /
+ * false on every other message.
  */
 export const AGENT_FINAL_TEXT_METADATA_KEY = "agentFinalText";
 

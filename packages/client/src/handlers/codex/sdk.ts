@@ -1025,12 +1025,19 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         `codex usage limit reached chatId=${sessionCtx.chatId}: empty turn, model not invoked (zero token delta); ` +
           "posting a chat notice instead of silently acking the message",
       );
-      // Layer 1-A (visibility): post a chat-visible notice via the
-      // agent-final-text path (forwardResult → notify=false, bypasses the
-      // group @mention guard) so a human observer sees WHY their message got
-      // no reply, rather than having to dig through codex rollout files.
+      // Layer 1-A (visibility): post a chat-visible notice so a human observer
+      // sees WHY their message got no reply, rather than digging through codex
+      // rollout files. This is a deliberate, EXPLICIT send — NOT the retired
+      // final-text forward (`forwardResult` no longer delivers anything). It
+      // rides the `agent-final-text` purpose only for its delivery profile
+      // (recipientless, notify=false, bypasses the group @mention guard).
       try {
-        await sessionCtx.forwardResult(USAGE_LIMIT_NOTICE);
+        await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
+          source: "api",
+          format: "text",
+          content: USAGE_LIMIT_NOTICE,
+          purpose: "agent-final-text",
+        });
         consumedErrorReason = "usage_limit_notice_posted";
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

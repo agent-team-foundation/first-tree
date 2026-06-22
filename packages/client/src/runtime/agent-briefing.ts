@@ -599,12 +599,23 @@ intent-specific channels: \`chat ask\` (decisions) and \`chat update
 --description\` (progress). Decision guide (based on participant \`type\` in
 the Current Chat Context block):
 
-- **Replying to a human** — a free reply / conversational answer → \`${bin} chat
-  send <name> "..."\`. Plain sends to a human raise no red dot.
+- **Replying to a human / your result for this turn** → one \`${bin} chat send
+  <name> "..."\`. This is the explicit replacement for the retired final-text
+  mirror: your turn's final text is no longer posted to chat on its own, so
+  when the human should see the result, gather it — what you did, decisions
+  made, blockers, and the next step — into ONE concise message near the end of
+  the turn. A plain send is informational and raises no red dot.
+- **Don't stream a human through repeated \`chat send\`.** Within a turn, send
+  at most one plain human reply; merge related updates into that single
+  message, and use \`${bin} chat update --description\` for ongoing
+  progress/status. Don't send a reply just to say nothing changed — on a
+  re-delivery, an already-handled event, or a no-op turn, end without sending
+  unless there is genuinely new information the human needs.
 - **Asking a human** for a decision, approval, or answer → \`${bin} chat ask
   <human> "<background + the question>"\` (see \`## Asking Humans\`). The message
   body IS the ask. This raises a tracked open question (red-dot / open-request
-  count) and blocks the chat for them until they answer.
+  count) and blocks the chat for them until they answer. Use this — not a plain
+  send — whenever the human must decide, approve, or answer before you proceed.
 - **Reporting progress to a human** → \`${bin} chat update --description
   "..."\` (see \`## Chat Topic & Description\`).
 - **Reaching an agent to make them act** → \`${bin} chat send <name> "..."\`.

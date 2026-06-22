@@ -659,6 +659,17 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toMatch(/\*\*Asking a human\*\*/);
     expect(briefing).toMatch(/\*\*Reporting progress to a human\*\*/);
     expect(briefing).toMatch(/\*\*Reaching an agent to make them act\*\*/);
+    // Plain human reply is the explicit replacement for the retired final-text
+    // mirror, collected into ONE concise message near the turn's end.
+    expect(briefing).toContain("explicit replacement for the retired final-text");
+    expect(briefing).toMatch(/Replying to a human \/ your result for this turn/);
+    // Anti-spam discipline: at most one plain human reply per turn; ongoing
+    // progress goes to `chat update --description`; no "nothing changed" replies.
+    expect(briefing).toContain("Don't stream a human through repeated");
+    expect(briefing).toContain("at most one plain human reply");
+    expect(briefing).toMatch(/Don't send a reply just to say nothing changed/);
+    // A decision the human must make goes through `chat ask`, not a plain send.
+    expect(briefing).toMatch(/must decide, approve, or answer before you proceed/);
     expect(briefing).toContain("chat invite <name>");
     expect(briefing).toContain("stage or role handoff inside the same task stays in this chat");
     expect(briefing).toMatch(/\*\*Starting separate work\*\*/);

@@ -773,8 +773,18 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           message: "codex usage limit reached: turn completed without a usable model response",
         },
       });
+      // Post the usage-limit notice as a deliberate, chat-visible runtime
+      // message — an EXPLICIT send, not the retired final-text forward
+      // (`forwardResult` no longer delivers). It rides the `agent-final-text`
+      // purpose only for its delivery profile (recipientless, notify=false,
+      // bypasses the group @mention guard).
       try {
-        await sessionCtx.forwardResult(USAGE_LIMIT_NOTICE);
+        await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
+          source: "api",
+          format: "text",
+          content: USAGE_LIMIT_NOTICE,
+          purpose: "agent-final-text",
+        });
         consumedErrorReason = "usage_limit_notice_posted";
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
