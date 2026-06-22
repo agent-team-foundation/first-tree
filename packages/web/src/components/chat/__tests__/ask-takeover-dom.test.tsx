@@ -267,4 +267,51 @@ describe("AskTakeover", () => {
     expect(onReply).not.toHaveBeenCalled();
     expect(onSkip).not.toHaveBeenCalled();
   });
+
+  it("stays inert while a higher overlay owns the keystroke (aria-hidden region)", async () => {
+    const onReply = vi.fn();
+    const onSkip = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Concerns?" payload={{ multiSelect: false }} onReply={onReply} onSkip={onSkip} />,
+    );
+    const ta = c.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!ta) throw new Error("free-text input missing");
+    await setValue(ta, "looks risky");
+
+    // Simulate a modal layered above the card (e.g. the ⌘K command palette,
+    // a Radix dialog) by marking the card's container aria-hidden, exactly as
+    // Radix's focus scope does to the rest of the tree while a dialog is open.
+    // Enter/Escape now belong to that overlay and must not resolve the ask.
+    c.setAttribute("aria-hidden", "true");
+    await keyDown(ta, "Enter");
+    await keyDown(ta, "Escape");
+    expect(onReply).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
+
+    // Once the overlay closes (aria-hidden cleared), the shortcuts resume.
+    c.removeAttribute("aria-hidden");
+    await keyDown(ta, "Enter");
+    expect(onReply).toHaveBeenCalledWith("looks risky");
+  });
+
+  it("yields to a focused control that already consumed the keystroke (defaultPrevented)", async () => {
+    const onReply = vi.fn();
+    const onSkip = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Concerns?" payload={{ multiSelect: false }} onReply={onReply} onSkip={onSkip} />,
+    );
+    const ta = c.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!ta) throw new Error("free-text input missing");
+    await setValue(ta, "looks risky");
+
+    // A focused popover (mention/slash autocomplete) consumes Enter/Escape
+    // before the window listener sees it; the ask must not also resolve.
+    const consume = (e: Event) => e.preventDefault();
+    ta.addEventListener("keydown", consume);
+    await keyDown(ta, "Enter");
+    await keyDown(ta, "Escape");
+    expect(onReply).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
+    ta.removeEventListener("keydown", consume);
+  });
 });
