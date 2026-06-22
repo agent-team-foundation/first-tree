@@ -122,7 +122,7 @@ export function EnvSection({ items, onSave, disabled, saving, saveError, saved }
     <Section
       title={titleWithSemantics("Environment variables", saved)}
       count={items.length}
-      description="Injected into this agent's runtime process. Sensitive values are encrypted and hidden after save."
+      description="Sensitive values are encrypted and hidden after save."
       action={action}
     >
       <div>

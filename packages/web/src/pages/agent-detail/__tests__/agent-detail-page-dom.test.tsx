@@ -473,7 +473,7 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "What this agent is told");
+    await waitForText(container, "Team style guide");
     expect(container.textContent).toContain("Vega");
     expect(container.textContent).toContain("1 active");
     expect(container.textContent).toContain("Chat");
@@ -632,7 +632,7 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "What this agent is told");
+    await waitForText(container, "Team style guide");
     await clickRowMenuItem(container, "More actions for Team style guide", "Customize for this agent");
     await waitForText(container, "Save instructions");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
@@ -700,7 +700,7 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "What this agent is told");
+    await waitForText(container, "Team style guide");
     await clickRowMenuItem(container, "More actions for Team style guide", "Customize for this agent");
     await waitForText(container, "Save instructions");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
@@ -769,7 +769,7 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "What this agent is told");
+    await waitForText(container, "Team style guide");
     // Disabling a recommended prompt is now the row's Switch, toggled off.
     await click(container.querySelector('button[role="switch"]'));
     await waitForCondition(
@@ -885,7 +885,7 @@ describe("AgentDetailPage", () => {
   it("starts a draft chat with the current agent from the header", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "What this agent is told");
+    await waitForText(container, "Custom instructions");
 
     await click(container.querySelector('button[aria-label="Start chat"]'));
     await waitForText(container, "/?c=draft&with=agent-1");

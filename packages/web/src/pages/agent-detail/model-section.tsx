@@ -69,7 +69,7 @@ export function ModelSection({ value, onChange, disabled, provider = "claude-cod
   }, [presetOptions, value]);
 
   return (
-    <ConfigRow label="Model" description={MODEL_HELP_BY_PROVIDER[provider]}>
+    <ConfigRow label="Model" helpText={MODEL_HELP_BY_PROVIDER[provider]}>
       <Select options={items} value={value} onChange={onChange} disabled={disabled} mono aria-label="Model" />
     </ConfigRow>
   );

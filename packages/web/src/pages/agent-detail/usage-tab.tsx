@@ -34,14 +34,17 @@ const WEEKDAY_RAIL: readonly string[] = ["", "Mon", "", "Wed", "", "Fri", ""];
  * trailing-90d `daily` series regardless of the `from` window, so the 30d
  * call here is just a stable, server-cached key.
  */
-export function UsageTab(): ReactElement {
+export function UsageTab({
+  fetchEnabled = true,
+  refetchInterval = 60_000,
+}: { fetchEnabled?: boolean; refetchInterval?: number | false } = {}): ReactElement {
   const ctx = useAgentDetailContext();
 
   const summaryQuery = useQuery({
     queryKey: ["usage-summary", ctx.agent.uuid, "30d"],
     queryFn: () => getAgentUsageSummary(ctx.agent.uuid, "30d"),
-    enabled: !ctx.isHuman,
-    refetchInterval: 60_000,
+    enabled: fetchEnabled && !ctx.isHuman,
+    refetchInterval,
     staleTime: 30_000,
   });
   const [turnsLimit, setTurnsLimit] = useState(RECENT_TURNS_LIMIT);
@@ -51,8 +54,8 @@ export function UsageTab(): ReactElement {
   const turnsQuery = useQuery({
     queryKey: ["usage-turns", ctx.agent.uuid, "30d", turnsLimit],
     queryFn: () => getAgentUsageTurns(ctx.agent.uuid, { window: "30d", limit: turnsLimit }),
-    enabled: !ctx.isHuman,
-    refetchInterval: 60_000,
+    enabled: fetchEnabled && !ctx.isHuman,
+    refetchInterval,
     staleTime: 30_000,
   });
   useEffect(() => {
@@ -123,7 +126,6 @@ function ActivityBlock({
           </span>
         </>
       }
-      description="Daily processed tokens."
       action={<DensityLegend />}
     >
       {isError ? (

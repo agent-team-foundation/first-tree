@@ -142,7 +142,6 @@ export function ResourceTypeSection(props: {
     <Section
       title={titleWithSemantics(typeLabel(type), saved)}
       count={rows.length}
-      description={type === "mcp" ? "From the MCP servers you connect." : undefined}
       action={
         canEdit ? (
           <AddCapabilityMenu
