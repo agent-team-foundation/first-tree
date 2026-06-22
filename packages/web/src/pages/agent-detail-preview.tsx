@@ -512,9 +512,8 @@ export function AgentDetailPreviewPage() {
             Instructions tab
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Result-first: the top "What this agent is told" block shows the merged runtime instructions (clamp + Show
-            all). Source rows are de-crowded — Switch + ⋯ only, click a row to read its full body. The old 👁 modal is
-            gone.
+            Result-first: the top block shows the merged runtime instructions (clamp + Show all), without extra label
+            copy. Source rows are de-crowded — Switch + ⋯ only, click a row to read its full body.
           </p>
           <div style={{ marginTop: "var(--sp-4)" }}>
             <TabHost element={<PromptTab />} />
@@ -528,15 +527,15 @@ export function AgentDetailPreviewPage() {
             exact value on hover, window in the title.
           </p>
           <div style={{ marginTop: "var(--sp-4)" }}>
-            <TabHost element={<UsageTab />} />
+            <TabHost element={<UsageTab fetchEnabled={false} refetchInterval={false} />} />
           </div>
 
           <h1 className="text-title m-0" style={{ marginTop: "var(--sp-8)", color: "var(--fg)" }}>
             Execution — computer presence
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Runtime row is label:value only; the bound Computer row shows the computer's live connection state (online /
-            offline dot) instead of a restated caption.
+            Runtime row is label:value only; the bound Computer row keeps the computer name and connection state on one
+            line.
           </p>
           <div style={{ marginTop: "var(--sp-4)" }}>
             <RuntimeSection

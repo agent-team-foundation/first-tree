@@ -974,7 +974,7 @@ describe("page SSR smoke coverage", () => {
       // moved to their own Repositories tab; Tools & skills lists only skills + MCP.
       ["/agents/agent-1/runtime", "Reasoning effort"],
       ["/agents/agent-1/repositories", "Team web"],
-      ["/agents/agent-1/prompt", "What this agent is told"],
+      ["/agents/agent-1/prompt", "Instructions"],
       ["/agents/agent-1/resources", "Integrations (MCP)"],
     ] as const) {
       expect(

@@ -68,7 +68,7 @@ export function ReasoningEffortSection({
   }, [presetOptions, value]);
 
   return (
-    <ConfigRow label="Reasoning effort" description={EFFORT_HELP_BY_PROVIDER[provider]}>
+    <ConfigRow label="Reasoning effort" helpText={EFFORT_HELP_BY_PROVIDER[provider]}>
       <Select
         options={items}
         value={value}

@@ -104,7 +104,7 @@ export function AppearanceSection({ agent, canEdit = true, onEdit, variant = "se
   }
 
   return (
-    <Section title="Appearance" description="Shows in chats, lists, and mentions." action={action}>
+    <Section title="Appearance" action={action}>
       {content}
     </Section>
   );
