@@ -1,9 +1,9 @@
 /**
  * Pure `@<name>` mention extraction. Lives in `@agent-team-foundation/
- * first-tree-shared` so the server (authoritative resolver during
- * fan-out) and client handlers (e.g. auto-forward enrichment) share one
- * implementation — otherwise the two sides drift on corner cases like code
- * fencing or email addresses and cause hard-to-debug routing mismatches.
+ * first-tree-shared` so the server (the authoritative resolver during
+ * fan-out) and every other reader share one implementation — otherwise the
+ * sides drift on corner cases like code fencing or email addresses and cause
+ * hard-to-debug routing mismatches.
  *
  * Three defensive gates (see proposals/hub-agent-messaging-reply-and-mentions §4):
  *

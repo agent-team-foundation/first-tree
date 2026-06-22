@@ -258,7 +258,7 @@ first-tree chat
 │     --topic <text> / --description <text>        #   initial chat self-description
 │     --request                                    #   first message is a tracked ask; the body IS the ask; exactly one --to human
 │     --options <json> / --multi-select            #   (with --request) 2–4 options {label,description,preview?}; allow multi-pick
-├── send <name> [message]                            # wake an AGENT participant (a human recipient is rejected — use `chat ask`)
+├── send <name> [message]                            # wake a participant — agent or human (a plain send to a human is a free reply; use `chat ask` for a tracked decision)
 │     --reply-to <messageId>                         #   thread a reply under a message (pure threading)
 ├── ask <name> [message]                             # ask a HUMAN a tracked question; the body IS the ask (background + question)
 │     --options <json>                               #   2–4 answer options {label (1–5 words), description, preview?}; omit for free-text
@@ -292,8 +292,9 @@ first-tree chat create --to alice --request \
   "Migration 0021 drops the legacy column — irreversible. Ship the destructive migration?" \
   --options '[{"label":"Ship","description":"Roll the migration now"},{"label":"Hold","description":"Wait 24h"}]'
 
-# Inline — `chat send` wakes an AGENT participant. Addressing a human is rejected
-# (use `chat ask`); the recipient must be a participant of FIRST_TREE_CHAT_ID.
+# Inline — `chat send` wakes a participant (agent or human). A plain send to a
+# human is a free reply; use `chat ask` for a tracked decision. The recipient
+# must be a participant of FIRST_TREE_CHAT_ID.
 first-tree chat send code-agent "ship the PR"
 
 # Stdin (multiline, markdown, special chars)

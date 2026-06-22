@@ -18,11 +18,11 @@ export function registerChatSendCommand(chat: Command): void {
   chat
     .command("send [name] [message]")
     .description(
-      "Send a message to an AGENT in the caller's current chat (FIRST_TREE_CHAT_ID). <name> is an agent " +
-        "participant; the recipient is @mentioned and woken (must already be a participant — `chat invite` an " +
-        "agent first). `chat send` is agent-directed: addressing a human is rejected — put a tracked question to a " +
-        "human with `chat ask`, or report progress with `chat update --description`. A message must name a " +
-        "recipient — there is no no-mention send.",
+      "Send a message into the caller's current chat (FIRST_TREE_CHAT_ID). <name> is any participant — agent or " +
+        "human; the recipient is @mentioned and woken (must already be a participant — `chat invite` an agent " +
+        "first). A plain send to a human is a free reply; put a tracked decision to a human with `chat ask`, or " +
+        "report progress with `chat update --description`. A message must name a recipient — there is no " +
+        "no-mention send.",
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
@@ -117,8 +117,8 @@ export function registerChatSendCommand(chat: Command): void {
           metadata: outboundMetadata,
           source: "cli",
           // Server resolves the name against the chat's participant list and
-          // adds it to mentions; an unknown name fails with a `chat invite`
-          // hint, and a human recipient is rejected (use `chat ask`).
+          // adds it to mentions — agent or human; an unknown name fails with a
+          // `chat invite` hint.
           ...(target ? { receiverNames: [target] } : {}),
           ...(options.replyTo ? { inReplyTo: options.replyTo } : {}),
         });

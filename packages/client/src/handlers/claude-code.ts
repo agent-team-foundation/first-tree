@@ -42,6 +42,7 @@ import { InputController } from "../runtime/input-controller.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
+import { chunkAssistantText } from "./assistant-text.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 import { consumedErrorOutcome } from "./turn-settlement.js";
@@ -135,7 +136,6 @@ export function detectStreamApiError(text: string): { message: string } | null {
 }
 
 const TOOL_RESULT_PREVIEW_LIMIT = 400;
-const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 
 type ToolUseBlock = { type: "tool_use"; id: string; name: string; input: unknown };
 type ToolResultBlock = { type: "tool_result"; tool_use_id: string; content: unknown; is_error?: boolean };
@@ -586,10 +586,12 @@ export function createToolCallProcessor(
           } else if (isTextBlock(block)) {
             const text = block.text.trim();
             if (text.length === 0) continue;
-            emit({
-              kind: "assistant_text",
-              payload: { text: text.slice(0, ASSISTANT_TEXT_EVENT_LIMIT) },
-            });
+            // Chunk so the FULL assistant text is preserved across one or more
+            // events — the durable troubleshooting record now that the
+            // per-turn final-text chat mirror is retired.
+            for (const chunk of chunkAssistantText(text)) {
+              emit({ kind: "assistant_text", payload: { text: chunk } });
+            }
           } else if (isThinkingBlock(block)) {
             emit({ kind: "thinking", payload: {} });
           }
@@ -1310,24 +1312,23 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               const providerEnteredPrefix = pendingProviderEnteredPrefix();
               emitTokenUsageFromResult(message, sessionCtx);
               if (message.subtype === "success") {
-                // Auto-bridge: forward result text back to the chat and close
-                // the turn. We AWAIT sendMessage (rather than fire-and-forget)
-                // so the turn_end emit is guaranteed to hit the WebSocket
-                // before the for-await pulls the next turn's first event.
-                // Otherwise a slow sendMessage round-trip could let the
+                // Close out the turn. The result text is already captured as
+                // `assistant_text` events; `forwardResult` no longer delivers
+                // it to chat (final-text mirror retired) — it is the
+                // turn-completion hook. We AWAIT it (rather than
+                // fire-and-forget) so the turn_end emit is guaranteed to hit
+                // the WebSocket before the for-await pulls the next turn's
+                // first event. Otherwise a slow round-trip could let the
                 // server assign a smaller seq to turn N+1's thinking/tool_call
                 // than to turn N's turn_end — which would cause the frontend's
                 // "latest turn_end" filter to retroactively hide turn N+1's
-                // live events. If the forward fails the text is otherwise
-                // lost (no session_output table since NC2) — surface it via
-                // the events API so admins see both the failure and a
-                // snapshot of what would have been sent.
+                // live events.
                 if (message.result && sessionCtx.chatId) {
                   const resultText = message.result;
                   // Bug 6: SDK sometimes packages its own catch'd API error
-                  // as a `result.subtype === "success"` payload. Sniff
-                  // before forwarding so the user does not see raw "API
-                  // Error: socket closed" text as a model reply.
+                  // as a `result.subtype === "success"` payload. Sniff it so
+                  // we surface an error turn instead of silently closing the
+                  // turn as a clean success.
                   const sniff = detectStreamApiError(resultText);
                   if (sniff) {
                     const classification = classify(new Error(sniff.message), { source: "stream" });
@@ -1353,10 +1354,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       // (retry counter + self-resume via handler.resume).
                       throw new StreamApiTransientError(sniff.message);
                     }
-                    // Permanent (401/403) OR retries exhausted: surface to
-                    // chat as an error event so the user sees what happened.
-                    // Skip forwardResult so the raw "API Error" text never
-                    // appears as a model reply in the timeline.
+                    // Permanent (401/403) OR retries exhausted: surface the
+                    // failure as an error event + error turn, and do NOT run
+                    // the success/completion path for this turn.
                     sessionCtx.emitEvent({
                       kind: "error",
                       payload: {
@@ -1378,11 +1378,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // loop (rate limit / socket closed / etc.).
                     retryCount = 0;
                     try {
-                      // All enrichment (inReplyTo, mentions, participants
-                      // lookup, transport) lives in ctx.forwardResult so every
-                      // handler shares one code path — see runtime/result-sink.ts.
+                      // Turn-completion hook. The agent's text is already
+                      // captured as `assistant_text` events above; `forwardResult`
+                      // no longer delivers it to chat (the per-turn final-text
+                      // mirror is retired — see runtime/result-sink.ts), it just
+                      // closes out the turn trigger.
                       await sessionCtx.forwardResult(resultText);
-                      sessionCtx.log("Result forwarded to chat");
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                       // Turn closed cleanly — drain in-flight inbox entries.
                       await ackTurnClose("success", "provider_clean_error", providerEnteredPrefix);
@@ -1396,19 +1397,20 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                         payload: { source: "runtime", message: forwardErrMessage },
                       });
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
-                      // forwardResult failure is treated as terminal for
-                      // this turn — ack so we don't loop on redelivery.
-                      // Long-lived sdk.sendMessage failures are rare; if
-                      // recovery is needed the user can retry by sending
-                      // a new message.
+                      // A failure in the completion hook is treated as terminal
+                      // for this turn — ack so we don't loop on redelivery. The
+                      // hook only closes the turn trigger now (the final-text
+                      // mirror is retired, so there is no chat-delivery step to
+                      // fail); a throw here is unexpected, but we still degrade
+                      // gracefully. If recovery is needed the user can retry by
+                      // sending a new message.
                       //
-                      // Reset retryCount along with the forward-success
-                      // branch above: the SDK actually returned a clean
-                      // `result` here (the failure was in our own
-                      // sendMessage downstream), so the next turn should
-                      // not inherit the prior turn's transient-retry
-                      // counter when an unrelated future stream error
-                      // fires.
+                      // Reset retryCount along with the success branch above:
+                      // the SDK actually returned a clean `result` here (any
+                      // failure is in our own turn-completion plumbing, not the
+                      // model), so the next turn should not inherit the prior
+                      // turn's transient-retry counter when an unrelated future
+                      // stream error fires.
                       retryCount = 0;
                       await ackTurnClose("error", "forward_failed", providerEnteredPrefix);
                     }

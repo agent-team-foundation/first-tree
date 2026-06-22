@@ -140,9 +140,10 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     expect(briefing).toContain("## Workspace Collaboration");
     expect(briefing).toContain("first-tree-staging chat --help");
     expect(briefing).toContain("first-tree-staging chat send");
-    // `chat send` is agent-directed; humans are reached via `chat ask`
-    // (decisions) / `chat update --description` (progress). No output-stream
-    // or `agent-final-text` mirror framing survives in the briefing.
+    // `chat send` reaches any teammate — agent or human; a human also has
+    // `chat ask` (decisions) / `chat update --description` (progress). No
+    // output-stream or `agent-final-text` mirror framing survives in the
+    // briefing.
     expect(briefing).toContain("first-tree-staging chat ask <human>");
     expect(briefing).toContain("first-tree-staging chat update --description");
     expect(briefing).not.toMatch(/output stream/i);

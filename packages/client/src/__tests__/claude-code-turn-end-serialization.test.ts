@@ -7,22 +7,24 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 /**
  * Regression guard for the turn_end serialization race.
  *
- * If `sendMessage` is fire-and-forget, a slow HTTP round-trip (say 200ms)
- * can let the SDK emit turn N+1's thinking / tool_call / assistant_text
- * events BEFORE the client has posted turn N's `turn_end` over the WebSocket.
- * The server then assigns a smaller seq to turn N+1's first events than to
- * turn N's turn_end — and the chat-view's `filterEventsForTimeline` treats
- * the latest turn_end as a hard boundary, retroactively hiding turn N+1's
- * live events.
+ * If the per-turn completion hook (`forwardResult`) were fire-and-forget, a
+ * slow round-trip could let the SDK emit turn N+1's thinking / tool_call /
+ * assistant_text events BEFORE the client has posted turn N's `turn_end` over
+ * the WebSocket. The server then assigns a smaller seq to turn N+1's first
+ * events than to turn N's turn_end — and the chat-view's
+ * `filterEventsForTimeline` treats the latest turn_end as a hard boundary,
+ * retroactively hiding turn N+1's live events.
  *
- * The fix: await `sendMessage` synchronously inside the consumer loop so
- * the turn_end emit happens BEFORE the for-await pulls the next SDK
- * message off the queue. This test proves the property.
+ * The fix: await `forwardResult` synchronously inside the consumer loop so the
+ * turn_end emit happens BEFORE the for-await pulls the next SDK message off the
+ * queue. (The final-text mirror is retired, so `forwardResult` no longer
+ * delivers a message — but it stays awaited precisely to preserve this seq
+ * ordering.) This test proves the property by stalling the hook.
  */
 
-let releaseSendMessage: (() => void) | null = null;
-const sendMessageStalled = new Promise<void>((resolve) => {
-  releaseSendMessage = resolve;
+let releaseForward: (() => void) | null = null;
+const forwardStalled = new Promise<void>((resolve) => {
+  releaseForward = resolve;
 });
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => {
@@ -39,8 +41,8 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
             };
           }
           // Turn 2 begins: the SDK has a next assistant message ready. If the
-          // consumer loop were not awaiting sendMessage, this would fire
-          // before turn_end and break the seq invariant.
+          // consumer loop were not awaiting the completion hook, this would
+          // fire before turn_end and break the seq invariant.
           if (step === 2) {
             return {
               done: false,
@@ -95,9 +97,10 @@ function buildCache() {
 
 describe("claude-code handler — turn_end serialization (race guard)", () => {
   it("blocks the next turn's events until the current turn_end has been emitted", async () => {
-    // sendMessage holds for 50ms to simulate a slow server round-trip.
-    const sendMessage = vi.fn().mockImplementation(async () => {
-      await sendMessageStalled;
+    const sendMessage = vi.fn();
+    // The completion hook holds (simulating a slow round-trip) until released.
+    const forwardResult = vi.fn().mockImplementation(async () => {
+      await forwardStalled;
     });
 
     const emitted: { kind: string; at: number }[] = [];
@@ -125,6 +128,7 @@ describe("claude-code handler — turn_end serialization (race guard)", () => {
         emitted.push({ kind: e.kind, at: Date.now() - start });
       },
       ...mockCtxPlumbing({ sendMessage }, "chat-1"),
+      forwardResult,
     };
 
     const startPromise = handler.start(
@@ -132,14 +136,16 @@ describe("claude-code handler — turn_end serialization (race guard)", () => {
       ctx,
     );
 
-    // Wait until sendMessage was invoked (turn 1 result arrived), then hold
-    // briefly to prove that no turn-2 events were emitted while we stalled.
+    // Wait until the completion hook was invoked (turn 1 result arrived), then
+    // hold briefly to prove no turn-2 events were emitted while we stalled.
     await new Promise((r) => setTimeout(r, 30));
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(forwardResult).toHaveBeenCalledTimes(1);
+    // The mirror is retired — no chat message is ever sent.
+    expect(sendMessage).not.toHaveBeenCalled();
     expect(emitted.filter((e) => e.kind !== "turn_end")).toEqual([]);
 
-    // Release sendMessage — turn_end should fire, THEN turn 2 tool_use pending.
-    releaseSendMessage?.();
+    // Release the hook — turn_end should fire, THEN turn 2 tool_use pending.
+    releaseForward?.();
 
     await startPromise;
     await handler.suspend();

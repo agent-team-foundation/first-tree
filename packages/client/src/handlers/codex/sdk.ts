@@ -48,6 +48,7 @@ import { deliveryTokenFromSessionContext } from "../../runtime/handler.js";
 import { materializeResourceSkills } from "../../runtime/resource-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
+import { chunkAssistantText } from "../assistant-text.js";
 import { formatAuthHint, isCodexAuthError } from "../auth-error-hint.js";
 import { resolveTurnSettlement } from "../turn-settlement.js";
 
@@ -59,7 +60,6 @@ import { resolveTurnSettlement } from "../turn-settlement.js";
 type CodexConfigValue = string | number | boolean | CodexConfigValue[] | CodexConfigObject;
 type CodexConfigObject = { [key: string]: CodexConfigValue };
 
-const ASSISTANT_TEXT_EVENT_LIMIT = 8000;
 const RESULT_PREVIEW_LIMIT = 400;
 
 /**
@@ -94,10 +94,12 @@ const RETRY_MULTIPLIER = 3;
  * Chat-visible notice posted when a turn is detected as a usage-limit empty
  * turn (issue #971 — codex account usage limit exhausted: the SDK reports
  * `turn.completed` with no reply and zero token consumption, i.e. the model
- * was never invoked). Delivered via the agent-final-text path, so it is
- * authored as the agent itself — hence first person. We deliberately do NOT
- * include an ETA: codex-sdk@0.134 does not expose `rate_limits.resets_at`,
- * so there is no reliable recovery time to quote.
+ * was never invoked). Delivered by an EXPLICIT `sdk.sendMessage(...,
+ * purpose: "agent-final-text")` (a deliberate recipientless runtime notice —
+ * NOT the retired final-text forward), authored as the agent itself, hence
+ * first person. We deliberately do NOT include an ETA: codex-sdk@0.134 does
+ * not expose `rate_limits.resets_at`, so there is no reliable recovery time to
+ * quote.
  */
 const USAGE_LIMIT_NOTICE =
   "⚠️ My runtime has reached its usage limit, so I couldn't process the message you just sent. " +
@@ -644,10 +646,12 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         // the events stream with empty `assistant_text` rows. Mirrors the
         // claude-code handler's `text.trim()` guard.
         if (!item.text.trim()) return "";
-        sessionCtx.emitEvent({
-          kind: "assistant_text",
-          payload: { text: item.text.slice(0, ASSISTANT_TEXT_EVENT_LIMIT) },
-        });
+        // Chunk so the FULL assistant text is preserved across one or more
+        // events — the durable troubleshooting record now that the per-turn
+        // final-text chat mirror is retired.
+        for (const chunk of chunkAssistantText(item.text)) {
+          sessionCtx.emitEvent({ kind: "assistant_text", payload: { text: chunk } });
+        }
         return item.text;
       }
       case "command_execution": {
@@ -953,9 +957,10 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
 
     // Match @openai/codex-sdk's Thread.run() success semantics: when a turn
     // emits several non-empty agent_message items, finalResponse is the latest
-    // one. Earlier agent_message items remain live assistant_text progress
-    // events only. If the provider never completes successfully, do not
-    // forward partial text as a final chat message.
+    // one. Every agent_message is already captured as `assistant_text` events
+    // regardless; `accumulated` only feeds the turn-completion hook + success
+    // gating below. If the provider never completes successfully, we don't
+    // treat partial text as the turn's result.
     const accumulated = finalResponse;
 
     // Codex reports CUMULATIVE thread usage on `turn.completed`; convert it to
@@ -1025,12 +1030,19 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         `codex usage limit reached chatId=${sessionCtx.chatId}: empty turn, model not invoked (zero token delta); ` +
           "posting a chat notice instead of silently acking the message",
       );
-      // Layer 1-A (visibility): post a chat-visible notice via the
-      // agent-final-text path (forwardResult → notify=false, bypasses the
-      // group @mention guard) so a human observer sees WHY their message got
-      // no reply, rather than having to dig through codex rollout files.
+      // Layer 1-A (visibility): post a chat-visible notice so a human observer
+      // sees WHY their message got no reply, rather than digging through codex
+      // rollout files. This is a deliberate, EXPLICIT send — NOT the retired
+      // final-text forward (`forwardResult` no longer delivers anything). It
+      // rides the `agent-final-text` purpose only for its delivery profile
+      // (recipientless, notify=false, bypasses the group @mention guard).
       try {
-        await sessionCtx.forwardResult(USAGE_LIMIT_NOTICE);
+        await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
+          source: "api",
+          format: "text",
+          content: USAGE_LIMIT_NOTICE,
+          purpose: "agent-final-text",
+        });
         consumedErrorReason = "usage_limit_notice_posted";
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1042,6 +1054,9 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       }
     } else if (completedSuccessfully && accumulated.trim()) {
       try {
+        // Turn-completion hook. The agent text is already captured as
+        // `assistant_text` events; `forwardResult` no longer delivers it to
+        // chat (final-text mirror retired) — it just closes the turn trigger.
         await sessionCtx.forwardResult(accumulated);
       } catch (err) {
         forwardFailed = true;

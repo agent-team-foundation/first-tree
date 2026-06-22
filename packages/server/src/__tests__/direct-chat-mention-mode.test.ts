@@ -139,9 +139,10 @@ describe("chat membership + fan-out semantics (explicit-only)", () => {
     });
 
     it("agent→human 1-on-1 ask (format=request) wakes the human (symmetric)", async () => {
-      // `chat send` is agent-directed: an agent reaches a human only as an ask
-      // (`chat ask`, format=request), never a plain send. That ask still wakes
-      // the human, so the wake projection stays symmetric with human→agent.
+      // An agent raises a tracked decision with an ask (`chat ask`,
+      // format=request); the ask wakes the human, so the wake projection stays
+      // symmetric with human→agent. (A plain `chat send <human>` is also
+      // allowed as a free reply — this case exercises the ask path.)
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const human = await createTestAgent(app, { name: `fo-h2-${uid}`, type: "human" });

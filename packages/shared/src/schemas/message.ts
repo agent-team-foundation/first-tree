@@ -11,14 +11,15 @@ import { z } from "zod";
  *                 session).
  *   - "cli"     — Agent's First Tree CLI (`chat send` / `chat invite`
  *                 / etc.).
- *   - "api"     — Agent SDK direct API call (incl. result-sink auto-forward,
- *                 in-process tool integrations); the catch-all for client
- *                 runtime-initiated writes that aren't typed via the CLI.
+ *   - "api"     — Agent SDK direct API call (incl. deliberate runtime notices
+ *                 such as the codex usage-limit notice, in-process tool
+ *                 integrations); the catch-all for client runtime-initiated
+ *                 writes that aren't typed via the CLI.
  *   - "github"  — Inbound message bridged from a GitHub webhook.
  *
  * NOT a behaviour discriminator — use `purpose` for that (e.g. distinguishing
- * a CLI-typed agent send from a result-sink auto-forward, both of which may
- * carry source='api'/'cli'). `source` is the caller-stack origin, intended
+ * a regular agent send from a deliberate `agent-final-text` runtime notice,
+ * which may carry source='api'). `source` is the caller-stack origin, intended
  * for observability and loop / egress diagnostics.
  */
 export const MESSAGE_SOURCES = {
@@ -54,12 +55,13 @@ export const MESSAGE_FORMATS = {
    * `requestResolutionSchema`), which drives `chat_user_state.open_request_count`
    * down. The target's answer ALWAYS resolves it — picking an option OR typing
    * free text both write `resolves` (kind="answered"). NEW resolutions are
-   * human-only — the server accepts a `resolves` write only from the target, and
-   * an agent cannot post a non-ask follow-up to the human (a plain agent→human
-   * send is rejected). Lifecycle readers additionally honor a legacy
-   * asker-authored resolution row (written before the refinement) for
-   * backward-compat. `inReplyTo` itself is pure threading and never changes a
-   * question's lifecycle.
+   * human-only — the server accepts a `resolves` write only from the target. An
+   * agent CAN post a plain `chat send <human>` follow-up (an informational free
+   * reply; it carries no `resolves`, raises no red dot, and never resolves the
+   * question), but it cannot answer/close the question itself. Lifecycle readers
+   * additionally honor a legacy asker-authored resolution row (written before
+   * the refinement) for backward-compat. `inReplyTo` itself is pure threading
+   * and never changes a question's lifecycle.
    */
   REQUEST: "request",
 } as const;
@@ -151,12 +153,14 @@ export type RequestResolution = z.infer<typeof requestResolutionSchema>;
  * `POST /agent/chats/:id/messages`. Tells the server *why* this write is
  * happening so it can pick the right enforcement profile.
  *
- *   - `"agent-final-text"`: handler-initiated forward of an agent's final
- *     reply text (today: `runtime/result-sink.ts`). Lands in chat history
- *     so human observers in the web UI can see what the agent is doing,
- *     but does not wake other agents and is not subject to the group-chat
- *     `@mention required` guard — it is an agent's own response surfaced
- *     for humans, not a message addressed into the room.
+ *   - `"agent-final-text"`: a recipientless, human-observable runtime message.
+ *     It lands in chat history for human observers, does not wake other agents,
+ *     and is not subject to the group-chat `@mention required` guard — it is
+ *     surfaced for humans, not addressed into the room. The per-turn final-text
+ *     MIRROR that used to ride this purpose is RETIRED (an agent's final text is
+ *     its output stream, not a chat message — see `runtime/result-sink.ts`);
+ *     the purpose now serves deliberate handler-emitted runtime notices (e.g.
+ *     the codex usage-limit notice).
  *
  * Default-`undefined` means a regular agent-initiated send (CLI `chat send`,
  * API, etc.) and goes through the normal enforcement profile.
@@ -166,16 +170,16 @@ export type MessagePurpose = z.infer<typeof messagePurposeSchema>;
 
 /**
  * Metadata flag the server stamps on a STORED message when it was sent with
- * `purpose: "agent-final-text"` (the runtime's per-turn final-text mirror —
- * see client `runtime/result-sink.ts`). `purpose` itself is a send-time-only
- * intent tag that the server consumes for enforcement and does NOT persist,
- * so this boolean is the only durable post-save signal distinguishing a
- * silent final-text mirror from a deliberate agent `chat send`. Server-owned:
- * stamped only for a genuine mirror (a NON-HUMAN sender with the final-text
- * purpose) and never honored from inbound client metadata, so a human/web send
- * carrying `purpose` cannot masquerade as one. The web reads it to optionally
- * hide final-text rows behind a staging-only view toggle; absent / false on
- * every other message.
+ * `purpose: "agent-final-text"` (see client `runtime/result-sink.ts` for the
+ * now-retired per-turn mirror; the purpose lives on as a recipientless runtime
+ * notice). `purpose` itself is a send-time-only intent tag that the server
+ * consumes for enforcement and does NOT persist, so this boolean is the only
+ * durable post-save signal distinguishing such a message from a deliberate
+ * agent `chat send`. Server-owned: stamped only for a NON-HUMAN sender with the
+ * final-text purpose and never honored from inbound client metadata, so a
+ * human/web send carrying `purpose` cannot masquerade as one. The web reads it
+ * to optionally hide these rows behind a staging-only view toggle; absent /
+ * false on every other message.
  */
 export const AGENT_FINAL_TEXT_METADATA_KEY = "agentFinalText";
 

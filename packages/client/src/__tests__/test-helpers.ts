@@ -3,23 +3,22 @@ import type { SessionMessage } from "../runtime/handler.js";
 
 /**
  * Minimal stub for the runtime-provided `SessionContext` plumbing fields
- * (forwardResult / buildAgentEnv / formatInboundContent / resolveSenderLabel).
- * Keeps legacy tests — which pre-date the runtime migration and still assert
- * directly on `sdk.sendMessage` — green without duplicating the stub in every
- * file.
+ * (forwardResult / buildAgentEnv / formatInboundContent / resolveSenderLabel),
+ * so handler tests don't re-stub them in every file.
  *
- * The stubbed `forwardResult` just proxies to `sdk.sendMessage` with no
- * enrichment — it's deliberately not a faithful copy of the real result-sink
- * (mentions / inReplyTo / trigger lookup live in the runtime). Tests that
- * need enrichment coverage should exercise the real sink in
- * `result-sink.test.ts` instead of going through the handler.
+ * `forwardResult` is a production-faithful NO-OP: the per-turn final-text
+ * mirror is retired, so the real `runtime/result-sink.ts` does not deliver to
+ * chat — it only closes the turn trigger. The agent's text is captured via
+ * `assistant_text` events, not this hook. A handler test that needs to assert
+ * an EXPLICIT chat write (e.g. the codex usage-limit runtime notice) mocks
+ * `sdk.sendMessage` on the ctx directly, not through here.
  *
  * The stubbed name-resolution path returns the raw senderId — the production
  * `[From: <name>]` path is covered separately in `agent-io.test.ts`.
  */
 export function mockCtxPlumbing(
-  sdk: { sendMessage: (chatId: string, body: Record<string, unknown>) => Promise<unknown> },
-  chatId: string,
+  _sdk: { sendMessage: (chatId: string, body: Record<string, unknown>) => Promise<unknown> },
+  _chatId: string,
 ): {
   forwardResult: (text: string) => Promise<void>;
   markMessagesConsumed: (messages: SessionMessage | readonly SessionMessage[]) => void;
@@ -33,9 +32,8 @@ export function mockCtxPlumbing(
   resolveSenderLabel: (senderId: string) => Promise<string>;
 } {
   return {
-    forwardResult: async (text: string) => {
-      await sdk.sendMessage(chatId, { source: "api", format: "text", content: text });
-    },
+    // Turn-completion hook — delivers nothing (final-text mirror retired).
+    forwardResult: async () => {},
     // Default stub: tests that care about ack timing override via spies.
     markMessagesConsumed: () => {},
     finishTurn: async () => {},

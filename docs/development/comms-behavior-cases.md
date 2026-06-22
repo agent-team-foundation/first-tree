@@ -9,23 +9,23 @@
 > `chat ask` (a tracked question — the message **body is the ask**, `--options`
 > as a JSON array; an agent can ONLY ask — the human resolves in the web UI,
 > there is no agent resolve/close), `chat update --description` (progress /
-> status), and `chat send` is
-> **agent-directed only** — the server **rejects** a plain agent→human send. This
+> status), while `chat send` still reaches any teammate — agent or human — with
+> a plain agent→human send delivered as a free reply (it raises no red dot;
+> reserve `chat ask` for a tracked decision). This
 > file is retained for historical reference and is **not** authoritative.
 > The current contract lives in `packages/client/src/runtime/agent-briefing.ts`
 > (Communication / Asking Humans), `docs/cli-reference.md`, and the Context
 > Tree node `system/cloud/chat/messaging.md`.
 
-Behavioral use cases for the **agent ↔ teammate communication contract**
-(`chat send` as the only delivery path agents rely on; `--request` /
-`--question` for asking humans; output stream outside `chat send` is the
-agent's reasoning trace, not a chat reply path). Every case is grounded in a
-**real** `yzw-assistant` session from `~/.first-tree-staging/.../workspaces/yzw-assistant`
-(2026-06-05 → 06-08); the session id is cited so the source can be re-read.
-
-These are the regression set for the contract defined in
-`packages/client/src/runtime/agent-briefing.ts` (Communication / Asking Humans
-blocks) and `docs/cli-reference.md`.
+Each case is grounded in a **real** `yzw-assistant` session from
+`~/.first-tree-staging/.../workspaces/yzw-assistant` (2026-06-05 → 06-08); the
+session id is cited so the source can be re-read. The cases were written
+against a **since-superseded** contract (`chat send --request/--question/
+--answer/--close` for asking and resolving; the output stream framed as a
+reasoning-trace channel). They are preserved ONLY as a record of how the
+communication surface evolved — **not** a regression set, **not** an eval
+oracle, and **not** an implementation reference. For the current contract use
+the sources named in the banner above.
 
 **Validation status (2026-06-08, real e2e runtime + real Claude Code agent):**
 C1 (ask human via `--request`) and C4 (wake agent via plain `chat send`)
@@ -42,7 +42,7 @@ agent) goes through explicit `chat send`. C6 flipped accordingly (was
 the agent's output stream is its reasoning trace and must not be suppressed
 for chat-related reasons.
 
-**Open-question lifecycle (current contract — blocking ask):** An open question
+**Open-question lifecycle (historical note — blocking ask):** An open question
 is a `format="request"` message — an agent asking a single human — and it raises
 a tracked red dot (`open_request_count`) on the human target AND **blocks that
 chat for them**: the web UI pins the question and hides every message after it
@@ -52,32 +52,28 @@ resolves it** — the human picking an option OR typing free text both write
 `metadata.resolves = {request: <requestId>, kind: "answered" | "closed",
 reason?}`, the only field that drives the red-dot −1 (and unblocks the chat).
 There is no human-side "discuss without resolving"; an agent may still thread a
-non-resolving follow-up. The asking agent can also resolve from the CLI
-(`first-tree chat send ... --answer <requestId>`) or withdraw a moot question
-(`first-tree chat send ... --close <requestId>`). Authz: only the target human
-or the asking agent may resolve. Authoring: **prefer a free-text question (omit
-`--option`); add `--option` only when every option is a short, single-meaning,
+non-resolving follow-up. **Resolution is human-only** — the target human's web
+answer is the only thing that resolves it; an agent (including the asker) cannot
+answer or close a question (there is no agent resolve/close command). Authoring:
+the question is raised with `chat ask`; **prefer a free-text question (omit
+`--options`); add `--options` only when every option is a short, single-meaning,
 mutually-exclusive pick.** See C8 for the full flow.
 
-## How to run
+## Outcome vocabulary (historical shorthand)
 
-Each case is a `(situation → expected action)` pair judged on the agent's
-**outgoing actions** for one turn. No harness exists yet; run either way:
+The `assert` columns below use these tokens. **They reference the OLD command
+surface** (`chat send --request/--answer/--close`) and the old "reasoning
+trace" framing — kept verbatim as written at the time, NOT updated to the
+current `chat ask` + human-only-resolution contract. They are reading aids for
+the historical cases, not a runnable oracle; do not load them as eval fixtures.
 
-- **LLM-judge / manual** — give a model the current `AGENTS.md` briefing + the
-  case `situation`, then check its turn against `assert`.
-- **Future eval** — the table is machine-readable enough to load as fixtures
-  (one row = one scenario; `assert` is the oracle).
-
-Outcome vocabulary (`assert` references these):
-
-| Token | Means |
+| Token | Means (as written then; superseded) |
 |---|---|
-| `REQUEST(human)` | `chat send <human> --request --question "..." [--option ...]` — a tracked ask (**human recipient only**; the server rejects a request directed at an agent) |
+| `REQUEST(human)` | `chat send <human> --request --question "..." [--option ...]` — a tracked ask (**human recipient only**; the server rejects a request directed at an agent). Today: `chat ask <human> "..." [--options ...]`. |
 | `SEND(human)` | plain `chat send <human> "..."` — reply / status to a named human |
 | `SEND(agent)` | plain `chat send <agent> "..."` — wakes an agent |
-| `RESOLVE(request)` | explicit `metadata.resolves` write that clears the red dot — `first-tree chat send ... --answer <requestId>` (`kind="answered"`) / `first-tree chat send ... --close <requestId>` (`kind="closed"`), or the human's web-UI answer |
-| `NO_SEND` | the turn does not fire any `chat send` (no `REQUEST`, no `SEND`, no `RESOLVE`). The agent's output stream / reasoning trace is unconstrained — only the *send* side is asserted here. |
+| `RESOLVE(request)` | explicit `metadata.resolves` write that clears the red dot. Shown here via `chat send ... --answer/--close`; today **resolution is human-only** (the target's web answer only — no agent resolve/close command). |
+| `NO_SEND` | the turn does not fire any `chat send` (no `REQUEST`, no `SEND`, no `RESOLVE`). |
 | `¬X` | must NOT do X |
 
 ## Case index
@@ -185,15 +181,9 @@ Outcome vocabulary (`assert` references these):
 - **Decision point:** What does the human's answer do, and how else can the question be resolved?
 - **Behavior (current contract):**
   - **Any human answer resolves it.** Picking an option OR typing free text both attach `metadata.resolves` (kind="answered"), clear the red dot, and unblock the chat. There is no human-side "reply without resolving" — the blocking answer surface always resolves. If the human's answer is a pushback rather than a decision, that pushback **is** the (free-text) answer; the agent reads it and **re-asks** if it still needs a decision.
-  - `metadata.resolves = {request: <requestId>, kind: "answered" | "closed", reason?}` is the **only** field that drives the red-dot −1. Besides the human's web answer, the **asking agent** can resolve from the CLI:
-    ```bash
-    # answered out-of-band → resolve as answered
-    first-tree chat send yuezengwu "Reworded the Engagement paragraph as discussed; opening the tree PR now." --answer <requestId>
-    # decided not to proceed → withdraw the question
-    first-tree chat send yuezengwu "Dropping the edit — handling it in the separate archive-policy PR instead." --close <requestId>
-    ```
+  - `metadata.resolves = {request: <requestId>, kind: "answered"}` is the **only** field that drives the red-dot −1, and it is written **only** by the target human's web answer. **Resolution is human-only** — an agent (including the asker) cannot answer or close a question; there is no agent resolve/close command. The agent only asks (`chat ask`) and reads the answer.
   - An agent's bare threaded follow-up (`inReplyTo`, no `resolves`) adds context without resolving — `inReplyTo` is pure threading.
-  - **Authz:** only the target human or the asking agent may resolve.
+  - **Authz:** only the target human may resolve.
   - **Invalid resolves fail loud (no silent write).** The server rejects the whole send — message included, via tx rollback — when `resolves.request` does not exist in this chat (stale/bogus id), points at a non-`request` message, or the sender is neither the target nor the asker. No "answered"/"closed" message with a dangling `metadata.resolves`/`inReplyTo` ever lands in history. Re-resolving an already-resolved question stays a **soft success** (threads as confirmation, idempotent counter), so the human-answers-while-agent-closes race never errors either side.
   - **Re-asking opens a NEW, independent question** — it never auto-supersedes the old one; the new question raises a fresh red dot and a fresh block.
 - **assert:** the human's answer (option or free text) is a `RESOLVE(answered)` that clears the dot and unblocks; an agent's bare threaded follow-up is `¬RESOLVE`; a re-ask is a new `REQUEST(human)`, `¬supersede` of the prior question.
@@ -205,7 +195,7 @@ Outcome vocabulary (`assert` references these):
 | Decision-guide branch | Positive (do it) | Guard (don't over-do it) |
 |---|---|---|
 | Ask a human (`--request`) | C1, C2, C3, C8 (ask phase) | C5 (no spurious ask), C6 (no escalation from informational reply), C7 (never at an agent) |
-| Resolve a question (`RESOLVE`) | C8 (human answer = option/free text; or `chat send ... --answer` / `--close`) | C8 (an agent's bare follow-up must NOT resolve; a re-ask must NOT supersede) |
+| Resolve a question (`RESOLVE`) | C8 (human answer = option/free text — human-only; no agent resolve/close) | C8 (an agent's bare follow-up must NOT resolve; a re-ask must NOT supersede) |
 | Reach a human plain (`SEND(human)`) | C6, C8 (agent follow-up context under a question) | C5 (no courtesy send) |
 | Reach an agent (`SEND(agent)`) | C4 | C5 (no courtesy ping), C7 (plain send, not `--request`) |
 | Fire no `chat send` (`NO_SEND`) | C5 | — |

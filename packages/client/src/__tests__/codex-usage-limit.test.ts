@@ -144,6 +144,11 @@ function makeContext(
     recordProviderActivity: () => {},
     emitEvent: opts.emitEvent ?? (() => {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-usage-limit"),
+    // Production-faithful: the final-text forward is retired, so it delivers
+    // nothing. (mockCtxPlumbing's stub would proxy to sendMessage and mask
+    // that — the usage-limit notice is delivered by an EXPLICIT sdk.sendMessage
+    // in the handler, NOT through this path.)
+    forwardResult: async () => {},
     finishTurn: async (messages) => {
       onFinishTurn(Array.isArray(messages) ? messages.length : 1);
     },
@@ -185,10 +190,12 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
 
     const events = emitEvent.mock.calls.map(([event]) => event);
 
-    // Layer 1-A: a chat-visible notice is posted (via the forwardResult /
-    // agent-final-text path → sendMessage in this harness).
+    // Layer 1-A: a chat-visible notice is posted by an EXPLICIT sdk.sendMessage
+    // (NOT the retired final-text forward), carrying the agent-final-text
+    // delivery profile so it lands recipientless without waking anyone.
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("usage limit");
+    expect(sendMessage.mock.calls[0]?.[1].purpose).toBe("agent-final-text");
 
     // Layer 2: an `error` event is emitted (daemon log + admin stream), and a
     // warn-style log line is recorded — not a phantom success.
@@ -254,7 +261,7 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
     await handler.shutdown();
   });
 
-  it("forwards a normal reply unchanged and reports success (no false trigger when text is produced)", async () => {
+  it("a normal reply reports success and is NOT delivered to chat (final-text mirror retired)", async () => {
     state.turns = [
       [
         { type: "item.completed", item: { type: "agent_message", text: "here is your answer" } },
@@ -276,8 +283,9 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
     await handler.start(makeMessage("m1", "hello"), ctx);
 
     const events = emitEvent.mock.calls.map(([event]) => event);
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1].content).toBe("here is your answer");
+    // The final text is the agent's output stream, not a chat message — it is
+    // NOT forwarded. The turn still completes successfully.
+    expect(sendMessage).not.toHaveBeenCalled();
     expect(
       events.some((event) => event.kind === "error" && event.payload.message.includes("codex usage limit reached")),
     ).toBe(false);

@@ -446,11 +446,9 @@ describe("SessionManager edge coverage", () => {
     expect(formatted).toContain("[From: alice]");
     expect(await ctx.resolveSenderLabel("sender-1")).toBe("alice");
 
+    // Final-text delivery is retired: forwardResult writes nothing to chat.
     await ctx.forwardResult("final answer");
-    expect(sendMessage).toHaveBeenCalledWith(
-      "chat-context",
-      expect.objectContaining({ content: "final answer", inReplyTo: "msg-1" }),
-    );
+    expect(sendMessage).not.toHaveBeenCalled();
 
     await sm.shutdown();
     rmSync(workspaceRoot, { recursive: true, force: true });
@@ -1108,83 +1106,6 @@ describe("SessionManager edge coverage", () => {
     );
     expect(withoutRuntimeCallback.getSessionRuntimeStates()).toEqual([]);
     await withoutRuntimeCallback.shutdown();
-  });
-
-  it("resolves self-fence through forwardResult for success, no-cache, null-trigger, and non-Error failure cases", async () => {
-    const cache = makeCache({
-      config: runtimeConfig({
-        payload: {
-          kind: "claude-code",
-          prompt: { append: "" },
-          model: "opus",
-          mcpServers: [],
-          env: [],
-          gitRepos: [{ url: "https://github.com/acme/project.git", localPath: "project" }],
-          resourceSkills: [],
-          reasoningEffort: "",
-        },
-      }),
-    });
-    const sdk = mockSdk();
-    const sendMessage = vi.mocked(sdk.sendMessage);
-    let cachedCtx: SessionContext | undefined;
-    const cached = makeManager({
-      handlers: [
-        handler({
-          async start(_message, ctx) {
-            cachedCtx = ctx;
-            return "cached-context";
-          },
-        }),
-      ],
-      sdk,
-      agentConfigCache: cache,
-    });
-
-    await cached.dispatch(mockEntry({ id: 1, chatId: "chat-cached-fence" }));
-    if (!cachedCtx) throw new Error("cached context missing");
-    await cachedCtx.forwardResult("first result");
-    await cachedCtx.forwardResult("second result");
-    expect(sendMessage).toHaveBeenLastCalledWith(
-      "chat-cached-fence",
-      expect.not.objectContaining({ inReplyTo: expect.any(String) }),
-    );
-    await cached.shutdown();
-
-    let noCacheCtx: SessionContext | undefined;
-    const noCache = makeManager({
-      handlers: [
-        handler({
-          async start(_message, ctx) {
-            noCacheCtx = ctx;
-            return "no-cache-context";
-          },
-        }),
-      ],
-    });
-    await noCache.dispatch(mockEntry({ id: 2, chatId: "chat-no-cache-fence" }));
-    if (!noCacheCtx) throw new Error("no-cache context missing");
-    await noCacheCtx.forwardResult("no cache result");
-    await noCache.shutdown();
-
-    let stringFailureCtx: SessionContext | undefined;
-    const stringFailure = makeManager({
-      handlers: [
-        handler({
-          async start(_message, ctx) {
-            stringFailureCtx = ctx;
-            return "string-failure-context";
-          },
-        }),
-      ],
-      agentConfigCache: makeCache({
-        refreshIfNewer: () => Promise.reject("config missing"),
-      }),
-    });
-    await stringFailure.dispatch(mockEntry({ id: 3, chatId: "chat-string-fence" }));
-    if (!stringFailureCtx) throw new Error("string-failure context missing");
-    await stringFailureCtx.forwardResult("string failure result");
-    await stringFailure.shutdown();
   });
 
   it("reports runtime snapshots only for active sessions and ignores inactive provider activity", async () => {

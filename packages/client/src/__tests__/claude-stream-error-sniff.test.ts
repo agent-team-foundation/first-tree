@@ -3,9 +3,9 @@ import { detectStreamApiError } from "../handlers/claude-code.js";
 
 /**
  * Task 8 (Bug 6): the `detectStreamApiError` sniffer recognises Claude SDK
- * "API Error: ..." text that was forwarded as a result.success payload, so
- * the runtime can route it through transient retry / structured error
- * events instead of forwarding it as a model reply.
+ * "API Error: ..." text that arrived as a result.success payload, so the
+ * runtime can route it through transient retry / structured error events
+ * instead of recording it as the turn's clean result.
  *
  * The heuristic is intentionally conservative: prefix + length cap +
  * technical hint. Test coverage includes the "user discusses API Error in

@@ -3,10 +3,10 @@ import { extractMentions, scanMentionTokens, segmentMentions } from "../mentions
 import type { ChatParticipantDetail } from "../schemas/chat.js";
 
 /**
- * `extractMentions` is the "@<name> → agentId[]" resolver used by both the
- * server's fan-out router and the claude-code handler's auto-forward (see
- * proposals/hub-agent-messaging-reply-and-mentions §4). Every test here pins
- * one of the three defensive gates so a future refactor can't silently drop one.
+ * `extractMentions` is the "@<name> → agentId[]" resolver used by the server's
+ * fan-out router (see proposals/hub-agent-messaging-reply-and-mentions §4).
+ * Every test here pins one of the three defensive gates so a future refactor
+ * can't silently drop one.
  */
 
 function mkParticipant(

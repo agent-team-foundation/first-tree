@@ -495,8 +495,9 @@ describe("codex handler startup inject queue", () => {
 
     await handler.start(makeMessage("m1", "first"), ctx);
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1].content).toBe("final answer");
+    // Final-text mirror retired: the result is captured as assistant_text
+    // events, NOT delivered as a chat message.
+    expect(sendMessage).not.toHaveBeenCalled();
     expect(
       emitEvent.mock.calls
         .map(([event]) => (event.kind === "assistant_text" ? event.payload.text : null))
@@ -528,8 +529,13 @@ describe("codex handler startup inject queue", () => {
     await handler.start(makeMessage("m1", "first"), ctx);
 
     const events = emitEvent.mock.calls.map(([event]) => event);
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1].content).toBe("final answer");
+    // Final-text mirror retired: result captured as assistant_text, not sent.
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(
+      events
+        .map((event) => (event.kind === "assistant_text" ? event.payload.text : null))
+        .filter((text): text is string => typeof text === "string"),
+    ).toContain("final answer");
     expect(
       events.some(
         (event) =>
