@@ -3,6 +3,8 @@ import { BoundAgentsList } from "./shared/bound-agents-list.js";
 import { CardSection, CardSectionLabel } from "./shared/card-section.js";
 import { CompactMetaLine } from "./shared/compact-meta-line.js";
 import { PROVIDER_ORDER } from "./shared/providers.js";
+import { RuntimeAuthControls } from "./shared/runtime-auth-controls.js";
+import { deriveRuntimeAuthView } from "./shared/runtime-auth-view.js";
 import { RuntimeInstallBox } from "./shared/runtime-install-box.js";
 import { cardHostnameLabel, summarizeBoundAgents } from "./view-models.js";
 
@@ -58,15 +60,18 @@ export function SetupIncompleteCardBody({ client, boundAgents, agentName }: Setu
             gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, var(--sp-70)), 1fr))",
           }}
         >
-          {installableProviders.map((provider) => (
-            <RuntimeInstallBox
-              key={provider}
-              provider={provider}
-              entry={client.capabilities[provider] ?? null}
-              hostname={hostname}
-              os={client.os}
-            />
-          ))}
+          {installableProviders.map((provider) => {
+            const entry = client.capabilities[provider] ?? null;
+            // When the daemon can drive this provider's login in-product (codex
+            // device-auth), offer the one-click Connect / device-code panel
+            // instead of a "run `codex login` yourself" command box.
+            if (deriveRuntimeAuthView(provider, entry, Date.now()).kind !== "none") {
+              return <RuntimeAuthControls key={provider} clientId={client.id} provider={provider} entry={entry} />;
+            }
+            return (
+              <RuntimeInstallBox key={provider} provider={provider} entry={entry} hostname={hostname} os={client.os} />
+            );
+          })}
         </div>
       </CardSection>
     </div>
