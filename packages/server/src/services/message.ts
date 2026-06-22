@@ -285,24 +285,12 @@ export function preflightMessageSendIntent(input: {
     }
   }
 
-  // An agent may address a human ONLY as a `request` (an ask via `chat ask`). A
-  // plain agent→human send has no channel: humans are reached with `chat ask`
-  // (decisions/approval) or `chat update --description` (progress). The only
-  // exempt shape is the silent `agent-final-text` mirror (it addresses no one —
-  // an agent's own response surfaced for human observers). An agent CANNOT
-  // resolve a question either: resolution is human-only (the web answer), so a
-  // resolution-carrying agent send is not exempt here and is also refused by the
-  // resolution authorization below.
-  if (senderType !== "human" && data.format !== MESSAGE_FORMATS.REQUEST && data.purpose !== "agent-final-text") {
-    const humanTarget = mentionTargets.map((id) => participantsById.get(id)).find((p) => p?.type === "human");
-    if (humanTarget) {
-      const label = humanTarget.displayName || humanTarget.name || "that human";
-      throw new BadRequestError(
-        `An agent cannot \`chat send\` a human (addressed ${label}). Ask a human with ` +
-          "`chat ask` (a decision/approval/answer), or report progress with `chat update --description`.",
-      );
-    }
-  }
+  // An agent may `chat send` any participant — agent or human. A plain
+  // agent→human send is a free reply / conversational answer; a tracked
+  // decision goes through `chat ask` (format=request) and progress through
+  // `chat update --description`, but neither is the only path to a human.
+  // (Resolution stays human-only — enforced by the resolution authorization
+  // below, independent of who may send.)
 
   const isAgentFinalText = data.purpose === "agent-final-text";
   const purposeProfile = isAgentFinalText
@@ -642,9 +630,9 @@ async function sendMessageInner(
       }
       // Resolution is human-only: ONLY the target human resolves it, by
       // answering in the web UI. An agent — including the asker — cannot mark a
-      // question answered or close it; an agent reaches the human only by asking.
-      // (The send guard above already refuses an agent→human send that is not an
-      // ask; this is the authoritative authz for the resolution itself.)
+      // question answered or close it. A plain agent→human `chat send` is allowed
+      // (a free reply), but it can never carry a resolution: this authz is the
+      // authoritative gate for the resolution itself.
       if (senderId !== target) {
         throw new ForbiddenError("Only the question's target may resolve it — the human answers in the web UI.");
       }

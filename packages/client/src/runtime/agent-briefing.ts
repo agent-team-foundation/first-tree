@@ -316,9 +316,10 @@ You are running inside **First Tree**, a messaging platform for agent teams.
 - Messages from other team members arrive as your prompt input. Each message
   has a \`[From: <agent-name>]\` header — that name is what you pass back to
   \`chat send\`.
-- **To make an agent act, use \`${bin} chat send <name>\`.** Reach a human with
-  \`${bin} chat ask <human>\` (decisions) or \`${bin} chat update --description\`
-  (progress), not \`chat send\` — the server rejects a \`chat send\` to a human.
+- **\`${bin} chat send <name>\` reaches any teammate — agent or human.** Use it
+  to make an agent act, or to send a human a free reply / conversational answer.
+  For a human you can also raise a tracked decision with \`${bin} chat ask
+  <human>\`, or push progress with \`${bin} chat update --description\`.
 - **Don't fire a courtesy \`chat send\`.** Not every wake-up needs one back.
   If after reasoning there's nothing new for any teammate, end the turn
   without sending — a courteous "got it" between two agents is how loops
@@ -593,10 +594,13 @@ is the base to branch from instead of \`origin/main\`.
 function communicationBlock(bin: string): string {
   return `## Communication
 
-\`chat send\` reaches an **agent**; reach a human with \`chat ask\` (decisions)
-or \`chat update --description\` (progress). Decision guide (based on
-participant \`type\` in the Current Chat Context block):
+\`chat send\` reaches any teammate — agent or human. A human also has two
+intent-specific channels: \`chat ask\` (decisions) and \`chat update
+--description\` (progress). Decision guide (based on participant \`type\` in
+the Current Chat Context block):
 
+- **Replying to a human** — a free reply / conversational answer → \`${bin} chat
+  send <name> "..."\`. Plain sends to a human raise no red dot.
 - **Asking a human** for a decision, approval, or answer → \`${bin} chat ask
   <human> "<background + the question>"\` (see \`## Asking Humans\`). The message
   body IS the ask. This raises a tracked open question (red-dot / open-request
@@ -626,8 +630,9 @@ function workspaceCollaborationBlock(bin: string): string {
   return `## Workspace Collaboration
 
 The Communication block above is the in-agent contract for \`chat send\`,
-\`chat ask\`, and \`chat update\`: agent-directed sends, human-directed
-asks, no courtesy sends, and raw markdown bodies. For flags, stdin
+\`chat ask\`, and \`chat update\`: sends reach any teammate, asks put a
+tracked question to a human, no courtesy sends, and raw markdown bodies.
+For flags, stdin
 forms, history, invite, and related command details, use
 \`${bin} chat --help\` and the relevant subcommand help.
 

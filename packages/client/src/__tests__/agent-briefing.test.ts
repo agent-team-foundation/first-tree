@@ -417,15 +417,16 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
 });
 
 describe("buildAgentBriefing — # Working in First Tree subsections", () => {
-  it("emits the runtime intro block: agent-directed chat send, ask/update for humans, courtesy-send guard, Issue #389", () => {
+  it("emits the runtime intro block: chat send reaches any teammate, ask/update for humans, courtesy-send guard, Issue #389", () => {
     const briefing = buildAgentBriefing(makeOpts());
 
-    // `chat send` is agent-directed; a human is reached only via `chat ask`
-    // (decisions) or `chat update --description` (progress), never a plain send.
-    expect(briefing).toContain("To make an agent act, use `first-tree chat send <name>`");
+    // `chat send` reaches any teammate — agent or human (a plain send to a human
+    // is a free reply); a human also has `chat ask` (decisions) and
+    // `chat update --description` (progress).
+    expect(briefing).toContain("`first-tree chat send <name>` reaches any teammate — agent or human");
     expect(briefing).toContain("first-tree chat ask <human>");
     expect(briefing).toContain("first-tree chat update --description");
-    expect(briefing).toMatch(/server rejects a `?chat send`? to a human/);
+    expect(briefing).not.toMatch(/server rejects a `?chat send`? to a human/);
 
     // yuezengwu 2026-06-16: all output-streaming framing is removed from the
     // briefing — no reasoning-trace channel, no `agent-final-text` mirror, no
@@ -651,9 +652,10 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
   it("emits Communication, Workspace Collaboration, Asking Humans, Chat Topic & Description, and CLI Overview subsections", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("## Communication");
-    // Communication routing: `chat send` is agent-directed; a human is reached
-    // via `chat ask` (decisions) or `chat update --description` (progress). The
-    // courtesy-send guard prevents echo loops.
+    // Communication routing: `chat send` reaches any teammate (a plain send to a
+    // human is a free reply); a human also has `chat ask` (decisions) and
+    // `chat update --description` (progress). The courtesy-send guard prevents
+    // echo loops.
     expect(briefing).toMatch(/\*\*Asking a human\*\*/);
     expect(briefing).toMatch(/\*\*Reporting progress to a human\*\*/);
     expect(briefing).toMatch(/\*\*Reaching an agent to make them act\*\*/);

@@ -129,9 +129,8 @@ describe("chat-first workspace service layer", () => {
     const { chatId } = await createMeChat(app.db, owner.humanAgentUuid, owner.organizationId, {
       participantIds: [peer.agent.uuid],
     });
-    // An agent reaches a human only via a `request` (plain agent→human sends are
-    // rejected); the request still @-mentions the human, so it drives the same
-    // explicit-mention attention this test asserts on.
+    // A `request` @-mentions the human, so it drives the explicit-mention
+    // attention this test asserts on.
     await sendMessage(app.db, chatId, peer.agent.uuid, {
       source: "api",
       format: "request",
