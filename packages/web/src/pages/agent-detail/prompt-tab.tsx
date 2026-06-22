@@ -197,6 +197,9 @@ function EffectiveInstructionsBlock({ prompt }: { prompt: string }) {
     <div style={{ marginBottom: "var(--sp-4)" }}>
       {prompt.trim() ? (
         <>
+          <p className="text-eyebrow" style={{ color: "var(--fg-4)", margin: "0 0 var(--sp-1_5)" }}>
+            Effective
+          </p>
           <section
             ref={bodyRef}
             aria-label="Effective instructions"

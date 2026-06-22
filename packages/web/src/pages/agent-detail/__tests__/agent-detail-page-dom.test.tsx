@@ -486,6 +486,7 @@ describe("AgentDetailPage", () => {
       "Usage",
     ]);
     expect(container.textContent).toContain("Always explain tradeoffs.");
+    expect(container.textContent).toContain("Effective");
     await waitForText(container, "Team style guide");
     expect(container.textContent).toContain("Team style guide");
     expect(container.textContent).toContain("Added by you");
