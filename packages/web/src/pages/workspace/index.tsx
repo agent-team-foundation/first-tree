@@ -202,6 +202,14 @@ export function WorkspacePage() {
     setSearchParams(next);
   }, [searchParams, setSearchParams]);
 
+  const clearSelectedChat = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("c");
+    clearDocPreviewParams(next);
+    setSearchParams(next, { replace: true });
+    setConvOverlayOpen(false);
+  }, [searchParams, setSearchParams]);
+
   const setEngagement = useCallback(
     (view: ChatEngagementView) => {
       setSearchParams(nextParamsForEngagement(searchParams, view), { replace: true });
@@ -323,6 +331,7 @@ export function WorkspacePage() {
         <CenterPanel
           selectedChatId={selectedChatId}
           onSelectChat={selectChat}
+          onClearChat={clearSelectedChat}
           narrow={isNarrow}
           onShowConversations={isNarrow ? () => setConvOverlayOpen(true) : null}
           initialParticipantIds={participants}

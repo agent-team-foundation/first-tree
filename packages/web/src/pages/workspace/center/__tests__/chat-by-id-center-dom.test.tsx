@@ -343,6 +343,28 @@ describe("ChatByIdView and CenterPanel", () => {
     await act(async () => loading.root.unmount());
   });
 
+  it("shows an unavailable empty state when a manual chat URL cannot be loaded", async () => {
+    chatMocks.getChat.mockRejectedValueOnce(new Error("not found"));
+    const onClearChat = vi.fn();
+    const { ChatByIdView } = await import("../chat-by-id.js");
+    const { container, root } = await renderDom(
+      <ChatByIdView chatId="missing-chat" narrow={false} onShowConversations={null} onClearChat={onClearChat} />,
+    );
+
+    await waitForText(container, "This chat doesn't exist or you don't have access.");
+    expect(container.textContent).toContain("Chat unavailable");
+    expect(container.textContent).not.toContain("Resolving participants");
+    expect(chatViewMocks.props).toHaveLength(0);
+    expect(meChatMocks.markMeChatRead).not.toHaveBeenCalled();
+
+    await click(
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Back")) ?? null,
+    );
+    expect(onClearChat).toHaveBeenCalledTimes(1);
+
+    await act(async () => root.unmount());
+  });
+
   it("passes watcher join state into ChatView and invalidates via the join action", async () => {
     chatMocks.getChat.mockResolvedValueOnce(chatDetail({ viewerMembershipKind: "watching", title: "Watch title" }));
     const { ChatByIdView } = await import("../chat-by-id.js");
@@ -361,12 +383,14 @@ describe("ChatByIdView and CenterPanel", () => {
   it("routes CenterPanel between draft, selected chat, and empty state", async () => {
     const { CenterPanel } = await import("../index.js");
     const onSelectChat = vi.fn();
+    const onClearChat = vi.fn();
     const onShowConversations = vi.fn();
 
     const draft = await renderDom(
       <CenterPanel
         selectedChatId="draft"
         onSelectChat={onSelectChat}
+        onClearChat={onClearChat}
         narrow
         onShowConversations={onShowConversations}
         initialParticipantIds={["agent-1"]}
@@ -382,13 +406,25 @@ describe("ChatByIdView and CenterPanel", () => {
     await act(async () => draft.root.unmount());
 
     const selected = await renderDom(
-      <CenterPanel selectedChatId="chat-1" onSelectChat={onSelectChat} narrow={false} onShowConversations={null} />,
+      <CenterPanel
+        selectedChatId="chat-1"
+        onSelectChat={onSelectChat}
+        onClearChat={onClearChat}
+        narrow={false}
+        onShowConversations={null}
+      />,
     );
     await waitForText(selected.container, "ChatView agent-1 chat-1");
     await act(async () => selected.root.unmount());
 
     const empty = await renderDom(
-      <CenterPanel selectedChatId={null} onSelectChat={onSelectChat} narrow={false} onShowConversations={null} />,
+      <CenterPanel
+        selectedChatId={null}
+        onSelectChat={onSelectChat}
+        onClearChat={onClearChat}
+        narrow={false}
+        onShowConversations={null}
+      />,
     );
     await click(
       [...empty.container.querySelectorAll("button")].find((button) => button.textContent?.includes("New chat")) ??

@@ -1,9 +1,11 @@
 import type { ListMeChatsResponse } from "@first-tree/shared";
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { getChat } from "../../../api/chats.js";
 import { joinMeChat, markMeChatRead } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
+import { Button } from "../../../components/ui/button.js";
 import { useAdminWs } from "../../../hooks/use-admin-ws.js";
 import { ChatView } from "./chat-view.js";
 
@@ -63,15 +65,17 @@ export function ChatByIdView({
   chatId,
   narrow,
   onShowConversations,
+  onClearChat = null,
 }: {
   chatId: string;
   narrow: boolean;
   onShowConversations: (() => void) | null;
+  onClearChat?: (() => void) | null;
 }) {
   const queryClient = useQueryClient();
   const { agentId: myAgentId } = useAuth();
 
-  const { data: chatDetail } = useQuery({
+  const { data: chatDetail, isError: chatDetailError } = useQuery({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
     enabled: !!chatId,
@@ -146,6 +150,10 @@ export function ChatByIdView({
 
   const isWatching = chatDetail?.viewerMembershipKind === "watching";
 
+  if (chatDetailError) {
+    return <ChatUnavailableState onClearChat={onClearChat} />;
+  }
+
   if (!primaryAgent) {
     return (
       <div className="flex-1 flex items-center justify-center" style={{ padding: "var(--sp-8)" }}>
@@ -186,5 +194,28 @@ export function ChatByIdView({
       narrow={narrow}
       onShowConversations={onShowConversations}
     />
+  );
+}
+
+function ChatUnavailableState({ onClearChat }: { onClearChat: (() => void) | null }) {
+  return (
+    <div className="flex-1 flex items-center justify-center" style={{ padding: "var(--sp-8)" }}>
+      <div className="text-center max-w-sm">
+        <div className="text-subtitle" style={{ color: "var(--fg-2)", marginBottom: 6 }}>
+          Chat unavailable
+        </div>
+        <div className="text-body text-muted-foreground" style={{ marginBottom: "var(--sp-4)" }}>
+          This chat doesn't exist or you don't have access.
+        </div>
+        {onClearChat ? (
+          <div className="flex justify-center">
+            <Button type="button" variant="outline" onClick={onClearChat}>
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span>Back to conversations</span>
+            </Button>
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }

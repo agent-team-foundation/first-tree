@@ -19,12 +19,14 @@ import { NoChatView } from "./no-chat-view.js";
 export function CenterPanel({
   selectedChatId,
   onSelectChat,
+  onClearChat,
   narrow,
   onShowConversations,
   initialParticipantIds,
 }: {
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
+  onClearChat: () => void;
   /** True when the workspace shell is in narrow-viewport mode (<768).
    *  Propagated to `ChatView` so it can swap the right rail to an
    *  overlay and surface the conv-list summon button. */
@@ -62,7 +64,14 @@ export function CenterPanel({
   }
 
   if (selectedChatId) {
-    return <ChatByIdView chatId={selectedChatId} narrow={narrow} onShowConversations={onShowConversations} />;
+    return (
+      <ChatByIdView
+        chatId={selectedChatId}
+        narrow={narrow}
+        onShowConversations={onShowConversations}
+        onClearChat={onClearChat}
+      />
+    );
   }
 
   return <NoChatView onNewChat={() => onSelectChat(DRAFT_CHAT_ID)} />;
