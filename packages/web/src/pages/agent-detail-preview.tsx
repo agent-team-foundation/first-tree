@@ -17,8 +17,10 @@ import { ResourcesTab } from "./agent-detail/resources-tab.js";
  * QueryClient + a mock outlet context — no backend, no auth. The sample data is
  * crafted so every label / marker / control is visible at once:
  *   - source labels: `From your team` vs `Added by you`
- *   - status markers: `Off`, `Overridden`, `Unavailable`, `Can't load`
- *   - controls: Customize / Disable / Edit / Remove / Re-enable / Enable
+ *   - status markers: `Overridden`, `Can't load` (plain disabled is conveyed by
+ *     the Switch in its off position + a greyed row, not a badge)
+ *   - controls: the on/off Switch (team-recommended only) + the ⋯ overflow menu
+ *     (Customize / Edit / Remove). Opt-in and custom rows have no Switch.
  *
  * This page is for looking, not round-tripping — clicking a mutating button hits
  * the real API and will fail without a server.
@@ -137,6 +139,25 @@ const RESOURCES: AgentResourcesOutput = {
         unavailableReason: null,
         order: 2,
       },
+      {
+        // Team prompt the agent overrode with its own version → the original
+        // shows the `Overridden` badge (the custom replacement is its own row).
+        id: "eff:prompt:replaced",
+        bindingId: "bind-replace",
+        resourceId: "prompt-review",
+        replacesResourceId: null,
+        type: "prompt",
+        name: "Review checklist",
+        scope: "team",
+        source: "team_recommended",
+        mode: "replaced",
+        defaultEnabled: "recommended",
+        payload: null,
+        repo: null,
+        promptBody: "Use the team's standard review checklist.",
+        unavailableReason: null,
+        order: 3,
+      },
     ],
     skills: [
       {
@@ -160,6 +181,25 @@ const RESOURCES: AgentResourcesOutput = {
         promptBody: null,
         unavailableReason: null,
         order: 0,
+      },
+      {
+        // Opt-in team skill the agent enabled for itself: no Switch (present-or-
+        // removed) — managed via the ⋯ Remove + the section "+".
+        id: "eff:skill:optin",
+        bindingId: "bind-skill-optin",
+        resourceId: "skill-optin",
+        replacesResourceId: null,
+        type: "skill",
+        name: "pr-summary",
+        scope: "team",
+        source: "team_available",
+        mode: "enabled",
+        defaultEnabled: "available",
+        payload: { name: "pr-summary", description: "Summarize a PR for reviewers.", body: "", metadata: {} },
+        repo: null,
+        promptBody: null,
+        unavailableReason: null,
+        order: 1,
       },
     ],
     mcp: [
@@ -186,6 +226,14 @@ const RESOURCES: AgentResourcesOutput = {
   bindings: [
     { id: "bind-repo-extra", type: "repo", mode: "include", resourceId: null, replacesResourceId: null, order: 1 },
     {
+      id: "bind-skill-optin",
+      type: "skill",
+      mode: "include",
+      resourceId: "skill-optin",
+      replacesResourceId: null,
+      order: 4,
+    },
+    {
       id: "bind-inline",
       type: "prompt",
       mode: "include",
@@ -201,6 +249,26 @@ const RESOURCES: AgentResourcesOutput = {
       resourceId: "prompt-tone",
       replacesResourceId: null,
       order: 2,
+    },
+    {
+      id: "bind-replace",
+      type: "prompt",
+      mode: "replace",
+      resourceId: null,
+      replacesResourceId: "prompt-review",
+      inlinePromptBody: "Use our stricter, security-focused review checklist.",
+      order: 6,
+    },
+    {
+      // An inline prompt binding the backend kept but produced no effective row
+      // for (empty body) — recovered as an "orphan" row so it's editable/removable.
+      id: "bind-orphan",
+      type: "prompt",
+      mode: "include",
+      resourceId: null,
+      replacesResourceId: null,
+      inlinePromptBody: "",
+      order: 5,
     },
   ],
   availableTeamResources: [
@@ -358,7 +426,8 @@ export function AgentDetailPreviewPage() {
             Tools &amp; skills tab
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Skills / MCP — each row tagged From your team or Added by you; deviations show Off / Can't load.
+            Skills / MCP — team-recommended rows carry an on/off Switch (off = greyed, stays in the list); opt-in /
+            added rows have no Switch, just ⋯ Remove. Can't load flags a broken reference.
           </p>
           <div style={{ marginTop: "var(--sp-4)", marginBottom: "var(--sp-8)" }}>
             <TabHost element={<ResourcesTab />} />
@@ -368,9 +437,10 @@ export function AgentDetailPreviewPage() {
             Instructions tab
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Per-instruction management (Customize / Disable / Edit / Remove / Re-enable) with each block collapsed to a
-            summary (Show full to expand), an Add menu for custom or team instructions, and the read-only merged
-            Effective instructions at the bottom.
+            Per-instruction management converged to the Switch (team-recommended enable / disable) + the ⋯ menu
+            (Customize / Edit / Remove); each block collapses to a summary (expand to read the full body), an Add menu
+            adds custom or team instructions, and the 👁 Effective instructions button shows the merged runtime prompt.
+            (The always-on top Effective block + the density pass land in PR2.)
           </p>
           <div style={{ marginTop: "var(--sp-4)" }}>
             <TabHost element={<PromptTab />} />

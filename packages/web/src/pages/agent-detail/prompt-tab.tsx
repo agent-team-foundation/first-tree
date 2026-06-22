@@ -19,11 +19,12 @@ import {
 } from "../../components/ui/dialog.js";
 import { Markdown } from "../../components/ui/markdown.js";
 import { Popover } from "../../components/ui/popover.js";
+import type { RowAction as RowMenuAction } from "../../components/ui/row-actions-menu.js";
 import { Section } from "../../components/ui/section.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { agentResourcesMutationHandlers, resourceTypeIcon, statusMarker } from "./capability-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
-import { ResourceRowView, RowAction, type RowStatusMarker } from "./resource-row.js";
+import { ResourceRowView, type RowMenu, type RowStatusMarker, type RowToggle } from "./resource-row.js";
 import { sourceLabel } from "./resource-source.js";
 import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 
@@ -383,14 +384,15 @@ function PromptResourceBlocks(props: {
 
   const blocks: ReactNode[] = rows.map((row) => {
     const isEditingRow = !!props.editor && editorIsInline && props.editor.rowId === row.id;
-    const action = props.editor || !props.canEdit ? null : promptRowAction(row, props);
+    const controls = props.editor || !props.canEdit ? {} : promptRowControls(row, props);
     return (
       <PromptResourceBlock
         key={row.id}
         name={promptBlockName(row)}
         source={row.source}
         marker={statusMarker(row.mode)}
-        action={action}
+        toggle={controls.toggle}
+        menu={controls.menu}
         body={row.promptBody ?? ""}
         expanded={expandedIds.has(row.id)}
         onToggle={() => toggleExpand(row.id)}
@@ -414,28 +416,49 @@ function PromptResourceBlocks(props: {
   }
 
   for (const row of inactiveRows) {
-    // Disabled team prompt → Re-enable. Overridden prompt with no live replacement
-    // row (e.g. an empty inline replacement) → Remove, so it never gets stuck.
+    // Disabled team prompt → Switch off (toggling on removes the disable binding).
+    // Overridden prompt with no live replacement row (e.g. an empty inline
+    // replacement) → ⋯ Remove, so it never gets stuck.
     const manageable =
       props.canEdit &&
       !props.editor &&
       !!row.bindingId &&
       (row.mode === "disabled" || !enabledBindingIds.has(row.bindingId));
-    const action = manageable ? (
-      <RowAction
-        label={row.mode === "disabled" ? "Re-enable" : "Remove"}
-        icon={row.mode === "disabled" ? undefined : "remove"}
-        disabled={props.busy}
-        onClick={() => row.bindingId && props.onRemoveBinding(row.bindingId)}
-      />
-    ) : null;
+    const name = promptBlockName(row) ?? "instructions";
+    let toggle: RowToggle | undefined;
+    let menu: RowMenu | undefined;
+    if (manageable && row.bindingId) {
+      if (row.mode === "disabled") {
+        toggle = {
+          checked: false,
+          disabled: props.busy,
+          ariaLabel: `Enable ${name}`,
+          onChange: () => row.bindingId && props.onRemoveBinding(row.bindingId),
+        };
+      } else {
+        menu = {
+          ariaLabel: `More actions for ${name}`,
+          actions: [
+            {
+              key: "remove",
+              label: "Remove",
+              destructive: true,
+              disabled: props.busy,
+              onSelect: () => row.bindingId && props.onRemoveBinding(row.bindingId),
+            },
+          ],
+        };
+      }
+    }
     blocks.push(
       <PromptResourceBlock
         key={row.id}
         name={promptBlockName(row)}
         source={row.source}
         marker={statusMarker(row.mode)}
-        action={action}
+        toggle={toggle}
+        menu={menu}
+        dimmed={row.mode === "disabled"}
         body={row.promptBody ?? ""}
         expanded={expandedIds.has(row.id)}
         onToggle={() => toggleExpand(row.id)}
@@ -448,24 +471,28 @@ function PromptResourceBlocks(props: {
     if (!bindingId) continue;
     const orphanId = `orphan:${bindingId}`;
     const isEditingOrphan = !!props.editor && props.editor.rowId === orphanId;
+    const menu: RowMenu | undefined =
+      props.editor || !props.canEdit
+        ? undefined
+        : {
+            ariaLabel: "More actions for custom instructions",
+            actions: [
+              { key: "edit", label: "Edit custom instructions", onSelect: () => props.onEditBinding(bindingId) },
+              {
+                key: "remove",
+                label: "Remove",
+                destructive: true,
+                disabled: props.busy,
+                onSelect: () => props.onRemoveBinding(bindingId),
+              },
+            ],
+          };
     blocks.push(
       <PromptResourceBlock
         key={orphanId}
         name={null}
         source="inline_prompt"
-        action={
-          props.editor || !props.canEdit ? null : (
-            <div className="flex gap-2">
-              <RowAction icon="edit" label="Edit custom instructions" onClick={() => props.onEditBinding(bindingId)} />
-              <RowAction
-                label="Remove"
-                icon="remove"
-                disabled={props.busy}
-                onClick={() => props.onRemoveBinding(bindingId)}
-              />
-            </div>
-          )
-        }
+        menu={menu}
         body=""
         expanded={isEditingOrphan}
         onToggle={() => {}}
@@ -483,9 +510,10 @@ function PromptResourceBlocks(props: {
   );
 }
 
-/** Inline action buttons for an active prompt row, mirroring the old Resources tab:
- *  customize / edit any prompt, disable a recommended one, remove a custom or opted-in one. */
-function promptRowAction(
+/** Converged controls for an active prompt row: a Switch for a team-recommended
+ *  prompt (enable / disable in place), and a ⋯ menu for the secondary actions —
+ *  Customize a team prompt, Edit a custom one, Remove a custom or opted-in one. */
+function promptRowControls(
   row: EffectivePromptRow,
   props: {
     busy: boolean;
@@ -493,42 +521,55 @@ function promptRowAction(
     onDisable: (resourceId: string) => void;
     onRemoveBinding: (bindingId: string) => void;
   },
-): ReactNode {
-  const buttons: ReactNode[] = [];
-  const remove = (
-    <RowAction
-      key="remove"
-      label="Remove"
-      icon="remove"
-      disabled={props.busy}
-      onClick={() => row.bindingId && props.onRemoveBinding(row.bindingId)}
-    />
-  );
+): { toggle?: RowToggle; menu?: RowMenu } {
+  const name = promptBlockName(row) ?? "instructions";
+  const removeItem: RowMenuAction = {
+    key: "remove",
+    label: "Remove",
+    destructive: true,
+    disabled: props.busy,
+    onSelect: () => {
+      if (row.bindingId) props.onRemoveBinding(row.bindingId);
+    },
+  };
+
   if (row.source === "inline_prompt") {
-    buttons.push(
-      <RowAction key="edit" icon="edit" label="Edit custom instructions" onClick={() => props.onStartEdit(row)} />,
-    );
-    if (row.bindingId) buttons.push(remove);
-  } else if (row.source.startsWith("team_") && row.resourceId) {
-    buttons.push(
-      <RowAction key="customize" icon="edit" label="Customize for this agent" onClick={() => props.onStartEdit(row)} />,
-    );
-    if (row.source === "team_recommended") {
-      buttons.push(
-        <RowAction
-          key="disable"
-          label="Disable"
-          disabled={props.busy}
-          onClick={() => row.resourceId && props.onDisable(row.resourceId)}
-        />,
-      );
-    } else if (row.bindingId) {
-      buttons.push(remove);
-    }
-  } else if (row.bindingId) {
-    buttons.push(remove);
+    const actions: RowMenuAction[] = [
+      { key: "edit", label: "Edit custom instructions", onSelect: () => props.onStartEdit(row) },
+    ];
+    if (row.bindingId) actions.push(removeItem);
+    return { menu: { ariaLabel: `More actions for ${name}`, actions } };
   }
-  return buttons.length > 0 ? <div className="flex gap-2">{buttons}</div> : null;
+
+  if (row.source.startsWith("team_") && row.resourceId) {
+    const actions: RowMenuAction[] = [
+      { key: "customize", label: "Customize for this agent", onSelect: () => props.onStartEdit(row) },
+    ];
+    if (row.source === "team_recommended") {
+      // Switch carries enable/disable; the ⋯ keeps only Customize.
+      const toggle: RowToggle = {
+        checked: row.mode === "enabled",
+        disabled: props.busy || row.mode === "unavailable",
+        ariaLabel: `Enable ${name}`,
+        onChange: (next) => {
+          if (next) {
+            if (row.bindingId) props.onRemoveBinding(row.bindingId);
+          } else if (row.resourceId) {
+            props.onDisable(row.resourceId);
+          }
+        },
+      };
+      return { toggle, menu: { ariaLabel: `More actions for ${name}`, actions } };
+    }
+    // team_available (opt-in): no Switch — present-or-removed.
+    if (row.bindingId) actions.push(removeItem);
+    return { menu: { ariaLabel: `More actions for ${name}`, actions } };
+  }
+
+  if (row.bindingId) {
+    return { menu: { ariaLabel: `More actions for ${name}`, actions: [removeItem] } };
+  }
+  return {};
 }
 
 function PromptFallbackPanel(props: { prompt: string }) {
@@ -569,7 +610,9 @@ function PromptResourceBlock(props: {
   name: string | null;
   source: EffectivePromptRow["source"];
   marker?: RowStatusMarker;
-  action?: ReactNode;
+  toggle?: RowToggle;
+  menu?: RowMenu;
+  dimmed?: boolean;
   body: string;
   expanded: boolean;
   onToggle: () => void;
@@ -585,7 +628,9 @@ function PromptResourceBlock(props: {
       source={sourceLabel(props.source)}
       status={props.marker}
       peek={peek || undefined}
-      actions={props.action}
+      toggle={props.toggle}
+      menu={props.menu}
+      dimmed={props.dimmed}
       emptyPeek="No instructions yet."
       expandLabel="instructions"
       leadingIcon={resourceTypeIcon("prompt")}
