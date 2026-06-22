@@ -1312,18 +1312,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               const providerEnteredPrefix = pendingProviderEnteredPrefix();
               emitTokenUsageFromResult(message, sessionCtx);
               if (message.subtype === "success") {
-                // Auto-bridge: forward result text back to the chat and close
-                // the turn. We AWAIT sendMessage (rather than fire-and-forget)
-                // so the turn_end emit is guaranteed to hit the WebSocket
-                // before the for-await pulls the next turn's first event.
-                // Otherwise a slow sendMessage round-trip could let the
+                // Close out the turn. The result text is already captured as
+                // `assistant_text` events; `forwardResult` no longer delivers
+                // it to chat (final-text mirror retired) — it is the
+                // turn-completion hook. We AWAIT it (rather than
+                // fire-and-forget) so the turn_end emit is guaranteed to hit
+                // the WebSocket before the for-await pulls the next turn's
+                // first event. Otherwise a slow round-trip could let the
                 // server assign a smaller seq to turn N+1's thinking/tool_call
                 // than to turn N's turn_end — which would cause the frontend's
                 // "latest turn_end" filter to retroactively hide turn N+1's
-                // live events. If the forward fails the text is otherwise
-                // lost (no session_output table since NC2) — surface it via
-                // the events API so admins see both the failure and a
-                // snapshot of what would have been sent.
+                // live events.
                 if (message.result && sessionCtx.chatId) {
                   const resultText = message.result;
                   // Bug 6: SDK sometimes packages its own catch'd API error

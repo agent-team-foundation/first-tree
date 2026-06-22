@@ -1833,11 +1833,10 @@ export class SessionManager {
     const selfSlug = basename(this.config.handlerConfig.workspaceRoot);
     // Resolve the self-fence SYNCHRONOUSLY from the already-populated config
     // cache so it can ride the agent's env (`buildAgentEnv` is sync). This
-    // lets a `<binName> chat send` sub-process snapshot referenced docs
-    // exactly like result-sink does (L3: unify capture across send paths).
-    // result-sink keeps its own async `getSelfFence`; both read the same cache
-    // (`refreshIfNewer(_, 0)` returns the cached payload), so the fence they
-    // compute agrees. The legacy `base` env var (`FIRST_TREE_DOC_BASE`) is
+    // lets a `<binName> chat send` sub-process snapshot referenced docs. (The
+    // result-sink's own doc-capture was retired with the final-text mirror, so
+    // this snapshot path now serves the CLI `chat send` sub-process only.) The
+    // legacy `base` env var (`FIRST_TREE_DOC_BASE`) is
     // kept emitting the OLD source-repo-top semantics so a stale pre-fix
     // `chat send` binary inherited from this process still snapshots like it
     // used to — see `agent-io.ts` for the wire-compat plumbing.

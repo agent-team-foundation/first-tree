@@ -7,7 +7,7 @@ export {
   findAssembledBriefingFingerprint,
 } from "./agent-briefing-guard.js";
 export { canonicalGitRepoUrl } from "./canonical-git-repo-url.js";
-// -- Mention extraction (shared by server fan-out resolver and client auto-forward) --
+// -- Mention extraction (shared by the server fan-out resolver and other readers) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
 export {
   buildWorkspaceDocKey,

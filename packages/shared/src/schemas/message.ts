@@ -11,14 +11,15 @@ import { z } from "zod";
  *                 session).
  *   - "cli"     — Agent's First Tree CLI (`chat send` / `chat invite`
  *                 / etc.).
- *   - "api"     — Agent SDK direct API call (incl. result-sink auto-forward,
- *                 in-process tool integrations); the catch-all for client
- *                 runtime-initiated writes that aren't typed via the CLI.
+ *   - "api"     — Agent SDK direct API call (incl. deliberate runtime notices
+ *                 such as the codex usage-limit notice, in-process tool
+ *                 integrations); the catch-all for client runtime-initiated
+ *                 writes that aren't typed via the CLI.
  *   - "github"  — Inbound message bridged from a GitHub webhook.
  *
  * NOT a behaviour discriminator — use `purpose` for that (e.g. distinguishing
- * a CLI-typed agent send from a result-sink auto-forward, both of which may
- * carry source='api'/'cli'). `source` is the caller-stack origin, intended
+ * a regular agent send from a deliberate `agent-final-text` runtime notice,
+ * which may carry source='api'). `source` is the caller-stack origin, intended
  * for observability and loop / egress diagnostics.
  */
 export const MESSAGE_SOURCES = {

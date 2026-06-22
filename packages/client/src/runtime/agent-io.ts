@@ -41,9 +41,9 @@ export function buildAgentEnv(
     chatId: string;
     /**
      * Resolved doc-preview context for this session, so a `first-tree
-     * chat send` sub-process can snapshot referenced `.md` the same way
-     * `result-sink` does for final-text (L3: unify capture across send
-     * paths). Absent → `chat send` skips snapshotting.
+     * chat send` sub-process can snapshot referenced `.md`. (The result-sink's
+     * own doc-capture was retired with the final-text mirror, so this is now a
+     * CLI-`chat send`-only path.) Absent → `chat send` skips snapshotting.
      *
      * Two boundaries are exported:
      *  - `agentHome` — the WIDE fence: per-agent home (or legacy per-chat

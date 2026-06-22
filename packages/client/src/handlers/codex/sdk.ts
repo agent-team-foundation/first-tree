@@ -957,9 +957,10 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
 
     // Match @openai/codex-sdk's Thread.run() success semantics: when a turn
     // emits several non-empty agent_message items, finalResponse is the latest
-    // one. Earlier agent_message items remain live assistant_text progress
-    // events only. If the provider never completes successfully, do not
-    // forward partial text as a final chat message.
+    // one. Every agent_message is already captured as `assistant_text` events
+    // regardless; `accumulated` only feeds the turn-completion hook + success
+    // gating below. If the provider never completes successfully, we don't
+    // treat partial text as the turn's result.
     const accumulated = finalResponse;
 
     // Codex reports CUMULATIVE thread usage on `turn.completed`; convert it to
