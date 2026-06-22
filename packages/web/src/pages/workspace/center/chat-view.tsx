@@ -154,12 +154,14 @@ function saveSidebarOpen(open: boolean): void {
 }
 
 /**
- * Temporary, staging-only preference: hide agent final-text mirrors (the
- * per-turn output the runtime auto-forwards into chat with
- * `purpose: "agent-final-text"`) so a human watching sees only deliberate
- * sends + human messages. Defaults to OFF (show everything). Purely a view
- * filter — nothing is deleted, and it only ever applies on non-prod channels
- * (the toggle is hidden on prod; see `finalTextToggleEnabled`).
+ * Temporary, staging-only preference: hide messages stamped
+ * `purpose: "agent-final-text"`. The per-turn final-text mirror that used to
+ * auto-produce these is RETIRED (the runtime no longer auto-forwards a turn's
+ * output to chat); the purpose now only carries deliberate runtime notices
+ * (e.g. the codex usage-limit notice). This toggle is legacy from the mirror
+ * era — a pure view filter, nothing is deleted — and only applies on non-prod
+ * channels (hidden on prod; see `finalTextToggleEnabled`). Cleanup is a noted
+ * follow-up; defaults to OFF (show everything).
  */
 const HIDE_AGENT_FINAL_TEXT_STORAGE_KEY = "first-tree:chat:hide-agent-final-text:v1";
 

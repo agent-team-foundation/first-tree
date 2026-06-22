@@ -1326,9 +1326,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 if (message.result && sessionCtx.chatId) {
                   const resultText = message.result;
                   // Bug 6: SDK sometimes packages its own catch'd API error
-                  // as a `result.subtype === "success"` payload. Sniff
-                  // before forwarding so the user does not see raw "API
-                  // Error: socket closed" text as a model reply.
+                  // as a `result.subtype === "success"` payload. Sniff it so
+                  // we surface an error turn instead of silently closing the
+                  // turn as a clean success.
                   const sniff = detectStreamApiError(resultText);
                   if (sniff) {
                     const classification = classify(new Error(sniff.message), { source: "stream" });
@@ -1354,10 +1354,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                       // (retry counter + self-resume via handler.resume).
                       throw new StreamApiTransientError(sniff.message);
                     }
-                    // Permanent (401/403) OR retries exhausted: surface to
-                    // chat as an error event so the user sees what happened.
-                    // Skip forwardResult so the raw "API Error" text never
-                    // appears as a model reply in the timeline.
+                    // Permanent (401/403) OR retries exhausted: surface the
+                    // failure as an error event + error turn, and do NOT run
+                    // the success/completion path for this turn.
                     sessionCtx.emitEvent({
                       kind: "error",
                       payload: {
@@ -1398,19 +1397,20 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                         payload: { source: "runtime", message: forwardErrMessage },
                       });
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
-                      // forwardResult failure is treated as terminal for
-                      // this turn — ack so we don't loop on redelivery.
-                      // Long-lived sdk.sendMessage failures are rare; if
-                      // recovery is needed the user can retry by sending
-                      // a new message.
+                      // A failure in the completion hook is treated as terminal
+                      // for this turn — ack so we don't loop on redelivery. The
+                      // hook only closes the turn trigger now (the final-text
+                      // mirror is retired, so there is no chat-delivery step to
+                      // fail); a throw here is unexpected, but we still degrade
+                      // gracefully. If recovery is needed the user can retry by
+                      // sending a new message.
                       //
-                      // Reset retryCount along with the forward-success
-                      // branch above: the SDK actually returned a clean
-                      // `result` here (the failure was in our own
-                      // sendMessage downstream), so the next turn should
-                      // not inherit the prior turn's transient-retry
-                      // counter when an unrelated future stream error
-                      // fires.
+                      // Reset retryCount along with the success branch above:
+                      // the SDK actually returned a clean `result` here (any
+                      // failure is in our own turn-completion plumbing, not the
+                      // model), so the next turn should not inherit the prior
+                      // turn's transient-retry counter when an unrelated future
+                      // stream error fires.
                       retryCount = 0;
                       await ackTurnClose("error", "forward_failed", providerEnteredPrefix);
                     }

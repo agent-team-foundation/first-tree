@@ -162,7 +162,8 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     await handler.suspend();
     await new Promise((r) => setImmediate(r));
 
-    // Result auto-forward never ran — every iteration threw.
+    // Every iteration threw, so the turn never reached its completion hook;
+    // the hook delivers nothing anyway (final-text mirror retired).
     expect(sendMessage).not.toHaveBeenCalled();
 
     // Reviewer Blocking 2 regression: the retry-exhausted return MUST ack

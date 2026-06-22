@@ -37,37 +37,14 @@ export type ResultSinkDeps = {
   clearTrigger: () => void;
   log: (msg: string) => void;
   /**
-   * Resolved self-fence for snapshot capture. `agentHome` is the wide
-   * containment boundary for absolute paths — covers the predeclared source
-   * repo, the agent's on-demand `worktrees/<task>/` checkouts, and anything
-   * else the agent writes inside its home. `singleRepoLocalPath` (optional)
-   * enables relative-path promotion so `docs/foo.md` and the absolute form
-   * `<agentHome>/<localPath>/docs/foo.md` share one canonical key. Absent →
-   * no snapshotting (legacy / test path).
-   *
-   * Returned via a callback (not a static field) because the agent's git-repo
-   * config can refresh mid-session; the runtime exposes the latest payload via
-   * its config cache.
+   * INERT (see the module note): these fed the retired doc-capture/snapshot
+   * enrichment that ran when the sink delivered the final-text mirror. The sink
+   * no longer writes to chat, so they are never read; they are retained only to
+   * keep the wiring stable and are cleaned up with the turn-trigger machinery.
    */
   getSelfFence?: () => Promise<SelfFence | null>;
-  /**
-   * Resolve the organization id the doc captures upload under. Uploads are
-   * org-scoped (`POST /orgs/:orgId/attachments`); the chat lives in exactly one
-   * org, so the sink resolves it from the chat (cached). Returning `null` (org
-   * unresolvable) disables doc capture for the turn — the message still goes
-   * out, mentions just stay plain text. Returned via a callback so the lookup
-   * (and its cache) lives with the runtime, not the sink.
-   */
   getOrgId?: () => Promise<string | null>;
-  /**
-   * Shared `workspaces/` common root (parent of every `<agentSlug>/<chatId>`).
-   * Set alongside `selfSlug` to enable cross-agent doc snapshots: an absolute
-   * `.md` path that realpaths into ANOTHER agent's workspace under this root
-   * (same chat) is snapshotted with a global `<ownerSlug>/<chatId>/<rel>` key.
-   * Absent → self-only behaviour (pre-existing).
-   */
   workspacesRoot?: string;
-  /** This agent's own dir name under `workspacesRoot` (excluded from cross). */
   selfSlug?: string;
 };
 

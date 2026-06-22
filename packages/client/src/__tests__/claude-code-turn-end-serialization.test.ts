@@ -41,8 +41,8 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
             };
           }
           // Turn 2 begins: the SDK has a next assistant message ready. If the
-          // consumer loop were not awaiting sendMessage, this would fire
-          // before turn_end and break the seq invariant.
+          // consumer loop were not awaiting the completion hook, this would
+          // fire before turn_end and break the seq invariant.
           if (step === 2) {
             return {
               done: false,
