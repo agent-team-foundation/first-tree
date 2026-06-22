@@ -86,8 +86,10 @@ type CurrentTurn = {
   completedItemIds: Set<string>;
   usageLast: TokenUsageBreakdown | null;
   failure: TurnErrorInfo | null;
+  lastSdkError: TurnErrorInfo | null;
   providerCompleted: boolean;
   stopRequested: boolean;
+  sdkErrorEmitted: boolean;
   resolveTerminal: () => void;
 };
 
@@ -106,6 +108,9 @@ const RESULT_PREVIEW_LIMIT = 400;
 const USAGE_LIMIT_NOTICE =
   "⚠️ My runtime has reached its usage limit, so I couldn't process the message you just sent. " +
   "Please resend it once the limit resets.";
+const CODEX_CONTEXT_WINDOW_FAILURE_MESSAGE =
+  "Codex ran out of room in the model context while compacting this thread. " +
+  "Start a new thread or clear earlier history before retrying.";
 
 export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfig): AgentHandler => {
   const workspaceRoot = config.workspaceRoot as string;
@@ -523,6 +528,10 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       case "error": {
         const error = parseTurnError(params.error);
         if (error) {
+          if (turn) {
+            turn.lastSdkError = error;
+            turn.sdkErrorEmitted = true;
+          }
           sessionCtx.emitEvent({
             kind: "error",
             payload: { source: "sdk", message: formatAppServerError(error.message) },
@@ -710,8 +719,10 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       completedItemIds: new Set(),
       usageLast: null,
       failure: null,
+      lastSdkError: null,
       providerCompleted: false,
       stopRequested: false,
+      sdkErrorEmitted: false,
       resolveTerminal,
     };
     currentTurn = turn;
@@ -764,6 +775,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     let forwardFailed = false;
     let retryReason: string | null = null;
     let consumedErrorReason: TurnConsumedErrorReason | null = null;
+    let terminalRejectionReason: string | null = null;
 
     if (usageLimitEmptyTurn || usageLimitFailure) {
       sessionCtx.emitEvent({
@@ -796,18 +808,26 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         });
       }
     } else if (turn.failure) {
-      const kind = classifyAppServerFailure(turn.failure);
-      retryReason = `codex_${kind}_failure`;
-      sessionCtx.log(`codex app-server turn failed (${kind}): ${turn.failure.message}`);
+      const failure = mergeFailureWithDiagnostic(turn.failure, turn.lastSdkError);
+      const kind = classifyAppServerFailure(failure);
+      if (kind === "deterministic") {
+        terminalRejectionReason = deterministicTerminalRejectionReason(failure);
+        if (!turn.sdkErrorEmitted) {
+          sessionCtx.emitEvent({
+            kind: "error",
+            payload: { source: "sdk", message: formatDeterministicFailureMessage(failure) },
+          });
+        }
+        sessionCtx.log(
+          `codex app-server turn failed deterministically; terminal rejecting delivery (${terminalRejectionReason}): ${turn.failure.message}`,
+        );
+      } else {
+        retryReason = `codex_${kind}_failure`;
+        sessionCtx.log(`codex app-server turn failed (${kind}): ${turn.failure.message}`);
+      }
     } else if (!turn.providerCompleted) {
       retryReason = "codex_app_server_stream_ended_without_completion";
     }
-
-    const settlement = resolveTurnSettlement({
-      retryReason,
-      consumedErrorReason,
-      forwardFailed,
-    });
 
     if (usage) {
       sessionCtx.emitEvent({
@@ -821,12 +841,25 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         },
       });
     }
-    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: settlement.status } });
 
-    if (settlement.action.kind === "complete") {
-      await turn.primaryToken.complete(turn.acceptedMessages, settlement.action.outcome);
+    if (terminalRejectionReason) {
+      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+      await turn.primaryToken.terminalRejected(turn.acceptedMessages, terminalRejectionReason, {
+        kind: "server_terminal_record",
+        recordId: turn.turnId,
+      });
     } else {
-      turn.primaryToken.retry(turn.acceptedMessages, settlement.action.reason);
+      const settlement = resolveTurnSettlement({
+        retryReason,
+        consumedErrorReason,
+        forwardFailed,
+      });
+      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: settlement.status } });
+      if (settlement.action.kind === "complete") {
+        await turn.primaryToken.complete(turn.acceptedMessages, settlement.action.outcome);
+      } else {
+        turn.primaryToken.retry(turn.acceptedMessages, settlement.action.reason);
+      }
     }
     schedulePostTurnDrain();
   }
@@ -1121,15 +1154,64 @@ function parseTurnError(value: unknown): TurnErrorInfo | null {
   };
 }
 
+function mergeFailureWithDiagnostic(failure: TurnErrorInfo, diagnostic: TurnErrorInfo | null): TurnErrorInfo {
+  if (!diagnostic) return failure;
+  const details = [failure.additionalDetails, diagnostic.message, diagnostic.additionalDetails]
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join("\n");
+  return {
+    message: failure.message,
+    codexErrorInfo: failure.codexErrorInfo ?? diagnostic.codexErrorInfo,
+    additionalDetails: details || null,
+  };
+}
+
 function formatAppServerError(message: string): string {
   if (isCodexAuthError(message)) return formatAuthHint("codex", message);
   return message;
 }
 
 function classifyAppServerFailure(error: TurnErrorInfo): "deterministic" | "transient" | "unknown" {
-  if (isCodexAuthError(error.message) || isDeterministicErrorInfo(error.codexErrorInfo)) return "deterministic";
+  if (
+    isCodexAuthError(error.message) ||
+    isDeterministicErrorInfo(error.codexErrorInfo) ||
+    isDeterministicCompactFailure(error)
+  ) {
+    return "deterministic";
+  }
   if (isTransientCodexErrorMessage(error.message) || isTransientErrorInfo(error.codexErrorInfo)) return "transient";
   return "unknown";
+}
+
+function deterministicTerminalRejectionReason(error: TurnErrorInfo): string {
+  if (isContextWindowFailure(error)) return "codex_context_window_exceeded";
+  if (isCodexAuthError(error.message) || error.codexErrorInfo === "unauthorized") return "codex_auth_failure";
+  if (error.codexErrorInfo === "badRequest") return "codex_bad_request_failure";
+  if (error.codexErrorInfo === "sandboxError") return "codex_sandbox_failure";
+  if (error.codexErrorInfo === "cyberPolicy") return "codex_cyber_policy_failure";
+  return "codex_deterministic_failure";
+}
+
+function formatDeterministicFailureMessage(error: TurnErrorInfo): string {
+  if (isContextWindowFailure(error)) return CODEX_CONTEXT_WINDOW_FAILURE_MESSAGE;
+  return formatAppServerError(error.message);
+}
+
+function isContextWindowFailure(error: TurnErrorInfo): boolean {
+  return error.codexErrorInfo === "contextWindowExceeded" || isDeterministicCompactFailure(error);
+}
+
+function isDeterministicCompactFailure(error: TurnErrorInfo): boolean {
+  const text = `${error.message}\n${error.additionalDetails ?? ""}`.toLowerCase();
+  if (text.includes("contextwindowexceeded") || text.includes("context_length_exceeded")) return true;
+  if (text.includes("ran out of room") && text.includes("context window")) return true;
+
+  const compactFailure =
+    text.includes("failed to run pre-sampling compact") ||
+    text.includes("error running remote compact task") ||
+    text.includes("remote compact");
+  const contextFailure = text.includes("context window") || text.includes("context length");
+  return compactFailure && contextFailure;
 }
 
 function isUsageLimitErrorInfo(value: unknown): boolean {
