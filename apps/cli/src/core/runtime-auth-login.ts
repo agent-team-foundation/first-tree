@@ -1,11 +1,15 @@
 import {
   BROWSER_LOGIN_TIMEOUT_MS,
+  type ClaudeLoginInvocation,
   type CodexBinaryResolution,
-  type DeviceAuthOutcome,
   type DeviceCodePrompt,
+  type LoginOutcome,
+  probeClaudeCodeCapability,
   probeCodexCapability,
   type RuntimeAuthCommand,
+  resolveClaudeLoginInvocation,
   resolveCodexRuntimeBinary,
+  runClaudeBrowserLogin,
   runCodexBrowserLogin,
   runCodexDeviceAuthLogin,
 } from "@first-tree/client";
@@ -21,13 +25,10 @@ import type { CapabilityEntry, PendingAuth } from "@first-tree/shared";
  * screen with no bespoke realtime channel, and the capability probe stays the
  * single source of truth. The OAuth token never transits First Tree.
  *
- * Codex methods:
- *   - PRIMARY `browser` (default): bare `codex login` — opens the auth page on
- *     the host, redirects to codex's localhost callback, codex writes auth.json.
- *   - FALLBACK `device-auth`: `codex login --device-auth` for a headless host;
- *     surfaces a device code the user enters on another device.
- *
- * Other providers (claude-code) are a follow-up (browser `setup-token`).
+ * Consistent PRIMARY across providers — browser OAuth:
+ *   - codex: bare `codex login` → writes `~/.codex/auth.json`.
+ *   - claude-code: `claude auth login` → writes keychain `Claude Code-credentials`.
+ * FALLBACK (codex only, headless): `codex login --device-auth` device code.
  */
 
 /** Fallback expiry when the device-code prompt does not state one (codex says 15). */
@@ -45,6 +46,9 @@ export type RuntimeAuthLoginDeps = {
   runBrowserLogin?: typeof runCodexBrowserLogin;
   runDeviceAuth?: typeof runCodexDeviceAuthLogin;
   probeCodex?: () => Promise<CapabilityEntry>;
+  resolveClaudeLogin?: () => ClaudeLoginInvocation;
+  runClaudeBrowser?: typeof runClaudeBrowserLogin;
+  probeClaude?: () => Promise<CapabilityEntry>;
   now?: () => number;
 };
 
@@ -67,10 +71,19 @@ function pendingEntry(base: CapabilityEntry | undefined, pending: PendingAuth, n
   };
 }
 
+/** A `browser` pending marker so the web shows "finish sign-in in your browser". */
+function browserPending(nowMs: number): PendingAuth {
+  return { method: "browser", expiresAt: new Date(nowMs + BROWSER_LOGIN_TIMEOUT_MS).toISOString() };
+}
+
 /** Dispatch on provider. Never throws — failures are logged + reflected in caps. */
 export async function runRuntimeAuthLogin(command: RuntimeAuthCommand, deps: RuntimeAuthLoginDeps): Promise<void> {
   if (command.provider === "codex") {
     await runCodexRuntimeAuth(command, deps);
+    return;
+  }
+  if (command.provider === "claude-code") {
+    await runClaudeRuntimeAuth(command, deps);
     return;
   }
   deps.log("⚠️", `runtime-auth: provider "${command.provider}" is not supported yet (ref ${command.ref})`);
@@ -84,9 +97,6 @@ async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAut
   // explicit headless fallback (only when the host has no usable browser).
   const method = command.method === "device-auth" ? "device-auth" : "browser";
 
-  // Re-probe codex and publish the result, clearing any pending marker. The
-  // single "reflect the real state" path: used on resolve failure and after the
-  // login resolves (success or failure).
   const reflectRealState = async (label: string): Promise<void> => {
     try {
       await deps.setProviderEntry("codex", await probeCodex());
@@ -104,52 +114,40 @@ async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAut
     return;
   }
 
-  let outcome: DeviceAuthOutcome;
+  let outcome: LoginOutcome;
   try {
     outcome =
       method === "device-auth"
-        ? await runDeviceAuthFlow(resolved.binary, deps, now)
-        : await runBrowserFlow(resolved.binary, deps, now);
+        ? await runCodexDeviceAuthFlow(resolved.binary, deps, now)
+        : await runCodexBrowserFlow(resolved.binary, deps, now);
   } catch (err) {
-    // The runners are documented never to throw, but stay defensive.
     deps.log("⚠️", `runtime-auth: codex login threw: ${message(err)}`);
     await reflectRealState("after login threw");
     return;
   }
 
   await reflectRealState("after login");
-  if (outcome.ok) {
-    deps.log("✓", `runtime-auth: codex login complete (ref ${command.ref})`);
-  } else {
-    deps.log("⚠️", `runtime-auth: codex login failed (${outcome.reason}): ${outcome.error}`);
-  }
+  logOutcome("codex", command.ref, outcome, deps);
 }
 
-/**
- * PRIMARY: browser OAuth. Mark a `browser` pending so the web shows the "finish
- * sign-in in the browser on this host" state, then run `codex login`.
- */
-async function runBrowserFlow(
+/** PRIMARY codex: mark a browser pending, then run `codex login`. */
+async function runCodexBrowserFlow(
   binary: string,
   deps: RuntimeAuthLoginDeps,
   now: () => number,
-): Promise<DeviceAuthOutcome> {
+): Promise<LoginOutcome> {
   const runBrowserLogin = deps.runBrowserLogin ?? runCodexBrowserLogin;
-  const pending: PendingAuth = {
-    method: "browser",
-    expiresAt: new Date(now() + BROWSER_LOGIN_TIMEOUT_MS).toISOString(),
-  };
-  await deps.setProviderEntry("codex", pendingEntry(deps.currentEntry("codex"), pending, now()));
+  await deps.setProviderEntry("codex", pendingEntry(deps.currentEntry("codex"), browserPending(now()), now()));
   deps.log("•", "runtime-auth: codex browser sign-in opened on this host");
   return runBrowserLogin({ binary });
 }
 
-/** FALLBACK: device code. Surface the verification URL + code as pending-auth. */
-async function runDeviceAuthFlow(
+/** FALLBACK codex: surface the verification URL + code as pending-auth. */
+async function runCodexDeviceAuthFlow(
   binary: string,
   deps: RuntimeAuthLoginDeps,
   now: () => number,
-): Promise<DeviceAuthOutcome> {
+): Promise<LoginOutcome> {
   const runDeviceAuth = deps.runDeviceAuth ?? runCodexDeviceAuthLogin;
   const publishPending = async (prompt: DeviceCodePrompt): Promise<void> => {
     const minutes = prompt.expiresInMinutes ?? DEFAULT_DEVICE_CODE_MINUTES;
@@ -168,4 +166,55 @@ async function runDeviceAuthFlow(
       void publishPending(prompt);
     },
   });
+}
+
+/** PRIMARY claude-code: `claude auth login` (browser OAuth → keychain). */
+async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAuthLoginDeps): Promise<void> {
+  const now = deps.now ?? Date.now;
+  const resolveLogin = deps.resolveClaudeLogin ?? resolveClaudeLoginInvocation;
+  const runClaudeBrowser = deps.runClaudeBrowser ?? runClaudeBrowserLogin;
+  const probeClaude = deps.probeClaude ?? probeClaudeCodeCapability;
+
+  const reflectRealState = async (label: string): Promise<void> => {
+    try {
+      await deps.setProviderEntry("claude-code", await probeClaude());
+    } catch (err) {
+      deps.log("⚠️", `runtime-auth: claude re-probe ${label} failed: ${message(err)}`);
+    }
+  };
+
+  deps.log("•", `runtime-auth: starting claude login (method=browser, ref ${command.ref})`);
+
+  const invocation = resolveLogin();
+  if (!invocation.ok) {
+    deps.log("⚠️", `runtime-auth: claude CLI unavailable: ${invocation.error}`);
+    await reflectRealState("after unresolved CLI");
+    return;
+  }
+
+  await deps.setProviderEntry(
+    "claude-code",
+    pendingEntry(deps.currentEntry("claude-code"), browserPending(now()), now()),
+  );
+  deps.log("•", "runtime-auth: claude browser sign-in opened on this host");
+
+  let outcome: LoginOutcome;
+  try {
+    outcome = await runClaudeBrowser({ command: invocation.command, baseArgs: invocation.baseArgs });
+  } catch (err) {
+    deps.log("⚠️", `runtime-auth: claude login threw: ${message(err)}`);
+    await reflectRealState("after login threw");
+    return;
+  }
+
+  await reflectRealState("after login");
+  logOutcome("claude", command.ref, outcome, deps);
+}
+
+function logOutcome(provider: string, ref: string, outcome: LoginOutcome, deps: RuntimeAuthLoginDeps): void {
+  if (outcome.ok) {
+    deps.log("✓", `runtime-auth: ${provider} login complete (ref ${ref})`);
+  } else {
+    deps.log("⚠️", `runtime-auth: ${provider} login failed (${outcome.reason}): ${outcome.error}`);
+  }
 }

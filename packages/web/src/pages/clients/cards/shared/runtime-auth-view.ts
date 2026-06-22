@@ -22,9 +22,10 @@ export type RuntimeAuthView =
 
 /** Providers whose login the daemon can drive in-product today. */
 export function providerSupportsInProductAuth(provider: RuntimeProvider): boolean {
-  // codex: bare `codex login` (browser OAuth) primary, `--device-auth` fallback.
-  // claude-code's browser `setup-token` path is a documented follow-up.
-  return provider === "codex";
+  // Consistent browser-OAuth Connect: codex (`codex login`) + claude-code
+  // (`claude auth login`). `claude-code-tui` shares Claude Code's credentials
+  // but isn't a distinct Connect target.
+  return provider === "codex" || provider === "claude-code";
 }
 
 export function deriveRuntimeAuthView(

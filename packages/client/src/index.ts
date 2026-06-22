@@ -52,20 +52,22 @@ export type {
   RegistrySpawnOptions,
 } from "./runtime/child-process-registry.js";
 export { CHILD_CATEGORIES, getChildProcessRegistry } from "./runtime/child-process-registry.js";
+export {
+  type ClaudeBrowserLoginOptions,
+  type ClaudeLoginInvocation,
+  resolveClaudeLoginInvocation,
+  runClaudeBrowserLogin,
+} from "./runtime/claude-login.js";
 export type { CliBinding } from "./runtime/cli-binding.js";
 export { setCliBinding } from "./runtime/cli-binding.js";
-// Runtime-auth (browser OAuth primary + device-code fallback)
 export {
-  BROWSER_LOGIN_TIMEOUT_MS,
   type CodexBrowserLoginOptions,
   type CodexDeviceAuthOptions,
-  DEVICE_AUTH_TIMEOUT_MS,
   type DeviceAuthOutcome,
   type DeviceCodePrompt,
   parseDeviceCodePrompt,
   runCodexBrowserLogin,
   runCodexDeviceAuthLogin,
-  stripAnsi,
 } from "./runtime/codex-device-auth.js";
 export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
 export { loadRuntimeConfig } from "./runtime/config.js";
@@ -86,6 +88,13 @@ export { getHandlerFactory, hasHandler, registerHandler } from "./runtime/handle
 export { InputController } from "./runtime/input-controller.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
+// Runtime-auth (browser OAuth primary + device-code fallback)
+export {
+  BROWSER_LOGIN_TIMEOUT_MS,
+  DEVICE_AUTH_TIMEOUT_MS,
+  type LoginOutcome,
+  stripAnsi,
+} from "./runtime/runtime-login.js";
 export { SessionManager } from "./runtime/session-manager.js";
 export { SessionRegistry } from "./runtime/session-registry.js";
 // Skills (slash-command discovery)

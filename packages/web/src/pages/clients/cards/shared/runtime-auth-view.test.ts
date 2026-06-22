@@ -69,8 +69,12 @@ describe("deriveRuntimeAuthView", () => {
     expect(view).toEqual({ kind: "connectable" });
   });
 
-  it("offers nothing for a provider without in-product auth (claude-code)", () => {
-    expect(deriveRuntimeAuthView("claude-code", entry({}), NOW)).toEqual({ kind: "none" });
+  it("offers Connect for an unauthenticated claude-code (cc/codex parity)", () => {
+    expect(deriveRuntimeAuthView("claude-code", entry({}), NOW)).toEqual({ kind: "connectable" });
+  });
+
+  it("offers nothing for a provider without in-product auth (claude-code-tui)", () => {
+    expect(deriveRuntimeAuthView("claude-code-tui", entry({}), NOW)).toEqual({ kind: "none" });
   });
 
   it("offers nothing when ok / missing / null", () => {
@@ -92,7 +96,7 @@ describe("deriveRuntimeAuthView", () => {
 
   it("knows which providers support in-product auth", () => {
     expect(providerSupportsInProductAuth("codex")).toBe(true);
-    expect(providerSupportsInProductAuth("claude-code")).toBe(false);
+    expect(providerSupportsInProductAuth("claude-code")).toBe(true);
     expect(providerSupportsInProductAuth("claude-code-tui")).toBe(false);
   });
 });

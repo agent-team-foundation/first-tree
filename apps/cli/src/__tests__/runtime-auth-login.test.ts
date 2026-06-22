@@ -153,3 +153,53 @@ describe("runRuntimeAuthLogin — device-code fallback (method override)", () =>
     expect(h.logs.some((l) => l.includes("no-prompt"))).toBe(true);
   });
 });
+
+describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", () => {
+  function claudeHarness(opts: { resolveOk?: boolean; outcome?: DeviceAuthOutcome; probeResult?: CapabilityEntry }) {
+    const calls: Recorded[] = [];
+    const logs: string[] = [];
+    const deps = {
+      currentEntry: (): CapabilityEntry | undefined => undefined,
+      setProviderEntry: async (provider: string, entry: CapabilityEntry): Promise<void> => {
+        calls.push({ provider, entry });
+      },
+      log: (_s: string, msg: string): void => {
+        logs.push(msg);
+      },
+      now: (): number => NOW,
+      resolveClaudeLogin: () =>
+        opts.resolveOk === false
+          ? ({ ok: false, error: "no claude CLI" } as const)
+          : ({ ok: true, command: "/usr/local/bin/claude", baseArgs: [] as string[] } as const),
+      runClaudeBrowser: async (): Promise<DeviceAuthOutcome> => opts.outcome ?? ({ ok: true } as const),
+      probeClaude: async (): Promise<CapabilityEntry> => opts.probeResult ?? unauthEntry(),
+    };
+    return { calls, logs, deps };
+  }
+
+  it("publishes a browser pending then the re-probed ok entry", async () => {
+    const h = claudeHarness({ outcome: { ok: true }, probeResult: okEntry() });
+    await runRuntimeAuthLogin({ provider: "claude-code", ref: "c1" }, h.deps);
+
+    expect(h.calls).toHaveLength(2);
+    expect(h.calls[0]?.provider).toBe("claude-code");
+    expect(h.calls[0]?.entry.pendingAuth).toEqual({
+      method: "browser",
+      expiresAt: new Date(NOW + BROWSER_LOGIN_TIMEOUT_MS).toISOString(),
+    });
+    expect(h.calls[1]?.entry.state).toBe("ok");
+    expect(h.calls[1]?.entry.pendingAuth).toBeUndefined();
+  });
+
+  it("on unresolved CLI, reflects real state and never logs in", async () => {
+    const h = claudeHarness({
+      resolveOk: false,
+      probeResult: { ...unauthEntry(), state: "missing", available: false },
+    });
+    await runRuntimeAuthLogin({ provider: "claude-code", ref: "c2" }, h.deps);
+
+    expect(h.calls).toHaveLength(1);
+    expect(h.calls[0]?.entry.state).toBe("missing");
+    expect(h.logs.some((l) => l.includes("claude CLI unavailable"))).toBe(true);
+  });
+});
