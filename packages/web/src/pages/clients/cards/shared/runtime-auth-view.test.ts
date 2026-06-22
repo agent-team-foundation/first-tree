@@ -2,6 +2,7 @@ import type { CapabilityEntry, PendingAuth } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import {
   deriveRuntimeAuthView,
+  offersDeviceCodeFallback,
   providerAuthHandledInProduct,
   providerSupportsInProductAuth,
   runtimeAuthIsPending,
@@ -106,6 +107,25 @@ describe("deriveRuntimeAuthView", () => {
       NOW,
     );
     expect(view.kind).toBe("browser-pending");
+  });
+
+  it("offers the device-code fallback only upfront for codex, never mid-browser-login", () => {
+    const connectable = deriveRuntimeAuthView("codex", entry({}), NOW);
+    expect(connectable.kind).toBe("connectable");
+    expect(offersDeviceCodeFallback("codex", connectable)).toBe(true);
+
+    // Mid-browser-login the daemon drops a duplicate start, so the fallback
+    // would be a dead action — it must not be offered.
+    const pending = deriveRuntimeAuthView(
+      "codex",
+      entry({ pendingAuth: browserPending("2026-06-22T12:05:00.000Z") }),
+      NOW,
+    );
+    expect(pending.kind).toBe("browser-pending");
+    expect(offersDeviceCodeFallback("codex", pending)).toBe(false);
+
+    // Claude has no device-code login.
+    expect(offersDeviceCodeFallback("claude-code", connectable)).toBe(false);
   });
 
   it("knows which providers support in-product auth", () => {

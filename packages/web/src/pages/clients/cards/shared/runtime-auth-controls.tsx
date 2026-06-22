@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { startRuntimeAuth } from "../../../../api/activity.js";
 import { Button } from "../../../../components/ui/button.js";
 import { PROVIDER_LABEL } from "./providers.js";
-import { deriveRuntimeAuthView, runtimeAuthIsPending } from "./runtime-auth-view.js";
+import { deriveRuntimeAuthView, offersDeviceCodeFallback, runtimeAuthIsPending } from "./runtime-auth-view.js";
 
 /** While a login is in flight, re-poll capabilities this often. */
 const AUTH_POLL_MS = 3000;
@@ -29,9 +29,10 @@ export function RuntimeAuthControls({
 }) {
   const queryClient = useQueryClient();
   const view = deriveRuntimeAuthView(provider, entry, Date.now());
-  // Only codex has a headless device-code login; Claude has no equivalent, so
-  // the "use a code instead" affordance is codex-only.
-  const supportsDeviceCode = provider === "codex";
+  // The "use a one-time code instead" affordance is offered only upfront
+  // (connectable) and only for codex — never during browser-pending, where a
+  // second start is a no-op the daemon drops as a duplicate.
+  const showCodeFallback = offersDeviceCodeFallback(provider, view);
 
   const start = useMutation({
     mutationFn: (method?: RuntimeAuthMethod) => startRuntimeAuth(clientId, { provider, ...(method ? { method } : {}) }),
@@ -55,8 +56,8 @@ export function RuntimeAuthControls({
   const label = PROVIDER_LABEL[provider];
 
   // A small "use a one-time code instead" link, for headless hosts where the
-  // browser path can't complete. Codex only.
-  const deviceCodeFallback = supportsDeviceCode ? (
+  // browser path can't complete. Offered upfront only (see showCodeFallback).
+  const deviceCodeFallback = showCodeFallback ? (
     <button
       type="button"
       className="text-caption"
@@ -113,7 +114,6 @@ export function RuntimeAuthControls({
         <p className="text-caption" style={{ color: "var(--fg-3)", margin: 0 }}>
           Waiting for you to authorize…
         </p>
-        {deviceCodeFallback}
       </div>
     );
   }
