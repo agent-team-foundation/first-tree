@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { lazy, Suspense } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
+import { RouteTracker } from "./analytics.js";
 import { AuthProvider } from "./auth/auth-context.js";
 import { RequireAuth } from "./auth/require-auth.js";
 import { Layout } from "./components/layout.js";
@@ -118,6 +119,7 @@ export function App() {
       <AuthProvider>
         <ToastProvider>
           <BrowserRouter>
+            <RouteTracker />
             <Routes>
               {/* Public routes — no auth required */}
               <Route path="/login" element={<LoginPage />} />
