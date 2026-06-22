@@ -71,6 +71,7 @@ export function PromptTab() {
   const canEditPrompt = ctx.canManageAgent && ctx.agent.status === "active";
   const resourceError = resourcesQuery.error instanceof Error ? resourcesQuery.error.message : null;
   const resources = resourcesQuery.data;
+  const showEffectiveInstructions = resources ? shouldShowEffectiveInstructions(resources, prompt) : false;
   const editorError = savePromptMut.error instanceof Error ? savePromptMut.error.message : null;
   const bindingError = bindingMut.error instanceof Error ? bindingMut.error.message : null;
   const bindings = resources?.bindings ?? [];
@@ -140,7 +141,7 @@ export function PromptTab() {
           ) : null
         }
       >
-        <EffectiveInstructionsBlock prompt={prompt} />
+        {showEffectiveInstructions ? <EffectiveInstructionsBlock prompt={prompt} /> : null}
         <div>
           {resources ? (
             <PromptResourceBlocks
@@ -185,7 +186,7 @@ export function PromptTab() {
 function EffectiveInstructionsBlock({ prompt }: { prompt: string }) {
   const [showAll, setShowAll] = useState(false);
   const [clamped, setClamped] = useState(false);
-  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const bodyRef = useRef<HTMLElement | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when the prompt text changes.
   useEffect(() => {
     const el = bodyRef.current;
@@ -194,13 +195,11 @@ function EffectiveInstructionsBlock({ prompt }: { prompt: string }) {
 
   return (
     <div style={{ marginBottom: "var(--sp-4)" }}>
-      <p className="text-eyebrow" style={{ color: "var(--fg-3)", margin: "0 0 var(--sp-1_5)" }}>
-        What this agent is told
-      </p>
       {prompt.trim() ? (
         <>
-          <div
+          <section
             ref={bodyRef}
+            aria-label="Effective instructions"
             className="text-body"
             style={{
               background: "var(--bg-sunken)",
@@ -212,7 +211,7 @@ function EffectiveInstructionsBlock({ prompt }: { prompt: string }) {
             }}
           >
             <Markdown className={PROSE_COMPACT_HEADINGS}>{prompt}</Markdown>
-          </div>
+          </section>
           {clamped || showAll ? (
             <Button
               type="button"
@@ -334,6 +333,13 @@ function convertPromptBindingToInline(
 
 function nextOrder(bindings: readonly AgentResourceBindingInput[]): number {
   return bindings.reduce((max, binding) => Math.max(max, binding.order ?? 0), 0) + 1;
+}
+
+function shouldShowEffectiveInstructions(data: AgentResourcesOutput, prompt: string): boolean {
+  if (!prompt.trim()) return false;
+  const activeRows = enabledPromptRows(data);
+  if (activeRows.length > 1) return true;
+  return data.effective.prompts.some((row) => row.mode === "replaced" || !!row.replacesResourceId);
 }
 
 function PromptResourceBlocks(props: {

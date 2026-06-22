@@ -275,7 +275,7 @@ describe("UsageTab", () => {
     expect(container.textContent).toContain("Active days");
     expect(container.textContent).toContain("Peak day");
     expect(container.textContent).toContain("Recent turns");
-    expect(container.textContent).toContain("Daily processed tokens.");
+    expect(container.textContent).not.toContain("Daily processed tokens.");
     expect(container.textContent).not.toContain("Darker cells mean more usage");
     expect(
       activityCells.find((cell) => cell.getAttribute("aria-label")?.includes("10.5K processed tokens")),
