@@ -90,6 +90,10 @@ const BASE_ROWS: MeChatRow[] = [
   row({
     chatId: "chat-needs",
     title: "Waiting approval",
+    // An open ask (R2) — pins to "Needs attention". The unread badge below
+    // still renders (unreadMentionCount: 1), but the mention is no longer
+    // what pins the row; the open request is.
+    openRequestCount: 1,
     unreadMentionCount: 1,
     chatHasExplicitMentionToMe: true,
     lastMessageAt: null,
@@ -276,7 +280,8 @@ describe("ConversationList", () => {
     expect(container.textContent).toContain("From GitHub");
     expect(container.querySelector('[aria-label="watching"]')).toBeTruthy();
     expect(container.querySelector('[aria-label="failed, 3 unread"]')).toBeTruthy();
-    expect(container.querySelector('[aria-label="1 unread"]')).toBeTruthy();
+    // The open-ask row carries the "needs you" badge alongside its unread count.
+    expect(container.querySelector('[aria-label="needs you, 1 unread"]')).toBeTruthy();
 
     await click(rowButton(container, "Manual planning"));
     expect(onSelectChat).toHaveBeenCalledWith("chat-manual");
