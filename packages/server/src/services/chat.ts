@@ -6,7 +6,7 @@ import {
   type LegacyCreateChat,
   type SendMessage,
 } from "@first-tree/shared";
-import { and, desc, eq, inArray, lt, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -537,13 +537,14 @@ export async function updateChatMetadata(
   chatId: string,
   patch: { topic?: string | null; description?: string | null },
   actorAgentId: string,
-): Promise<typeof chats.$inferSelect> {
+): Promise<{ chat: typeof chats.$inferSelect; descriptionChanged: boolean }> {
   const now = new Date();
+  let descriptionChanged = false;
   const set: {
     topic?: string | null;
     description?: string | null;
-    descriptionUpdatedAt?: SQL;
-    descriptionUpdatedBy?: SQL;
+    descriptionUpdatedAt?: Date;
+    descriptionUpdatedBy?: string;
     updatedAt: Date;
   } = { updatedAt: now };
   if (patch.topic !== undefined) {
@@ -552,16 +553,25 @@ export async function updateChatMetadata(
   if (patch.description !== undefined) {
     const nextDescription = patch.description && patch.description.length > 0 ? patch.description : null;
     set.description = nextDescription;
-    // The CASE reads the PRE-UPDATE column values, so re-running
-    // `chat update --description` with identical text — or a topic-only edit
-    // that happens to route through here — does not move the "X ago · who"
-    // line. `IS DISTINCT FROM` is null-safe.
-    set.descriptionUpdatedAt = sql`CASE WHEN ${chats.description} IS DISTINCT FROM ${nextDescription} THEN now() ELSE ${chats.descriptionUpdatedAt} END`;
-    set.descriptionUpdatedBy = sql`CASE WHEN ${chats.description} IS DISTINCT FROM ${nextDescription} THEN ${actorAgentId} ELSE ${chats.descriptionUpdatedBy} END`;
+    // Detect a real change (null-safe) to gate BOTH the freshness stamp and the
+    // realtime `chat:updated` notify the caller fires. A no-op re-write of
+    // identical text — or a topic-only edit routed through here — leaves the
+    // "X ago · who" line and the notify untouched. The read-then-write window is
+    // acceptable: chat descriptions are low-frequency, single-maintainer writes.
+    const [current] = await db
+      .select({ description: chats.description })
+      .from(chats)
+      .where(eq(chats.id, chatId))
+      .limit(1);
+    descriptionChanged = (current?.description ?? null) !== nextDescription;
+    if (descriptionChanged) {
+      set.descriptionUpdatedAt = now;
+      set.descriptionUpdatedBy = actorAgentId;
+    }
   }
   const [updated] = await db.update(chats).set(set).where(eq(chats.id, chatId)).returning();
   if (!updated) throw new Error(`Unexpected: chat "${chatId}" missing after update`);
-  return updated;
+  return { chat: updated, descriptionChanged };
 }
 
 /**

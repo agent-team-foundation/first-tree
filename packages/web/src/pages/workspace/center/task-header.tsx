@@ -3,6 +3,7 @@ import type { RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
+import { stripInlineMarkdown } from "../../../lib/strip-inline-markdown.js";
 import { formatRelative } from "../../../lib/utils.js";
 
 /**
@@ -82,17 +83,20 @@ export function descriptionFirstLine(description: string): string {
     // (---/***/___) and table delimiter rows (| --- | :--: |).
     if (/^([-*_])\1{2,}$/.test(line)) continue;
     if (/^\|?[\s:|-]+\|?$/.test(line) && line.includes("-")) continue;
-    const stripped = line
-      // Leading block markers: heading hashes, list bullets, ordered markers,
-      // blockquote, a leading table pipe.
-      .replace(/^#{1,6}\s+/, "")
-      .replace(/^[-*+]\s+/, "")
-      .replace(/^\d+[.)]\s+/, "")
-      .replace(/^>\s?/, "")
-      .replace(/^\|\s?/, "")
-      // Inline: links/images -> their text; then drop emphasis / code ticks.
-      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-      .replace(/[*_`~]/g, "")
+    // Strip leading block markers (heading / bullet / ordered / quote / a
+    // leading table pipe), then peel inline emphasis/code/link markers with the
+    // shared delimiter-aware helper. Crucially that helper leaves literal
+    // underscores inside content intact (e.g. `description_updated_at` stays
+    // `description_updated_at`) — it removes markdown noise, never mangles the
+    // description's own text.
+    const stripped = stripInlineMarkdown(
+      line
+        .replace(/^#{1,6}\s+/, "")
+        .replace(/^[-*+]\s+/, "")
+        .replace(/^\d+[.)]\s+/, "")
+        .replace(/^>\s?/, "")
+        .replace(/^\|\s?/, ""),
+    )
       .replace(/\s+/g, " ")
       .trim();
     if (stripped) return stripped;
@@ -151,15 +155,21 @@ export function TaskHeader({
   const [scrollCollapsed, setScrollCollapsed] = useState(false);
   const [unreadCleared, setUnreadCleared] = useState(false);
 
-  // Decide the entry state once per chat, after the real detail has settled:
-  // auto-expand + highlight only when the update is unread AND the viewer hasn't
-  // looked in a while; otherwise honor their remembered per-chat preference
-  // (default collapsed). Manual toggles afterward always win (see onToggle).
-  const decidedForChat = useRef<string | null>(null);
+  // Decide the entry state, after the real detail has settled, keyed by chat AND
+  // the description's freshness version (`descriptionUpdatedAt`): auto-expand +
+  // highlight only when the update is unread AND the viewer hasn't looked in a
+  // while; otherwise honor their remembered per-chat preference (default
+  // collapsed). Keying on the version (not just chatId) means a NEW description
+  // update re-asserts its unread cue / auto-expand even within the same open
+  // chat, instead of being suppressed by a once-per-chat guard — while the
+  // user's manual collapse/expand preference is still remembered per chat.
+  // Manual toggles for the current version always win (see onToggle).
+  const decidedForKey = useRef<string | null>(null);
+  const entryKey = `${chatId}|${descriptionUpdatedAt ?? ""}`;
   useEffect(() => {
     if (!hasDescription || !freshnessReady) return;
-    if (decidedForChat.current === chatId) return;
-    decidedForChat.current = chatId;
+    if (decidedForKey.current === entryKey) return;
+    decidedForKey.current = entryKey;
     setScrollCollapsed(false);
     setUnreadCleared(false);
     if (unread && isStaleSinceLastView(lastReadMs, Date.now())) {
@@ -169,7 +179,7 @@ export function TaskHeader({
       setOpen(loadManualPref(chatId) ?? false);
       setHighlighted(false);
     }
-  }, [chatId, hasDescription, freshnessReady, unread, lastReadMs]);
+  }, [entryKey, chatId, hasDescription, freshnessReady, unread, lastReadMs]);
 
   const onToggle = useCallback(() => {
     setOpen((prev) => {

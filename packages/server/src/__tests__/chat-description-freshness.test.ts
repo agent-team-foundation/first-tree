@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createChat, updateChatMetadata } from "../services/chat.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
@@ -9,7 +9,8 @@ import { createTestAgent, useTestApp } from "./helpers.js";
  * distinct from the row-level `updatedAt` that a topic edit also bumps. Only a
  * *real* description change stamps them, so the header's "X ago · who" line and
  * its unread/auto-expand logic reflect the actual last description edit — never
- * a topic rename or a no-op re-write.
+ * a topic rename or a no-op re-write. The same "did it really change" signal
+ * gates the realtime `chat:updated` notify that refreshes an open client.
  */
 describe("chat description freshness — stamping (updateChatMetadata)", () => {
   const getApp = useTestApp();
@@ -25,45 +26,48 @@ describe("chat description freshness — stamping (updateChatMetadata)", () => {
     return { maintainer, other, chat };
   }
 
-  it("first description write stamps descriptionUpdatedAt + descriptionUpdatedBy", async () => {
+  it("first description write stamps descriptionUpdatedAt + descriptionUpdatedBy and reports the change", async () => {
     const app = getApp();
     const { maintainer, chat } = await setupChat(app);
     const r1 = await updateChatMetadata(app.db, chat.id, { description: "First summary" }, maintainer.agent.uuid);
-    expect(r1.description).toBe("First summary");
-    expect(r1.descriptionUpdatedAt).toBeInstanceOf(Date);
-    expect(r1.descriptionUpdatedBy).toBe(maintainer.agent.uuid);
+    expect(r1.descriptionChanged).toBe(true);
+    expect(r1.chat.description).toBe("First summary");
+    expect(r1.chat.descriptionUpdatedAt).toBeInstanceOf(Date);
+    expect(r1.chat.descriptionUpdatedBy).toBe(maintainer.agent.uuid);
   });
 
-  it("a no-op re-write of identical text does NOT bump freshness or attribution", async () => {
+  it("a no-op re-write of identical text does NOT bump freshness, attribution, or report a change", async () => {
     const app = getApp();
     const { maintainer, other, chat } = await setupChat(app);
     const r1 = await updateChatMetadata(app.db, chat.id, { description: "Same text" }, maintainer.agent.uuid);
-    const t1 = r1.descriptionUpdatedAt?.getTime();
+    const t1 = r1.chat.descriptionUpdatedAt?.getTime();
     const r2 = await updateChatMetadata(app.db, chat.id, { description: "Same text" }, other.agent.uuid);
-    // Value is unchanged → the CASE keeps the original time + author.
-    expect(r2.descriptionUpdatedAt?.getTime()).toBe(t1);
-    expect(r2.descriptionUpdatedBy).toBe(maintainer.agent.uuid);
+    expect(r2.descriptionChanged).toBe(false);
+    expect(r2.chat.descriptionUpdatedAt?.getTime()).toBe(t1);
+    expect(r2.chat.descriptionUpdatedBy).toBe(maintainer.agent.uuid);
   });
 
-  it("a topic-only patch leaves description freshness untouched", async () => {
+  it("a topic-only patch leaves description freshness untouched and reports no description change", async () => {
     const app = getApp();
     const { maintainer, other, chat } = await setupChat(app);
     const r1 = await updateChatMetadata(app.db, chat.id, { description: "Body" }, maintainer.agent.uuid);
-    const t1 = r1.descriptionUpdatedAt?.getTime();
+    const t1 = r1.chat.descriptionUpdatedAt?.getTime();
     const r2 = await updateChatMetadata(app.db, chat.id, { topic: "Renamed" }, other.agent.uuid);
-    expect(r2.topic).toBe("Renamed");
-    expect(r2.descriptionUpdatedAt?.getTime()).toBe(t1);
-    expect(r2.descriptionUpdatedBy).toBe(maintainer.agent.uuid);
+    expect(r2.descriptionChanged).toBe(false);
+    expect(r2.chat.topic).toBe("Renamed");
+    expect(r2.chat.descriptionUpdatedAt?.getTime()).toBe(t1);
+    expect(r2.chat.descriptionUpdatedBy).toBe(maintainer.agent.uuid);
   });
 
-  it("a real description change re-stamps with the new actor", async () => {
+  it("a real description change re-stamps with the new actor and reports the change", async () => {
     const app = getApp();
     const { maintainer, other, chat } = await setupChat(app);
     await updateChatMetadata(app.db, chat.id, { description: "v1" }, maintainer.agent.uuid);
     const r2 = await updateChatMetadata(app.db, chat.id, { description: "v2" }, other.agent.uuid);
-    expect(r2.description).toBe("v2");
-    expect(r2.descriptionUpdatedBy).toBe(other.agent.uuid);
-    expect(r2.descriptionUpdatedAt).toBeInstanceOf(Date);
+    expect(r2.descriptionChanged).toBe(true);
+    expect(r2.chat.description).toBe("v2");
+    expect(r2.chat.descriptionUpdatedBy).toBe(other.agent.uuid);
+    expect(r2.chat.descriptionUpdatedAt).toBeInstanceOf(Date);
   });
 
   it("clearing the description counts as a change and attributes to the clearer", async () => {
@@ -71,8 +75,9 @@ describe("chat description freshness — stamping (updateChatMetadata)", () => {
     const { maintainer, other, chat } = await setupChat(app);
     await updateChatMetadata(app.db, chat.id, { description: "something" }, maintainer.agent.uuid);
     const r2 = await updateChatMetadata(app.db, chat.id, { description: "" }, other.agent.uuid);
-    expect(r2.description).toBeNull();
-    expect(r2.descriptionUpdatedBy).toBe(other.agent.uuid);
+    expect(r2.descriptionChanged).toBe(true);
+    expect(r2.chat.description).toBeNull();
+    expect(r2.chat.descriptionUpdatedBy).toBe(other.agent.uuid);
   });
 });
 
@@ -150,5 +155,44 @@ describe("chat description freshness — detail exposure (GET /api/v1/chats/:id)
     const body = res.json() as { descriptionUpdatedAt: string | null; descriptionUpdatedByName: string | null };
     expect(body.descriptionUpdatedAt).toBeNull();
     expect(body.descriptionUpdatedByName).toBeNull();
+  });
+});
+
+describe("chat description freshness — realtime notify (PATCH /api/v1/chats/:id)", () => {
+  const getApp = useTestApp();
+
+  it("emits chat:updated on a real description change, but not on a no-op or a topic-only edit", async () => {
+    const app = getApp();
+    const caller = await createTestAgent(app, { type: "human", displayName: "Caller" });
+    const peer = await createTestAgent(app, { type: "agent", displayName: "Peer Bot" });
+    const chat = await createChat(app.db, caller.agent.uuid, {
+      type: "group",
+      participantIds: [peer.agent.uuid],
+    });
+
+    const notifySpy = vi.spyOn(app.notifier, "notifyChatUpdated").mockResolvedValue();
+    const patch = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: "PATCH",
+        url: `/api/v1/chats/${chat.id}`,
+        headers: { authorization: `Bearer ${caller.accessToken}` },
+        payload,
+      });
+
+    // Real description change → exactly one realtime kick for this chat.
+    const first = await patch({ description: "first summary" });
+    expect(first.statusCode).toBe(200);
+    expect(notifySpy).toHaveBeenCalledWith(chat.id);
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+
+    // No-op re-write of identical text → no further notify.
+    await patch({ description: "first summary" });
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+
+    // Topic-only edit → no description notify.
+    await patch({ topic: "Renamed" });
+    expect(notifySpy).toHaveBeenCalledTimes(1);
+
+    notifySpy.mockRestore();
   });
 });

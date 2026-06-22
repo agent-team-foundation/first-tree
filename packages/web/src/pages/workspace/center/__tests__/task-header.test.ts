@@ -25,6 +25,14 @@ describe("descriptionFirstLine", () => {
     expect(descriptionFirstLine("**Status**: `done` soon")).toBe("Status: done soon");
   });
 
+  it("preserves literal underscores in content (snake_case identifiers are not mangled)", () => {
+    expect(descriptionFirstLine("- `description_updated_at` lands")).toBe("description_updated_at lands");
+  });
+
+  it("strips emphasis markers but keeps an underscored identifier inside them", () => {
+    expect(descriptionFirstLine("**foo_bar_baz** done")).toBe("foo_bar_baz done");
+  });
+
   it("renders a link as its text", () => {
     expect(descriptionFirstLine("see [the PR](https://x/y) now")).toBe("see the PR now");
   });

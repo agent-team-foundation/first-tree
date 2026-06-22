@@ -324,7 +324,16 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     // common description-maintenance path is the agent route, which attributes
     // to the maintaining agent; both go through `updateChatMetadata` so the
     // freshness/attribution stamping stays in one place.
-    const updated = await updateChatMetadata(app.db, request.params.chatId, body, scope.humanAgentId);
+    const { chat: updated, descriptionChanged } = await updateChatMetadata(
+      app.db,
+      request.params.chatId,
+      body,
+      scope.humanAgentId,
+    );
+    // A real description change must reach an already-open client: the pinned
+    // task header reads the summary + freshness off chat-detail, which the web
+    // only refetches on a realtime kick.
+    if (descriptionChanged) void app.notifier.notifyChatUpdated(request.params.chatId);
     return {
       ...updated,
       createdAt: updated.createdAt.toISOString(),
