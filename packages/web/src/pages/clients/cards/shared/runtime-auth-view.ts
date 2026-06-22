@@ -15,7 +15,7 @@ import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
  *   - "none": nothing to offer here (ok / missing / error → other surfaces).
  */
 export type RuntimeAuthView =
-  | { kind: "browser-pending" }
+  | { kind: "browser-pending"; authUrl?: string }
   | { kind: "device-code"; verificationUrl: string; userCode: string; expiresAt: string }
   | { kind: "connectable" }
   | { kind: "none" };
@@ -51,7 +51,7 @@ export function deriveRuntimeAuthView(
     const expiresMs = Date.parse(pending.expiresAt);
     const live = Number.isNaN(expiresMs) || expiresMs > nowMs;
     if (live) {
-      if (pending.method === "browser") return { kind: "browser-pending" };
+      if (pending.method === "browser") return { kind: "browser-pending", authUrl: pending.authUrl };
       if (pending.method === "device-code" && pending.verificationUrl && pending.userCode) {
         return {
           kind: "device-code",

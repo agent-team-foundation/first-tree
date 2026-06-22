@@ -1,5 +1,15 @@
 import { z } from "zod";
-import { runtimeProviderSchema } from "./runtime-provider.js";
+
+/**
+ * Providers whose login the daemon can drive in-product. Narrower than the full
+ * `runtimeProviderSchema`: `claude-code-tui` shares Claude Code's credentials
+ * (authenticated by the `claude-code` login, never separately) and is not a
+ * Connect target. The server rejects a `runtime-auth:start` for anything else
+ * rather than returning `started: true` for a provider that will never publish
+ * pending auth.
+ */
+export const runtimeAuthProviderSchema = z.enum(["claude-code", "codex"]);
+export type RuntimeAuthProvider = z.infer<typeof runtimeAuthProviderSchema>;
 
 /**
  * Runtime-auth: the in-product "connect this provider's credentials" flow that
@@ -32,7 +42,7 @@ export type RuntimeAuthMethod = z.infer<typeof runtimeAuthMethodSchema>;
 export const runtimeAuthStartCommandSchema = z.object({
   type: z.literal(RUNTIME_AUTH_START_TYPE),
   /** Which runtime to authenticate. */
-  provider: runtimeProviderSchema,
+  provider: runtimeAuthProviderSchema,
   /** Optional method override; daemon defaults per provider when absent. */
   method: runtimeAuthMethodSchema.optional(),
   /** Correlation id so logs/telemetry can tie command → outcome. */
@@ -46,7 +56,7 @@ export type RuntimeAuthStartCommand = z.infer<typeof runtimeAuthStartCommandSche
  * frame to the daemon via `sendToClient`.
  */
 export const runtimeAuthStartRequestSchema = z.object({
-  provider: runtimeProviderSchema,
+  provider: runtimeAuthProviderSchema,
   method: runtimeAuthMethodSchema.optional(),
 });
 export type RuntimeAuthStartRequest = z.infer<typeof runtimeAuthStartRequestSchema>;

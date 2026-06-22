@@ -73,9 +73,18 @@ function pendingEntry(base: CapabilityEntry | undefined, pending: PendingAuth, n
   };
 }
 
-/** A `browser` pending marker so the web shows "finish sign-in in your browser". */
-function browserPending(nowMs: number): PendingAuth {
-  return { method: "browser", expiresAt: new Date(nowMs + BROWSER_LOGIN_TIMEOUT_MS).toISOString() };
+/**
+ * A `browser` pending marker so the web shows "finish sign-in in your browser".
+ * `authUrl` (the provider's sign-in URL, once the login process prints it) lets
+ * the web offer a "didn't open? open sign-in" link when the host browser does
+ * not auto-launch.
+ */
+function browserPending(nowMs: number, authUrl?: string): PendingAuth {
+  return {
+    method: "browser",
+    expiresAt: new Date(nowMs + BROWSER_LOGIN_TIMEOUT_MS).toISOString(),
+    ...(authUrl ? { authUrl } : {}),
+  };
 }
 
 /** Dispatch on provider. Never throws — failures are logged + reflected in caps. */
@@ -139,9 +148,13 @@ async function runCodexBrowserFlow(
   now: () => number,
 ): Promise<LoginOutcome> {
   const runBrowserLogin = deps.runBrowserLogin ?? runCodexBrowserLogin;
-  await deps.setProviderEntry("codex", pendingEntry(deps.currentEntry("codex"), browserPending(now()), now()));
+  const setPending = (authUrl?: string): Promise<void> =>
+    deps.setProviderEntry("codex", pendingEntry(deps.currentEntry("codex"), browserPending(now(), authUrl), now()));
+  await setPending();
   deps.log("•", "runtime-auth: codex browser sign-in opened on this host");
-  return runBrowserLogin({ binary });
+  // Surface the sign-in URL into the pending marker once codex prints it, so
+  // the web can offer a fallback link when the host browser does not auto-open.
+  return runBrowserLogin({ binary, onAuthUrl: (url) => void setPending(url) });
 }
 
 /** FALLBACK codex: surface the verification URL + code as pending-auth. */
@@ -202,15 +215,21 @@ async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAu
     return;
   }
 
-  await deps.setProviderEntry(
-    "claude-code",
-    pendingEntry(deps.currentEntry("claude-code"), browserPending(now()), now()),
-  );
+  const setPending = (authUrl?: string): Promise<void> =>
+    deps.setProviderEntry(
+      "claude-code",
+      pendingEntry(deps.currentEntry("claude-code"), browserPending(now(), authUrl), now()),
+    );
+  await setPending();
   deps.log("•", "runtime-auth: claude browser sign-in opened on this host");
 
   let outcome: LoginOutcome;
   try {
-    outcome = await runClaudeBrowser({ command: invocation.command, baseArgs: invocation.baseArgs });
+    outcome = await runClaudeBrowser({
+      command: invocation.command,
+      baseArgs: invocation.baseArgs,
+      onAuthUrl: (url) => void setPending(url),
+    });
   } catch (err) {
     deps.log("⚠️", `runtime-auth: claude login threw: ${message(err)}`);
     await reflectRealState("after login threw");

@@ -56,6 +56,12 @@ export const pendingAuthSchema = z.object({
   verificationUrl: z.string().optional(),
   /** device-code only: one-time code the user types on that page. */
   userCode: z.string().optional(),
+  /**
+   * browser only: the provider's sign-in URL, surfaced once the login process
+   * prints it, so the web can offer a "didn't open? open sign-in" link when the
+   * host browser does not auto-launch. Absent until the process emits it.
+   */
+  authUrl: z.string().optional(),
   /** ISO8601 instant the attempt expires; the web hides/falls back once past. */
   expiresAt: z.string(),
 });

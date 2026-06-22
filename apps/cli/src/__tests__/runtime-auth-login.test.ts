@@ -36,6 +36,7 @@ function harness(opts: {
   resolveOk?: boolean;
   outcome?: DeviceAuthOutcome;
   fireDeviceCode?: boolean;
+  fireAuthUrl?: string;
   probeResult?: CapabilityEntry;
   current?: CapabilityEntry;
 }) {
@@ -60,8 +61,11 @@ function harness(opts: {
             runtimePath: null,
             version: "0.130.0",
           } as const),
-    runBrowserLogin: async (_o: CodexBrowserLoginOptions): Promise<DeviceAuthOutcome> =>
-      opts.outcome ?? ({ ok: true } as const),
+    runBrowserLogin: async (o: CodexBrowserLoginOptions): Promise<DeviceAuthOutcome> => {
+      if (opts.fireAuthUrl) o.onAuthUrl?.(opts.fireAuthUrl);
+      await new Promise((r) => setTimeout(r, 0));
+      return opts.outcome ?? ({ ok: true } as const);
+    },
     runDeviceAuth: async (o: CodexDeviceAuthOptions): Promise<DeviceAuthOutcome> => {
       if (opts.fireDeviceCode !== false) {
         o.onDeviceCode({
@@ -94,6 +98,14 @@ describe("runRuntimeAuthLogin — primary browser OAuth", () => {
     // Then: the cleared, authenticated entry from the re-probe.
     expect(h.calls[1]?.entry.state).toBe("ok");
     expect(h.calls[1]?.entry.pendingAuth).toBeUndefined();
+  });
+
+  it("surfaces the browser auth URL into pendingAuth when the login emits it (no-auto-open recovery)", async () => {
+    const h = harness({ outcome: { ok: true }, probeResult: okEntry(), fireAuthUrl: "https://auth.openai.com/x" });
+    await runRuntimeAuthLogin({ provider: "codex", ref: "u1" }, h.deps);
+
+    const withUrl = h.calls.find((c) => c.entry.pendingAuth?.authUrl);
+    expect(withUrl?.entry.pendingAuth).toMatchObject({ method: "browser", authUrl: "https://auth.openai.com/x" });
   });
 
   it("preserves the prior entry's runtimeSource/version on the pending entry", async () => {

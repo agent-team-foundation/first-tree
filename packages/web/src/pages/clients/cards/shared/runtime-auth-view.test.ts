@@ -37,6 +37,15 @@ describe("deriveRuntimeAuthView", () => {
     expect(runtimeAuthIsPending(view)).toBe(true);
   });
 
+  it("carries the browser auth URL into the browser-pending view (no-auto-open fallback link)", () => {
+    const view = deriveRuntimeAuthView(
+      "codex",
+      entry({ pendingAuth: { method: "browser", expiresAt: "2026-06-22T12:05:00.000Z", authUrl: "https://x/auth" } }),
+      NOW,
+    );
+    expect(view).toEqual({ kind: "browser-pending", authUrl: "https://x/auth" });
+  });
+
   it("shows the device code while a device-code login is live (FALLBACK)", () => {
     const view = deriveRuntimeAuthView(
       "codex",

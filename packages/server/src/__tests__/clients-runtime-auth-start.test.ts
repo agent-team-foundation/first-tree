@@ -88,6 +88,28 @@ describe("POST /clients/:clientId/runtime-auth/start", () => {
     }
   });
 
+  it("rejects an unsupported Connect target (claude-code-tui) with 400, sending no frame", async () => {
+    // claude-code-tui is a real runtime, but its credentials come from the
+    // claude-code login — it is never a separate Connect target, so the route
+    // must reject it rather than return started:true for a no-op.
+    const app = getApp();
+    const admin = await createAdminContext(app, { username: `ra-${crypto.randomUUID().slice(0, 6)}` });
+    const ws = { readyState: 1, send: vi.fn(), close: vi.fn() };
+    setClientConnection(admin.clientId, ws as unknown as WebSocket);
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/clients/${admin.clientId}/runtime-auth/start`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload: { provider: "claude-code-tui" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(ws.send).not.toHaveBeenCalled();
+    } finally {
+      removeClientConnection(admin.clientId, ws as unknown as WebSocket);
+    }
+  });
+
   it("forbids starting runtime-auth on a client the caller does not own", async () => {
     const app = getApp();
     const owner = await createAdminContext(app, { username: `ra-own-${crypto.randomUUID().slice(0, 6)}` });
