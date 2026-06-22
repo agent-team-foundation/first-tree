@@ -39,7 +39,7 @@ export function IdentitySection({
   onEdit,
   saved = false,
   title = "Identity",
-  description = "Identity saves immediately; runtime behavior is configured from the other tabs.",
+  description,
   aside,
 }: IdentitySectionProps) {
   const resolveAgent = useAgentIdentityMap();
@@ -67,7 +67,7 @@ export function IdentitySection({
     <Section title={titleWithSemantics(title, saved)} description={description} action={action}>
       <div
         className={aside ? "grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(18rem,0.85fr)] lg:gap-8" : undefined}
-        style={{ padding: "var(--sp-3) 0", borderBottom: "var(--hairline) solid var(--border-faint)" }}
+        style={{ padding: "var(--sp-3) 0" }}
       >
         <div className="min-w-0">
           <div className={aside ? "grid gap-0" : "grid gap-0 md:grid-cols-2 md:gap-x-8"}>

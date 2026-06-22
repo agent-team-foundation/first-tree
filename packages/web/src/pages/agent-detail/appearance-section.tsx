@@ -95,11 +95,6 @@ export function AppearanceSection({ agent, canEdit = true, onEdit, variant = "se
         <div className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-0_5)" }}>
           {agent.avatarImageUrl ? "Image uploaded" : "No custom image uploaded"} · Color {colorLabel}
         </div>
-        {variant === "section" && (
-          <div className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-1)" }}>
-            Updates appear immediately in chats, lists, and mentions.
-          </div>
-        )}
       </div>
     </div>
   );
@@ -109,11 +104,7 @@ export function AppearanceSection({ agent, canEdit = true, onEdit, variant = "se
   }
 
   return (
-    <Section
-      title="Appearance"
-      description="Controls how this agent is recognized in chats, lists, and mentions."
-      action={action}
-    >
+    <Section title="Appearance" description="Shows in chats, lists, and mentions." action={action}>
       {content}
     </Section>
   );

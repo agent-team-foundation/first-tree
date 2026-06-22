@@ -76,6 +76,7 @@ export function RuntimeTab() {
           <RuntimeSection
             runtimeProvider={ctx.setupRuntimeProvider}
             computerLabel={ctx.boundClientLabel}
+            computerOnline={ctx.boundComputerOnline}
             computerStatusLoading={ctx.clientStatusLoading}
             computerStatusError={ctx.clientStatusError}
             canBindComputer={ctx.isUnclaimed && ctx.agent.status === "active"}

@@ -1908,16 +1908,6 @@ body:has(#onboarding-preview-root) hearback-widget {
   min-width: var(--sp-20);
 }
 
-.usage-model-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px var(--sp-1_75);
-  border-radius: var(--radius-chip);
-  background: var(--bg-sunken);
-  color: var(--fg-2);
-  border: var(--hairline) solid var(--border);
-}
-
 .usage-turn-row td {
   padding: var(--sp-2_5);
   vertical-align: middle;
@@ -1925,6 +1915,13 @@ body:has(#onboarding-preview-root) hearback-widget {
 
 .usage-turn-row + .usage-turn-row td {
   border-top: var(--hairline) solid var(--border-faint);
+}
+
+/* Agent-detail: drop the bottom hairline on a section's last row/block so it
+   doesn't double up with the gap before the next section. Inter-row lines stay;
+   only the trailing one goes. Beats the rows' inline border-bottom (!important). */
+.ad-tail-trim > :last-child {
+  border-bottom: 0 !important;
 }
 
 .usage-turn-table th {

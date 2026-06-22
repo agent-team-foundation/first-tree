@@ -40,10 +40,7 @@ export function DangerZone(props: DangerZoneProps) {
 
   return (
     <div id="ad-danger" style={{ marginTop: "var(--sp-10)" }}>
-      <Section
-        title="Agent lifecycle"
-        description="Manage availability and deletion. Lifecycle changes save immediately."
-      >
+      <Section title="Agent lifecycle">
         {agent.status === "active" ? (
           <DangerActionRow
             label="Availability"
