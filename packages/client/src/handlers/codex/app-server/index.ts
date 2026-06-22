@@ -111,6 +111,8 @@ const USAGE_LIMIT_NOTICE =
 const CODEX_CONTEXT_WINDOW_FAILURE_MESSAGE =
   "Codex ran out of room in the model context while compacting this thread. " +
   "Start a new thread or clear earlier history before retrying.";
+const CODEX_COMPACT_FAILURE_MESSAGE =
+  "Codex failed to compact this thread before answering. Start a new thread or clear earlier history before retrying.";
 
 export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfig): AgentHandler => {
   const workspaceRoot = config.workspaceRoot as string;
@@ -762,6 +764,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     }
 
     const completedSuccessfully = turn.providerCompleted && turn.failure === null && turn.status === "completed";
+    const finalAgentText = turn.finalAgentText.trim();
     const usage = turn.usageLast;
     const zeroTokenDelta =
       usage !== null &&
@@ -769,7 +772,11 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       usage.cachedInputTokens === 0 &&
       usage.outputTokens === 0 &&
       usage.reasoningOutputTokens === 0;
-    const usageLimitEmptyTurn = completedSuccessfully && turn.finalAgentText.trim().length === 0 && zeroTokenDelta;
+    const usageLimitEmptyTurn = completedSuccessfully && finalAgentText.length === 0 && zeroTokenDelta;
+    const completedEmptyCompactFailure =
+      completedSuccessfully && finalAgentText.length === 0
+        ? completedEmptyCompactFailureInfo(turn, appServer?.stderr ?? "")
+        : null;
     const usageLimitFailure = turn.failure ? isUsageLimitErrorInfo(turn.failure.codexErrorInfo) : false;
 
     let forwardFailed = false;
@@ -777,7 +784,16 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     let consumedErrorReason: TurnConsumedErrorReason | null = null;
     let terminalRejectionReason: string | null = null;
 
-    if (usageLimitEmptyTurn || usageLimitFailure) {
+    if (completedEmptyCompactFailure) {
+      terminalRejectionReason = deterministicTerminalRejectionReason(completedEmptyCompactFailure);
+      sessionCtx.emitEvent({
+        kind: "error",
+        payload: { source: "sdk", message: formatDeterministicFailureMessage(completedEmptyCompactFailure) },
+      });
+      sessionCtx.log(
+        `codex app-server turn completed empty after compact failure; terminal rejecting delivery (${terminalRejectionReason}): ${completedEmptyCompactFailure.message}`,
+      );
+    } else if (usageLimitEmptyTurn || usageLimitFailure) {
       sessionCtx.emitEvent({
         kind: "error",
         payload: {
@@ -796,9 +812,9 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         });
         retryReason = "codex_usage_limit_notice_delivery_failed";
       }
-    } else if (completedSuccessfully && turn.finalAgentText.trim()) {
+    } else if (completedSuccessfully && finalAgentText) {
       try {
-        await sessionCtx.forwardResult(turn.finalAgentText);
+        await sessionCtx.forwardResult(finalAgentText);
       } catch (err) {
         forwardFailed = true;
         const msg = err instanceof Error ? err.message : String(err);
@@ -1166,6 +1182,22 @@ function mergeFailureWithDiagnostic(failure: TurnErrorInfo, diagnostic: TurnErro
   };
 }
 
+function completedEmptyCompactFailureInfo(turn: CurrentTurn, stderr: string): TurnErrorInfo | null {
+  const details = [turn.lastSdkError?.message, turn.lastSdkError?.additionalDetails, stderr]
+    .filter((part): part is string => typeof part === "string" && part.length > 0)
+    .join("\n");
+  if (!details) return null;
+
+  const diagnostic: TurnErrorInfo = {
+    message: "codex app-server completed without output after pre-sampling compact failure",
+    codexErrorInfo: turn.lastSdkError?.codexErrorInfo ?? null,
+    additionalDetails: details,
+  };
+  if (isDeterministicCompactFailure(diagnostic)) return diagnostic;
+  if (isPreSamplingCompactFailureText(details)) return diagnostic;
+  return null;
+}
+
 function formatAppServerError(message: string): string {
   if (isCodexAuthError(message)) return formatAuthHint("codex", message);
   return message;
@@ -1185,6 +1217,7 @@ function classifyAppServerFailure(error: TurnErrorInfo): "deterministic" | "tran
 
 function deterministicTerminalRejectionReason(error: TurnErrorInfo): string {
   if (isContextWindowFailure(error)) return "codex_context_window_exceeded";
+  if (isPreSamplingCompactFailure(error)) return "codex_compact_failure";
   if (isCodexAuthError(error.message) || error.codexErrorInfo === "unauthorized") return "codex_auth_failure";
   if (error.codexErrorInfo === "badRequest") return "codex_bad_request_failure";
   if (error.codexErrorInfo === "sandboxError") return "codex_sandbox_failure";
@@ -1194,6 +1227,7 @@ function deterministicTerminalRejectionReason(error: TurnErrorInfo): string {
 
 function formatDeterministicFailureMessage(error: TurnErrorInfo): string {
   if (isContextWindowFailure(error)) return CODEX_CONTEXT_WINDOW_FAILURE_MESSAGE;
+  if (isPreSamplingCompactFailure(error)) return CODEX_COMPACT_FAILURE_MESSAGE;
   return formatAppServerError(error.message);
 }
 
@@ -1212,6 +1246,14 @@ function isDeterministicCompactFailure(error: TurnErrorInfo): boolean {
     text.includes("remote compact");
   const contextFailure = text.includes("context window") || text.includes("context length");
   return compactFailure && contextFailure;
+}
+
+function isPreSamplingCompactFailure(error: TurnErrorInfo): boolean {
+  return isPreSamplingCompactFailureText(`${error.message}\n${error.additionalDetails ?? ""}`);
+}
+
+function isPreSamplingCompactFailureText(value: string): boolean {
+  return value.toLowerCase().includes("failed to run pre-sampling compact");
 }
 
 function isUsageLimitErrorInfo(value: unknown): boolean {

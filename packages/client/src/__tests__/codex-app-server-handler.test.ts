@@ -248,6 +248,18 @@ function completeTurn(fake: FakeAppServerClient, turnId: string, text: string): 
   });
 }
 
+function completeEmptyTurn(fake: FakeAppServerClient, turnId: string): void {
+  fake.emit("turn/completed", {
+    threadId: "thread-app-server",
+    turn: {
+      id: turnId,
+      status: "completed",
+      items: [],
+      error: null,
+    },
+  });
+}
+
 function failTurn(
   fake: FakeAppServerClient,
   turnId: string,
@@ -472,6 +484,63 @@ describe("codex app-server handler", () => {
     });
     expect(token.retry).not.toHaveBeenCalled();
     expect(retryTurn).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it("terminal-rejects completed empty turns when stderr reports pre-sampling compact failure", async () => {
+    const fake = new FakeAppServerClient();
+    fake.stderr = "2026-06-22T03:02:58Z ERROR codex_core::session::turn: Failed to run pre-sampling compact";
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const finishTurn = vi.fn<SessionContext["finishTurn"]>();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ retryTurn, finishTurn, emitEvent });
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    completeEmptyTurn(fake, "turn-1");
+    await startPromise;
+
+    expect(token.terminalRejected).toHaveBeenCalledWith([message], "codex_compact_failure", {
+      kind: "server_terminal_record",
+      recordId: "turn-1",
+    });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(token.complete).not.toHaveBeenCalled();
+    expect(retryTurn).not.toHaveBeenCalled();
+    expect(finishTurn).not.toHaveBeenCalled();
+    expect(
+      emitEvent.mock.calls.some(
+        ([event]) =>
+          event.kind === "error" &&
+          event.payload.source === "sdk" &&
+          event.payload.message.includes("failed to compact this thread"),
+      ),
+    ).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  it("keeps completed empty turns without compact diagnostics as successful silence", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    completeEmptyTurn(fake, "turn-1");
+    await startPromise;
+
+    expect(token.complete).toHaveBeenCalledWith([message], { status: "success", terminal: true });
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+    expect(token.retry).not.toHaveBeenCalled();
 
     await handler.shutdown();
   });
