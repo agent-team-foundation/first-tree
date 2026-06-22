@@ -1,6 +1,11 @@
 import type { CapabilityEntry, PendingAuth } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { deriveRuntimeAuthView, providerSupportsInProductAuth, runtimeAuthIsPending } from "./runtime-auth-view.js";
+import {
+  deriveRuntimeAuthView,
+  providerAuthHandledInProduct,
+  providerSupportsInProductAuth,
+  runtimeAuthIsPending,
+} from "./runtime-auth-view.js";
 
 const NOW = Date.parse("2026-06-22T12:00:00.000Z");
 
@@ -98,5 +103,13 @@ describe("deriveRuntimeAuthView", () => {
     expect(providerSupportsInProductAuth("codex")).toBe(true);
     expect(providerSupportsInProductAuth("claude-code")).toBe(true);
     expect(providerSupportsInProductAuth("claude-code-tui")).toBe(false);
+  });
+
+  it("treats claude-code-tui's auth as in-product (shared Claude keychain) — no manual login hint", () => {
+    // tui has no Connect of its own, but its credentials come from the Claude
+    // Code login, so it must not show a manual "Run `claude login`" hint.
+    expect(providerAuthHandledInProduct("claude-code-tui")).toBe(true);
+    expect(providerAuthHandledInProduct("codex")).toBe(true);
+    expect(providerAuthHandledInProduct("claude-code")).toBe(true);
   });
 });

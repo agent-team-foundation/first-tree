@@ -1,6 +1,6 @@
 import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
 import { PROVIDER_LABEL, providerInstallHint, providerUnauthHint } from "./providers.js";
-import { providerSupportsInProductAuth } from "./runtime-auth-view.js";
+import { providerAuthHandledInProduct } from "./runtime-auth-view.js";
 
 /**
  * Per-runtime state line — single rendering used by every card body
@@ -42,11 +42,12 @@ export function RuntimeStateLine({
         </div>
       );
     case "unauthenticated": {
-      // For a provider the daemon can authenticate in-product (codex), the
-      // adjacent "Connect" control is the recovery path — don't also print a
-      // manual "Run `codex login` on this Mac." hint, which contradicts the
-      // no-separate-CLI onboarding. Other providers keep the concrete hint.
-      const manualHint = providerSupportsInProductAuth(provider) ? "" : ` · ${providerUnauthHint(provider, os)}`;
+      // For a provider whose credentials are obtained in-product — codex /
+      // claude-code via Connect, or claude-code-tui which SHARES the Claude Code
+      // keychain — don't print a manual "Run `<cli> login`" hint: there is no
+      // separate CLI login to run, and the adjacent Connect (or the shared
+      // Claude login) is the path. Other providers keep the concrete hint.
+      const manualHint = providerAuthHandledInProduct(provider) ? "" : ` · ${providerUnauthHint(provider, os)}`;
       return (
         <div className="text-body" style={{ color: "var(--fg-2)" }}>
           <span style={{ color: "var(--state-blocked)" }}>⚠</span> {label}

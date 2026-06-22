@@ -5,6 +5,7 @@ import {
   type DeviceCodePrompt,
   type LoginOutcome,
   probeClaudeCodeCapability,
+  probeClaudeCodeTuiCapability,
   probeCodexCapability,
   type RuntimeAuthCommand,
   resolveClaudeLoginInvocation,
@@ -49,6 +50,7 @@ export type RuntimeAuthLoginDeps = {
   resolveClaudeLogin?: () => ClaudeLoginInvocation;
   runClaudeBrowser?: typeof runClaudeBrowserLogin;
   probeClaude?: () => Promise<CapabilityEntry>;
+  probeClaudeTui?: () => Promise<CapabilityEntry>;
   now?: () => number;
 };
 
@@ -174,10 +176,18 @@ async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAu
   const resolveLogin = deps.resolveClaudeLogin ?? resolveClaudeLoginInvocation;
   const runClaudeBrowser = deps.runClaudeBrowser ?? runClaudeBrowserLogin;
   const probeClaude = deps.probeClaude ?? probeClaudeCodeCapability;
+  const probeClaudeTui = deps.probeClaudeTui ?? probeClaudeCodeTuiCapability;
 
+  // Claude auth is a single keychain credential shared by the SDK (claude-code)
+  // AND the TUI runtime (claude-code-tui). So a Claude login authenticates both;
+  // re-probe both here, otherwise the TUI row stays a stale "needs login" until
+  // the next background poll (the QA finding) and reads as a second, separate
+  // Claude login the user must do — it isn't.
   const reflectRealState = async (label: string): Promise<void> => {
     try {
-      await deps.setProviderEntry("claude-code", await probeClaude());
+      const [cc, tui] = await Promise.all([probeClaude(), probeClaudeTui()]);
+      await deps.setProviderEntry("claude-code", cc);
+      await deps.setProviderEntry("claude-code-tui", tui);
     } catch (err) {
       deps.log("⚠️", `runtime-auth: claude re-probe ${label} failed: ${message(err)}`);
     }

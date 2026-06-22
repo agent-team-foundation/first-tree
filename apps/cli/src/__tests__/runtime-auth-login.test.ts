@@ -173,33 +173,40 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
           : ({ ok: true, command: "/usr/local/bin/claude", baseArgs: [] as string[] } as const),
       runClaudeBrowser: async (): Promise<DeviceAuthOutcome> => opts.outcome ?? ({ ok: true } as const),
       probeClaude: async (): Promise<CapabilityEntry> => opts.probeResult ?? unauthEntry(),
+      // Claude auth is shared with the TUI runtime — re-probe it too.
+      probeClaudeTui: async (): Promise<CapabilityEntry> => opts.probeResult ?? unauthEntry(),
     };
     return { calls, logs, deps };
   }
 
-  it("publishes a browser pending then the re-probed ok entry", async () => {
+  it("browser pending, then re-probes BOTH claude-code and claude-code-tui (shared auth)", async () => {
     const h = claudeHarness({ outcome: { ok: true }, probeResult: okEntry() });
     await runRuntimeAuthLogin({ provider: "claude-code", ref: "c1" }, h.deps);
 
-    expect(h.calls).toHaveLength(2);
+    // pending(claude-code) → ok(claude-code) → ok(claude-code-tui)
+    expect(h.calls).toHaveLength(3);
     expect(h.calls[0]?.provider).toBe("claude-code");
     expect(h.calls[0]?.entry.pendingAuth).toEqual({
       method: "browser",
       expiresAt: new Date(NOW + BROWSER_LOGIN_TIMEOUT_MS).toISOString(),
     });
-    expect(h.calls[1]?.entry.state).toBe("ok");
-    expect(h.calls[1]?.entry.pendingAuth).toBeUndefined();
+    const reprobed = h.calls.slice(1);
+    expect(reprobed.map((c) => c.provider).sort()).toEqual(["claude-code", "claude-code-tui"]);
+    for (const c of reprobed) {
+      expect(c.entry.state).toBe("ok");
+      expect(c.entry.pendingAuth).toBeUndefined();
+    }
   });
 
-  it("on unresolved CLI, reflects real state and never logs in", async () => {
+  it("on unresolved CLI, reflects real state for both and never logs in", async () => {
     const h = claudeHarness({
       resolveOk: false,
       probeResult: { ...unauthEntry(), state: "missing", available: false },
     });
     await runRuntimeAuthLogin({ provider: "claude-code", ref: "c2" }, h.deps);
 
-    expect(h.calls).toHaveLength(1);
-    expect(h.calls[0]?.entry.state).toBe("missing");
+    expect(h.calls.map((c) => c.provider).sort()).toEqual(["claude-code", "claude-code-tui"]);
+    expect(h.calls.every((c) => c.entry.state === "missing")).toBe(true);
     expect(h.logs.some((l) => l.includes("claude CLI unavailable"))).toBe(true);
   });
 });

@@ -26,6 +26,7 @@ export {
 } from "./runtime/bootstrap.js";
 // Capabilities
 export { probeClaudeCodeCapability } from "./runtime/capabilities/claude-code.js";
+export { probeClaudeCodeTuiCapability } from "./runtime/capabilities/claude-code-tui.js";
 export {
   type CodexBinaryResolution,
   probeCodexCapability,

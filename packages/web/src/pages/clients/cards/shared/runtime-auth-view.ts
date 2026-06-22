@@ -28,6 +28,17 @@ export function providerSupportsInProductAuth(provider: RuntimeProvider): boolea
   return provider === "codex" || provider === "claude-code";
 }
 
+/**
+ * Providers whose credentials are obtained in-product — either directly via
+ * Connect, OR shared: `claude-code-tui` uses the SAME Claude keychain as the
+ * Claude Code SDK, so a Claude Code login authenticates it too. The card must
+ * NOT show a manual "Run `<cli> login`" hint for any of these — there is no
+ * separate CLI login to run.
+ */
+export function providerAuthHandledInProduct(provider: RuntimeProvider): boolean {
+  return providerSupportsInProductAuth(provider) || provider === "claude-code-tui";
+}
+
 export function deriveRuntimeAuthView(
   provider: RuntimeProvider,
   entry: CapabilityEntry | null | undefined,
