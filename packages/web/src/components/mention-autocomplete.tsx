@@ -243,13 +243,17 @@ export function buildPickerSections(
  */
 export function rankCandidates(candidates: MentionCandidate[], query: string): MentionCandidate[] {
   if (!query) {
-    // Reuse the picker's grouping logic, strip the divider marker, and
-    // cap at 8. Keeping the empty-query path in lockstep with the
-    // picker means changing one (mine-first, alpha) tomorrow won't
-    // silently leave the other behind.
-    return groupAndSortCandidates(candidates)
-      .filter((item): item is MentionCandidate => !("divider" in item))
-      .slice(0, 8);
+    // Reuse the picker's grouping logic and strip the divider marker.
+    // Keeping the empty-query path in lockstep with the picker means
+    // changing one (mine-first, alpha) tomorrow won't silently leave the
+    // other behind — and that lockstep now includes "no cap": the `[+]`
+    // picker lists every addable agent, so the `@` popover does too. The
+    // popover is height-capped + scrollable (`max-h-56 overflow-auto`), so
+    // a long roster scrolls rather than hiding agents past an arbitrary
+    // cut. A prior hard `.slice(0, 8)` dropped the 9th+ addressable agent
+    // from the empty-`@` view with no "more" affordance, so the list read
+    // as broken/incomplete the moment an org had more than eight.
+    return groupAndSortCandidates(candidates).filter((item): item is MentionCandidate => !("divider" in item));
   }
   const scored: Array<{ c: MentionCandidate; score: number }> = [];
   for (const c of candidates) {
@@ -263,7 +267,12 @@ export function rankCandidates(candidates: MentionCandidate[], query: string): M
     if (score !== Infinity) scored.push({ c, score });
   }
   scored.sort((a, b) => a.score - b.score || (a.c.displayName ?? "").localeCompare(b.c.displayName ?? ""));
-  return scored.slice(0, 8).map((s) => s.c);
+  // No cap here either: every scored match surfaces, scrolling inside the
+  // popover. Capping the typed path would hide later matches behind a
+  // query the user can't refine further (the substring is already as
+  // narrow as they typed). The candidate pool is bounded upstream by the
+  // server's 100-row fetch — see useOrgAgentsSearch / issue 494.
+  return scored.map((s) => s.c);
 }
 
 type MentionInsert = {
