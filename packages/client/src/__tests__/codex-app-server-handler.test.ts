@@ -5,7 +5,7 @@ import type { SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, CodexAppServerTransportError } from "../handlers/codex/app-server/client.js";
 import { createCodexAppServerHandler } from "../handlers/codex/app-server/index.js";
-import type { SessionContext, SessionMessage } from "../runtime/handler.js";
+import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
 vi.mock("../runtime/bootstrap.js", () => ({
@@ -218,6 +218,15 @@ function makeHandler(fake: FakeAppServerClient) {
   });
 }
 
+function makeDeliveryToken(): DeliveryToken {
+  return {
+    processingStarted: vi.fn<DeliveryToken["processingStarted"]>(),
+    complete: vi.fn<DeliveryToken["complete"]>().mockResolvedValue(undefined),
+    retry: vi.fn<DeliveryToken["retry"]>(),
+    terminalRejected: vi.fn<DeliveryToken["terminalRejected"]>().mockResolvedValue(undefined),
+  };
+}
+
 async function waitFor(assertion: () => boolean): Promise<void> {
   const deadline = Date.now() + 1000;
   while (!assertion()) {
@@ -269,14 +278,34 @@ function completeTurn(fake: FakeAppServerClient, turnId: string, text: string): 
   });
 }
 
-function failTurn(fake: FakeAppServerClient, turnId: string, message: string): void {
+function completeEmptyTurn(fake: FakeAppServerClient, turnId: string): void {
+  fake.emit("turn/completed", {
+    threadId: "thread-app-server",
+    turn: {
+      id: turnId,
+      status: "completed",
+      items: [],
+      error: null,
+    },
+  });
+}
+
+function failTurn(
+  fake: FakeAppServerClient,
+  turnId: string,
+  error: { message: string; codexErrorInfo?: unknown; additionalDetails?: string | null },
+): void {
   fake.emit("turn/completed", {
     threadId: "thread-app-server",
     turn: {
       id: turnId,
       status: "failed",
       items: [],
-      error: { message },
+      error: {
+        message: error.message,
+        codexErrorInfo: error.codexErrorInfo ?? null,
+        additionalDetails: error.additionalDetails ?? null,
+      },
     },
   });
 }
@@ -518,7 +547,7 @@ describe("codex app-server handler", () => {
     handler.inject(makeMessage("m2", "second"));
     await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
 
-    failTurn(fake, "turn-1", "provider failed");
+    failTurn(fake, "turn-1", { message: "provider failed" });
     await startPromise;
     await flushAsync();
 
@@ -530,6 +559,208 @@ describe("codex app-server handler", () => {
     ]);
     expect(failSessionForRecovery).toHaveBeenCalledWith("codex_unknown_failure", "thread-app-server");
     expect(fake.isClosed).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  it("terminal-rejects deterministic context-window turn failures instead of retrying delivery", async () => {
+    const fake = new FakeAppServerClient();
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const finishTurn = vi.fn<SessionContext["finishTurn"]>();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ retryTurn, finishTurn, emitEvent });
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    failTurn(fake, "turn-1", {
+      message:
+        "Error running remote compact task: Codex ran out of room in the model's context window. Start a new thread.",
+      codexErrorInfo: "contextWindowExceeded",
+    });
+    await startPromise;
+
+    expect(token.terminalRejected).toHaveBeenCalledWith([message], "codex_context_window_exceeded", {
+      kind: "server_terminal_record",
+      recordId: "turn-1",
+    });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(token.complete).not.toHaveBeenCalled();
+    expect(retryTurn).not.toHaveBeenCalled();
+    expect(finishTurn).not.toHaveBeenCalled();
+    expect(
+      emitEvent.mock.calls.some(
+        ([event]) =>
+          event.kind === "error" &&
+          event.payload.source === "sdk" &&
+          event.payload.message.includes("Codex ran out of room"),
+      ),
+    ).toBe(true);
+    expect(emitEvent).toHaveBeenCalledWith({ kind: "turn_end", payload: { status: "error" } });
+
+    await handler.shutdown();
+  });
+
+  it("terminal-rejects stderr-only remote compact context-window failures", async () => {
+    const fake = new FakeAppServerClient();
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ retryTurn });
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    fake.close(
+      "codex app-server exited signal SIGTERM. stderr: Failed to run pre-sampling compact\n" +
+        "Error running remote compact task: Codex ran out of room in the model's context window.",
+    );
+    await startPromise;
+
+    expect(token.terminalRejected).toHaveBeenCalledWith([message], "codex_context_window_exceeded", {
+      kind: "server_terminal_record",
+      recordId: "turn-1",
+    });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(retryTurn).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it("uses prior sdk compact errors to classify a later compact transport close", async () => {
+    const fake = new FakeAppServerClient();
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ retryTurn });
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    fake.emit("error", {
+      threadId: "thread-app-server",
+      turnId: "turn-1",
+      error: {
+        message:
+          "Error running remote compact task: Codex ran out of room in the model's context window. Start a new thread.",
+        codexErrorInfo: null,
+        additionalDetails: null,
+      },
+    });
+    fake.close("codex app-server exited signal SIGTERM. stderr: Failed to run pre-sampling compact");
+    await startPromise;
+
+    expect(token.terminalRejected).toHaveBeenCalledWith([message], "codex_context_window_exceeded", {
+      kind: "server_terminal_record",
+      recordId: "turn-1",
+    });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(retryTurn).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it("terminal-rejects completed empty turns when stderr reports pre-sampling compact failure", async () => {
+    const fake = new FakeAppServerClient();
+    fake.stderr = "2026-06-22T03:02:58Z ERROR codex_core::session::turn: Failed to run pre-sampling compact";
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const finishTurn = vi.fn<SessionContext["finishTurn"]>();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ retryTurn, finishTurn, emitEvent });
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    completeEmptyTurn(fake, "turn-1");
+    await startPromise;
+
+    expect(token.terminalRejected).toHaveBeenCalledWith([message], "codex_compact_failure", {
+      kind: "server_terminal_record",
+      recordId: "turn-1",
+    });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(token.complete).not.toHaveBeenCalled();
+    expect(retryTurn).not.toHaveBeenCalled();
+    expect(finishTurn).not.toHaveBeenCalled();
+    expect(
+      emitEvent.mock.calls.some(
+        ([event]) =>
+          event.kind === "error" &&
+          event.payload.source === "sdk" &&
+          event.payload.message.includes("failed to compact this thread"),
+      ),
+    ).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  it("keeps completed empty turns without compact diagnostics as successful silence", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    completeEmptyTurn(fake, "turn-1");
+    await startPromise;
+
+    expect(token.complete).toHaveBeenCalledWith([message], { status: "success", terminal: true });
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+    expect(token.retry).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it("keeps transient app-server turn failures retryable", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    failTurn(fake, "turn-1", {
+      message: "server overloaded",
+      codexErrorInfo: "serverOverloaded",
+    });
+    await startPromise;
+
+    expect(token.retry).toHaveBeenCalledWith([message], "codex_transient_failure");
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+    expect(token.complete).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it("does not classify ordinary transport close text as deterministic", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    fake.close("transport is closed");
+    await startPromise;
+
+    expect(token.retry).toHaveBeenCalledWith([message], "codex_unknown_failure");
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+    expect(token.complete).not.toHaveBeenCalled();
 
     await handler.shutdown();
   });

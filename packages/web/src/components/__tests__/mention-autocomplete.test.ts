@@ -187,7 +187,7 @@ describe("groupAndSortCandidates", () => {
  * managedByMe signal is intentionally ignored once they've typed.
  */
 describe("rankCandidates", () => {
-  it("empty query: my-managed first, then alpha within each group, capped at 8", () => {
+  it("empty query: my-managed first, then alpha within each group", () => {
     const input = [
       cand({ agentId: "zoe", managedByMe: false, displayName: "Zoe" }),
       cand({ agentId: "alice", managedByMe: true, displayName: "Alice" }),
@@ -261,11 +261,41 @@ describe("rankCandidates", () => {
     expect(result.map((c) => c.agentId)[0]).toBe("pfx");
   });
 
-  it("empty query: caps the popover at 8 entries even when more match", () => {
+  it("empty query: returns every candidate, uncapped (popover scrolls instead of truncating)", () => {
+    // Regression lock for the user-reported "list looks incomplete": a
+    // prior `.slice(0, 8)` hid the 9th+ addressable agent from the
+    // empty-`@` view. The popover is height-capped + scrollable, so the
+    // full roster is reachable by scrolling — matching the `[+]` picker,
+    // which never capped.
     const input = Array.from({ length: 12 }, (_, i) =>
       cand({ agentId: `agent-${i.toString().padStart(2, "0")}`, managedByMe: i < 3 }),
     );
-    expect(rankCandidates(input, "").length).toBe(8);
+    const result = rankCandidates(input, "");
+    // All 12 surface, mine-first (00/01/02) then alpha — none dropped.
+    expect(result.map((c) => c.agentId)).toEqual([
+      "agent-00",
+      "agent-01",
+      "agent-02",
+      "agent-03",
+      "agent-04",
+      "agent-05",
+      "agent-06",
+      "agent-07",
+      "agent-08",
+      "agent-09",
+      "agent-10",
+      "agent-11",
+    ]);
+  });
+
+  it("non-empty query: returns every match, uncapped", () => {
+    // Same no-cap guarantee on the typed path: a substring shared by more
+    // than eight agents must surface them all, not silently truncate at 8.
+    const input = Array.from({ length: 12 }, (_, i) =>
+      cand({ agentId: `team-${i.toString().padStart(2, "0")}`, name: `team-${i.toString().padStart(2, "0")}` }),
+    );
+    const result = rankCandidates(input, "team");
+    expect(result).toHaveLength(12);
   });
 });
 
