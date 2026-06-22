@@ -108,6 +108,10 @@ export function isTransientCodexErrorMessage(message: string): boolean {
   return classification.category === "transient_transport" || classification.category === "provider_capacity";
 }
 
+function isCodexStreamDiagnosticMessage(message: string): boolean {
+  return /\breconnecting\b.*\b\d+\s*\/\s*\d+\b/i.test(message);
+}
+
 /**
  * Tracks whether re-running this turn would double-emit a chat-visible item.
  * `reasoning` and the bare `error` item are presence-only / diagnostic and
@@ -898,6 +902,19 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
                 }
                 stopCodexFailure(event.error.message, classification, decision);
               } else if (event.type === "error") {
+                // Codex SDK bare `error` stream events are diagnostic: they
+                // can be followed by more items and a successful
+                // `turn.completed` (for example reconnect progress). Only
+                // treat explicit progress messages as diagnostic; ordinary
+                // stream failures still go through the shared retry policy.
+                if (isCodexStreamDiagnosticMessage(event.message)) {
+                  diagnosticErrorEmittedBox.value = true;
+                  sessionCtx.emitEvent({
+                    kind: "error",
+                    payload: { source: "sdk", message: event.message },
+                  });
+                  continue;
+                }
                 const { classification, decision } = decideCodexFailure(event.message, attempt, true);
                 if (decision.action === "retry") {
                   retryRequested = true;
@@ -912,12 +929,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
                   );
                   break;
                 }
-                if (decision.terminalKind === "capacity_wait_required" || decision.terminalKind === "exhausted") {
-                  stopCodexFailure(event.message, classification, decision);
-                } else {
-                  diagnosticErrorEmittedBox.value = true;
-                  stopCodexFailure(event.message, classification, decision);
-                }
+                stopCodexFailure(event.message, classification, decision);
               }
             }
           } catch (err) {

@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionEvent } from "@first-tree/shared";
+import { parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatContext } from "../runtime/chat-context.js";
 import type { SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -550,7 +550,7 @@ describe("codex handler startup inject queue", () => {
     await handler.shutdown();
   });
 
-  it("does not forward partial Codex text when the turn later fails", async () => {
+  it("does not retry partial Codex text when the turn later fails", async () => {
     const sendMessage = vi
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
       .mockResolvedValue(undefined);
@@ -580,13 +580,24 @@ describe("codex handler startup inject queue", () => {
       ),
     ).toBe(true);
     expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);
-    expect(completedCounts).toEqual([]);
-    expect(retryTurn).toHaveBeenCalledWith([makeMessage("m1", "first")], "codex_unknown_failure");
+    expect(
+      events.some((event) => {
+        if (event.kind !== "error") return false;
+        const retryPayload = parseProviderRetryEventMessage(event.payload.message);
+        return (
+          retryPayload?.event === "provider_failure_terminal" &&
+          retryPayload.reasonCode === "unsafe_replay" &&
+          retryPayload.scope === "provider_turn"
+        );
+      }),
+    ).toBe(true);
+    expect(completedCounts).toEqual([1]);
+    expect(retryTurn).not.toHaveBeenCalled();
 
     await handler.shutdown();
   });
 
-  it("does not forward partial Codex text when the stream emits a fatal error", async () => {
+  it("does not retry partial Codex text when the stream emits a fatal error", async () => {
     const sendMessage = vi
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
       .mockResolvedValue(undefined);
@@ -617,8 +628,19 @@ describe("codex handler startup inject queue", () => {
       ),
     ).toBe(true);
     expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);
-    expect(completedCounts).toEqual([]);
-    expect(retryTurn).toHaveBeenCalledWith([makeMessage("m1", "first")], "codex_stream_ended_after_diagnostic_error");
+    expect(
+      events.some((event) => {
+        if (event.kind !== "error") return false;
+        const retryPayload = parseProviderRetryEventMessage(event.payload.message);
+        return (
+          retryPayload?.event === "provider_failure_terminal" &&
+          retryPayload.reasonCode === "unsafe_replay" &&
+          retryPayload.scope === "provider_turn"
+        );
+      }),
+    ).toBe(true);
+    expect(completedCounts).toEqual([1]);
+    expect(retryTurn).not.toHaveBeenCalled();
 
     await handler.shutdown();
   });
