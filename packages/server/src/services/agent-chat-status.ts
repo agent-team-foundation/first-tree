@@ -283,33 +283,44 @@ async function deriveStatusReasons(
   const rawRows = (await db.execute(sql`
     SELECT acs.agent_id AS agent_id,
            acs.chat_id  AS chat_id,
+           e.kind       AS kind,
            e.payload    AS payload
       FROM agent_chat_sessions acs
       CROSS JOIN LATERAL (
-        SELECT payload, seq
+        SELECT kind, payload, seq
           FROM session_events se
          WHERE se.agent_id = acs.agent_id
            AND se.chat_id  = acs.chat_id
-           AND se.kind     = 'error'
+           AND se.kind     IN ('error', 'turn_end')
          ORDER BY se.seq DESC
-         LIMIT 5
+         LIMIT 10
       ) e
      WHERE acs.chat_id IN (${chatIdInClause})
+     ORDER BY acs.chat_id, acs.agent_id, e.seq DESC
   `)) as unknown as Array<{
     agent_id: string;
     chat_id: string;
+    kind: string;
     payload: unknown;
   }>;
 
   const seen = new Set<string>();
+  const latestSuccessfulTurnEnd = new Set<string>();
   for (const row of rawRows) {
     const key = pairKey(row.chat_id, row.agent_id);
     if (seen.has(key)) continue;
+    if (row.kind === "turn_end") {
+      const payload = row.payload as { status?: unknown } | null;
+      if (payload?.status === "success") latestSuccessfulTurnEnd.add(key);
+      continue;
+    }
+    if (row.kind !== "error") continue;
     const payload = row.payload as { message?: unknown } | null;
     if (typeof payload?.message !== "string") continue;
     const retryPayload = parseProviderRetryEventMessage(payload.message);
     if (!retryPayload) continue;
     seen.add(key);
+    if (retryPayload.scope === "provider_turn" && latestSuccessfulTurnEnd.has(key)) continue;
     const reason = statusReasonFromProviderRetryEvent(retryPayload);
     if (!reason) continue;
     let perAgent = out.get(row.chat_id);

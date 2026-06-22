@@ -253,6 +253,32 @@ describe("agent-chat-status", () => {
       expect(s?.main).toBe("ready");
       expect(s?.statusReason).toBeUndefined();
     });
+
+    it("clears provider-turn retry statusReason when a later turn_end succeeds", async () => {
+      const { app, peer, chatId } = await newChatWithAgent();
+      await bindPresence(peer.agent.uuid, peer.clientId);
+      await setSession(peer.agent.uuid, chatId, "active");
+      await insertEvent(peer.agent.uuid, chatId, 1, "error", {
+        message: encodeProviderRetryEventMessage({
+          event: "provider_retry_scheduled",
+          provider: "codex",
+          scope: "provider_turn",
+          category: "transient_transport",
+          reasonCode: "provider_transient_transport",
+          attempt: 1,
+          maxAttempts: 2,
+          retryMode: "foreground",
+          delayMs: 500,
+          replaySafety: "pre_visible",
+          userSeverity: "info",
+        }),
+      });
+      await insertEvent(peer.agent.uuid, chatId, 2, "turn_end", { status: "success" });
+
+      const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+      expect(s?.main).toBe("ready");
+      expect(s?.statusReason).toBeUndefined();
+    });
   });
 
   describe("withTurnNarration — sticky narration on the working activity", () => {
