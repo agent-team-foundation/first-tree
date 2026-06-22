@@ -43,6 +43,13 @@ async function click(el: Element | null): Promise<void> {
     el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
   });
 }
+async function keyDown(el: EventTarget, key: string, init: KeyboardEventInit = {}): Promise<KeyboardEvent> {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+  await act(async () => {
+    el.dispatchEvent(event);
+  });
+  return event;
+}
 async function setValue(el: HTMLTextAreaElement, value: string): Promise<void> {
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
@@ -188,5 +195,76 @@ describe("AskTakeover", () => {
     await click(btn(c, "Skip"));
     expect(onSkip).toHaveBeenCalledTimes(1);
     expect(onReply).not.toHaveBeenCalled();
+  });
+
+  it("Esc resolves with Skip; Enter resolves with Reply once the answer is valid", async () => {
+    const onReply = vi.fn();
+    const onSkip = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Concerns?" payload={{ multiSelect: false }} onReply={onReply} onSkip={onSkip} />,
+    );
+    const ta = c.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!ta) throw new Error("free-text input missing");
+
+    // Enter is inert while Reply is gated (no text yet).
+    await keyDown(ta, "Enter");
+    expect(onReply).not.toHaveBeenCalled();
+
+    await setValue(ta, "looks risky");
+    const entered = await keyDown(ta, "Enter");
+    expect(onReply).toHaveBeenCalledWith("looks risky");
+    expect(entered.defaultPrevented).toBe(true); // no newline gets inserted
+
+    // Esc skips, regardless of focus / typed text.
+    await keyDown(ta, "Escape");
+    expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+
+  it("Shift+Enter and IME composition do not resolve (newline / candidate confirm)", async () => {
+    const onReply = vi.fn();
+    const onSkip = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Concerns?" payload={{ multiSelect: false }} onReply={onReply} onSkip={onSkip} />,
+    );
+    const ta = c.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!ta) throw new Error("free-text input missing");
+    await setValue(ta, "draft");
+
+    const shiftEnter = await keyDown(ta, "Enter", { shiftKey: true });
+    expect(onReply).not.toHaveBeenCalled();
+    expect(shiftEnter.defaultPrevented).toBe(false); // newline stands
+
+    // Mid-IME-composition Enter confirms the candidate, never resolves.
+    await keyDown(ta, "Enter", { isComposing: true });
+    expect(onReply).not.toHaveBeenCalled();
+    // Esc during composition cancels the candidate, never skips.
+    await keyDown(ta, "Escape", { isComposing: true });
+    expect(onSkip).not.toHaveBeenCalled();
+  });
+
+  it("Enter on an option row toggles it rather than resolving", async () => {
+    const onReply = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Pick" payload={{ multiSelect: false, options: OPTS }} onReply={onReply} onSkip={() => {}} />,
+    );
+    const ship = option(c, "Ship");
+    if (!ship) throw new Error("option missing");
+    await keyDown(ship, "Enter");
+    expect(onReply).not.toHaveBeenCalled();
+  });
+
+  it("Enter and Esc are inert while sending", async () => {
+    const onReply = vi.fn();
+    const onSkip = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Concerns?" payload={{ multiSelect: false }} sending onReply={onReply} onSkip={onSkip} />,
+    );
+    const ta = c.querySelector<HTMLTextAreaElement>('textarea[placeholder^="Type your answer"]');
+    if (!ta) throw new Error("free-text input missing");
+    await setValue(ta, "looks risky");
+    await keyDown(ta, "Enter");
+    await keyDown(ta, "Escape");
+    expect(onReply).not.toHaveBeenCalled();
+    expect(onSkip).not.toHaveBeenCalled();
   });
 });

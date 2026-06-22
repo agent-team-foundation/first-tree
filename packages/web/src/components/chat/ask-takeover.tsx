@@ -101,6 +101,33 @@ export function AskTakeover({
     onReply(buildResolveAnswer(payload, selected, freeText));
   };
 
+  // Keyboard shortcuts, mirroring the chat composer: Enter (no Shift, and not
+  // mid-IME-composition) resolves with Reply, while Shift+Enter stays a newline
+  // in the free-text box. Esc resolves with Skip. Bound at the window because
+  // the card does not autofocus, so a keydown handler on the dialog subtree
+  // would miss the shortcuts until the user first clicks into the card.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.isComposing) return;
+      if (e.key === "Escape") {
+        if (sending) return;
+        e.preventDefault();
+        onSkip();
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        // An option row is a radio/checkbox button that owns Enter as its
+        // toggle; let that native behavior stand rather than resolving.
+        if (e.target instanceof HTMLElement && e.target.tagName === "BUTTON") return;
+        if (!canReply) return;
+        e.preventDefault();
+        onReply(buildResolveAnswer(payload, selected, freeText));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [sending, canReply, onReply, onSkip, payload, selected, freeText]);
+
   const ftStyle = {
     width: "100%",
     border: "var(--hairline) solid var(--border-strong)",
@@ -230,6 +257,7 @@ export function AskTakeover({
             type="button"
             onClick={onSkip}
             disabled={sending}
+            title="Skip (Esc)"
             className="text-label"
             style={{
               height: 34,
@@ -247,6 +275,7 @@ export function AskTakeover({
             type="button"
             onClick={reply}
             disabled={!canReply}
+            title="Reply (Enter)"
             className="text-label"
             style={{
               height: 34,
