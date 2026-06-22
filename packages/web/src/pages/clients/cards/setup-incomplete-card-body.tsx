@@ -64,6 +64,7 @@ export function SetupIncompleteCardBody({ client, boundAgents, agentName }: Setu
               provider={provider}
               entry={client.capabilities[provider] ?? null}
               hostname={hostname}
+              os={client.os}
             />
           ))}
         </div>

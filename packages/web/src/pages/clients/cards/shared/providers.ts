@@ -76,15 +76,35 @@ export const PROVIDER_LOGIN_COMMAND: Record<RuntimeProvider, string> = {
  * lines. The Setup-incomplete card body wraps this in a per-provider
  * box with a copy button per box.
  */
-export function buildInstallCommand(provider: RuntimeProvider): string {
+export function buildInstallCommand(provider: RuntimeProvider, os?: string | null): string {
   const base = `npm install -g ${PROVIDER_NPM_PACKAGE[provider]}\n${PROVIDER_LOGIN_COMMAND[provider]}`;
   if (provider === "claude-code-tui") {
-    // The tmux-driven runtime additionally needs tmux (>= 3.0). Its install
-    // command is OS-specific, so surface it as a comment line rather than guess
-    // the package manager — the npm + login lines above stay copy-paste runnable.
-    return `${base}\n# tmux (>= 3.0) is also required — e.g. brew install tmux (macOS) / apt install tmux (Linux)`;
+    // The tmux-driven runtime additionally needs tmux (>= 3.0). tmux is not an
+    // npm package, so emit the command for the host's actual package manager
+    // (keyed off the client's reported OS) instead of a generic note.
+    return `${base}\n${tmuxInstallCommand(os)}`;
   }
   return base;
+}
+
+/**
+ * OS-specific command to install tmux (>= 3.0), keyed off the client's reported
+ * OS (`darwin` / `linux` / `win32`). tmux is not an npm package, so the right
+ * command depends on the host package manager. Windows has no native tmux — it
+ * runs inside WSL, so the command targets the WSL distro.
+ */
+export function tmuxInstallCommand(os: string | null | undefined): string {
+  switch (os) {
+    case "darwin":
+      return "brew install tmux";
+    case "win32":
+    case "windows":
+      return "wsl sudo apt install tmux";
+    default:
+      // Linux / unknown — apt covers Debian/Ubuntu; other distros swap the
+      // package manager (dnf / pacman / …).
+      return "sudo apt install tmux";
+  }
 }
 
 /**
@@ -147,16 +167,18 @@ export function providerInstallHint(
   }
   if (provider === "claude-code-tui") {
     // The probe joins per-requirement reasons (claude + tmux) into one string;
-    // match on each so we can tailor the hint to what's genuinely missing.
+    // match on each so we can tailor the hint to what's genuinely missing. The
+    // tmux command is keyed to the host OS (brew / apt / WSL).
     const claudeMissing = error == null || /claude/i.test(error);
     const tmuxMissing = error == null || /tmux/i.test(error);
+    const tmuxCmd = tmuxInstallCommand(os);
     if (tmuxMissing && !claudeMissing) {
-      return `Install \`tmux\` (>= 3.0) on this ${device}.`;
+      return `Run \`${tmuxCmd}\` on this ${device} (tmux >= 3.0).`;
     }
     if (claudeMissing && !tmuxMissing) {
       return `Run \`npm install -g @anthropic-ai/claude-code\` on this ${device}.`;
     }
-    return `Install \`@anthropic-ai/claude-code\` and \`tmux\` (>= 3.0) on this ${device}.`;
+    return `Run \`npm install -g @anthropic-ai/claude-code\` and \`${tmuxCmd}\` (tmux >= 3.0) on this ${device}.`;
   }
   return `Install the OpenAI Codex CLI on this ${device}.`;
 }

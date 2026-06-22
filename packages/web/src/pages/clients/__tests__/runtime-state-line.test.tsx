@@ -106,8 +106,26 @@ describe("RuntimeStateLine", () => {
     const dom = await render(<RuntimeStateLine provider="claude-code-tui" entry={entry} os="darwin" />);
 
     expect(dom.textContent).toContain("Claude Code CLI");
-    expect(dom.textContent).toContain("Install `tmux` (>= 3.0)");
+    // macOS → Homebrew command, not a generic "install tmux".
+    expect(dom.textContent).toContain("brew install tmux");
     expect(dom.textContent).not.toContain("npm install");
+  });
+
+  it("keys the tmux install command to the host OS (Linux → apt)", async () => {
+    const entry: CapabilityEntry = {
+      available: false,
+      state: "missing",
+      authenticated: false,
+      sdkVersion: "2.1.84",
+      authMethod: "none",
+      error: "tmux not found",
+      detectedAt: "2026-06-12T12:00:00.000Z",
+    };
+
+    const dom = await render(<RuntimeStateLine provider="claude-code-tui" entry={entry} os="linux" />);
+
+    expect(dom.textContent).toContain("sudo apt install tmux");
+    expect(dom.textContent).not.toContain("brew");
   });
 
   it("names both requirements when the TUI runtime is missing claude and tmux", async () => {
