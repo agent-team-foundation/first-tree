@@ -244,7 +244,7 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
       kind: ERROR_KINDS.PERMANENT,
       strategy: NONE,
       reasonCode: "claude_login_required",
-      message: shape.message ?? "Claude TUI requires re-authentication (run /login)",
+      message: shape.message ?? "Claude Code CLI requires re-authentication (run /login)",
     };
   }
   if (isCodexBinaryMissingError(err)) {

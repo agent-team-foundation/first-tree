@@ -17,7 +17,7 @@ export const PROVIDER_ORDER: RuntimeProvider[] = [
 
 export const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
   "claude-code": "Claude Code",
-  "claude-code-tui": "Claude Code (TUI)",
+  "claude-code-tui": "Claude Code CLI",
   codex: "Codex",
 };
 
