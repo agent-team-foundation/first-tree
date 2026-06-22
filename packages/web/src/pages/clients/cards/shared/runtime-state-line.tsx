@@ -1,5 +1,6 @@
 import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
 import { PROVIDER_LABEL, providerInstallHint, providerUnauthHint } from "./providers.js";
+import { providerSupportsInProductAuth } from "./runtime-auth-view.js";
 
 /**
  * Per-runtime state line — single rendering used by every card body
@@ -40,14 +41,20 @@ export function RuntimeStateLine({
           {runtimeSuffix}
         </div>
       );
-    case "unauthenticated":
+    case "unauthenticated": {
+      // For a provider the daemon can authenticate in-product (codex), the
+      // adjacent "Connect" control is the recovery path — don't also print a
+      // manual "Run `codex login` on this Mac." hint, which contradicts the
+      // no-separate-CLI onboarding. Other providers keep the concrete hint.
+      const manualHint = providerSupportsInProductAuth(provider) ? "" : ` · ${providerUnauthHint(provider, os)}`;
       return (
         <div className="text-body" style={{ color: "var(--fg-2)" }}>
           <span style={{ color: "var(--state-blocked)" }}>⚠</span> {label}
           {entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}
-          {runtimeSuffix} · needs login · {providerUnauthHint(provider, os)}
+          {runtimeSuffix} · needs login{manualHint}
         </div>
       );
+    }
     case "missing":
       // Lead with the concrete install action keyed to what the probe found
       // missing — for `claude-code-tui` that may be only tmux, so a bare "not

@@ -275,11 +275,24 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // (device code / success / failure) by re-PATCHing capabilities through
         // the refresher, which the web already polls — no bespoke channel.
         runtime.onRuntimeAuthStart((command) => {
+          // Serialize per provider: ignore a duplicate start while a login is
+          // already running, else a second `codex login --device-auth` spawns
+          // and its device code races the first. The interactive flag also
+          // tells the background poll to preserve the pending device-code entry
+          // instead of clobbering it on the next re-probe.
+          if (capabilityRefresher.isInteractive(command.provider)) {
+            print.status(
+              "•",
+              `runtime-auth: ${command.provider} login already in progress — ignoring duplicate (ref ${command.ref})`,
+            );
+            return;
+          }
+          capabilityRefresher.beginInteractive(command.provider);
           void runRuntimeAuthLogin(command, {
             currentEntry: (provider) => capabilityRefresher.currentEntry(provider),
             setProviderEntry: (provider, entry) => capabilityRefresher.setProviderEntry(provider, entry),
             log: (symbol, msg) => print.status(symbol, msg),
-          });
+          }).finally(() => capabilityRefresher.endInteractive(command.provider));
         });
 
         await runtime.start();

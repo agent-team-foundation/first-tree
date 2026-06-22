@@ -87,6 +87,15 @@ export class CapabilityRefresher {
   private snapshot: ClientCapabilities | null;
   private lastUploadedSyncJson: string | null = null;
   private inFlight = false;
+  /**
+   * Providers with an in-flight interactive login (runtime-auth device-code).
+   * While a provider is in this set, a background re-probe must NOT overwrite
+   * its entry — the orchestrator owns it and is publishing a pending
+   * device-code that a fresh probe would clobber (the web panel would vanish
+   * mid-login). The flag also serializes logins: the daemon ignores a second
+   * `runtime-auth:start` for a provider already mid-login.
+   */
+  private readonly interactiveProviders = new Set<string>();
   /** A reconnect that landed while a refresh was in flight, to be drained (in
    * reconnect mode) once the current refresh finishes — never dropped, so the
    * reconnect TTL/full re-probe path is always honored. */
@@ -172,6 +181,26 @@ export class CapabilityRefresher {
     this.scheduleNext();
   }
 
+  /**
+   * Mark a provider as having an in-flight interactive login. A background
+   * re-probe will then preserve that provider's current entry (incl. a pending
+   * device-code) instead of overwriting it, and {@link isInteractive} lets the
+   * caller drop duplicate `runtime-auth:start` commands. Idempotent.
+   */
+  beginInteractive(provider: string): void {
+    this.interactiveProviders.add(provider);
+  }
+
+  /** Clear the in-flight interactive flag once the login resolves. */
+  endInteractive(provider: string): void {
+    this.interactiveProviders.delete(provider);
+  }
+
+  /** True while a provider has an in-flight interactive login. */
+  isInteractive(provider: string): boolean {
+    return this.interactiveProviders.has(provider);
+  }
+
   private clearPending(): void {
     if (this.timer !== null) {
       this.clearTimer(this.timer);
@@ -213,6 +242,17 @@ export class CapabilityRefresher {
           modeLabel = "poll";
         }
         probed = true;
+        // Preserve any provider with an in-flight interactive login: the
+        // orchestrator owns its entry (a pending device-code) and a fresh probe
+        // would clobber it, making the web device-code panel vanish mid-login.
+        if (this.interactiveProviders.size > 0) {
+          const preserved: ClientCapabilities = { ...next };
+          for (const provider of this.interactiveProviders) {
+            const owned = previous[provider];
+            if (owned) preserved[provider] = owned;
+          }
+          next = preserved;
+        }
         const changed = stableCapabilitySyncJson(next) !== stableCapabilitySyncJson(previous);
         this.snapshot = next;
         // Upload is tracked separately from the probe: a probe that recovered a

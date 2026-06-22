@@ -46,6 +46,38 @@ const codexMissing = (): ClientCapabilities => ({
   codex: missing(),
 });
 
+const codexUnauth = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
+  state: "unauthenticated",
+  available: true,
+  authenticated: false,
+  authMethod: "none",
+  detectedAt: "2026-06-17T00:00:00.000Z",
+  ...over,
+});
+
+const codexPending = (): CapabilityEntry =>
+  codexUnauth({
+    pendingDeviceAuth: {
+      verificationUrl: "https://auth.openai.com/codex/device",
+      userCode: "0WYJ-KDUHH",
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    },
+  });
+
+/** Snapshot with codex mid-device-auth (unauthenticated + a pending code). */
+const codexPendingSnapshot = (): ClientCapabilities => ({
+  "claude-code": ok(),
+  "claude-code-tui": ok(),
+  codex: codexPending(),
+});
+
+/** What a re-probe sees while the login is still in flight: plain unauth. */
+const codexUnauthSnapshot = (): ClientCapabilities => ({
+  "claude-code": ok(),
+  "claude-code-tui": ok(),
+  codex: codexUnauth(),
+});
+
 const BASE = 100;
 const MAX = 400;
 
@@ -112,6 +144,53 @@ describe("CapabilityRefresher", () => {
 
     await vi.advanceTimersByTimeAsync(MAX * 4);
     expect(revalidate).not.toHaveBeenCalled();
+    refresher.stop();
+  });
+
+  // Regression (real-QA): the background poll must NOT clobber a provider's
+  // pending device-code while an interactive runtime-auth login is in flight —
+  // otherwise the web device-code panel vanishes ~30s in, before auth finishes.
+  it("preserves an interactive provider's pending device-code across a background poll", async () => {
+    const { refresher, upload, revalidate } = makeRefresher({ initial: codexPendingSnapshot() });
+    revalidate.mockResolvedValue(codexUnauthSnapshot()); // a fresh probe drops the pending code
+
+    refresher.beginInteractive("codex");
+    await refresher.start();
+    expect(upload).toHaveBeenCalledTimes(1); // initial snapshot WITH pending
+
+    // A poll fires: revalidate runs, but the interactive provider is preserved.
+    await vi.advanceTimersByTimeAsync(BASE);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    // Snapshot still carries the pending device-code…
+    expect(refresher.currentEntry("codex")?.pendingDeviceAuth).toBeDefined();
+    // …and the unchanged snapshot is NOT re-uploaded (no panel flicker).
+    expect(upload).toHaveBeenCalledTimes(1);
+    refresher.stop();
+  });
+
+  it("lets a re-probe overwrite the entry once the interactive flag is cleared", async () => {
+    const { refresher, upload, revalidate } = makeRefresher({ initial: codexPendingSnapshot() });
+    revalidate.mockResolvedValue(codexUnauthSnapshot());
+
+    refresher.beginInteractive("codex");
+    await refresher.start();
+    refresher.endInteractive("codex");
+
+    await vi.advanceTimersByTimeAsync(BASE);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    // Now the fresh (no-pending) entry wins and is uploaded.
+    expect(refresher.currentEntry("codex")?.pendingDeviceAuth).toBeUndefined();
+    expect(upload).toHaveBeenCalledTimes(2);
+    refresher.stop();
+  });
+
+  it("isInteractive reflects begin/end and serializes duplicate starts", () => {
+    const { refresher } = makeRefresher({ initial: codexUnauthSnapshot() });
+    expect(refresher.isInteractive("codex")).toBe(false);
+    refresher.beginInteractive("codex");
+    expect(refresher.isInteractive("codex")).toBe(true);
+    refresher.endInteractive("codex");
+    expect(refresher.isInteractive("codex")).toBe(false);
     refresher.stop();
   });
 
