@@ -80,14 +80,18 @@ export function RuntimeTab() {
               provider={ctx.setupRuntimeProvider}
             />
           </Section>
-          {configSave.conflict ? (
-            <p className="text-body" style={{ color: "var(--state-blocked)", margin: "var(--sp-2) 0 0" }}>
-              This agent's configuration was updated elsewhere; reloaded the latest values.
-            </p>
-          ) : configSave.saveError ? (
-            <p className="text-body" style={{ color: "var(--state-error)", margin: "var(--sp-2) 0 0" }}>
-              Failed to save: {configSave.saveError}
-            </p>
+          {/* Only model/effort failures belong here; env failures surface at the
+              Env section (dialog for add/edit, toast for delete). */}
+          {configSave.errorField === "model" || configSave.errorField === "effort" ? (
+            configSave.conflict ? (
+              <p className="text-body" style={{ color: "var(--state-blocked)", margin: "var(--sp-2) 0 0" }}>
+                This agent's configuration was updated elsewhere; reloaded the latest values.
+              </p>
+            ) : configSave.saveError ? (
+              <p className="text-body" style={{ color: "var(--state-error)", margin: "var(--sp-2) 0 0" }}>
+                Failed to save: {configSave.saveError}
+              </p>
+            ) : null
           ) : null}
         </div>
       )}
@@ -132,13 +136,17 @@ export function RuntimeTab() {
         <div style={{ marginTop: "var(--sp-8)" }}>
           <EnvSection
             items={config.payload.env}
-            onSave={(next, opts) => configSave.save({ env: next }, { field: "env", onSuccess: opts?.onSuccess })}
+            onSave={(next, opts) =>
+              configSave.save({ env: next }, { field: "env", onSuccess: opts?.onSuccess, onError: opts?.onError })
+            }
             disabled={ctx.agent.status !== "active"}
             saving={configSave.pending}
             saveError={
-              configSave.conflict
-                ? "This agent's configuration was updated elsewhere — reloaded the latest values. Re-enter and try again."
-                : configSave.saveError
+              configSave.errorField === "env"
+                ? configSave.conflict
+                  ? "This agent's configuration was updated elsewhere — reloaded the latest values. Re-enter and try again."
+                  : configSave.saveError
+                : null
             }
             saved={envSaved}
           />

@@ -2152,6 +2152,10 @@ describe("web DOM interaction coverage", () => {
     // The save is now in flight.
     await act(async () => setSaving(true));
 
+    // Inputs are locked mid-save so a value typed in the pending window can't be
+    // silently dropped when the save resolves.
+    expect(document.body.querySelector<HTMLInputElement>("#env-value")?.disabled).toBe(true);
+
     // The Radix close (X), Escape, and outside click all route through the
     // dialog's onOpenChange — none of them may dismiss it mid-save.
     await click([...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Close") ?? null);
@@ -2170,4 +2174,99 @@ describe("web DOM interaction coverage", () => {
 
     await unmountRoot(root);
   });
+
+  it("shows a toast when an env row delete fails (no dialog to host the error)", async () => {
+    const { EnvSection } = await import("../agent-detail/env-section.js");
+    // onSave invokes onError, simulating a rejected/409 delete.
+    const onSave = vi.fn((_next: unknown, opts?: { onError?: () => void }) => opts?.onError?.());
+    const items = [{ key: "FIRST_TREE_ENV", value: "test", sensitive: false }];
+    const { container, root } = await renderDom(<EnvSection items={items} onSave={onSave} />);
+
+    await click(container.querySelector('button[title="Delete"]'));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    await waitForText("Couldn't remove FIRST_TREE_ENV", document.body);
+
+    await unmountRoot(root);
+  });
+
+  it("locks the secret input mid-save so a successful old request can't drop a late edit", async () => {
+    const { EnvSection } = await import("../agent-detail/env-section.js");
+    let setSaving: (v: boolean) => void = () => {};
+    let resolveSuccess: () => void = () => {};
+    const onSave = vi.fn((_next: unknown, opts?: { onSuccess?: () => void }) => {
+      resolveSuccess = () => opts?.onSuccess?.();
+    });
+    function Harness() {
+      const [saving, s] = useState(false);
+      setSaving = s;
+      return <EnvSection items={[]} onSave={onSave} saving={saving} />;
+    }
+    const { container, root } = await renderDom(<Harness />);
+
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Add")) ?? null);
+    await waitForText("Add environment variable", document.body);
+    const key = document.body.querySelector<HTMLInputElement>("#env-key");
+    const value = document.body.querySelector<HTMLInputElement>("#env-value");
+    const sensitive = document.body.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (!key || !value || !sensitive) throw new Error("Env fields missing");
+    await setValue(key, "API_KEY");
+    await setValue(value, "secret1");
+    await click(sensitive);
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
+    expect(onSave.mock.calls[0]?.[0]).toEqual([{ key: "API_KEY", value: "secret1", sensitive: true }]);
+
+    // Save is in flight: the inputs are disabled, so the user CANNOT type a late
+    // "correction" into the still-open dialog — there is no unsubmitted edit that
+    // the succeeding old request could silently drop.
+    await act(async () => setSaving(true));
+    expect(document.body.querySelector<HTMLInputElement>("#env-value")?.disabled).toBe(true);
+    expect(document.body.querySelector<HTMLInputElement>("#env-key")?.disabled).toBe(true);
+
+    // The original request succeeds and closes the dialog. Only the submitted
+    // secret1 was ever sent — exactly one save, no silent second value.
+    await act(async () => {
+      resolveSuccess();
+      setSaving(false);
+    });
+    expect(document.body.textContent).not.toContain("Add environment variable");
+    expect(onSave).toHaveBeenCalledTimes(1);
+
+    await unmountRoot(root);
+  });
+
+  it("clears a stale validation error so a later save failure is shown, not masked", async () => {
+    const { EnvSection } = await import("../agent-detail/env-section.js");
+    function Harness() {
+      const [saveError, setSaveError] = useState<string | null>(null);
+      // The save fails (no onSuccess) and surfaces an error to the dialog.
+      const onSave = (_next: EnvEntryLike[]) => setSaveError("Save failed");
+      return (
+        <EnvSection items={[{ key: "EXISTING", value: "x", sensitive: false }]} onSave={onSave} saveError={saveError} />
+      );
+    }
+    const { container, root } = await renderDom(<Harness />);
+
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Add")) ?? null);
+    await waitForText("Add environment variable", document.body);
+    const key = document.body.querySelector<HTMLInputElement>("#env-key");
+    const value = document.body.querySelector<HTMLInputElement>("#env-value");
+    if (!key || !value) throw new Error("Env fields missing");
+
+    // Trigger a local validation error (duplicate key), then fix it and resubmit.
+    await setValue(key, "EXISTING");
+    await setValue(value, "v");
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
+    await waitForText('Another entry already uses key "EXISTING".', document.body);
+    await setValue(key, "NEWKEY");
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
+
+    // The real save failure shows; the stale validation message no longer masks it.
+    await waitForText("Save failed", document.body);
+    expect(document.body.textContent).not.toContain("Another entry already uses key");
+
+    await unmountRoot(root);
+  });
 });
+
+// Minimal structural shape for the env onSave callback in the test above.
+type EnvEntryLike = { key: string; value: string; sensitive: boolean };

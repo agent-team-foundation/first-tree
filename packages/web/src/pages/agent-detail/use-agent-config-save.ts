@@ -24,13 +24,18 @@ import { useJustSaved } from "./save-semantics.js";
 export type ConfigField = "model" | "effort" | "env";
 
 export type AgentConfigSaveController = {
-  /** Save a partial config patch immediately. `field` drives which section flashes "Saved". */
-  save: (patch: AgentRuntimeConfigPatch, opts?: { field?: ConfigField; onSuccess?: () => void }) => void;
+  /** Save a partial config patch immediately. `field` drives which section flashes "Saved" / shows the error. */
+  save: (
+    patch: AgentRuntimeConfigPatch,
+    opts?: { field?: ConfigField; onSuccess?: () => void; onError?: () => void },
+  ) => void;
   pending: boolean;
   /** Non-conflict save failure message, else null. */
   saveError: string | null;
   /** True after a 409 (someone else saved a newer version); cleared on the next successful save. */
   conflict: boolean;
+  /** Which field's save last failed (conflict or error), so the UI can show it field-located; null when clean. */
+  errorField: ConfigField | null;
   justSaved: boolean;
   savedField: ConfigField | null;
 };
@@ -43,6 +48,7 @@ export function useAgentConfigSave(uuid: string): AgentConfigSaveController {
   const { justSaved, markSaved } = useJustSaved();
   const [saveError, setSaveError] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
+  const [errorField, setErrorField] = useState<ConfigField | null>(null);
   const [savedField, setSavedField] = useState<ConfigField | null>(null);
 
   const { mutate, isPending } = useMutation<AgentRuntimeConfig, unknown, SaveVars, SaveContext>({
@@ -60,8 +66,9 @@ export function useAgentConfigSave(uuid: string): AgentConfigSaveController {
       }
       return { prev };
     },
-    onError: (err, _vars, context) => {
+    onError: (err, vars, context) => {
       if (context?.prev) queryClient.setQueryData(["agent-config", uuid], context.prev);
+      setErrorField(vars.field ?? null);
       if (err instanceof ApiError && err.status === 409) {
         setConflict(true);
         setSaveError(null);
@@ -76,6 +83,7 @@ export function useAgentConfigSave(uuid: string): AgentConfigSaveController {
       queryClient.setQueryData(["agent-config", uuid], next);
       setSaveError(null);
       setConflict(false);
+      setErrorField(null);
       setSavedField(vars.field ?? null);
       markSaved();
     },
@@ -87,10 +95,14 @@ export function useAgentConfigSave(uuid: string): AgentConfigSaveController {
       if (!current) return;
       setSaveError(null);
       setConflict(false);
-      mutate({ patch, expectedVersion: current.version, field: opts?.field }, { onSuccess: () => opts?.onSuccess?.() });
+      setErrorField(null);
+      mutate(
+        { patch, expectedVersion: current.version, field: opts?.field },
+        { onSuccess: () => opts?.onSuccess?.(), onError: () => opts?.onError?.() },
+      );
     },
     [queryClient, uuid, mutate],
   );
 
-  return { save, pending: isPending, saveError, conflict, justSaved, savedField };
+  return { save, pending: isPending, saveError, conflict, errorField, justSaved, savedField };
 }
