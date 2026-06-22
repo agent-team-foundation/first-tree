@@ -8,7 +8,7 @@ import { cn } from "../../lib/utils.js";
  * so the two surfaces no longer drift visually.
  *
  * Visual hierarchy this enforces inside one tab:
- *   - title       = text-subtitle / 600   ("chapter")
+ *   - title       = text-title    / 600   ("chapter")
  *   - row label   = text-body     / 400   ("field")
  *   - description = text-caption  / 400   ("annotation")
  *
