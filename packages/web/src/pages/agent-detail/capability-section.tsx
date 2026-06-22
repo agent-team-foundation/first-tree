@@ -161,7 +161,7 @@ export function ResourceTypeSection(props: {
         ) : null
       }
     >
-      <div>
+      <div className="ad-tail-trim">
         {rows.length === 0 ? (
           <p className="text-body" style={{ color: "var(--fg-4)", padding: "var(--sp-3) 0", margin: 0 }}>
             No {emptyNoun(type)} yet.

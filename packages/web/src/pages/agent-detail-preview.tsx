@@ -1,4 +1,10 @@
-import type { Agent, AgentResourcesOutput, AgentRuntimeConfig } from "@first-tree/shared";
+import type {
+  Agent,
+  AgentResourcesOutput,
+  AgentRuntimeConfig,
+  UsageAgentSummary,
+  UsageTurnsResponse,
+} from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { Outlet, Route, Routes } from "react-router";
@@ -7,6 +13,7 @@ import { ResourceTypeSection } from "./agent-detail/capability-section.js";
 import type { AgentDetailContext } from "./agent-detail/layout-context.js";
 import { PromptTab } from "./agent-detail/prompt-tab.js";
 import { ResourcesTab } from "./agent-detail/resources-tab.js";
+import { UsageTab } from "./agent-detail/usage-tab.js";
 
 /**
  * DEV-only visual preview of the redesigned agent-detail **Capabilities** and
@@ -349,6 +356,70 @@ const CONFIG: AgentRuntimeConfig = {
   updatedBy: "member-self",
 };
 
+// Usage tab sample data — crafted to exercise the slimmed Recent turns table:
+// a long chat title (truncates), a non-default model (claude-haiku) next to the
+// dominant one, and big token counts (compact in-cell, exact on hover).
+const USAGE_SUMMARY: UsageAgentSummary = {
+  agentId: UUID,
+  from: "2026-05-23T00:00:00.000Z",
+  to: NOW,
+  totals: {
+    inputTokens: 1_293_770,
+    cachedInputTokens: 3_538_960,
+    outputTokens: 236_600,
+    turns: 3,
+    chats: 3,
+    lastUsageAt: NOW,
+  },
+  daily: [
+    { date: "2026-06-02", inputTokens: 121_730, cachedInputTokens: 656_880, outputTokens: 38_460, turns: 1 },
+    { date: "2026-06-03", inputTokens: 1_100_000, cachedInputTokens: 2_880_000, outputTokens: 187_500, turns: 1 },
+    { date: "2026-06-04", inputTokens: 72_040, cachedInputTokens: 2_080, outputTokens: 10_640, turns: 1 },
+  ],
+};
+
+const USAGE_TURNS: UsageTurnsResponse = {
+  agentId: UUID,
+  from: "2026-05-23T00:00:00.000Z",
+  to: NOW,
+  rows: [
+    {
+      seq: 1,
+      chatId: "chat-uxr",
+      chatTitle: "Agent 详情页 UX 审查 — a deliberately long chat title that should truncate with an ellipsis",
+      createdAt: NOW,
+      inputTokens: 121_730,
+      cachedInputTokens: 656_880,
+      outputTokens: 38_460,
+      provider: "claude-code",
+      model: "claude-opus-4-8",
+    },
+    {
+      seq: 2,
+      chatId: "chat-launch",
+      chatTitle: "Launch planning",
+      createdAt: NOW,
+      inputTokens: 1_100_000,
+      cachedInputTokens: 2_880_000,
+      outputTokens: 187_500,
+      provider: "claude-code",
+      model: "claude-opus-4-8",
+    },
+    {
+      seq: 3,
+      chatId: "chat-triage",
+      chatTitle: "Quick triage",
+      createdAt: NOW,
+      inputTokens: 72_040,
+      cachedInputTokens: 2_080,
+      outputTokens: 10_640,
+      provider: "claude-code",
+      model: "claude-haiku-4-5",
+    },
+  ],
+  nextCursor: null,
+};
+
 // The tabs only read uuid / agent / isHuman / canManageAgent / config / configLoading
 // from the context. Building the full ~30-field shape adds no signal to the preview.
 // (unavoidable cast: the omitted fields are never touched by these two tabs.)
@@ -360,6 +431,7 @@ const CTX = {
   canEditConfig: true,
   config: CONFIG,
   configLoading: false,
+  navigateAway: () => undefined,
 } as unknown as AgentDetailContext;
 
 function buildClient(): QueryClient {
@@ -369,6 +441,8 @@ function buildClient(): QueryClient {
     },
   });
   client.setQueryData(["agent-resources", UUID], RESOURCES);
+  client.setQueryData(["usage-summary", UUID, "30d"], USAGE_SUMMARY);
+  client.setQueryData(["usage-turns", UUID, "30d", 10], USAGE_TURNS);
   // Seed the agent switcher list (both admin/member keys, since preview auth is
   // ambient). fetchAllAgents flattens to Agent[].
   const switcherAgents: Agent[] = [
@@ -437,13 +511,23 @@ export function AgentDetailPreviewPage() {
             Instructions tab
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Per-instruction management converged to the Switch (team-recommended enable / disable) + the ⋯ menu
-            (Customize / Edit / Remove); each block collapses to a summary (expand to read the full body), an Add menu
-            adds custom or team instructions, and the 👁 Effective instructions button shows the merged runtime prompt.
-            (The always-on top Effective block + the density pass land in PR2.)
+            Result-first: the top "What this agent is told" block shows the merged runtime instructions (clamp + Show
+            all). Source rows are de-crowded — Switch + ⋯ only, click a row to read its full body. The old 👁 modal is
+            gone.
           </p>
           <div style={{ marginTop: "var(--sp-4)" }}>
             <TabHost element={<PromptTab />} />
+          </div>
+
+          <h1 className="text-title m-0" style={{ marginTop: "var(--sp-8)", color: "var(--fg)" }}>
+            Usage tab — Recent turns
+          </h1>
+          <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
+            Slimmed: model name only (provider on hover), Chat truncates with a tooltip, token columns compact with the
+            exact value on hover, window in the title.
+          </p>
+          <div style={{ marginTop: "var(--sp-4)" }}>
+            <TabHost element={<UsageTab />} />
           </div>
         </div>
         <button

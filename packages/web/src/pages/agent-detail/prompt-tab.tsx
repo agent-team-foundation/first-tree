@@ -22,6 +22,12 @@ import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 
 type AvailablePrompt = { id: string; name: string };
 
+// Clamp markdown headings to the dense in-app scale inside the Effective block, so
+// a prompt that opens with a big "# Heading" doesn't blow out the ~8-line clamp
+// (h1 → subtitle, the rest → body).
+const PROSE_COMPACT_HEADINGS =
+  "prose-headings:font-semibold prose-h1:text-subtitle prose-h1:mt-0 prose-h2:text-body prose-h3:text-body prose-h4:text-body";
+
 export function PromptTab() {
   const ctx = useAgentDetailContext();
   const queryClient = useQueryClient();
@@ -205,7 +211,7 @@ function EffectiveInstructionsBlock({ prompt }: { prompt: string }) {
               overflow: showAll ? undefined : "hidden",
             }}
           >
-            <Markdown>{prompt}</Markdown>
+            <Markdown className={PROSE_COMPACT_HEADINGS}>{prompt}</Markdown>
           </div>
           {clamped || showAll ? (
             <Button
@@ -511,7 +517,7 @@ function PromptResourceBlocks(props: {
   }
 
   return blocks.length > 0 ? (
-    <>{blocks}</>
+    <div className="ad-tail-trim">{blocks}</div>
   ) : (
     <p className="text-body text-muted-foreground" style={{ margin: 0, padding: "var(--sp-3) 0" }}>
       No instructions yet.
