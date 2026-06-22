@@ -81,8 +81,10 @@ export function buildInstallCommand(provider: RuntimeProvider, os?: string | nul
   if (provider === "claude-code-tui") {
     // The tmux-driven runtime additionally needs tmux (>= 3.0). tmux is not an
     // npm package, so emit the command for the host's actual package manager
-    // (keyed off the client's reported OS) instead of a generic note.
-    return `${base}\n${tmuxInstallCommand(os)}`;
+    // (keyed off the client's reported OS). Unknown OS → a non-command note
+    // rather than a guessed package manager.
+    const tmuxCmd = tmuxInstallCommand(os);
+    return `${base}\n${tmuxCmd ?? "# install tmux (>= 3.0) with your OS package manager"}`;
   }
   return base;
 }
@@ -93,17 +95,23 @@ export function buildInstallCommand(provider: RuntimeProvider, os?: string | nul
  * command depends on the host package manager. Windows has no native tmux — it
  * runs inside WSL, so the command targets the WSL distro.
  */
-export function tmuxInstallCommand(os: string | null | undefined): string {
+export function tmuxInstallCommand(os: string | null | undefined): string | null {
   switch (os) {
     case "darwin":
       return "brew install tmux";
+    case "linux":
+      // apt covers Debian/Ubuntu; other distros swap the package manager
+      // (dnf / pacman / …), but apt is the common default.
+      return "sudo apt install tmux";
     case "win32":
     case "windows":
+      // No native Windows tmux — it runs inside WSL.
       return "wsl sudo apt install tmux";
     default:
-      // Linux / unknown — apt covers Debian/Ubuntu; other distros swap the
-      // package manager (dnf / pacman / …).
-      return "sudo apt install tmux";
+      // Unknown / unreported OS — don't assume a package manager. A real client
+      // always reports `process.platform`; this only guards legacy/unknown rows,
+      // where callers fall back to naming the requirement without a command.
+      return null;
   }
 }
 
@@ -171,14 +179,20 @@ export function providerInstallHint(
     // tmux command is keyed to the host OS (brew / apt / WSL).
     const claudeMissing = error == null || /claude/i.test(error);
     const tmuxMissing = error == null || /tmux/i.test(error);
+    // OS-keyed tmux command (brew / apt / WSL), or null for an unknown OS — then
+    // name the requirement without assuming a package manager.
     const tmuxCmd = tmuxInstallCommand(os);
     if (tmuxMissing && !claudeMissing) {
-      return `Run \`${tmuxCmd}\` on this ${device} (tmux >= 3.0).`;
+      return tmuxCmd
+        ? `Run \`${tmuxCmd}\` on this ${device} (tmux >= 3.0).`
+        : `Install tmux (>= 3.0) on this ${device} with your package manager.`;
     }
     if (claudeMissing && !tmuxMissing) {
       return `Run \`npm install -g @anthropic-ai/claude-code\` on this ${device}.`;
     }
-    return `Run \`npm install -g @anthropic-ai/claude-code\` and \`${tmuxCmd}\` (tmux >= 3.0) on this ${device}.`;
+    return tmuxCmd
+      ? `Run \`npm install -g @anthropic-ai/claude-code\` and \`${tmuxCmd}\` (tmux >= 3.0) on this ${device}.`
+      : `Run \`npm install -g @anthropic-ai/claude-code\`, then install tmux (>= 3.0) with your package manager, on this ${device}.`;
   }
   return `Install the OpenAI Codex CLI on this ${device}.`;
 }

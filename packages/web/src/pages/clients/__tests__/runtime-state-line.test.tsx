@@ -128,6 +128,26 @@ describe("RuntimeStateLine", () => {
     expect(dom.textContent).not.toContain("brew");
   });
 
+  it("names tmux generically when the OS is unknown, with no guessed package manager", async () => {
+    const entry: CapabilityEntry = {
+      available: false,
+      state: "missing",
+      authenticated: false,
+      sdkVersion: "2.1.84",
+      authMethod: "none",
+      error: "tmux not found",
+      detectedAt: "2026-06-12T12:00:00.000Z",
+    };
+
+    const dom = await render(<RuntimeStateLine provider="claude-code-tui" entry={entry} os={null} />);
+
+    expect(dom.textContent).toContain("tmux (>= 3.0)");
+    expect(dom.textContent).toContain("package manager");
+    // No OS evidence → don't show a Linux/macOS command.
+    expect(dom.textContent).not.toContain("apt");
+    expect(dom.textContent).not.toContain("brew");
+  });
+
   it("names both requirements when the TUI runtime is missing claude and tmux", async () => {
     const entry: CapabilityEntry = {
       available: false,
