@@ -949,6 +949,7 @@ describe("page SSR smoke coverage", () => {
     const { AgentDetailPage } = await import("../agent-detail.js");
     const { ProfileTab } = await import("../agent-detail/profile-tab.js");
     const { PromptTab } = await import("../agent-detail/prompt-tab.js");
+    const { RepositoriesTab } = await import("../agent-detail/repositories-tab.js");
     const { ResourcesTab } = await import("../agent-detail/resources-tab.js");
     const { RuntimeTab } = await import("../agent-detail/runtime-tab.js");
 
@@ -959,6 +960,7 @@ describe("page SSR smoke coverage", () => {
           <Route path="runtime" element={<RuntimeTab />} />
           <Route path="prompt" element={<PromptTab />} />
           <Route path="resources" element={<ResourcesTab />} />
+          <Route path="repositories" element={<RepositoriesTab />} />
         </Route>
       </Routes>,
       "/agents/agent-1/profile",
@@ -968,9 +970,10 @@ describe("page SSR smoke coverage", () => {
     expect(html).toContain("Profile");
 
     for (const [route, expected] of [
-      // Repos render on the Environment (runtime) tab now; Tools & skills
-      // (resources route) lists only skills + MCP.
-      ["/agents/agent-1/runtime", "Team web"],
+      // IA recut: runtime shows model/effort/execution/env; repos + context tree
+      // moved to their own Repositories tab; Tools & skills lists only skills + MCP.
+      ["/agents/agent-1/runtime", "Reasoning effort"],
+      ["/agents/agent-1/repositories", "Team web"],
       ["/agents/agent-1/prompt", "Effective instructions"],
       ["/agents/agent-1/resources", "Integrations (MCP)"],
     ] as const) {
@@ -982,6 +985,7 @@ describe("page SSR smoke coverage", () => {
               <Route path="runtime" element={<RuntimeTab />} />
               <Route path="prompt" element={<PromptTab />} />
               <Route path="resources" element={<ResourcesTab />} />
+              <Route path="repositories" element={<RepositoriesTab />} />
             </Route>
           </Routes>,
           route,

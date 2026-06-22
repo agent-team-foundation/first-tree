@@ -3,13 +3,15 @@ import { canManageAgentDetail } from "./access.js";
 
 export type TabDef = { key: string; label: string; path: string };
 
-// IA labels only. Routing `path` and the `key` (draft / deep-link mapping) are
-// kept stable so existing URLs and SECTION_TO_TAB keep resolving.
+// IA labels only. Routing `path` and the `key` (deep-link mapping) are kept
+// stable so existing URLs keep resolving; only the `runtime` label changed
+// (Environment → Runtime) and `repositories` was added.
 const TAB_LABELS: Record<string, string> = {
   profile: "Profile",
-  runtime: "Environment",
+  runtime: "Runtime",
   prompt: "Instructions",
   capabilities: "Tools & skills",
+  repositories: "Repositories",
   usage: "Usage",
 };
 
@@ -22,10 +24,15 @@ const TAB_LABELS: Record<string, string> = {
 export function tabKeysFor(canEditConfig: boolean, isHuman: boolean): { key: string; path: string }[] {
   const tabs: { key: string; path: string }[] = [{ key: "profile", path: "profile" }];
   if (canEditConfig) {
+    // engine-first: Runtime (model/effort/computer/env) before Instructions, then
+    // the two resource tabs. Repositories is editor-only — repos + the read-only
+    // context tree lived on the old (editor-only) Environment tab, so non-editors
+    // never saw them and still don't.
     tabs.push(
       { key: "runtime", path: "runtime" },
       { key: "prompt", path: "prompt" },
       { key: "capabilities", path: "capabilities" },
+      { key: "repositories", path: "repositories" },
     );
   } else if (!isHuman) {
     tabs.push({ key: "capabilities", path: "capabilities" });

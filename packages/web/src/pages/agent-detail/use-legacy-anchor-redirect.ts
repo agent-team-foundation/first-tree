@@ -18,11 +18,11 @@ const HASH_TO_TAB: Record<string, string> = {
   "agent-cfg-mcp": "capabilities",
   "ad-advanced": "capabilities",
   "agent-cfg-env": "runtime",
-  // Model / reasoning effort live on the Environment (runtime) tab's draft zone.
+  // Model / reasoning effort live on the Runtime tab.
   "agent-cfg-model": "runtime",
   "agent-cfg-effort": "runtime",
-  // Repos moved to the Environment (runtime) tab.
-  "agent-cfg-git": "runtime",
+  // Repos now live on their own Repositories tab (split out of Environment/Runtime).
+  "agent-cfg-git": "repositories",
   // Lifecycle lives at the bottom of Profile — keep the danger anchor alive.
   "ad-danger": "profile",
 };
