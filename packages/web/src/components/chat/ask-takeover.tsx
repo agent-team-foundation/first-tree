@@ -25,7 +25,7 @@
  * only ask, never answer or close.
  */
 import type { AskOption, AskRequest } from "@first-tree/shared";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { Markdown } from "../ui/markdown.js";
 import { allRequiredAnswered, buildResolveAnswer } from "./request-state.js";
@@ -101,6 +101,45 @@ export function AskTakeover({
     onReply(buildResolveAnswer(payload, selected, freeText));
   };
 
+  // Keyboard shortcuts, mirroring the chat composer: Enter (no Shift, and not
+  // mid-IME-composition) resolves with Reply, while Shift+Enter stays a newline
+  // in the free-text box. Esc resolves with Skip. Bound at the window because
+  // the card does not autofocus, so a keydown handler on the dialog subtree
+  // would miss the shortcuts until the user first clicks into the card.
+  const cardRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.isComposing) return;
+      // A focused control already claimed this keystroke (e.g. the composer's
+      // mention/slash popover, which preventDefaults Enter/Escape). Don't also
+      // resolve the ask behind it.
+      if (e.defaultPrevented) return;
+      // A modal layered ABOVE the card owns the keyboard. Radix dialogs (the
+      // ⌘K command palette, etc.) render in a body-level portal and mark the
+      // rest of the tree `aria-hidden` while open; if the card now sits inside
+      // an aria-hidden region, a higher overlay holds focus, so stay out of its
+      // way — otherwise Enter/Escape driving that overlay would also resolve
+      // the ask underneath it.
+      if (cardRef.current?.closest('[aria-hidden="true"]')) return;
+      if (e.key === "Escape") {
+        if (sending) return;
+        e.preventDefault();
+        onSkip();
+        return;
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        // An option row is a radio/checkbox button that owns Enter as its
+        // toggle; let that native behavior stand rather than resolving.
+        if (e.target instanceof HTMLElement && e.target.tagName === "BUTTON") return;
+        if (!canReply) return;
+        e.preventDefault();
+        onReply(buildResolveAnswer(payload, selected, freeText));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [sending, canReply, onReply, onSkip, payload, selected, freeText]);
+
   const ftStyle = {
     width: "100%",
     border: "var(--hairline) solid var(--border-strong)",
@@ -134,6 +173,7 @@ export function AskTakeover({
       }}
     >
       <div
+        ref={cardRef}
         role="dialog"
         aria-modal="true"
         aria-label={askerName ? `Question from ${askerName}` : "Question awaiting your answer"}
@@ -230,6 +270,7 @@ export function AskTakeover({
             type="button"
             onClick={onSkip}
             disabled={sending}
+            title="Skip (Esc)"
             className="text-label"
             style={{
               height: 34,
@@ -247,6 +288,7 @@ export function AskTakeover({
             type="button"
             onClick={reply}
             disabled={!canReply}
+            title="Reply (Enter)"
             className="text-label"
             style={{
               height: 34,
