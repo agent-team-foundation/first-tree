@@ -82,6 +82,8 @@ type CurrentTurn = {
   status: "inProgress" | "completed" | "failed" | "interrupted";
   primaryToken: DeliveryToken;
   acceptedMessages: SessionMessage[];
+  appendClosed: boolean;
+  inFlightAppend: Promise<void> | null;
   finalAgentText: string;
   completedItemIds: Set<string>;
   usageLast: TokenUsageBreakdown | null;
@@ -127,16 +129,14 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let currentTurnPromise: Promise<void> | null = null;
   let turnSettlementInProgress = false;
   let startupTurnPending = false;
-  let drainSteerInProgress = false;
-  let drainSteerScheduled = false;
-  let drainPostTurnInProgress = false;
-  let drainPostTurnScheduled = false;
+  let turnStartInProgress = false;
+  let pendingDrainInProgress = false;
+  let pendingDrainScheduled = false;
   let shutdownRequested = false;
   let pendingChatContextPrompt: string | null = null;
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
 
-  const steerQueue: QueueEntry[] = [];
-  const postTurnQueue: QueueEntry[] = [];
+  const pendingInputs: QueueEntry[] = [];
   const pendingNotificationsByTurn = new Map<string, CodexAppServerNotification[]>();
 
   const gitWriteTracker = createContextTreeGitWriteTracker({
@@ -607,6 +607,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     err: unknown,
   ): Promise<void> {
     shutdownRequested = true;
+    turnStartInProgress = false;
     retryQueuedMessages(reason);
     const client = appServer;
     const resumeThreadId = threadId ?? undefined;
@@ -618,6 +619,21 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         err instanceof Error ? err.message : String(err)
       }`,
     );
+    const shutdown = client?.shutdown();
+    sessionCtx.failSessionForRecovery?.(reason, resumeThreadId);
+    await shutdown;
+  }
+
+  async function closeAppServerAfterUncommittablePrefix(sessionCtx: SessionContext, reason: string): Promise<void> {
+    shutdownRequested = true;
+    turnStartInProgress = false;
+    retryQueuedMessages(reason);
+    const client = appServer;
+    const resumeThreadId = threadId ?? undefined;
+    appServer = null;
+    threadId = null;
+    pendingNotificationsByTurn.clear();
+    sessionCtx.log(`codex app-server session closed after uncommittable turn prefix (${reason})`);
     const shutdown = client?.shutdown();
     sessionCtx.failSessionForRecovery?.(reason, resumeThreadId);
     await shutdown;
@@ -638,10 +654,15 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       token.retry(messages, "codex_app_server_shutdown_before_turn_start");
       return;
     }
+    if (turnStartInProgress) {
+      token.retry(messages, "codex_app_server_turn_start_already_in_progress");
+      return;
+    }
 
     const providerInputText = consumePendingChatContext(inputText);
     gitWriteTracker.captureBaseline();
     let result: unknown;
+    turnStartInProgress = true;
     try {
       result = await client.request("turn/start", {
         threadId,
@@ -652,6 +673,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         effort: currentReasoningEffort,
       });
     } catch (err) {
+      turnStartInProgress = false;
       const reason = isCodexAppServerTransientError(err)
         ? "codex_app_server_turn_start_unknown_custody_transient"
         : "codex_app_server_turn_start_unknown_custody_failed";
@@ -663,6 +685,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     const turnRecord = asRecord(asRecord(result)?.turn);
     const turnId = turnRecord ? readString(turnRecord, "id") : null;
     if (!turnId) {
+      turnStartInProgress = false;
       const reason = "codex_app_server_turn_start_missing_id_unknown_custody";
       token.retry(messages, reason);
       await closeAppServerAfterUnknownCustody(sessionCtx, reason, "missing turn id in turn/start response");
@@ -670,6 +693,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     }
 
     const turn = await createCurrentTurn(turnId, messages, token, sessionCtx);
+    turnStartInProgress = false;
+    schedulePendingDrain();
     if (turnRecord && readString(turnRecord, "status") !== "inProgress") {
       settleTerminalNotification(turnRecord, sessionCtx, turn);
     }
@@ -680,7 +705,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       await settleTurn(turn, sessionCtx);
     } finally {
       turnSettlementInProgress = false;
-      schedulePostTurnDrain();
+      if (currentTurn === turn) currentTurn = null;
+      schedulePendingDrain();
     }
   }
 
@@ -706,6 +732,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       status: "inProgress",
       primaryToken: token,
       acceptedMessages: [...messages],
+      appendClosed: false,
+      inFlightAppend: null,
       finalAgentText: "",
       completedItemIds: new Set(),
       usageLast: null,
@@ -718,35 +746,37 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     token.processingStarted(messages);
     currentTurnPromise = terminalPromise.finally(() => {
       currentTurnPromise = null;
-      currentTurn = null;
     });
     sessionCtx.log(`codex app-server turn started turnId=${turnId} accepted=${messages.length}`);
-    scheduleSteerDrain();
+    schedulePendingDrain();
     return turn;
   }
 
   async function failCurrentTurnAfterUnknownSteer(
     turn: CurrentTurn,
-    entry: QueueEntry,
+    batch: readonly QueueEntry[],
     reason: string,
     err: unknown,
     sessionCtx: SessionContext,
+    additionalDetails = "turn/steer input custody is unknown; app-server session was closed",
   ): Promise<void> {
     turn.stopRequested = true;
     turn.status = "failed";
     turn.failure = {
       message: err instanceof Error ? err.message : String(err),
       codexErrorInfo: null,
-      additionalDetails: "turn/steer input custody is unknown; app-server session was closed",
+      additionalDetails,
     };
     turn.resolveTerminal();
-    turn.primaryToken.retry([...turn.acceptedMessages, entry.message], reason);
+    turn.primaryToken.retry([...turn.acceptedMessages, ...batch.map((entry) => entry.message)], reason);
     await closeAppServerAfterUnknownCustody(sessionCtx, reason, err);
   }
 
   async function settleTurn(turn: CurrentTurn, sessionCtx: SessionContext): Promise<void> {
+    if (turn.inFlightAppend) await turn.inFlightAppend;
+
     if (turn.stopRequested || shutdownRequested) {
-      schedulePostTurnDrain();
+      schedulePendingDrain();
       return;
     }
 
@@ -827,130 +857,190 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       await turn.primaryToken.complete(turn.acceptedMessages, settlement.action.outcome);
     } else {
       turn.primaryToken.retry(turn.acceptedMessages, settlement.action.reason);
+      await closeAppServerAfterUncommittablePrefix(sessionCtx, settlement.action.reason);
+      return;
     }
-    schedulePostTurnDrain();
+    schedulePendingDrain();
   }
 
-  function scheduleSteerDrain(): void {
-    if (drainSteerScheduled || drainSteerInProgress) return;
-    drainSteerScheduled = true;
+  function schedulePendingDrain(): void {
+    if (pendingDrainScheduled || pendingDrainInProgress) return;
+    if (pendingInputs.length === 0 || shutdownRequested) return;
+    if (!appServer || !threadId) return;
+    if (turnSettlementInProgress || turnStartInProgress) return;
+
+    const turn = currentTurn;
+    if (turn) {
+      if (turn.status !== "inProgress" || turn.appendClosed || turn.inFlightAppend) return;
+    } else if (startupTurnPending || currentTurnPromise) {
+      return;
+    }
+
+    pendingDrainScheduled = true;
     setImmediate(() => {
-      drainSteerScheduled = false;
-      void drainSteerQueue();
+      pendingDrainScheduled = false;
+      void drainPendingInputs();
     });
   }
 
-  async function drainSteerQueue(): Promise<void> {
-    if (drainSteerInProgress) return;
+  async function drainPendingInputs(): Promise<void> {
+    if (pendingDrainInProgress || pendingInputs.length === 0 || shutdownRequested) return;
+    if (!appServer || !threadId) return;
     const sessionCtx = ctx;
     if (!sessionCtx) return;
-    drainSteerInProgress = true;
+
+    pendingDrainInProgress = true;
     try {
-      while (steerQueue.length > 0 && !shutdownRequested) {
-        const entry = steerQueue.shift();
-        if (!entry) continue;
-        let text: string;
-        try {
-          text = await sessionCtx.formatInboundContent(entry.message);
-        } catch (err) {
-          sessionCtx.log(
-            `codex app-server inject formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-          entry.token.retry(entry.message, "codex_queued_turn_format_failed");
-          continue;
-        }
-
-        const turn = currentTurn;
-        const client = appServer;
-        if (!client || !threadId || (!turn && startupTurnPending)) {
-          steerQueue.unshift(entry);
-          return;
-        }
-        if (!turn || turn.status !== "inProgress") {
-          postTurnQueue.push(entry);
-          schedulePostTurnDrain();
-          continue;
-        }
-
-        try {
-          await client.request("turn/steer", {
-            threadId,
-            expectedTurnId: turn.turnId,
-            input: [textInput(text)],
-          });
-          entry.token.processingStarted(entry.message);
-          turn.acceptedMessages.push(entry.message);
-        } catch (err) {
-          if (shouldFallbackSteerToNextTurn(err)) {
-            postTurnQueue.push(entry);
-            schedulePostTurnDrain();
-          } else {
-            const reason = isCodexAppServerTransientError(err)
-              ? "codex_app_server_steer_unknown_custody_transient"
-              : "codex_app_server_steer_unknown_custody_failed";
-            await failCurrentTurnAfterUnknownSteer(turn, entry, reason, err, sessionCtx);
-            return;
-          }
-        }
-      }
-    } finally {
-      drainSteerInProgress = false;
-    }
-  }
-
-  function schedulePostTurnDrain(): void {
-    if (drainPostTurnScheduled || drainPostTurnInProgress) return;
-    if (currentTurnPromise || turnSettlementInProgress || postTurnQueue.length === 0 || shutdownRequested) return;
-    if (!appServer || !threadId || startupTurnPending) return;
-    drainPostTurnScheduled = true;
-    setImmediate(() => {
-      drainPostTurnScheduled = false;
-      void drainPostTurnQueue();
-    });
-  }
-
-  async function drainPostTurnQueue(): Promise<void> {
-    if (drainPostTurnInProgress || currentTurnPromise || shutdownRequested) return;
-    if (!appServer || !threadId || startupTurnPending) return;
-    const sessionCtx = ctx;
-    if (!sessionCtx) return;
-    const drained = postTurnQueue.splice(0);
-    if (drained.length === 0) return;
-    drainPostTurnInProgress = true;
-    try {
-      const texts: string[] = [];
-      let hadFormatFailure = false;
-      for (const entry of drained) {
-        try {
-          texts.push(await sessionCtx.formatInboundContent(entry.message));
-        } catch (err) {
-          hadFormatFailure = true;
-          sessionCtx.log(
-            `codex app-server post-turn formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-      if (hadFormatFailure || texts.length === 0) {
-        for (const entry of drained) entry.token.retry(entry.message, "codex_queued_turn_format_failed");
+      const turn = currentTurn;
+      if (turn && turn.status === "inProgress" && !turn.appendClosed) {
+        await appendPendingInputsToTurn(turn, sessionCtx);
         return;
       }
-      const token = drained[0]?.token;
-      if (!token) return;
-      await runTurnFromText(
-        texts.join("\n\n"),
-        drained.map((entry) => entry.message),
-        token,
-        sessionCtx,
-      );
+      if (!turn && !currentTurnPromise && !turnSettlementInProgress && !startupTurnPending && !turnStartInProgress) {
+        await startTurnFromPendingInputs(sessionCtx);
+      }
     } finally {
-      drainPostTurnInProgress = false;
-      schedulePostTurnDrain();
+      pendingDrainInProgress = false;
+      schedulePendingDrain();
     }
+  }
+
+  async function appendPendingInputsToTurn(turn: CurrentTurn, sessionCtx: SessionContext): Promise<void> {
+    if (turn.inFlightAppend || pendingInputs.length === 0) return;
+    const batch = pendingInputs.slice();
+    const appendPromise = appendBatchToTurn(turn, batch, sessionCtx);
+    const trackedAppend = appendPromise.finally(() => {
+      if (turn.inFlightAppend === trackedAppend) turn.inFlightAppend = null;
+    });
+    turn.inFlightAppend = trackedAppend;
+    await trackedAppend;
+  }
+
+  async function appendBatchToTurn(
+    turn: CurrentTurn,
+    batch: readonly QueueEntry[],
+    sessionCtx: SessionContext,
+  ): Promise<void> {
+    const client = appServer;
+    const activeThreadId = threadId;
+    if (!client || !activeThreadId || batch.length === 0 || shutdownRequested) return;
+
+    let text: string;
+    try {
+      text = await formatBatchInput(batch, sessionCtx, "inject");
+    } catch (err) {
+      removePendingPrefix(batch);
+      await failCurrentTurnAfterUnknownSteer(
+        turn,
+        batch,
+        "codex_queued_turn_format_failed",
+        err,
+        sessionCtx,
+        "pending input could not be formatted; app-server session was closed before later input could pass it",
+      );
+      return;
+    }
+
+    if (currentTurn !== turn || turn.stopRequested || shutdownRequested) return;
+    if (turn.status !== "inProgress" || turn.appendClosed) return;
+
+    try {
+      await client.request("turn/steer", {
+        threadId: activeThreadId,
+        expectedTurnId: turn.turnId,
+        input: [textInput(text)],
+      });
+      if (currentTurn !== turn || turn.stopRequested || shutdownRequested) {
+        const reason = "codex_app_server_steer_unknown_custody_after_session_change";
+        removePendingPrefix(batch);
+        await failCurrentTurnAfterUnknownSteer(turn, batch, reason, "turn changed after turn/steer", sessionCtx);
+        return;
+      }
+      removePendingPrefix(batch);
+      for (const entry of batch) entry.token.processingStarted(entry.message);
+      turn.acceptedMessages.push(...batch.map((entry) => entry.message));
+    } catch (err) {
+      if (shouldFallbackSteerToNextTurn(err)) {
+        turn.appendClosed = true;
+        schedulePendingDrain();
+      } else {
+        const reason = isCodexAppServerTransientError(err)
+          ? "codex_app_server_steer_unknown_custody_transient"
+          : "codex_app_server_steer_unknown_custody_failed";
+        removePendingPrefix(batch);
+        await failCurrentTurnAfterUnknownSteer(turn, batch, reason, err, sessionCtx);
+      }
+    }
+  }
+
+  async function startTurnFromPendingInputs(sessionCtx: SessionContext): Promise<void> {
+    if (pendingInputs.length === 0 || turnStartInProgress) return;
+    const batch = pendingInputs.slice();
+    let text: string;
+    try {
+      text = await formatBatchInput(batch, sessionCtx, "post-turn");
+    } catch (err) {
+      removePendingPrefix(batch);
+      retryBatch(batch, "codex_queued_turn_format_failed");
+      await closeAppServerAfterUnknownCustody(sessionCtx, "codex_queued_turn_format_failed", err);
+      return;
+    }
+    removePendingPrefix(batch);
+    const token = batch[0]?.token;
+    if (!token) return;
+    void runTurnFromText(
+      text,
+      batch.map((entry) => entry.message),
+      token,
+      sessionCtx,
+    ).catch((err) => {
+      sessionCtx.log(`codex app-server pending turn failed: ${err instanceof Error ? err.message : String(err)}`);
+      token.retry(
+        batch.map((entry) => entry.message),
+        "codex_pending_turn_failed",
+      );
+    });
+  }
+
+  async function formatBatchInput(
+    batch: readonly QueueEntry[],
+    sessionCtx: SessionContext,
+    label: "inject" | "post-turn",
+  ): Promise<string> {
+    const texts: string[] = [];
+    for (const entry of batch) {
+      try {
+        texts.push(await sessionCtx.formatInboundContent(entry.message));
+      } catch (err) {
+        sessionCtx.log(
+          `codex app-server ${label} formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        throw err;
+      }
+    }
+    if (texts.length === 0) throw new Error("empty pending input batch");
+    return texts.join("\n\n");
+  }
+
+  function removePendingPrefix(batch: readonly QueueEntry[]): void {
+    if (batch.length === 0) return;
+    if (batch.every((entry, index) => pendingInputs[index] === entry)) {
+      pendingInputs.splice(0, batch.length);
+      return;
+    }
+    for (const entry of batch) {
+      const index = pendingInputs.indexOf(entry);
+      if (index >= 0) pendingInputs.splice(index, 1);
+    }
+  }
+
+  function retryBatch(batch: readonly QueueEntry[], reason: string): void {
+    for (const entry of batch) entry.token.retry(entry.message, reason);
   }
 
   function retryQueuedMessages(reason: string): void {
-    const queued = [...steerQueue.splice(0), ...postTurnQueue.splice(0)];
-    for (const entry of queued) entry.token.retry(entry.message, reason);
+    const queued = pendingInputs.splice(0);
+    retryBatch(queued, reason);
   }
 
   async function interruptCurrentTurn(): Promise<void> {
@@ -997,8 +1087,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         return hasExplicitDeliveryToken ? { sessionId: id, route: { kind: "owned", mode: "processing" } } : id;
       } finally {
         startupTurnPending = false;
-        scheduleSteerDrain();
-        schedulePostTurnDrain();
+        schedulePendingDrain();
       }
     },
 
@@ -1030,21 +1119,21 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           : sessionId;
       } finally {
         startupTurnPending = false;
-        scheduleSteerDrain();
-        schedulePostTurnDrain();
+        schedulePendingDrain();
       }
     },
 
     inject(message, token) {
       if (!ctx || shutdownRequested) return { kind: "rejected", reason: "no_active_context", retryable: true };
       const deliveryToken = token ?? deliveryTokenFromSessionContext(ctx);
-      steerQueue.push({ message, token: deliveryToken });
-      scheduleSteerDrain();
+      pendingInputs.push({ message, token: deliveryToken });
+      schedulePendingDrain();
       return { kind: "owned", mode: "queued" };
     },
 
     async suspend() {
       startupTurnPending = false;
+      turnStartInProgress = false;
       retryQueuedMessages("codex_suspend_before_terminal");
       await interruptCurrentTurn();
       await appServer?.shutdown();
@@ -1061,6 +1150,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       currentTurn = null;
       currentTurnPromise = null;
       startupTurnPending = false;
+      turnStartInProgress = false;
       pendingNotificationsByTurn.clear();
       cwd = null;
       threadId = null;
