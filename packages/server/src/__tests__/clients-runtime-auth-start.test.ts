@@ -30,7 +30,7 @@ describe("POST /clients/:clientId/runtime-auth/start", () => {
       expect(body.started).toBe(true);
       expect(typeof body.ref).toBe("string");
       expect(ws.send).toHaveBeenCalledTimes(1);
-      const frame = JSON.parse(ws.send.mock.calls[0][0]);
+      const frame = JSON.parse(String(ws.send.mock.calls[0]?.[0]));
       expect(frame).toMatchObject({ type: "runtime-auth:start", provider: "codex", ref: body.ref });
     } finally {
       removeClientConnection(admin.clientId, ws as unknown as WebSocket);
@@ -50,7 +50,7 @@ describe("POST /clients/:clientId/runtime-auth/start", () => {
         payload: { provider: "claude-code", method: "browser" },
       });
       expect(res.statusCode).toBe(200);
-      const frame = JSON.parse(ws.send.mock.calls[0][0]);
+      const frame = JSON.parse(String(ws.send.mock.calls[0]?.[0]));
       expect(frame).toMatchObject({ type: "runtime-auth:start", provider: "claude-code", method: "browser" });
     } finally {
       removeClientConnection(admin.clientId, ws as unknown as WebSocket);
