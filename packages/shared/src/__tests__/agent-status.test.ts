@@ -90,6 +90,29 @@ describe("agentChatStatusSchema", () => {
     expect(parsed.main).toBe("working");
   });
 
+  it("accepts statusReason without feeding it into main derivation", () => {
+    const parsed = agentChatStatusSchema.parse({
+      agentId: "agent-1",
+      main: "ready",
+      reachable: true,
+      engagement: "active",
+      working: false,
+      errored: false,
+      activity: null,
+      statusReason: {
+        kind: "waiting",
+        severity: "warning",
+        provider: "codex",
+        scope: "session_resume",
+        category: "provider_capacity",
+        reasonCode: "provider_capacity",
+        label: "Waiting for provider capacity",
+      },
+    });
+    expect(parsed.main).toBe("ready");
+    expect(parsed.statusReason?.kind).toBe("waiting");
+  });
+
   it("rejects the runtime-A vocabulary (idle/blocked are not composite main values)", () => {
     // Guards against the two-vocabulary confusion this module exists to prevent.
     expect(agentMainStatusSchema.safeParse("idle").success).toBe(false);
@@ -132,6 +155,30 @@ describe("buildAgentChatStatus", () => {
       engagement: "active",
     });
     expect(status.main).toBe("offline");
+    expect(agentChatStatusSchema.safeParse(status).success).toBe(true);
+  });
+
+  it("preserves statusReason while deriving main from the axes", () => {
+    const status = buildAgentChatStatus({
+      agentId: "agent-1",
+      reachable: true,
+      errored: false,
+      working: false,
+      engagement: "active",
+      statusReason: {
+        kind: "retrying",
+        severity: "info",
+        provider: "claude-code",
+        scope: "provider_turn",
+        category: "transient_transport",
+        reasonCode: "provider_transient_transport",
+        label: "Retrying provider",
+        attempt: 1,
+        maxAttempts: 3,
+      },
+    });
+    expect(status.main).toBe("ready");
+    expect(status.statusReason?.kind).toBe("retrying");
     expect(agentChatStatusSchema.safeParse(status).success).toBe(true);
   });
 });

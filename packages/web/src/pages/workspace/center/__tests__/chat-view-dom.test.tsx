@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 
-import type { Agent, ChatDetail, ChatParticipantDetail } from "@first-tree/shared";
+import {
+  type Agent,
+  type ChatDetail,
+  type ChatParticipantDetail,
+  encodeProviderRetryEventMessage,
+} from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -783,6 +788,47 @@ describe("ChatView", () => {
     expect(onJoin).toHaveBeenCalledTimes(1);
     await act(async () => readOnly.root.unmount());
 
+    await act(async () => root.unmount());
+  });
+
+  it("renders provider retry events as non-fatal timeline rows when severity is not error", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+      queryClient.setQueryData(["session-events", "agent-1", "chat-1"], {
+        items: [
+          {
+            id: "retry-event",
+            agentId: "agent-1",
+            chatId: "chat-1",
+            seq: 1,
+            kind: "error",
+            payload: {
+              source: "runtime",
+              message: encodeProviderRetryEventMessage({
+                event: "provider_retry_scheduled",
+                provider: "codex",
+                scope: "provider_turn",
+                category: "transient_transport",
+                reasonCode: "provider_transient_transport",
+                attempt: 1,
+                maxAttempts: 2,
+                retryMode: "foreground",
+                delayMs: 500,
+                replaySafety: "pre_visible",
+                userSeverity: "info",
+                messagePreview: "fetch failed",
+              }),
+            },
+            createdAt: "2026-05-28T11:56:30.000Z",
+          },
+        ] satisfies SessionEventRow[],
+        nextCursor: null,
+      });
+    });
+
+    await waitForText(container, "Retrying provider");
+    expect(container.textContent).toContain("fetch failed");
+    expect(container.querySelector("[data-error-agent]")).toBeNull();
     await act(async () => root.unmount());
   });
 

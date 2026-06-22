@@ -1,4 +1,4 @@
-import type { SessionEvent, SessionState } from "@first-tree/shared";
+import { parseProviderRetryEventMessage, type SessionEvent, type SessionState } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgentHandler,
@@ -168,8 +168,14 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
     expect(errorEvent?.event.kind).toBe("error");
     if (errorEvent?.event.kind === "error") {
       expect(errorEvent.event.payload.source).toBe("runtime");
-      expect(errorEvent.event.payload.message).toContain("Session start failed");
-      expect(errorEvent.event.payload.message).toContain("git worktree add failed");
+      const retryPayload = parseProviderRetryEventMessage(errorEvent.event.payload.message);
+      expect(retryPayload).toMatchObject({
+        event: "provider_failure_terminal",
+        scope: "session_start",
+        category: "configuration",
+        reasonCode: "client_identity_mismatch",
+      });
+      expect(retryPayload?.messagePreview).toContain("git worktree add failed");
     }
 
     await sm.shutdown();
@@ -433,14 +439,22 @@ describe("SessionManager: session-resume failure signalling (F2, resume path)", 
     const chatAStates = stateChanges.filter((c) => c.chatId === "chat-A").map((c) => c.state);
     expect(chatAStates.at(-1)).toBe("errored");
 
-    const resumeErrEvent = events.find(
-      (e) =>
-        e.chatId === "chat-A" && e.event.kind === "error" && e.event.payload.message.includes("Session resume failed"),
-    );
+    const resumeErrEvent = events.find((e) => {
+      if (e.chatId !== "chat-A" || e.event.kind !== "error") return false;
+      const payload = parseProviderRetryEventMessage(e.event.payload.message);
+      return payload?.event === "provider_failure_terminal" && payload.scope === "session_resume";
+    });
     expect(resumeErrEvent).toBeDefined();
     if (resumeErrEvent?.event.kind === "error") {
       expect(resumeErrEvent.event.payload.source).toBe("runtime");
-      expect(resumeErrEvent.event.payload.message).toContain("git mirror fetch failed");
+      const retryPayload = parseProviderRetryEventMessage(resumeErrEvent.event.payload.message);
+      expect(retryPayload).toMatchObject({
+        event: "provider_failure_terminal",
+        scope: "session_resume",
+        category: "configuration",
+        reasonCode: "client_identity_mismatch",
+      });
+      expect(retryPayload?.messagePreview).toContain("git mirror fetch failed");
     }
 
     // sendMessage should NOT carry the error — that's the regression we're

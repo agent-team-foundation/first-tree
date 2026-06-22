@@ -48,7 +48,7 @@ const EXPANDED_MAX_HEIGHT = 180;
 /** A failure preempts the working-lead anti-flicker hold (see {@link pickLead}).
  *  "alert" is just "failed". */
 function isAlert(s: AgentChatStatus): boolean {
-  return s.main === "failed";
+  return s.main === "failed" || isFatalStatusReason(s);
 }
 
 function activityStartedMs(s: AgentChatStatus): number {
@@ -61,7 +61,22 @@ function activityStartedMs(s: AgentChatStatus): number {
  * Exported for tests.
  */
 export function selectAttention(statuses: AgentChatStatus[]): AgentChatStatus[] {
-  return statuses.filter((s) => ATTENTION.has(s.main)).sort((a, b) => compareMainStatus(a.main, b.main));
+  return statuses
+    .filter((s) => ATTENTION.has(s.main) || s.statusReason !== undefined)
+    .sort((a, b) => attentionRank(a) - attentionRank(b) || compareMainStatus(a.main, b.main));
+}
+
+function attentionRank(status: AgentChatStatus): number {
+  if (status.main === "failed" || isFatalStatusReason(status)) return 0;
+  if (status.main === "working") return 1;
+  if (status.statusReason?.kind === "terminal") return 2;
+  if (status.statusReason?.kind === "waiting") return 3;
+  if (status.statusReason?.kind === "retrying") return 4;
+  return 5;
+}
+
+function isFatalStatusReason(status: AgentChatStatus): boolean {
+  return status.statusReason?.kind === "terminal" && status.statusReason.severity === "error";
 }
 
 /**
@@ -216,6 +231,11 @@ function RailRow({
   mounted: ReadonlySet<string>;
 }) {
   const view = viewOf(status.main);
+  const reasonView = statusReasonView(status);
+  const colorVar = reasonView?.colorVar ?? view.colorVar;
+  const shape = reasonView?.shape ?? view.shape;
+  const pulse = reasonView?.pulse ?? view.pulse;
+  const label = reasonView?.label ?? view.label;
   const jumpable = isJumpable(mounted, status.main, status.agentId);
   return (
     <div className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-1_5)" }}>
@@ -225,9 +245,9 @@ function RailRow({
         anchored={jumpable}
         ariaLabel={`Jump to ${nameOf(status.agentId)} in the timeline`}
         className="flex-1 text-caption"
-        style={{ color: view.colorVar }}
+        style={{ color: colorVar }}
       >
-        <StatusGlyph colorVar={view.colorVar} shape={view.shape} pulse={view.pulse} size={8} ariaLabel={view.label} />
+        <StatusGlyph colorVar={colorVar} shape={shape} pulse={pulse} size={8} ariaLabel={label} />
         <span className="shrink-0">{nameOf(status.agentId)}</span>
         <Sep />
         <LeadDetail status={status} />
@@ -239,8 +259,33 @@ function RailRow({
 /** The detail after the name: a short reason (failed) or the live activity
  *  (working). */
 function LeadDetail({ status }: { status: AgentChatStatus }) {
+  if (status.statusReason) {
+    const detail = status.statusReason.detail ?? status.statusReason.reasonCode;
+    return (
+      <span className="truncate" title={detail}>
+        {status.statusReason.label}
+      </span>
+    );
+  }
   if (status.main === "failed") return <span className="truncate">failed</span>;
   return <WorkingDetail activity={status.activity} />;
+}
+
+export function statusReasonView(status: AgentChatStatus) {
+  const reason = status.statusReason;
+  if (!reason) return null;
+  if (reason.kind === "terminal") {
+    return {
+      colorVar: reason.severity === "error" ? "var(--state-error)" : "var(--state-blocked)",
+      shape: "dot" as const,
+      pulse: null,
+      label: reason.label,
+    };
+  }
+  if (reason.kind === "waiting") {
+    return { colorVar: "var(--state-blocked)", shape: "pause" as const, pulse: null, label: reason.label };
+  }
+  return { colorVar: "var(--state-idle)", shape: "dot" as const, pulse: "working" as const, label: reason.label };
 }
 
 /**

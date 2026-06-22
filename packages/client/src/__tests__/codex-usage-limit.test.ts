@@ -43,6 +43,7 @@ vi.mock("@openai/codex-sdk", () => {
       state.runInputs.push(input);
       const idx = state.runInputs.length - 1;
       const events = state.turns[idx] ?? [];
+      if (events[0] instanceof Error) throw events[0];
       return {
         events: (async function* () {
           yield { type: "thread.started", thread_id: "thread-usage-limit" };
@@ -118,11 +119,12 @@ function makeMessage(id: string, content: string): SessionMessage {
 }
 
 function makeContext(
-  onFinishTurn: (count?: number) => void,
+  onFinishTurn: (count?: number, outcome?: { status: "success" | "error"; reason?: string }) => void,
   opts: {
     sendMessage?: SendMessageMock;
     emitEvent?: SessionContext["emitEvent"];
     log?: SessionContext["log"];
+    retryTurn?: SessionContext["retryTurn"];
   } = {},
 ): SessionContext {
   const sendMessage =
@@ -149,8 +151,9 @@ function makeContext(
     // that — the usage-limit notice is delivered by an EXPLICIT sdk.sendMessage
     // in the handler, NOT through this path.)
     forwardResult: async () => {},
-    finishTurn: async (messages) => {
-      onFinishTurn(Array.isArray(messages) ? messages.length : 1);
+    retryTurn: opts.retryTurn ?? (() => {}),
+    finishTurn: async (messages, outcome) => {
+      onFinishTurn(Array.isArray(messages) ? messages.length : 1, outcome);
     },
   };
 }
@@ -291,6 +294,57 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
     ).toBe(false);
     expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "success")).toBe(true);
     expect(completedCounts).toEqual([1]);
+
+    await handler.shutdown();
+  });
+
+  it("settles provider-entered rate limits as consumed errors instead of retrying the inbox entry", async () => {
+    state.turns = [[{ type: "turn.failed", error: { message: "rate limit exceeded; retry later" } }]];
+
+    const completed: Array<{ count?: number; reason?: string }> = [];
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count, outcome) => completed.push({ count, reason: outcome?.reason }), {
+      emitEvent,
+      retryTurn,
+    });
+
+    await handler.start(makeMessage("m1", "hello"), ctx);
+
+    expect(retryTurn).not.toHaveBeenCalled();
+    expect(completed).toEqual([{ count: 1, reason: "capacity_wait_required" }]);
+    expect(
+      emitEvent.mock.calls.some(
+        ([event]) => event.kind === "error" && event.payload.message.includes("provider.retry:"),
+      ),
+    ).toBe(true);
+    expect(emitEvent.mock.calls.some(([event]) => event.kind === "turn_end" && event.payload.status === "error")).toBe(
+      true,
+    );
+
+    await handler.shutdown();
+  });
+
+  it("keeps pre-provider exhausted network failures retryable instead of consuming the inbox entry", async () => {
+    state.turns = [[new Error("fetch failed")], [new Error("fetch failed")], [new Error("fetch failed")]];
+
+    const completedCounts: Array<number | undefined> = [];
+    const retryReasons: string[] = [];
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => completedCounts.push(count), {
+      emitEvent,
+      retryTurn: (_messages, reason) => retryReasons.push(reason),
+    });
+
+    await handler.start(makeMessage("m-pre-provider", "hello"), ctx);
+
+    expect(state.runInputs).toHaveLength(3);
+    expect(completedCounts).toEqual([]);
+    expect(retryReasons).toEqual(["provider_transient_transport_exhausted"]);
+    const events = emitEvent.mock.calls.map(([event]) => event);
+    expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);
 
     await handler.shutdown();
   });

@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  encodeProviderRetryEventMessage,
+  parseProviderRetryEventMessage,
+  statusReasonFromProviderRetryEvent,
+} from "../schemas/provider-retry.js";
 import { sessionEventSchema } from "../schemas/session-event.js";
 
 describe("sessionEventSchema", () => {
@@ -94,6 +99,38 @@ describe("sessionEventSchema", () => {
         payload: { source: "sdk", message: "x".repeat(2001) },
       });
       expect(r.success).toBe(false);
+    });
+
+    it("round-trips provider retry payloads through the encoded bridge", () => {
+      const message = encodeProviderRetryEventMessage({
+        event: "provider_retry_scheduled",
+        provider: "codex",
+        scope: "provider_turn",
+        category: "transient_transport",
+        reasonCode: "provider_transient_transport",
+        attempt: 1,
+        maxAttempts: 3,
+        retryMode: "foreground",
+        delayMs: 1000,
+        replaySafety: "pre_visible",
+        userSeverity: "info",
+      });
+      const parsed = parseProviderRetryEventMessage(message);
+      expect(parsed).toMatchObject({
+        event: "provider_retry_scheduled",
+        provider: "codex",
+        scope: "provider_turn",
+        category: "transient_transport",
+      });
+      expect(parsed ? statusReasonFromProviderRetryEvent(parsed) : null).toMatchObject({
+        kind: "retrying",
+        label: "Retrying provider",
+      });
+    });
+
+    it("ignores malformed provider retry bridge messages", () => {
+      expect(parseProviderRetryEventMessage("provider.retry: nope")).toBeNull();
+      expect(parseProviderRetryEventMessage("plain sdk failure")).toBeNull();
     });
   });
 

@@ -1,6 +1,6 @@
 import { type AgentChatStatusInput, buildAgentChatStatus, MAIN_STATUS_PRIORITY } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { pickLead, selectAttention } from "../compose-status-bar.js";
+import { pickLead, selectAttention, statusReasonView } from "../compose-status-bar.js";
 
 const mk = (agentId: string, over: Partial<AgentChatStatusInput>) =>
   buildAgentChatStatus({
@@ -32,6 +32,66 @@ describe("selectAttention — the bar surfaces only actionable/active states, mo
     const out = selectAttention([mk("w", { working: true }), mk("f", { errored: true })]);
     const idx = out.map((s) => MAIN_STATUS_PRIORITY.indexOf(s.main));
     expect(idx).toEqual([...idx].sort((x, y) => x - y));
+  });
+
+  it("surfaces provider retry reasons without requiring the status to be working", () => {
+    const retrying = mk("retrying", {
+      statusReason: {
+        kind: "retrying",
+        severity: "info",
+        provider: "codex",
+        scope: "provider_turn",
+        category: "transient_transport",
+        reasonCode: "provider_transient_transport",
+        label: "Retrying provider",
+      },
+    });
+    const waiting = mk("waiting", {
+      statusReason: {
+        kind: "waiting",
+        severity: "warning",
+        provider: "codex",
+        scope: "session_resume",
+        category: "provider_capacity",
+        reasonCode: "provider_rate_limited",
+        label: "Waiting for provider capacity",
+      },
+    });
+    const terminal = mk("terminal", {
+      statusReason: {
+        kind: "terminal",
+        severity: "error",
+        provider: "codex",
+        scope: "provider_turn",
+        category: "unknown",
+        reasonCode: "unknown_exhausted",
+        label: "Provider retry exhausted",
+      },
+    });
+    const terminalWarning = mk("terminal-warning", {
+      statusReason: {
+        kind: "terminal",
+        severity: "warning",
+        provider: "codex",
+        scope: "provider_turn",
+        category: "provider_capacity",
+        reasonCode: "capacity_wait_required",
+        label: "Provider capacity limit",
+      },
+    });
+
+    expect(selectAttention([retrying, waiting, terminalWarning, terminal]).map((s) => s.agentId)).toEqual([
+      "terminal",
+      "terminal-warning",
+      "waiting",
+      "retrying",
+    ]);
+    expect(retrying.main).toBe("ready");
+    expect(waiting.main).toBe("ready");
+    expect(terminal.main).toBe("ready");
+    expect(terminalWarning.main).toBe("ready");
+    expect(statusReasonView(terminal)?.colorVar).toBe("var(--state-error)");
+    expect(statusReasonView(terminalWarning)?.colorVar).toBe("var(--state-blocked)");
   });
 });
 

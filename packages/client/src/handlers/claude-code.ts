@@ -11,10 +11,18 @@ import type {
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
-import type { AgentRuntimeConfigPayload, SessionEvent, SupportedImageMime, ToolFileRef } from "@first-tree/shared";
+import type {
+  AgentRuntimeConfigPayload,
+  RuntimeProvider,
+  SessionEvent,
+  SupportedImageMime,
+  ToolFileRef,
+} from "@first-tree/shared";
 import {
+  encodeProviderRetryEventMessage,
   isImageBatchRefContent,
   isImageRefContent,
+  runtimeProviderSchema,
   SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
 } from "@first-tree/shared";
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../runtime/agent-bootstrap.js";
@@ -28,7 +36,6 @@ import {
   type ContextTreeGitWriteTracker,
   createContextTreeGitWriteTracker,
 } from "../runtime/context-tree-git-status.js";
-import { classify } from "../runtime/error-taxonomy.js";
 import {
   type AgentHandler,
   type DeliveryToken,
@@ -39,6 +46,14 @@ import {
 } from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
+import {
+  buildProviderRetryEvent,
+  classifyProviderFailure,
+  decideProviderRetry,
+  maxProviderTurnRetryAttempts,
+  type ProviderFailureClassification,
+  type ProviderRetryDecision,
+} from "../runtime/provider-retry-policy.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
@@ -46,8 +61,6 @@ import { chunkAssistantText } from "./assistant-text.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
 import { consumedErrorOutcome } from "./turn-settlement.js";
-
-const MAX_RETRIES = 2;
 
 type PendingAckMessage = {
   message: SessionMessage;
@@ -709,6 +722,10 @@ export function isSameModelFamily(a: string, b: string): boolean {
  */
 export const createClaudeCodeHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
+  const runtimeProvider: RuntimeProvider = runtimeProviderSchema.safeParse(config.runtimeProvider).success
+    ? runtimeProviderSchema.parse(config.runtimeProvider)
+    : "claude-code";
+  const providerTurnMaxRetries = maxProviderTurnRetryAttempts();
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
   // Pre-resolved by registerBuiltinHandlers at process start. Undefined =
   // defer to the SDK's bundled native binary (see claude-executable.ts for
@@ -757,6 +774,31 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
    * tracked separately by `PendingAckMessage.providerEntered`.
    */
   const unclosedSdkInputs: PendingSdkInput[] = [];
+
+  function emitProviderTurnRetryEvent(
+    sessionCtx: SessionContext,
+    event: "provider_retry_scheduled" | "provider_retry_exhausted" | "provider_failure_terminal",
+    classification: ProviderFailureClassification,
+    decision: ProviderRetryDecision,
+    messagePreview: string,
+  ): void {
+    sessionCtx.emitEvent({
+      kind: "error",
+      payload: {
+        source: "runtime",
+        message: encodeProviderRetryEventMessage(
+          buildProviderRetryEvent({
+            event,
+            provider: runtimeProvider,
+            scope: "provider_turn",
+            classification,
+            decision,
+            messagePreview,
+          }),
+        ),
+      },
+    });
+  }
 
   async function toSDKUserMessage(
     message: SessionMessage,
@@ -1331,9 +1373,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                   // turn as a clean success.
                   const sniff = detectStreamApiError(resultText);
                   if (sniff) {
-                    const classification = classify(new Error(sniff.message), { source: "stream" });
+                    const classification = classifyProviderFailure(new Error(sniff.message), {
+                      provider: runtimeProvider,
+                      scope: "provider_turn",
+                      source: "stream",
+                    });
+                    const decision = decideProviderRetry({
+                      classification,
+                      scope: "provider_turn",
+                      attempt: retryCount + 1,
+                      replaySafety: "pre_visible",
+                    });
                     sessionCtx.log(
-                      `Stream API error detected (${classification.kind}/${classification.reasonCode}): ${sniff.message}`,
+                      `Stream API error detected (${classification.category}/${classification.reasonCode}): ${sniff.message}`,
                     );
                     // Design §6.1: emit `resilience.stream.api_error_detected`
                     // on BOTH transient and permanent paths via the closed-kind
@@ -1344,12 +1396,19 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                         source: "runtime",
                         message: `resilience.stream.api_error_detected: ${JSON.stringify({
                           reasonCode: classification.reasonCode,
-                          kind: classification.kind,
+                          category: classification.category,
                           messagePreview: sniff.message.slice(0, 200),
                         })}`,
                       },
                     });
-                    if (classification.kind === "transient" && retryCount < MAX_RETRIES) {
+                    if (decision.action === "retry") {
+                      emitProviderTurnRetryEvent(
+                        sessionCtx,
+                        "provider_retry_scheduled",
+                        classification,
+                        decision,
+                        sniff.message,
+                      );
                       // Re-throw to drive the outer catch's auto-resume path
                       // (retry counter + self-resume via handler.resume).
                       throw new StreamApiTransientError(sniff.message);
@@ -1357,6 +1416,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // Permanent (401/403) OR retries exhausted: surface the
                     // failure as an error event + error turn, and do NOT run
                     // the success/completion path for this turn.
+                    emitProviderTurnRetryEvent(
+                      sessionCtx,
+                      decision.terminalKind === "exhausted" ? "provider_retry_exhausted" : "provider_failure_terminal",
+                      classification,
+                      decision,
+                      sniff.message,
+                    );
                     sessionCtx.emitEvent({
                       kind: "error",
                       payload: {
@@ -1466,10 +1532,22 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             if (err.stack) sessionCtx.log(`  stack: ${err.stack.split("\n").slice(1, 4).join(" | ")}`);
           }
 
-          if (retryCount >= MAX_RETRIES || !claudeSessionId) {
+          const classification = classifyProviderFailure(err, {
+            provider: runtimeProvider,
+            scope: "provider_turn",
+            source: "stream",
+          });
+          const decision = decideProviderRetry({
+            classification,
+            scope: "provider_turn",
+            attempt: retryCount + 1,
+            replaySafety: "pre_visible",
+          });
+
+          if (decision.action !== "retry" || !claudeSessionId) {
             sessionCtx.log("Exhausted retries, session will be suspended");
             // Surface to the chat timeline so the user sees the failure and
-            // doesn't think the agent silently stalled. The MAX_RETRIES
+            // doesn't think the agent silently stalled. The retry-exhausted
             // case in particular drops the turn entirely — no result will
             // be forwarded — so without an explicit error event the chat
             // would just go quiet.
@@ -1479,8 +1557,25 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             try {
               const preview = errMsg.slice(0, 800);
               const reason = claudeSessionId
-                ? `Query failed after ${MAX_RETRIES} retries: ${preview}`
+                ? `Query failed after ${providerTurnMaxRetries} retries: ${preview}`
                 : `Query failed and no resume id available: ${preview}`;
+              emitProviderTurnRetryEvent(
+                sessionCtx,
+                decision.action === "stop" && decision.terminalKind === "exhausted"
+                  ? "provider_retry_exhausted"
+                  : "provider_failure_terminal",
+                classification,
+                decision.action === "stop"
+                  ? decision
+                  : {
+                      action: "stop",
+                      reasonCode: "claude_missing_resume_id",
+                      terminalKind: "unsafe_replay",
+                      replaySafety: "unknown",
+                      userSeverity: "error",
+                    },
+                preview,
+              );
               sessionCtx.emitEvent({ kind: "error", payload: { source: "runtime", message: reason } });
               sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
             } catch (emitErr) {
@@ -1520,8 +1615,9 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
           // after resume.
           toolCallProcessor.flush();
 
-          retryCount++;
-          sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${MAX_RETRIES})`);
+          retryCount = decision.attempt;
+          emitProviderTurnRetryEvent(sessionCtx, "provider_retry_scheduled", classification, decision, errMsg);
+          sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${providerTurnMaxRetries})`);
 
           try {
             respawnQuery(claudeSessionId, sessionCtx);

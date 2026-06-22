@@ -10,7 +10,9 @@ import {
   isImageBatchRefContent,
   isImageRefContent,
   type MentionParticipant,
+  parseProviderRetryEventMessage,
   type RequestResolution,
+  statusReasonFromProviderRetryEvent,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -230,25 +232,54 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
 
 function ErrorRow({ event, agentNameFn }: { event: SessionEventRow; agentNameFn?: (id: string) => string }) {
   const payload = asErrorPayload(event.payload);
+  const retryPayload = payload ? parseProviderRetryEventMessage(payload.message) : null;
+  const retryReason = retryPayload ? statusReasonFromProviderRetryEvent(retryPayload) : null;
   const ts = formatClockTime(event.createdAt);
   // Resolve the emitting agent so the header reads "error · <agent> · runtime · …".
   // Falls back gracefully if the lookup function isn't provided (legacy callers).
   const agentName = agentNameFn ? agentNameFn(event.agentId) : null;
+  const fatal = !retryPayload || retryPayload.userSeverity === "error";
+  const color =
+    retryPayload?.userSeverity === "info"
+      ? "var(--fg-4)"
+      : retryPayload?.userSeverity === "warning"
+        ? "var(--state-blocked)"
+        : "var(--state-error)";
+  const wash =
+    retryPayload?.userSeverity === "info"
+      ? "color-mix(in oklch, var(--fg-4) 6%, transparent)"
+      : retryPayload?.userSeverity === "warning"
+        ? "color-mix(in oklch, var(--state-blocked) 8%, transparent)"
+        : "color-mix(in oklch, var(--state-error) 6%, transparent)";
+  const label = retryPayload ? retryPayload.event.replace(/^provider_/, "").replace(/_/g, " ") : "error";
+  const message = retryPayload
+    ? [
+        retryReason?.label ?? label,
+        retryPayload.attempt
+          ? `attempt ${retryPayload.attempt}${retryPayload.maxAttempts ? `/${retryPayload.maxAttempts}` : ""}`
+          : null,
+        retryPayload.nextRetryAt ? `next ${formatClockTime(retryPayload.nextRetryAt)}` : null,
+        retryPayload.messagePreview,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : (payload?.message ?? "(invalid error payload)");
   return (
     <div
       // Anchor for the compose rail's jump-to-timeline (failed → this agent's error).
-      data-error-agent={event.agentId}
+      data-error-agent={fatal ? event.agentId : undefined}
       style={{
         padding: "var(--sp-1_5) var(--sp-2_5)",
-        borderLeft: "var(--hairline-bold) solid var(--state-error)",
+        borderLeft: `var(--hairline-bold) solid ${color}`,
         // Intentionally fainter than --state-error-soft (14%): this inline error row
         // already carries a solid --hairline-bold error borderLeft, so the wash stays at 6%.
-        background: "color-mix(in oklch, var(--state-error) 6%, transparent)",
+        background: wash,
         borderRadius: "0 var(--radius-input) var(--radius-input) 0",
       }}
     >
-      <div className="mono uppercase text-caption" style={{ color: "var(--state-error)" }}>
-        error{agentName ? ` · ${agentName}` : ""} · {payload?.source ?? "unknown"} · {ts}
+      <div className="mono uppercase text-caption" style={{ color }}>
+        {label}
+        {agentName ? ` · ${agentName}` : ""} · {payload?.source ?? "unknown"} · {ts}
       </div>
       <div
         className="text-label"
@@ -258,7 +289,7 @@ function ErrorRow({ event, agentNameFn }: { event: SessionEventRow; agentNameFn?
           whiteSpace: "pre-wrap",
         }}
       >
-        {payload?.message ?? "(invalid error payload)"}
+        {message}
       </div>
     </div>
   );

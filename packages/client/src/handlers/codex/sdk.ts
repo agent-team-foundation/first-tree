@@ -2,6 +2,8 @@ import { isAbsolute, resolve } from "node:path";
 import {
   type AgentRuntimeConfigPayload,
   deriveRepoLocalPath,
+  encodeProviderRetryEventMessage,
+  runtimeProviderSchema,
   type SessionEvent,
   type ToolFileRef,
 } from "@first-tree/shared";
@@ -45,6 +47,14 @@ import type {
   TurnConsumedErrorReason,
 } from "../../runtime/handler.js";
 import { deliveryTokenFromSessionContext } from "../../runtime/handler.js";
+import {
+  buildProviderRetryEvent,
+  classifyProviderFailure,
+  decideProviderRetry,
+  maxProviderTurnRetryAttempts,
+  type ProviderFailureClassification,
+  type ProviderRetryDecision,
+} from "../../runtime/provider-retry-policy.js";
 import { materializeResourceSkills } from "../../runtime/resource-skills.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
@@ -63,34 +73,6 @@ type CodexConfigObject = { [key: string]: CodexConfigValue };
 const RESULT_PREVIEW_LIMIT = 400;
 
 /**
- * Turn-level retry budget for transient codex failures.
- *
- * Total attempts = MAX_TURN_RETRIES + 1 (i.e. 1 initial + 2 retries = 3 tries).
- * Backoff is `RETRY_BASE_MS * RETRY_MULTIPLIER^attempt`, so the schedule is
- * 500 ms → 1500 ms before the third attempt — matches the order of magnitude
- * of the SDK fetch-retry layer (`sdk-retry.test.ts`) without falling into the
- * same band that PostgreSQL LISTEN/NOTIFY uses for inbox redelivery.
- *
- * **Layering with `FirstTreeHubSDK` fetch retry (PR #600 review nit #3):**
- * this counter sits on top of the SDK's internal `doFetch` retry (3 tries,
- * 0/500/1000 ms) AND on top of whatever `@openai/codex-sdk` does inside its
- * child-process call. Worst-case attempts per turn ≈ this layer (3) × inner
- * SDK fetch retry (3) = ~9 model invocations and a wall-clock ceiling near
- * `RETRY_BASE_MS * RETRY_MULTIPLIER^MAX_TURN_RETRIES + sum(inner backoffs)`.
- * Operators looking at long-tail latency / retry logs should know both
- * layers exist before tuning either.
- *
- * Retries fire ONLY when (a) the error message looks transient (see
- * `isTransientCodexErrorMessage`) AND (b) no user-visible event has been
- * emitted yet for this turn (see `isUserVisibleItem`). Once the agent has
- * said something or run a tool, re-running the turn would double-emit those
- * items in the chat timeline — not acceptable.
- */
-const MAX_TURN_RETRIES = 2;
-const RETRY_BASE_MS = 500;
-const RETRY_MULTIPLIER = 3;
-
-/**
  * Chat-visible notice posted when a turn is detected as a usage-limit empty
  * turn (issue #971 — codex account usage limit exhausted: the SDK reports
  * `turn.completed` with no reply and zero token consumption, i.e. the model
@@ -106,15 +88,6 @@ const USAGE_LIMIT_NOTICE =
   "Please resend it once the limit resets.";
 
 /**
- * HTTP status-code matchers anchored at word boundaries so unrelated
- * numeric IDs ("request id 5023", "job_id=5001", "context window 4012")
- * don't smuggle a false-positive match through `includes("500")` etc.
- * See PR #600 review nit #1.
- */
-const AUTH_HTTP_CODE_RE = /\b(401|403)\b/;
-const TRANSIENT_HTTP_CODE_RE = /\b(500|502|503|504)\b/;
-
-/**
  * Transient-error heuristic for `turn.failed` / SDK throws.
  *
  * The codex SDK surfaces `ThreadError = { message: string }` only — no
@@ -127,50 +100,16 @@ const TRANSIENT_HTTP_CODE_RE = /\b(500|502|503|504)\b/;
  * Exported for tests so the classifier table is locked behavioural API.
  */
 export function isTransientCodexErrorMessage(message: string): boolean {
-  const m = message.toLowerCase();
-  // Explicit non-retriables — short-circuit so a message like "401:
-  // unauthorized after fetch failed" doesn't get retried because of
-  // "fetch failed". HTTP codes use \b word boundaries so a `job_id=4012345`
-  // / `request id 4019` in the wrapped error doesn't get misclassified as
-  // an auth failure (which would silently swallow a real transient).
-  if (
-    AUTH_HTTP_CODE_RE.test(m) ||
-    m.includes("unauthorized") ||
-    m.includes("forbidden") ||
-    m.includes("invalid api key") ||
-    m.includes("invalid_api_key") ||
-    m.includes("authentication") ||
-    m.includes("context length") ||
-    m.includes("context_length") ||
-    m.includes("sandbox") ||
-    m.includes("approval")
-  ) {
-    return false;
-  }
-  return (
-    TRANSIENT_HTTP_CODE_RE.test(m) ||
-    m.includes("rate limit") ||
-    m.includes("rate_limit") ||
-    m.includes("overloaded") ||
-    m.includes("unavailable") ||
-    m.includes("timed out") ||
-    m.includes("timeout") ||
-    m.includes("fetch failed") ||
-    m.includes("network") ||
-    m.includes("econnreset") ||
-    m.includes("econnrefused") ||
-    m.includes("etimedout") ||
-    m.includes("epipe")
-  );
+  const classification = classifyProviderFailure(new Error(message), {
+    provider: "codex",
+    scope: "provider_turn",
+    source: "sdk",
+  });
+  return classification.category === "transient_transport" || classification.category === "provider_capacity";
 }
 
-type CodexFailureKind = "deterministic" | "transient" | "unknown";
-type CodexTerminalFailure = { kind: CodexFailureKind; message: string };
-
-function classifyCodexFailure(message: string): CodexFailureKind {
-  if (isCodexAuthError(message)) return "deterministic";
-  if (isTransientCodexErrorMessage(message)) return "transient";
-  return "unknown";
+function isCodexStreamDiagnosticMessage(message: string): boolean {
+  return /\breconnecting\b.*\b\d+\s*\/\s*\d+\b/i.test(message);
 }
 
 /**
@@ -448,6 +387,8 @@ export function toolFileRefsForTerminalCodexTool(input: {
  */
 export const createCodexSdkHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
+  const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider ?? "codex");
+  const providerTurnMaxRetries = maxProviderTurnRetryAttempts();
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
@@ -498,6 +439,31 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
    * so the LLM knows the absolute paths and upstream coordinates.
    */
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
+
+  function emitProviderTurnRetryEvent(
+    sessionCtx: SessionContext,
+    event: "provider_retry_scheduled" | "provider_retry_exhausted" | "provider_failure_terminal",
+    classification: ProviderFailureClassification,
+    decision: ProviderRetryDecision,
+    messagePreview: string,
+  ): void {
+    sessionCtx.emitEvent({
+      kind: "error",
+      payload: {
+        source: "runtime",
+        message: encodeProviderRetryEventMessage(
+          buildProviderRetryEvent({
+            event,
+            provider: runtimeProvider,
+            scope: "provider_turn",
+            classification,
+            decision,
+            messagePreview,
+          }),
+        ),
+      },
+    });
+  }
 
   function buildEnv(sessionCtx: SessionContext): Record<string, string> {
     // Footgun F1: when `CodexOptions.env` is provided the SDK does NOT
@@ -811,21 +777,77 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     let finalResponse = "";
     const providerCompletedBox: { value: boolean } = { value: false };
     const diagnosticErrorEmittedBox: { value: boolean } = { value: false };
-    const terminalFailureBox: { value: CodexTerminalFailure | null } = { value: null };
+    const consumedErrorReasonBox: { value: TurnConsumedErrorReason | null } = { value: null };
     let userVisibleEmitted = false;
     // Wrapper object so TS doesn't narrow `lastUsage` to `null` based on the
     // synchronous initializer (assignments live inside the IIFE below, which
     // TS' control-flow analysis can't reach — microsoft/TypeScript#9998).
     const usageBox: { value: Usage | null } = { value: null };
     const turnStartedAt = Date.now();
+    const retryAfterHelperStopBox: { value: string | null } = { value: null };
+    const decideCodexFailure = (
+      message: string,
+      attemptIndex: number,
+      providerEntered: boolean,
+    ): {
+      classification: ProviderFailureClassification;
+      decision: ProviderRetryDecision;
+    } => {
+      const classification = classifyProviderFailure(new Error(message), {
+        provider: runtimeProvider,
+        scope: "provider_turn",
+        source: "sdk",
+      });
+      const replaySafety = userVisibleEmitted
+        ? "user_visible"
+        : !providerEntered
+          ? "pre_provider"
+          : classification.category === "provider_capacity"
+            ? "provider_entered"
+            : "pre_visible";
+      return {
+        classification,
+        decision: decideProviderRetry({
+          classification,
+          scope: "provider_turn",
+          attempt: attemptIndex + 1,
+          replaySafety,
+        }),
+      };
+    };
+    const stopCodexFailure = (
+      message: string,
+      classification: ProviderFailureClassification,
+      decision: Extract<ProviderRetryDecision, { action: "stop" }>,
+    ): void => {
+      emitProviderTurnRetryEvent(
+        sessionCtx,
+        decision.terminalKind === "exhausted" ? "provider_retry_exhausted" : "provider_failure_terminal",
+        classification,
+        decision,
+        message,
+      );
+      if (decision.replaySafety === "pre_provider" && decision.terminalKind === "exhausted") {
+        retryAfterHelperStopBox.value = decision.reasonCode;
+      } else {
+        consumedErrorReasonBox.value =
+          decision.terminalKind === "capacity_wait_required"
+            ? "capacity_wait_required"
+            : decision.terminalKind === "exhausted"
+              ? "provider_retry_exhausted"
+              : decision.reasonCode;
+      }
+      const formatted = formatCodexSdkError(message);
+      sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: formatted } });
+    };
     const promise = (async () => {
-      for (let attempt = 0; attempt <= MAX_TURN_RETRIES; attempt++) {
+      for (let attempt = 0; ; attempt++) {
         // Reset per-attempt; finalResponse intentionally persists across
         // attempts only because we abort retries the moment any user-visible
         // item is emitted, so it is empty whenever a retry runs.
         providerCompletedBox.value = false;
         diagnosticErrorEmittedBox.value = false;
-        terminalFailureBox.value = null;
+        consumedErrorReasonBox.value = null;
         let retryRequested = false;
         let retryDelay = 0;
         let retryReason = "";
@@ -864,51 +886,63 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
                 usageBox.value = event.usage;
                 providerCompletedBox.value = true;
               } else if (event.type === "turn.failed") {
-                if (
-                  !userVisibleEmitted &&
-                  attempt < MAX_TURN_RETRIES &&
-                  isTransientCodexErrorMessage(event.error.message)
-                ) {
+                const { classification, decision } = decideCodexFailure(event.error.message, attempt, true);
+                if (decision.action === "retry") {
                   retryRequested = true;
-                  retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
-                  retryReason = `turn.failed (transient): ${event.error.message}`;
+                  retryDelay = decision.delayMs;
+                  retryReason = `turn.failed (${classification.category}): ${event.error.message}`;
+                  emitProviderTurnRetryEvent(
+                    sessionCtx,
+                    "provider_retry_scheduled",
+                    classification,
+                    decision,
+                    event.error.message,
+                  );
                   break;
                 }
-                terminalFailureBox.value = {
-                  kind: classifyCodexFailure(event.error.message),
-                  message: event.error.message,
-                };
-                const message = formatCodexSdkError(event.error.message);
-                sessionCtx.emitEvent({
-                  kind: "error",
-                  payload: { source: "sdk", message },
-                });
+                stopCodexFailure(event.error.message, classification, decision);
               } else if (event.type === "error") {
-                if (!userVisibleEmitted && attempt < MAX_TURN_RETRIES && isTransientCodexErrorMessage(event.message)) {
+                // Codex SDK bare `error` stream events are diagnostic: they
+                // can be followed by more items and a successful
+                // `turn.completed` (for example reconnect progress). Only
+                // treat explicit progress messages as diagnostic; ordinary
+                // stream failures still go through the shared retry policy.
+                if (isCodexStreamDiagnosticMessage(event.message)) {
+                  diagnosticErrorEmittedBox.value = true;
+                  sessionCtx.emitEvent({
+                    kind: "error",
+                    payload: { source: "sdk", message: event.message },
+                  });
+                  continue;
+                }
+                const { classification, decision } = decideCodexFailure(event.message, attempt, true);
+                if (decision.action === "retry") {
                   retryRequested = true;
-                  retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
-                  retryReason = `stream error (transient): ${event.message}`;
+                  retryDelay = decision.delayMs;
+                  retryReason = `stream error (${classification.category}): ${event.message}`;
+                  emitProviderTurnRetryEvent(
+                    sessionCtx,
+                    "provider_retry_scheduled",
+                    classification,
+                    decision,
+                    event.message,
+                  );
                   break;
                 }
-                diagnosticErrorEmittedBox.value = true;
-                const message = formatCodexSdkError(event.message);
-                sessionCtx.emitEvent({
-                  kind: "error",
-                  payload: { source: "sdk", message },
-                });
+                stopCodexFailure(event.message, classification, decision);
               }
             }
           } catch (err) {
             if (abort.signal.aborted) return;
             const msg = err instanceof Error ? err.message : String(err);
-            if (!userVisibleEmitted && attempt < MAX_TURN_RETRIES && isTransientCodexErrorMessage(msg)) {
+            const { classification, decision } = decideCodexFailure(msg, attempt, false);
+            if (decision.action === "retry") {
               retryRequested = true;
-              retryDelay = RETRY_BASE_MS * RETRY_MULTIPLIER ** attempt;
-              retryReason = `runStreamed threw (transient): ${msg}`;
+              retryDelay = decision.delayMs;
+              retryReason = `runStreamed threw (${classification.category}): ${msg}`;
+              emitProviderTurnRetryEvent(sessionCtx, "provider_retry_scheduled", classification, decision, msg);
             } else {
-              terminalFailureBox.value = { kind: classifyCodexFailure(msg), message: msg };
-              const message = formatCodexSdkError(msg);
-              sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message } });
+              stopCodexFailure(msg, classification, decision);
             }
           }
         } finally {
@@ -928,7 +962,9 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         // ChildProcess AbortError that crashes the client. The backoff still
         // listens to the parent signal below, so suspend/shutdown can cut it
         // short without starting another attempt.
-        sessionCtx.log(`codex turn retry ${attempt + 1}/${MAX_TURN_RETRIES + 1} after ${retryDelay}ms; ${retryReason}`);
+        sessionCtx.log(
+          `codex turn retry ${attempt + 1}/${providerTurnMaxRetries + 1} after ${retryDelay}ms; ${retryReason}`,
+        );
         try {
           // Sleep on PARENT signal: only suspend/shutdown should cut
           // short the backoff window. The per-attempt signal belongs to the
@@ -1003,14 +1039,14 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       perTurnUsage.cached_input_tokens === 0 &&
       perTurnUsage.output_tokens === 0 &&
       perTurnUsage.reasoning_output_tokens === 0;
-    const failure = terminalFailureBox.value;
+    const helperConsumedErrorReason = consumedErrorReasonBox.value;
     const providerCompleted = providerCompletedBox.value;
-    const completedSuccessfully = providerCompleted && failure === null;
+    const completedSuccessfully = providerCompleted && helperConsumedErrorReason === null;
     const usageLimitEmptyTurn = completedSuccessfully && accumulated.trim().length === 0 && zeroTokenDelta;
 
     let forwardFailed = false;
-    let retryReason: string | null = null;
-    let consumedErrorReason: TurnConsumedErrorReason | null = null;
+    let retryReason: string | null = retryAfterHelperStopBox.value;
+    let consumedErrorReason: TurnConsumedErrorReason | null = helperConsumedErrorReason;
     if (usageLimitEmptyTurn) {
       // Layer 2 (observability): emit an error event + warn-level log so the
       // daemon log and admin event stream record a real failure instead of a
@@ -1066,16 +1102,37 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
           payload: { source: "runtime", message: `forwardResult failed: ${msg}` },
         });
       }
-    } else if (failure !== null) {
-      retryReason = `codex_${failure.kind}_failure`;
-      sessionCtx.log(
-        `codex turn did not complete successfully; scheduling recovery (${failure.kind}): ${failure.message}`,
-      );
-    } else if (!providerCompleted) {
-      retryReason = diagnosticErrorEmittedBox.value
+    } else if (consumedErrorReason) {
+      sessionCtx.log(`codex turn stopped with consumed provider error: ${consumedErrorReason}`);
+    } else if (!retryReason && !providerCompleted) {
+      const streamEndReason = diagnosticErrorEmittedBox.value
         ? "codex_stream_ended_after_diagnostic_error"
         : "codex_stream_ended_without_completion";
-      sessionCtx.log(`codex stream ended without turn.completed; scheduling recovery (${retryReason})`);
+      if (userVisibleEmitted) {
+        const message = `${streamEndReason}: stream ended without turn.completed after user-visible output`;
+        const classification = classifyProviderFailure(new Error(message), {
+          provider: runtimeProvider,
+          scope: "provider_turn",
+          source: "sdk",
+        });
+        const decision = decideProviderRetry({
+          classification,
+          scope: "provider_turn",
+          attempt: 1,
+          replaySafety: "user_visible",
+        });
+        if (decision.action === "stop") {
+          emitProviderTurnRetryEvent(sessionCtx, "provider_failure_terminal", classification, decision, message);
+          consumedErrorReason = decision.reasonCode;
+          sessionCtx.log(`codex stream ended without turn.completed; stopping unsafe replay (${decision.reasonCode})`);
+        } else {
+          retryReason = streamEndReason;
+          sessionCtx.log(`codex stream ended without turn.completed; scheduling recovery (${retryReason})`);
+        }
+      } else {
+        retryReason = streamEndReason;
+        sessionCtx.log(`codex stream ended without turn.completed; scheduling recovery (${retryReason})`);
+      }
     }
 
     const settlement = resolveTurnSettlement({

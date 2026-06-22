@@ -1,4 +1,4 @@
-import type { SessionEvent, SessionState } from "@first-tree/shared";
+import { parseProviderRetryEventMessage, type SessionEvent, type SessionState } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentHandler, HandlerFactory, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { SessionManager } from "../runtime/session-manager.js";
@@ -151,16 +151,17 @@ describe("SessionManager: transient retry on session start", () => {
     expect(errorEvents.length).toBeGreaterThan(0);
     const scheduled = errorEvents.find(
       (e) =>
-        typeof e.payload.message === "string" && e.payload.message.startsWith("resilience.session.retry_scheduled:"),
+        typeof e.payload.message === "string" &&
+        parseProviderRetryEventMessage(e.payload.message)?.event === "provider_retry_scheduled",
     );
     expect(scheduled).toBeDefined();
-    // Encoded payload follows `<eventName>: <JSON>` — parse the JSON tail.
-    const jsonText = (scheduled?.payload.message as string).slice("resilience.session.retry_scheduled:".length).trim();
-    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
-    expect(parsed.reasonCode).toBe("claude_rate_limit");
-    expect(parsed.attempt).toBe(1);
-    expect(parsed.phase).toBe("start");
-    expect(parsed.rawError).toBe("upstream rate limited — please retry shortly");
+    const message = scheduled?.payload.message;
+    if (typeof message !== "string") throw new Error("Expected string provider retry payload");
+    const parsed = parseProviderRetryEventMessage(message);
+    expect(parsed?.reasonCode).toBe("provider_rate_limited");
+    expect(parsed?.attempt).toBe(1);
+    expect(parsed?.scope).toBe("session_start");
+    expect(parsed?.messagePreview).toBe("upstream rate limited — please retry shortly");
 
     await sm.shutdown();
   });
@@ -199,7 +200,7 @@ describe("SessionManager: transient retry on session start", () => {
       (e): e is Extract<SessionEvent, { kind: "error" }> =>
         e.kind === "error" &&
         typeof e.payload.message === "string" &&
-        e.payload.message.startsWith("resilience.session.retry_scheduled:"),
+        parseProviderRetryEventMessage(e.payload.message)?.event === "provider_retry_scheduled",
     );
     expect(scheduled).toBeDefined();
     const encoded = scheduled?.payload.message ?? "";

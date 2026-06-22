@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { type LiveActivity, liveActivitySchema } from "./me-chat.js";
+import { type AgentStatusReason, agentStatusReasonSchema } from "./provider-retry.js";
 
 /**
  * Composite "main" status — the single value a compact surface (a status
@@ -137,6 +138,12 @@ export const agentChatStatusSchema = z
      * a second round-trip. Not an input to `main` — purely descriptive.
      */
     activity: liveActivitySchema.nullable(),
+    /**
+     * Current retry/waiting/terminal reason projected from runtime-owned
+     * resilience events. Descriptive only: it is not an input to `main`, and
+     * consumers must not infer busy state from it.
+     */
+    statusReason: agentStatusReasonSchema.optional(),
   })
   .superRefine((val, ctx) => {
     const expected = deriveMainStatus(val);
@@ -152,7 +159,11 @@ export type AgentChatStatus = z.infer<typeof agentChatStatusSchema>;
 
 /** Inputs to `buildAgentChatStatus` — the axis fields plus the agent id and
  * the optional descriptive live activity. */
-export type AgentChatStatusInput = DeriveMainStatusInput & { agentId: string; activity?: LiveActivity | null };
+export type AgentChatStatusInput = DeriveMainStatusInput & {
+  agentId: string;
+  activity?: LiveActivity | null;
+  statusReason?: AgentStatusReason;
+};
 
 /**
  * Construct an `AgentChatStatus` with `main` always derived from the axes
@@ -168,5 +179,6 @@ export function buildAgentChatStatus(input: AgentChatStatusInput): AgentChatStat
     errored: input.errored,
     main: deriveMainStatus(input),
     activity: input.activity ?? null,
+    ...(input.statusReason ? { statusReason: input.statusReason } : {}),
   };
 }

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionEvent } from "@first-tree/shared";
+import { parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
@@ -171,7 +171,9 @@ describe("claude-code handler — retry-exhausted surfacing", () => {
     // in-process Deduplicator collapses every bind-reset replay.
     expect(finishTurnCalled).toHaveBeenCalledTimes(1);
 
-    const errors = emitted.filter((e) => e.kind === "error");
+    const errors = emitted.filter(
+      (e) => e.kind === "error" && parseProviderRetryEventMessage(e.payload.message) === null,
+    );
     expect(errors).toHaveLength(1);
     const err = errors[0];
     if (!err || err.kind !== "error") throw new Error("expected error event");
