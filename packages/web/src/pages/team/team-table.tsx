@@ -8,6 +8,7 @@ import { Popover } from "../../components/ui/popover.js";
 import { PresenceChip, runtimeStateToPresence } from "../../components/ui/presence-chip.js";
 import { type RowAction, RowActionsMenu } from "../../components/ui/row-actions-menu.js";
 import { SegmentedControl } from "../../components/ui/segmented-control.js";
+import { formatTokenUsageTitle, processedTokenCount } from "../../lib/token-usage.js";
 import { formatCompactCount, formatRelative } from "../../lib/utils.js";
 
 export type { RowAction };
@@ -557,8 +558,7 @@ function UsageCell({ usage, loading }: { usage: UsageByAgentRow | null; loading:
       </div>
     );
   }
-  const activeTokens = usage.inputTokens + usage.outputTokens;
-  const processedTokens = activeTokens + usage.cachedInputTokens;
+  const processedTokens = processedTokenCount(usage);
   // Show only the token magnitude — the turn count was dropped from the cell (it
   // crowded the column and truncated); usage events remain in the hover title
   // for the rare case someone wants the breakdown.
@@ -566,9 +566,9 @@ function UsageCell({ usage, loading }: { usage: UsageByAgentRow | null; loading:
     <div
       className="text-caption mono truncate"
       style={{ color: "var(--fg-2)", textAlign: "right" }}
-      title={`Active ${activeTokens.toLocaleString()} · Input ${usage.inputTokens.toLocaleString()} · Cached ${usage.cachedInputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · Processed ${processedTokens.toLocaleString()} · ${usage.turns} usage events`}
+      title={formatTokenUsageTitle(usage, { turns: usage.turns })}
     >
-      {formatCompactCount(activeTokens)}
+      {formatCompactCount(processedTokens)}
     </div>
   );
 }
@@ -1080,6 +1080,6 @@ function agentMetaLine(
 ): string {
   const owner = isSelf ? "You" : (managerLabel ?? "—");
   // Token magnitude only — usage events were dropped from the Usage display.
-  const usageStr = usage && usage.turns > 0 ? formatCompactCount(usage.inputTokens + usage.outputTokens) : "—";
+  const usageStr = usage && usage.turns > 0 ? formatCompactCount(processedTokenCount(usage)) : "—";
   return `${owner} · ${provider} · ${usageStr}`;
 }

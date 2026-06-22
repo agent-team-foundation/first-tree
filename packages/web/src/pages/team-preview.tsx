@@ -10,6 +10,7 @@ import { Popover } from "../components/ui/popover.js";
 import { PresenceChip } from "../components/ui/presence-chip.js";
 import { type RowAction, RowActionsMenu } from "../components/ui/row-actions-menu.js";
 import { SegmentedControl } from "../components/ui/segmented-control.js";
+import { formatTokenUsageTitle, processedTokenCount } from "../lib/token-usage.js";
 import { formatCompactCount } from "../lib/utils.js";
 import {
   ME_ID,
@@ -611,15 +612,14 @@ function UsageCell({ usage }: { usage: PreviewUsage | null }) {
       </span>
     );
   }
-  const activeTokens = usage.inputTokens + usage.outputTokens;
-  const processedTokens = activeTokens + usage.cachedInputTokens;
+  const processedTokens = processedTokenCount(usage);
   return (
     <span
       className="text-caption mono truncate"
       style={{ color: "var(--fg-2)" }}
-      title={`Active ${activeTokens.toLocaleString()} · Input ${usage.inputTokens.toLocaleString()} · Cached ${usage.cachedInputTokens.toLocaleString()} · Output ${usage.outputTokens.toLocaleString()} · Processed ${processedTokens.toLocaleString()} · ${usage.turns} usage events`}
+      title={formatTokenUsageTitle(usage, { turns: usage.turns })}
     >
-      {formatCompactCount(activeTokens)}
+      {formatCompactCount(processedTokens)}
       <span style={{ color: "var(--fg-4)" }}>{` · ${formatCompactCount(usage.turns)}t`}</span>
     </span>
   );
@@ -1094,7 +1094,7 @@ function agentMetaLine(agent: PreviewAgent, isMine: boolean, usage: PreviewUsage
   const owner = isMine ? "You" : (MEMBERS[agent.managerId]?.displayName ?? "—");
   const usageStr =
     usage && usage.turns > 0
-      ? `${formatCompactCount(usage.inputTokens + usage.outputTokens)} · ${formatCompactCount(usage.turns)}t`
+      ? `${formatCompactCount(processedTokenCount(usage))} · ${formatCompactCount(usage.turns)}t`
       : "—";
   return `${owner} · ${agent.runtimeProvider} · ${usageStr}`;
 }
