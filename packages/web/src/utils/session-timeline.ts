@@ -5,10 +5,14 @@ import type { SessionEventRow } from "../api/sessions.js";
  * render. Input order is irrelevant — the function looks at seq numbers and
  * the downstream renderer sorts by timestamp anyway.
  *
- * Rules (per the "only show result after turn ends" UX):
- *   - Completed turns collapse to their forwarded result message — so any
- *     transient event (assistant_text / thinking / tool_call) older than the
- *     most recent `turn_end` marker is dropped.
+ * Rules (per the "only show live progress, not a turn's full transcript" UX):
+ *   - A completed turn's transient events (assistant_text / thinking /
+ *     tool_call older than the most recent `turn_end` marker) are dropped from
+ *     the rendered timeline. This is a RENDER filter only — the events stay
+ *     persisted server-side (queryable for troubleshooting). There is no
+ *     auto-forwarded "result message" to collapse to: the per-turn final-text
+ *     mirror is retired, so a human-visible result is whatever deliberate
+ *     `chat send` / `chat ask` the agent issued (a normal chat message).
  *   - `turn_end` markers are themselves never rendered (they're boundaries).
  *   - `error` events stay visible across turns so failures are not hidden.
  *   - Events on the currently-active turn (seq > lastTurnEndSeq) are kept as

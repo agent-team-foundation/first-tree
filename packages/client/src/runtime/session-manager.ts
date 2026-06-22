@@ -381,10 +381,11 @@ export class SessionManager {
   private lastTreeResolveAttemptAt = 0;
   /**
    * Current trigger (messageId + senderId) per chat — the message that kicked
-   * off the current or most-recent turn. Read by `forwardResult` (via the
-   * resultSink closure) to attach `inReplyTo` and default mentions to the
-   * outbound reply. Maintained entirely by the runtime: handlers never touch
-   * this map, which keeps adding a new handler trivial.
+   * off the current or most-recent turn. The result-sink clears it at turn end.
+   * It no longer drives an outbound reply: the per-turn final-text mirror is
+   * retired, so `forwardResult` does not deliver anything (a human-visible reply
+   * is a deliberate `chat send` / `chat ask` the agent issues). Maintained
+   * entirely by the runtime: handlers never touch this map.
    */
   private readonly currentTrigger = new Map<string, Trigger>();
   private readonly registry: SessionRegistry | null;
@@ -434,8 +435,9 @@ export class SessionManager {
    * completed turn via `ctx.finishTurn(...)`.
    *
    * Delayed ACK semantics (post inflight-message-recovery): the entry stays
-   * `delivered` server-side until forwardResult succeeds (or the handler
-   * surfaces a permanent error). If this client crashes mid-turn, the next
+   * `delivered` server-side until the handler completes the turn via
+   * `ctx.finishTurn(...)` (or surfaces a permanent error). If this client
+   * crashes mid-turn, the next
    * `agent:bind` resets the entry back to `pending` so a fresh client
    * resumes the work — see docs/inflight-message-recovery-design.md.
    *

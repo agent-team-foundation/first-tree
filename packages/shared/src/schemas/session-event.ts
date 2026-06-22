@@ -46,11 +46,16 @@ export const errorEventPayload = z.object({
 export type ErrorEventPayload = z.infer<typeof errorEventPayload>;
 
 /**
- * A text block emitted by the model within an assistant message. These are
- * transient "in-progress" events used to render the assistant's reply body
- * while a turn is still running. The final turn result is forwarded as a
- * regular chat message (not an event); the frontend hides all assistant_text
- * events for turns that have completed (i.e. once `turn_end` has been emitted).
+ * A text block emitted by the model within an assistant message. A long block
+ * is split across consecutive events that each fit the cap below (see
+ * `client/handlers/assistant-text.ts#chunkAssistantText`), so the persisted
+ * stream is a complete, lossless record of what the agent said. The per-turn
+ * final-text chat mirror is RETIRED — the agent's output is NOT delivered as a
+ * chat message; these events are the durable troubleshooting record. A
+ * human-visible reply is a deliberate `chat send <human>` / `chat ask` the
+ * agent issues itself, not an automatic forward. The live chat timeline still
+ * renders these only for the in-progress turn (it folds completed turns), but
+ * the events remain persisted and queryable after `turn_end`.
  */
 export const assistantTextEventPayload = z.object({
   text: z.string().max(8000),
@@ -67,8 +72,11 @@ export type ThinkingEventPayload = z.infer<typeof thinkingEventPayload>;
 
 /**
  * Turn boundary marker. Emitted once per completed query turn, regardless of
- * success/failure, so the frontend can group events into turns and collapse
- * completed turns to show only the final result message.
+ * success/failure, so the frontend can group events into turns and fold a
+ * completed turn's transient events (assistant_text / thinking / tool_call)
+ * out of the live timeline. The folded events stay persisted (queryable for
+ * troubleshooting); the durable human-visible result, if any, is whatever
+ * deliberate `chat send` / `chat ask` the agent issued — not an auto-forward.
  */
 export const turnEndEventPayload = z.object({
   status: z.enum(["success", "error"]),

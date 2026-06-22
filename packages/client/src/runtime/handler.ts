@@ -131,15 +131,21 @@ export type SessionContext = HandlerContext & {
   /** Refresh `lastActivity` timestamp when the provider produces activity. */
   recordProviderActivity: () => void;
   /**
-   * Persist a structured session event (tool_call / error) to the server.
-   * Assistant text does NOT go through here — it flows via `forwardResult`.
+   * Persist a structured session event (tool_call / error / assistant_text /
+   * thinking / turn_end / usage) to the server. Assistant text DOES go through
+   * here: handlers emit it as `assistant_text` events (chunked when long — see
+   * `handlers/assistant-text.ts`), which are the durable, persisted record of
+   * what the agent said. There is no separate chat-delivery path for it.
    */
   emitEvent: (event: SessionEvent) => void;
 
   /**
-   * Forward the handler's final text to the chat. Runtime handles mention
-   * extraction, `inReplyTo`, participants lookup, and transport — handlers
-   * just pass the raw output text.
+   * Turn-completion hook the runtime calls at the end of a turn. It does NOT
+   * deliver the agent's final text to chat — the per-turn final-text mirror is
+   * retired (the output is captured via `assistant_text` events above, and a
+   * human-visible reply must be a deliberate `chat send <human>` / `chat ask`
+   * the agent issues itself). The hook only clears the turn trigger; see
+   * `runtime/result-sink.ts`.
    */
   forwardResult: (text: string) => Promise<void>;
 

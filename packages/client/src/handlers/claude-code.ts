@@ -1380,11 +1380,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                     // loop (rate limit / socket closed / etc.).
                     retryCount = 0;
                     try {
-                      // All enrichment (inReplyTo, mentions, participants
-                      // lookup, transport) lives in ctx.forwardResult so every
-                      // handler shares one code path — see runtime/result-sink.ts.
+                      // Turn-completion hook. The agent's text is already
+                      // captured as `assistant_text` events above; `forwardResult`
+                      // no longer delivers it to chat (the per-turn final-text
+                      // mirror is retired — see runtime/result-sink.ts), it just
+                      // closes out the turn trigger.
                       await sessionCtx.forwardResult(resultText);
-                      sessionCtx.log("Result forwarded to chat");
                       sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                       // Turn closed cleanly — drain in-flight inbox entries.
                       await ackTurnClose("success", "provider_clean_error", providerEnteredPrefix);

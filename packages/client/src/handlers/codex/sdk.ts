@@ -94,10 +94,12 @@ const RETRY_MULTIPLIER = 3;
  * Chat-visible notice posted when a turn is detected as a usage-limit empty
  * turn (issue #971 — codex account usage limit exhausted: the SDK reports
  * `turn.completed` with no reply and zero token consumption, i.e. the model
- * was never invoked). Delivered via the agent-final-text path, so it is
- * authored as the agent itself — hence first person. We deliberately do NOT
- * include an ETA: codex-sdk@0.134 does not expose `rate_limits.resets_at`,
- * so there is no reliable recovery time to quote.
+ * was never invoked). Delivered by an EXPLICIT `sdk.sendMessage(...,
+ * purpose: "agent-final-text")` (a deliberate recipientless runtime notice —
+ * NOT the retired final-text forward), authored as the agent itself, hence
+ * first person. We deliberately do NOT include an ETA: codex-sdk@0.134 does
+ * not expose `rate_limits.resets_at`, so there is no reliable recovery time to
+ * quote.
  */
 const USAGE_LIMIT_NOTICE =
   "⚠️ My runtime has reached its usage limit, so I couldn't process the message you just sent. " +
@@ -1051,6 +1053,9 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       }
     } else if (completedSuccessfully && accumulated.trim()) {
       try {
+        // Turn-completion hook. The agent text is already captured as
+        // `assistant_text` events; `forwardResult` no longer delivers it to
+        // chat (final-text mirror retired) — it just closes the turn trigger.
         await sessionCtx.forwardResult(accumulated);
       } catch (err) {
         forwardFailed = true;
