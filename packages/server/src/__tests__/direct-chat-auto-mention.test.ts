@@ -108,8 +108,9 @@ describe("1:1 chat wake-up + unread badge (explicit-mention contract)", () => {
   });
 
   it("agent → human DM ask (format=request) wakes the human and bumps the unread counter", async () => {
-    // `chat send` is agent-directed; an agent reaches a human only as an ask
-    // (`chat ask`, format=request), which still wakes the human and counts unread.
+    // An agent asks a human with `chat ask` (format=request), which wakes the
+    // human and counts unread. (A plain `chat send <human>` is also allowed as
+    // a free reply; this case exercises the ask path.)
     const app = getApp();
     const admin = await createTestAdmin(app);
     const peer = await createTestAgent(app, { name: `dma2h-${crypto.randomUUID().slice(0, 6)}` });

@@ -130,9 +130,10 @@ describe("messaging E2E — group-chat mention scenarios", () => {
       metadata: { mentions: [b1.uuid] },
     });
 
-    // b1's runtime processes, then auto-forwards mentioning the agent peer b3.
-    // (An agent reply does not address the human a1 directly — `chat send` is
-    // agent-directed; a1 stays in the loop as a full-mode participant.)
+    // b1's runtime processes, then sends to its agent peer b3. (This reply
+    // addresses agent b3, not the human a1; a1 stays in the loop as a full-mode
+    // participant. A plain `chat send <a1>` would also be allowed, but this
+    // case routes to b3.)
     await pollInbox(app.db, b1.inboxId, 10);
     await sendMessage(app.db, chat.id, b1.uuid, {
       source: "api",

@@ -225,8 +225,9 @@ describe("codex handler retry abort cleanup", () => {
     expect(String(state.runInputs[1])).toContain('"chatId": "chat-retry-abort"');
     expect(String(state.runInputs[1])).toContain("first");
     expect(state.signals).toHaveLength(2);
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1].content).toBe("retry succeeded");
+    // Final-text mirror retired: the result is captured as an assistant_text
+    // event, NOT delivered as a chat message.
+    expect(sendMessage).not.toHaveBeenCalled();
     expect(assistantTexts).toEqual(["retry succeeded"]);
     expect(events.some((event) => event.kind === "error")).toBe(false);
     expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "success")).toBe(true);

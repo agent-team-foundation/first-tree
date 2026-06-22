@@ -5,11 +5,12 @@ import type { SessionEvent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
- * The chat UI collapses completed turns to just their result message by
- * grouping session events at `turn_end` boundaries. This test locks down the
- * handler's contract: every query turn emits exactly one `turn_end`, with
- * status:"success" when the result was forwarded and status:"error" when
- * forwarding failed or the SDK returned a non-success subtype.
+ * The chat UI groups session events at `turn_end` boundaries. This test locks
+ * down the handler's contract: every query turn emits exactly one `turn_end`,
+ * with status:"success" on a clean turn and status:"error" when the SDK
+ * returned a non-success subtype. The final-text mirror is retired, so the
+ * turn produces no chat message — `forwardResult` is the turn-completion hook,
+ * awaited before `turn_end` only to keep the seq ordering.
  */
 
 const RESULT_TEXT = "final answer";
@@ -106,13 +107,11 @@ describe("claude-code handler — turn_end emission", () => {
     expect(emitted.filter((e) => e.kind === "turn_end")).toHaveLength(1);
   });
 
-  it("emits a turn_end success event AFTER the result forwards", async () => {
+  it("emits a turn_end success event AFTER the turn-completion hook resolves", async () => {
     const emitted: SessionEvent[] = [];
-    // Track call order so we can assert turn_end follows the sendMessage resolution.
+    // Track call order so we can assert turn_end follows the completion hook.
     const order: string[] = [];
-    const sendMessage = vi.fn().mockImplementation(async () => {
-      order.push("sendMessage");
-    });
+    const sendMessage = vi.fn();
 
     const cache = buildCache();
     await cache.refresh(AGENT_ID);
@@ -133,6 +132,11 @@ describe("claude-code handler — turn_end emission", () => {
       log: () => {},
       recordProviderActivity: () => {},
       ...mockCtxPlumbing({ sendMessage }, "chat-1"),
+      // Production-faithful: forwardResult delivers nothing; record the call so
+      // we can assert turn_end is emitted only after it resolves.
+      forwardResult: async () => {
+        order.push("forwardResult");
+      },
       emitEvent: (e) => {
         if (e.kind === "turn_end") order.push(`turn_end:${e.payload.status}`);
         emitted.push(e);
@@ -144,11 +148,12 @@ describe("claude-code handler — turn_end emission", () => {
       ctx,
     );
 
-    // Consumer loop is async; let microtasks (the resolved sendMessage promise) settle.
+    // Consumer loop is async; let microtasks settle.
     await handler.suspend();
     await new Promise((r) => setImmediate(r));
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
+    // The final-text mirror is retired: the turn produces no chat message.
+    expect(sendMessage).not.toHaveBeenCalled();
 
     const turnEndEvents = emitted.filter((e) => e.kind === "turn_end");
     expect(turnEndEvents).toHaveLength(1);
@@ -156,9 +161,9 @@ describe("claude-code handler — turn_end emission", () => {
     if (!ev || ev.kind !== "turn_end") throw new Error("expected turn_end event");
     expect(ev.payload.status).toBe("success");
 
-    // Crucial: turn_end must fire AFTER the result message is persisted — otherwise
-    // the frontend's "hide completed-turn events" filter could briefly show an
-    // empty timeline.
-    expect(order).toEqual(["sendMessage", "turn_end:success"]);
+    // Crucial: turn_end must fire AFTER the completion hook resolves, so the
+    // server can't assign turn N+1's events a smaller seq than turn N's
+    // turn_end (which the frontend's "latest turn_end" filter keys off).
+    expect(order).toEqual(["forwardResult", "turn_end:success"]);
   });
 });
