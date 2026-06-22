@@ -1,11 +1,17 @@
-import { updateClientCapabilitiesSchema } from "@first-tree/shared";
+import { randomUUID } from "node:crypto";
+import {
+  RUNTIME_AUTH_START_TYPE,
+  runtimeAuthStartRequestSchema,
+  updateClientCapabilitiesSchema,
+} from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
 import type { FastifyInstance } from "fastify";
+import { ServiceUnavailableError } from "../errors.js";
 import { stampClientResource } from "../observability/request-context.js";
 import { requireUser } from "../scope/require-user.js";
 import { expiryToSeconds } from "../services/auth.js";
 import * as clientService from "../services/client.js";
-import { forceDisconnectClient } from "../services/connection-manager.js";
+import { forceDisconnectClient, sendToClient } from "../services/connection-manager.js";
 import { serializeDate } from "../utils.js";
 import { clientCommandVersionHint } from "./client-command-version.js";
 
@@ -52,6 +58,33 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     const body = updateClientCapabilitiesSchema.parse(request.body);
     await clientService.updateClientCapabilities(app.db, clientId, body.capabilities);
     return reply.status(204).send();
+  });
+
+  // Start an in-product runtime-auth login on the connected daemon: the member
+  // clicked "Connect <provider>" in the console. We forward a reverse command
+  // over the client's live WS (same precedent as session suspend/resume); the
+  // daemon runs the provider's official login and reflects progress by
+  // re-PATCHing capabilities, which the web polls. Fire-and-forget: 503 only if
+  // the daemon is not connected to this server process.
+  app.post<{ Params: { clientId: string } }>("/:clientId/runtime-auth/start", async (request) => {
+    const { userId } = requireUser(request);
+    const { clientId } = request.params;
+    stampClientResource(request, clientId);
+    await clientService.assertClientOwner(app.db, clientId, { userId });
+    const body = runtimeAuthStartRequestSchema.parse(request.body);
+    const ref = randomUUID();
+    const delivered = sendToClient(clientId, {
+      type: RUNTIME_AUTH_START_TYPE,
+      provider: body.provider,
+      ...(body.method ? { method: body.method } : {}),
+      ref,
+    });
+    if (!delivered) {
+      throw new ServiceUnavailableError(
+        "Runtime-auth could not start because this computer is not connected. Make sure the daemon is running, then retry.",
+      );
+    }
+    return { ref, started: true as const };
   });
 
   app.post<{ Params: { clientId: string } }>("/:clientId/disconnect", async (request) => {

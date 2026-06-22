@@ -40,6 +40,24 @@ export const runtimeAuthStartCommandSchema = z.object({
 });
 export type RuntimeAuthStartCommand = z.infer<typeof runtimeAuthStartCommandSchema>;
 
+/**
+ * Web→server request body for `POST /clients/:clientId/runtime-auth/start`.
+ * The server stamps a `ref` and forwards a {@link runtimeAuthStartCommandSchema}
+ * frame to the daemon via `sendToClient`.
+ */
+export const runtimeAuthStartRequestSchema = z.object({
+  provider: runtimeProviderSchema,
+  method: runtimeAuthMethodSchema.optional(),
+});
+export type RuntimeAuthStartRequest = z.infer<typeof runtimeAuthStartRequestSchema>;
+
+/** Server response for a started runtime-auth login. */
+export const runtimeAuthStartResponseSchema = z.object({
+  ref: z.string(),
+  started: z.literal(true),
+});
+export type RuntimeAuthStartResponse = z.infer<typeof runtimeAuthStartResponseSchema>;
+
 /** Terminal reasons a runtime-auth login can fail, surfaced on the entry's `error`. */
 export const runtimeAuthFailureReasonSchema = z.enum([
   "spawn-error",

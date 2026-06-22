@@ -685,9 +685,13 @@ export {
   type RuntimeAuthFailureReason,
   type RuntimeAuthMethod,
   type RuntimeAuthStartCommand,
+  type RuntimeAuthStartRequest,
+  type RuntimeAuthStartResponse,
   runtimeAuthFailureReasonSchema,
   runtimeAuthMethodSchema,
   runtimeAuthStartCommandSchema,
+  runtimeAuthStartRequestSchema,
+  runtimeAuthStartResponseSchema,
 } from "./schemas/runtime-auth.js";
 export {
   DEFAULT_RUNTIME_PROVIDER,
