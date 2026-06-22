@@ -218,7 +218,7 @@ describe("TeamTable", () => {
     expect(container.textContent).toContain("Human teammates");
     expect(container.textContent).toContain("Nova");
     expect(container.textContent).toContain("Design");
-    expect(container.textContent).toContain("1.5K");
+    expect(container.textContent).toContain("3.5K");
     expect(container.textContent).toContain("Online");
     expect(container.textContent).toContain("Gandy");
     expect(container.textContent).toContain("Admin");

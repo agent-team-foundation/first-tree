@@ -4,6 +4,7 @@ import { type CSSProperties, type ReactElement, type ReactNode, useEffect, useMe
 import { getAgentUsageSummary, getAgentUsageTurns } from "../../api/usage.js";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
+import { activeTokenCount, processedTokenCount } from "../../lib/token-usage.js";
 import { formatCompactCount, formatRelative } from "../../lib/utils.js";
 import { useAgentDetailContext } from "./layout-context.js";
 
@@ -122,7 +123,7 @@ function ActivityBlock({
           </span>
         </>
       }
-      description="Daily active tokens. Darker cells mean more usage."
+      description="Daily processed tokens. Darker cells mean more usage."
       action={<DensityLegend />}
     >
       {isError ? (
@@ -153,7 +154,7 @@ function DensityLegend(): ReactElement {
 function ActivityBody({ summary }: { summary: UsageAgentSummary | undefined }): ReactElement {
   const days = useMemo(() => buildDays(summary?.daily), [summary?.daily]);
   const columns = useMemo(() => buildColumns(days), [days]);
-  const max = Math.max(1, ...days.map((d) => d.activeTokens));
+  const max = Math.max(1, ...days.map((d) => d.processedTokens));
   const stats = useMemo(() => computeStats(days), [days]);
   const [hover, setHover] = useState<{ d: DayBucket; x: number; y: number } | null>(null);
 
@@ -236,13 +237,13 @@ function Cell({
   if (!day) {
     return <span aria-hidden="true" className="usage-cal-cell usage-cal-cell-empty" />;
   }
-  const b = bucket(day.activeTokens, max);
+  const b = bucket(day.processedTokens, max);
   const colors = ["var(--lvl0)", "var(--lvl1)", "var(--lvl2)", "var(--lvl3)", "var(--lvl4)"];
   return (
     <span
       role="img"
       aria-label={`${WEEKDAYS[day.weekday]} ${MONTHS[day.month]} ${day.day}: ${
-        day.activeTokens > 0 ? `${formatCompactCount(day.activeTokens)} active tokens` : "no activity"
+        day.processedTokens > 0 ? `${formatCompactCount(day.processedTokens)} processed tokens` : "no activity"
       }`}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
@@ -254,16 +255,16 @@ function Cell({
 
 function CellTooltip({ day, anchorX, anchorY }: { day: DayBucket; anchorX: number; anchorY: number }): ReactElement {
   const label = `${WEEKDAYS[day.weekday]} · ${MONTHS[day.month]} ${day.day}, ${day.year}`;
-  const value = day.activeTokens > 0 ? `${formatCompactCount(day.activeTokens)} active tokens` : "No activity";
+  const value = day.processedTokens > 0 ? `${formatCompactCount(day.processedTokens)} processed tokens` : "No activity";
   return (
     <div role="tooltip" className="usage-cal-tooltip" style={{ left: anchorX, top: anchorY }}>
       <div className="text-eyebrow mono" style={{ color: "var(--fg-3)" }}>
         {label}
       </div>
       <div className="usage-cal-tooltip-value text-body mono font-semibold">{value}</div>
-      {day.cacheReadTokens > 0 ? (
+      {day.processedTokens > 0 ? (
         <div className="text-caption mono" style={{ color: "var(--fg-3)" }}>
-          {formatCompactCount(day.cacheReadTokens)} cache read · {formatCompactCount(day.processedTokens)} processed
+          {formatCompactCount(day.activeTokens)} active · {formatCompactCount(day.cacheReadTokens)} cached
         </div>
       ) : null}
     </div>
@@ -276,8 +277,8 @@ function ActivityStatsPanel({
   stats: { activeDays: number; avgPerDay: number; peak: DayBucket | null; streak: number };
 }): ReactElement {
   const peakLabel =
-    stats.peak && stats.peak.activeTokens > 0
-      ? `${MONTHS[stats.peak.month]} ${stats.peak.day} · ${formatCompactCount(stats.peak.activeTokens)}`
+    stats.peak && stats.peak.processedTokens > 0
+      ? `${MONTHS[stats.peak.month]} ${stats.peak.day} · ${formatCompactCount(stats.peak.processedTokens)}`
       : "—";
   return (
     <div className="usage-stats-panel">
@@ -292,7 +293,7 @@ function ActivityStatsPanel({
           </>
         }
       />
-      <StatTile label="Avg active / day" value={formatCompactCount(stats.avgPerDay)} mono />
+      <StatTile label="Avg processed / day" value={formatCompactCount(stats.avgPerDay)} mono />
       <StatTile label="Peak day" value={peakLabel} mono />
       <StatTile
         label="Current streak"
@@ -371,8 +372,8 @@ function TurnsTable({
   rows: UsageTurnRow[];
   onOpenChat: (chatId: string) => void;
 }): ReactElement {
-  const activeFor = (r: UsageTurnRow) => r.inputTokens + r.outputTokens;
-  const max = Math.max(1, ...rows.map(activeFor));
+  const processedFor = (r: UsageTurnRow) => processedTokenCount(r);
+  const max = Math.max(1, ...rows.map(processedFor));
   return (
     <div className="usage-turn-scroll">
       <table className="usage-turn-table w-full" style={{ borderCollapse: "collapse", marginTop: "var(--sp-1)" }}>
@@ -384,12 +385,12 @@ function TurnsTable({
             <th style={thStyle("right")}>Input</th>
             <th style={thStyle("right")}>Cached</th>
             <th style={thStyle("right")}>Output</th>
-            <th style={{ ...thStyle("left"), width: "var(--sp-20)" }}>Active</th>
+            <th style={{ ...thStyle("left"), width: "var(--sp-20)" }}>Processed</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => {
-            const active = activeFor(r);
+            const processed = processedFor(r);
             return (
               <tr key={`${r.chatId}:${r.seq}`} className="usage-turn-row">
                 <td className="text-body" style={{ color: "var(--fg-3)", whiteSpace: "nowrap" }}>
@@ -432,13 +433,13 @@ function TurnsTable({
                 </td>
                 <td>
                   <div className="usage-turn-total-cell">
-                    <span className="mono text-body">{formatCompactCount(active)}</span>
+                    <span className="mono text-body">{formatCompactCount(processed)}</span>
                     <div
                       role="img"
                       className="usage-turn-volbar"
-                      aria-label={`${formatCompactCount(active)} active tokens this usage event`}
+                      aria-label={`${formatCompactCount(processed)} processed tokens this usage event`}
                     >
-                      <span style={{ width: `${(active / max) * 100}%` }} />
+                      <span style={{ width: `${(processed / max) * 100}%` }} />
                     </div>
                   </div>
                 </td>
@@ -471,15 +472,15 @@ function buildDays(daily: UsageAgentSummary["daily"] | undefined): DayBucket[] {
   // `daily[].date` is YYYY-MM-DD in UTC (schema). Iterate, label, and join in
   // UTC consistently — local-tz Date methods would shift weekday/date by ±1
   // half the day in non-UTC zones and silently miss the join key.
-  const byDate = new Map<string, number>();
+  const byActive = new Map<string, number>();
   for (const d of daily ?? []) {
-    byDate.set(d.date, d.inputTokens + d.outputTokens);
+    byActive.set(d.date, activeTokenCount(d));
   }
   const byCacheRead = new Map<string, number>();
   const byProcessed = new Map<string, number>();
   for (const d of daily ?? []) {
     byCacheRead.set(d.date, d.cachedInputTokens);
-    byProcessed.set(d.date, d.inputTokens + d.cachedInputTokens + d.outputTokens);
+    byProcessed.set(d.date, processedTokenCount(d));
   }
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
@@ -487,7 +488,7 @@ function buildDays(daily: UsageAgentSummary["daily"] | undefined): DayBucket[] {
   for (let i = ACTIVITY_GRID_DAYS - 1; i >= 0; i--) {
     const dt = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
     const iso = dt.toISOString().slice(0, 10);
-    const activeTokens = byDate.get(iso) ?? 0;
+    const activeTokens = byActive.get(iso) ?? 0;
     const cacheReadTokens = byCacheRead.get(iso) ?? 0;
     days.push({
       date: iso,
@@ -538,15 +539,15 @@ function computeStats(days: DayBucket[]): {
   peak: DayBucket | null;
   streak: number;
 } {
-  const activeDays = days.filter((d) => d.activeTokens > 0).length;
-  const total = days.reduce((acc, d) => acc + d.activeTokens, 0);
+  const activeDays = days.filter((d) => d.processedTokens > 0).length;
+  const total = days.reduce((acc, d) => acc + d.processedTokens, 0);
   const avgPerDay = days.length > 0 ? Math.round(total / days.length) : 0;
   const seed = days[0];
-  const peak = seed ? days.reduce((a, d) => (d.activeTokens > a.activeTokens ? d : a), seed) : null;
+  const peak = seed ? days.reduce((a, d) => (d.processedTokens > a.processedTokens ? d : a), seed) : null;
   let streak = 0;
   for (let i = days.length - 1; i >= 0; i--) {
     const d = days[i];
-    if (d && d.activeTokens > 0) streak++;
+    if (d && d.processedTokens > 0) streak++;
     else break;
   }
   return { activeDays, avgPerDay, peak, streak };

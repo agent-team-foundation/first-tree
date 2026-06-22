@@ -113,6 +113,7 @@ import { viewOf } from "../../../lib/agent-status-view.js";
 import { attachmentIdFromHref, parseFailedDocHref, wrapFailedDocMentions } from "../../../lib/doc-preview-links.js";
 import { parkFailedDraftIfSwitched } from "../../../lib/draft-store.js";
 import { isNavigableWebHref } from "../../../lib/safe-href.js";
+import { formatTokenUsageTitle, processedTokenCount } from "../../../lib/token-usage.js";
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useChatDraftText } from "../../../lib/use-chat-draft-text.js";
@@ -1357,8 +1358,7 @@ export function ChatView({
     enabled: !!chatId,
     refetchInterval: 5_000,
   });
-  const chatActiveTokens = chatTokenUsage ? chatTokenUsage.inputTokens + chatTokenUsage.outputTokens : 0;
-  const chatProcessedTokens = chatTokenUsage ? chatActiveTokens + chatTokenUsage.cachedInputTokens : 0;
+  const chatProcessedTokens = chatTokenUsage ? processedTokenCount(chatTokenUsage) : 0;
 
   /** Org-wide agent list, consumed by `managedByMeMap` for picker
    *  grouping and by the identity-map hooks (`useAgentIdentityMap` etc.)
@@ -3366,9 +3366,9 @@ export function ChatView({
                       <div
                         className="mono text-caption"
                         style={{ color: "var(--fg-4)", padding: "0 var(--sp-0_5) var(--sp-1)" }}
-                        title={`active ${chatActiveTokens.toLocaleString()} · input ${chatTokenUsage.inputTokens.toLocaleString()} · cached ${chatTokenUsage.cachedInputTokens.toLocaleString()} · output ${chatTokenUsage.outputTokens.toLocaleString()} · processed ${chatProcessedTokens.toLocaleString()}`}
+                        title={formatTokenUsageTitle(chatTokenUsage)}
                       >
-                        {formatTokenCount(chatActiveTokens)} active tokens in this chat
+                        {formatTokenCount(chatProcessedTokens)} processed tokens in this chat
                       </div>
                     ) : null}
                     <ComposeStatusBar
