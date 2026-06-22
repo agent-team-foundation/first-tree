@@ -60,6 +60,11 @@ class FakeAppServerClient {
   steerError: Error | null = null;
   turnStartError: Error | null = null;
   threadStartDeferred: { promise: Promise<unknown>; resolve: (value: unknown) => void } | null = null;
+  steerDeferred: {
+    promise: Promise<unknown>;
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+  } | null = null;
   turnCounter = 0;
 
   async request(method: string, params?: unknown): Promise<unknown> {
@@ -84,6 +89,7 @@ class FakeAppServerClient {
       };
     }
     if (method === "turn/steer") {
+      if (this.steerDeferred) return this.steerDeferred.promise;
       if (this.steerError) throw this.steerError;
       return { turnId: "turn-1" };
     }
@@ -112,6 +118,26 @@ class FakeAppServerClient {
     this.threadStartDeferred = null;
   }
 
+  deferNextSteer(): void {
+    let resolve: (value: unknown) => void = () => {};
+    let reject: (error: Error) => void = () => {};
+    const promise = new Promise<unknown>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    this.steerDeferred = { promise, resolve, reject };
+  }
+
+  resolveSteer(value: unknown = { turnId: "turn-1" }): void {
+    this.steerDeferred?.resolve(value);
+    this.steerDeferred = null;
+  }
+
+  rejectSteer(error: Error): void {
+    this.steerDeferred?.reject(error);
+    this.steerDeferred = null;
+  }
+
   emit(method: string, params?: unknown): void {
     this.onNotification?.({ method, params });
   }
@@ -132,6 +158,10 @@ function makeMessage(id: string, content: string): SessionMessage {
     content,
     metadata: {},
   };
+}
+
+function messageIds(messages: SessionMessage | readonly SessionMessage[]): string[] {
+  return (Array.isArray(messages) ? messages : [messages]).map((message) => message.id);
 }
 
 function makeContext(
@@ -280,6 +310,14 @@ function failTurn(
   });
 }
 
+function activeTurnNotSteerableError(): CodexAppServerRpcError {
+  return new CodexAppServerRpcError("turn/steer", {
+    code: -32602,
+    message: "activeTurnNotSteerable",
+    data: { activeTurnNotSteerable: { turnKind: "compact" } },
+  });
+}
+
 beforeEach(() => {
   workspaceRoot = mkdtempSync(join(tmpdir(), "ft-codex-app-server-"));
 });
@@ -357,11 +395,7 @@ describe("codex app-server handler", () => {
 
   it("falls stale/non-steerable injects back to the next turn", async () => {
     const fake = new FakeAppServerClient();
-    fake.steerError = new CodexAppServerRpcError("turn/steer", {
-      code: -32602,
-      message: "activeTurnNotSteerable",
-      data: { activeTurnNotSteerable: { turnKind: "compact" } },
-    });
+    fake.steerError = activeTurnNotSteerableError();
     const finished: SessionMessage[][] = [];
     const handler = makeHandler(fake);
     const ctx = makeContext({
@@ -382,6 +416,149 @@ describe("codex app-server handler", () => {
     await waitFor(() => finished.length === 2);
 
     expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1"], ["m2"]]);
+
+    await handler.shutdown();
+  });
+
+  it("keeps newer injects behind an older no-custody steer until the next turn", async () => {
+    const fake = new FakeAppServerClient();
+    fake.deferNextSteer();
+    const finished: SessionMessage[][] = [];
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      finishTurn: async (messages) => {
+        finished.push(Array.isArray(messages) ? [...messages] : [messages]);
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    handler.inject(makeMessage("m2", "second"));
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
+
+    handler.inject(makeMessage("m3", "third"));
+    await flushAsync();
+
+    expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
+
+    fake.rejectSteer(activeTurnNotSteerableError());
+    await flushAsync();
+
+    expect(fake.requests.filter((request) => request.method === "turn/steer")).toHaveLength(1);
+
+    completeTurn(fake, "turn-1", "first done");
+    await startPromise;
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === 2);
+
+    const secondStart = fake.requests.filter((request) => request.method === "turn/start")[1];
+    expect(JSON.stringify(secondStart?.params)).toContain("second");
+    expect(JSON.stringify(secondStart?.params)).toContain("third");
+
+    completeTurn(fake, "turn-2", "second batch done");
+    await waitFor(() => finished.length === 2);
+
+    expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1"], ["m2", "m3"]]);
+
+    await handler.shutdown();
+  });
+
+  it("waits for an in-flight steer success before settling a completed turn", async () => {
+    const fake = new FakeAppServerClient();
+    fake.deferNextSteer();
+    const finished: SessionMessage[][] = [];
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      finishTurn: async (messages) => {
+        finished.push(Array.isArray(messages) ? [...messages] : [messages]);
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    handler.inject(makeMessage("m2", "second"));
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
+
+    completeTurn(fake, "turn-1", "final answer");
+    await flushAsync();
+
+    expect(finished).toHaveLength(0);
+
+    fake.resolveSteer();
+    await startPromise;
+
+    expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1", "m2"]]);
+
+    await handler.shutdown();
+  });
+
+  it("keeps in-flight steer no-custody input pending when completion wins the race", async () => {
+    const fake = new FakeAppServerClient();
+    fake.deferNextSteer();
+    const finished: SessionMessage[][] = [];
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      finishTurn: async (messages) => {
+        finished.push(Array.isArray(messages) ? [...messages] : [messages]);
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    handler.inject(makeMessage("m2", "second"));
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
+
+    completeTurn(fake, "turn-1", "first done");
+    await flushAsync();
+
+    expect(finished).toHaveLength(0);
+
+    fake.rejectSteer(activeTurnNotSteerableError());
+    await startPromise;
+
+    expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1"]]);
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === 2);
+
+    completeTurn(fake, "turn-2", "second done");
+    await waitFor(() => finished.length === 2);
+
+    expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1"], ["m2"]]);
+
+    await handler.shutdown();
+  });
+
+  it("fences pending tail when the accepted turn prefix must retry", async () => {
+    const fake = new FakeAppServerClient();
+    fake.steerError = activeTurnNotSteerableError();
+    const retried: Array<{ ids: string[]; reason: string }> = [];
+    const failSessionForRecovery = vi.fn<(reason: string, sessionId?: string) => void>();
+    const finishTurn = vi.fn<SessionContext["finishTurn"]>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      finishTurn,
+      retryTurn: (messages, reason) => {
+        retried.push({ ids: messageIds(messages), reason });
+      },
+      failSessionForRecovery,
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    handler.inject(makeMessage("m2", "second"));
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/steer"));
+
+    failTurn(fake, "turn-1", { message: "provider failed" });
+    await startPromise;
+    await flushAsync();
+
+    expect(fake.requests.filter((request) => request.method === "turn/start")).toHaveLength(1);
+    expect(finishTurn).not.toHaveBeenCalled();
+    expect(retried).toEqual([
+      { ids: ["m1"], reason: "codex_unknown_failure" },
+      { ids: ["m2"], reason: "codex_unknown_failure" },
+    ]);
+    expect(failSessionForRecovery).toHaveBeenCalledWith("codex_unknown_failure", "thread-app-server");
+    expect(fake.isClosed).toBe(true);
 
     await handler.shutdown();
   });
