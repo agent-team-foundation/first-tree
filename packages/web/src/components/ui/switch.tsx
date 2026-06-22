@@ -40,7 +40,10 @@ export function Switch(props: {
         "inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border border-transparent p-0 transition-colors",
         "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
         "disabled:cursor-not-allowed disabled:opacity-50",
-        checked ? "bg-primary" : "bg-secondary",
+        // Off track: in dark mode bg-secondary sits too close to the page bg and
+        // reads as a blurry block, so outline it with a hairline border to keep it
+        // legible as a control. Light mode reads fine without it (on stays filled).
+        checked ? "bg-primary" : "bg-secondary dark:border-[var(--border-strong)]",
         className,
       )}
     >
