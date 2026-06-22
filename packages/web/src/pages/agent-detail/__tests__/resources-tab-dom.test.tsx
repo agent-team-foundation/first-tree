@@ -406,6 +406,129 @@ describe("ResourcesTab", () => {
     expect(document.body.textContent).toContain("Manage in Settings → Resources");
   });
 
+  it("disables a recommended skill via its Switch (off = disable binding)", async () => {
+    const { ResourceTypeSection } = await import("../capability-section.js");
+    const onMutate = vi.fn();
+    const data = agentResources({
+      effective: {
+        version: 3,
+        repos: [],
+        prompts: [],
+        mcp: [],
+        unavailable: [],
+        skills: [
+          {
+            id: "resource:skill-1",
+            bindingId: null,
+            resourceId: "skill-1",
+            replacesResourceId: null,
+            type: "skill",
+            name: "Team skill",
+            scope: "team",
+            source: "team_recommended",
+            mode: "enabled",
+            defaultEnabled: "recommended",
+            payload: { name: "Team skill", description: "Does things.", body: "Do it.", metadata: {} },
+            repo: null,
+            promptBody: null,
+            unavailableReason: null,
+            order: 0,
+          },
+        ],
+      },
+    });
+
+    const container = await renderRouted(
+      <ResourceTypeSection type="skill" data={data} canEdit pending={false} onMutate={onMutate} />,
+    );
+    const sw = container.querySelector('button[role="switch"]');
+    expect(sw?.getAttribute("aria-checked")).toBe("true");
+    await click(sw);
+    expect(onMutate).toHaveBeenCalledWith([{ type: "skill", mode: "disable", resourceId: "skill-1", order: 1 }]);
+  });
+
+  it("removes an opted-in skill via the ⋯ overflow menu (no Switch)", async () => {
+    const { ResourceTypeSection } = await import("../capability-section.js");
+    const onMutate = vi.fn();
+    const data = agentResources({
+      bindings: [{ id: "skill-binding-1", type: "skill", mode: "include", resourceId: "skill-1", order: 1 }],
+      effective: {
+        version: 3,
+        repos: [],
+        prompts: [],
+        mcp: [],
+        unavailable: [],
+        skills: [
+          {
+            id: "binding:skill-binding-1:enabled",
+            bindingId: "skill-binding-1",
+            resourceId: "skill-1",
+            replacesResourceId: null,
+            type: "skill",
+            name: "Opt-in skill",
+            scope: "team",
+            source: "team_available",
+            mode: "enabled",
+            defaultEnabled: "available",
+            payload: { name: "Opt-in skill", description: "Optional.", body: "Maybe.", metadata: {} },
+            repo: null,
+            promptBody: null,
+            unavailableReason: null,
+            order: 1,
+          },
+        ],
+      },
+    });
+
+    const container = await renderRouted(
+      <ResourceTypeSection type="skill" data={data} canEdit pending={false} onMutate={onMutate} />,
+    );
+    // Opt-in resources are present-or-removed — no Switch, just ⋯ Remove.
+    expect(container.querySelector('button[role="switch"]')).toBeNull();
+    await click(container.querySelector('button[aria-label="More actions for Opt-in skill"]'));
+    await click(buttonByText(container, "Remove Opt-in skill"));
+    expect(onMutate).toHaveBeenCalledWith([]);
+  });
+
+  it("shows a disabled Switch and a Can't load badge for an unavailable recommended skill", async () => {
+    const { ResourceTypeSection } = await import("../capability-section.js");
+    const data = agentResources({
+      effective: {
+        version: 3,
+        repos: [],
+        prompts: [],
+        mcp: [],
+        unavailable: [],
+        skills: [
+          {
+            id: "resource:skill-x",
+            bindingId: null,
+            resourceId: "skill-x",
+            replacesResourceId: null,
+            type: "skill",
+            name: "Broken skill",
+            scope: "team",
+            source: "team_recommended",
+            mode: "unavailable",
+            defaultEnabled: "recommended",
+            payload: null,
+            repo: null,
+            promptBody: null,
+            unavailableReason: "Skill failed to load.",
+            order: 0,
+          },
+        ],
+      },
+    });
+
+    const container = await renderRouted(
+      <ResourceTypeSection type="skill" data={data} canEdit pending={false} onMutate={vi.fn()} />,
+    );
+    expect(container.textContent).toContain("Can't load");
+    const sw = container.querySelector<HTMLButtonElement>('button[role="switch"]');
+    expect(sw?.disabled).toBe(true);
+  });
+
   it("renders flat-section row primitives", async () => {
     const row = await renderElement(
       <div>

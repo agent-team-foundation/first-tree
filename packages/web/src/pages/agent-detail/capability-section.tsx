@@ -22,7 +22,7 @@ import { Label } from "../../components/ui/label.js";
 import { Popover } from "../../components/ui/popover.js";
 import { Section } from "../../components/ui/section.js";
 import { typeLabelSingular } from "../settings/resource-editors.js";
-import { ResourceRowView, RowAction } from "./resource-row.js";
+import { ResourceRowView, type RowMenu, type RowStatusMarker, type RowToggle } from "./resource-row.js";
 import { sourceLabel } from "./resource-source.js";
 import { titleWithSemantics, useJustSaved } from "./save-semantics.js";
 
@@ -323,46 +323,64 @@ function EffectiveRow(props: {
   onRemoveBinding: (bindingId: string) => void;
   onDisable: (resourceId: string) => void;
 }) {
+  const row = props.row;
   // Unavailable rows surface the failure reason as the subtitle; everything
   // else shows a type-appropriate detail. The subtitle never falls back to the
   // raw `source` enum (that used to duplicate the source under skills/MCP rows).
-  const subtitle = props.row.mode === "unavailable" ? props.row.unavailableReason : rowSubtitle(props.row);
-  const status = statusMarker(props.row.mode);
-  const source = sourceLabel(props.row.source);
-  const canRemove = props.row.bindingId && props.bindings.some((b) => b.id === props.row.bindingId);
-  const canDisable = props.row.resourceId && props.row.source === "team_recommended" && props.row.mode === "enabled";
+  const subtitle = row.mode === "unavailable" ? row.unavailableReason : rowSubtitle(row);
+  const status = statusMarker(row.mode);
+  const source = sourceLabel(row.source);
+  const isTeamRecommended = row.source === "team_recommended";
+  const canRemove = !!row.bindingId && props.bindings.some((b) => b.id === row.bindingId);
   // Mono only for technical detail (repo URL, MCP command). A skill description
   // and an "unavailable" failure reason are prose and stay in the sans body.
-  const monoPeek = props.row.mode !== "unavailable" && (props.row.type === "repo" || props.row.type === "mcp");
-  const actions =
-    props.canEdit && (canDisable || canRemove) ? (
-      <>
-        {canDisable ? (
-          <RowAction
-            label="Disable"
-            disabled={props.pending}
-            onClick={() => props.onDisable(props.row.resourceId ?? "")}
-          />
-        ) : null}
-        {canRemove ? (
-          <RowAction
-            icon="remove"
-            label={`Remove ${props.row.name}`}
-            disabled={props.pending}
-            onClick={() => props.onRemoveBinding(props.row.bindingId ?? "")}
-          />
-        ) : null}
-      </>
-    ) : null;
+  const monoPeek = row.mode !== "unavailable" && (row.type === "repo" || row.type === "mcp");
+
+  // Team-recommended resources get the on/off Switch (off = stays listed, greyed).
+  // It reuses the existing disable-binding mutation: toggling off adds a disable
+  // binding; toggling on removes it (the disabled row's bindingId IS that disable
+  // binding). Unavailable team rows show the Switch disabled rather than hide it.
+  const toggle: RowToggle | undefined =
+    props.canEdit && isTeamRecommended && row.resourceId && row.mode !== "replaced"
+      ? {
+          checked: row.mode === "enabled",
+          disabled: props.pending || row.mode === "unavailable",
+          ariaLabel: `Enable ${row.name}`,
+          onChange: (next) =>
+            next ? props.onRemoveBinding(row.bindingId ?? "") : props.onDisable(row.resourceId ?? ""),
+        }
+      : undefined;
+
+  // ⋯ Remove only for the present-or-removed sources (opt-in / agent-added). A
+  // team-recommended resource is never "removed" — it belongs to the team set and
+  // is toggled off instead — so it gets no ⋯ when there's nothing else to offer.
+  const menu: RowMenu | undefined =
+    props.canEdit && canRemove && !isTeamRecommended
+      ? {
+          ariaLabel: `More actions for ${row.name}`,
+          actions: [
+            {
+              key: "remove",
+              label: `Remove ${row.name}`,
+              destructive: true,
+              disabled: props.pending,
+              onSelect: () => props.onRemoveBinding(row.bindingId ?? ""),
+            },
+          ],
+        }
+      : undefined;
+
   return (
     <ResourceRowView
-      name={props.row.name}
+      name={row.name}
       source={source}
       status={status}
       peek={subtitle}
       monoPeek={monoPeek}
-      actions={actions}
-      leadingIcon={resourceTypeIcon(props.row.type)}
+      toggle={toggle}
+      menu={menu}
+      dimmed={row.mode === "disabled"}
+      leadingIcon={resourceTypeIcon(row.type)}
     />
   );
 }
@@ -503,13 +521,13 @@ function rowSubtitle(row: EffectiveResourceRow): string | null {
 }
 
 /**
- * Status marker — only rendered when a row deviates from the normal "enabled"
- * state, so normal rows stay clean. `Off` (not `Disabled`) avoids colliding
- * with the row's own `Disable` action button.
+ * Status marker — a dense badge, rendered only for the two states a row can't
+ * convey through its own controls: `Overridden` (a team resource replaced by a
+ * custom one) and `Can't load` (a broken reference). The plain disabled state is
+ * NOT a badge — it's the Switch in its off position plus a greyed (`dimmed`) row.
  */
-export function statusMarker(mode: EffectiveResourceRow["mode"]): { label: string; color: string } | null {
-  if (mode === "disabled") return { label: "Off", color: "var(--fg-4)" };
-  if (mode === "replaced") return { label: "Overridden", color: "var(--fg-4)" };
-  if (mode === "unavailable") return { label: "Can't load", color: "var(--state-error)" };
+export function statusMarker(mode: EffectiveResourceRow["mode"]): RowStatusMarker {
+  if (mode === "replaced") return { label: "Overridden", tone: "neutral" };
+  if (mode === "unavailable") return { label: "Can't load", tone: "error" };
   return null;
 }

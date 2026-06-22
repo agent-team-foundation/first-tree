@@ -344,6 +344,20 @@ function exactButtonByText(container: ParentNode, text: string): HTMLButtonEleme
   return [...container.querySelectorAll("button")].find((button) => button.textContent?.trim() === text) ?? null;
 }
 
+function menuItemByText(container: ParentNode, text: string): HTMLButtonElement | null {
+  return (
+    ([...container.querySelectorAll('[role="menuitem"]')] as HTMLButtonElement[]).find(
+      (item) => item.textContent?.trim() === text,
+    ) ?? null
+  );
+}
+
+/** Open a row's ⋯ overflow menu, then click one of its items by label. */
+async function clickRowMenuItem(container: ParentNode, menuAriaLabel: string, itemText: string): Promise<void> {
+  await click(container.querySelector(`button[aria-label="${menuAriaLabel}"]`));
+  await click(menuItemByText(container, itemText));
+}
+
 async function chooseSelectOption(trigger: Element | null, optionText: string): Promise<void> {
   await click(trigger);
   await click(buttonByText(document.body, optionText));
@@ -476,7 +490,8 @@ describe("AgentDetailPage", () => {
     expect(container.textContent).toContain("Use the team style guide.");
     expect(container.textContent).toContain("Added by you");
 
-    await click(container.querySelector('button[aria-label="Edit custom instructions"]'));
+    // The custom prompt's edit action now lives in the row's ⋯ overflow menu.
+    await clickRowMenuItem(container, "More actions for Custom instructions", "Edit custom instructions");
     await waitForText(container, "Save instructions");
     expect(container.textContent).toContain("Team style guide");
     expect(container.textContent).toContain("Use the team style guide.");
@@ -558,7 +573,7 @@ describe("AgentDetailPage", () => {
     await waitForText(container, "Added by you");
     expect(container.textContent).toContain("No instructions yet.");
 
-    await click(container.querySelector('button[aria-label="Edit custom instructions"]'));
+    await clickRowMenuItem(container, "More actions for Custom instructions", "Edit custom instructions");
     await waitForText(container, "Save instructions");
     expect(container.textContent).toContain("Use the team style guide.");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
@@ -618,7 +633,7 @@ describe("AgentDetailPage", () => {
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Effective instructions");
-    await click(container.querySelector('button[aria-label="Customize for this agent"]'));
+    await clickRowMenuItem(container, "More actions for Team style guide", "Customize for this agent");
     await waitForText(container, "Save instructions");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Use the team style guide.");
@@ -686,7 +701,7 @@ describe("AgentDetailPage", () => {
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Effective instructions");
-    await click(container.querySelector('button[aria-label="Customize for this agent"]'));
+    await clickRowMenuItem(container, "More actions for Team style guide", "Customize for this agent");
     await waitForText(container, "Save instructions");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Use the team style guide.");
@@ -755,7 +770,8 @@ describe("AgentDetailPage", () => {
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
     await waitForText(container, "Effective instructions");
-    await click(exactButtonByText(container, "Disable"));
+    // Disabling a recommended prompt is now the row's Switch, toggled off.
+    await click(container.querySelector('button[role="switch"]'));
     await waitForCondition(
       () => agentResourceMocks.updateAgentResources.mock.calls.length > 0,
       "Expected prompt resource update",
