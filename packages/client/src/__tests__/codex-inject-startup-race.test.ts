@@ -550,6 +550,56 @@ describe("codex handler startup inject queue", () => {
     await handler.shutdown();
   });
 
+  it("does not retry user-visible output when a reconnect diagnostic ends without turn.completed", async () => {
+    const sendMessage = vi
+      .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
+      .mockResolvedValue(undefined);
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const completedCounts: Array<number | undefined> = [];
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent, retryTurn });
+
+    state.agentMessagesByTurn.set(1, ["working note"]);
+    state.streamErrorByTurn.set(1, "Reconnecting... 2/5 (request timed out)");
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+
+    const events = emitEvent.mock.calls.map(([event]) => event);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(
+      events.some(
+        (event) =>
+          event.kind === "error" &&
+          event.payload.source === "sdk" &&
+          event.payload.message.includes("Reconnecting... 2/5"),
+      ),
+    ).toBe(true);
+    expect(
+      events.some((event) => {
+        if (event.kind !== "error") return false;
+        const retryPayload = parseProviderRetryEventMessage(event.payload.message);
+        return (
+          retryPayload?.event === "provider_failure_terminal" &&
+          retryPayload.reasonCode === "unsafe_replay" &&
+          retryPayload.scope === "provider_turn"
+        );
+      }),
+    ).toBe(true);
+    expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);
+    expect(completedCounts).toEqual([1]);
+    expect(retryTurn).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
   it("does not retry partial Codex text when the turn later fails", async () => {
     const sendMessage = vi
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()

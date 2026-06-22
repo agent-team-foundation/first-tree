@@ -1105,10 +1105,34 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     } else if (consumedErrorReason) {
       sessionCtx.log(`codex turn stopped with consumed provider error: ${consumedErrorReason}`);
     } else if (!retryReason && !providerCompleted) {
-      retryReason = diagnosticErrorEmittedBox.value
+      const streamEndReason = diagnosticErrorEmittedBox.value
         ? "codex_stream_ended_after_diagnostic_error"
         : "codex_stream_ended_without_completion";
-      sessionCtx.log(`codex stream ended without turn.completed; scheduling recovery (${retryReason})`);
+      if (userVisibleEmitted) {
+        const message = `${streamEndReason}: stream ended without turn.completed after user-visible output`;
+        const classification = classifyProviderFailure(new Error(message), {
+          provider: runtimeProvider,
+          scope: "provider_turn",
+          source: "sdk",
+        });
+        const decision = decideProviderRetry({
+          classification,
+          scope: "provider_turn",
+          attempt: 1,
+          replaySafety: "user_visible",
+        });
+        if (decision.action === "stop") {
+          emitProviderTurnRetryEvent(sessionCtx, "provider_failure_terminal", classification, decision, message);
+          consumedErrorReason = decision.reasonCode;
+          sessionCtx.log(`codex stream ended without turn.completed; stopping unsafe replay (${decision.reasonCode})`);
+        } else {
+          retryReason = streamEndReason;
+          sessionCtx.log(`codex stream ended without turn.completed; scheduling recovery (${retryReason})`);
+        }
+      } else {
+        retryReason = streamEndReason;
+        sessionCtx.log(`codex stream ended without turn.completed; scheduling recovery (${retryReason})`);
+      }
     }
 
     const settlement = resolveTurnSettlement({
