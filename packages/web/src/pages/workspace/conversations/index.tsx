@@ -219,10 +219,11 @@ export function ConversationList({
   // (e.g. an inactive tab the browser throttles) won't see the bucket
   // shift until the next refetch lands; that's an acceptable degree
   // of staleness for a presentational concern.
-  // Hoist attention chats (failed + open request + mention) into a pinned
-  // section at the top WITHOUT touching cursor pagination or reordering the
-  // main list: partition them out, group the rest as usual, then prepend a
-  // synthetic "Needs attention" bucket (failed > request > mention). A chat
+  // Hoist attention chats (failed + open request) into a pinned section at
+  // the top WITHOUT touching cursor pagination or reordering the main list:
+  // partition them out, group the rest as usual, then prepend a synthetic
+  // "Needs attention" bucket (failed > request). A plain unread mention /
+  // red dot deliberately does NOT pin, so the list stays stable. A chat
   // appears in exactly one place (pinned OR its normal group), never both.
   const buckets = useMemo(() => {
     const { attention, rest } = splitAttentionRows(allRows);

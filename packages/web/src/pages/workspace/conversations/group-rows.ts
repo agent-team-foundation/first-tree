@@ -183,7 +183,7 @@ function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucke
 }
 
 // ---------------------------------------------------------------------------
-// attention pinning (failed + request + mention)
+// attention pinning (failed + request)
 // ---------------------------------------------------------------------------
 //
 // Chat-granularity predicate — see docs/development/needs-attention-scoping.20260526.md.
@@ -192,7 +192,9 @@ function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucke
 //   R1. `failedAgentIds.length > 0`
 //       — A non-human agent I MANAGE is `failed` in this chat. Server
 //         narrows `failedAgentIds` to `agents.manager_id = caller` so a
-//         peer's broken agent never pins my row.
+//         peer's broken agent never pins my row. A broken agent is stuck
+//         until I intervene, so recovery is a legitimate attention signal
+//         and it still pins.
 //
 //   R2. `openRequestCount > 0`
 //       — An agent raised a structured question (`format=request`) at me
@@ -203,51 +205,39 @@ function groupBySource(rows: ReadonlyArray<MeChatRow>): ReadonlyArray<GroupBucke
 //         bucket — the asking agent is still blocked on me until I actually
 //         answer the question.
 //
-//   R3. `unreadMentionCount > 0 && chatHasExplicitMentionToMe === true`
-//       — I have unread, and at least one unread message explicitly
-//         `@<me>`-mentions me (server checks `messages.metadata.mentions`
-//         in the unread window). Distinguishes explicit `@<me>` from the
-//         v1 1-on-1 implicit DM auto-mention (`services/message.ts:282
-//         dmAutoProjection`), which still bumps `unreadMentionCount` for
-//         the red dot but never writes the recipient into
-//         `metadata.mentions` — so an agent's plain `"ack"` to me in a DM
-//         correctly stays out of attention. Read-cleared — which is why
-//         an open request needs its own rule (R2) instead of riding on
-//         this one.
+// Deliberately NOT a pinning rule — a plain unread mention / red dot. An
+// `@<me>` mention bumps `unreadMentionCount` (and still renders the red
+// dot) but no longer hoists the chat to the top. The chat list is kept as
+// stable as possible: only an explicit ask (R2) or a broken agent needing
+// recovery (R1) reorders it. A red dot is awareness, not a demand for
+// judgment, so it must not churn the ordering. (`chatHasExplicitMentionToMe`
+// stays on the row as a precise signal for the red dot / a future
+// explicit-@me affordance, but no longer feeds pinning.)
 //
-// Sort priority: `failed > request > mention`. An open question outranks a
-// plain mention because the asker is explicitly blocked waiting on the
-// caller; both yield to `failed` (broken agent needs recovery first).
+// Sort priority: `failed > request`. Both demand action; `failed` outranks
+// because a stuck agent needs recovery before its chat can make progress
+// at all.
 //
 // This ladder is INTENTIONALLY separate from the shared agent-status
-// `compareMainStatus` (`failed`, `working`, ...). `mention` is a chat-level
-// signal, not an agent main status — overloading the shared comparator would
-// couple two ladders that should evolve independently.
-//
-// `=== true` checks (not truthy) on booleans: the web client does NOT run
-// rows through `meChatRowSchema.parse`, so the Zod `.default(false)` only
-// applies server-side; an older server returning `undefined` would
-// silently degrade the rule to "off" under strict equality (safer
-// direction).
+// `compareMainStatus` (`failed`, `working`, ...) — overloading the shared
+// comparator would couple two ladders that should evolve independently.
 
-const ATTENTION_PRIORITY = ["failed", "request", "mention"] as const;
+const ATTENTION_PRIORITY = ["failed", "request"] as const;
 type AttentionReason = (typeof ATTENTION_PRIORITY)[number];
 
 /**
  * Highest-priority attention reason for this row, or `null` when the row is
  * NOT in the attention bucket. Order matters: a row that satisfies multiple
- * rules sorts under its highest tier (e.g. failed + mention → failed).
+ * rules sorts under its highest tier (e.g. failed + request → failed).
  */
 export function rowAttentionReason(r: MeChatRow): AttentionReason | null {
   if (r.failedAgentIds.length > 0) return "failed";
   // `> 0` is skew-safe without an explicit guard: an older server build
   // that predates `openRequestCount` yields `undefined`, and
-  // `undefined > 0` is `false` — the rule degrades to "off", same safe
-  // direction as the `=== true` boolean checks above.
+  // `undefined > 0` is `false` — the rule degrades to "off" (safe
+  // direction). A plain unread mention is intentionally not a reason here:
+  // the red dot must not pin (see the rules block above).
   if (r.openRequestCount > 0) return "request";
-  if (r.unreadMentionCount > 0 && r.chatHasExplicitMentionToMe === true) {
-    return "mention";
-  }
   return null;
 }
 
