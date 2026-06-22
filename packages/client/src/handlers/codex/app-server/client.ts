@@ -86,6 +86,7 @@ export class CodexAppServerClient {
   private closed = false;
   private exited = false;
   private closeNotified = false;
+  private shutdownRequested = false;
   private stderrTail = "";
 
   private constructor(options: Required<Pick<CodexAppServerClientOptions, "binary">> & CodexAppServerClientOptions) {
@@ -114,6 +115,10 @@ export class CodexAppServerClient {
     });
     this.child.on("exit", (code, signal) => {
       this.markExited();
+      if (this.shutdownRequested) {
+        this.closeExpectedly();
+        return;
+      }
       const detail = this.stderrTail.trim();
       const suffix = detail ? ` stderr: ${detail}` : "";
       const error = new CodexAppServerTransportError(
@@ -188,6 +193,7 @@ export class CodexAppServerClient {
   }
 
   async shutdown(timeoutMs = 1_000): Promise<void> {
+    this.shutdownRequested = true;
     if (this.exited) return;
     if (!this.closed) {
       this.closed = true;
@@ -273,6 +279,11 @@ export class CodexAppServerClient {
       pending.reject(error);
     }
     this.pending.clear();
+  }
+
+  private closeExpectedly(): void {
+    this.closed = true;
+    this.rejectAll(new CodexAppServerTransportError("codex app-server client shut down"));
   }
 
   private closeWithError(error: CodexAppServerTransportError): void {
