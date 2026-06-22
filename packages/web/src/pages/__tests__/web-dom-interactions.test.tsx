@@ -2233,4 +2233,40 @@ describe("web DOM interaction coverage", () => {
 
     await unmountRoot(root);
   });
+
+  it("clears a stale validation error so a later save failure is shown, not masked", async () => {
+    const { EnvSection } = await import("../agent-detail/env-section.js");
+    function Harness() {
+      const [saveError, setSaveError] = useState<string | null>(null);
+      // The save fails (no onSuccess) and surfaces an error to the dialog.
+      const onSave = (_next: EnvEntryLike[]) => setSaveError("Save failed");
+      return (
+        <EnvSection items={[{ key: "EXISTING", value: "x", sensitive: false }]} onSave={onSave} saveError={saveError} />
+      );
+    }
+    const { container, root } = await renderDom(<Harness />);
+
+    await click([...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Add")) ?? null);
+    await waitForText("Add environment variable", document.body);
+    const key = document.body.querySelector<HTMLInputElement>("#env-key");
+    const value = document.body.querySelector<HTMLInputElement>("#env-value");
+    if (!key || !value) throw new Error("Env fields missing");
+
+    // Trigger a local validation error (duplicate key), then fix it and resubmit.
+    await setValue(key, "EXISTING");
+    await setValue(value, "v");
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
+    await waitForText('Another entry already uses key "EXISTING".', document.body);
+    await setValue(key, "NEWKEY");
+    await click([...document.body.querySelectorAll("button")].find((b) => b.textContent === "Add") ?? null);
+
+    // The real save failure shows; the stale validation message no longer masks it.
+    await waitForText("Save failed", document.body);
+    expect(document.body.textContent).not.toContain("Another entry already uses key");
+
+    await unmountRoot(root);
+  });
 });
+
+// Minimal structural shape for the env onSave callback in the test above.
+type EnvEntryLike = { key: string; value: string; sensitive: boolean };

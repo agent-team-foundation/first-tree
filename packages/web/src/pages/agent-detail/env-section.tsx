@@ -272,6 +272,9 @@ function EnvDialog({
       setErr("Value is required for non-sensitive entries.");
       return;
     }
+    // Validation passed — clear any prior local error so it can't mask a save
+    // failure surfaced via `saveError` (the dialog hides saveError while `err` is set).
+    setErr(null);
     onSubmit({ key, value: resolved.value, sensitive });
   }
 
