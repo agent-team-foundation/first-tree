@@ -406,15 +406,13 @@ export const COPY = {
   provisionErrors: {
     organization_installation_required:
       "First Tree is connected to a personal GitHub account, but a team Context Tree needs a GitHub organization. Connect First Tree to an org, then try again.",
-    selected_repositories_unsupported:
-      "First Tree's GitHub App can only see selected repositories. Give it access to all repositories on GitHub, then try again.",
     installation_permissions_insufficient:
       "First Tree's GitHub App is missing permissions it needs to create your team's tree. Update its access on GitHub, then try again.",
     no_installation: "GitHub isn't connected for your team yet. Connect it first, then try again.",
     suspended: "Your team's GitHub App installation is suspended. Re-enable it on GitHub, then try again.",
     not_configured: "GitHub isn't set up on this First Tree server yet. Ask your First Tree admin to finish the setup.",
     repo_unavailable:
-      "A GitHub repo for your team's Context Tree already exists but First Tree can't access it. Give the GitHub App access to it (or remove it), then try again.",
+      "First Tree couldn't create or access your team's Context Tree repo with the current GitHub App installation. Update the GitHub App repository access, then try again.",
     upstream: "Couldn't reach GitHub just now. Try again in a moment.",
   },
   /**
