@@ -6,9 +6,7 @@ import {
   paginationQuerySchema,
   updateChatSchema,
 } from "@first-tree/shared";
-import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { chats } from "../../db/schema/chats.js";
 import { BadRequestError } from "../../errors.js";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
@@ -144,12 +142,9 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     const identity = requireAgent(request);
     await chatService.assertOwner(app.db, request.params.chatId, identity.uuid);
     const body = updateChatSchema.parse(request.body);
-    const patch: { topic?: string | null; description?: string | null; updatedAt: Date } = { updatedAt: new Date() };
-    if (body.topic !== undefined) patch.topic = body.topic && body.topic.length > 0 ? body.topic : null;
-    if (body.description !== undefined)
-      patch.description = body.description && body.description.length > 0 ? body.description : null;
-    const [updated] = await app.db.update(chats).set(patch).where(eq(chats.id, request.params.chatId)).returning();
-    if (!updated) throw new Error("Unexpected: chat missing after update");
+    // Actor = the maintaining agent itself — this is the `chat update
+    // --description` path that keeps the task-header freshness line current.
+    const updated = await chatService.updateChatMetadata(app.db, request.params.chatId, body, identity.uuid);
     return serializeChat(updated);
   });
 

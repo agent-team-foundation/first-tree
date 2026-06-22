@@ -1,7 +1,6 @@
 import type { ChatParticipantDetail } from "@first-tree/shared";
 import { useCallback, useState } from "react";
-import { DescriptionSection } from "./description-section.js";
-import { GitHubSection, useChatGithubEntities } from "./github-section.js";
+import { GitHubSection } from "./github-section.js";
 import { ParticipantsSection } from "./participants-section.js";
 import { SidebarResizeHandle } from "./resize-handle.js";
 
@@ -50,18 +49,13 @@ function saveWidth(width: number): void {
  * chat header already owns a "Hide chat details" toggle, so a duplicate
  * × inside the panel was just redundant clutter.
  *
- * Sections, top-to-bottom — ordered by what the user most wants to scan when
- * inspecting selected work (the rail is a calm inspection surface; attention
- * routing lives in the left nav + composer RequestDock, not here):
+ * The chat's running summary (the `description`) is NOT here — it lives in the
+ * pinned TaskHeader above the message stream. This rail carries only the
+ * secondary "who + what's bound" context:
  *   1. Participants — humans + agents (agents first, since their live status
  *      is the glanceable pulse). Caps the visible roster; rest behind
  *      "Show all".
- *   2. Summary — the chat's running work summary + status (the `description`
- *      field, labelled "Summary"), rendered as markdown. Height is dynamic:
- *      capped (fade + "Show more") only when GitHub renders below it; uncapped
- *      when Summary is the last section. Hidden when unset.
- *   3. GitHub bindings — read-only PRs / Issues bound to this chat. As the
- *      last section nothing sits below it, so it is NOT height-capped. Hidden
+ *   2. GitHub bindings — read-only PRs / Issues bound to this chat. Hidden
  *      when there are no bindings.
  *
  * Width: the inline rail is drag-resizable (left-edge handle) and remembers
@@ -74,7 +68,6 @@ function saveWidth(width: number): void {
  */
 export function ChatRightSidebar({
   chatId,
-  description,
   participants,
   participantsLoading,
   managedByMe,
@@ -83,9 +76,6 @@ export function ChatRightSidebar({
   width,
 }: {
   chatId: string;
-  /** The chat's running work summary, rendered as markdown in the
-   *  DescriptionSection. Null / empty hides that section. */
-  description: string | null;
   participants: ChatParticipantDetail[];
   participantsLoading: boolean;
   managedByMe: Map<string, boolean>;
@@ -108,13 +98,6 @@ export function ChatRightSidebar({
     saveWidth(DEFAULT_WIDTH);
   }, []);
 
-  // Summary caps its height only when a section (GitHub) sits below it. GitHub
-  // is hidden when the chat has no bindings — the common case — so Summary is
-  // then the last section and renders uncapped. While the bindings query is in
-  // flight, stay capped to avoid a tall-then-shrink reflow if bindings load.
-  const { items: githubItems, isLoading: githubLoading } = useChatGithubEntities(chatId);
-  const summaryCapped = githubLoading || githubItems.length > 0;
-
   return (
     <aside
       aria-label="Chat details"
@@ -135,12 +118,10 @@ export function ChatRightSidebar({
           onReset={handleReset}
         />
       )}
-      {/* Key the sections that hold local fold state (Participants' "Show all",
-          Summary's "Show more") by chatId so it resets on chat switch — ChatView
-          is NOT remounted on switch, it refetches by chatId. The keys MUST be
-          per-section-unique (not the bare chatId on both), or the two siblings
-          collide on the same key and React duplicates/omits them. The rail shell
-          itself is intentionally NOT keyed: its width is a global preference. */}
+      {/* Key the Participants section (its "Show all" fold state) by chatId so
+          it resets on chat switch — ChatView is NOT remounted on switch, it
+          refetches by chatId. The rail shell itself is intentionally NOT keyed:
+          its width is a global preference. */}
       <div className="flex-1 overflow-y-auto">
         <ParticipantsSection
           key={`participants:${chatId}`}
@@ -151,7 +132,6 @@ export function ChatRightSidebar({
           onAdded={onAdded}
           readOnly={readOnly}
         />
-        <DescriptionSection key={`summary:${chatId}`} description={description} capped={summaryCapped} />
         <GitHubSection chatId={chatId} />
       </div>
     </aside>

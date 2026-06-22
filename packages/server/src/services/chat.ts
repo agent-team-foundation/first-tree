@@ -6,7 +6,7 @@ import {
   type LegacyCreateChat,
   type SendMessage,
 } from "@first-tree/shared";
-import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -204,12 +204,18 @@ async function createLegacyEmptyChat(
   const kickoffKey = input.mode === "legacy-empty-agent" ? (input.onboardingKickoffKey ?? null) : null;
 
   return db.transaction(async (tx) => {
+    const initialDescription = input.description ?? null;
     const values = {
       id: chatId,
       organizationId: orgId,
       type: "group",
       topic: input.topic ?? null,
-      description: input.description ?? null,
+      description: initialDescription,
+      // A description present at creation is "updated now" by the creator, so
+      // the task header shows real freshness immediately rather than a blank
+      // line until the first `chat update` (mirrors `updateChatMetadata`).
+      descriptionUpdatedAt: initialDescription != null ? new Date() : null,
+      descriptionUpdatedBy: initialDescription != null ? creator.id : null,
       onboardingKickoffKey: kickoffKey,
       metadata: input.mode === "legacy-empty-agent" ? (input.metadata ?? {}) : {},
     };
@@ -351,6 +357,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
 
   const chatId = randomUUID();
   const chat = await db.transaction(async (tx) => {
+    const initialDescription = input.description && input.description.length > 0 ? input.description : null;
     const [inserted] = await tx
       .insert(chats)
       .values({
@@ -358,7 +365,12 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
         organizationId: input.organizationId,
         type: "group",
         topic: input.topic && input.topic.length > 0 ? input.topic : null,
-        description: input.description && input.description.length > 0 ? input.description : null,
+        description: initialDescription,
+        // Stamp freshness so a task chat created with a description shows a
+        // real "X ago · <initiator>" line immediately (mirrors
+        // `updateChatMetadata`'s attribution for later edits).
+        descriptionUpdatedAt: initialDescription != null ? new Date() : null,
+        descriptionUpdatedBy: initialDescription != null ? input.initiatorAgentId : null,
         metadata: chatMetadata,
       })
       .returning();
@@ -506,6 +518,50 @@ export async function getChat(db: Database, chatId: string) {
     throw new NotFoundError(`Chat "${chatId}" not found`);
   }
   return chat;
+}
+
+/**
+ * Apply a `topic` / `description` patch to a chat and return the updated row.
+ *
+ * Freshness attribution: a *real* `description` change — the value actually
+ * differs, tested with SQL `IS DISTINCT FROM` so a no-op re-write of identical
+ * text does not count — stamps `description_updated_at = now` and
+ * `description_updated_by = actorAgentId`. A topic-only patch, or a description
+ * patch that does not change the value, leaves those two columns untouched; the
+ * whole-row `updated_at` always advances. Shared by the user PATCH (actor = the
+ * console human's agent) and the agent PATCH (actor = the maintaining agent) so
+ * both attribute identically.
+ */
+export async function updateChatMetadata(
+  db: Database,
+  chatId: string,
+  patch: { topic?: string | null; description?: string | null },
+  actorAgentId: string,
+): Promise<typeof chats.$inferSelect> {
+  const now = new Date();
+  const set: {
+    topic?: string | null;
+    description?: string | null;
+    descriptionUpdatedAt?: SQL;
+    descriptionUpdatedBy?: SQL;
+    updatedAt: Date;
+  } = { updatedAt: now };
+  if (patch.topic !== undefined) {
+    set.topic = patch.topic && patch.topic.length > 0 ? patch.topic : null;
+  }
+  if (patch.description !== undefined) {
+    const nextDescription = patch.description && patch.description.length > 0 ? patch.description : null;
+    set.description = nextDescription;
+    // The CASE reads the PRE-UPDATE column values, so re-running
+    // `chat update --description` with identical text — or a topic-only edit
+    // that happens to route through here — does not move the "X ago · who"
+    // line. `IS DISTINCT FROM` is null-safe.
+    set.descriptionUpdatedAt = sql`CASE WHEN ${chats.description} IS DISTINCT FROM ${nextDescription} THEN now() ELSE ${chats.descriptionUpdatedAt} END`;
+    set.descriptionUpdatedBy = sql`CASE WHEN ${chats.description} IS DISTINCT FROM ${nextDescription} THEN ${actorAgentId} ELSE ${chats.descriptionUpdatedBy} END`;
+  }
+  const [updated] = await db.update(chats).set(set).where(eq(chats.id, chatId)).returning();
+  if (!updated) throw new Error(`Unexpected: chat "${chatId}" missing after update`);
+  return updated;
 }
 
 /**

@@ -14,6 +14,22 @@ export const chats = pgTable(
     type: text("type").notNull().default("direct"),
     topic: text("topic"),
     description: text("description"),
+    /**
+     * Freshness + attribution for `description` specifically — the data
+     * behind the task header's "X ago · <who> updated" line and its
+     * unread/auto-expand logic. Deliberately distinct from the row-level
+     * `updatedAt`, which a topic edit or a projection write also bumps;
+     * only a *real* description change stamps these (see
+     * `updateChatMetadata`). `descriptionUpdatedBy` holds the acting agent's
+     * uuid — the maintaining agent on the `chat update --description` path,
+     * or the human who edited from the console. No FK (service-layer
+     * integrity, matching `chat_user_state`). NULL until the first
+     * description write lands; existing rows are intentionally NOT
+     * backfilled — we surface "no freshness yet" rather than fabricate a
+     * time / author we do not truly have.
+     */
+    descriptionUpdatedAt: timestamp("description_updated_at", { withTimezone: true }),
+    descriptionUpdatedBy: text("description_updated_by"),
     lifecyclePolicy: text("lifecycle_policy").default("persistent"),
     /**
      * Decision-inert column. First Tree keeps a single group-chat model — there is no
