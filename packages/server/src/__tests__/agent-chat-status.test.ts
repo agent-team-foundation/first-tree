@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { agentChatStatusSchema, type LiveActivity, RUNTIME_STALE_MS } from "@first-tree/shared";
+import {
+  agentChatStatusSchema,
+  encodeProviderRetryEventMessage,
+  type LiveActivity,
+  RUNTIME_STALE_MS,
+} from "@first-tree/shared";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import {
@@ -182,6 +187,71 @@ describe("agent-chat-status", () => {
       for (const s of await getChatAgentStatuses(app.db, chatId)) {
         expect(() => agentChatStatusSchema.parse(s)).not.toThrow();
       }
+    });
+
+    it("projects provider retry statusReason without feeding the derived main status", async () => {
+      const { app, peer, chatId } = await newChatWithAgent();
+      await bindPresence(peer.agent.uuid, peer.clientId);
+      await setSession(peer.agent.uuid, chatId, "active");
+      await insertEvent(peer.agent.uuid, chatId, 1, "error", {
+        message: encodeProviderRetryEventMessage({
+          event: "provider_retry_scheduled",
+          provider: "codex",
+          scope: "provider_turn",
+          category: "transient_transport",
+          reasonCode: "provider_transient_transport",
+          attempt: 1,
+          maxAttempts: 2,
+          retryMode: "foreground",
+          delayMs: 500,
+          nextRetryAt: "2026-06-22T10:00:00.000Z",
+          replaySafety: "pre_visible",
+          userSeverity: "info",
+          messagePreview: "fetch failed",
+        }),
+      });
+
+      const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+      expect(s?.main).toBe("ready");
+      expect(s?.statusReason?.kind).toBe("retrying");
+      expect(s?.statusReason?.reasonCode).toBe("provider_transient_transport");
+      expect(() => agentChatStatusSchema.parse(s)).not.toThrow();
+    });
+
+    it("clears provider retry statusReason when the latest structured event is succeeded", async () => {
+      const { app, peer, chatId } = await newChatWithAgent();
+      await bindPresence(peer.agent.uuid, peer.clientId);
+      await setSession(peer.agent.uuid, chatId, "active");
+      await insertEvent(peer.agent.uuid, chatId, 1, "error", {
+        message: encodeProviderRetryEventMessage({
+          event: "provider_retry_scheduled",
+          provider: "codex",
+          scope: "provider_turn",
+          category: "transient_transport",
+          reasonCode: "provider_transient_transport",
+          attempt: 1,
+          maxAttempts: 2,
+          retryMode: "foreground",
+          delayMs: 500,
+          replaySafety: "pre_visible",
+          userSeverity: "info",
+        }),
+      });
+      await insertEvent(peer.agent.uuid, chatId, 2, "error", {
+        message: encodeProviderRetryEventMessage({
+          event: "provider_retry_succeeded",
+          provider: "codex",
+          scope: "provider_turn",
+          category: "transient_transport",
+          reasonCode: "provider_transient_transport",
+          replaySafety: "pre_visible",
+          userSeverity: "info",
+        }),
+      });
+
+      const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+      expect(s?.main).toBe("ready");
+      expect(s?.statusReason).toBeUndefined();
     });
   });
 

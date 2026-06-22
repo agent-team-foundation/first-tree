@@ -1,4 +1,4 @@
-import type { AgentVisibility, SessionEvent } from "@first-tree/shared";
+import type { AgentVisibility, RuntimeProvider, SessionEvent } from "@first-tree/shared";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
 /** Agent identity fields flowing from Server through the runtime pipeline. */
@@ -291,6 +291,8 @@ export type HandlerFactory = (config: HandlerConfig) => AgentHandler;
 export type HandlerConfig = {
   /** Root directory for per-chat workspaces (`<dataDir>/workspaces/<agentName>`). */
   workspaceRoot: string;
+  /** Runtime provider for this handler slot, used for structured status payloads. */
+  runtimeProvider?: RuntimeProvider;
   /** Additional handler-specific config. */
   [key: string]: unknown;
 };

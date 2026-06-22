@@ -626,6 +626,24 @@ export {
   sessionStateSchema,
 } from "./schemas/presence.js";
 export {
+  type AgentStatusReason,
+  agentStatusReasonSchema,
+  encodeProviderRetryEventMessage,
+  PROVIDER_RETRY_EVENT_MESSAGE_PREFIX,
+  type ProviderFailureCategory,
+  type ProviderRetryEventName,
+  type ProviderRetryEventPayload,
+  type ProviderRetryScope,
+  parseProviderRetryEventMessage,
+  providerFailureCategorySchema,
+  providerRetryEventNameSchema,
+  providerRetryEventPayloadSchema,
+  providerRetryScopeSchema,
+  type ReplaySafety,
+  replaySafetySchema,
+  statusReasonFromProviderRetryEvent,
+} from "./schemas/provider-retry.js";
+export {
   type PulseBucket,
   type PulseTick,
   pulseBucketSchema,

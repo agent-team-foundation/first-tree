@@ -4,14 +4,17 @@ import type {
   AgentRuntimeConfigPayload,
   GitRepo,
   InboxEntryWithMessage,
+  RuntimeProvider,
   RuntimeState,
   SessionEvent,
   SessionState,
 } from "@first-tree/shared";
 import {
   deriveRepoLocalPath,
+  encodeProviderRetryEventMessage,
   isImageBatchRefContent,
   isImageRefContent,
+  runtimeProviderSchema,
   SOURCE_REPOS_DIRNAME,
 } from "@first-tree/shared";
 import type { pino } from "../observability/logger.js";
@@ -22,7 +25,7 @@ import { type ContextTreeBinding, resolveAgentContextTreeBinding } from "./boots
 import type { SessionConfig } from "./config.js";
 import { reresolveUnboundTree } from "./context-tree-rebind.js";
 import type { SelfFence } from "./doc-snapshots.js";
-import { type Classification, clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./error-taxonomy.js";
+import { clampRetryAttempt } from "./error-taxonomy.js";
 import type {
   AgentHandler,
   AgentIdentity,
@@ -38,6 +41,12 @@ import type {
 } from "./handler.js";
 import { findImagePath, writeImage } from "./image-store.js";
 import { InboxDeliveryCoordinator } from "./inbox-delivery-coordinator.js";
+import {
+  buildProviderRetryEvent,
+  classifyProviderFailure,
+  decideProviderRetry,
+  type ProviderFailureClassification,
+} from "./provider-retry-policy.js";
 import { redactErrorPreview } from "./redact-error-preview.js";
 import { createResultSink, type Trigger } from "./result-sink.js";
 import { SessionRegistry } from "./session-registry.js";
@@ -66,6 +75,8 @@ type SessionEntry = {
    * structured logging.
    */
   lastRetryReason: string | null;
+  lastRetryCategory: ProviderFailureClassification["category"] | null;
+  lastRetryScope: "session_start" | "session_resume" | null;
   /**
    * Truncated raw message from the last transient failure. Surfaced into the
    * `resilience.session.retry_started` event payload alongside `reasonCode`
@@ -800,8 +811,24 @@ export class SessionManager {
     entry.retryNextAt = null;
     entry.retryTimer = null;
     entry.lastRetryReason = null;
+    entry.lastRetryCategory = null;
+    entry.lastRetryScope = null;
     entry.lastRetryRawError = null;
     entry.retryQueuedMessages = [];
+  }
+
+  private runtimeProvider(): RuntimeProvider {
+    const parsed = runtimeProviderSchema.safeParse(this.config.handlerConfig.runtimeProvider);
+    return parsed.success ? parsed.data : "claude-code";
+  }
+
+  private retryClassificationForEntry(entry: SessionEntry): ProviderFailureClassification {
+    return {
+      category: entry.lastRetryCategory ?? "unknown",
+      reasonCode: entry.lastRetryReason ?? "unknown",
+      message: entry.lastRetryRawError ?? entry.lastRetryReason ?? "unknown",
+      sourceKind: "transient",
+    };
   }
 
   private async recoverDebtBeforeResume(chatId: string, reason: string): Promise<boolean> {
@@ -1047,6 +1074,8 @@ export class SessionManager {
       retryNextAt: null,
       retryTimer: null,
       lastRetryReason: null,
+      lastRetryCategory: null,
+      lastRetryScope: null,
       lastRetryRawError: null,
       startMessage: message,
       retryQueuedMessages: [],
@@ -1082,7 +1111,11 @@ export class SessionManager {
     } catch (err) {
       if (this.sessions.get(chatId) !== entry) return;
       const phase: "start" | "resume" = evicted ? "resume" : "start";
-      const classification = classify(err, { source: "session" });
+      const classification = classifyProviderFailure(err, {
+        provider: this.runtimeProvider(),
+        scope: phase === "start" ? "session_start" : "session_resume",
+        source: "session",
+      });
       const handled = this.handleSessionFailure({
         entry,
         ctx,
@@ -1149,7 +1182,11 @@ export class SessionManager {
       this.persistRegistry();
     } catch (err) {
       if (this.sessions.get(entry.chatId) !== entry) return;
-      const classification = classify(err, { source: "session" });
+      const classification = classifyProviderFailure(err, {
+        provider: this.runtimeProvider(),
+        scope: "session_resume",
+        source: "session",
+      });
       const handled = this.handleSessionFailure({
         entry,
         ctx,
@@ -1182,20 +1219,31 @@ export class SessionManager {
     ctx: SessionContext;
     err: unknown;
     phase: "start" | "resume";
-    classification: Classification;
+    classification: ProviderFailureClassification;
   }): boolean {
     const { entry, ctx, err, phase, classification } = args;
     const errMsg = err instanceof Error ? err.message : String(err);
     const chatId = entry.chatId;
+    const provider = this.runtimeProvider();
+    const scope = phase === "start" ? "session_start" : "session_resume";
+    const nextAttempt = clampRetryAttempt(entry.retryAttempt + 1);
+    const decision = decideProviderRetry({
+      classification,
+      scope,
+      attempt: nextAttempt,
+      replaySafety: "pre_provider",
+    });
 
     this.config.log.error(
-      { chatId, err, phase, kind: classification.kind, reasonCode: classification.reasonCode },
+      { chatId, err, phase, category: classification.category, reasonCode: classification.reasonCode },
       "session start/resume failed",
     );
 
-    if (classification.kind === ERROR_KINDS.TRANSIENT) {
-      entry.retryAttempt = clampRetryAttempt(entry.retryAttempt + 1);
-      entry.lastRetryReason = classification.reasonCode;
+    if (decision.action === "retry") {
+      entry.retryAttempt = decision.attempt;
+      entry.lastRetryReason = decision.reasonCode;
+      entry.lastRetryCategory = classification.category;
+      entry.lastRetryScope = scope;
       // Truncate the raw err message to 256 chars and persist it on the entry
       // so retry_started can include it too. The web UI renders the encoded
       // payload as text, so any operator looking at a `reasonCode:"unknown"` /
@@ -1206,7 +1254,7 @@ export class SessionManager {
       // and this payload leaves the `safe in logs but NOT chat` boundary
       // — see Classification.message's contract in error-taxonomy.ts.
       entry.lastRetryRawError = errMsg ? redactErrorPreview(errMsg, 256) : null;
-      const delayMs = nextRetryDelayMs(classification.strategy, entry.retryAttempt);
+      const delayMs = decision.delayMs;
       entry.retryNextAt = Date.now() + delayMs;
       // Drop the active slot now so other chats can use it during the
       // backoff window — the retry will re-acquire when it runs.
@@ -1232,9 +1280,10 @@ export class SessionManager {
           chatId,
           attempt: entry.retryAttempt,
           nextDelayMs: delayMs,
-          reasonCode: classification.reasonCode,
+          reasonCode: decision.reasonCode,
+          category: classification.category,
           phase,
-          resilienceEvent: "resilience.session.retry_scheduled",
+          resilienceEvent: "provider_retry_scheduled",
         },
         "session transient failure — scheduling retry",
       );
@@ -1244,17 +1293,19 @@ export class SessionManager {
       // directly, so we encode it as a structured `error` event with the
       // resilience tag in the message prefix — see ResiliencePayload helper.
       try {
+        const payload = buildProviderRetryEvent({
+          event: "provider_retry_scheduled",
+          provider,
+          scope,
+          classification,
+          decision,
+          messagePreview: errMsg,
+        });
         ctx.emitEvent({
           kind: "error",
           payload: {
             source: "runtime",
-            message: encodeResilienceMessage("resilience.session.retry_scheduled", {
-              attempt: entry.retryAttempt,
-              nextDelayMs: delayMs,
-              reasonCode: classification.reasonCode,
-              phase,
-              rawError: entry.lastRetryRawError,
-            }),
+            message: encodeProviderRetryEventMessage(payload),
           },
         });
       } catch (emitErr) {
@@ -1271,8 +1322,8 @@ export class SessionManager {
       return true;
     }
 
-    // Permanent / degraded — legacy F2 signalling (server state + structured
-    // error event), then let caller tear down.
+    // Stop decision — legacy F2 teardown still owns ACK/recovery, but the
+    // visible signal is now the standard provider retry payload.
     entry.status = "errored";
     this.notifySessionState(chatId, "errored");
     this.projectSessionRuntime(chatId);
@@ -1283,11 +1334,19 @@ export class SessionManager {
       // event is rendered into chat-visible UI. Redact before slicing — slicing
       // first risks leaving a partial-token tail across the truncation point.
       const preview = redactErrorPreview(errMsg, 800);
+      const payload = buildProviderRetryEvent({
+        event: decision.terminalKind === "exhausted" ? "provider_retry_exhausted" : "provider_failure_terminal",
+        provider,
+        scope,
+        classification,
+        decision,
+        messagePreview: preview,
+      });
       ctx.emitEvent({
         kind: "error",
         payload: {
           source: "runtime",
-          message: `Session ${phase} failed: ${preview}`,
+          message: encodeProviderRetryEventMessage(payload),
         },
       });
     } catch (emitErr) {
@@ -1318,22 +1377,29 @@ export class SessionManager {
         chatId,
         attempt: entry.retryAttempt,
         reasonCode: entry.lastRetryReason,
-        resilienceEvent: "resilience.session.retry_started",
+        category: entry.lastRetryCategory,
+        resilienceEvent: "provider_retry_started",
       },
       "session transient retry — starting attempt",
     );
     // Design §6.1: emit via SessionContext.emitEvent (post-slot-acquire we
     // build the real ctx; here we use a lightweight onSessionEvent path).
     try {
+      const scope = entry.lastRetryScope ?? (previousAvailable(entry) ? "session_resume" : "session_start");
+      const classification = this.retryClassificationForEntry(entry);
       this.config.onSessionEvent?.(chatId, {
         kind: "error",
         payload: {
           source: "runtime",
-          message: encodeResilienceMessage("resilience.session.retry_started", {
-            attempt: entry.retryAttempt,
-            reasonCode: entry.lastRetryReason,
-            rawError: entry.lastRetryRawError,
-          }),
+          message: encodeProviderRetryEventMessage(
+            buildProviderRetryEvent({
+              event: "provider_retry_started",
+              provider: this.runtimeProvider(),
+              scope,
+              classification,
+              messagePreview: entry.lastRetryRawError,
+            }),
+          ),
         },
       });
     } catch (emitErr) {
@@ -1392,15 +1458,19 @@ export class SessionManager {
         this.markRouteOwned(chatId, message, receipt.route);
       }
       const totalAttempts = entry.retryAttempt;
+      const succeededScope = entry.lastRetryScope ?? (previousAvailable(entry) ? "session_resume" : "session_start");
+      const succeededClassification = this.retryClassificationForEntry(entry);
       entry.retryAttempt = 0;
       entry.retryNextAt = null;
       entry.lastRetryReason = null;
+      entry.lastRetryCategory = null;
+      entry.lastRetryScope = null;
       entry.lastRetryRawError = null;
       this.config.log.info(
         {
           chatId,
           sessionId: entry.claudeSessionId,
-          resilienceEvent: "resilience.session.retry_succeeded",
+          resilienceEvent: "provider_retry_succeeded",
         },
         "session transient retry succeeded",
       );
@@ -1409,9 +1479,15 @@ export class SessionManager {
           kind: "error",
           payload: {
             source: "runtime",
-            message: encodeResilienceMessage("resilience.session.retry_succeeded", {
-              totalAttempts,
-            }),
+            message: encodeProviderRetryEventMessage(
+              buildProviderRetryEvent({
+                event: "provider_retry_succeeded",
+                provider: this.runtimeProvider(),
+                scope: succeededScope,
+                classification: succeededClassification,
+                messagePreview: `retry succeeded after ${totalAttempts} attempt(s)`,
+              }),
+            ),
           },
         });
       } catch (emitErr) {
@@ -1421,12 +1497,17 @@ export class SessionManager {
       this.persistRegistry();
     } catch (err) {
       if (this.sessions.get(chatId) !== entry) return;
-      const classification = classify(err, { source: "session" });
+      const phase = previousAvailable(entry) ? "resume" : "start";
+      const classification = classifyProviderFailure(err, {
+        provider: this.runtimeProvider(),
+        scope: phase === "start" ? "session_start" : "session_resume",
+        source: "session",
+      });
       const handled = this.handleSessionFailure({
         entry,
         ctx,
         err,
-        phase: previousAvailable(entry) ? "resume" : "start",
+        phase,
         classification,
       });
       if (!handled) {

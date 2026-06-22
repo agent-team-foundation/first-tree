@@ -1,13 +1,16 @@
 import {
   type AgentChatStatus,
   type AgentEngagement,
+  type AgentStatusReason,
   ASSISTANT_TEXT_PREVIEW_MAX,
   type AssistantTextEventPayload,
   buildAgentChatStatus,
   LIVE_ACTIVITY_STALE_MS,
   type LiveActivity,
+  parseProviderRetryEventMessage,
   RUNTIME_STALE_MS,
   type RuntimeState,
+  statusReasonFromProviderRetryEvent,
   stripShellCommandDisplayWrapper,
   type ToolCallEventPayload,
 } from "@first-tree/shared";
@@ -266,6 +269,59 @@ async function deriveActivities(
   return out;
 }
 
+async function deriveStatusReasons(
+  db: Database,
+  chatIds: string[],
+): Promise<Map<string, Map<string, AgentStatusReason>>> {
+  const out = new Map<string, Map<string, AgentStatusReason>>();
+  if (chatIds.length === 0) return out;
+
+  const chatIdInClause = sql.join(
+    chatIds.map((id) => sql`${id}`),
+    sql`, `,
+  );
+  const rawRows = (await db.execute(sql`
+    SELECT acs.agent_id AS agent_id,
+           acs.chat_id  AS chat_id,
+           e.payload    AS payload
+      FROM agent_chat_sessions acs
+      CROSS JOIN LATERAL (
+        SELECT payload, seq
+          FROM session_events se
+         WHERE se.agent_id = acs.agent_id
+           AND se.chat_id  = acs.chat_id
+           AND se.kind     = 'error'
+         ORDER BY se.seq DESC
+         LIMIT 5
+      ) e
+     WHERE acs.chat_id IN (${chatIdInClause})
+  `)) as unknown as Array<{
+    agent_id: string;
+    chat_id: string;
+    payload: unknown;
+  }>;
+
+  const seen = new Set<string>();
+  for (const row of rawRows) {
+    const key = pairKey(row.chat_id, row.agent_id);
+    if (seen.has(key)) continue;
+    const payload = row.payload as { message?: unknown } | null;
+    if (typeof payload?.message !== "string") continue;
+    const retryPayload = parseProviderRetryEventMessage(payload.message);
+    if (!retryPayload) continue;
+    seen.add(key);
+    const reason = statusReasonFromProviderRetryEvent(retryPayload);
+    if (!reason) continue;
+    let perAgent = out.get(row.chat_id);
+    if (!perAgent) {
+      perAgent = new Map();
+      out.set(row.chat_id, perAgent);
+    }
+    perAgent.set(row.agent_id, reason);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // The producer
 // ---------------------------------------------------------------------------
@@ -361,10 +417,12 @@ export async function resolveAgentChatStatuses(
   //    current activity description", not "agent is not working" (which is
   //    decided by `computeWorking` above).
   const activityByChat = await deriveActivities(db, chatIds, opts);
+  const statusReasonByChat = await deriveStatusReasons(db, chatIds);
 
   const now = Date.now();
   for (const [chatId, agentSet] of unionByChat) {
     const perAgentActivity = activityByChat.get(chatId);
+    const perAgentStatusReason = statusReasonByChat.get(chatId);
     const arr: AgentChatStatus[] = [];
     for (const agentId of agentSet) {
       const sess = sessionByPair.get(pairKey(chatId, agentId));
@@ -393,6 +451,7 @@ export async function resolveAgentChatStatuses(
           // aren't in chainSessionOp) briefly emits activity=null; the next
           // runtime frame self-heals.
           activity: working ? activity : null,
+          statusReason: perAgentStatusReason?.get(agentId),
         }),
       );
     }

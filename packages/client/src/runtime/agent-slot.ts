@@ -6,6 +6,7 @@ import type {
   SessionEvent,
   SessionState,
 } from "@first-tree/shared";
+import { runtimeProviderSchema } from "@first-tree/shared";
 import { defaultDataDir } from "@first-tree/shared/config";
 import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
@@ -165,11 +166,8 @@ export class AgentSlot {
 
     let bindSucceeded = false;
     try {
-      const bound = await this.clientConnection.bindAgent(
-        this.config.agentId,
-        this.config.runtimeType ?? this.config.type,
-        this.config.runtimeVersion,
-      );
+      const runtimeType = this.config.runtimeType ?? this.config.type;
+      const bound = await this.clientConnection.bindAgent(this.config.agentId, runtimeType, this.config.runtimeVersion);
       bindSucceeded = true;
       const sdk = bound.sdk;
       const agent = await sdk.register();
@@ -210,6 +208,7 @@ export class AgentSlot {
 
       const ackEntry = (entryId: number) => this.clientConnection.sendInboxAck(entryId, agent.agentId);
       const recoverChat = (chatId: string) => this.clientConnection.sendInboxRecover(agent.agentId, chatId);
+      const runtimeProvider = runtimeProviderSchema.safeParse(runtimeType);
 
       this.sessionManager = new SessionManager({
         session: this.config.session,
@@ -221,6 +220,7 @@ export class AgentSlot {
           contextTreePath: contextTreeBinding?.path,
           contextTreeRepoUrl: contextTreeBinding?.repoUrl,
           contextTreeBranch: contextTreeBinding?.branch,
+          ...(runtimeProvider.success ? { runtimeProvider: runtimeProvider.data } : {}),
           // Identifies the owning client process. The claude-code-tui handler
           // uses it to scope tmux session ownership (orphan sweep / names) so
           // it never touches another live client's sessions. Other handlers

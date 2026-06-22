@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionEvent } from "@first-tree/shared";
+import { parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatContext } from "../runtime/chat-context.js";
 import type { SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -229,7 +229,16 @@ describe("codex handler retry abort cleanup", () => {
     // event, NOT delivered as a chat message.
     expect(sendMessage).not.toHaveBeenCalled();
     expect(assistantTexts).toEqual(["retry succeeded"]);
-    expect(events.some((event) => event.kind === "error")).toBe(false);
+    const errorEvents = events.filter(
+      (event): event is Extract<SessionEvent, { kind: "error" }> => event.kind === "error",
+    );
+    const retryEvents = errorEvents
+      .map((event) => parseProviderRetryEventMessage(event.payload.message))
+      .filter((event) => event !== null);
+    expect(retryEvents).toHaveLength(1);
+    expect(retryEvents[0]?.event).toBe("provider_retry_scheduled");
+    expect(retryEvents[0]?.userSeverity).toBe("info");
+    expect(errorEvents.filter((event) => parseProviderRetryEventMessage(event.payload.message) === null)).toEqual([]);
     expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "success")).toBe(true);
     expect(completedCounts).toEqual([1]);
     expect(state.lateAbortAfterClose).toBe(false);
