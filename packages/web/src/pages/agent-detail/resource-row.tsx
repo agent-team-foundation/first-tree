@@ -53,7 +53,7 @@ export function ResourceRowView(props: {
   return (
     <div
       style={{
-        padding: "var(--sp-3) var(--sp-3_5)",
+        padding: "var(--sp-3) 0",
         borderBottom: "var(--hairline) solid var(--border-faint)",
       }}
     >
