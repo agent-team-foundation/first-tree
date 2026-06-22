@@ -33,7 +33,7 @@ type SectionProps = {
 
 export function Section({ title, count, description, action, children, className }: SectionProps) {
   return (
-    <section className={cn("space-y-3", className)} style={{ marginTop: "var(--sp-1_5)" }}>
+    <section className={cn("space-y-3", className)} style={{ marginTop: "var(--sp-6)" }}>
       <div className="flex flex-col items-start justify-between gap-2 sm:flex-row sm:items-center sm:gap-3">
         <div className="min-w-0">
           <h2 className="text-subtitle font-semibold m-0" style={{ color: "var(--fg)" }}>
@@ -53,7 +53,19 @@ export function Section({ title, count, description, action, children, className
         </div>
         {action}
       </div>
-      <div style={{ borderTop: "var(--hairline) solid var(--border)" }}>{children}</div>
+      {/* Flat grouped container: a faint rounded outline groups each section's
+          rows without a lifted "card" — no shadow, no fill, a hairline-faint
+          border. The low-contrast palette wants restraint, so grouping comes
+          from the outline + radius alone, not from elevation. */}
+      <div
+        style={{
+          border: "var(--hairline) solid var(--border-faint)",
+          borderRadius: "var(--radius-panel)",
+          overflow: "hidden",
+        }}
+      >
+        {children}
+      </div>
     </section>
   );
 }
