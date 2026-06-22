@@ -33,6 +33,24 @@ export type CapabilityRuntimeSource = z.infer<typeof capabilityRuntimeSourceSche
 export const capabilityProbeKindSchema = z.enum(["launch", "static"]);
 export type CapabilityProbeKind = z.infer<typeof capabilityProbeKindSchema>;
 
+/**
+ * An in-flight device-code login the daemon is driving for this provider
+ * (e.g. `codex login --device-auth`). It rides the capabilities snapshot the
+ * daemon already PATCHes — so the web console surfaces the verification URL +
+ * one-time code by polling capabilities, with the probe staying the single
+ * source of truth, and no separate realtime channel. Cleared (back to
+ * absent) once the daemon re-probes after the login resolves.
+ */
+export const pendingDeviceAuthSchema = z.object({
+  /** Page the user opens on any device to enter the code. */
+  verificationUrl: z.string(),
+  /** One-time code the user types on that page. */
+  userCode: z.string(),
+  /** ISO8601 instant the code expires; the web hides it once past. */
+  expiresAt: z.string(),
+});
+export type PendingDeviceAuth = z.infer<typeof pendingDeviceAuthSchema>;
+
 export const capabilityEntrySchema = z.object({
   state: capabilityStateSchema,
   available: z.boolean(),
@@ -61,6 +79,11 @@ export const capabilityEntrySchema = z.object({
    * means "launchable + credentials present", not "end-to-end verified".
    */
   degraded: z.boolean().optional(),
+  /**
+   * Present while the daemon is driving an interactive device-code login for
+   * this provider. Absent in steady state. See `pendingDeviceAuthSchema`.
+   */
+  pendingDeviceAuth: pendingDeviceAuthSchema.nullable().optional(),
 });
 export type CapabilityEntry = z.infer<typeof capabilityEntrySchema>;
 

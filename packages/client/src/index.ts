@@ -1,6 +1,7 @@
 export type {
   BoundAgent,
   ClientConnectionConfig,
+  RuntimeAuthCommand,
   ServerWelcome,
   SessionCommand,
 } from "./client-connection.js";
@@ -25,7 +26,11 @@ export {
 } from "./runtime/bootstrap.js";
 // Capabilities
 export { probeClaudeCodeCapability } from "./runtime/capabilities/claude-code.js";
-export { probeCodexCapability } from "./runtime/capabilities/codex.js";
+export {
+  type CodexBinaryResolution,
+  probeCodexCapability,
+  resolveCodexRuntimeBinary,
+} from "./runtime/capabilities/codex.js";
 export {
   CAPABILITY_REFRESH_BASE_MS,
   CAPABILITY_REFRESH_MAX_MS,
@@ -49,6 +54,16 @@ export type {
 export { CHILD_CATEGORIES, getChildProcessRegistry } from "./runtime/child-process-registry.js";
 export type { CliBinding } from "./runtime/cli-binding.js";
 export { setCliBinding } from "./runtime/cli-binding.js";
+// Runtime-auth (device-code login)
+export {
+  type CodexDeviceAuthOptions,
+  DEVICE_AUTH_TIMEOUT_MS,
+  type DeviceAuthOutcome,
+  type DeviceCodePrompt,
+  parseDeviceCodePrompt,
+  runCodexDeviceAuthLogin,
+  stripAnsi,
+} from "./runtime/codex-device-auth.js";
 export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
 export { loadRuntimeConfig } from "./runtime/config.js";
 export { Deduplicator } from "./runtime/deduplicator.js";

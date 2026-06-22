@@ -4,7 +4,7 @@ import {
   reprobeOnReconnect,
   revalidateCapabilities,
 } from "@first-tree/client";
-import type { ClientCapabilities } from "@first-tree/shared";
+import type { CapabilityEntry, ClientCapabilities } from "@first-tree/shared";
 
 const EMPTY_OMITTED_KEYS = new Set<string>();
 const VOLATILE_CAPABILITY_FIELDS = new Set(["detectedAt", "latencyMs"]);
@@ -142,6 +142,34 @@ export class CapabilityRefresher {
   stop(): void {
     this.stopped = true;
     this.clearPending();
+  }
+
+  /**
+   * Latest known capability entry for a provider, or undefined. The runtime-auth
+   * login flow reads this to preserve a provider's existing fields (version,
+   * runtimeSource) while it attaches/clears a pending device-code.
+   */
+  currentEntry(provider: string): CapabilityEntry | undefined {
+    return this.snapshot?.[provider];
+  }
+
+  /**
+   * Replace a single provider's entry in the snapshot and upload the merged
+   * snapshot (deduped), then re-arm the poll so convergence continues. The
+   * runtime-auth login flow uses this to surface a pending device-code
+   * immediately and to clear it after the post-login re-probe — without waiting
+   * for the next scheduled poll. Best-effort upload: a failure is logged and a
+   * later poll retries.
+   */
+  async setProviderEntry(provider: string, entry: CapabilityEntry): Promise<void> {
+    const next: ClientCapabilities = { ...(this.snapshot ?? {}), [provider]: entry };
+    this.snapshot = next;
+    try {
+      await this.uploadIfChanged(next);
+    } catch (err) {
+      this.deps.log("⚠️", `capabilities upload skipped: ${message(err)}`);
+    }
+    this.scheduleNext();
   }
 
   private clearPending(): void {

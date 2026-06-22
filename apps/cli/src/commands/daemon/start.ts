@@ -39,6 +39,7 @@ import {
   promptUpdate,
   reconcileLocalRuntimeProviders,
   refreshServerUpdateTarget,
+  runRuntimeAuthLogin,
   startClientService,
   uploadAgentSkills,
   uploadClientCapabilities,
@@ -267,6 +268,19 @@ export function registerDaemonStartCommand(daemon: Command): void {
           log: (symbol, msg) => print.status(symbol, msg),
         });
         runtime.onReconnect(() => capabilityRefresher.onReconnect());
+
+        // In-product runtime-auth: the server pushes `runtime-auth:start` when a
+        // member clicks "Connect <provider>" in the console. The daemon drives
+        // the provider's official login on this host and surfaces progress
+        // (device code / success / failure) by re-PATCHing capabilities through
+        // the refresher, which the web already polls — no bespoke channel.
+        runtime.onRuntimeAuthStart((command) => {
+          void runRuntimeAuthLogin(command, {
+            currentEntry: (provider) => capabilityRefresher.currentEntry(provider),
+            setProviderEntry: (provider, entry) => capabilityRefresher.setProviderEntry(provider, entry),
+            log: (symbol, msg) => print.status(symbol, msg),
+          });
+        });
 
         await runtime.start();
 

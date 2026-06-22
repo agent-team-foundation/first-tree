@@ -16,7 +16,11 @@ import {
   inboxDeliverFrameSchema,
   inboxRecoverAcceptedFrameSchema,
   inboxRecoverRejectedFrameSchema,
+  RUNTIME_AUTH_START_TYPE,
+  type RuntimeAuthMethod,
+  type RuntimeProvider,
   type RuntimeState,
+  runtimeAuthStartCommandSchema,
   type ServerWelcomeFrame,
   type SessionEvent,
   type SessionState,
@@ -134,6 +138,18 @@ export type SessionReconcileResult = {
 };
 
 /**
+ * Server→client command to begin an in-product runtime-auth login (connect a
+ * provider's credentials on this host without a separate CLI install). The
+ * daemon runs the provider's official login and surfaces progress by
+ * re-PATCHing capabilities. See `runtimeAuthStartCommandSchema` in shared.
+ */
+export type RuntimeAuthCommand = {
+  provider: RuntimeProvider;
+  method?: RuntimeAuthMethod;
+  ref: string;
+};
+
+/**
  * Welcome frame received after `auth:ok`. `isReconnect` is true for every
  * occurrence after the first welcome in the lifetime of this `ClientConnection`
  * — lets consumers (UpdateManager) distinguish a cold-start install from a
@@ -167,6 +183,7 @@ type ClientConnectionEvents = {
    */
   "agent:pinned": [message: AgentPinnedMessage];
   "session:command": [command: SessionCommand];
+  "runtime-auth:start": [command: RuntimeAuthCommand];
   "session:reconcile:result": [result: SessionReconcileResult];
   "auth:expired": [];
   /**
@@ -1377,6 +1394,15 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const chatId = msg.chatId as string;
       if (agentId && chatId) {
         this.emit("session:command", { type: type as SessionCommand["type"], agentId, chatId });
+      }
+      return;
+    }
+
+    if (type === RUNTIME_AUTH_START_TYPE) {
+      const parsed = runtimeAuthStartCommandSchema.safeParse(msg);
+      if (parsed.success) {
+        const { provider, method, ref } = parsed.data;
+        this.emit("runtime-auth:start", { provider, method, ref });
       }
       return;
     }
