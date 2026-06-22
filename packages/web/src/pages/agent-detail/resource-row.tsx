@@ -46,6 +46,9 @@ export function ResourceRowView(props: {
   /** Noun for the expand/collapse control's aria-label (e.g. "instructions"), so the
    *  shared row still announces WHAT expands. Falls back to a bare "Expand"/"Collapse". */
   expandLabel?: string;
+  /** Leading type glyph (repo / skill / MCP / instruction) so the four resource
+   *  kinds are distinguishable at a glance. A small line icon, tinted --fg-4. */
+  leadingIcon?: ReactNode;
 }): ReactNode {
   const expanded = !!props.expand?.expanded;
   const canExpand = !props.editor && !!props.expand?.canExpand;
@@ -62,7 +65,12 @@ export function ResourceRowView(props: {
           they sit on one row with the actions right-aligned. */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
         <div className="min-w-0 flex-1">
-          <RowHeading name={props.name} source={props.source} status={props.status} />
+          <RowHeading
+            name={props.name}
+            source={props.source}
+            status={props.status}
+            leadingIcon={props.leadingIcon}
+          />
         </div>
         {props.actions || canExpand ? (
           <div className="flex flex-wrap items-center gap-1 shrink-0">
@@ -115,9 +123,24 @@ export function ResourceRowView(props: {
   );
 }
 
-function RowHeading({ name, source, status }: { name: ReactNode | null; source: ReactNode; status?: RowStatusMarker }) {
+function RowHeading({
+  name,
+  source,
+  status,
+  leadingIcon,
+}: {
+  name: ReactNode | null;
+  source: ReactNode;
+  status?: RowStatusMarker;
+  leadingIcon?: ReactNode;
+}) {
   return (
     <span className="inline-flex items-center gap-2">
+      {leadingIcon ? (
+        <span className="inline-flex shrink-0 items-center" style={{ color: "var(--fg-4)" }} aria-hidden>
+          {leadingIcon}
+        </span>
+      ) : null}
       {name ? (
         <span className="text-body font-medium truncate" style={{ color: "var(--fg)" }}>
           {name}
