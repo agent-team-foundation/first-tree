@@ -1,6 +1,5 @@
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { ReactNode } from "react";
-import { Button } from "../../components/ui/button.js";
 import { DenseBadge, type DenseBadgeTone } from "../../components/ui/dense-badge.js";
 import { RowActionsMenu, type RowAction as RowMenuAction } from "../../components/ui/row-actions-menu.js";
 import { Switch } from "../../components/ui/switch.js";
@@ -74,7 +73,9 @@ export function ResourceRowView(props: {
   const canExpand = !props.editor && !!props.expand?.canExpand;
   const showSunken = props.editor ? true : expanded && !!props.expand?.body;
   const hasMenu = !!props.menu && props.menu.actions.length > 0;
-  const showCluster = !!props.toggle || hasMenu || canExpand;
+  // Expand is triggered by clicking the row heading (de-crowd), not a separate
+  // chevron button — so the right cluster carries only the Switch + ⋯.
+  const showCluster = !!props.toggle || hasMenu;
   return (
     <div
       data-dimmed={props.dimmed ? "true" : undefined}
@@ -88,13 +89,38 @@ export function ResourceRowView(props: {
           sm+ they sit on one row with the controls right-aligned. */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
         <div className="min-w-0 flex-1">
-          <RowHeading
-            name={props.name}
-            source={props.source}
-            status={props.status}
-            leadingIcon={props.leadingIcon}
-            dimmed={props.dimmed}
-          />
+          {canExpand ? (
+            <button
+              type="button"
+              aria-expanded={expanded}
+              aria-label={
+                expanded
+                  ? `Collapse${props.expandLabel ? ` ${props.expandLabel}` : ""}`
+                  : `Expand${props.expandLabel ? ` ${props.expandLabel}` : ""}`
+              }
+              onClick={props.expand?.onToggle}
+              className="block w-full text-left"
+              style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer" }}
+            >
+              <RowHeading
+                name={props.name}
+                source={props.source}
+                status={props.status}
+                leadingIcon={props.leadingIcon}
+                dimmed={props.dimmed}
+                expandable
+                expanded={expanded}
+              />
+            </button>
+          ) : (
+            <RowHeading
+              name={props.name}
+              source={props.source}
+              status={props.status}
+              leadingIcon={props.leadingIcon}
+              dimmed={props.dimmed}
+            />
+          )}
         </div>
         {showCluster ? (
           <div className="flex flex-wrap items-center gap-1 shrink-0">
@@ -107,22 +133,6 @@ export function ResourceRowView(props: {
               />
             ) : null}
             {props.menu ? <RowActionsMenu actions={props.menu.actions} ariaLabel={props.menu.ariaLabel} /> : null}
-            {canExpand ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="ghost"
-                aria-expanded={expanded}
-                aria-label={
-                  expanded
-                    ? `Collapse${props.expandLabel ? ` ${props.expandLabel}` : ""}`
-                    : `Expand${props.expandLabel ? ` ${props.expandLabel}` : ""}`
-                }
-                onClick={props.expand?.onToggle}
-              >
-                {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-              </Button>
-            ) : null}
           </div>
         ) : null}
       </div>
@@ -161,12 +171,17 @@ function RowHeading({
   status,
   leadingIcon,
   dimmed,
+  expandable,
+  expanded,
 }: {
   name: ReactNode | null;
   source: ReactNode;
   status?: RowStatusMarker;
   leadingIcon?: ReactNode;
   dimmed?: boolean;
+  /** When the heading itself is the expand trigger, show a subtle affordance. */
+  expandable?: boolean;
+  expanded?: boolean;
 }) {
   return (
     <span className="inline-flex items-center gap-2">
@@ -187,6 +202,11 @@ function RowHeading({
         <DenseBadge tone={status.tone} className="shrink-0">
           {status.label}
         </DenseBadge>
+      ) : null}
+      {expandable ? (
+        <span className="inline-flex shrink-0 items-center" style={{ color: "var(--fg-4)" }} aria-hidden>
+          {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+        </span>
       ) : null}
     </span>
   );

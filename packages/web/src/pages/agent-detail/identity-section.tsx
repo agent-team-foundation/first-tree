@@ -39,7 +39,7 @@ export function IdentitySection({
   onEdit,
   saved = false,
   title = "Identity",
-  description = "Identity saves immediately; runtime behavior is configured from the other tabs.",
+  description,
   aside,
 }: IdentitySectionProps) {
   const resolveAgent = useAgentIdentityMap();

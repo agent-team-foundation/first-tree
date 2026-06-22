@@ -274,15 +274,28 @@ describe("UsageTab", () => {
     expect(container.textContent).toContain("Active days");
     expect(container.textContent).toContain("Peak day");
     expect(container.textContent).toContain("Recent turns");
-    expect(container.textContent).toContain("Daily processed tokens. Darker cells mean more usage.");
+    expect(container.textContent).toContain("Daily processed tokens.");
+    expect(container.textContent).not.toContain("Darker cells mean more usage");
     expect(
       activityCells.find((cell) => cell.getAttribute("aria-label")?.includes("10.5K processed tokens")),
     ).toBeDefined();
-    expect(container.textContent).toContain("Your most recent turns from the last 30 days.");
+    // Recent turns: the window moved into the title and the standalone subtitle is gone.
+    expect(container.textContent).not.toContain("Your most recent turns from the last 30 days.");
+    expect(container.textContent).toContain("last 30 days");
     expect(container.textContent).toContain("Launch planning");
     expect(container.textContent).toContain("private chat");
-    expect(container.textContent).toContain("claude-code/sonnet");
+    // Model column kept but slimmed: provider prefix dropped from the visible chip
+    // (model name only), the full provider/model stays on hover via title.
+    expect(container.textContent).toContain("sonnet");
+    expect(container.textContent).not.toContain("claude-code/sonnet");
+    expect(
+      [...container.querySelectorAll("[title]")].some((el) => el.getAttribute("title") === "claude-code/sonnet"),
+    ).toBe(true);
+    // Numbers stay compact in-cell, with the exact value on hover (title).
     expect(container.textContent).toContain("46.2K");
+    expect(
+      [...container.querySelectorAll("[title]")].some((el) => (el.getAttribute("title") ?? "").includes("12,000")),
+    ).toBe(true);
     expect(usageMocks.getAgentUsageSummary).toHaveBeenCalledWith("agent-1", "30d");
     expect(usageMocks.getAgentUsageTurns).toHaveBeenCalledWith("agent-1", {
       window: "30d",

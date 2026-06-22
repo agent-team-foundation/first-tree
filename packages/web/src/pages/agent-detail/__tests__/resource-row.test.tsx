@@ -113,4 +113,28 @@ describe("ResourceRowView — converged action slots", () => {
     );
     expect(container.querySelector('[data-dimmed="true"]')).toBeTruthy();
   });
+
+  it("expands via the row heading (no separate chevron button), keeping the cluster to Switch + ⋯", async () => {
+    const toggles: number[] = [];
+    render(
+      <ResourceRowView
+        name="Style guide"
+        source="From your team"
+        expandLabel="instructions"
+        toggle={{ checked: true, ariaLabel: "Enable Style guide", onChange: () => {} }}
+        expand={{ canExpand: true, expanded: false, onToggle: () => toggles.push(1), body: <p>Full body</p> }}
+      />,
+    );
+    // The heading itself is the expand trigger; clicking it fires onToggle.
+    const heading = container.querySelector('button[aria-label="Expand instructions"]');
+    expect(heading).toBeTruthy();
+    await click(heading);
+    expect(toggles).toEqual([1]);
+    // Only the Switch lives in the right cluster — no extra chevron button.
+    const buttons = [...container.querySelectorAll("button")];
+    const switches = buttons.filter((b) => b.getAttribute("role") === "switch");
+    expect(switches).toHaveLength(1);
+    // The expand control is the heading (aria-label), not a duplicate chevron button.
+    expect(buttons.filter((b) => b.getAttribute("aria-label") === "Expand instructions")).toHaveLength(1);
+  });
 });

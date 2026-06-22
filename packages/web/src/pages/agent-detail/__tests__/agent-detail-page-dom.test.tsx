@@ -473,7 +473,7 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Effective instructions");
+    await waitForText(container, "What this agent is told");
     expect(container.textContent).toContain("Vega");
     expect(container.textContent).toContain("1 active");
     expect(container.textContent).toContain("Chat");
@@ -487,14 +487,14 @@ describe("AgentDetailPage", () => {
     ]);
     expect(container.textContent).toContain("Always explain tradeoffs.");
     await waitForText(container, "Team style guide");
-    expect(container.textContent).toContain("Use the team style guide.");
+    expect(container.textContent).toContain("Team style guide");
     expect(container.textContent).toContain("Added by you");
 
     // The custom prompt's edit action now lives in the row's ⋯ overflow menu.
     await clickRowMenuItem(container, "More actions for Custom instructions", "Edit custom instructions");
     await waitForText(container, "Save instructions");
     expect(container.textContent).toContain("Team style guide");
-    expect(container.textContent).toContain("Use the team style guide.");
+    expect(container.textContent).toContain("Team style guide");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("Always explain tradeoffs.");
     expect(textarea?.style.minHeight).toBe("16rem");
@@ -575,7 +575,7 @@ describe("AgentDetailPage", () => {
 
     await clickRowMenuItem(container, "More actions for Custom instructions", "Edit custom instructions");
     await waitForText(container, "Save instructions");
-    expect(container.textContent).toContain("Use the team style guide.");
+    expect(container.textContent).toContain("Team style guide");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
     expect(textarea?.value).toBe("");
     if (!textarea) throw new Error("Expected custom prompt textarea");
@@ -632,7 +632,7 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Effective instructions");
+    await waitForText(container, "What this agent is told");
     await clickRowMenuItem(container, "More actions for Team style guide", "Customize for this agent");
     await waitForText(container, "Save instructions");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
@@ -700,7 +700,7 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Effective instructions");
+    await waitForText(container, "What this agent is told");
     await clickRowMenuItem(container, "More actions for Team style guide", "Customize for this agent");
     await waitForText(container, "Save instructions");
     const textarea = container.querySelector<HTMLTextAreaElement>("#custom-prompt-body");
@@ -769,7 +769,7 @@ describe("AgentDetailPage", () => {
     );
 
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Effective instructions");
+    await waitForText(container, "What this agent is told");
     // Disabling a recommended prompt is now the row's Switch, toggled off.
     await click(container.querySelector('button[role="switch"]'));
     await waitForCondition(
@@ -885,7 +885,7 @@ describe("AgentDetailPage", () => {
   it("starts a draft chat with the current agent from the header", async () => {
     const { PromptTab } = await import("../prompt-tab.js");
     const { container, root } = await renderDom("/agents/agent-1/prompt", <PromptTab />);
-    await waitForText(container, "Effective instructions");
+    await waitForText(container, "What this agent is told");
 
     await click(container.querySelector('button[aria-label="Start chat"]'));
     await waitForText(container, "/?c=draft&with=agent-1");
@@ -937,7 +937,7 @@ describe("AgentDetailPage", () => {
     expect(active.container.textContent).toContain("@vega");
     expect(active.container.textContent).toContain("Owner");
     expect(active.container.textContent).toContain("Agent lifecycle");
-    expect(active.container.textContent).toContain("Lifecycle changes save immediately.");
+    expect(active.container.textContent).not.toContain("Lifecycle changes save immediately.");
     expect(
       [...active.container.querySelectorAll("section h2")].filter((heading) =>
         heading.textContent?.includes("Agent lifecycle"),

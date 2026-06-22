@@ -123,7 +123,7 @@ function ActivityBlock({
           </span>
         </>
       }
-      description="Daily processed tokens. Darker cells mean more usage."
+      description="Daily processed tokens."
       action={<DensityLegend />}
     >
       {isError ? (
@@ -342,7 +342,16 @@ function RecentTurnsBlock({
   onShowMore: () => void;
 }): ReactElement {
   return (
-    <Section title="Recent turns" description="Your most recent turns from the last 30 days.">
+    <Section
+      title={
+        <>
+          Recent turns{" "}
+          <span className="font-normal" style={{ color: "var(--fg-4)" }}>
+            · last 30 days
+          </span>
+        </>
+      }
+    >
       {isError ? (
         <UsagePlaceholder tone="error">Failed to load recent turns.</UsagePlaceholder>
       ) : isLoading ? (
@@ -374,6 +383,8 @@ function TurnsTable({
 }): ReactElement {
   const processedFor = (r: UsageTurnRow) => processedTokenCount(r);
   const max = Math.max(1, ...rows.map(processedFor));
+  // Keep all columns; slim each one (gandy's call): model name only, Chat
+  // truncated with a tooltip, and compact numbers with the exact value on hover.
   return (
     <div className="usage-turn-scroll">
       <table className="usage-turn-table w-full" style={{ borderCollapse: "collapse", marginTop: "var(--sp-1)" }}>
@@ -401,8 +412,11 @@ function TurnsTable({
                     <button
                       type="button"
                       onClick={() => onOpenChat(r.chatId)}
-                      className="text-body font-medium"
+                      title={r.chatTitle}
+                      className="text-body font-medium truncate"
                       style={{
+                        display: "block",
+                        maxWidth: "var(--sp-70)",
                         background: "transparent",
                         border: 0,
                         padding: 0,
@@ -422,17 +436,29 @@ function TurnsTable({
                 <td>
                   <ModelChip provider={r.provider} model={r.model} />
                 </td>
-                <td className="mono text-body" style={{ textAlign: "right", color: "var(--fg-2)" }}>
+                <td
+                  className="mono text-body"
+                  style={{ textAlign: "right", color: "var(--fg-2)" }}
+                  title={fullCount(r.inputTokens)}
+                >
                   {formatCompactCount(r.inputTokens)}
                 </td>
-                <td className="mono text-body" style={{ textAlign: "right", color: "var(--fg-3)" }}>
+                <td
+                  className="mono text-body"
+                  style={{ textAlign: "right", color: "var(--fg-3)" }}
+                  title={fullCount(r.cachedInputTokens)}
+                >
                   {formatCompactCount(r.cachedInputTokens)}
                 </td>
-                <td className="mono text-body" style={{ textAlign: "right", color: "var(--fg-2)" }}>
+                <td
+                  className="mono text-body"
+                  style={{ textAlign: "right", color: "var(--fg-2)" }}
+                  title={fullCount(r.outputTokens)}
+                >
                   {formatCompactCount(r.outputTokens)}
                 </td>
                 <td>
-                  <div className="usage-turn-total-cell">
+                  <div className="usage-turn-total-cell" title={fullCount(processed)}>
                     <span className="mono text-body">{formatCompactCount(processed)}</span>
                     <div
                       role="img"
@@ -456,10 +482,17 @@ function thStyle(align: "left" | "right"): CSSProperties {
   return { textAlign: align };
 }
 
+/** Exact token count with thousands separators, for the per-cell hover title. */
+function fullCount(n: number): string {
+  return `${n.toLocaleString("en-US")} tokens`;
+}
+
+/** Model chip — model name only (provider dropped for width); the full
+ *  `provider/model` stays available on hover. */
 function ModelChip({ provider, model }: { provider: string; model: string }): ReactElement {
   return (
-    <span className="usage-model-chip mono text-caption">
-      {provider}/{model}
+    <span className="usage-model-chip mono text-caption" title={`${provider}/${model}`}>
+      {model}
     </span>
   );
 }

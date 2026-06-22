@@ -4,19 +4,11 @@ import {
   PROMPT_APPEND_MAX_LENGTH,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { Navigate } from "react-router";
 import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
 import { Button } from "../../components/ui/button.js";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "../../components/ui/dialog.js";
 import { Markdown } from "../../components/ui/markdown.js";
 import { Popover } from "../../components/ui/popover.js";
 import type { RowAction as RowMenuAction } from "../../components/ui/row-actions-menu.js";
@@ -130,22 +122,19 @@ export function PromptTab() {
     <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
       <Section
         title={titleWithSemantics("Instructions", justSaved)}
-        description="Team and your own instructions for this agent — toggle, customize, or add your own."
         action={
-          <div className="flex items-center gap-2">
-            <EffectiveInstructionsTrigger prompt={prompt} />
-            {canEditPrompt && !resourceError && !editor && resources ? (
-              <AddInstructionsMenu
-                available={availablePrompts}
-                pending={bindingMut.isPending}
-                onAddCustom={() => openPromptEditor(null)}
-                onEnable={enablePrompt}
-                onNavigateAway={ctx.navigateAway}
-              />
-            ) : null}
-          </div>
+          canEditPrompt && !resourceError && !editor && resources ? (
+            <AddInstructionsMenu
+              available={availablePrompts}
+              pending={bindingMut.isPending}
+              onAddCustom={() => openPromptEditor(null)}
+              onEnable={enablePrompt}
+              onNavigateAway={ctx.navigateAway}
+            />
+          ) : null
         }
       >
+        <EffectiveInstructionsBlock prompt={prompt} />
         <div>
           {resources ? (
             <PromptResourceBlocks
@@ -182,41 +171,61 @@ export function PromptTab() {
   );
 }
 
-// On-demand `Effective instructions` dialog. Replaces the always-on bottom
-// section: the merged runtime truth (`ctx.config.payload.prompt.append`, after
-// every override) is revealed in a centered modal — same dialog pattern as the
-// rest of the app — only when asked for. Long bodies scroll inside the modal.
-function EffectiveInstructionsTrigger(props: { prompt: string }) {
+// Result-first: the merged runtime instructions (`ctx.config.payload.prompt.append`,
+// after every team prompt + override) are surfaced at the TOP of the tab as the
+// thing the agent actually runs with — replacing the old on-demand 👁 modal. Long
+// bodies clamp to ~8 lines with a Show all toggle; the source list below is for
+// management (toggle / customize / add).
+function EffectiveInstructionsBlock({ prompt }: { prompt: string }) {
+  const [showAll, setShowAll] = useState(false);
+  const [clamped, setClamped] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when the prompt text changes.
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (el) setClamped(el.scrollHeight > el.clientHeight + 2);
+  }, [prompt]);
+
   return (
-    <Dialog>
-      <DialogTrigger asChild>
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          aria-label="Effective instructions"
-          title="Effective instructions"
-        >
-          <Eye className="h-3 w-3" />
-          Effective instructions
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Effective instructions</DialogTitle>
-          <DialogDescription>
-            The full instructions this agent runs with, after your changes — team and custom, in order.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="text-body" style={{ maxHeight: "60vh", overflowY: "auto" }}>
-          {props.prompt ? (
-            <Markdown>{props.prompt}</Markdown>
-          ) : (
-            <span className="text-muted-foreground">No instructions yet.</span>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+    <div style={{ marginBottom: "var(--sp-4)" }}>
+      <p className="text-eyebrow" style={{ color: "var(--fg-3)", margin: "0 0 var(--sp-1_5)" }}>
+        What this agent is told
+      </p>
+      {prompt.trim() ? (
+        <>
+          <div
+            ref={bodyRef}
+            className="text-body"
+            style={{
+              background: "var(--bg-sunken)",
+              border: "var(--hairline) solid var(--border-faint)",
+              borderRadius: "var(--radius-panel)",
+              padding: "var(--sp-3)",
+              maxHeight: showAll ? undefined : "var(--sp-35)",
+              overflow: showAll ? undefined : "hidden",
+            }}
+          >
+            <Markdown>{prompt}</Markdown>
+          </div>
+          {clamped || showAll ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              aria-expanded={showAll}
+              onClick={() => setShowAll((v) => !v)}
+              style={{ marginTop: "var(--sp-1)" }}
+            >
+              {showAll ? "Collapse" : "Show all"}
+            </Button>
+          ) : null}
+        </>
+      ) : (
+        <p className="text-body" style={{ color: "var(--fg-4)", margin: 0 }}>
+          No extra instructions — this agent runs on its base profile only.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -602,10 +611,10 @@ function PromptPanel(props: { children: ReactNode; minHeight?: string; sunken?: 
 }
 
 // One instruction row — a thin wrapper over the shared `ResourceRowView`
-// primitive (the same flat skeleton the Tools & skills / Environment resource
-// rows use): name → source → status, right-aligned ghost actions, a one-line
-// peek, and an in-place sunken expansion holding the full Markdown or the inline
-// editor. Short, single-line prompts have no chevron, so the list stays calm.
+// primitive (the same flat skeleton the Tools & skills / Repositories rows use):
+// name → source → status, plus Switch / ⋯. De-crowded: no per-row body peek —
+// click the row to read the full Markdown in the sunken block (the merged net
+// result lives in the top Effective block).
 function PromptResourceBlock(props: {
   name: string | null;
   source: EffectivePromptRow["source"];
@@ -619,27 +628,26 @@ function PromptResourceBlock(props: {
   /** When present (editor active), the sunken area shows this instead of Markdown. */
   editor?: ReactNode;
 }) {
-  const peek = peekLine(props.body);
-  // Trivially-short single-line prompts need no expander.
-  const canExpand = props.body.length > 120 || props.body.includes("\n");
+  // Any non-empty body is readable on demand (click the row); only the empty
+  // orphan binding falls back to the "No instructions yet." hint so it stays
+  // editable/removable.
+  const hasBody = props.body.trim().length > 0;
   return (
     <ResourceRowView
       name={props.name}
       source={sourceLabel(props.source)}
       status={props.marker}
-      peek={peek || undefined}
       toggle={props.toggle}
       menu={props.menu}
       dimmed={props.dimmed}
-      emptyPeek="No instructions yet."
+      emptyPeek={hasBody ? undefined : "No instructions yet."}
       expandLabel="instructions"
       leadingIcon={resourceTypeIcon("prompt")}
       expand={{
-        canExpand,
+        canExpand: hasBody,
         expanded: props.expanded,
         onToggle: props.onToggle,
-        // Cap prose to a readable measure (~66–75ch), matching the Effective
-        // instructions dialog (max-w-2xl) instead of stretching the full rail.
+        // Cap prose to a readable measure (~66–75ch) instead of the full rail.
         body: props.body ? (
           <div className="max-w-2xl">
             <Markdown>{props.body}</Markdown>
@@ -649,16 +657,6 @@ function PromptResourceBlock(props: {
       editor={props.editor ?? undefined}
     />
   );
-}
-
-// First non-empty line of the body, for the single-line truncated peek. Markdown
-// heading markers are stripped so the peek reads as plain text.
-function peekLine(body: string): string {
-  for (const raw of body.split("\n")) {
-    const line = raw.replace(/^#+\s*/, "").trim();
-    if (line) return line;
-  }
-  return "";
 }
 
 // Per-section add control on the Instructions tab. One "+" trigger opens a menu:
