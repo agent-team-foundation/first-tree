@@ -65,12 +65,7 @@ export function ResourceRowView(props: {
           they sit on one row with the actions right-aligned. */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
         <div className="min-w-0 flex-1">
-          <RowHeading
-            name={props.name}
-            source={props.source}
-            status={props.status}
-            leadingIcon={props.leadingIcon}
-          />
+          <RowHeading name={props.name} source={props.source} status={props.status} leadingIcon={props.leadingIcon} />
         </div>
         {props.actions || canExpand ? (
           <div className="flex flex-wrap items-center gap-1 shrink-0">
