@@ -438,11 +438,14 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).not.toMatch(/reach path/i);
     expect(briefing).not.toMatch(/decoupled channels/i);
 
-    // yuezengwu 2026-06-23: the visibility WHY is stated WITHOUT reviving any
-    // output-streaming framing — a teammate only sees what you `chat send`, so
-    // no send is no reply. Worded to clear every guard above.
-    expect(briefing).toMatch(/only ever sees what you `?chat send`?/);
-    expect(briefing).toMatch(/the human sees nothing at all/);
+    // yuezengwu 2026-06-23: the WHY is stated as a mechanism (working text is
+    // not a delivered message, so you must send) WITHOUT reviving any
+    // output-streaming framing AND without absolutizing it to `chat send` —
+    // `chat ask` / `chat update` stay valid human-visible channels (codex R1).
+    expect(briefing).toMatch(/not a message addressed to anyone/);
+    expect(briefing).toMatch(/has sent nothing/);
+    // Must NOT claim chat send is the sole channel a teammate ever sees.
+    expect(briefing).not.toMatch(/only ever sees what you `?chat send`?/);
 
     // Courtesy-send guard stays — the brake is on the *send* side.
     expect(briefing).toContain("Don't fire a courtesy");
