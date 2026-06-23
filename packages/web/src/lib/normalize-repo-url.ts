@@ -17,9 +17,12 @@ export function normalizeRepoUrl(raw: string): string {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value;
   // scp-like SSH: user@host:path (e.g. git@github.com:org/repo.git).
   if (/^[^@/\s]+@[^/\s:]+:[^/\s]/.test(value)) return value;
-  // Scheme-less host path: "host.tld/owner/repo…" — prepend https://.
-  if (/^[^/\s]+\.[^/\s]+\/\S+/.test(value)) return `https://${value}`;
-  // GitHub shorthand: "owner/repo" (exactly one segment pair, no host).
+  // Scheme-less host path: "host.tld/owner/repo". Fully anchored (^…$) and
+  // whitespace-free so trailing junk (e.g. "github.com/x/y extra") is NOT wrapped
+  // into a valid-looking URL — unrecognized input must fall through to schema
+  // validation, which rejects it.
+  if (/^[^/\s]+\.[^/\s]+\/\S+$/.test(value)) return `https://${value}`;
+  // GitHub shorthand: exactly "owner/repo" (no host, anchored, no trailing junk).
   if (/^[^/\s]+\/[^/\s]+$/.test(value)) return `https://github.com/${value}`;
   return value;
 }

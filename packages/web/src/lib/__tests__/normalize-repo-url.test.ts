@@ -33,4 +33,13 @@ describe("normalizeRepoUrl", () => {
     expect(normalizeRepoUrl("   ")).toBe("");
     expect(normalizeRepoUrl("not a url")).toBe("not a url");
   });
+
+  it("does not fabricate a URL from input with trailing junk after the path", () => {
+    // The host-path / shorthand matches are fully anchored, so trailing text or
+    // internal whitespace leaves the input untouched for the schema to reject —
+    // it is never silently wrapped into a valid-looking https URL.
+    expect(normalizeRepoUrl("github.com/acme/web extra")).toBe("github.com/acme/web extra");
+    expect(normalizeRepoUrl("acme/web extra")).toBe("acme/web extra");
+    expect(normalizeRepoUrl("github.com/acme/web\tnope")).toBe("github.com/acme/web\tnope");
+  });
 });
