@@ -131,8 +131,9 @@ type AuthContextValue = {
    * Switch the active organization view. Pure client-side state — the
    * /orgs/:orgId/* routes themselves probe membership in real time on
    * every request, so a stale or unauthorized selection just yields a
-   * clean 403 from the next API call. Does NOT re-issue tokens or touch
-   * the WS connection.
+   * clean 403 from the next API call. Does NOT re-issue tokens; it does
+   * signal the org-scoped admin WebSocket to reconnect against the new
+   * org (`ADMIN_WS_ORG_CHANGED_EVENT`).
    */
   selectOrganization: (organizationId: string) => Promise<void>;
   refreshMe: () => Promise<void>;
