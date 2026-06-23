@@ -436,6 +436,95 @@ describe("sweepChatArchive — mapped source=github branch", () => {
     // h2 had no prior row — sweeper materialises one in 'archived'.
     expect(await getEngagement(app, chatId, h2)).toBe("archived");
   });
+
+  it("does not let non-archivable mapped rows consume the mapped batch", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const human = await seedHumanAgent(app, admin.organizationId, admin.memberId);
+    const delegate = await seedDelegateAgent(app, admin.organizationId, admin.memberId);
+
+    const archivedChatId = await seedChat(
+      app,
+      admin.organizationId,
+      longAgo(),
+      githubMetadata("owner/repo#already-archived"),
+    );
+    const deletedChatId = await seedChat(app, admin.organizationId, longAgo(), githubMetadata("owner/repo#deleted"));
+    const unreadChatId = await seedChat(app, admin.organizationId, longAgo(), githubMetadata("owner/repo#unread"));
+    const targetChatId = await seedChat(app, admin.organizationId, longAgo(), githubMetadata("owner/repo#target"));
+
+    await app.db.insert(githubEntityChatMappings).values([
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "pull_request",
+        entityKey: "owner/repo#already-archived",
+        chatId: archivedChatId,
+        boundVia: "direct",
+        entityState: "merged",
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "pull_request",
+        entityKey: "owner/repo#deleted",
+        chatId: deletedChatId,
+        boundVia: "direct",
+        entityState: "merged",
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "pull_request",
+        entityKey: "owner/repo#unread",
+        chatId: unreadChatId,
+        boundVia: "direct",
+        entityState: "merged",
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: human,
+        delegateAgentId: delegate,
+        entityType: "pull_request",
+        entityKey: "owner/repo#target",
+        chatId: targetChatId,
+        boundVia: "direct",
+        entityState: "merged",
+      },
+    ]);
+
+    await app.db.insert(chatUserState).values([
+      {
+        chatId: archivedChatId,
+        agentId: human,
+        engagementStatus: "archived",
+        unreadMentionCount: 0,
+      },
+      {
+        chatId: deletedChatId,
+        agentId: human,
+        engagementStatus: "deleted",
+        unreadMentionCount: 0,
+      },
+      {
+        chatId: unreadChatId,
+        agentId: human,
+        engagementStatus: "active",
+        unreadMentionCount: 1,
+      },
+    ]);
+
+    const result = await sweepChatArchive(app.db, { batchSize: 1 });
+
+    expect(result.mappedRowsArchived).toBe(1);
+    expect(await getEngagement(app, archivedChatId, human)).toBe("archived");
+    expect(await getEngagement(app, deletedChatId, human)).toBe("deleted");
+    expect(await getEngagement(app, unreadChatId, human)).toBe("active");
+    expect(await getEngagement(app, targetChatId, human)).toBe("archived");
+  });
 });
 
 describe("sweepChatArchive — no-mapping source=github branch", () => {

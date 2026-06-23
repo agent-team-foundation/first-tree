@@ -70,28 +70,28 @@ export async function sweepChatArchive(
  * chat-level open-request guards.
  *
  * Implemented as a single `INSERT … SELECT … ON CONFLICT` round-trip:
- *  - The inner CTE picks chats whose `BOOL_AND(entity_state IN
- *    ('closed','merged'))`, GitHub source, open-request, and idle timestamp
- *    conditions all hold.
- *  - The outer SELECT joins back to the mapping table for the (chat,
- *    human) pairs. A second per-user guard excludes humans whose
- *    `unread_mention_count > 0` — the schema column is semantically
- *    overloaded as "any kind of unread" (see chat_user_state docstring and
- *    me-chat.ts:markChatUnread), so this also covers manually-marked-unread
- *    chats.
- *  - A LEFT JOIN on `chat_user_state` filters out rows that are already
- *    `archived`/`deleted` so we never even SELECT them again on the next
- *    tick (the `ON CONFLICT … WHERE` guard handles the race window).
+ *  - The CTE enumerates only archivable (chat, human) rows, then applies the
+ *    batch limit. Rows that are already archived/deleted, unread, blocked by
+ *    an open request, or attached to a non-terminal mapped entity never consume
+ *    the batch.
+ *  - The per-user unread guard excludes humans whose `unread_mention_count >
+ *    0` — the schema column is semantically overloaded as "any kind of unread"
+ *    (see chat_user_state docstring and me-chat.ts:markChatUnread), so this
+ *    also covers manually-marked-unread chats.
+ *  - The `ON CONFLICT … WHERE` guard keeps the write safe under a concurrent
+ *    state change between candidate selection and insert/update.
  *  - `parent_chat_id IS NULL` matches `listMeChats`'s defensive filter
  *    — First Tree has no sub-chat product, but historical rows may carry a
  *    non-null value and should stay invisible (and untouched).
  */
 async function sweepMapped(db: Database, idleSeconds: number, batchSize: number): Promise<number> {
   const rows = await db.execute<{ chat_id: string }>(sql`
-    WITH eligible_chats AS (
-      SELECT m.chat_id
+    WITH archivable_rows AS (
+      SELECT DISTINCT m.chat_id, m.human_agent_id
         FROM github_entity_chat_mappings m
         JOIN chats c ON c.id = m.chat_id
+        LEFT JOIN chat_user_state cus
+               ON cus.chat_id = m.chat_id AND cus.agent_id = m.human_agent_id
        WHERE c.parent_chat_id IS NULL
          AND c.metadata->>'source' = 'github'
          AND c.last_message_at IS NOT NULL
@@ -99,21 +99,22 @@ async function sweepMapped(db: Database, idleSeconds: number, batchSize: number)
          AND NOT EXISTS (
            SELECT 1
              FROM chat_user_state req
-            WHERE req.chat_id = c.id
-              AND req.open_request_count > 0
+           WHERE req.chat_id = c.id
+             AND req.open_request_count > 0
          )
-       GROUP BY m.chat_id
-      HAVING bool_and(m.entity_state IN ('closed', 'merged'))
+         AND NOT EXISTS (
+           SELECT 1
+             FROM github_entity_chat_mappings open_m
+            WHERE open_m.chat_id = m.chat_id
+              AND open_m.entity_state NOT IN ('closed', 'merged')
+         )
+         AND COALESCE(cus.engagement_status, 'active') = 'active'
+         AND COALESCE(cus.unread_mention_count, 0) = 0
        LIMIT ${batchSize}
     )
     INSERT INTO chat_user_state (chat_id, agent_id, unread_mention_count, engagement_status)
-    SELECT DISTINCT m.chat_id, m.human_agent_id, 0, 'archived'
-      FROM github_entity_chat_mappings m
-      JOIN eligible_chats e ON e.chat_id = m.chat_id
-      LEFT JOIN chat_user_state cus
-             ON cus.chat_id = m.chat_id AND cus.agent_id = m.human_agent_id
-     WHERE COALESCE(cus.engagement_status, 'active') = 'active'
-       AND COALESCE(cus.unread_mention_count, 0) = 0
+    SELECT chat_id, human_agent_id, 0, 'archived'
+      FROM archivable_rows
         ON CONFLICT (chat_id, agent_id) DO UPDATE
            SET engagement_status = 'archived'
          WHERE chat_user_state.engagement_status = 'active'
