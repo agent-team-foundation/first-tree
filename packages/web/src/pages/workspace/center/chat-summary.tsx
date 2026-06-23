@@ -1,13 +1,12 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "../../../components/ui/markdown.js";
-import { StatusGlyph } from "../../../components/ui/status-glyph.js";
 import { stripInlineMarkdown } from "../../../lib/strip-inline-markdown.js";
 import { formatRelative } from "../../../lib/utils.js";
 
 /**
- * Task summary — the chat's running summary (`chat.description`), surfaced as a
+ * Chat summary — the chat's running summary (`chat.description`), surfaced as a
  * pinned, collapsible strip between the chat header and the message stream
  * rather than buried in the right rail. Read-only: the description is the chat
  * `description`, maintained by agents via `chat update --description`; there is
@@ -15,24 +14,28 @@ import { formatRelative } from "../../../lib/utils.js";
  * agent in chat). The component renders the description's markdown faithfully —
  * it never invents sections, fields, or a "stage".
  *
+ * It belongs to the conversation content, not the header chrome: it shares the
+ * message-stream canvas (`--bg`) rather than a fill of its own, is separated
+ * from the white header (`--bg-raised`) above by a single hairline + the
+ * natural bg step, and lifts on a faint shadow only while the stream scrolls
+ * under it.
+ *
  * Two forms:
- *   - Collapsed (default): one line — an activity dot (green pulse when the
- *     description changed recently, else muted grey — a freshness signal, NOT a
- *     task stage), the description's first meaningful line (section headings
- *     skipped, markdown markers stripped, ellipsis-truncated), an "Updated" chip
- *     when there's an unread change, and the freshness ("9 days ago"). The bar
- *     shows the freshness in BOTH states, so an auto-expanded summary still
- *     surfaces when it last changed.
+ *   - Collapsed (default): one line — the description's first meaningful line
+ *     (section headings skipped, markdown markers stripped, ellipsis-truncated),
+ *     an "Updated" chip when there's an unread change, the freshness
+ *     ("9 days ago"), and a quiet chevron. Freshness shows in BOTH states, so an
+ *     auto-expanded summary still surfaces when it last changed.
  *   - Expanded: just the description rendered as markdown — no footer. Read-only
  *     is self-evident (no edit affordance anywhere); the updater name is not
  *     shown (single-agent maintenance makes it noise — the data stays on the
  *     chat detail).
  *
- * Auto behavior (SPEC §五): default collapsed; auto-expand once on entry ONLY
- * when the update is unread AND the viewer hasn't looked in a while; while
- * expanded, scrolling the stream folds it to the bar (restores at the top); a
- * manual toggle always wins and is remembered per chat. Renders nothing when
- * the chat has no description.
+ * Auto behavior: default collapsed; auto-expand once on entry ONLY when the
+ * update is unread AND the viewer hasn't looked in a while; while expanded,
+ * scrolling the stream folds it to the bar (restores at the top); a manual
+ * toggle always wins and is remembered per chat. Renders nothing when the chat
+ * has no description.
  */
 
 // Auto-expand "haven't looked in a while" gate: an unread description update
@@ -40,9 +43,6 @@ import { formatRelative } from "../../../lib/utils.js";
 // least this long ago — or on an earlier calendar day. Long enough that a quick
 // tab-away-and-back doesn't re-pop the panel.
 const STALE_SINCE_VIEW_MS = 8 * 60 * 60 * 1000;
-// Activity-dot freshness window: green + pulse when the description changed
-// within this window, muted grey (no pulse) beyond it.
-const FRESH_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Scroll sticky-collapse thresholds (px from the stream top). The hysteresis
 // gap (40 vs 6) debounces the boundary so a hair of scroll doesn't flutter it.
 const SCROLL_COLLAPSE_PX = 40;
@@ -50,7 +50,7 @@ const SCROLL_RESTORE_PX = 6;
 
 // Per-chat manual expand/collapse preference. Mirrors the localStorage pattern
 // used elsewhere in the chat view (private-mode safe, per-chat key suffix).
-const MANUAL_PREF_KEY = "first-tree:chat-task-summary-expanded:v1";
+const MANUAL_PREF_KEY = "first-tree:chat-summary-expanded:v1";
 
 function loadManualPref(chatId: string): boolean | null {
   if (typeof window === "undefined") return null;
@@ -126,7 +126,7 @@ function isStaleSinceLastView(lastReadAtMs: number | null, nowMs: number): boole
   return new Date(lastReadAtMs).toDateString() !== new Date(nowMs).toDateString();
 }
 
-export function TaskSummary({
+export function ChatSummary({
   chatId,
   description,
   descriptionUpdatedAt,
@@ -166,6 +166,9 @@ export function TaskSummary({
   const [open, setOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(false);
   const [scrollCollapsed, setScrollCollapsed] = useState(false);
+  // Pinned-elevation: true once the stream has scrolled under the bar (drives a
+  // faint shadow); flat when the stream is at the top.
+  const [scrolled, setScrolled] = useState(false);
   const [unreadCleared, setUnreadCleared] = useState(false);
 
   // Decide the entry state, after the real detail has settled, keyed by chat AND
@@ -213,12 +216,17 @@ export function TaskSummary({
   openRef.current = open;
   const scrollCollapsedRef = useRef(scrollCollapsed);
   scrollCollapsedRef.current = scrollCollapsed;
+  const scrolledRef = useRef(scrolled);
+  scrolledRef.current = scrolled;
   useEffect(() => {
     if (!hasDescription) return;
     const el = scrollContainerRef.current;
     if (!el) return;
+    setScrolled(el.scrollTop > 1); // initial elevation state (does not collapse on mount)
     const onScroll = () => {
       const top = el.scrollTop;
+      const nextScrolled = top > 1;
+      if (nextScrolled !== scrolledRef.current) setScrolled(nextScrolled);
       if (top > SCROLL_COLLAPSE_PX && openRef.current && !scrollCollapsedRef.current) {
         setScrollCollapsed(true);
       } else if (top <= SCROLL_RESTORE_PX && scrollCollapsedRef.current) {
@@ -232,7 +240,6 @@ export function TaskSummary({
   if (!hasDescription) return null;
 
   const expanded = open && !scrollCollapsed;
-  const fresh = updatedAtMs !== null && Date.now() - updatedAtMs < FRESH_WINDOW_MS;
   const firstLine = descriptionFirstLine(trimmed);
   const freshnessText = updatedAtMs !== null ? formatRelative(descriptionUpdatedAt) : null;
   const showAmberChip = unread && !unreadCleared && !expanded;
@@ -242,21 +249,23 @@ export function TaskSummary({
     <div
       className="shrink-0"
       style={{
-        // A recessed band (`--bg-sunken`) so the summary reads as its own pinned
-        // strip at the top of the conversation — distinct from the white header
-        // chrome above (header + composer share `--bg-raised`), not fused into
-        // it. Hairlines top + bottom delimit the band without a heavy card.
-        background: amberActive ? "var(--bg-warn-soft)" : "var(--bg-sunken)",
+        // The summary is conversation content, so it shares the message-stream
+        // canvas (`--bg`) — the white header (`--bg-raised`) above gives a
+        // natural one-step contrast. Only the header↔summary seam carries a
+        // hairline (the header itself has no bottom border); nothing separates
+        // the summary from the stream below (same surface). A faint shadow
+        // appears only while the stream scrolls under it, reading as "pinned".
+        background: amberActive ? "var(--bg-warn-soft)" : "var(--bg)",
         borderTop: `var(--hairline) solid ${amberActive ? "var(--state-blocked-border)" : "var(--border-faint)"}`,
-        borderBottom: `var(--hairline) solid ${amberActive ? "var(--state-blocked-border)" : "var(--border-faint)"}`,
-        transition: "background 160ms ease",
+        boxShadow: scrolled ? "var(--shadow-sm)" : "none",
+        transition: "background 160ms ease, box-shadow 160ms ease",
       }}
     >
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        aria-label={expanded ? "Collapse task summary" : "Expand task summary"}
+        aria-label={expanded ? "Collapse summary" : "Expand summary"}
         className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
         style={{
           gap: "var(--sp-2)",
@@ -266,13 +275,6 @@ export function TaskSummary({
           cursor: "pointer",
         }}
       >
-        <StatusGlyph
-          colorVar={fresh ? "var(--success)" : "var(--fg-4)"}
-          shape="dot"
-          pulse={fresh ? "working" : null}
-          size={8}
-          ariaLabel={fresh ? "Recently updated" : "No recent update"}
-        />
         <span
           className="text-body min-w-0 flex-1"
           style={{
@@ -304,16 +306,16 @@ export function TaskSummary({
             {freshnessText}
           </span>
         ) : null}
-        <ChevronRight
-          size={13}
-          strokeWidth={1.75}
+        <ChevronDown
+          size={15}
+          strokeWidth={2}
           className="shrink-0"
           style={{
-            // Deliberately quiet (smaller + thinner): the activity dot and the
-            // freshness text ("9 days ago") are the primary right-side signal;
-            // the chevron is just a low-key "expandable" hint, not a competing mark.
+            // Vertical axis matches the open/close motion: ▼ collapsed (opens
+            // downward) → ▲ expanded (collapses up). Kept quiet (muted grey) so
+            // the freshness stays the primary right-side signal.
             color: "var(--fg-4)",
-            transform: expanded ? "rotate(90deg)" : "none",
+            transform: expanded ? "rotate(180deg)" : "none",
             transition: "transform 180ms ease",
           }}
         />

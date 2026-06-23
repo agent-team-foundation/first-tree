@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { descriptionFirstLine } from "../task-summary.js";
+import { descriptionFirstLine } from "../chat-summary.js";
 
 /**
- * `descriptionFirstLine` powers the collapsed task-summary bar: it picks the
+ * `descriptionFirstLine` powers the collapsed chat-summary bar: it picks the
  * first content line of the chat description and strips the common markdown
  * markers so a `- bullet` reads as plain text (visual truncation is left to
  * CSS). A leading section heading (`## 任务`) is skipped in favor of the prose

@@ -100,8 +100,8 @@ const UserMenuPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/user-menu-preview.js").then((module) => ({ default: module.UserMenuPreviewPage })))
   : null;
 
-const TaskSummaryPreviewPage = import.meta.env.DEV
-  ? lazy(() => import("./pages/task-summary-preview.js").then((module) => ({ default: module.TaskSummaryPreviewPage })))
+const ChatSummaryPreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/chat-summary-preview.js").then((module) => ({ default: module.ChatSummaryPreviewPage })))
   : null;
 
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
@@ -197,12 +197,12 @@ export function App() {
                   }
                 />
               ) : null}
-              {TaskSummaryPreviewPage ? (
+              {ChatSummaryPreviewPage ? (
                 <Route
-                  path="/preview/task-summary"
+                  path="/preview/chat-summary"
                   element={
                     <Suspense fallback={null}>
-                      <TaskSummaryPreviewPage />
+                      <ChatSummaryPreviewPage />
                     </Suspense>
                   }
                 />

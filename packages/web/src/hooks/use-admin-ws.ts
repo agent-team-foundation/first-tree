@@ -267,7 +267,7 @@ function broadcast(msg: WsMessage) {
       }
     } else if (msg.type === "chat:updated") {
       // A chat's metadata changed (e.g. an agent ran `chat update --description`).
-      // Refresh the open chat's detail — the pinned task summary reads description
+      // Refresh the open chat's detail — the pinned summary reads description
       // + freshness off `["chat-detail", chatId]` — and the conversation list,
       // whose row renders the description. No message arrived, so the message
       // timeline is deliberately NOT invalidated.
