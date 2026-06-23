@@ -37,9 +37,6 @@ export type AgentDetailContext = {
   isUnclaimed: boolean;
   isOffline: boolean;
   boundClientLabel: string | null;
-  /** The bound computer's own connection state (connected client row), distinct
-   *  from agent presence; null when no computer is bound or it's unknown. */
-  boundComputerOnline: boolean | null;
   setupRuntimeProvider: RuntimeProvider;
   onOpenBindDialog: () => void;
   bindClientPending: boolean;

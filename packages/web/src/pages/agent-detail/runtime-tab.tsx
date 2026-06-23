@@ -36,11 +36,25 @@ export function RuntimeTab() {
         </div>
       )}
 
-      {/* Model settings on top — the most-changed runtime lever, so it's the first
-          thing on the tab. Then Execution (computer / runtime), then Env vars.
-          Every section saves immediately. */}
+      {/* Execution (computer / runtime) on top — the agent's "where it runs"
+          context. Then Model settings, then Env vars. Every section saves
+          immediately. */}
       {config && (
         <div>
+          <RuntimeSection
+            runtimeProvider={ctx.setupRuntimeProvider}
+            computerLabel={ctx.boundClientLabel}
+            computerStatusLoading={ctx.clientStatusLoading}
+            computerStatusError={ctx.clientStatusError}
+            canBindComputer={ctx.isUnclaimed && ctx.agent.status === "active"}
+            bindComputerPending={ctx.bindClientPending}
+            onBindComputer={ctx.onOpenBindDialog}
+          />
+        </div>
+      )}
+
+      {config && (
+        <div style={{ marginTop: "var(--sp-8)" }}>
           <Section title={titleWithSemantics("Model settings", modelSettingsSaved)}>
             <ModelSection
               value={config.payload.model}
@@ -68,21 +82,6 @@ export function RuntimeTab() {
               </p>
             ) : null
           ) : null}
-        </div>
-      )}
-
-      {config && (
-        <div style={{ marginTop: "var(--sp-8)" }}>
-          <RuntimeSection
-            runtimeProvider={ctx.setupRuntimeProvider}
-            computerLabel={ctx.boundClientLabel}
-            computerOnline={ctx.boundComputerOnline}
-            computerStatusLoading={ctx.clientStatusLoading}
-            computerStatusError={ctx.clientStatusError}
-            canBindComputer={ctx.isUnclaimed && ctx.agent.status === "active"}
-            bindComputerPending={ctx.bindClientPending}
-            onBindComputer={ctx.onOpenBindDialog}
-          />
         </div>
       )}
 

@@ -48,14 +48,14 @@ export function ConfigRow({
         <span className="truncate" style={{ color: danger ? "var(--state-error)" : "var(--fg-2)" }}>
           {label}
         </span>
+        {/* The help ? sits next to the LABEL — it explains the setting (which the
+            label names), not whichever value is currently selected. */}
+        {helpText && <HelpIconTooltip text={helpText} />}
       </div>
       <div className="min-w-0 break-words">
         {children ? (
           <>
-            <div className="flex items-center" style={{ gap: "var(--sp-1_5)" }}>
-              <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
-              {helpText && <HelpIconTooltip text={helpText} />}
-            </div>
+            {children}
             {description && (
               <div className="text-caption" style={{ color: "var(--fg-4)", marginTop: "var(--sp-1)" }}>
                 {description}
@@ -65,9 +65,8 @@ export function ConfigRow({
         ) : (
           <>
             {value != null && (
-              <div className="font-medium flex items-center" style={{ color: "var(--fg)", gap: "var(--sp-1_5)" }}>
-                <span>{value}</span>
-                {helpText && <HelpIconTooltip text={helpText} />}
+              <div className="font-medium" style={{ color: "var(--fg)" }}>
+                {value}
               </div>
             )}
             {description && (

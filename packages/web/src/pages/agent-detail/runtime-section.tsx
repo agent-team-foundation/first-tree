@@ -3,7 +3,6 @@ import { Link2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
-import { StatusGlyph } from "../../components/ui/status-glyph.js";
 import { ConfigRow } from "./flat-section.js";
 import { titleWithSemantics } from "./save-semantics.js";
 
@@ -15,8 +14,6 @@ export type RuntimeSectionProps = {
   runtimeProvider: RuntimeProvider;
   /** Display label of the bound computer; null when no computer is bound yet. */
   computerLabel: string | null;
-  /** Whether the bound computer is currently connected; null when unknown. */
-  computerOnline?: boolean | null;
   computerStatusLoading?: boolean;
   computerStatusError?: string | null;
   /** Whether the "Bind computer" CTA should be shown (only when no client is bound and agent is active). */
@@ -36,7 +33,6 @@ export function RuntimeSection(props: RuntimeSectionProps) {
     <Section title={titleWithSemantics("Execution")}>
       <ComputerRow
         computerLabel={props.computerLabel}
-        online={props.computerOnline ?? null}
         statusLoading={props.computerStatusLoading ?? false}
         statusError={props.computerStatusError ?? null}
         canBindComputer={props.canBindComputer}
@@ -55,7 +51,6 @@ function RuntimeRow({ name }: { name: string }) {
 
 function ComputerRow(props: {
   computerLabel: string | null;
-  online: boolean | null;
   statusLoading: boolean;
   statusError: string | null;
   canBindComputer: boolean;
@@ -87,27 +82,10 @@ function ComputerRow(props: {
   } else if (!bound) {
     value = "No computer bound";
     description = "Bind a connected computer before this agent can run.";
-  } else {
-    value = (
-      <span className="inline-flex min-w-0 items-center" style={{ gap: "var(--sp-2)" }}>
-        <span className="truncate">{props.computerLabel}</span>
-        <ComputerPresence online={props.online} />
-      </span>
-    );
   }
+  // Bound: the computer name only. Its live online/offline state is intentionally
+  // not repeated here — the page header already carries presence (and the two
+  // read as redundant side by side).
 
   return <ConfigRow label="Computer" value={value} description={description} action={action} />;
-}
-
-// Live presence of the bound computer: a connected computer is "present" (blue,
-// per the state map), a disconnected one is offline (gray). Unknown → hidden.
-function ComputerPresence({ online }: { online: boolean | null }) {
-  if (online == null) return null;
-  const color = online ? "var(--state-idle)" : "var(--state-offline)";
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1.5 text-caption" style={{ color: "var(--fg-3)" }}>
-      <StatusGlyph colorVar={color} shape="dot" size={7} ariaLabel={online ? "Online" : "Offline"} />
-      {online ? "Online" : "Offline"}
-    </span>
-  );
 }

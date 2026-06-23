@@ -107,7 +107,6 @@ function context(overrides: Partial<AgentDetailContext> = {}): AgentDetailContex
     isUnclaimed: false,
     isOffline: false,
     boundClientLabel: "gandy-macbook",
-    boundComputerOnline: true,
     setupRuntimeProvider: "claude-code",
     onOpenBindDialog: vi.fn(),
     bindClientPending: false,

@@ -2,6 +2,7 @@ import {
   type AgentResourceBindingInput,
   type AgentResourcesOutput,
   PROMPT_APPEND_MAX_LENGTH,
+  type PromptSection,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
@@ -68,6 +69,7 @@ export function PromptTab() {
   if (ctx.isHuman) return <Navigate to="../profile" replace />;
   if (!ctx.config && ctx.configLoading) return null;
   const prompt = ctx.config?.payload.prompt.append ?? "";
+  const promptSections = ctx.config?.payload.prompt.sections;
   const canEditPrompt = ctx.canManageAgent && ctx.agent.status === "active";
   const resourceError = resourcesQuery.error instanceof Error ? resourcesQuery.error.message : null;
   const resources = resourcesQuery.data;
@@ -141,7 +143,7 @@ export function PromptTab() {
           ) : null
         }
       >
-        {showEffectiveInstructions ? <EffectiveInstructionsBlock prompt={prompt} /> : null}
+        {showEffectiveInstructions ? <EffectiveInstructionsBlock prompt={prompt} sections={promptSections} /> : null}
         <div>
           {resources ? (
             <PromptResourceBlocks
@@ -183,26 +185,32 @@ export function PromptTab() {
 // thing the agent actually runs with — replacing the old on-demand 👁 modal. Long
 // bodies clamp to ~8 lines with a Show all toggle; the source list below is for
 // management (toggle / customize / add).
-function EffectiveInstructionsBlock({ prompt }: { prompt: string }) {
+function EffectiveInstructionsBlock({ prompt, sections }: { prompt: string; sections?: PromptSection[] }) {
   const [showAll, setShowAll] = useState(false);
   const [clamped, setClamped] = useState(false);
   const bodyRef = useRef<HTMLElement | null>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when the prompt text changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure when the merged text changes.
   useEffect(() => {
     const el = bodyRef.current;
     if (el) setClamped(el.scrollHeight > el.clientHeight + 2);
   }, [prompt]);
+
+  // Prefer the structured per-source sections (resolved server-side from the
+  // same effective stack as `append`, in the same order) so each contributed
+  // instruction reads as its own segment split by a dashed rule. Fall back to
+  // the merged `append` string for older payloads that carry no sections.
+  const segments = sections?.filter((s) => s.body.trim()) ?? [];
 
   return (
     <div style={{ marginBottom: "var(--sp-4)" }}>
       {prompt.trim() ? (
         <>
           <p className="text-eyebrow" style={{ color: "var(--fg-4)", margin: "0 0 var(--sp-1_5)" }}>
-            Effective
+            All instructions
           </p>
           <section
             ref={bodyRef}
-            aria-label="Effective instructions"
+            aria-label="All instructions"
             className="text-body"
             style={{
               background: "var(--bg-sunken)",
@@ -213,7 +221,29 @@ function EffectiveInstructionsBlock({ prompt }: { prompt: string }) {
               overflow: showAll ? undefined : "hidden",
             }}
           >
-            <Markdown className={PROSE_COMPACT_HEADINGS}>{prompt}</Markdown>
+            {segments.length > 0 ? (
+              segments.map((section, i) => (
+                <div
+                  key={`${section.scope}:${section.name}:${section.body.length}`}
+                  style={
+                    i > 0
+                      ? {
+                          marginTop: "var(--sp-3)",
+                          paddingTop: "var(--sp-3)",
+                          borderTop: "var(--hairline) dashed var(--border)",
+                        }
+                      : undefined
+                  }
+                >
+                  <p className="text-eyebrow" style={{ color: "var(--fg-4)", margin: "0 0 var(--sp-1)" }}>
+                    {segmentLabel(section)}
+                  </p>
+                  <Markdown className={PROSE_COMPACT_HEADINGS}>{section.body}</Markdown>
+                </div>
+              ))
+            ) : (
+              <Markdown className={PROSE_COMPACT_HEADINGS}>{prompt}</Markdown>
+            )}
           </section>
           {clamped || showAll ? (
             <Button
@@ -235,6 +265,17 @@ function EffectiveInstructionsBlock({ prompt }: { prompt: string }) {
       )}
     </div>
   );
+}
+
+// A provenance label for each merged instruction segment: "<name> · <source>",
+// aligned with the source rows below so a segment maps cleanly to its row. The
+// name is the resource's own (the same `row.name` the row shows); the agent's
+// standalone inline fragment carries no name, so it reads "Custom instructions"
+// exactly like its row does.
+function segmentLabel(section: PromptSection): string {
+  const name = section.name.trim() || "Custom instructions";
+  const source = section.scope === "team" ? "From your team" : "Added by you";
+  return `${name} · ${source}`;
 }
 
 type PromptEditorState = {
