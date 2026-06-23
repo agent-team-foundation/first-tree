@@ -73,13 +73,38 @@ export function ChatByIdView({
   onClearChat?: (() => void) | null;
 }) {
   const queryClient = useQueryClient();
-  const { agentId: myAgentId } = useAuth();
+  const { agentId: myAgentId, organizationId: currentOrgId, selectOrganization, memberships } = useAuth();
 
   const { data: chatDetail, isError: chatDetailError } = useQuery({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
     enabled: !!chatId,
   });
+
+  // Cross-org chat links: a chat is routed by a global `?c=<chatId>` with no
+  // org segment, and the per-chat reads (`getChat` / messages) resolve by UUID
+  // regardless of the selected org. So opening a chat that lives in a *different*
+  // org than the one currently selected would render that org's conversation in
+  // the center while the rest of the shell (conversation rail, team name, agent
+  // roster, admin WebSocket) stayed on the old org. Switch the whole workspace
+  // to the chat's org so the shell follows the conversation.
+  //
+  // Only switch into an org the user actually belongs to. The server already
+  // guarantees this (`requireChatAccess` 404s a chat outside the caller's orgs
+  // before its detail can load), but the guard keeps a stale `/me` from looping:
+  // `currentOrgId` is derived from `memberships`, so a switch into an org absent
+  // from that list would never settle and the effect would re-fire. The
+  // per-target ref additionally suppresses a re-fire while the switch + `/me`
+  // refetch is in flight.
+  const switchedOrgRef = useRef<string | null>(null);
+  useEffect(() => {
+    const chatOrg = chatDetail?.organizationId;
+    if (!chatOrg || !currentOrgId || chatOrg === currentOrgId) return;
+    if (switchedOrgRef.current === chatOrg) return;
+    if (!memberships.some((m) => m.organizationId === chatOrg)) return;
+    switchedOrgRef.current = chatOrg;
+    void selectOrganization(chatOrg);
+  }, [chatDetail?.organizationId, currentOrgId, memberships, selectOrganization]);
 
   const primaryAgent = useMemo(() => {
     if (!chatDetail) return null;
