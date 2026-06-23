@@ -65,13 +65,6 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
         code: "organization_installation_required",
       });
     }
-    if (mint.repositorySelection !== "all") {
-      return reply.status(409).send({
-        error:
-          "One-click Context Tree initialization requires the GitHub App installation to have access to all repositories.",
-        code: "selected_repositories_unsupported",
-      });
-    }
     if (!hasInitializationPermissions(mint.permissions)) {
       return reply.status(403).send({
         error:
@@ -298,6 +291,9 @@ async function createOrAdoptContextTreeRepo(input: {
     if (err instanceof GithubAppApiError && err.status === 422) {
       return await adoptExistingRepository(input.installationToken, input.installation.accountLogin, input.repoName);
     }
+    if (err instanceof GithubAppApiError && isRepoAccessError(err)) {
+      throw repoUnavailableError(input.installation.accountLogin, input.repoName);
+    }
     throw mapUpstreamError(err, "Couldn't create the GitHub repo. Try again in a moment.");
   }
 }
@@ -310,6 +306,9 @@ async function verifyCreatedRepository(
   try {
     return await getRepository(installationToken, owner, repoName);
   } catch (err) {
+    if (err instanceof GithubAppApiError && isRepoAccessError(err)) {
+      throw repoUnavailableError(owner, repoName);
+    }
     throw mapUpstreamError(err, "Couldn't verify the created GitHub repo. Try again in a moment.");
   }
 }
@@ -322,12 +321,8 @@ async function adoptExistingRepository(
   try {
     return await getRepository(installationToken, owner, repoName);
   } catch (err) {
-    if (err instanceof GithubAppApiError && (err.status === 403 || err.status === 404)) {
-      throw new ContextTreeInitializeError(
-        409,
-        "repo_unavailable",
-        `GitHub repo ${owner}/${repoName} already exists but is not accessible to this team's GitHub App installation.`,
-      );
+    if (err instanceof GithubAppApiError && isRepoAccessError(err)) {
+      throw repoUnavailableError(owner, repoName);
     }
     throw mapUpstreamError(err, "Couldn't verify the existing GitHub repo. Try again in a moment.");
   }
@@ -354,7 +349,11 @@ async function ensureRepoFile(
     });
     return;
   } catch (err) {
-    if (!(err instanceof GithubAppApiError) || err.status !== 404) {
+    if (err instanceof GithubAppApiError && err.status === 404) {
+      // The file does not exist yet; create it below.
+    } else if (err instanceof GithubAppApiError && isRepoAccessError(err)) {
+      throw repoUnavailableError(repo.ownerLogin, repo.name);
+    } else {
       throw mapUpstreamError(err, input.verifyErrorMessage);
     }
   }
@@ -372,6 +371,9 @@ async function ensureRepoFile(
     if (err instanceof GithubAppApiError && (err.status === 409 || err.status === 422)) {
       await verifyExistingRepoFile(installationToken, repo, input.path, input.verifyExistingErrorMessage);
       return;
+    }
+    if (err instanceof GithubAppApiError && isRepoAccessError(err)) {
+      throw repoUnavailableError(repo.ownerLogin, repo.name);
     }
     throw mapUpstreamError(err, input.createErrorMessage);
   }
@@ -391,8 +393,23 @@ async function verifyExistingRepoFile(
       branch: BRANCH,
     });
   } catch (err) {
+    if (err instanceof GithubAppApiError && isRepoAccessError(err)) {
+      throw repoUnavailableError(repo.ownerLogin, repo.name);
+    }
     throw mapUpstreamError(err, errorMessage);
   }
+}
+
+function isRepoAccessError(err: GithubAppApiError): boolean {
+  return err.status === 403 || err.status === 404;
+}
+
+function repoUnavailableError(owner: string, repoName: string): ContextTreeInitializeError {
+  return new ContextTreeInitializeError(
+    409,
+    "repo_unavailable",
+    `GitHub repo ${owner}/${repoName} is not accessible to this team's GitHub App installation.`,
+  );
 }
 
 function mapUpstreamError(err: unknown, message: string): ContextTreeInitializeError {

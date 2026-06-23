@@ -58,8 +58,8 @@ function repoKey(url: string): string {
  * A `409` from the initializer is ambiguous — it can mean the tree is **already
  * provisioned** (a detect→create race, or a retry after a later kickoff step
  * failed) OR that **no tree could be created** (the merged initializer also
- * returns 409 for `organization_installation_required` /
- * `selected_repositories_unsupported`). We distinguish by the **actual binding
+ * returns 409 for `organization_installation_required` / `repo_unavailable`).
+ * We distinguish by the **actual binding
  * state** rather than the status code (the "already configured" conflict
  * carries no discriminating `code`): if a tree now exists, provisioning
  * effectively succeeded and we proceed; otherwise we re-throw so the user sees

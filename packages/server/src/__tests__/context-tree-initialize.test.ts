@@ -261,13 +261,56 @@ owners: [${ACCOUNT_LOGIN}]
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("returns 409 selected_repositories_unsupported before creating anything", async () => {
+  it("initializes a Context Tree when the installation is scoped to selected repositories but can access the tree repo", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = await seedInstallation(app, admin.organizationId);
+    await renameOrg(app, admin.organizationId, "Acme Labs");
+    let rootNodeWrites = 0;
+    let workflowWrites = 0;
     const fetchSpy = mockFetch(async (url) => {
       if (url === installationTokenUrl(installationId)) {
         return installationTokenResponse({ repository_selection: "selected" });
+      }
+      if (url === orgReposUrl(ACCOUNT_LOGIN)) return githubRepoResponse(201);
+      if (url === repoUrl(ACCOUNT_LOGIN, REPO_NAME)) return githubRepoResponse(200);
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+        rootNodeWrites += 1;
+        return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+        return jsonResponse({ message: "Not Found" }, 404);
+      }
+      if (url === contentsUrl(ACCOUNT_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+        workflowWrites += 1;
+        return jsonResponse({ content: { path: VALIDATE_TREE_WORKFLOW_PATH } }, 201);
+      }
+      return new Response(`unexpected fetch ${url}`, { status: 500 });
+    });
+
+    const res = await initialize(app, admin);
+
+    expect(res.statusCode).toBe(201);
+    expect(rootNodeWrites).toBe(1);
+    expect(workflowWrites).toBe(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(7);
+    expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
+  });
+
+  it("returns 409 repo_unavailable when GitHub refuses to create the tree repo for the installation", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = await seedInstallation(app, admin.organizationId);
+    await renameOrg(app, admin.organizationId, "Acme Labs");
+    const fetchSpy = mockFetch(async (url) => {
+      if (url === installationTokenUrl(installationId)) {
+        return installationTokenResponse({ repository_selection: "selected" });
+      }
+      if (url === orgReposUrl(ACCOUNT_LOGIN)) {
+        return jsonResponse({ message: "Resource not accessible by integration" }, 403);
       }
       return new Response(`unexpected fetch ${url}`, { status: 500 });
     });
@@ -275,8 +318,9 @@ owners: [${ACCOUNT_LOGIN}]
     const res = await initialize(app, admin);
 
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ code: "selected_repositories_unsupported" });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(res.json()).toMatchObject({ code: "repo_unavailable" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
   });
 
   const permissionCases: Array<[string, Record<string, "read" | "write" | "admin">]> = [
