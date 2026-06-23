@@ -23,6 +23,8 @@ const authMock = vi.hoisted(() => ({
   value: {
     agentId: "human-agent-self" as string | null,
     organizationId: "org-1" as string | null,
+    memberships: [{ organizationId: "org-1" }, { organizationId: "org-2" }] as Array<{ organizationId: string }>,
+    selectOrganization: vi.fn(),
   },
 }));
 
@@ -245,7 +247,12 @@ beforeEach(() => {
   wsMock.handler = null;
   chatViewMocks.props.length = 0;
   draftMocks.props.length = 0;
-  authMock.value = { agentId: "human-agent-self", organizationId: "org-1" };
+  authMock.value = {
+    agentId: "human-agent-self",
+    organizationId: "org-1",
+    memberships: [{ organizationId: "org-1" }, { organizationId: "org-2" }],
+    selectOrganization: vi.fn(),
+  };
   chatMocks.getChat.mockResolvedValue(chatDetail());
   meChatMocks.markMeChatRead.mockResolvedValue({
     chatId: "chat-1",
@@ -434,5 +441,51 @@ describe("ChatByIdView and CenterPanel", () => {
     );
     expect(onSelectChat).toHaveBeenCalledWith("draft");
     await act(async () => empty.root.unmount());
+  });
+
+  it("switches the workspace to the chat's org when it differs and the user is a member", async () => {
+    authMock.value.organizationId = "org-1";
+    authMock.value.memberships = [{ organizationId: "org-1" }, { organizationId: "org-2" }];
+    chatMocks.getChat.mockResolvedValueOnce(chatDetail({ organizationId: "org-2" }));
+    const { ChatByIdView } = await import("../chat-by-id.js");
+    const { container, root } = await renderDom(
+      <ChatByIdView chatId="chat-xorg" narrow={false} onShowConversations={null} />,
+    );
+
+    await waitForText(container, "ChatView agent-1 chat-xorg");
+    expect(authMock.value.selectOrganization).toHaveBeenCalledTimes(1);
+    expect(authMock.value.selectOrganization).toHaveBeenCalledWith("org-2");
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not switch org when the opened chat is already in the current org", async () => {
+    authMock.value.organizationId = "org-1";
+    authMock.value.memberships = [{ organizationId: "org-1" }, { organizationId: "org-2" }];
+    chatMocks.getChat.mockResolvedValueOnce(chatDetail({ organizationId: "org-1" }));
+    const { ChatByIdView } = await import("../chat-by-id.js");
+    const { container, root } = await renderDom(
+      <ChatByIdView chatId="chat-sameorg" narrow={false} onShowConversations={null} />,
+    );
+
+    await waitForText(container, "ChatView agent-1 chat-sameorg");
+    expect(authMock.value.selectOrganization).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not switch into an org the caller is not a member of (stale /me guard)", async () => {
+    authMock.value.organizationId = "org-1";
+    authMock.value.memberships = [{ organizationId: "org-1" }];
+    chatMocks.getChat.mockResolvedValueOnce(chatDetail({ organizationId: "org-2" }));
+    const { ChatByIdView } = await import("../chat-by-id.js");
+    const { container, root } = await renderDom(
+      <ChatByIdView chatId="chat-guard" narrow={false} onShowConversations={null} />,
+    );
+
+    await waitForText(container, "ChatView agent-1 chat-guard");
+    expect(authMock.value.selectOrganization).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
   });
 });

@@ -34,6 +34,7 @@ vi.mock("../../api/client.js", () => ({
   getStoredTokens: apiMocks.getStoredTokens,
   setApiSelectedOrganizationId: apiMocks.setApiSelectedOrganizationId,
   setStoredTokens: apiMocks.setStoredTokens,
+  ADMIN_WS_ORG_CHANGED_EVENT: "admin-ws:org-changed",
 }));
 
 vi.mock("../../api/auth.js", () => ({

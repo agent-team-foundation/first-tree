@@ -4,6 +4,7 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useM
 import { trackEvent } from "../analytics.js";
 import { login as loginApi } from "../api/auth.js";
 import {
+  ADMIN_WS_ORG_CHANGED_EVENT,
   api,
   clearStoredTokens,
   getStoredTokens,
@@ -130,8 +131,9 @@ type AuthContextValue = {
    * Switch the active organization view. Pure client-side state — the
    * /orgs/:orgId/* routes themselves probe membership in real time on
    * every request, so a stale or unauthorized selection just yields a
-   * clean 403 from the next API call. Does NOT re-issue tokens or touch
-   * the WS connection.
+   * clean 403 from the next API call. Does NOT re-issue tokens; it does
+   * signal the org-scoped admin WebSocket to reconnect against the new
+   * org (`ADMIN_WS_ORG_CHANGED_EVENT`).
    */
   selectOrganization: (organizationId: string) => Promise<void>;
   refreshMe: () => Promise<void>;
@@ -313,6 +315,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // is restored only for this account.
       writeSelectedOrgId(userIdFromToken(), organizationId);
       setApiSelectedOrganizationId(organizationId);
+      // The org-scoped admin WebSocket is not re-opened by React state changes;
+      // signal it to reconnect against the newly selected org so realtime frames
+      // follow the switch instead of staying on the previously selected org.
+      window.dispatchEvent(new CustomEvent(ADMIN_WS_ORG_CHANGED_EVENT));
       // Drop every cached React Query result keyed off the previous org —
       // the next render refetches with the new prefix so a non-default org
       // never reuses the previous selection's data.
