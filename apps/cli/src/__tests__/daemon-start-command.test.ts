@@ -82,6 +82,7 @@ let runtimeInstance: {
   start: ReturnType<typeof vi.fn>;
   watchAgentsDir: ReturnType<typeof vi.fn>;
   onReconnect: ReturnType<typeof vi.fn>;
+  onRuntimeAuthStart: ReturnType<typeof vi.fn>;
 };
 let refresherInstance: {
   start: ReturnType<typeof vi.fn>;
@@ -140,6 +141,7 @@ beforeEach(() => {
       throw new Error("stop after watch");
     }),
     onReconnect: vi.fn(),
+    onRuntimeAuthStart: vi.fn(),
   };
   coreMocks.ClientRuntime.mockImplementation(() => runtimeInstance);
 

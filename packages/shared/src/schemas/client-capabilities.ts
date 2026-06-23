@@ -33,6 +33,40 @@ export type CapabilityRuntimeSource = z.infer<typeof capabilityRuntimeSourceSche
 export const capabilityProbeKindSchema = z.enum(["launch", "static"]);
 export type CapabilityProbeKind = z.infer<typeof capabilityProbeKindSchema>;
 
+export const pendingAuthMethodSchema = z.enum(["browser", "device-code"]);
+export type PendingAuthMethod = z.infer<typeof pendingAuthMethodSchema>;
+
+/**
+ * An in-flight in-product login the daemon is driving for this provider. It
+ * rides the capabilities snapshot the daemon already PATCHes — so the web
+ * console surfaces it by polling capabilities, with the probe staying the
+ * single source of truth and no separate realtime channel. Cleared (back to
+ * absent) once the daemon re-probes after the login resolves.
+ *
+ *   - `method: "browser"` (PRIMARY): the daemon ran the provider's official
+ *     browser OAuth on the host (codex `login` / claude `setup-token`). The web
+ *     shows a "finish in the browser that opened on <host>" state; no code.
+ *   - `method: "device-code"` (headless FALLBACK): no host browser, so codex
+ *     `login --device-auth` produced a `verificationUrl` + `userCode` the user
+ *     enters on another device.
+ */
+export const pendingAuthSchema = z.object({
+  method: pendingAuthMethodSchema,
+  /** device-code only: page the user opens to enter the code. */
+  verificationUrl: z.string().optional(),
+  /** device-code only: one-time code the user types on that page. */
+  userCode: z.string().optional(),
+  /**
+   * browser only: the provider's sign-in URL, surfaced once the login process
+   * prints it, so the web can offer a "didn't open? open sign-in" link when the
+   * host browser does not auto-launch. Absent until the process emits it.
+   */
+  authUrl: z.string().optional(),
+  /** ISO8601 instant the attempt expires; the web hides/falls back once past. */
+  expiresAt: z.string(),
+});
+export type PendingAuth = z.infer<typeof pendingAuthSchema>;
+
 export const capabilityEntrySchema = z.object({
   state: capabilityStateSchema,
   available: z.boolean(),
@@ -61,6 +95,12 @@ export const capabilityEntrySchema = z.object({
    * means "launchable + credentials present", not "end-to-end verified".
    */
   degraded: z.boolean().optional(),
+  /**
+   * Present while the daemon is driving an in-product login for this provider
+   * (browser OAuth, or the device-code fallback). Absent in steady state.
+   * See `pendingAuthSchema`.
+   */
+  pendingAuth: pendingAuthSchema.nullable().optional(),
 });
 export type CapabilityEntry = z.infer<typeof capabilityEntrySchema>;
 

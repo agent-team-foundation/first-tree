@@ -1,6 +1,7 @@
 export type {
   BoundAgent,
   ClientConnectionConfig,
+  RuntimeAuthCommand,
   ServerWelcome,
   SessionCommand,
 } from "./client-connection.js";
@@ -25,7 +26,12 @@ export {
 } from "./runtime/bootstrap.js";
 // Capabilities
 export { probeClaudeCodeCapability } from "./runtime/capabilities/claude-code.js";
-export { probeCodexCapability } from "./runtime/capabilities/codex.js";
+export { probeClaudeCodeTuiCapability } from "./runtime/capabilities/claude-code-tui.js";
+export {
+  type CodexBinaryResolution,
+  probeCodexCapability,
+  resolveCodexRuntimeBinary,
+} from "./runtime/capabilities/codex.js";
 export {
   CAPABILITY_REFRESH_BASE_MS,
   CAPABILITY_REFRESH_MAX_MS,
@@ -47,8 +53,23 @@ export type {
   RegistrySpawnOptions,
 } from "./runtime/child-process-registry.js";
 export { CHILD_CATEGORIES, getChildProcessRegistry } from "./runtime/child-process-registry.js";
+export {
+  type ClaudeBrowserLoginOptions,
+  type ClaudeLoginInvocation,
+  resolveClaudeLoginInvocation,
+  runClaudeBrowserLogin,
+} from "./runtime/claude-login.js";
 export type { CliBinding } from "./runtime/cli-binding.js";
 export { setCliBinding } from "./runtime/cli-binding.js";
+export {
+  type CodexBrowserLoginOptions,
+  type CodexDeviceAuthOptions,
+  type DeviceAuthOutcome,
+  type DeviceCodePrompt,
+  parseDeviceCodePrompt,
+  runCodexBrowserLogin,
+  runCodexDeviceAuthLogin,
+} from "./runtime/codex-device-auth.js";
 export type { AgentSlotYamlConfig, RuntimeConfig, SessionConfig } from "./runtime/config.js";
 export { loadRuntimeConfig } from "./runtime/config.js";
 export { Deduplicator } from "./runtime/deduplicator.js";
@@ -68,6 +89,13 @@ export { getHandlerFactory, hasHandler, registerHandler } from "./runtime/handle
 export { InputController } from "./runtime/input-controller.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
+// Runtime-auth (browser OAuth primary + device-code fallback)
+export {
+  BROWSER_LOGIN_TIMEOUT_MS,
+  DEVICE_AUTH_TIMEOUT_MS,
+  type LoginOutcome,
+  stripAnsi,
+} from "./runtime/runtime-login.js";
 export { SessionManager } from "./runtime/session-manager.js";
 export { SessionRegistry } from "./runtime/session-registry.js";
 // Skills (slash-command discovery)

@@ -51,7 +51,11 @@ describe("RuntimeStateLine", () => {
     expect(dom.textContent).toContain("system CLI fallback");
   });
 
-  it("keeps the login recovery hint when the fallback CLI is unauthenticated", async () => {
+  it("drops the manual login hint for an in-product provider (codex), even via the system CLI fallback", async () => {
+    // codex auth is obtained in-product via the adjacent Connect button (which
+    // drives `codex login` on the resolved binary, bundled OR system PATH), so
+    // the state line must not also print a manual "Run `codex login`" command —
+    // that would contradict the no-separate-CLI onboarding.
     const entry: CapabilityEntry = {
       available: true,
       state: "unauthenticated",
@@ -67,7 +71,7 @@ describe("RuntimeStateLine", () => {
 
     expect(dom.textContent).toContain("system CLI fallback");
     expect(dom.textContent).toContain("needs login");
-    expect(dom.textContent).toContain("codex login");
+    expect(dom.textContent).not.toContain("codex login");
   });
 
   it("gives a concrete install command when a runtime is missing", async () => {

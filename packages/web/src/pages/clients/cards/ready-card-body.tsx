@@ -3,6 +3,8 @@ import { BoundAgentsList } from "./shared/bound-agents-list.js";
 import { CardSection, CardSectionLabel } from "./shared/card-section.js";
 import { CompactMetaLine } from "./shared/compact-meta-line.js";
 import { PROVIDER_ORDER } from "./shared/providers.js";
+import { RuntimeAuthControls } from "./shared/runtime-auth-controls.js";
+import { deriveRuntimeAuthView } from "./shared/runtime-auth-view.js";
 import { RuntimeStateLine } from "./shared/runtime-state-line.js";
 import { summarizeBoundAgents } from "./view-models.js";
 
@@ -40,7 +42,16 @@ export function ReadyCardBody({ client, boundAgents, agentName }: ReadyCardBodyP
             {reportedProviders.map((provider) => {
               const entry = client.capabilities[provider];
               if (entry == null) return null;
-              return <RuntimeStateLine key={provider} provider={provider} entry={entry} os={client.os} />;
+              // A reported-but-unauthenticated provider (e.g. Codex while Claude
+              // is ok) gets the in-product Connect / device-code panel beneath
+              // its status line, so the operator never leaves the console.
+              const offerAuth = deriveRuntimeAuthView(provider, entry, Date.now()).kind !== "none";
+              return (
+                <div key={provider} className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
+                  <RuntimeStateLine provider={provider} entry={entry} os={client.os} />
+                  {offerAuth && <RuntimeAuthControls clientId={client.id} provider={provider} entry={entry} />}
+                </div>
+              );
             })}
           </div>
         </CardSection>

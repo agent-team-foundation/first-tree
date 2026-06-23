@@ -252,6 +252,10 @@ export {
   capabilityRuntimeSourceSchema,
   capabilityStateSchema,
   clientCapabilitiesSchema,
+  type PendingAuth,
+  type PendingAuthMethod,
+  pendingAuthMethodSchema,
+  pendingAuthSchema,
   type UpdateClientCapabilities,
   updateClientCapabilitiesSchema,
 } from "./schemas/client-capabilities.js";
@@ -696,6 +700,21 @@ export {
   updateTeamResourceSchema,
   validateEffectivePromptLength,
 } from "./schemas/resource.js";
+export {
+  RUNTIME_AUTH_START_TYPE,
+  type RuntimeAuthFailureReason,
+  type RuntimeAuthMethod,
+  type RuntimeAuthProvider,
+  type RuntimeAuthStartCommand,
+  type RuntimeAuthStartRequest,
+  type RuntimeAuthStartResponse,
+  runtimeAuthFailureReasonSchema,
+  runtimeAuthMethodSchema,
+  runtimeAuthProviderSchema,
+  runtimeAuthStartCommandSchema,
+  runtimeAuthStartRequestSchema,
+  runtimeAuthStartResponseSchema,
+} from "./schemas/runtime-auth.js";
 export {
   DEFAULT_RUNTIME_PROVIDER,
   RUNTIME_PROVIDERS,

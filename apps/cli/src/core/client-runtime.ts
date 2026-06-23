@@ -7,6 +7,7 @@ import {
   getChildProcessRegistry,
   getHandlerFactory,
   hasHandler,
+  type RuntimeAuthCommand,
   registerBuiltinHandlers,
   type UpdateHooks,
   UpdateManager,
@@ -201,6 +202,16 @@ export class ClientRuntime {
    */
   onReconnect(callback: () => void): void {
     this.reconnectListeners.push(callback);
+  }
+
+  /**
+   * Register a handler for the server→client `runtime-auth:start` command (the
+   * in-product "connect a provider's credentials" action). The daemon drives
+   * the provider's official login and reflects progress through the
+   * capabilities snapshot. Fired once per command.
+   */
+  onRuntimeAuthStart(callback: (command: RuntimeAuthCommand) => void): void {
+    this.connection.on("runtime-auth:start", callback);
   }
 
   addAgent(name: string, config: AgentConfig): void {

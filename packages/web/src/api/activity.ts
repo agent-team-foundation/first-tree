@@ -1,4 +1,4 @@
-import type { AgentType, ClientCapabilities } from "@first-tree/shared";
+import type { AgentType, ClientCapabilities, RuntimeAuthMethod, RuntimeProvider } from "@first-tree/shared";
 import { api, withOrg } from "./client.js";
 
 export type { AgentType };
@@ -97,6 +97,21 @@ export function getClientCapabilities(clientId: string): Promise<HubClient> {
 
 export function disconnectClient(clientId: string): Promise<{ disconnected: boolean; agentIds: string[] }> {
   return api.post(`/clients/${clientId}/disconnect`);
+}
+
+/**
+ * Start an in-product runtime-auth login on this client's daemon (the
+ * "Connect <provider>" action). The server forwards a command to the daemon,
+ * which runs the provider's official login (browser OAuth, or the device-code
+ * fallback) and surfaces progress by re-PATCHing capabilities — so the caller
+ * just polls {@link listClients} / {@link getClientCapabilities} afterwards and
+ * reads `entry.pendingAuth` then the flipped `state`.
+ */
+export function startRuntimeAuth(
+  clientId: string,
+  body: { provider: RuntimeProvider; method?: RuntimeAuthMethod },
+): Promise<{ ref: string; started: true }> {
+  return api.post(`/clients/${encodeURIComponent(clientId)}/runtime-auth/start`, body);
 }
 
 export function resetAgentActivity(agentId: string): Promise<{ reset: boolean }> {

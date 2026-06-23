@@ -1,5 +1,6 @@
 import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
 import { PROVIDER_LABEL, providerInstallHint, providerUnauthHint } from "./providers.js";
+import { providerAuthHandledInProduct } from "./runtime-auth-view.js";
 
 /**
  * Per-runtime state line — single rendering used by every card body
@@ -40,14 +41,21 @@ export function RuntimeStateLine({
           {runtimeSuffix}
         </div>
       );
-    case "unauthenticated":
+    case "unauthenticated": {
+      // For a provider whose credentials are obtained in-product — codex /
+      // claude-code via Connect, or claude-code-tui which SHARES the Claude Code
+      // keychain — don't print a manual "Run `<cli> login`" hint: there is no
+      // separate CLI login to run, and the adjacent Connect (or the shared
+      // Claude login) is the path. Other providers keep the concrete hint.
+      const manualHint = providerAuthHandledInProduct(provider) ? "" : ` · ${providerUnauthHint(provider, os)}`;
       return (
         <div className="text-body" style={{ color: "var(--fg-2)" }}>
           <span style={{ color: "var(--state-blocked)" }}>⚠</span> {label}
           {entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}
-          {runtimeSuffix} · needs login · {providerUnauthHint(provider, os)}
+          {runtimeSuffix} · needs login{manualHint}
         </div>
       );
+    }
     case "missing":
       // Lead with the concrete install action keyed to what the probe found
       // missing — for `claude-code-tui` that may be only tmux, so a bare "not

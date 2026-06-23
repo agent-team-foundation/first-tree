@@ -30,7 +30,7 @@ export const CLAUDE_SMOKE_PROMPT = "Reply with exactly: OK";
  * `node_modules` to the same package (realpath'd so pnpm symlinks resolve
  * exactly like Node's own resolution would) — mirrors codex's anchor.
  */
-function locateSdkCliJs(): string {
+export function locateSdkCliJs(): string {
   if (typeof import.meta.resolve === "function") {
     return join(dirname(fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"))), "cli.js");
   }
