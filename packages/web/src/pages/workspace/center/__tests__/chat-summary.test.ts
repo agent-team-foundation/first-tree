@@ -82,24 +82,110 @@ describe("descriptionFirstLine", () => {
 });
 
 describe("ChatSummary", () => {
-  async function renderSummary(scrollEl: HTMLDivElement): Promise<{ container: HTMLDivElement; root: Root }> {
+  const readRecentlyAt = "2026-05-28T12:00:00.000Z";
+  const unreadVersionAt = "2026-05-28T12:01:00.000Z";
+  const newerUnreadVersionAt = "2026-05-28T12:02:00.000Z";
+
+  type SummaryProps = Parameters<typeof ChatSummary>[0];
+
+  function summaryProps(scrollEl: HTMLDivElement, overrides: Partial<SummaryProps> = {}): SummaryProps {
+    return {
+      chatId: "chat-1",
+      description: "Status: shipping **DescBody** soon.",
+      descriptionUpdatedAt: null,
+      lastReadAt: null,
+      freshnessReady: true,
+      scrollContainerRef: { current: scrollEl },
+      ...overrides,
+    };
+  }
+
+  async function renderSummary(
+    scrollEl: HTMLDivElement,
+    overrides: Partial<SummaryProps> = {},
+  ): Promise<{ container: HTMLDivElement; root: Root; rerender: (next: Partial<SummaryProps>) => Promise<void> }> {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
+    let props = summaryProps(scrollEl, overrides);
     await act(async () => {
-      root.render(
-        createElement(ChatSummary, {
-          chatId: "chat-1",
-          description: "Status: shipping **DescBody** soon.",
-          descriptionUpdatedAt: null,
-          lastReadAt: null,
-          freshnessReady: true,
-          scrollContainerRef: { current: scrollEl },
-        }),
-      );
+      root.render(createElement(ChatSummary, props));
     });
-    return { container, root };
+    return {
+      container,
+      root,
+      rerender: async (next: Partial<SummaryProps>) => {
+        props = { ...props, ...next };
+        await act(async () => {
+          root.render(createElement(ChatSummary, props));
+        });
+      },
+    };
   }
+
+  it("auto-expands an unread summary version on entry even when the chat was read recently", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const { container, root } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
+      "Summary",
+    );
+    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("does not auto-expand the same unread summary version after the user manually collapses it", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const unreadProps = {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    };
+    const first = await renderSummary(scrollEl, unreadProps);
+    const collapseButton = first.container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]');
+    if (!collapseButton) throw new Error("summary collapse button missing");
+    await act(async () => {
+      collapseButton.click();
+    });
+    await act(async () => first.root.unmount());
+    first.container.remove();
+
+    const second = await renderSummary(scrollEl, unreadProps);
+    expect(second.container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(second.container.querySelector("strong")).toBeNull();
+    expect(second.container.textContent).toContain("Updated");
+
+    await act(async () => second.root.unmount());
+    second.container.remove();
+  });
+
+  it("keeps the current mounted chat collapsed when a newer unread summary version arrives", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const { container, root, rerender } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: readRecentlyAt,
+      lastReadAt: unreadVersionAt,
+    });
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+
+    await rerender({
+      descriptionUpdatedAt: newerUnreadVersionAt,
+      lastReadAt: unreadVersionAt,
+    });
+
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(container.querySelector("strong")).toBeNull();
+    expect(container.textContent).toContain("Updated");
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
 
   it("keeps a manual expand open when the stream was already scrolled", async () => {
     localStorage.clear();
@@ -112,6 +198,9 @@ describe("ChatSummary", () => {
     await act(async () => {
       button.click();
     });
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
+      "Summary",
+    );
     expect(container.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {
@@ -134,6 +223,9 @@ describe("ChatSummary", () => {
     await act(async () => {
       button.click();
     });
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
+      "Summary",
+    );
     expect(container.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {
@@ -157,6 +249,9 @@ describe("ChatSummary", () => {
     await act(async () => {
       initialButton.click();
     });
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
+      "Summary",
+    );
     expect(container.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {

@@ -26,23 +26,18 @@ import { formatRelative } from "../../../lib/utils.js";
  *     an "Updated" chip when there's an unread change, the freshness
  *     ("9 days ago"), and a quiet chevron. Freshness shows in BOTH states, so an
  *     auto-expanded summary still surfaces when it last changed.
- *   - Expanded: just the description rendered as markdown — no footer. Read-only
- *     is self-evident (no edit affordance anywhere); the updater name is not
- *     shown (single-agent maintenance makes it noise — the data stays on the
- *     chat detail).
+ *   - Expanded: a fixed "Summary" control label plus the description rendered
+ *     as markdown — no footer. Read-only is self-evident (no edit affordance
+ *     anywhere); the updater name is not shown (single-agent maintenance makes
+ *     it noise — the data stays on the chat detail).
  *
- * Auto behavior: default collapsed; auto-expand once on entry ONLY when the
- * update is unread AND the viewer hasn't looked in a while; while expanded,
- * scrolling the stream folds it to the bar (restores at the top); a manual
- * toggle always wins and is remembered per chat. Renders nothing when the chat
- * has no description.
+ * Auto behavior: default collapsed; auto-expand once on entry when the update
+ * is unread for this viewer, unless they already manually dismissed this exact
+ * summary version; while expanded, scrolling the stream folds it to the bar
+ * (restores at the top); a manual toggle always wins and is remembered per
+ * chat. Renders nothing when the chat has no description.
  */
 
-// Auto-expand "haven't looked in a while" gate: an unread description update
-// only pops the header open on entry when the viewer last read this chat at
-// least this long ago — or on an earlier calendar day. Long enough that a quick
-// tab-away-and-back doesn't re-pop the panel.
-const STALE_SINCE_VIEW_MS = 8 * 60 * 60 * 1000;
 // Scroll sticky-collapse thresholds (px from the stream top). The hysteresis
 // gap (40 vs 6) debounces the boundary so a hair of scroll doesn't flutter it.
 const SCROLL_COLLAPSE_PX = 40;
@@ -51,6 +46,10 @@ const SCROLL_RESTORE_PX = 6;
 // Per-chat manual expand/collapse preference. Mirrors the localStorage pattern
 // used elsewhere in the chat view (private-mode safe, per-chat key suffix).
 const MANUAL_PREF_KEY = "first-tree:chat-summary-expanded:v1";
+// Per-chat summary version the user has explicitly collapsed while it was
+// unread. This suppresses repeat auto-open for the same `descriptionUpdatedAt`
+// while still allowing the next summary update to surface.
+const DISMISSED_VERSION_KEY = "first-tree:chat-summary-dismissed-version:v1";
 
 function loadManualPref(chatId: string): boolean | null {
   if (typeof window === "undefined") return null;
@@ -67,6 +66,34 @@ function saveManualPref(chatId: string, expanded: boolean): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.setItem(`${MANUAL_PREF_KEY}:${chatId}`, expanded ? "1" : "0");
+  } catch {
+    // localStorage may be unavailable (private mode); ignore.
+  }
+}
+
+function loadDismissedVersion(chatId: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(`${DISMISSED_VERSION_KEY}:${chatId}`);
+  } catch {
+    return null;
+  }
+}
+
+function saveDismissedVersion(chatId: string, version: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(`${DISMISSED_VERSION_KEY}:${chatId}`, version);
+  } catch {
+    // localStorage may be unavailable (private mode); ignore.
+  }
+}
+
+function clearDismissedVersion(chatId: string, version: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    const key = `${DISMISSED_VERSION_KEY}:${chatId}`;
+    if (window.localStorage.getItem(key) === version) window.localStorage.removeItem(key);
   } catch {
     // localStorage may be unavailable (private mode); ignore.
   }
@@ -119,13 +146,6 @@ export function descriptionFirstLine(description: string): string {
   return headingFallback;
 }
 
-function isStaleSinceLastView(lastReadAtMs: number | null, nowMs: number): boolean {
-  if (lastReadAtMs === null) return true; // never read this chat → treat as "a while"
-  if (nowMs - lastReadAtMs >= STALE_SINCE_VIEW_MS) return true;
-  // A different calendar day also counts as "haven't looked in a while".
-  return new Date(lastReadAtMs).toDateString() !== new Date(nowMs).toDateString();
-}
-
 export function ChatSummary({
   chatId,
   description,
@@ -171,49 +191,67 @@ export function ChatSummary({
   const [scrolled, setScrolled] = useState(false);
   const [unreadCleared, setUnreadCleared] = useState(false);
 
-  // Decide the entry state, after the real detail has settled, keyed by chat AND
-  // the description's freshness version (`descriptionUpdatedAt`): auto-expand +
-  // highlight only when the update is unread AND the viewer hasn't looked in a
-  // while; otherwise honor their remembered per-chat preference (default
-  // collapsed). Keying on the version (not just chatId) means a NEW description
-  // update re-asserts its unread cue / auto-expand even within the same open
-  // chat, instead of being suppressed by a once-per-chat guard — while the
-  // user's manual collapse/expand preference is still remembered per chat.
-  // Manual toggles for the current version always win (see onToggle).
+  // Decide the entry state after the real detail has settled. A newly entered
+  // chat auto-opens an unread summary version once; manually collapsing that
+  // version suppresses repeat auto-open. If the summary updates while the user
+  // is already in the chat, do not suddenly expand the reading pane — show the
+  // Updated chip in the collapsed bar instead.
   const decidedForKey = useRef<string | null>(null);
   const entryKey = `${chatId}|${descriptionUpdatedAt ?? ""}`;
+  const activeChatIdRef = useRef<string | null>(null);
   // When the user manually expands while already scrolled down, sticky-collapse
   // must not immediately fold the panel on the next scroll event that reports the
   // same scrollTop. Store the expansion point and require a fresh downward move.
   const manualExpandTopRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!hasDescription || !freshnessReady) return;
+    if (!freshnessReady) return;
     if (decidedForKey.current === entryKey) return;
+    const enteringChat = activeChatIdRef.current !== chatId;
+    activeChatIdRef.current = chatId;
     decidedForKey.current = entryKey;
+    setUnreadCleared(false);
+    if (!hasDescription) {
+      manualExpandTopRef.current = null;
+      setOpen(false);
+      setScrollCollapsed(false);
+      setHighlighted(false);
+      return;
+    }
+    if (!enteringChat) {
+      setHighlighted(false);
+      return;
+    }
     manualExpandTopRef.current = null;
     setScrollCollapsed(false);
-    setUnreadCleared(false);
-    if (unread && isStaleSinceLastView(lastReadMs, Date.now())) {
+    const dismissedVersion = loadDismissedVersion(chatId);
+    if (unread && descriptionUpdatedAt && dismissedVersion !== descriptionUpdatedAt) {
       setOpen(true);
       setHighlighted(true);
     } else {
       setOpen(loadManualPref(chatId) ?? false);
       setHighlighted(false);
     }
-  }, [entryKey, chatId, hasDescription, freshnessReady, unread, lastReadMs]);
+  }, [entryKey, chatId, descriptionUpdatedAt, hasDescription, freshnessReady, unread]);
 
   const onToggle = useCallback(() => {
     setOpen((prev) => {
       const next = scrollCollapsedRef.current ? true : !prev;
       const el = scrollContainerRef.current;
       manualExpandTopRef.current = next && el ? el.scrollTop : null;
+      if (descriptionUpdatedAt) {
+        if (next) {
+          clearDismissedVersion(chatId, descriptionUpdatedAt);
+        } else if (unread) {
+          saveDismissedVersion(chatId, descriptionUpdatedAt);
+        }
+      }
       saveManualPref(chatId, next);
       return next;
     });
     setHighlighted(false);
     setUnreadCleared(true);
     setScrollCollapsed(false);
-  }, [chatId, scrollContainerRef]);
+  }, [chatId, descriptionUpdatedAt, scrollContainerRef, unread]);
 
   // Sticky-collapse: while open, scrolling the message stream down folds the
   // header to its one-line bar; returning to the top restores it. Transient —
@@ -291,14 +329,15 @@ export function ChatSummary({
         <span
           className="text-body min-w-0 flex-1"
           style={{
-            color: firstLine ? "var(--fg)" : "var(--fg-3)",
+            color: expanded || firstLine ? "var(--fg)" : "var(--fg-3)",
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
-            fontStyle: firstLine ? undefined : "italic",
+            fontStyle: !expanded && !firstLine ? "italic" : undefined,
+            fontWeight: expanded ? 600 : undefined,
           }}
         >
-          {firstLine || "No summary yet"}
+          {expanded ? "Summary" : firstLine || "No summary yet"}
         </span>
         {showAmberChip ? (
           <span
@@ -335,7 +374,7 @@ export function ChatSummary({
       </button>
 
       {expanded ? (
-        <div style={{ padding: "0 var(--sp-6) var(--sp-3)" }}>
+        <div style={{ padding: "var(--sp-1) var(--sp-6) var(--sp-3)" }}>
           <div className="text-body" style={{ color: "var(--fg)", maxHeight: "min(46vh, 30rem)", overflowY: "auto" }}>
             {/* Faithful markdown render. Headings are flattened to body size so
                 hierarchy is carried by weight + spacing (mirrors the rail's old
