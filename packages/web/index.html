@@ -9,6 +9,39 @@
     <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/jetbrains-mono-latin.woff2" as="font" type="font/woff2" crossorigin />
     <title>First Tree</title>
+    <!--
+      Google Analytics 4 — same property (G-BHG918MZ02) as first-tree.ai, with
+      cross-domain linking so a visitor who goes marketing-site -> cloud is
+      stitched into one user (that's what makes "click_app -> signup"
+      attributable per repo/campaign). send_page_view is off: this is a
+      react-router SPA, so RouteTracker (src/analytics.tsx) reports page_view on
+      every route change — leaving it on would double-count the first screen.
+
+      PRODUCTION ONLY: the Docker build produces one web dist for every channel,
+      so we gate here on hostname. Without this, dev (127.0.0.1) and staging
+      (dev.cloud.first-tree.ai) would load gtag and write into the shared
+      production property, polluting the attribution dataset. gtag is neither
+      fetched nor configured off the production host. analytics.tsx applies the
+      same host gate before sending, as defense in depth.
+    -->
+    <script>
+      (() => {
+        if (window.location.hostname !== "cloud.first-tree.ai") return;
+        window.dataLayer = window.dataLayer || [];
+        window.gtag = (...args) => {
+          window.dataLayer.push(args);
+        };
+        const tag = document.createElement("script");
+        tag.async = true;
+        tag.src = "https://www.googletagmanager.com/gtag/js?id=G-BHG918MZ02";
+        document.head.appendChild(tag);
+        window.gtag("js", new Date());
+        window.gtag("config", "G-BHG918MZ02", {
+          send_page_view: false,
+          linker: { domains: ["first-tree.ai", "cloud.first-tree.ai"] },
+        });
+      })();
+    </script>
     <script>
       (() => {
         const t = localStorage.getItem("theme");
