@@ -2,7 +2,12 @@ import { type AgentChatStatus, agentChatStatusSchema } from "@first-tree/shared"
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { chatAgentStatusQueryKey } from "../api/agent-status.js";
-import { getApiSelectedOrganizationId, getStoredTokens, refreshAccessToken } from "../api/client.js";
+import {
+  ADMIN_WS_ORG_CHANGED_EVENT,
+  getApiSelectedOrganizationId,
+  getStoredTokens,
+  refreshAccessToken,
+} from "../api/client.js";
 import { upsertAgentStatus } from "../lib/agent-status-view.js";
 
 type WsMessage = {
@@ -407,6 +412,7 @@ function scheduleReconnect() {
 
 function teardown() {
   closing = true;
+  window.removeEventListener(ADMIN_WS_ORG_CHANGED_EVENT, reconnectForOrgChange);
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -420,6 +426,30 @@ function teardown() {
     ws.close(1000, "unmount");
     ws = null;
   }
+}
+
+/**
+ * Rebuild the shared connection against the now-current selected org. Fires on
+ * `ADMIN_WS_ORG_CHANGED_EVENT` (a user-driven `selectOrganization`): `connect()`
+ * reads the org from `getApiSelectedOrganizationId()` at call time, so closing
+ * the stale socket and reconnecting is enough to move to the new org's
+ * `/orgs/:orgId/ws/`. No-op when no consumer is mounted — the next mount
+ * connects fresh against the new org.
+ */
+function reconnectForOrgChange(): void {
+  if (refCount === 0) return;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempt = 0;
+  const previous = ws;
+  // Detach before closing so the stale socket's onclose (`socket !== ws`)
+  // no-ops instead of scheduling a backoff reconnect to the previous org.
+  ws = null;
+  closing = false;
+  if (previous) previous.close(1000, "org-switch");
+  connect();
 }
 
 /**
@@ -448,6 +478,7 @@ export function useAdminWs(options?: UseAdminWsOptions) {
     if (refCount === 1) {
       closing = false;
       connect();
+      window.addEventListener(ADMIN_WS_ORG_CHANGED_EVENT, reconnectForOrgChange);
     }
 
     return () => {

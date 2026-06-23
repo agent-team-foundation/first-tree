@@ -27,6 +27,17 @@ export function getApiSelectedOrganizationId(): string | null {
 }
 
 /**
+ * Window event announcing that the active org selection changed (a user-driven
+ * `selectOrganization`). The org-scoped admin WebSocket (`/orgs/:orgId/ws/`)
+ * reads `getApiSelectedOrganizationId()` only when it (re)connects and is not
+ * re-opened by React state, so `useAdminWs` listens for this to reconnect
+ * against the new org — otherwise a team switch keeps streaming the previous
+ * org's realtime frames. Dispatched on `window` to stay decoupled, mirroring
+ * the existing `auth:logout` signal.
+ */
+export const ADMIN_WS_ORG_CHANGED_EVENT = "admin-ws:org-changed";
+
+/**
  * Prefix an org-scoped path with `/orgs/<currentOrgId>/`. Use this on every
  * call that targets a resource living inside the user's currently-viewed
  * organization. Paths that aren't org-scoped (`/me/...`, `/auth/...`,
