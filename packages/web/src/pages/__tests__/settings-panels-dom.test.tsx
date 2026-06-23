@@ -198,6 +198,21 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
   await flush();
 }
 
+function buttonByText(container: ParentNode, text: string): HTMLButtonElement | null {
+  return (
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes(text)) ??
+    null
+  );
+}
+
+function inputByLabel(container: ParentNode, label: string): HTMLInputElement | null {
+  const labelElement = [...container.querySelectorAll<HTMLLabelElement>("label")].find((node) =>
+    node.textContent?.includes(label),
+  );
+  const control = labelElement?.control;
+  return control instanceof HTMLInputElement ? control : null;
+}
+
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
@@ -290,15 +305,36 @@ describe("settings panels", () => {
     await act(async () => failed.root.unmount());
   });
 
-  it("loads and saves context tree settings with blank values normalized to null", async () => {
+  it("renders context tree tabs and keeps manual settings hidden by default", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context tree");
+    await waitForText(container, "Manual Set");
 
-    const inputs = container.querySelectorAll<HTMLInputElement>("input");
-    const repoInput = inputs[0];
-    const branchInput = inputs[1];
+    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+    expect([...tabs].map((tab) => tab.textContent?.trim())).toEqual(["Initial", "Features"]);
+    expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
+    expect(tabs[1]?.getAttribute("aria-selected")).toBe("false");
+    expect(container.textContent).toContain("Connect your code & build your Context Tree");
+    expect(inputByLabel(container, "Manual Set")?.checked).toBe(false);
+    expect(container.textContent).not.toContain("Repo URL");
+    expect(container.textContent).not.toContain("Branch");
+
+    await act(async () => root.unmount());
+  });
+
+  it("shows and saves manual context tree settings with blank values normalized to null", async () => {
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Manual Set");
+
+    await click(inputByLabel(container, "Manual Set"));
+    await waitForText(container, "Repo URL");
+
+    const repoInput = inputByLabel(container, "Repo URL");
+    const branchInput = inputByLabel(container, "Branch");
     if (!repoInput || !branchInput) throw new Error("Expected context tree inputs");
+    expect(repoInput.value).toBe("https://github.com/acme/context");
+    expect(branchInput.value).toBe("main");
     await setInputValue(repoInput, "   ");
     await setInputValue(branchInput, "  trunk  ");
     await submit(container.querySelector("form"));
@@ -324,15 +360,17 @@ describe("settings panels", () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
     await waitForText(container, "Connect your code & build your Context Tree");
+    expect(container.textContent).toContain("Manual Set");
+    expect(container.textContent).not.toContain("Repo URL");
+    expect(container.textContent).not.toContain("Branch");
     // No raw "create private repo" button, and the panel no longer initializes
     // the tree in place — that's the /build-tree flow's job now.
     expect(container.textContent).not.toContain("Create private GitHub repo");
     expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
 
-    await click(
-      [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Connect your code")) ?? null,
-    );
+    await click(buttonByText(container, "Connect your code"));
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/build-tree");
+    expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });
@@ -341,12 +379,12 @@ describe("settings panels", () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Context tree");
-    const inputs = container.querySelectorAll("input");
-    expect(inputs.length).toBeGreaterThan(0);
-    for (const input of inputs) {
-      expect(input.hasAttribute("readonly")).toBe(true);
-    }
+    await waitForText(container, "Manual Set");
+    await click(inputByLabel(container, "Manual Set"));
+    await waitForText(container, "Repo URL");
+
+    expect(inputByLabel(container, "Repo URL")?.hasAttribute("readonly")).toBe(true);
+    expect(inputByLabel(container, "Branch")?.hasAttribute("readonly")).toBe(true);
     // No Save affordance for members.
     expect(container.querySelector('button[type="submit"]')).toBeNull();
     await act(async () => root.unmount());
@@ -359,6 +397,30 @@ describe("settings panels", () => {
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
     await waitForText(container, "Ask an admin to initialize");
     expect(container.textContent).not.toContain("Create private GitHub repo");
+    await act(async () => root.unmount());
+  });
+
+  it("shows an empty features tab without resetting manual draft values", async () => {
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Manual Set");
+
+    await click(inputByLabel(container, "Manual Set"));
+    await waitForText(container, "Repo URL");
+    const repoInput = inputByLabel(container, "Repo URL");
+    if (!repoInput) throw new Error("Expected repo input");
+    await setInputValue(repoInput, "https://github.com/acme/draft-context");
+
+    await click(buttonByText(container, "Features"));
+    await waitForText(container, "No feature settings yet.");
+    expect(buttonByText(container, "Initial")?.getAttribute("aria-selected")).toBe("false");
+    expect(buttonByText(container, "Features")?.getAttribute("aria-selected")).toBe("true");
+    expect(container.textContent).not.toContain("Repo URL");
+    expect(container.textContent).not.toContain("Branch");
+
+    await click(buttonByText(container, "Initial"));
+    expect(inputByLabel(container, "Repo URL")?.value).toBe("https://github.com/acme/draft-context");
+
     await act(async () => root.unmount());
   });
 });

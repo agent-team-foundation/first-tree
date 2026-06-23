@@ -7,7 +7,10 @@ import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Section } from "../components/ui/section.js";
 import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
+import { Tab, TabBar } from "../components/ui/tab-bar.js";
 import { COPY } from "./onboarding/copy.js";
+
+type ContextTreeSettingsTab = "initial" | "features";
 
 /**
  * Section for the per-org Context Tree binding (repo / branch). Replaces the
@@ -28,6 +31,8 @@ export function ContextTreeSettingsPanel() {
   const isAdmin = role === "admin";
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<ContextTreeSettingsTab>("initial");
+  const [manualEnabled, setManualEnabled] = useState(false);
 
   const settingQuery = useQuery({
     queryKey: ["org-setting", organizationId, "context_tree"],
@@ -84,51 +89,106 @@ export function ContextTreeSettingsPanel() {
           {settingQuery.error instanceof Error ? settingQuery.error.message : "Failed to load setting"}
         </div>
       ) : (
-        <form onSubmit={handleSubmit}>
-          {isAdmin && !hasConfiguredRepo ? (
-            <div style={{ marginBottom: "var(--sp-4)" }}>
-              {/* No green "create repo" button — the team's tree is built via the
-                  /build-tree flow (connect code -> build -> seed). The form below
-                  stays for pointing at an EXISTING tree (paste a repo URL). */}
-              <Button type="button" variant="link" className="h-auto p-0" onClick={() => navigate("/build-tree")}>
-                <span>{COPY.buildTree.buildCta}</span>
-                <ArrowRight className="h-4 w-4" />
-              </Button>
+        <div>
+          <TabBar role="tablist" aria-label="Context tree settings tabs" style={{ padding: 0 }}>
+            <Tab
+              id="context-tree-settings-initial-tab"
+              role="tab"
+              aria-selected={activeTab === "initial"}
+              aria-controls="context-tree-settings-initial-panel"
+              active={activeTab === "initial"}
+              onClick={() => setActiveTab("initial")}
+            >
+              Initial
+            </Tab>
+            <Tab
+              id="context-tree-settings-features-tab"
+              role="tab"
+              aria-selected={activeTab === "features"}
+              aria-controls="context-tree-settings-features-panel"
+              active={activeTab === "features"}
+              onClick={() => setActiveTab("features")}
+            >
+              Features
+            </Tab>
+          </TabBar>
+
+          {activeTab === "initial" ? (
+            <div
+              id="context-tree-settings-initial-panel"
+              role="tabpanel"
+              aria-labelledby="context-tree-settings-initial-tab"
+              style={{ paddingTop: "var(--sp-4)" }}
+            >
+              {isAdmin ? (
+                <div style={{ marginBottom: "var(--sp-4)" }}>
+                  {/* The team's tree is built via the /build-tree flow
+                      (connect code -> build -> seed). Manual settings below are
+                      only for pointing at an existing tree repo. */}
+                  <Button type="button" onClick={() => navigate("/build-tree")}>
+                    <span>{COPY.buildTree.buildCta}</span>
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              ) : null}
+              {!isAdmin && !hasConfiguredRepo ? (
+                <div className="text-body" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-4)" }}>
+                  Ask an admin to initialize this team's Context Tree.
+                </div>
+              ) : null}
+              <label
+                className="text-body inline-flex items-center"
+                style={{ color: "var(--fg)", gap: "var(--sp-2)", marginBottom: "var(--sp-4)" }}
+              >
+                <input type="checkbox" checked={manualEnabled} onChange={(e) => setManualEnabled(e.target.checked)} />
+                <span>Manual Set</span>
+              </label>
+              {manualEnabled ? (
+                <form onSubmit={handleSubmit}>
+                  <SettingsField
+                    label="Repo URL"
+                    hint="HTTPS URL of the Context Tree git repository for this team."
+                    value={repo}
+                    onChange={setRepo}
+                    mono
+                    placeholder="https://github.com/your-org/first-tree-context"
+                    readOnly={!isAdmin}
+                  />
+                  <SettingsField
+                    label="Branch"
+                    hint="Branch checked out by client agents on startup."
+                    value={branch}
+                    onChange={setBranch}
+                    mono
+                    placeholder="main"
+                    readOnly={!isAdmin}
+                    saved={saved}
+                    rightSlot={
+                      isAdmin ? (
+                        <SettingsSaveButton pending={mutation.isPending} disabled={!settingQuery.data} />
+                      ) : undefined
+                    }
+                  />
+                  {mutation.error instanceof Error && (
+                    <div className="text-body" style={{ color: "var(--state-error)" }}>
+                      {mutation.error.message}
+                    </div>
+                  )}
+                </form>
+              ) : null}
             </div>
-          ) : null}
-          {!isAdmin && !hasConfiguredRepo ? (
-            <div className="text-body" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-4)" }}>
-              Ask an admin to initialize this team's Context Tree.
-            </div>
-          ) : null}
-          <SettingsField
-            label="Repo URL"
-            hint="HTTPS URL of the Context Tree git repository for this team."
-            value={repo}
-            onChange={setRepo}
-            mono
-            placeholder="https://github.com/your-org/first-tree-context"
-            readOnly={!isAdmin}
-          />
-          <SettingsField
-            label="Branch"
-            hint="Branch checked out by client agents on startup."
-            value={branch}
-            onChange={setBranch}
-            mono
-            placeholder="main"
-            readOnly={!isAdmin}
-            saved={saved}
-            rightSlot={
-              isAdmin ? <SettingsSaveButton pending={mutation.isPending} disabled={!settingQuery.data} /> : undefined
-            }
-          />
-          {mutation.error instanceof Error && (
-            <div className="text-body" style={{ color: "var(--state-error)" }}>
-              {mutation.error.message}
+          ) : (
+            <div
+              id="context-tree-settings-features-panel"
+              role="tabpanel"
+              aria-labelledby="context-tree-settings-features-tab"
+              className="text-body"
+              style={{ color: "var(--fg-3)", paddingTop: "var(--sp-4)" }}
+            >
+              No feature settings yet.
             </div>
           )}
-        </form>
+        </div>
       )}
     </Section>
   );
