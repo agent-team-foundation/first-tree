@@ -1267,13 +1267,25 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
    */
   function refreshBriefingForActiveTurn(sessionCtx: SessionContext): { fingerprint: string; changed: boolean } | null {
     if (!agentConfigCache || !cwd || !threadId) return null;
-    const payload = agentConfigCache.get(sessionCtx.agent.agentId)?.payload;
-    if (!payload) return null;
-    const briefing = buildBriefing(sessionCtx, payload, cwd);
-    const fingerprint = computeBriefingFingerprint(briefing);
-    if (readSessionBriefingFingerprint(cwd, threadId) === fingerprint) return { fingerprint, changed: false };
-    writeAgentBriefing(cwd, briefing);
-    return { fingerprint, changed: true };
+    // Never throw: this runs on the inject drain path AFTER the batch has been
+    // dequeued, so a thrown briefing rewrite would strand the message (no
+    // turn/start, no token.retry). On any failure, skip the hot-switch for this
+    // turn — the message still delivers under the prior briefing, and the next
+    // injected turn retries the refresh.
+    try {
+      const payload = agentConfigCache.get(sessionCtx.agent.agentId)?.payload;
+      if (!payload) return null;
+      const briefing = buildBriefing(sessionCtx, payload, cwd);
+      const fingerprint = computeBriefingFingerprint(briefing);
+      if (readSessionBriefingFingerprint(cwd, threadId) === fingerprint) return { fingerprint, changed: false };
+      writeAgentBriefing(cwd, briefing);
+      return { fingerprint, changed: true };
+    } catch (err) {
+      sessionCtx.log(
+        `active-session briefing refresh failed, delivering under prior briefing: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
   }
 
   async function mergeAndRun(

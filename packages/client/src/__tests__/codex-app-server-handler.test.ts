@@ -5,6 +5,7 @@ import type { SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, CodexAppServerTransportError } from "../handlers/codex/app-server/client.js";
 import { createCodexAppServerHandler } from "../handlers/codex/app-server/index.js";
+import { writeAgentBriefing } from "../runtime/bootstrap.js";
 import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
@@ -997,6 +998,32 @@ describe("codex app-server briefing-update notice", () => {
 
     const injectedStart = fake.requests.filter((request) => request.method === "turn/start")[startTurns];
     expect(JSON.stringify(injectedStart?.params ?? {})).toContain("<system-reminder>");
+
+    completeTurn(fake, "turn-2", "second answer");
+    await handler.shutdown();
+  });
+
+  it("still delivers the injected message when the active-session briefing rewrite throws", async () => {
+    const { cache, setAppend } = makeMutableConfigCache("BEFORE_MARKER");
+    const fake = new FakeAppServerClient();
+    const handler = makeHandler(fake, { agentConfigCache: cache });
+    const ctx = makeContext({ finishTurn: async () => {} });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    completeTurn(fake, "turn-1", "first answer");
+    await startPromise;
+    const startTurns = fake.requests.filter((request) => request.method === "turn/start").length;
+
+    // Prompt changes; the active-turn briefing rewrite throws (e.g. disk error).
+    // The batch was already dequeued, so the message must still reach turn/start
+    // rather than being stranded.
+    setAppend("AFTER_MARKER");
+    vi.mocked(writeAgentBriefing).mockImplementationOnce(() => {
+      throw new Error("simulated disk failure");
+    });
+    handler.inject(makeMessage("m2", "again"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === startTurns + 1);
 
     completeTurn(fake, "turn-2", "second answer");
     await handler.shutdown();
