@@ -1,9 +1,13 @@
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { AgentRuntimeConfigPayload, SessionEvent, ToolFileRef } from "@first-tree/shared";
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../../../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../../../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../../../runtime/agent-config-cache.js";
-import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../../../runtime/bootstrap.js";
+import {
+  FIRST_TREE_WORKSPACE_MARKER,
+  type PredeclaredSourceRepo,
+  writeAgentBriefing,
+} from "../../../runtime/bootstrap.js";
 import { type CodexBinaryResolution, resolveCodexRuntimeBinary } from "../../../runtime/capabilities/codex.js";
 import { type ChatContext, fetchChatContext } from "../../../runtime/chat-context.js";
 import { renderChatContextPrompt } from "../../../runtime/chat-context-section.js";
@@ -27,6 +31,12 @@ import type {
 } from "../../../runtime/handler.js";
 import { deliveryTokenFromSessionContext } from "../../../runtime/handler.js";
 import { materializeResourceSkills } from "../../../runtime/resource-skills.js";
+import {
+  buildBriefingUpdateNotice,
+  computeBriefingFingerprint,
+  readSessionBriefingFingerprint,
+  writeSessionBriefingFingerprint,
+} from "../../../runtime/session-briefing-fingerprint.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../../runtime/workspace.js";
 import { chunkAssistantText } from "../../assistant-text.js";
@@ -258,6 +268,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   async function prepareSession(sessionCtx: SessionContext): Promise<{
     payload: AgentRuntimeConfigPayload;
     env: NodeJS.ProcessEnv;
+    briefingFingerprint: string;
   }> {
     cwd = acquireAgentHome(workspaceRoot);
     const { payload, resolved } = await resolvePayload(sessionCtx);
@@ -270,7 +281,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     markWorkspaceInitComplete(cwd);
     currentModel = payload.model || "";
     currentReasoningEffort = payload.kind === "codex" ? payload.reasoningEffort : "high";
-    return { payload, env: buildEnv(sessionCtx) };
+    return { payload, env: buildEnv(sessionCtx), briefingFingerprint: computeBriefingFingerprint(briefing) };
   }
 
   async function startAppServer(sessionCtx: SessionContext, env: NodeJS.ProcessEnv): Promise<void> {
@@ -652,24 +663,32 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     await shutdown;
   }
 
+  /**
+   * Returns whether the turn actually reached the provider (turn/start
+   * accepted, turn id assigned). The briefing-update notice rides this turn's
+   * input (consumed from `pendingChatContextPrompt`), so the caller must only
+   * advance the briefing baseline when this is `true`: every early `token.retry`
+   * path below bounced the message for redelivery before the model saw the
+   * notice, and advancing the baseline there would suppress it on redelivery.
+   */
   async function runTurnFromText(
     inputText: string,
     messages: readonly SessionMessage[],
     token: DeliveryToken,
     sessionCtx: SessionContext,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const client = appServer;
     if (!client || !threadId) {
       token.retry(messages, "codex_app_server_missing_thread");
-      return;
+      return false;
     }
     if (shutdownRequested) {
       token.retry(messages, "codex_app_server_shutdown_before_turn_start");
-      return;
+      return false;
     }
     if (turnStartInProgress) {
       token.retry(messages, "codex_app_server_turn_start_already_in_progress");
-      return;
+      return false;
     }
 
     const providerInputText = consumePendingChatContext(inputText);
@@ -692,7 +711,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         : "codex_app_server_turn_start_unknown_custody_failed";
       token.retry(messages, reason);
       await closeAppServerAfterUnknownCustody(sessionCtx, reason, err);
-      return;
+      return false;
     }
 
     const turnRecord = asRecord(asRecord(result)?.turn);
@@ -702,7 +721,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       const reason = "codex_app_server_turn_start_missing_id_unknown_custody";
       token.retry(messages, reason);
       await closeAppServerAfterUnknownCustody(sessionCtx, reason, "missing turn id in turn/start response");
-      return;
+      return false;
     }
 
     const turn = await createCurrentTurn(turnId, messages, token, sessionCtx);
@@ -721,6 +740,9 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       if (currentTurn === turn) currentTurn = null;
       schedulePendingDrain();
     }
+    // Reached the provider (turn/start accepted, turn id assigned), so the
+    // notice-bearing input was delivered to the model.
+    return true;
   }
 
   function consumePendingChatContext(inputText: string): string {
@@ -1034,6 +1056,38 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     }
   }
 
+  /**
+   * Active-session config hot-switch for the Codex app-server: a thread reads
+   * AGENTS.md once at init and never re-reads it, so a mid-session prompt change
+   * would otherwise only land after a suspend/resume. Before an injected turn we
+   * rebuild the briefing from the latest cached config; if it changed, rewrite
+   * AGENTS.md and report so the caller prepends the re-read notice. Synchronous
+   * + `.get()` so it adds no await on the drain path. The prompt is the target;
+   * model / MCP hot-switch (which needs a thread restart) stays out of scope.
+   */
+  function refreshBriefingForActiveTurn(sessionCtx: SessionContext): { fingerprint: string; changed: boolean } | null {
+    if (!agentConfigCache || !cwd || !threadId) return null;
+    // Never throw: `startTurnFromPendingInputs` has already dequeued the batch
+    // by the time this runs, so a thrown briefing rewrite would strand the
+    // message (no turn/start, no token.retry). On any failure, skip the
+    // hot-switch for this turn — the message still delivers under the prior
+    // briefing, and the next injected turn retries the refresh.
+    try {
+      const payload = agentConfigCache.get(sessionCtx.agent.agentId)?.payload;
+      if (!payload) return null;
+      const briefing = buildBriefing(sessionCtx, payload, cwd);
+      const fingerprint = computeBriefingFingerprint(briefing);
+      if (readSessionBriefingFingerprint(cwd, threadId) === fingerprint) return { fingerprint, changed: false };
+      writeAgentBriefing(cwd, briefing);
+      return { fingerprint, changed: true };
+    } catch (err) {
+      sessionCtx.log(
+        `active-session briefing refresh failed, delivering under prior briefing: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
   async function startTurnFromPendingInputs(sessionCtx: SessionContext): Promise<void> {
     if (pendingInputs.length === 0 || turnStartInProgress) return;
     const batch = pendingInputs.slice();
@@ -1049,18 +1103,32 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     removePendingPrefix(batch);
     const token = batch[0]?.token;
     if (!token) return;
+    // Active-session hot-switch: pick up a mid-session briefing change before
+    // this injected turn and surface the re-read notice.
+    const refreshed = refreshBriefingForActiveTurn(sessionCtx);
+    if (refreshed?.changed && cwd) {
+      const notice = buildBriefingUpdateNotice(join(cwd, "AGENTS.md"));
+      pendingChatContextPrompt = pendingChatContextPrompt ? `${notice}\n\n${pendingChatContextPrompt}` : notice;
+      sessionCtx.log(`Active session briefing changed — prepending re-read notice (${threadId})`);
+    }
     void runTurnFromText(
       text,
       batch.map((entry) => entry.message),
       token,
       sessionCtx,
-    ).catch((err) => {
-      sessionCtx.log(`codex app-server pending turn failed: ${err instanceof Error ? err.message : String(err)}`);
-      token.retry(
-        batch.map((entry) => entry.message),
-        "codex_pending_turn_failed",
-      );
-    });
+    )
+      .then((delivered) => {
+        if (refreshed?.changed && delivered && cwd && threadId) {
+          writeSessionBriefingFingerprint(cwd, threadId, refreshed.fingerprint);
+        }
+      })
+      .catch((err) => {
+        sessionCtx.log(`codex app-server pending turn failed: ${err instanceof Error ? err.message : String(err)}`);
+        token.retry(
+          batch.map((entry) => entry.message),
+          "codex_pending_turn_failed",
+        );
+      });
   }
 
   async function formatBatchInput(
@@ -1131,7 +1199,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       startupTurnPending = true;
       ctx = sessionCtx;
       try {
-        const { payload, env } = await prepareSession(sessionCtx);
+        const { payload, env, briefingFingerprint } = await prepareSession(sessionCtx);
         await startAppServer(sessionCtx, env);
         const id = await startThread(payload);
         let input: string;
@@ -1144,7 +1212,10 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           );
           return hasExplicitDeliveryToken ? { sessionId: id, route: { kind: "owned", mode: "queued" } } : id;
         }
-        await runTurnFromText(input, [message], deliveryToken, sessionCtx);
+        const delivered = await runTurnFromText(input, [message], deliveryToken, sessionCtx);
+        // Fresh thread: seed the briefing baseline once the turn actually
+        // delivered, so a later resume only nudges on a real briefing change.
+        if (cwd && delivered) writeSessionBriefingFingerprint(cwd, id, briefingFingerprint);
         return hasExplicitDeliveryToken ? { sessionId: id, route: { kind: "owned", mode: "processing" } } : id;
       } finally {
         startupTurnPending = false;
@@ -1159,7 +1230,22 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       startupTurnPending = message !== undefined;
       ctx = sessionCtx;
       try {
-        const { payload, env } = await prepareSession(sessionCtx);
+        const { payload, env, briefingFingerprint } = await prepareSession(sessionCtx);
+        // Briefing-staleness notice: a resumed Codex thread read AGENTS.md once
+        // at thread init and never re-reads it. If the briefing changed since
+        // this session last ran a turn — or there is no baseline (a session
+        // predating this mechanism) — prepend a one-time re-read notice ahead of
+        // the Current Chat Context that prepareSession just staged. The baseline
+        // advances only after the turn runs, so a failed turn keeps it pending.
+        const briefingChanged =
+          message !== undefined &&
+          cwd !== null &&
+          readSessionBriefingFingerprint(cwd, sessionId) !== briefingFingerprint;
+        if (briefingChanged && cwd) {
+          const notice = buildBriefingUpdateNotice(join(cwd, "AGENTS.md"));
+          pendingChatContextPrompt = pendingChatContextPrompt ? `${notice}\n\n${pendingChatContextPrompt}` : notice;
+          sessionCtx.log(`Resume: briefing changed since last turn — prepending re-read notice (${sessionId})`);
+        }
         await startAppServer(sessionCtx, env);
         await resumeThread(sessionId, payload);
         if (message) {
@@ -1173,7 +1259,10 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
             );
             return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "queued" } } : sessionId;
           }
-          await runTurnFromText(input, [message], deliveryToken, sessionCtx);
+          const delivered = await runTurnFromText(input, [message], deliveryToken, sessionCtx);
+          // Advance the baseline ONLY when the notice-bearing turn actually
+          // delivered; a retried / pre-provider turn leaves it for redelivery.
+          if (cwd && delivered) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
         }
         return hasExplicitDeliveryToken
           ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }

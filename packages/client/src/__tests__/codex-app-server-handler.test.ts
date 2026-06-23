@@ -5,6 +5,7 @@ import type { SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, CodexAppServerTransportError } from "../handlers/codex/app-server/client.js";
 import { createCodexAppServerHandler } from "../handlers/codex/app-server/index.js";
+import { writeAgentBriefing } from "../runtime/bootstrap.js";
 import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
@@ -200,7 +201,7 @@ function makeContext(
   };
 }
 
-function makeHandler(fake: FakeAppServerClient) {
+function makeHandler(fake: FakeAppServerClient, extraConfig: Record<string, unknown> = {}) {
   return createCodexAppServerHandler({
     workspaceRoot,
     codexRuntimeBinaryResolver: async () => ({
@@ -215,7 +216,45 @@ function makeHandler(fake: FakeAppServerClient) {
       fake.onClose = options.onClose ?? null;
       return fake;
     },
+    ...extraConfig,
   });
+}
+
+/**
+ * Minimal mutable agent-config cache: `.get()` / `.refresh()` return a codex
+ * payload whose prompt body the test can flip mid-session to simulate an admin
+ * prompt change. Only the methods the handler actually calls are real.
+ */
+function makeMutableConfigCache(initialAppend: string) {
+  const state = { append: initialAppend };
+  const config = () => ({
+    agentId: AGENT_ID,
+    version: 1,
+    payload: {
+      kind: "codex" as const,
+      prompt: { append: state.append },
+      model: "",
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+      resourceSkills: [],
+      reasoningEffort: "high" as const,
+    },
+    updatedAt: "",
+    updatedBy: "",
+  });
+  return {
+    cache: {
+      get: () => config(),
+      refresh: async () => config(),
+      maybeRefresh: async () => config(),
+      updateUrls: () => {},
+      forget: () => {},
+    } as unknown as Record<string, unknown>,
+    setAppend: (value: string) => {
+      state.append = value;
+    },
+  };
 }
 
 function makeDeliveryToken(): DeliveryToken {
@@ -858,6 +897,135 @@ describe("codex app-server handler", () => {
     expect(sendMessage).not.toHaveBeenCalled();
     expect(finishTurn).not.toHaveBeenCalled();
 
+    await handler.shutdown();
+  });
+});
+
+describe("codex app-server briefing-update notice", () => {
+  it("prepends a re-read notice on resume when the session has no recorded briefing baseline", async () => {
+    const fake = new FakeAppServerClient();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ finishTurn: async () => {} });
+
+    const resumePromise = handler.resume(makeMessage("m1", "hello"), "thread-app-server", ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    const start = fake.requests.find((request) => request.method === "turn/start");
+    const input = JSON.stringify(start?.params ?? {});
+    expect(input).toContain("<system-reminder>");
+    expect(input).toContain("re-read");
+
+    completeTurn(fake, "turn-1", "ok");
+    await resumePromise;
+    await handler.shutdown();
+  });
+
+  it("adds no notice when the briefing is unchanged since the session last ran a turn", async () => {
+    // First session start seeds the briefing baseline for this thread id at the
+    // shared agent home (keyed off `workspaceRoot`).
+    const startFake = new FakeAppServerClient();
+    const startHandler = makeHandler(startFake);
+    const startCtx = makeContext({ finishTurn: async () => {} });
+    const startPromise = startHandler.start(makeMessage("m1", "first"), startCtx);
+    await waitFor(() => startFake.requests.some((request) => request.method === "turn/start"));
+    completeTurn(startFake, "turn-1", "first answer");
+    await startPromise;
+    await startHandler.shutdown();
+
+    // A later resume of the same thread, same config (briefing unchanged) →
+    // baseline matches → no re-read notice.
+    const resumeFake = new FakeAppServerClient();
+    const resumeHandler = makeHandler(resumeFake);
+    const resumeCtx = makeContext({ finishTurn: async () => {} });
+    const resumePromise = resumeHandler.resume(makeMessage("m2", "again"), "thread-app-server", resumeCtx);
+    await waitFor(() => resumeFake.requests.some((request) => request.method === "turn/start"));
+
+    const start = resumeFake.requests.find((request) => request.method === "turn/start");
+    expect(JSON.stringify(start?.params ?? {})).not.toContain("<system-reminder>");
+
+    completeTurn(resumeFake, "turn-1", "second answer");
+    await resumePromise;
+    await resumeHandler.shutdown();
+  });
+
+  it("keeps the notice for the next resume when the turn fails before reaching the provider", async () => {
+    // First resume hits a pre-provider turn/start failure: the notice was
+    // consumed for that attempt but the model never saw it, so the baseline
+    // must NOT advance.
+    const failFake = new FakeAppServerClient();
+    failFake.turnStartError = new CodexAppServerTransportError("codex app-server request timed out: turn/start");
+    const failHandler = makeHandler(failFake);
+    const failCtx = makeContext({ failSessionForRecovery: vi.fn(), finishTurn: async () => {} });
+    await failHandler.resume(makeMessage("m1", "hello"), "thread-app-server", failCtx);
+    expect(failFake.requests.some((request) => request.method === "turn/start")).toBe(true);
+    await failHandler.shutdown();
+
+    // Second resume of the same thread: baseline was never recorded, so the
+    // briefing still reads as changed and the re-read notice reappears.
+    const okFake = new FakeAppServerClient();
+    const okHandler = makeHandler(okFake);
+    const okCtx = makeContext({ finishTurn: async () => {} });
+    const resumePromise = okHandler.resume(makeMessage("m2", "again"), "thread-app-server", okCtx);
+    await waitFor(() => okFake.requests.some((request) => request.method === "turn/start"));
+    const start = okFake.requests.find((request) => request.method === "turn/start");
+    expect(JSON.stringify(start?.params ?? {})).toContain("<system-reminder>");
+
+    completeTurn(okFake, "turn-1", "ok");
+    await resumePromise;
+    await okHandler.shutdown();
+  });
+
+  it("prepends the notice on an injected turn when the prompt changed mid active session (no resume)", async () => {
+    const { cache, setAppend } = makeMutableConfigCache("BEFORE_MARKER");
+    const fake = new FakeAppServerClient();
+    const handler = makeHandler(fake, { agentConfigCache: cache });
+    const ctx = makeContext({ finishTurn: async () => {} });
+
+    // Start the session and finish its first turn (seeds the briefing baseline
+    // for the BEFORE prompt). Session is now idle/active.
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    completeTurn(fake, "turn-1", "first answer");
+    await startPromise;
+    const startTurns = fake.requests.filter((request) => request.method === "turn/start").length;
+
+    // Admin changes the prompt mid-session, then a message arrives — no
+    // suspend/resume. The injected turn must pick up the new briefing and carry
+    // the re-read notice.
+    setAppend("AFTER_MARKER");
+    handler.inject(makeMessage("m2", "again"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === startTurns + 1);
+
+    const injectedStart = fake.requests.filter((request) => request.method === "turn/start")[startTurns];
+    expect(JSON.stringify(injectedStart?.params ?? {})).toContain("<system-reminder>");
+
+    completeTurn(fake, "turn-2", "second answer");
+    await handler.shutdown();
+  });
+
+  it("still delivers the injected message when the active-session briefing rewrite throws", async () => {
+    const { cache, setAppend } = makeMutableConfigCache("BEFORE_MARKER");
+    const fake = new FakeAppServerClient();
+    const handler = makeHandler(fake, { agentConfigCache: cache });
+    const ctx = makeContext({ finishTurn: async () => {} });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    completeTurn(fake, "turn-1", "first answer");
+    await startPromise;
+    const startTurns = fake.requests.filter((request) => request.method === "turn/start").length;
+
+    // Prompt changes; the active-turn briefing rewrite throws (e.g. disk error).
+    // The batch was already dequeued, so the message must still reach turn/start
+    // rather than being stranded.
+    setAppend("AFTER_MARKER");
+    vi.mocked(writeAgentBriefing).mockImplementationOnce(() => {
+      throw new Error("simulated disk failure");
+    });
+    handler.inject(makeMessage("m2", "again"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === startTurns + 1);
+
+    completeTurn(fake, "turn-2", "second answer");
     await handler.shutdown();
   });
 });

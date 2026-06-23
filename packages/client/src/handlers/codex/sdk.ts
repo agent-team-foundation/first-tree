@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import {
   type AgentRuntimeConfigPayload,
   deriveRepoLocalPath,
@@ -19,7 +19,11 @@ import {
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../../runtime/agent-config-cache.js";
-import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../../runtime/bootstrap.js";
+import {
+  FIRST_TREE_WORKSPACE_MARKER,
+  type PredeclaredSourceRepo,
+  writeAgentBriefing,
+} from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
 import { renderChatContextPrompt } from "../../runtime/chat-context-section.js";
 import {
@@ -56,6 +60,12 @@ import {
   type ProviderRetryDecision,
 } from "../../runtime/provider-retry-policy.js";
 import { materializeResourceSkills } from "../../runtime/resource-skills.js";
+import {
+  buildBriefingUpdateNotice,
+  computeBriefingFingerprint,
+  readSessionBriefingFingerprint,
+  writeSessionBriefingFingerprint,
+} from "../../runtime/session-briefing-fingerprint.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
 import { chunkAssistantText } from "../assistant-text.js";
@@ -756,16 +766,24 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
    * fuses queued messages into one input. Completion acks through the last
    * consumed message id instead of shifting a count from SessionManager state.
    */
+  /**
+   * Returns whether the turn was actually delivered to the provider and
+   * settled as complete. The briefing-update notice rides this turn's input
+   * (consumed from `pendingChatContextPrompt`), so the caller must only advance
+   * the briefing baseline when this is `true` — a pre-provider / aborted /
+   * retried turn never showed the notice to the model, and a redelivery must
+   * still surface it.
+   */
   async function runTurn(
     input: Input,
     sessionCtx: SessionContext,
     messages: readonly SessionMessage[],
     token: DeliveryToken,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const activeThread = thread;
     if (!activeThread) {
       token.retry(messages, "codex_missing_thread");
-      return;
+      return false;
     }
     const providerInput = consumePendingChatContext(input);
 
@@ -987,8 +1005,9 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     }
 
     if (abort.signal.aborted) {
-      // Suspend/shutdown raced ahead — let the abort handler set state.
-      return;
+      // Suspend/shutdown raced ahead — let the abort handler set state. Not a
+      // delivered turn: the notice (if any) must survive for the redelivery.
+      return false;
     }
 
     // Match @openai/codex-sdk's Thread.run() success semantics: when a turn
@@ -1169,6 +1188,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       kind: "turn_end",
       payload: { status: settlement.status },
     });
+    const turnDelivered = settlement.action.kind === "complete";
     if (settlement.action.kind === "complete") {
       await token.complete(messages, settlement.action.outcome);
     } else {
@@ -1193,6 +1213,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     }
 
     scheduleQueuedMessagesDrain();
+    return turnDelivered;
   }
 
   function scheduleQueuedMessagesDrain(): void {
@@ -1229,6 +1250,44 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     });
   }
 
+  /**
+   * Active-session config hot-switch for Codex. A Codex thread reads AGENTS.md
+   * once at thread init and never re-reads it, and — unlike the Claude SDK
+   * handler — there is no query restart on the inject path. So when an admin
+   * changes the agent prompt mid-session, an injected message would otherwise
+   * run a fresh turn still under the OLD briefing until the next suspend/resume.
+   *
+   * Before an injected turn we rebuild the briefing from the latest cached
+   * config (kept fresh by config-update pushes, same source the Claude
+   * hot-switch reads). If it changed, rewrite AGENTS.md on disk and report the
+   * change so the caller prepends the one-time re-read notice — the agent then
+   * re-reads the now-current AGENTS.md before acting. Synchronous + `.get()` so
+   * it adds no await/race on the drain path. Model / MCP hot-switch (which would
+   * need a thread restart) stays out of scope; this targets the prompt.
+   */
+  function refreshBriefingForActiveTurn(sessionCtx: SessionContext): { fingerprint: string; changed: boolean } | null {
+    if (!agentConfigCache || !cwd || !threadId) return null;
+    // Never throw: this runs on the inject drain path AFTER the batch has been
+    // dequeued, so a thrown briefing rewrite would strand the message (no
+    // turn/start, no token.retry). On any failure, skip the hot-switch for this
+    // turn — the message still delivers under the prior briefing, and the next
+    // injected turn retries the refresh.
+    try {
+      const payload = agentConfigCache.get(sessionCtx.agent.agentId)?.payload;
+      if (!payload) return null;
+      const briefing = buildBriefing(sessionCtx, payload, cwd);
+      const fingerprint = computeBriefingFingerprint(briefing);
+      if (readSessionBriefingFingerprint(cwd, threadId) === fingerprint) return { fingerprint, changed: false };
+      writeAgentBriefing(cwd, briefing);
+      return { fingerprint, changed: true };
+    } catch (err) {
+      sessionCtx.log(
+        `active-session briefing refresh failed, delivering under prior briefing: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
   async function mergeAndRun(
     drained: Array<{ message: SessionMessage; token: DeliveryToken }>,
     sessionCtx: SessionContext,
@@ -1253,7 +1312,18 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       for (const queued of drained) queued.token.retry(queued.message, "codex_queued_turn_format_failed");
       return;
     }
-    await runTurn(inputs.join("\n\n"), sessionCtx, messages, token);
+    // Active-session hot-switch: pick up a mid-session briefing change before
+    // this injected turn and surface the re-read notice.
+    const refreshed = refreshBriefingForActiveTurn(sessionCtx);
+    if (refreshed?.changed && cwd) {
+      const notice = buildBriefingUpdateNotice(join(cwd, "AGENTS.md"));
+      pendingChatContextPrompt = pendingChatContextPrompt ? `${notice}\n\n${pendingChatContextPrompt}` : notice;
+      sessionCtx.log(`Active session briefing changed — prepending re-read notice (${threadId})`);
+    }
+    const delivered = await runTurn(inputs.join("\n\n"), sessionCtx, messages, token);
+    if (refreshed?.changed && delivered && cwd && threadId) {
+      writeSessionBriefingFingerprint(cwd, threadId, refreshed.fingerprint);
+    }
   }
 
   function retryQueuedMessages(reason: string): void {
@@ -1354,6 +1424,10 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       if (!threadId) {
         throw new Error("codex did not assign a thread id during the first turn");
       }
+      // Seed the briefing baseline now that Codex has assigned the thread id
+      // (only known after the first turn). A fresh thread starts in sync, so a
+      // later resume only nudges on a real change.
+      if (cwd) writeSessionBriefingFingerprint(cwd, threadId, computeBriefingFingerprint(briefing));
       return hasExplicitDeliveryToken
         ? { sessionId: threadId, route: { kind: "owned", mode: "processing" } }
         : threadId;
@@ -1395,6 +1469,24 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resumePayloadResolved);
       markWorkspaceInitComplete(cwd);
 
+      // Briefing-staleness notice: a resumed Codex thread read AGENTS.md once at
+      // thread init and never re-reads it, so a briefing rewritten by a runtime
+      // upgrade (changed operating contract / skill set) would otherwise never
+      // reach the resumed thread. If the current briefing differs from what this
+      // session last ran a turn under — or there is no baseline, i.e. a session
+      // predating this mechanism — prepend a one-time re-read notice ahead of the
+      // Current Chat Context in the next provider turn. The baseline is advanced
+      // only after the turn actually runs, so a failed turn keeps the notice
+      // pending for the retry.
+      const briefingFingerprint = computeBriefingFingerprint(briefing);
+      const briefingChanged =
+        Boolean(message) && readSessionBriefingFingerprint(cwd, sessionId) !== briefingFingerprint;
+      if (briefingChanged) {
+        const notice = buildBriefingUpdateNotice(join(cwd, "AGENTS.md"));
+        pendingChatContextPrompt = pendingChatContextPrompt ? `${notice}\n\n${pendingChatContextPrompt}` : notice;
+        sessionCtx.log(`Resume: briefing changed since last turn — prepending re-read notice (${sessionId})`);
+      }
+
       codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
       // Footgun F2: resumeThread does NOT inherit first-call ThreadOptions —
       // re-pass them every time.
@@ -1405,14 +1497,20 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       if (message) {
         initialTurnPreparing = true;
         let initialTurnCompleted = false;
+        let turnDelivered = false;
         try {
           const input = await toCodexInput(message, sessionCtx);
-          await runTurn(input, sessionCtx, [message], deliveryToken);
+          turnDelivered = await runTurn(input, sessionCtx, [message], deliveryToken);
           initialTurnCompleted = true;
         } finally {
           initialTurnPreparing = false;
           if (initialTurnCompleted) scheduleQueuedMessagesDrain();
         }
+        // Advance the baseline ONLY when the notice-bearing turn was actually
+        // delivered (settled complete). A pre-provider / retried turn consumed
+        // the notice without the model seeing it, so leaving the baseline
+        // unchanged lets the redelivery's resume re-surface it.
+        if (turnDelivered) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
       }
       return hasExplicitDeliveryToken
         ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
