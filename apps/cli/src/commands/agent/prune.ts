@@ -17,9 +17,9 @@ import { readClientId } from "../_shared/local-agent.js";
  * `agent prune` — drop local aliases the server no longer
  * pins to me. Counterpart to `daemon doctor`'s "stale aliases" warning.
  * Walks the local `agents/<name>/` dirs and removes any whose `agentId` is
- * not returned by `/api/v1/me/pinned-agents`. Common after `login --override`,
- * after the previous owner deleted an agent server-side, or after a typo
- * `agent add` left a junk dir.
+ * not returned by `/api/v1/me/pinned-agents`. Common after an agent was
+ * deleted server-side, pinned to another client, or after a typo `agent add`
+ * left a junk dir.
  */
 export function registerAgentPruneCommand(agent: Command): void {
   agent

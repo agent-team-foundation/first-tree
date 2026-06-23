@@ -13,6 +13,7 @@ const configMocks = vi.hoisted(() => ({
   agentConfigSchema: {},
   clientConfigSchema: {},
   defaultConfigDir: vi.fn(),
+  defaultDataDir: vi.fn(),
   loadAgents: vi.fn(),
   resolveConfigReadonly: vi.fn(),
   setConfigValue: vi.fn(),
@@ -100,6 +101,7 @@ beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "ft-cli-agent-commands-"));
   vi.clearAllMocks();
   configMocks.defaultConfigDir.mockReturnValue(tempDir);
+  configMocks.defaultDataDir.mockReturnValue(join(tempDir, "data"));
   configMocks.resolveConfigReadonly.mockReturnValue({ client: { id: "client-1" } });
   bootstrapMocks.ensureFreshAccessToken.mockResolvedValue("user-token");
   bootstrapMocks.resolveServerUrl.mockReturnValue("https://hub.example");
@@ -273,15 +275,24 @@ describe("agent lifecycle CLI commands", () => {
 });
 
 describe("logout and upgrade commands", () => {
-  it("logout stops an active service and removes credentials and client config when purging", async () => {
+  it("logout stops an active service and removes credentials, client config, and agent runtime state when purging", async () => {
     const credentials = join(tempDir, "credentials.json");
     const clientYaml = join(tempDir, "client.yaml");
+    const agentsDir = join(tempDir, "agents");
+    const sessionsDir = join(tempDir, "data", "sessions");
+    const workspacesDir = join(tempDir, "data", "workspaces");
     mkdirSync(tempDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(workspacesDir, { recursive: true });
     writeFileSync(credentials, "{}");
     writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    writeFileSync(join(agentsDir, "agent.yaml"), "agentId: agent-1\n");
+    writeFileSync(join(sessionsDir, "session.json"), "{}");
+    writeFileSync(join(workspacesDir, "workspace.json"), "{}");
     coreMocks.isServiceSupported.mockReturnValue(true);
     coreMocks.getClientServiceStatus.mockReturnValue({ state: "active", platform: "launchd" });
-    coreMocks.stopClientService.mockReturnValue({ ok: false, reason: "already stopped" });
+    coreMocks.stopClientService.mockReturnValue({ ok: true });
 
     const { registerLogoutCommand } = await import("../commands/logout.js");
     await runTopLevel(registerLogoutCommand, ["logout", "--purge"]);
@@ -289,7 +300,45 @@ describe("logout and upgrade commands", () => {
     expect(coreMocks.stopClientService).toHaveBeenCalled();
     expect(() => readFileSync(credentials, "utf8")).toThrow();
     expect(() => readFileSync(clientYaml, "utf8")).toThrow();
+    expect(() => readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toThrow();
+    expect(() => readFileSync(join(sessionsDir, "session.json"), "utf8")).toThrow();
+    expect(() => readFileSync(join(workspacesDir, "workspace.json"), "utf8")).toThrow();
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Logged out");
+  });
+
+  it("refuses purge before deleting local state when an active service cannot be stopped", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    const agentsDir = join(tempDir, "agents");
+    const sessionsDir = join(tempDir, "data", "sessions");
+    const workspacesDir = join(tempDir, "data", "workspaces");
+    mkdirSync(tempDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(workspacesDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    writeFileSync(join(agentsDir, "agent.yaml"), "agentId: agent-1\n");
+    writeFileSync(join(sessionsDir, "session.json"), "{}");
+    writeFileSync(join(workspacesDir, "workspace.json"), "{}");
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus.mockReturnValue({ state: "active", platform: "launchd" });
+    coreMocks.stopClientService.mockReturnValue({ ok: false, reason: "permission denied" });
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await expect(runTopLevel(registerLogoutCommand, ["logout", "--purge"])).rejects.toMatchObject({
+      code: "PURGE_DAEMON_STOP_FAILED",
+      exitCode: 1,
+    });
+
+    expect(readFileSync(credentials, "utf8")).toBe("{}");
+    expect(readFileSync(clientYaml, "utf8")).toContain("client-1");
+    expect(readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toContain("agent-1");
+    expect(readFileSync(join(sessionsDir, "session.json"), "utf8")).toBe("{}");
+    expect(readFileSync(join(workspacesDir, "workspace.json"), "utf8")).toBe("{}");
+    const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Refusing to purge");
+    expect(output).toContain("first-tree-dev daemon stop");
   });
 
   it("upgrade covers source, npx, check-only, install failure, no service, inactive service, and restart failure paths", async () => {

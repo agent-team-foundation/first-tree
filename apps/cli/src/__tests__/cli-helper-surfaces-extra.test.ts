@@ -22,7 +22,6 @@ const doctorCoreMocks = vi.hoisted(() => ({
 const clientMocks = vi.hoisted(() => ({
   FirstTreeHubSDK: vi.fn(),
   ClientOrgMismatchError: class ClientOrgMismatchError extends Error {},
-  createLogger: vi.fn(),
   probeCapabilities: vi.fn(),
 }));
 
@@ -46,8 +45,6 @@ const printMocks = vi.hoisted(() => ({
   line: vi.fn(),
 }));
 
-const confirmMock = vi.hoisted(() => vi.fn());
-
 vi.mock("../core/index.js", () => ({
   CLI_USER_AGENT: "first-tree-test",
   ...doctorCoreMocks,
@@ -57,7 +54,6 @@ vi.mock("@first-tree/shared/config", () => configMocks);
 vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
 vi.mock("../cli/output.js", () => outputMocks);
 vi.mock("../core/output.js", () => ({ print: printMocks }));
-vi.mock("@inquirer/prompts", () => ({ confirm: confirmMock }));
 
 let tempDir = "";
 const originalExit = process.exit;
@@ -91,8 +87,6 @@ beforeEach(() => {
   clientMocks.probeCapabilities.mockResolvedValue({});
   configMocks.initConfig.mockResolvedValue({ client: { id: "client-1" } });
   clientMocks.FirstTreeHubSDK.mockImplementation(() => ({ listMyAgents: vi.fn(async () => []) }));
-  clientMocks.createLogger.mockReturnValue({ warn: vi.fn() });
-  confirmMock.mockResolvedValue(true);
   process.exit = vi.fn(((code?: number) => {
     throw Object.assign(new Error("process.exit"), { code });
   }) as never);
@@ -199,48 +193,44 @@ describe("doctor checks and agent resolver", () => {
 });
 
 describe("client org mismatch handler", () => {
-  it("rotates after confirmation, logs managed rotations, and exits on decline or rotation failure", async () => {
+  it("fails closed with purge-first recovery and leaves client.yaml unchanged", async () => {
     const yamlPath = join(tempDir, "client.yaml");
-    writeFileSync(yamlPath, stringifyYaml({ client: { id: "client_11111111" } }));
+    const before = stringifyYaml({ client: { id: "client_11111111" } });
+    writeFileSync(yamlPath, before);
     const { handleClientOrgMismatch } = await import("../core/client-reidentify.js");
 
-    vi.mocked(process.exit).mockImplementationOnce((() => undefined) as never);
-    await handleClientOrgMismatch(new Error("wrong org") as never, {
-      managed: false,
-      configDir: tempDir,
-      rerunCommand: "first-tree-dev login token",
-    });
-    expect(process.exit).toHaveBeenLastCalledWith(0);
-    expect(readFileSync(yamlPath, "utf8")).toContain("client_");
-    expect(printMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("first-tree-dev login token");
-
-    writeFileSync(yamlPath, stringifyYaml({ client: { id: "client_22222222" } }));
-    vi.mocked(process.exit).mockImplementationOnce((() => undefined) as never);
-    await handleClientOrgMismatch(new Error("wrong org") as never, {
-      managed: true,
-      configDir: tempDir,
-      rerunCommand: "ignored",
-    });
-    expect(process.exit).toHaveBeenLastCalledWith(0);
-    expect(clientMocks.createLogger).toHaveBeenCalledWith("client");
-
-    confirmMock.mockResolvedValueOnce(false);
     await expect(
       handleClientOrgMismatch(new Error("wrong org") as never, {
         managed: false,
-        configDir: join(tempDir, "missing"),
+        configDir: tempDir,
         rerunCommand: "first-tree-dev login token",
       }),
     ).rejects.toMatchObject({ code: 1 });
 
-    confirmMock.mockResolvedValueOnce(true);
+    expect(readFileSync(yamlPath, "utf8")).toBe(before);
+    const output = printMocks.line.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("wrong org");
+    expect(output).toContain("first-tree-dev logout --purge");
+    expect(output).toContain("first-tree-dev login <token>");
+    expect(output).toContain("local agent configs");
+    expect(output).not.toContain("Rotate");
+    expect(output).not.toContain("Rotated");
+    expect(output).not.toContain("client.yaml.bak");
+  });
+
+  it("uses the same purge-first recovery in managed mode", async () => {
+    const { handleClientOrgMismatch } = await import("../core/client-reidentify.js");
+
     await expect(
       handleClientOrgMismatch(new Error("wrong org") as never, {
-        managed: false,
-        configDir: join(tempDir, "missing"),
-        rerunCommand: "first-tree-dev login token",
+        managed: true,
+        configDir: tempDir,
+        rerunCommand: "ignored",
       }),
     ).rejects.toMatchObject({ code: 1 });
-    expect(printMocks.line.mock.calls.map((call) => String(call[0])).join("")).toContain("Failed to rotate");
+
+    const output = printMocks.line.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("first-tree-dev logout --purge");
+    expect(output).toContain("first-tree-dev login <token>");
   });
 });

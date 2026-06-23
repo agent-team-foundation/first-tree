@@ -381,10 +381,11 @@ export function registerDaemonStartCommand(daemon: Command): void {
         if (error instanceof ClientUserMismatchError) {
           print.line("\n");
           print.line("  ⚠️  This client.yaml is owned by a different user.\n");
-          print.line(`  Run \`${binName} login <token> --override\` to take this machine over\n`);
-          print.line("  for your account: it registers a fresh client identity here. The other\n");
-          print.line("  account keeps its own client entry and agents server-side (they show\n");
-          print.line("  offline until that account removes them).\n\n");
+          print.line(`  Run \`${binName} logout --purge\` before logging in with another account.\n`);
+          print.line("  This signs out the current user and removes this machine's local client\n");
+          print.line("  identity plus local agent configs, workspaces, and session state. Server-side\n");
+          print.line("  clients, agents, chats, and history are not deleted; the previous client and\n");
+          print.line("  agents simply stop running from this machine unless they are set up again.\n\n");
           process.exit(1);
         }
         if (error instanceof ClientOrgMismatchError) {

@@ -36,31 +36,13 @@ const outputMocks = vi.hoisted(() => ({
   }),
 }));
 
-const agentPruneMocks = vi.hoisted(() => ({
-  findStaleAliases: vi.fn(),
-  formatStaleReason: vi.fn((reason: unknown) => {
-    if (typeof reason === "object" && reason !== null && "kind" in reason) return String(reason.kind);
-    return String(reason);
-  }),
-  removeLocalAgent: vi.fn(),
-}));
-
 const cliFetchMock = vi.hoisted(() => vi.fn());
-
-const promptMocks = vi.hoisted(() => ({
-  confirm: vi.fn(),
-}));
-
-const printLineMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@first-tree/client", () => clientMocks);
 vi.mock("@first-tree/shared/config", () => configMocks);
 vi.mock("../core/bootstrap.js", () => bootstrapMocks);
 vi.mock("../cli/output.js", () => outputMocks);
-vi.mock("../core/agent-prune.js", () => agentPruneMocks);
 vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
-vi.mock("@inquirer/prompts", () => promptMocks);
-vi.mock("../core/output.js", () => ({ print: { line: printLineMock } }));
 
 const originalAgentId = process.env.FIRST_TREE_AGENT_ID;
 const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
@@ -78,15 +60,6 @@ function restoreEnv(): void {
   }
 }
 
-function jsonResponse(body: unknown, ok = true, status = 200): Response {
-  return {
-    ok,
-    status,
-    json: vi.fn(async () => body),
-    text: vi.fn(async () => (typeof body === "string" ? body : JSON.stringify(body))),
-  } as unknown as Response;
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   restoreEnv();
@@ -99,8 +72,6 @@ beforeEach(() => {
     config,
     listMyAgents: vi.fn(async () => []),
   }));
-  agentPruneMocks.findStaleAliases.mockResolvedValue([]);
-  promptMocks.confirm.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -192,51 +163,5 @@ describe("local agent shared helpers", () => {
 
     expect(() => handleSdkError("boom")).toThrow();
     expect(outputMocks.fail).toHaveBeenLastCalledWith("UNKNOWN_ERROR", "boom", 1);
-  });
-});
-
-describe("account transfer helpers", () => {
-  it("cleans stale aliases after identity rotation with non-interactive, prompt-denied, failure, empty, and catch-all paths", async () => {
-    const { cleanupStaleLocalAliases } = await import("../commands/_shared/account-transfer.js");
-    agentPruneMocks.findStaleAliases.mockResolvedValueOnce([
-      { name: "old", agentId: "agent-old", reason: { kind: "unowned" } },
-      { name: "broken", agentId: null, reason: { kind: "unreadable", error: "bad yaml" } },
-    ]);
-    agentPruneMocks.removeLocalAgent
-      .mockImplementationOnce(() => undefined)
-      .mockImplementationOnce(() => {
-        throw new Error("locked");
-      });
-
-    await cleanupStaleLocalAliases({
-      serverUrl: "https://hub.example",
-      clientId: "client-1",
-      nonInteractive: true,
-    });
-
-    expect(agentPruneMocks.findStaleAliases).toHaveBeenCalledWith({
-      clientId: "client-1",
-      listPinnedAgents: expect.any(Function),
-    });
-    expect(agentPruneMocks.removeLocalAgent).toHaveBeenCalledWith("old");
-    expect(agentPruneMocks.removeLocalAgent).toHaveBeenCalledWith("broken");
-    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("1 pruned, 1 failed");
-
-    agentPruneMocks.findStaleAliases.mockResolvedValueOnce([
-      { name: "keep", agentId: "agent-keep", reason: { kind: "pinned-elsewhere", clientId: "client-2" } },
-    ]);
-    promptMocks.confirm.mockResolvedValueOnce(false);
-    await cleanupStaleLocalAliases({ serverUrl: "https://hub.example", clientId: "client-1" });
-    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Skipped.");
-
-    agentPruneMocks.findStaleAliases.mockResolvedValueOnce([]);
-    await cleanupStaleLocalAliases({ serverUrl: "https://hub.example", clientId: "client-1" });
-    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("No stale local aliases");
-
-    agentPruneMocks.findStaleAliases.mockRejectedValueOnce(new Error("offline"));
-    await cleanupStaleLocalAliases({ serverUrl: "https://hub.example", clientId: "client-1" });
-    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
-      "Could not check for stale aliases: offline",
-    );
   });
 });

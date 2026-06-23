@@ -111,7 +111,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
   // POST /:clientId/claim (cross-user ownership transfer) was removed: a
   // clientId is org-visible, so with only-JWT auth the route let any
   // authenticated user knock another user's machine offline. Machine handover
-  // now goes through `login --override`, which abandons the local client
-  // identity and registers a fresh clientId instead (no server-side transfer
-  // protocol to secure).
+  // is local-only: the operator must `logout --purge`, then login again so a
+  // fresh local client identity is generated (no server-side transfer protocol
+  // to secure).
 }

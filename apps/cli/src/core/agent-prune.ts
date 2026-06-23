@@ -6,9 +6,8 @@ import { z } from "zod";
 
 /**
  * Why a local alias is no longer usable from this client. Surfaced to
- * operators in `client doctor`, `agent prune`, and the post-rotation
- * cleanup after `login --override` — knowing *why* a dir is stale changes
- * the next action (delete vs. go run it on the other machine).
+ * operators in `client doctor` and `agent prune` — knowing *why* a dir is
+ * stale changes the next action (delete vs. go run it on the other machine).
  *
  * - `unreadable`        — agent.yaml missing, malformed, or has no agentId.
  * - `unowned`           — server doesn't return this agentId at all under

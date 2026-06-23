@@ -11,8 +11,9 @@ import { createTestAdmin, createTestApp } from "./helpers.js";
  * ownership transfer: the old POST /clients/:clientId/claim was removed
  * because a clientId is org-visible (agent list) and must not double as a
  * transfer capability — with only-JWT auth it let any authenticated user
- * knock another user's machine offline. Machine handover now rotates the
- * LOCAL client identity (`login --override`) and registers a fresh clientId.
+ * knock another user's machine offline. Machine handover is local-only:
+ * `logout --purge` removes the old local identity before a new login registers
+ * a fresh clientId.
  *
  * What remains server-side is the WS handshake refusal: a JWT for a
  * different user cannot register an already-owned clientId
