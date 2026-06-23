@@ -116,6 +116,8 @@ describe("shouldEnterOnboarding", () => {
     onboardingStep: "connect" as const,
     currentOrgReady: false,
     onboardingSuppressedAt: null,
+    // Ignored by the entry gate; present because both gates share the facts type.
+    onboardingCompletedAt: null,
   };
   it("redirects a fresh incomplete user (no computer yet → connect)", () => {
     expect(shouldEnterOnboarding(base)).toBe(true);
@@ -172,9 +174,31 @@ describe("shouldLeaveOnboarding", () => {
     onboardingStep: "connect" as const,
     currentOrgReady: false,
     onboardingSuppressedAt: null,
+    onboardingCompletedAt: null as string | null,
   };
-  it("leaves once connected AND the current org has a usable agent", () => {
-    expect(shouldLeaveOnboarding({ ...base, onboardingStep: "completed", currentOrgReady: true })).toBe(true);
+  it("leaves once connected, the org is ready, AND the membership completion stamp is set", () => {
+    expect(
+      shouldLeaveOnboarding({
+        ...base,
+        onboardingStep: "completed",
+        currentOrgReady: true,
+        onboardingCompletedAt: "2026-05-31T00:00:00Z",
+      }),
+    ).toBe(true);
+  });
+  it("stays after create-agent on a hard reload until the completion stamp is written", () => {
+    // The bug: a full reload right after create-agent sees onboardingStep
+    // "completed" + a ready org (server infers both the instant the agent comes
+    // online), but the membership stamp is still null because connect-code /
+    // kickoff haven't run. Readiness alone must NOT eject the user.
+    expect(
+      shouldLeaveOnboarding({
+        ...base,
+        onboardingStep: "completed",
+        currentOrgReady: true,
+        onboardingCompletedAt: null,
+      }),
+    ).toBe(false);
   });
   it("stays while the user hasn't connected a computer yet (connect step)", () => {
     expect(shouldLeaveOnboarding(base)).toBe(false);
@@ -194,8 +218,15 @@ describe("shouldLeaveOnboarding", () => {
     ).toBe(false);
   });
   it("waits for /me before deciding", () => {
+    // Otherwise leave-worthy (ready + stamped) so meLoaded is the only gate under test.
     expect(
-      shouldLeaveOnboarding({ ...base, meLoaded: false, onboardingStep: "completed", currentOrgReady: true }),
+      shouldLeaveOnboarding({
+        ...base,
+        meLoaded: false,
+        onboardingStep: "completed",
+        currentOrgReady: true,
+        onboardingCompletedAt: "2026-05-31T00:00:00Z",
+      }),
     ).toBe(false);
   });
 });
