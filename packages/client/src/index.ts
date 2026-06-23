@@ -82,7 +82,7 @@ export { InputController } from "./runtime/input-controller.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
 // Runtime-auth (browser OAuth)
-export { BROWSER_LOGIN_TIMEOUT_MS, type LoginOutcome, stripAnsi } from "./runtime/runtime-login.js";
+export { BROWSER_LOGIN_TIMEOUT_MS, extractAuthUrl, type LoginOutcome, stripAnsi } from "./runtime/runtime-login.js";
 export { SessionManager } from "./runtime/session-manager.js";
 export { SessionRegistry } from "./runtime/session-registry.js";
 // Skills (slash-command discovery)

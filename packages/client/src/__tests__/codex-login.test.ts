@@ -1,8 +1,35 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import { runCodexBrowserLogin, stripAnsi } from "../runtime/codex-login.js";
+import { extractAuthUrl } from "../runtime/runtime-login.js";
 
 const ESC = "\u001b";
+
+describe("extractAuthUrl", () => {
+  it("strips trailing sentence punctuation so the result parses as a URL", () => {
+    // codex prints the local sign-in server inside prose ("... visit
+    // http://localhost:1455.") — the period must not end up in the href, or
+    // `new URL()` rejects the port "1455." as invalid (the QA blocker).
+    const url = extractAuthUrl("If it didn't open, visit http://localhost:1455.\n");
+    expect(url).toBe("http://localhost:1455");
+    expect(() => new URL(url ?? "")).not.toThrow();
+  });
+
+  it("trims a wrapping paren but keeps a real query string", () => {
+    expect(extractAuthUrl("(see https://auth.openai.com/auth?code=ab_c1)\n")).toBe(
+      "https://auth.openai.com/auth?code=ab_c1",
+    );
+  });
+
+  it("returns null until the URL is whitespace-terminated (no truncated capture across chunks)", () => {
+    expect(extractAuthUrl("…navigate to http://localhost:145")).toBeNull();
+    expect(extractAuthUrl("…navigate to http://localhost:1455\n")).toBe("http://localhost:1455");
+  });
+
+  it("returns null when there is no URL yet", () => {
+    expect(extractAuthUrl("Starting local login server…\n")).toBeNull();
+  });
+});
 
 describe("stripAnsi", () => {
   it("removes CSI colour escapes including the ESC byte", () => {
@@ -56,6 +83,23 @@ describe("runCodexBrowserLogin", () => {
 
     await expect(run).resolves.toEqual({ ok: true });
     expect(urls).toEqual(["https://auth.openai.com/auth?x=1"]);
+  });
+
+  it("surfaces a prose-wrapped local URL without its trailing period (QA #1225 repro)", async () => {
+    const child = new FakeChild();
+    const urls: string[] = [];
+    const run = runCodexBrowserLogin({
+      binary: "/bundled/codex",
+      onAuthUrl: (u) => urls.push(u),
+      spawnFn: fakeSpawn(child),
+    });
+
+    child.emitStdout("Starting local login server.\nIf it didn't open, visit http://localhost:1455.\n");
+    child.close(0);
+
+    await expect(run).resolves.toEqual({ ok: true });
+    expect(urls).toEqual(["http://localhost:1455"]);
+    expect(() => new URL(urls[0] ?? "")).not.toThrow();
   });
 
   it("reports exit-nonzero with the stderr tail when login fails", async () => {

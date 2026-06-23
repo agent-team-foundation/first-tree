@@ -110,6 +110,26 @@ export function runLoginSubprocess(opts: LoginSubprocessOptions): Promise<LoginO
 // until the terminator (the URL's trailing newline) has actually arrived.
 const AUTH_URL_PATTERN = /https?:\/\/\S+(?=\s)/;
 
+// The CLIs print the URL inside prose ("If it didn't open, visit
+// http://localhost:1455."), so the captured token can carry trailing sentence
+// punctuation. Left on, the href is an INVALID URL — e.g. a port "1455." fails
+// `new URL()` parsing — so trim a trailing run of these closers.
+const TRAILING_URL_PUNCT = /[.,;:!?)\]}>'"]+$/;
+
+/**
+ * Pull a usable fallback sign-in URL out of accumulated, ANSI-stripped login
+ * output, or `null` if a complete one isn't present yet. Requires a whitespace
+ * terminator (so a URL split across stdout chunks isn't returned truncated) and
+ * strips trailing sentence punctuation (so the result is a parseable URL).
+ * Exported for unit tests.
+ */
+export function extractAuthUrl(buffer: string): string | null {
+  const match = buffer.match(AUTH_URL_PATTERN);
+  if (!match) return null;
+  const url = match[0].replace(TRAILING_URL_PUNCT, "");
+  return url || null;
+}
+
 export type BrowserLoginOptions = {
   /** Command to spawn (a binary path, or `process.execPath` for `node cli.js`). */
   command: string;
@@ -147,10 +167,10 @@ export function runBrowserLogin(options: BrowserLoginOptions): Promise<LoginOutc
     onOutput: (clean, full) => {
       onRawOutput?.(clean);
       if (urlFired || !onAuthUrl) return;
-      const match = full.match(AUTH_URL_PATTERN);
-      if (match) {
+      const url = extractAuthUrl(full);
+      if (url) {
         urlFired = true;
-        onAuthUrl(match[0]);
+        onAuthUrl(url);
       }
     },
     classifyExit: ({ code, stderrTail }) => ({

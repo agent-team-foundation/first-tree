@@ -103,7 +103,10 @@ export function RuntimeAuthControls({
   // started and are bridging the gap (latched). Same "finish in your browser"
   // state; the fallback link only exists once the URL has been parsed.
   if (pending || latched) {
-    const authUrl = view.kind === "browser-pending" ? view.authUrl : undefined;
+    // Defensive: only surface the fallback link if it actually parses as an
+    // http(s) URL, so a malformed value (e.g. a provider printing the URL with
+    // trailing punctuation) can never render a broken href.
+    const authUrl = view.kind === "browser-pending" && isHttpUrl(view.authUrl) ? view.authUrl : undefined;
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
         <div className="text-body font-medium">{label}</div>
@@ -152,6 +155,17 @@ export function RuntimeAuthControls({
       )}
     </div>
   );
+}
+
+/** True only for a well-formed http(s) URL — gates the fallback sign-in link. */
+function isHttpUrl(value: string | undefined): value is string {
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 /**
