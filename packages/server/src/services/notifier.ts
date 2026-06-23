@@ -32,7 +32,7 @@ const CHAT_AUDIENCE_CHANNEL = "chat_audience_events";
 /**
  * Chat metadata change (e.g. an agent running `chat update --description`).
  * Carries the bare `<chatId>`. Lets admin WS sockets translate a description /
- * topic edit into a `chat:updated` frame so an open chat's pinned task header
+ * topic edit into a `chat:updated` frame so an open chat's pinned task summary
  * (which reads `description` + freshness off chat-detail) and the conversation
  * list refresh in realtime, with no accompanying message.
  */

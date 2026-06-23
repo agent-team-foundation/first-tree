@@ -211,11 +211,10 @@ async function createLegacyEmptyChat(
       type: "group",
       topic: input.topic ?? null,
       description: initialDescription,
-      // A description present at creation is "updated now" by the creator, so
-      // the task header shows real freshness immediately rather than a blank
-      // line until the first `chat update` (mirrors `updateChatMetadata`).
+      // A description present at creation is "updated now", so the task summary
+      // shows real freshness immediately rather than a blank line until the
+      // first `chat update` (mirrors `updateChatMetadata`).
       descriptionUpdatedAt: initialDescription != null ? new Date() : null,
-      descriptionUpdatedBy: initialDescription != null ? creator.id : null,
       onboardingKickoffKey: kickoffKey,
       metadata: input.mode === "legacy-empty-agent" ? (input.metadata ?? {}) : {},
     };
@@ -367,10 +366,9 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
         topic: input.topic && input.topic.length > 0 ? input.topic : null,
         description: initialDescription,
         // Stamp freshness so a task chat created with a description shows a
-        // real "X ago · <initiator>" line immediately (mirrors
-        // `updateChatMetadata`'s attribution for later edits).
+        // real "X ago" line immediately (mirrors `updateChatMetadata` for later
+        // edits).
         descriptionUpdatedAt: initialDescription != null ? new Date() : null,
-        descriptionUpdatedBy: initialDescription != null ? input.initiatorAgentId : null,
         metadata: chatMetadata,
       })
       .returning();
@@ -523,20 +521,17 @@ export async function getChat(db: Database, chatId: string) {
 /**
  * Apply a `topic` / `description` patch to a chat and return the updated row.
  *
- * Freshness attribution: a *real* `description` change — the value actually
- * differs, tested with SQL `IS DISTINCT FROM` so a no-op re-write of identical
- * text does not count — stamps `description_updated_at = now` and
- * `description_updated_by = actorAgentId`. A topic-only patch, or a description
- * patch that does not change the value, leaves those two columns untouched; the
- * whole-row `updated_at` always advances. Shared by the user PATCH (actor = the
- * console human's agent) and the agent PATCH (actor = the maintaining agent) so
- * both attribute identically.
+ * Freshness: a *real* `description` change — the value actually differs, tested
+ * with SQL `IS DISTINCT FROM` so a no-op re-write of identical text does not
+ * count — stamps `description_updated_at = now`. A topic-only patch, or a
+ * description patch that does not change the value, leaves that column
+ * untouched; the whole-row `updated_at` always advances. The `descriptionChanged`
+ * flag this returns also gates the caller's realtime `chat:updated` notify.
  */
 export async function updateChatMetadata(
   db: Database,
   chatId: string,
   patch: { topic?: string | null; description?: string | null },
-  actorAgentId: string,
 ): Promise<{ chat: typeof chats.$inferSelect; descriptionChanged: boolean }> {
   const now = new Date();
   let descriptionChanged = false;
@@ -544,7 +539,6 @@ export async function updateChatMetadata(
     topic?: string | null;
     description?: string | null;
     descriptionUpdatedAt?: Date;
-    descriptionUpdatedBy?: string;
     updatedAt: Date;
   } = { updatedAt: now };
   if (patch.topic !== undefined) {
@@ -566,7 +560,6 @@ export async function updateChatMetadata(
     descriptionChanged = (current?.description ?? null) !== nextDescription;
     if (descriptionChanged) {
       set.descriptionUpdatedAt = now;
-      set.descriptionUpdatedBy = actorAgentId;
     }
   }
   const [updated] = await db.update(chats).set(set).where(eq(chats.id, chatId)).returning();

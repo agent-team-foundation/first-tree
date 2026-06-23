@@ -34,7 +34,6 @@ function mkChatDetail(overrides?: Partial<ChatDetail>): ChatDetail {
     engagementStatus: "active",
     viewerMembershipKind: "participant",
     descriptionUpdatedAt: null,
-    descriptionUpdatedByName: null,
     lastReadAt: null,
     ...overrides,
   };

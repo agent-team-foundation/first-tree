@@ -142,15 +142,14 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
     const identity = requireAgent(request);
     await chatService.assertOwner(app.db, request.params.chatId, identity.uuid);
     const body = updateChatSchema.parse(request.body);
-    // Actor = the maintaining agent itself — this is the `chat update
-    // --description` path that keeps the task-header freshness line current.
+    // The `chat update --description` path that keeps the task-summary freshness
+    // line current.
     const { chat: updated, descriptionChanged } = await chatService.updateChatMetadata(
       app.db,
       request.params.chatId,
       body,
-      identity.uuid,
     );
-    // Push a realtime kick so an open web client's pinned task header + the
+    // Push a realtime kick so an open web client's pinned task summary + the
     // conversation list reflect the new summary without waiting for a message.
     if (descriptionChanged) void app.notifier.notifyChatUpdated(request.params.chatId);
     return serializeChat(updated);

@@ -104,7 +104,6 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       engagement_status: ChatEngagementStatus | null;
       access_mode: "speaker" | "watcher" | null;
       last_read_at: Date | string | null;
-      description_updated_by_name: string | null;
     }>(sql`
       SELECT
         (
@@ -127,13 +126,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
            WHERE ${chatUserState.chatId} = ${chat.id}
              AND ${chatUserState.agentId} = ${scope.humanAgentId}
            LIMIT 1
-        ) AS last_read_at,
-        (
-          SELECT ${agents.displayName}
-            FROM ${agents}
-           WHERE ${agents.uuid} = ${chat.descriptionUpdatedBy}
-           LIMIT 1
-        ) AS description_updated_by_name
+        ) AS last_read_at
     `);
     const engagementStatus = callerState?.engagement_status ?? CHAT_ENGAGEMENT_STATUSES.ACTIVE;
     // Caller's own membership row drives speaker-vs-watcher UI. `null` means
@@ -153,11 +146,10 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       viewerMembershipKind,
       createdAt: chat.createdAt.toISOString(),
       updatedAt: chat.updatedAt.toISOString(),
-      // Task-header freshness: description-specific time + resolved updater
-      // name, and the caller's prior last-read cursor (captured BEFORE the
-      // open marks the chat read) so the client can decide unread/auto-expand.
+      // Task-summary freshness: the description-specific time, and the caller's
+      // prior last-read cursor (captured BEFORE the open marks the chat read)
+      // so the client can decide unread/auto-expand.
       descriptionUpdatedAt: chat.descriptionUpdatedAt ? chat.descriptionUpdatedAt.toISOString() : null,
-      descriptionUpdatedByName: callerState?.description_updated_by_name ?? null,
       lastReadAt: callerState?.last_read_at ? new Date(callerState.last_read_at).toISOString() : null,
       participants: participants.map((p) => ({
         agentId: p.agentId,
@@ -318,20 +310,15 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.patch<{ Params: { chatId: string } }>("/:chatId", { config: { otelRecordBody: true } }, async (request) => {
-    const { scope } = await requireChatAccess(request, app.db);
+    // Access enforcement only — the patch attributes to no specific actor now.
+    await requireChatAccess(request, app.db);
     const body = updateChatSchema.parse(request.body);
-    // Actor = the caller's human agent (console rename / re-describe). The
-    // common description-maintenance path is the agent route, which attributes
-    // to the maintaining agent; both go through `updateChatMetadata` so the
-    // freshness/attribution stamping stays in one place.
-    const { chat: updated, descriptionChanged } = await updateChatMetadata(
-      app.db,
-      request.params.chatId,
-      body,
-      scope.humanAgentId,
-    );
+    // Both the console rename / re-describe and the agent `chat update` path go
+    // through `updateChatMetadata`, so description-freshness stamping stays in
+    // one place.
+    const { chat: updated, descriptionChanged } = await updateChatMetadata(app.db, request.params.chatId, body);
     // A real description change must reach an already-open client: the pinned
-    // task header reads the summary + freshness off chat-detail, which the web
+    // task summary reads the summary + freshness off chat-detail, which the web
     // only refetches on a realtime kick.
     if (descriptionChanged) void app.notifier.notifyChatUpdated(request.params.chatId);
     return {

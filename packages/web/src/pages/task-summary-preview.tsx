@@ -19,7 +19,7 @@ const RICH = [
   "把右侧 summary 从「侧栏一段文字」改为**置顶可折叠任务头**。",
   "",
   "## 进展",
-  "- 后端：`description_updated_at` / `description_updated_by` 已落库",
+  "- 后端：`description_updated_at` 已落库",
   "- 前端：任务头组件接入 chat-view，右栏只留成员",
   "",
   "## 下一步",

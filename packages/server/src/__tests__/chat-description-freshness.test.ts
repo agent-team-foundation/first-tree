@@ -4,13 +4,13 @@ import { createChat, updateChatMetadata } from "../services/chat.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
- * Task-header data contract: the chat `description` carries its OWN freshness
- * (`description_updated_at`) and attribution (`description_updated_by`),
- * distinct from the row-level `updatedAt` that a topic edit also bumps. Only a
- * *real* description change stamps them, so the header's "X ago · who" line and
- * its unread/auto-expand logic reflect the actual last description edit — never
- * a topic rename or a no-op re-write. The same "did it really change" signal
- * gates the realtime `chat:updated` notify that refreshes an open client.
+ * Task-summary data contract: the chat `description` carries its OWN freshness
+ * (`description_updated_at`), distinct from the row-level `updatedAt` that a
+ * topic edit also bumps. Only a *real* description change stamps it, so the
+ * summary's "X ago" line and its unread/auto-expand logic reflect the actual
+ * last description edit — never a topic rename or a no-op re-write. The same
+ * "did it really change" signal gates the realtime `chat:updated` notify that
+ * refreshes an open client.
  */
 describe("chat description freshness — stamping (updateChatMetadata)", () => {
   const getApp = useTestApp();
@@ -18,73 +18,67 @@ describe("chat description freshness — stamping (updateChatMetadata)", () => {
   async function setupChat(app: FastifyInstance) {
     const owner = await createTestAgent(app, { type: "human", displayName: "Owner" });
     const maintainer = await createTestAgent(app, { type: "agent", displayName: "Maintainer Bot" });
-    const other = await createTestAgent(app, { type: "agent", displayName: "Other Bot" });
     const chat = await createChat(app.db, owner.agent.uuid, {
       type: "group",
-      participantIds: [maintainer.agent.uuid, other.agent.uuid],
+      participantIds: [maintainer.agent.uuid],
     });
-    return { maintainer, other, chat };
+    return { chat };
   }
 
-  it("first description write stamps descriptionUpdatedAt + descriptionUpdatedBy and reports the change", async () => {
+  it("first description write stamps descriptionUpdatedAt and reports the change", async () => {
     const app = getApp();
-    const { maintainer, chat } = await setupChat(app);
-    const r1 = await updateChatMetadata(app.db, chat.id, { description: "First summary" }, maintainer.agent.uuid);
+    const { chat } = await setupChat(app);
+    const r1 = await updateChatMetadata(app.db, chat.id, { description: "First summary" });
     expect(r1.descriptionChanged).toBe(true);
     expect(r1.chat.description).toBe("First summary");
     expect(r1.chat.descriptionUpdatedAt).toBeInstanceOf(Date);
-    expect(r1.chat.descriptionUpdatedBy).toBe(maintainer.agent.uuid);
   });
 
-  it("a no-op re-write of identical text does NOT bump freshness, attribution, or report a change", async () => {
+  it("a no-op re-write of identical text does NOT bump freshness or report a change", async () => {
     const app = getApp();
-    const { maintainer, other, chat } = await setupChat(app);
-    const r1 = await updateChatMetadata(app.db, chat.id, { description: "Same text" }, maintainer.agent.uuid);
+    const { chat } = await setupChat(app);
+    const r1 = await updateChatMetadata(app.db, chat.id, { description: "Same text" });
     const t1 = r1.chat.descriptionUpdatedAt?.getTime();
-    const r2 = await updateChatMetadata(app.db, chat.id, { description: "Same text" }, other.agent.uuid);
+    const r2 = await updateChatMetadata(app.db, chat.id, { description: "Same text" });
     expect(r2.descriptionChanged).toBe(false);
     expect(r2.chat.descriptionUpdatedAt?.getTime()).toBe(t1);
-    expect(r2.chat.descriptionUpdatedBy).toBe(maintainer.agent.uuid);
   });
 
   it("a topic-only patch leaves description freshness untouched and reports no description change", async () => {
     const app = getApp();
-    const { maintainer, other, chat } = await setupChat(app);
-    const r1 = await updateChatMetadata(app.db, chat.id, { description: "Body" }, maintainer.agent.uuid);
+    const { chat } = await setupChat(app);
+    const r1 = await updateChatMetadata(app.db, chat.id, { description: "Body" });
     const t1 = r1.chat.descriptionUpdatedAt?.getTime();
-    const r2 = await updateChatMetadata(app.db, chat.id, { topic: "Renamed" }, other.agent.uuid);
+    const r2 = await updateChatMetadata(app.db, chat.id, { topic: "Renamed" });
     expect(r2.descriptionChanged).toBe(false);
     expect(r2.chat.topic).toBe("Renamed");
     expect(r2.chat.descriptionUpdatedAt?.getTime()).toBe(t1);
-    expect(r2.chat.descriptionUpdatedBy).toBe(maintainer.agent.uuid);
   });
 
-  it("a real description change re-stamps with the new actor and reports the change", async () => {
+  it("a real description change re-stamps the freshness time and reports the change", async () => {
     const app = getApp();
-    const { maintainer, other, chat } = await setupChat(app);
-    await updateChatMetadata(app.db, chat.id, { description: "v1" }, maintainer.agent.uuid);
-    const r2 = await updateChatMetadata(app.db, chat.id, { description: "v2" }, other.agent.uuid);
+    const { chat } = await setupChat(app);
+    await updateChatMetadata(app.db, chat.id, { description: "v1" });
+    const r2 = await updateChatMetadata(app.db, chat.id, { description: "v2" });
     expect(r2.descriptionChanged).toBe(true);
     expect(r2.chat.description).toBe("v2");
-    expect(r2.chat.descriptionUpdatedBy).toBe(other.agent.uuid);
     expect(r2.chat.descriptionUpdatedAt).toBeInstanceOf(Date);
   });
 
-  it("clearing the description counts as a change and attributes to the clearer", async () => {
+  it("clearing the description counts as a change", async () => {
     const app = getApp();
-    const { maintainer, other, chat } = await setupChat(app);
-    await updateChatMetadata(app.db, chat.id, { description: "something" }, maintainer.agent.uuid);
-    const r2 = await updateChatMetadata(app.db, chat.id, { description: "" }, other.agent.uuid);
+    const { chat } = await setupChat(app);
+    await updateChatMetadata(app.db, chat.id, { description: "something" });
+    const r2 = await updateChatMetadata(app.db, chat.id, { description: "" });
     expect(r2.descriptionChanged).toBe(true);
     expect(r2.chat.description).toBeNull();
-    expect(r2.chat.descriptionUpdatedBy).toBe(other.agent.uuid);
   });
 });
 
 describe("chat description freshness — detail exposure (GET /api/v1/chats/:id)", () => {
   const getApp = useTestApp();
 
-  it("exposes descriptionUpdatedAt + resolved updater name, with null lastReadAt before first read", async () => {
+  it("exposes descriptionUpdatedAt, with null lastReadAt before first read", async () => {
     const app = getApp();
     const caller = await createTestAgent(app, { type: "human", displayName: "Caller" });
     const maintainer = await createTestAgent(app, { type: "agent", displayName: "Maintainer Bot" });
@@ -92,7 +86,7 @@ describe("chat description freshness — detail exposure (GET /api/v1/chats/:id)
       type: "group",
       participantIds: [maintainer.agent.uuid],
     });
-    await updateChatMetadata(app.db, chat.id, { description: "Hello **world**" }, maintainer.agent.uuid);
+    await updateChatMetadata(app.db, chat.id, { description: "Hello **world**" });
 
     const res = await app.inject({
       method: "GET",
@@ -103,13 +97,11 @@ describe("chat description freshness — detail exposure (GET /api/v1/chats/:id)
     const body = res.json() as {
       description: string | null;
       descriptionUpdatedAt: string | null;
-      descriptionUpdatedByName: string | null;
       lastReadAt: string | null;
     };
     expect(body.description).toBe("Hello **world**");
     expect(typeof body.descriptionUpdatedAt).toBe("string");
     expect(Number.isNaN(Date.parse(body.descriptionUpdatedAt ?? ""))).toBe(false);
-    expect(body.descriptionUpdatedByName).toBe("Maintainer Bot");
     expect(body.lastReadAt).toBeNull();
   });
 
@@ -121,7 +113,7 @@ describe("chat description freshness — detail exposure (GET /api/v1/chats/:id)
       type: "group",
       participantIds: [maintainer.agent.uuid],
     });
-    await updateChatMetadata(app.db, chat.id, { description: "Body" }, maintainer.agent.uuid);
+    await updateChatMetadata(app.db, chat.id, { description: "Body" });
     const readRes = await app.inject({
       method: "POST",
       url: `/api/v1/chats/${chat.id}/read`,
@@ -152,9 +144,8 @@ describe("chat description freshness — detail exposure (GET /api/v1/chats/:id)
       url: `/api/v1/chats/${chat.id}`,
       headers: { authorization: `Bearer ${caller.accessToken}` },
     });
-    const body = res.json() as { descriptionUpdatedAt: string | null; descriptionUpdatedByName: string | null };
+    const body = res.json() as { descriptionUpdatedAt: string | null };
     expect(body.descriptionUpdatedAt).toBeNull();
-    expect(body.descriptionUpdatedByName).toBeNull();
   });
 });
 
