@@ -11,7 +11,7 @@ import { useLocation } from "react-router";
  * post-login screen would be invisible. send_page_view is disabled in the
  * config so the first screen is reported here exactly once, not twice.
  *
- * Two hard rules enforced here (see PR review on #1201):
+ * Two hard rules enforced here (see the PR 1201 review):
  *  1. Production only. dev (127.0.0.1) and staging (dev.cloud.first-tree.ai)
  *     must NOT write into the shared production property, or they pollute the
  *     very attribution dataset this exists to make trustworthy.
