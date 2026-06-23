@@ -50,7 +50,7 @@ function saveWidth(width: number): void {
  * × inside the panel was just redundant clutter.
  *
  * The chat's running summary (the `description`) is NOT here — it lives in the
- * pinned TaskSummary above the message stream. This rail carries only the
+ * pinned ChatSummary above the message stream. This rail carries only the
  * secondary "who + what's bound" context:
  *   1. Participants — humans + agents (agents first, since their live status
  *      is the glanceable pulse). Caps the visible roster; rest behind
