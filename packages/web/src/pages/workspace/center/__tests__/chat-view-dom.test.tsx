@@ -1427,6 +1427,8 @@ describe("ChatView", () => {
       await act(async () => {
         button.click();
       });
+      expect(chatSummaryButton(container)?.textContent).toContain("Summary");
+      expect(chatSummaryButton(container)?.textContent).not.toContain("Status: shipping DescBody soon.");
       await waitForCondition(
         () => [...container.querySelectorAll("strong")].some((el) => el.textContent === "DescBody"),
         "Expected the expanded summary to render the description markdown",

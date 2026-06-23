@@ -112,6 +112,9 @@ describe("ChatSummary", () => {
     await act(async () => {
       button.click();
     });
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
+      "Summary",
+    );
     expect(container.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {
@@ -134,6 +137,9 @@ describe("ChatSummary", () => {
     await act(async () => {
       button.click();
     });
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
+      "Summary",
+    );
     expect(container.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {
@@ -157,6 +163,9 @@ describe("ChatSummary", () => {
     await act(async () => {
       initialButton.click();
     });
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
+      "Summary",
+    );
     expect(container.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {

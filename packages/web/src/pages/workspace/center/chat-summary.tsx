@@ -26,10 +26,10 @@ import { formatRelative } from "../../../lib/utils.js";
  *     an "Updated" chip when there's an unread change, the freshness
  *     ("9 days ago"), and a quiet chevron. Freshness shows in BOTH states, so an
  *     auto-expanded summary still surfaces when it last changed.
- *   - Expanded: just the description rendered as markdown — no footer. Read-only
- *     is self-evident (no edit affordance anywhere); the updater name is not
- *     shown (single-agent maintenance makes it noise — the data stays on the
- *     chat detail).
+ *   - Expanded: a fixed "Summary" control label plus the description rendered
+ *     as markdown — no footer. Read-only is self-evident (no edit affordance
+ *     anywhere); the updater name is not shown (single-agent maintenance makes
+ *     it noise — the data stays on the chat detail).
  *
  * Auto behavior: default collapsed; auto-expand once on entry ONLY when the
  * update is unread AND the viewer hasn't looked in a while; while expanded,
@@ -291,14 +291,15 @@ export function ChatSummary({
         <span
           className="text-body min-w-0 flex-1"
           style={{
-            color: firstLine ? "var(--fg)" : "var(--fg-3)",
+            color: expanded || firstLine ? "var(--fg)" : "var(--fg-3)",
             whiteSpace: "nowrap",
             overflow: "hidden",
             textOverflow: "ellipsis",
-            fontStyle: firstLine ? undefined : "italic",
+            fontStyle: !expanded && !firstLine ? "italic" : undefined,
+            fontWeight: expanded ? 600 : undefined,
           }}
         >
-          {firstLine || "No summary yet"}
+          {expanded ? "Summary" : firstLine || "No summary yet"}
         </span>
         {showAmberChip ? (
           <span
@@ -335,7 +336,7 @@ export function ChatSummary({
       </button>
 
       {expanded ? (
-        <div style={{ padding: "0 var(--sp-6) var(--sp-3)" }}>
+        <div style={{ padding: "var(--sp-1) var(--sp-6) var(--sp-3)" }}>
           <div className="text-body" style={{ color: "var(--fg)", maxHeight: "min(46vh, 30rem)", overflowY: "auto" }}>
             {/* Faithful markdown render. Headings are flattened to body size so
                 hierarchy is carried by weight + spacing (mirrors the rail's old
