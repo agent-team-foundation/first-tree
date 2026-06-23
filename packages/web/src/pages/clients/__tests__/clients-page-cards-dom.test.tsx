@@ -370,9 +370,12 @@ describe("ClientsPage computer cards", () => {
     await waitForText(container, "Auth expired");
     await waitForText(container, "Setup incomplete");
     await waitForText(container, "Offline");
-    await waitForText(container, "Install a runtime to start");
+    // Setup-incomplete now uses the unified "Runtimes" heading (matching Ready)
+    // with single-column rows: an install box for the missing/errored runtimes
+    // and an in-product Connect for the unauthenticated one.
     await waitForText(container, "npm install -g @anthropic-ai/claude-code");
     await waitForText(container, "probe failed");
+    await waitForText(container, "Connect Codex");
 
     await click(buttonByText(container, "Daemon not running?"));
     await waitForText(container, "first-tree-dev daemon start");

@@ -3,9 +3,7 @@ import { BoundAgentsList } from "./shared/bound-agents-list.js";
 import { CardSection, CardSectionLabel } from "./shared/card-section.js";
 import { CompactMetaLine } from "./shared/compact-meta-line.js";
 import { PROVIDER_ORDER } from "./shared/providers.js";
-import { RuntimeAuthControls } from "./shared/runtime-auth-controls.js";
-import { deriveRuntimeAuthView } from "./shared/runtime-auth-view.js";
-import { RuntimeStateLine } from "./shared/runtime-state-line.js";
+import { RuntimeProviderRow } from "./shared/runtime-provider-row.js";
 import { summarizeBoundAgents } from "./view-models.js";
 
 type ReadyCardBodyProps = {
@@ -38,19 +36,23 @@ export function ReadyCardBody({ client, boundAgents, agentName }: ReadyCardBodyP
       {reportedProviders.length > 0 && (
         <CardSection>
           <CardSectionLabel>Runtimes</CardSectionLabel>
-          <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+          <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
             {reportedProviders.map((provider) => {
               const entry = client.capabilities[provider];
               if (entry == null) return null;
               // A reported-but-unauthenticated provider (e.g. Codex while Claude
               // is ok) gets the in-product Connect panel beneath its status
-              // line, so the operator never leaves the console.
-              const offerAuth = deriveRuntimeAuthView(provider, entry, Date.now()).kind !== "none";
+              // line — same row component Setup-incomplete uses, so the Connect
+              // affordance is identical across both. Install boxes stay off here:
+              // a Ready card means at least one runtime is already `ok`.
               return (
-                <div key={provider} className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
-                  <RuntimeStateLine provider={provider} entry={entry} os={client.os} />
-                  {offerAuth && <RuntimeAuthControls clientId={client.id} provider={provider} entry={entry} />}
-                </div>
+                <RuntimeProviderRow
+                  key={provider}
+                  clientId={client.id}
+                  provider={provider}
+                  entry={entry}
+                  os={client.os}
+                />
               );
             })}
           </div>

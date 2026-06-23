@@ -116,6 +116,35 @@ describe("runRuntimeAuthLogin — primary browser OAuth", () => {
     expect(h.calls).toHaveLength(0);
     expect(h.logs.some((l) => l.includes("not supported yet"))).toBe(true);
   });
+
+  it("stamps lastAuthError on the re-probed entry when the login fails (so the web shows 'retry')", async () => {
+    const h = harness({
+      outcome: { ok: false, reason: "exit-nonzero", error: "account not authorized" },
+      probeResult: unauthEntry(),
+    });
+    await runRuntimeAuthLogin({ provider: "codex", ref: "f1" }, h.deps);
+
+    const last = h.calls.at(-1)?.entry;
+    expect(last?.state).toBe("unauthenticated");
+    expect(last?.pendingAuth).toBeUndefined();
+    expect(last?.lastAuthError).toMatchObject({ reason: "exit-nonzero", message: "account not authorized" });
+    expect(last?.lastAuthError?.at).toBe(new Date(NOW).toISOString());
+  });
+
+  it("leaves no lastAuthError after a successful login", async () => {
+    const h = harness({ outcome: { ok: true }, probeResult: okEntry() });
+    await runRuntimeAuthLogin({ provider: "codex", ref: "f2" }, h.deps);
+    expect(h.calls.at(-1)?.entry.lastAuthError).toBeUndefined();
+  });
+
+  it("does not stamp lastAuthError when the re-probe is non-unauthenticated (install box covers it)", async () => {
+    // Binary vanished mid-flight → re-probe lands `missing`, which already
+    // renders an install box; a duplicate error record there would be noise.
+    const h = harness({ resolveOk: false, probeResult: { ...unauthEntry(), state: "missing", available: false } });
+    await runRuntimeAuthLogin({ provider: "codex", ref: "f3" }, h.deps);
+    expect(h.calls.at(-1)?.entry.state).toBe("missing");
+    expect(h.calls.at(-1)?.entry.lastAuthError).toBeUndefined();
+  });
 });
 
 describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", () => {
@@ -172,5 +201,15 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
     expect(h.calls.map((c) => c.provider).sort()).toEqual(["claude-code", "claude-code-tui"]);
     expect(h.calls.every((c) => c.entry.state === "missing")).toBe(true);
     expect(h.logs.some((l) => l.includes("claude CLI unavailable"))).toBe(true);
+  });
+
+  it("on login failure, stamps lastAuthError on claude-code only (not the shared-keychain tui)", async () => {
+    const h = claudeHarness({ outcome: { ok: false, reason: "timeout", error: "claude auth login timed out" } });
+    await runRuntimeAuthLogin({ provider: "claude-code", ref: "c3" }, h.deps);
+
+    const cc = h.calls.filter((c) => c.provider === "claude-code").at(-1)?.entry;
+    const tui = h.calls.filter((c) => c.provider === "claude-code-tui").at(-1)?.entry;
+    expect(cc?.lastAuthError).toMatchObject({ reason: "timeout", message: "claude auth login timed out" });
+    expect(tui?.lastAuthError).toBeUndefined();
   });
 });

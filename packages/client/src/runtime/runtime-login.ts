@@ -103,7 +103,12 @@ export function runLoginSubprocess(opts: LoginSubprocessOptions): Promise<LoginO
   });
 }
 
-const AUTH_URL_PATTERN = /https?:\/\/[^\s]+/;
+// Capture a sign-in URL only once it is whitespace-terminated in the (already
+// ANSI-stripped) buffer. `onOutput` fires per stdout chunk, so a URL that spans
+// a chunk boundary would otherwise match while still truncated and latch a
+// broken fallback link via `urlFired`. The `(?=\s)` lookahead defers the match
+// until the terminator (the URL's trailing newline) has actually arrived.
+const AUTH_URL_PATTERN = /https?:\/\/\S+(?=\s)/;
 
 export type BrowserLoginOptions = {
   /** Command to spawn (a binary path, or `process.execPath` for `node cli.js`). */

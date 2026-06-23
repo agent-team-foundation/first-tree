@@ -3,9 +3,7 @@ import { BoundAgentsList } from "./shared/bound-agents-list.js";
 import { CardSection, CardSectionLabel } from "./shared/card-section.js";
 import { CompactMetaLine } from "./shared/compact-meta-line.js";
 import { PROVIDER_ORDER } from "./shared/providers.js";
-import { RuntimeAuthControls } from "./shared/runtime-auth-controls.js";
-import { deriveRuntimeAuthView } from "./shared/runtime-auth-view.js";
-import { RuntimeInstallBox } from "./shared/runtime-install-box.js";
+import { RuntimeProviderRow } from "./shared/runtime-provider-row.js";
 import { cardHostnameLabel, summarizeBoundAgents } from "./view-models.js";
 
 type SetupIncompleteCardBodyProps = {
@@ -49,29 +47,28 @@ export function SetupIncompleteCardBody({ client, boundAgents, agentName }: Setu
         </CardSection>
       )}
       <CardSection>
-        <CardSectionLabel>Install a runtime to start</CardSectionLabel>
-        <div
-          style={{
-            display: "grid",
-            gap: "var(--sp-3)",
-            // Side-by-side install boxes when the card is wide enough,
-            // stacked 1-up below the breakpoint (--sp-70 = 280 baseline
-            // for the install-command pre block).
-            gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, var(--sp-70)), 1fr))",
-          }}
-        >
-          {installableProviders.map((provider) => {
-            const entry = client.capabilities[provider] ?? null;
-            // When the daemon can drive this provider's login in-product
-            // (browser OAuth), offer the one-click Connect panel instead of a
-            // "run `codex login` yourself" command box.
-            if (deriveRuntimeAuthView(provider, entry, Date.now()).kind !== "none") {
-              return <RuntimeAuthControls key={provider} clientId={client.id} provider={provider} entry={entry} />;
-            }
-            return (
-              <RuntimeInstallBox key={provider} provider={provider} entry={entry} hostname={hostname} os={client.os} />
-            );
-          })}
+        {/* Same heading as Ready ("Runtimes") — the yellow "Setup incomplete"
+            pill already conveys the state, and these rows now mix Connect
+            (unauthenticated) with install boxes (missing), so the old
+            "Install a runtime to start" label was no longer always accurate. */}
+        <CardSectionLabel>Runtimes</CardSectionLabel>
+        {/* Single-column provider list, identical rhythm to Ready: each row is a
+            status line + its in-place action (Connect for unauthenticated,
+            install box for missing). Replaces the side-by-side grid so the
+            Connect affordance looks the same whether or not another runtime is
+            already `ok`. */}
+        <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+          {installableProviders.map((provider) => (
+            <RuntimeProviderRow
+              key={provider}
+              clientId={client.id}
+              provider={provider}
+              entry={client.capabilities[provider] ?? null}
+              os={client.os}
+              hostname={hostname}
+              showInstallBox
+            />
+          ))}
         </div>
       </CardSection>
     </div>

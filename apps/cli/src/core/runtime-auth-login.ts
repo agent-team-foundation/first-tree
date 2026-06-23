@@ -12,7 +12,7 @@ import {
   runClaudeBrowserLogin,
   runCodexBrowserLogin,
 } from "@first-tree/client";
-import type { CapabilityEntry, PendingAuth } from "@first-tree/shared";
+import type { CapabilityEntry, PendingAuth, RuntimeAuthFailureReason } from "@first-tree/shared";
 
 /**
  * Daemon-side orchestrator for an in-product runtime-auth login.
@@ -49,6 +49,31 @@ export type RuntimeAuthLoginDeps = {
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** A terminal login failure to record on the provider entry. */
+type AuthFailure = { reason: RuntimeAuthFailureReason; message?: string };
+
+/**
+ * Stamp a terminal `lastAuthError` onto a freshly re-probed entry so the web can
+ * tell "sign-in failed — retry" from "never attempted". Only attached when the
+ * re-probe still shows `unauthenticated` — the one state where the web renders a
+ * Connect affordance (and thus the error). A re-probe that lands `ok` (the login
+ * succeeded), `missing`, or `error` already renders the right thing on its own,
+ * so an error record there would be redundant. The probe never sets
+ * `lastAuthError`, so omitting it here also clears any prior failure on a
+ * successful retry.
+ */
+function attachAuthError(entry: CapabilityEntry, failure: AuthFailure | null, nowMs: number): CapabilityEntry {
+  if (!failure || entry.state !== "unauthenticated") return entry;
+  return {
+    ...entry,
+    lastAuthError: {
+      reason: failure.reason,
+      ...(failure.message ? { message: failure.message } : {}),
+      at: new Date(nowMs).toISOString(),
+    },
+  };
 }
 
 /** A minimal `unauthenticated` entry carrying an in-flight pending-auth marker. */
@@ -99,9 +124,12 @@ async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAut
   const probeCodex = deps.probeCodex ?? probeCodexCapability;
   const runBrowserLogin = deps.runBrowserLogin ?? runCodexBrowserLogin;
 
-  const reflectRealState = async (label: string): Promise<void> => {
+  // Re-probe the real state and, on a terminal failure, stamp `lastAuthError`
+  // onto the entry so the web shows "sign-in failed — retry" instead of silently
+  // resetting to a fresh Connect button.
+  const reflect = async (label: string, failure: AuthFailure | null): Promise<void> => {
     try {
-      await deps.setProviderEntry("codex", await probeCodex());
+      await deps.setProviderEntry("codex", attachAuthError(await probeCodex(), failure, now()));
     } catch (err) {
       deps.log("⚠️", `runtime-auth: codex re-probe ${label} failed: ${message(err)}`);
     }
@@ -112,7 +140,7 @@ async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAut
   const resolved = await resolveBinary();
   if (!resolved.ok) {
     deps.log("⚠️", `runtime-auth: codex binary unavailable: ${resolved.error}`);
-    await reflectRealState("after unresolved binary");
+    await reflect("after unresolved binary", { reason: "spawn-error", message: resolved.error });
     return;
   }
 
@@ -128,11 +156,11 @@ async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAut
     outcome = await runBrowserLogin({ binary: resolved.binary, onAuthUrl: (url) => void setPending(url) });
   } catch (err) {
     deps.log("⚠️", `runtime-auth: codex login threw: ${message(err)}`);
-    await reflectRealState("after login threw");
+    await reflect("after login threw", { reason: "spawn-error", message: message(err) });
     return;
   }
 
-  await reflectRealState("after login");
+  await reflect("after login", outcome.ok ? null : { reason: outcome.reason, message: outcome.error });
   logOutcome("codex", command.ref, outcome, deps);
 }
 
@@ -149,10 +177,12 @@ async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAu
   // re-probe both here, otherwise the TUI row stays a stale "needs login" until
   // the next background poll (the QA finding) and reads as a second, separate
   // Claude login the user must do — it isn't.
-  const reflectRealState = async (label: string): Promise<void> => {
+  // A failure stamps `lastAuthError` on the claude-code entry only (the login
+  // target); the shared-keychain tui entry just reflects the re-probed state.
+  const reflect = async (label: string, failure: AuthFailure | null): Promise<void> => {
     try {
       const [cc, tui] = await Promise.all([probeClaude(), probeClaudeTui()]);
-      await deps.setProviderEntry("claude-code", cc);
+      await deps.setProviderEntry("claude-code", attachAuthError(cc, failure, now()));
       await deps.setProviderEntry("claude-code-tui", tui);
     } catch (err) {
       deps.log("⚠️", `runtime-auth: claude re-probe ${label} failed: ${message(err)}`);
@@ -164,7 +194,7 @@ async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAu
   const invocation = resolveLogin();
   if (!invocation.ok) {
     deps.log("⚠️", `runtime-auth: claude CLI unavailable: ${invocation.error}`);
-    await reflectRealState("after unresolved CLI");
+    await reflect("after unresolved CLI", { reason: "spawn-error", message: invocation.error });
     return;
   }
 
@@ -185,11 +215,11 @@ async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAu
     });
   } catch (err) {
     deps.log("⚠️", `runtime-auth: claude login threw: ${message(err)}`);
-    await reflectRealState("after login threw");
+    await reflect("after login threw", { reason: "spawn-error", message: message(err) });
     return;
   }
 
-  await reflectRealState("after login");
+  await reflect("after login", outcome.ok ? null : { reason: outcome.reason, message: outcome.error });
   logOutcome("claude", command.ref, outcome, deps);
 }
 

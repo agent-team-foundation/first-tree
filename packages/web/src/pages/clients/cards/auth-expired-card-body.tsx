@@ -34,6 +34,18 @@ export function AuthExpiredCardBody({ client, boundAgents, agentName }: AuthExpi
       <CardSection>
         <CompactMetaLine client={client} timeMode="auth-expired" />
       </CardSection>
+      {/* Point at the recovery action so the body isn't a dead readout: the
+          "Generate new token" button lives in the card header (paired with the
+          pill), which a reader scanning only the body would miss. */}
+      <CardSection>
+        <p className="text-caption" style={{ margin: 0, color: "var(--fg-3)" }}>
+          This computer&apos;s access token expired. Use{" "}
+          <span className="font-medium" style={{ color: "var(--fg-2)" }}>
+            Generate new token
+          </span>{" "}
+          above to reconnect it.
+        </p>
+      </CardSection>
       {reportedProviders.length > 0 && (
         <CardSection dimmed>
           <CardSectionLabel>Runtimes · last reported</CardSectionLabel>

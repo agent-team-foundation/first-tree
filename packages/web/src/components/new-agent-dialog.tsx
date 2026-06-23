@@ -8,13 +8,15 @@ import {
   type RuntimeProvider,
 } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getClientCapabilities, type HubClient, listClients } from "../api/activity.js";
 import { checkAgentNameAvailability, createAgent } from "../api/agents.js";
 import { ApiError, api, type ValidationIssue } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { useCopyFeedback } from "../lib/use-copy-feedback.js";
 import { runVisibilityAwareInterval } from "../lib/visibility-interval.js";
+import { RuntimeAuthControls } from "../pages/clients/cards/shared/runtime-auth-controls.js";
+import { deriveRuntimeAuthView } from "../pages/clients/cards/shared/runtime-auth-view.js";
 import { slugify } from "../utils/agent-naming.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
@@ -397,35 +399,35 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     });
   }, [connectedClients]);
 
-  // Capability fetch — polls every 5s while a client is picked. Same
-  // cadence as the listClients poll above so a transient API failure
-  // self-heals on the next tick rather than freezing the UI in
-  // "Detecting installed runtimes…" until the user reopens the dialog.
-  // Visibility-aware (see `runVisibilityAwareInterval`).
+  // Capability fetch — exposed as a callback so an in-dialog Connect can force
+  // an immediate refresh (otherwise the just-signed-in runtime only flips to ok
+  // on the next 5s tick). Staleness is gated by `capabilitiesClientId`, so a
+  // late write from a previous client is ignored by `activeCapabilities`.
+  const refreshCapabilities = useCallback(async (): Promise<void> => {
+    if (!pickedClientId) return;
+    try {
+      const res = await getClientCapabilities(pickedClientId);
+      setCapabilities(res.capabilities);
+      setCapabilitiesClientId(pickedClientId);
+    } catch {
+      // Transient — keep whatever we have (initial null shows "detecting…",
+      // prior success keeps the chips). The next tick will retry.
+    }
+  }, [pickedClientId]);
+
+  // Polls every 5s while a client is picked. Same cadence as the listClients
+  // poll above so a transient API failure self-heals on the next tick rather
+  // than freezing the UI in "Detecting installed runtimes…" until the user
+  // reopens the dialog. Visibility-aware (see `runVisibilityAwareInterval`).
   useEffect(() => {
     if (!pickedClientId) {
       setCapabilities(null);
       setCapabilitiesClientId(null);
       return;
     }
-    let cancelled = false;
-    const fetchCaps = async (): Promise<void> => {
-      try {
-        const res = await getClientCapabilities(pickedClientId);
-        if (cancelled) return;
-        setCapabilities(res.capabilities);
-        setCapabilitiesClientId(pickedClientId);
-      } catch {
-        // Transient — keep whatever we have (initial null shows "detecting…",
-        // prior success keeps the chips). The next tick will retry.
-      }
-    };
-    const dispose = runVisibilityAwareInterval(fetchCaps, 5_000);
-    return () => {
-      cancelled = true;
-      dispose();
-    };
-  }, [pickedClientId]);
+    const dispose = runVisibilityAwareInterval(refreshCapabilities, 5_000);
+    return () => dispose();
+  }, [pickedClientId, refreshCapabilities]);
 
   // Connect-token generation. Only fires when the dialog is open AND the
   // user has zero connected computers — so an existing user creating their
@@ -482,6 +484,20 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
       if (entry.state !== "ok") continue;
       const rt = asRuntimeProvider(provider);
       if (rt) out.push(rt);
+    }
+    return out;
+  }, [activeCapabilities]);
+
+  // Providers the daemon can sign in right here (unauthenticated + in-product
+  // Connect). When no runtime is `ok` yet, these let the user authenticate
+  // without leaving the dialog — the 5s caps poll (plus the Connect control's
+  // own refresh) flips the runtime to `ok` and unblocks Create in place.
+  const connectableProviders = useMemo<RuntimeProvider[]>(() => {
+    if (!activeCapabilities) return [];
+    const out: RuntimeProvider[] = [];
+    for (const [provider, entry] of Object.entries(activeCapabilities)) {
+      const rt = asRuntimeProvider(provider);
+      if (rt && deriveRuntimeAuthView(rt, entry, Date.now()).kind !== "none") out.push(rt);
     }
     return out;
   }, [activeCapabilities]);
@@ -795,9 +811,12 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 {!pickedClientId || activeCapabilities === null ? (
                   <RuntimeChipsSkeleton />
                 ) : okRuntimes.length === 0 ? (
-                  <p className="text-caption text-destructive">
-                    No runtime ready on this computer. Install Claude Code or Codex on it (and sign in), then come back.
-                  </p>
+                  <NoOkRuntimeBlock
+                    clientId={pickedClientId}
+                    capabilities={activeCapabilities}
+                    connectableProviders={connectableProviders}
+                    onConnectRefresh={refreshCapabilities}
+                  />
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {okRuntimes.map((provider) => (
@@ -833,6 +852,51 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * "Computer is connected but no runtime is signed in" block. When a provider
+ * can be driven in-product (browser OAuth), offer Connect right here so the user
+ * authenticates without leaving the dialog — the parent's 5s caps poll plus the
+ * control's own refresh flip the runtime to `ok` and unblock Create in place.
+ * Falls back to the install hint only when nothing is connectable (e.g. nothing
+ * installed on that machine yet).
+ */
+function NoOkRuntimeBlock({
+  clientId,
+  capabilities,
+  connectableProviders,
+  onConnectRefresh,
+}: {
+  clientId: string;
+  capabilities: ClientCapabilities;
+  connectableProviders: RuntimeProvider[];
+  onConnectRefresh: () => void;
+}) {
+  if (connectableProviders.length === 0) {
+    return (
+      <p className="text-caption text-destructive">
+        No runtime ready on this computer. Install Claude Code or Codex on it (and sign in), then come back.
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      <p className="text-caption text-muted-foreground">
+        No runtime is signed in yet. Connect one here — the sign-in opens in your browser on that computer, and this
+        unblocks as soon as it finishes.
+      </p>
+      {connectableProviders.map((provider) => (
+        <RuntimeAuthControls
+          key={provider}
+          clientId={clientId}
+          provider={provider}
+          entry={capabilities[provider] ?? null}
+          onStarted={onConnectRefresh}
+        />
+      ))}
+    </div>
   );
 }
 
