@@ -215,30 +215,6 @@ function SecondLine({ status, mounted }: { status: AgentChatStatus | null; mount
       </div>
     );
   }
-  if (status.statusReason) {
-    const tone =
-      status.statusReason.severity === "error"
-        ? "error"
-        : status.statusReason.severity === "warning"
-          ? "blocked"
-          : "idle";
-    const pill = <StatePill tone={tone} label={status.statusReason.label} />;
-    if (status.statusReason.kind === "terminal" && status.statusReason.severity === "error") {
-      return (
-        <div className="flex">
-          <TimelineJumpButton
-            agentId={status.agentId}
-            main="failed"
-            anchored={isJumpable(mounted, "failed", status.agentId)}
-            ariaLabel="Jump to this agent's error in the timeline"
-          >
-            {pill}
-          </TimelineJumpButton>
-        </div>
-      );
-    }
-    return <div className="flex min-w-0">{pill}</div>;
-  }
   if (status.main === "working" && status.activity) {
     // "Working" (sans word) · "Bash · 0s" (mono tool + live timer). No leading
     // pulse dot — the avatar already carries the breathing status dot. The

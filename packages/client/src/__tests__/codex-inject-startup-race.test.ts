@@ -507,7 +507,7 @@ describe("codex handler startup inject queue", () => {
     await handler.shutdown();
   });
 
-  it("treats a stream error followed by final and turn.completed as success with diagnostics", async () => {
+  it("treats a reconnect diagnostic followed by final and turn.completed as success", async () => {
     const sendMessage = vi
       .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
       .mockResolvedValue(undefined);
@@ -543,9 +543,43 @@ describe("codex handler startup inject queue", () => {
           event.payload.source === "sdk" &&
           event.payload.message.includes("Reconnecting... 2/5"),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "success")).toBe(true);
     expect(completedCounts).toEqual([1]);
+
+    await handler.shutdown();
+  });
+
+  it("does not classify normal final text that mentions provider error keywords", async () => {
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const completedCounts: Array<number | undefined> = [];
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => completedCounts.push(count), { emitEvent, retryTurn });
+
+    state.agentMessagesByTurn.set(1, [
+      "The log says 401 Unauthorized and context window, but this is just the answer text.",
+    ]);
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+
+    const events = emitEvent.mock.calls.map(([event]) => event);
+    expect(
+      events.some((event) => {
+        if (event.kind !== "error") return false;
+        return parseProviderRetryEventMessage(event.payload.message) !== null;
+      }),
+    ).toBe(false);
+    expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "success")).toBe(true);
+    expect(completedCounts).toEqual([1]);
+    expect(retryTurn).not.toHaveBeenCalled();
 
     await handler.shutdown();
   });
@@ -589,6 +623,51 @@ describe("codex handler startup inject queue", () => {
         return (
           retryPayload?.event === "provider_failure_terminal" &&
           retryPayload.reasonCode === "unsafe_replay" &&
+          retryPayload.scope === "provider_turn"
+        );
+      }),
+    ).toBe(true);
+    expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);
+    expect(completedCounts).toEqual([1]);
+    expect(retryTurn).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it("does not retry 401 stream errors", async () => {
+    const sendMessage = vi
+      .fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>()
+      .mockResolvedValue(undefined);
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const completedCounts: Array<number | undefined> = [];
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => completedCounts.push(count), { sendMessage, emitEvent, retryTurn });
+
+    state.agentMessagesByTurn.set(1, []);
+    state.streamErrorByTurn.set(
+      1,
+      "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+    );
+    state.resolveChatContext?.({
+      chatId: "chat-startup-race",
+      title: "startup race",
+      topic: null,
+      description: null,
+      participants: [],
+    });
+
+    await handler.start(makeMessage("m1", "first"), ctx);
+
+    const events = emitEvent.mock.calls.map(([event]) => event);
+    expect(state.runInputs).toHaveLength(1);
+    expect(
+      events.some((event) => {
+        if (event.kind !== "error") return false;
+        const retryPayload = parseProviderRetryEventMessage(event.payload.message);
+        return (
+          retryPayload?.event === "provider_failure_terminal" &&
+          retryPayload.reasonCode === "provider_credential_required" &&
           retryPayload.scope === "provider_turn"
         );
       }),

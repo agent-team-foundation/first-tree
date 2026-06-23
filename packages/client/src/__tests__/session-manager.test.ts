@@ -541,6 +541,47 @@ describe("SessionManager", () => {
     await sm.shutdown();
   });
 
+  it("routes the next message through resume after a terminal pre-turn failure evicts the handler", async () => {
+    const ackEntry = mockAckEntry();
+    let startCtx: SessionContext | undefined;
+    let startMessage: SessionMessage | undefined;
+    let startToken: DeliveryToken | undefined;
+    const handler = createMockHandler({
+      start: vi.fn(async (message, ctx, token) => {
+        startCtx = ctx;
+        startMessage = message;
+        startToken = token;
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "processing" } as const };
+      }),
+      inject: vi.fn().mockReturnValue({ kind: "rejected", reason: "no_active_context", retryable: true } as const),
+      resume: vi.fn(async () => {
+        return { sessionId: "session-id-mock", route: { kind: "owned", mode: "processing" } as const };
+      }),
+    });
+    const sm = createSessionManager({ handler, ackEntry });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-terminal", messageId: "msg-1" }));
+    if (!startCtx || !startMessage || !startToken) throw new Error("expected captured start state");
+
+    await startToken.complete(startMessage, {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_credential_required",
+    });
+    startCtx.failSessionForRecovery?.("provider_credential_required", "session-id-mock");
+
+    expect(sm.activeCount).toBe(0);
+    expect(handler.inject).not.toHaveBeenCalled();
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-terminal", messageId: "msg-2" }));
+
+    expect(handler.inject).not.toHaveBeenCalled();
+    expect(handler.resume).toHaveBeenCalledTimes(1);
+
+    await sm.shutdown();
+  });
+
   it("creates separate sessions for different chats", async () => {
     const handlers: AgentHandler[] = [];
     const factory: HandlerFactory = () => {

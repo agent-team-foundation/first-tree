@@ -1,5 +1,10 @@
 import { isAbsolute, join, resolve } from "node:path";
-import type { AgentRuntimeConfigPayload, SessionEvent, ToolFileRef } from "@first-tree/shared";
+import {
+  type AgentRuntimeConfigPayload,
+  encodeProviderRetryEventMessage,
+  type SessionEvent,
+  type ToolFileRef,
+} from "@first-tree/shared";
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../../../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../../../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../../../runtime/agent-config-cache.js";
@@ -30,6 +35,7 @@ import type {
   TurnConsumedErrorReason,
 } from "../../../runtime/handler.js";
 import { deliveryTokenFromSessionContext } from "../../../runtime/handler.js";
+import { ProviderAttempt, type ProviderAttemptSettlement } from "../../../runtime/provider-attempt.js";
 import { materializeResourceSkills } from "../../../runtime/resource-skills.js";
 import {
   buildBriefingUpdateNotice,
@@ -41,8 +47,13 @@ import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../..
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../../runtime/workspace.js";
 import { chunkAssistantText } from "../../assistant-text.js";
 import { formatAuthHint, isCodexAuthError } from "../../auth-error-hint.js";
-import { resolveTurnSettlement } from "../../turn-settlement.js";
-import { buildCodexThreadOptions, collectCodexFileChangePaths, isTransientCodexErrorMessage } from "../sdk.js";
+import { consumedErrorOutcome, resolveTurnSettlement } from "../../turn-settlement.js";
+import {
+  buildCodexThreadOptions,
+  collectCodexFileChangePaths,
+  isCodexStreamDiagnosticMessage,
+  isTransientCodexErrorMessage,
+} from "../sdk.js";
 import {
   CodexAppServerClient,
   type CodexAppServerClientOptions,
@@ -103,6 +114,8 @@ type CurrentTurn = {
   providerCompleted: boolean;
   stopRequested: boolean;
   sdkErrorEmitted: boolean;
+  providerAttempt: ProviderAttempt;
+  userVisibleOutput: boolean;
   resolveTerminal: () => void;
 };
 
@@ -147,6 +160,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let turnSettlementInProgress = false;
   let startupTurnPending = false;
   let turnStartInProgress = false;
+  let turnStartAttempt: ProviderAttempt | null = null;
   let pendingDrainInProgress = false;
   let pendingDrainScheduled = false;
   let shutdownRequested = false;
@@ -162,6 +176,85 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     contextTreeBranch,
     log: (message) => ctx?.log(message),
   });
+
+  function createProviderAttempt(): ProviderAttempt {
+    return new ProviderAttempt({
+      provider: "codex",
+      scope: "provider_turn",
+      source: "sdk",
+    });
+  }
+
+  function emitProviderSettlementEvent(sessionCtx: SessionContext, settlement: ProviderAttemptSettlement): void {
+    sessionCtx.emitEvent({
+      kind: "error",
+      payload: {
+        source: "runtime",
+        message: encodeProviderRetryEventMessage(settlement.eventPayload),
+      },
+    });
+  }
+
+  function recordAppServerFailureSignal(
+    attempt: ProviderAttempt,
+    error: TurnErrorInfo,
+    turn?: Pick<CurrentTurn, "userVisibleOutput">,
+  ): ProviderAttemptSettlement | null {
+    const diagnostic = isCodexStreamDiagnosticMessage(error.message);
+    const classification = attempt.recordSignal({
+      kind: diagnostic ? "diagnostic" : "provider_error",
+      error: providerErrorFromTurnErrorInfo(error),
+      messagePreview: providerErrorPreview(error),
+    });
+    if (!classification && diagnostic) return null;
+    if (turn) {
+      if (turn.userVisibleOutput) {
+        attempt.markUserVisibleOutput();
+      } else if (classification?.category === "provider_capacity") {
+        attempt.setReplaySafety("provider_entered");
+      } else {
+        attempt.setReplaySafety("pre_visible");
+      }
+    }
+    return attempt.settle({ attempt: 1 });
+  }
+
+  type AcceptedTurnStopDisposition =
+    | { kind: "terminal_reject"; reason: TurnConsumedErrorReason }
+    | { kind: "consume"; reason: TurnConsumedErrorReason };
+
+  function stopReasonForSettlement(
+    error: TurnErrorInfo,
+    settlement: ProviderAttemptSettlement,
+  ): TurnConsumedErrorReason | null {
+    if (settlement.decision.action !== "stop") return null;
+    if (settlement.decision.terminalKind === "exhausted") return null;
+    if (settlement.classification.category === "deterministic_input") {
+      return deterministicTerminalRejectionReason(errorInfoForSettlement(error, settlement));
+    }
+    return settlement.decision.reasonCode;
+  }
+
+  function acceptedTurnStopDisposition(
+    error: TurnErrorInfo,
+    settlement: ProviderAttemptSettlement,
+  ): AcceptedTurnStopDisposition | null {
+    const reason = stopReasonForSettlement(error, settlement);
+    if (!reason) return null;
+    if (settlement.classification.category === "deterministic_input") {
+      return { kind: "terminal_reject", reason };
+    }
+    return { kind: "consume", reason };
+  }
+
+  function terminalTurnStartSettlement(
+    error: TurnErrorInfo,
+    attempt: ProviderAttempt,
+  ): ProviderAttemptSettlement | null {
+    const settlement = attempt.settle({ attempt: 1 });
+    if (!settlement) return null;
+    return stopReasonForSettlement(error, settlement) ? settlement : null;
+  }
 
   function buildEnv(sessionCtx: SessionContext): NodeJS.ProcessEnv {
     const env: NodeJS.ProcessEnv = {};
@@ -382,6 +475,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       case "agentMessage": {
         const text = typeof item.text === "string" ? item.text : "";
         if (!text.trim()) return;
+        turn.userVisibleOutput = true;
+        turn.providerAttempt.markUserVisibleOutput();
         // Chunk so the FULL assistant text is preserved across one or more
         // events — the durable troubleshooting record now that the per-turn
         // final-text chat mirror is retired.
@@ -392,6 +487,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         return;
       }
       case "commandExecution": {
+        turn.userVisibleOutput = true;
+        turn.providerAttempt.markUserVisibleOutput();
         const status = toolStatus(item.status);
         const command = typeof item.command === "string" ? item.command : "";
         const commandCwd = typeof item.cwd === "string" ? item.cwd : (cwd ?? undefined);
@@ -423,6 +520,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         return;
       }
       case "fileChange": {
+        turn.userVisibleOutput = true;
+        turn.providerAttempt.markUserVisibleOutput();
         const status = toolStatus(item.status);
         const changes = item.changes;
         const fileChangeRefs =
@@ -452,6 +551,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         return;
       }
       case "mcpToolCall": {
+        turn.userVisibleOutput = true;
+        turn.providerAttempt.markUserVisibleOutput();
         const status = toolStatus(item.status);
         const error = asRecord(item.error);
         const result = asRecord(item.result);
@@ -472,6 +573,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         return;
       }
       case "webSearch": {
+        turn.userVisibleOutput = true;
+        turn.providerAttempt.markUserVisibleOutput();
         emitToolCall(sessionCtx, {
           toolUseId: id,
           name: "web_search",
@@ -481,6 +584,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         return;
       }
       case "plan": {
+        turn.userVisibleOutput = true;
+        turn.providerAttempt.markUserVisibleOutput();
         emitToolCall(sessionCtx, {
           toolUseId: id,
           name: "todo_list",
@@ -514,6 +619,15 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     if (threadId && notificationThreadId && notificationThreadId !== threadId) return;
 
     const turn = currentTurn;
+    if (
+      turnStartAttempt &&
+      notification.method === "error" &&
+      notificationTurnId &&
+      (!turn || turn.turnId !== notificationTurnId)
+    ) {
+      const error = params ? parseTurnError(params.error) : null;
+      if (error) recordAppServerFailureSignal(turnStartAttempt, error);
+    }
     if (notificationTurnId && (!turn || turn.turnId !== notificationTurnId)) {
       bufferNotification(notificationTurnId, notification);
       return;
@@ -543,14 +657,20 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       case "error": {
         const error = parseTurnError(params.error);
         if (error) {
+          const diagnostic = isCodexStreamDiagnosticMessage(error.message);
           if (turn) {
             turn.lastSdkError = error;
-            turn.sdkErrorEmitted = true;
+            turn.sdkErrorEmitted = !diagnostic;
+            recordAppServerFailureSignal(turn.providerAttempt, error, turn);
+          } else if (turnStartAttempt) {
+            recordAppServerFailureSignal(turnStartAttempt, error);
           }
-          sessionCtx.emitEvent({
-            kind: "error",
-            payload: { source: "sdk", message: formatAppServerError(error.message) },
-          });
+          if (!diagnostic) {
+            sessionCtx.emitEvent({
+              kind: "error",
+              payload: { source: "sdk", message: formatAppServerError(error.message) },
+            });
+          }
         }
         return;
       }
@@ -648,6 +768,24 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     await shutdown;
   }
 
+  async function closeAppServerAfterTerminalTurnStartFailure(
+    sessionCtx: SessionContext,
+    reason: string,
+  ): Promise<void> {
+    shutdownRequested = true;
+    turnStartInProgress = false;
+    retryQueuedMessages(reason);
+    const client = appServer;
+    const resumeThreadId = threadId ?? undefined;
+    appServer = null;
+    threadId = null;
+    pendingNotificationsByTurn.clear();
+    sessionCtx.log(`codex app-server session closed after terminal turn/start failure (${reason})`);
+    const shutdown = client?.shutdown();
+    sessionCtx.failSessionForRecovery?.(reason, resumeThreadId);
+    await shutdown;
+  }
+
   async function closeAppServerAfterUncommittablePrefix(sessionCtx: SessionContext, reason: string): Promise<void> {
     shutdownRequested = true;
     turnStartInProgress = false;
@@ -695,6 +833,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     gitWriteTracker.captureBaseline();
     let result: unknown;
     turnStartInProgress = true;
+    turnStartAttempt = createProviderAttempt();
     try {
       result = await client.request("turn/start", {
         threadId,
@@ -706,6 +845,31 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       });
     } catch (err) {
       turnStartInProgress = false;
+      const attempt = turnStartAttempt ?? createProviderAttempt();
+      turnStartAttempt = null;
+      const syntheticFailure = {
+        message: err instanceof Error ? err.message : String(err),
+        codexErrorInfo: null,
+        additionalDetails: null,
+      };
+      const classification = attempt.recordSignal({
+        kind: "local_error",
+        error: err instanceof Error ? err : new Error(syntheticFailure.message),
+        messagePreview: syntheticFailure.message,
+      });
+      attempt.setReplaySafety(classification?.category === "provider_capacity" ? "provider_entered" : "pre_provider");
+      const terminalSettlement = terminalTurnStartSettlement(syntheticFailure, attempt);
+      if (terminalSettlement) {
+        const terminalReason = stopReasonForSettlement(syntheticFailure, terminalSettlement);
+        if (terminalReason) {
+          emitProviderSettlementEvent(sessionCtx, terminalSettlement);
+          token.processingStarted(messages);
+          sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+          await token.complete(messages, consumedErrorOutcome(terminalReason));
+          await closeAppServerAfterTerminalTurnStartFailure(sessionCtx, terminalReason);
+          return false;
+        }
+      }
       const reason = isCodexAppServerTransientError(err)
         ? "codex_app_server_turn_start_unknown_custody_transient"
         : "codex_app_server_turn_start_unknown_custody_failed";
@@ -718,6 +882,25 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     const turnId = turnRecord ? readString(turnRecord, "id") : null;
     if (!turnId) {
       turnStartInProgress = false;
+      const attempt = turnStartAttempt ?? createProviderAttempt();
+      turnStartAttempt = null;
+      const syntheticFailure = {
+        message: "missing turn id in turn/start response",
+        codexErrorInfo: null,
+        additionalDetails: null,
+      };
+      const terminalSettlement = terminalTurnStartSettlement(syntheticFailure, attempt);
+      if (terminalSettlement) {
+        const terminalReason = stopReasonForSettlement(syntheticFailure, terminalSettlement);
+        if (terminalReason) {
+          emitProviderSettlementEvent(sessionCtx, terminalSettlement);
+          token.processingStarted(messages);
+          sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+          await token.complete(messages, consumedErrorOutcome(terminalReason));
+          await closeAppServerAfterTerminalTurnStartFailure(sessionCtx, terminalReason);
+          return false;
+        }
+      }
       const reason = "codex_app_server_turn_start_missing_id_unknown_custody";
       token.retry(messages, reason);
       await closeAppServerAfterUnknownCustody(sessionCtx, reason, "missing turn id in turn/start response");
@@ -725,6 +908,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     }
 
     const turn = await createCurrentTurn(turnId, messages, token, sessionCtx);
+    turnStartAttempt = null;
     turnStartInProgress = false;
     schedulePendingDrain();
     if (turnRecord && readString(turnRecord, "status") !== "inProgress") {
@@ -762,6 +946,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     const terminalPromise = new Promise<void>((resolve) => {
       resolveTerminal = resolve;
     });
+    const providerAttempt = turnStartAttempt ?? createProviderAttempt();
+    providerAttempt.setReplaySafety("pre_visible");
     const turn: CurrentTurn = {
       turnId,
       status: "inProgress",
@@ -777,6 +963,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       providerCompleted: false,
       stopRequested: false,
       sdkErrorEmitted: false,
+      providerAttempt,
+      userVisibleOutput: false,
       resolveTerminal,
     };
     currentTurn = turn;
@@ -889,24 +1077,67 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       }
     } else if (turn.failure) {
       const failure = mergeFailureWithDiagnostic(turn.failure, turn.lastSdkError);
-      const kind = classifyAppServerFailure(failure);
-      if (kind === "deterministic") {
-        terminalRejectionReason = deterministicTerminalRejectionReason(failure);
+      const providerSettlement = recordAppServerFailureSignal(turn.providerAttempt, failure, turn);
+      const providerStopDisposition = providerSettlement
+        ? acceptedTurnStopDisposition(failure, providerSettlement)
+        : null;
+      if (providerSettlement && providerStopDisposition) {
+        emitProviderSettlementEvent(sessionCtx, providerSettlement);
         if (!turn.sdkErrorEmitted) {
           sessionCtx.emitEvent({
             kind: "error",
-            payload: { source: "sdk", message: formatDeterministicFailureMessage(failure) },
+            payload: { source: "sdk", message: formatProviderTerminalFailureMessage(failure, providerSettlement) },
           });
         }
-        sessionCtx.log(
-          `codex app-server turn failed deterministically; terminal rejecting delivery (${terminalRejectionReason}): ${turn.failure.message}`,
-        );
+        if (providerStopDisposition.kind === "terminal_reject") {
+          terminalRejectionReason = providerStopDisposition.reason;
+          sessionCtx.log(
+            `codex app-server turn failed terminally; terminal rejecting delivery (${terminalRejectionReason}): ${turn.failure.message}`,
+          );
+        } else {
+          consumedErrorReason = providerStopDisposition.reason;
+          sessionCtx.log(
+            `codex app-server turn failed terminally; consuming provider stop (${consumedErrorReason}): ${turn.failure.message}`,
+          );
+        }
       } else {
+        const kind = classifyAppServerFailure(failure);
         retryReason = `codex_${kind}_failure`;
         sessionCtx.log(`codex app-server turn failed (${kind}): ${turn.failure.message}`);
       }
     } else if (!turn.providerCompleted) {
-      retryReason = "codex_app_server_stream_ended_without_completion";
+      const streamEndError: TurnErrorInfo = {
+        message: "codex_app_server_stream_ended_without_completion",
+        codexErrorInfo: null,
+        additionalDetails: null,
+      };
+      const streamEndSettlement = recordAppServerFailureSignal(turn.providerAttempt, streamEndError, turn);
+      const providerStopDisposition = streamEndSettlement
+        ? acceptedTurnStopDisposition(streamEndError, streamEndSettlement)
+        : null;
+      if (streamEndSettlement && providerStopDisposition) {
+        emitProviderSettlementEvent(sessionCtx, streamEndSettlement);
+        sessionCtx.emitEvent({
+          kind: "error",
+          payload: {
+            source: "sdk",
+            message: formatProviderTerminalFailureMessage(streamEndError, streamEndSettlement),
+          },
+        });
+        if (providerStopDisposition.kind === "terminal_reject") {
+          terminalRejectionReason = providerStopDisposition.reason;
+          sessionCtx.log(
+            `codex app-server stream ended without completion; terminal rejecting delivery (${terminalRejectionReason})`,
+          );
+        } else {
+          consumedErrorReason = providerStopDisposition.reason;
+          sessionCtx.log(
+            `codex app-server stream ended without completion; consuming provider stop (${consumedErrorReason})`,
+          );
+        }
+      } else {
+        retryReason = "codex_app_server_stream_ended_without_completion";
+      }
     }
 
     if (usage) {
@@ -1394,6 +1625,22 @@ function formatAppServerError(message: string): string {
   return message;
 }
 
+function formatProviderTerminalFailureMessage(error: TurnErrorInfo, settlement: ProviderAttemptSettlement): string {
+  if (settlement.classification.category === "deterministic_input") {
+    return formatDeterministicFailureMessage(errorInfoForSettlement(error, settlement));
+  }
+  return formatAppServerError(providerErrorPreview(error));
+}
+
+function errorInfoForSettlement(error: TurnErrorInfo, settlement: ProviderAttemptSettlement): TurnErrorInfo {
+  if (settlement.classification.category !== "deterministic_input" || isContextWindowFailure(error)) return error;
+  return {
+    message: settlement.messagePreview,
+    codexErrorInfo: error.codexErrorInfo,
+    additionalDetails: error.additionalDetails,
+  };
+}
+
 function classifyAppServerFailure(error: TurnErrorInfo): "deterministic" | "transient" | "unknown" {
   if (
     isCodexAuthError(error.message) ||
@@ -1420,6 +1667,24 @@ function formatDeterministicFailureMessage(error: TurnErrorInfo): string {
   if (isContextWindowFailure(error)) return CODEX_CONTEXT_WINDOW_FAILURE_MESSAGE;
   if (isPreSamplingCompactFailure(error)) return CODEX_COMPACT_FAILURE_MESSAGE;
   return formatAppServerError(error.message);
+}
+
+type ProviderClassifiableError = Error & {
+  reason?: string;
+  code?: string;
+};
+
+function providerErrorFromTurnErrorInfo(error: TurnErrorInfo): Error {
+  const out = new Error(providerErrorPreview(error)) as ProviderClassifiableError;
+  if (typeof error.codexErrorInfo === "string") {
+    out.reason = error.codexErrorInfo;
+    out.code = error.codexErrorInfo;
+  }
+  return out;
+}
+
+function providerErrorPreview(error: TurnErrorInfo): string {
+  return [error.message, error.additionalDetails].filter((part): part is string => Boolean(part)).join("\n");
 }
 
 function isContextWindowFailure(error: TurnErrorInfo): boolean {

@@ -1107,6 +1107,63 @@ describe("page SSR smoke coverage", () => {
     );
   });
 
+  it("keeps the right sidebar roster on agent lifecycle labels when provider reasons are present", async () => {
+    const { AgentStatusPanel } = await import("../../components/chat/agent-status-panel.js");
+    const client = createClient();
+    client.setQueryData(chatAgentStatusQueryKey("chat-1"), [
+      {
+        agentId: "agent-1",
+        main: "failed",
+        reachable: true,
+        engagement: "active",
+        working: false,
+        errored: true,
+        activity: null,
+        statusReason: {
+          kind: "terminal",
+          severity: "error",
+          provider: "codex",
+          scope: "provider_turn",
+          category: "deterministic_input",
+          reasonCode: "codex_context_window_exceeded",
+          label: "Provider failure",
+        },
+      },
+      {
+        agentId: "agent-2",
+        main: "ready",
+        reachable: true,
+        engagement: "active",
+        working: false,
+        errored: false,
+        activity: null,
+        statusReason: {
+          kind: "terminal",
+          severity: "error",
+          provider: "codex",
+          scope: "provider_turn",
+          category: "deterministic_input",
+          reasonCode: "codex_context_window_exceeded",
+          label: "Provider failure",
+        },
+      },
+    ] satisfies AgentChatStatus[]);
+
+    const html = renderWithClient(
+      <AgentStatusPanel
+        chatId="chat-1"
+        agents={CHAT_PARTICIPANTS.filter((participant) => participant.type !== "human")}
+        canManage={() => true}
+        order="priority"
+      />,
+      client,
+    );
+
+    expect(html).toContain("Failed");
+    expect(html).toContain("Idle");
+    expect(html).not.toContain("Provider failure");
+  });
+
   it("renders ChatView alternate chrome, composer, and recovery states", async () => {
     const { ChatView } = await import("../workspace/center/chat-view.js");
 

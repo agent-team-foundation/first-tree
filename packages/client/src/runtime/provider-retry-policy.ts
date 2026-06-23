@@ -416,7 +416,11 @@ function configurationReason(base: Classification): string {
 }
 
 function isDeterministicInput(text: string, base: Classification): boolean {
-  return base.reasonCode.includes("context") || /context length|context_length|invalid request|bad request/.test(text);
+  return (
+    base.reasonCode.includes("context") ||
+    /context length|context_length|context window|invalid request|bad request/.test(text) ||
+    (text.includes("ran out of room") && text.includes("context"))
+  );
 }
 
 function deterministicReason(base: Classification): string {
