@@ -1,4 +1,4 @@
-import { ChevronRight, Info } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "../../../components/ui/markdown.js";
@@ -18,11 +18,15 @@ import { formatRelative } from "../../../lib/utils.js";
  * Two forms:
  *   - Collapsed (default): one line — an activity dot (green pulse when the
  *     description changed recently, else muted grey — a freshness signal, NOT a
- *     task stage), the description's first line (markdown markers stripped,
- *     ellipsis-truncated), an "Updated" chip when there's an unread change, and
- *     the freshness + updater.
- *   - Expanded: the description rendered as markdown, with a footer carrying the
- *     freshness/updater and the "maintained by agent" read-only note.
+ *     task stage), the description's first meaningful line (section headings
+ *     skipped, markdown markers stripped, ellipsis-truncated), an "Updated" chip
+ *     when there's an unread change, and the freshness ("9 days ago"). The bar
+ *     shows the freshness in BOTH states, so an auto-expanded summary still
+ *     surfaces when it last changed.
+ *   - Expanded: just the description rendered as markdown — no footer. Read-only
+ *     is self-evident (no edit affordance anywhere); the updater name is not
+ *     shown (single-agent maintenance makes it noise — the data stays on the
+ *     chat detail).
  *
  * Auto behavior (SPEC §五): default collapsed; auto-expand once on entry ONLY
  * when the update is unread AND the viewer hasn't looked in a while; while
@@ -126,7 +130,6 @@ export function TaskSummary({
   chatId,
   description,
   descriptionUpdatedAt,
-  descriptionUpdatedByName,
   lastReadAt,
   freshnessReady,
   scrollContainerRef,
@@ -134,7 +137,6 @@ export function TaskSummary({
   chatId: string;
   description: string | null;
   descriptionUpdatedAt: string | null;
-  descriptionUpdatedByName: string | null;
   lastReadAt: string | null;
   /** True once the REAL chat-detail fetch has settled for this chat (not the
    *  list-nav initialData stub, which lacks the freshness fields). The
@@ -232,10 +234,7 @@ export function TaskSummary({
   const expanded = open && !scrollCollapsed;
   const fresh = updatedAtMs !== null && Date.now() - updatedAtMs < FRESH_WINDOW_MS;
   const firstLine = descriptionFirstLine(trimmed);
-  const freshnessText =
-    updatedAtMs !== null
-      ? `${formatRelative(descriptionUpdatedAt)}${descriptionUpdatedByName ? ` · ${descriptionUpdatedByName}` : ""}`
-      : null;
+  const freshnessText = updatedAtMs !== null ? formatRelative(descriptionUpdatedAt) : null;
   const showAmberChip = unread && !unreadCleared && !expanded;
   const amberActive = highlighted && expanded;
 
@@ -300,7 +299,7 @@ export function TaskSummary({
             Updated
           </span>
         ) : null}
-        {!expanded && freshnessText ? (
+        {freshnessText ? (
           <span className="text-caption shrink-0" style={{ color: "var(--fg-3)", whiteSpace: "nowrap" }}>
             {freshnessText}
           </span>
@@ -311,8 +310,8 @@ export function TaskSummary({
           className="shrink-0"
           style={{
             // Deliberately quiet (smaller + thinner): the activity dot and the
-            // "2h ago · updater" text are the primary right-side signal; the
-            // chevron is just a low-key "expandable" hint, not a competing mark.
+            // freshness text ("9 days ago") are the primary right-side signal;
+            // the chevron is just a low-key "expandable" hint, not a competing mark.
             color: "var(--fg-4)",
             transform: expanded ? "rotate(90deg)" : "none",
             transition: "transform 180ms ease",
@@ -329,28 +328,6 @@ export function TaskSummary({
             <Markdown className="[&_:is(h1,h2,h3,h4,h5,h6)]:text-[length:1em] [&_:is(h1,h2,h3,h4,h5,h6)]:font-semibold [&_:is(h1,h2,h3,h4,h5,h6)]:leading-snug [&_:is(h1,h2,h3,h4,h5,h6)]:mt-3.5 [&_:is(h1,h2,h3,h4,h5,h6)]:mb-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:pl-4 [&_ol]:pl-4">
               {trimmed}
             </Markdown>
-          </div>
-          <div
-            className="text-caption flex items-center"
-            style={{
-              gap: "var(--sp-2)",
-              marginTop: "var(--sp-2)",
-              paddingTop: "var(--sp-1_5)",
-              borderTop: "var(--hairline) dashed var(--border-faint)",
-              color: "var(--fg-4)",
-            }}
-          >
-            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {freshnessText ? `Updated ${freshnessText}` : "No update recorded yet"}
-            </span>
-            <span
-              className="inline-flex shrink-0 items-center"
-              role="img"
-              title="The summary is the chat description — agents keep it current. To correct it, tell an agent in the chat."
-              aria-label="Maintained by an agent — to correct it, tell an agent in the chat"
-            >
-              <Info size={13} strokeWidth={2} aria-hidden="true" />
-            </span>
           </div>
         </div>
       ) : null}

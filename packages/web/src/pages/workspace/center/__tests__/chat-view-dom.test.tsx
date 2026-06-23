@@ -1473,7 +1473,7 @@ describe("ChatView", () => {
       await act(async () => root.unmount());
     });
 
-    it("exposes no edit affordance — read-only, maintained by agent", async () => {
+    it("exposes no edit affordance — read-only", async () => {
       localStorage.clear();
       const { ChatView } = await import("../chat-view.js");
       const withDescription = chatDetail({ description: DESCRIPTION_MD });
@@ -1487,16 +1487,15 @@ describe("ChatView", () => {
       await waitForCondition(() => taskSummaryButton(container) !== null, "Expected the task summary to render");
       const button = taskSummaryButton(container);
       if (!button) throw new Error("task summary button missing");
-      // Expand to reveal the footer and confirm no edit surface appears.
+      // Expand and confirm the expanded surface still exposes no edit affordance.
       await act(async () => {
         button.click();
       });
       await flush();
       const headerRoot = button.parentElement;
       if (!headerRoot) throw new Error("task summary root missing");
-      // Read-only affordance is the quiet ⓘ hint (aria-label / title), not body text.
-      expect(headerRoot.querySelector('[aria-label^="Maintained by an agent"]')).not.toBeNull();
-      // The only control is the expand/collapse toggle — no edit button / input.
+      // Read-only is self-evident: the only control is the expand/collapse toggle —
+      // no edit button / input / textarea (the footer + info hint were removed).
       expect(headerRoot.querySelectorAll("button")).toHaveLength(1);
       expect(headerRoot.querySelector("input")).toBeNull();
       expect(headerRoot.querySelector("textarea")).toBeNull();

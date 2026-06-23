@@ -47,13 +47,11 @@ function Demo({
   chatId,
   description,
   descriptionUpdatedAt,
-  descriptionUpdatedByName,
   lastReadAt,
 }: {
   chatId: string;
   description: string | null;
   descriptionUpdatedAt: string | null;
-  descriptionUpdatedByName: string | null;
   lastReadAt: string | null;
 }) {
   // A dummy scroll container — the preview does not exercise sticky-collapse.
@@ -64,7 +62,6 @@ function Demo({
         chatId={chatId}
         description={description}
         descriptionUpdatedAt={descriptionUpdatedAt}
-        descriptionUpdatedByName={descriptionUpdatedByName}
         lastReadAt={lastReadAt}
         freshnessReady
         scrollContainerRef={scrollRef}
@@ -113,33 +110,21 @@ export function TaskSummaryPreviewPage() {
           Chat task summary — states
         </h1>
         <p className="text-body" style={{ color: "var(--fg-3)" }}>
-          Click a header to expand / collapse. Read-only: there is no edit affordance anywhere — the footer states it is
-          maintained by an agent.
+          Click a header to expand / collapse. Read-only: there is no edit affordance anywhere. Expanded is just the
+          markdown; the freshness ("9 days ago") lives on the bar in both states.
         </p>
       </div>
 
       <section style={{ display: "flex", flexDirection: "column", gap: "var(--sp-6)" }}>
         <Col
           label="Unread + not seen in a while"
-          note="auto-expands once + amber highlight · green pulse dot · faithful markdown"
+          note="auto-expands once + amber highlight · green pulse dot · faithful markdown · freshness stays on the bar"
         >
-          <Demo
-            chatId="preview-unread"
-            description={RICH}
-            descriptionUpdatedAt={hoursAgo(2)}
-            descriptionUpdatedByName="ux-expert"
-            lastReadAt={null}
-          />
+          <Demo chatId="preview-unread" description={RICH} descriptionUpdatedAt={hoursAgo(2)} lastReadAt={null} />
         </Col>
 
-        <Col label="Recently updated, already seen" note="collapsed · green pulse dot · freshness + updater on the bar">
-          <Demo
-            chatId="preview-seen"
-            description={PLAIN}
-            descriptionUpdatedAt={hoursAgo(3)}
-            descriptionUpdatedByName="gandy-developer"
-            lastReadAt={hoursAgo(1)}
-          />
+        <Col label="Recently updated, already seen" note="collapsed · green pulse dot · freshness on the bar">
+          <Demo chatId="preview-seen" description={PLAIN} descriptionUpdatedAt={hoursAgo(3)} lastReadAt={hoursAgo(1)} />
         </Col>
 
         <Col label="Stale update, already seen" note="collapsed · muted grey dot (no pulse) · older freshness">
@@ -147,7 +132,6 @@ export function TaskSummaryPreviewPage() {
             chatId="preview-stale"
             description={PLAIN}
             descriptionUpdatedAt={hoursAgo(240)}
-            descriptionUpdatedByName="gandy-s-assistant"
             lastReadAt={hoursAgo(120)}
           />
         </Col>
@@ -156,13 +140,7 @@ export function TaskSummaryPreviewPage() {
           label="No freshness data (existing chat)"
           note="collapsed · grey dot · no freshness line (honest: not stamped yet)"
         >
-          <Demo
-            chatId="preview-nofresh"
-            description={PLAIN}
-            descriptionUpdatedAt={null}
-            descriptionUpdatedByName={null}
-            lastReadAt={null}
-          />
+          <Demo chatId="preview-nofresh" description={PLAIN} descriptionUpdatedAt={null} lastReadAt={null} />
         </Col>
 
         <Col
@@ -173,19 +151,12 @@ export function TaskSummaryPreviewPage() {
             chatId="preview-edge"
             description={HEADING_FIRST}
             descriptionUpdatedAt={hoursAgo(5)}
-            descriptionUpdatedByName="ux-expert"
             lastReadAt={hoursAgo(4)}
           />
         </Col>
 
         <Col label="No description" note="renders nothing — the panel below has no header strip">
-          <Demo
-            chatId="preview-empty"
-            description={null}
-            descriptionUpdatedAt={null}
-            descriptionUpdatedByName={null}
-            lastReadAt={null}
-          />
+          <Demo chatId="preview-empty" description={null} descriptionUpdatedAt={null} lastReadAt={null} />
         </Col>
 
         <Col
@@ -193,13 +164,7 @@ export function TaskSummaryPreviewPage() {
           note="same as the first, wrapped in .dark (how it renders in the live workspace)"
         >
           <div className="dark" style={{ borderRadius: "var(--radius-panel)" }}>
-            <Demo
-              chatId="preview-dark"
-              description={RICH}
-              descriptionUpdatedAt={hoursAgo(2)}
-              descriptionUpdatedByName="ux-expert"
-              lastReadAt={null}
-            />
+            <Demo chatId="preview-dark" description={RICH} descriptionUpdatedAt={hoursAgo(2)} lastReadAt={null} />
           </div>
         </Col>
       </section>

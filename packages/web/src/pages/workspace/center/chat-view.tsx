@@ -3252,7 +3252,6 @@ export function ChatView({
             chatId={chatId}
             description={chatDetail?.description ?? null}
             descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
-            descriptionUpdatedByName={chatDetail?.descriptionUpdatedByName ?? null}
             lastReadAt={chatDetail?.lastReadAt ?? null}
             freshnessReady={!chatDetailFetching && chatDetail?.id === chatId}
             scrollContainerRef={scrollContainerRef}
