@@ -235,6 +235,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       targetAgentId: body.agentUuid,
       bootstrap: body.bootstrap,
       kind: body.kind,
+      complete: body.complete ?? true,
     });
     if (result.sent) {
       notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);

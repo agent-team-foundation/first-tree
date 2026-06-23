@@ -12,6 +12,8 @@ import {
   buildBindBootstrap,
   buildCreateBootstrap,
   buildInviteeBootstrap,
+  buildNoRepoBootstrap,
+  buildValueFirstBootstrap,
 } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
 import { FlowHint, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
@@ -20,26 +22,12 @@ import { ensureSourceReposRegistered, kickoffErrorMessage, provisionNewTree, rep
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
 
-const NO_REPO_BOOTSTRAP =
-  "Introduce yourself to the team — what can you help with, and what's a good first thing for me to try?";
+type KickoffAgent = Awaited<ReturnType<typeof resolveOnboardingAgent>>;
 
-/** Shared "create the chat + send the first task + finish" sequence. */
-async function runKickoff(args: {
-  bootstrap: string;
+async function prepareKickoffWorkspace(args: {
   orgWrites: { organizationId: string; sourceRepos: string[]; contextTreeUrl: string | null } | null;
   treeMode: "new" | "existing";
-  /** The selected org — scopes agent resolution so the seed never lands on an
-   *  agent from a different org (notably the build-tree recovery surface). */
-  organizationId: string | null;
-  /** "intro" = meet-only (no tree work); "tree" = wake the agent to seed/read
-   *  the Context Tree. Part of the server idempotency key so an intro chat and a
-   *  later build-tree kickoff for the same agent don't collapse into one. */
-  kind: KickoffKind;
-  joinPath?: "invite";
-  complete: (chatId: string) => Promise<void>;
 }): Promise<void> {
-  const agent = await resolveOnboardingAgent(args.organizationId);
-
   // New-tree mode: provision the team's Context Tree repo + org binding BEFORE
   // sending the kickoff message, so the agent's session resolves the binding
   // (contextTreePath becomes non-null) and `first-tree-seed`'s preconditions
@@ -81,24 +69,64 @@ async function runKickoff(args: {
       await putContextTreeSetting(orgWrites.organizationId, { repo: orgWrites.contextTreeUrl }).catch(() => {});
     }
   }
+}
 
-  // Create-or-reuse the kickoff chat, send the bootstrap, and stamp completion
-  // in one idempotent server call. Folding these three steps server-side means a
-  // mid-way failure (closed tab, dropped network) no longer strands the user in
-  // a half-finished state: a retry — including the build-tree recovery surface —
-  // converges on the same chat and a single completion stamp. A failure here is
-  // surfaced to the caller (the kickoff didn't happen) rather than swallowed.
+async function startKickoffChat(args: {
+  agent: KickoffAgent;
+  bootstrap: string;
+  /** The selected org — scopes the membership completion stamped by the server. */
+  organizationId: string | null;
+  /** "intro" = meet-only; "work" = value-first first chat; "tree" = Context Tree setup/update chat. */
+  kind: KickoffKind;
+  treeMode: "new" | "existing";
+  joinPath?: "invite";
+  complete?: boolean;
+}): Promise<string> {
+  // Create-or-reuse the kickoff chat and send the bootstrap in one idempotent
+  // server call. Single-chat paths also let the server stamp completion after
+  // the chat exists; multi-chat paths pass `complete: false` and finish only
+  // after every required kickoff chat has succeeded. A failure here surfaces to
+  // the caller rather than being swallowed.
   const { chatId } = await kickoffOnboarding({
     ...(args.organizationId ? { organizationId: args.organizationId } : {}),
-    agentUuid: agent.uuid,
+    agentUuid: args.agent.uuid,
     bootstrap: args.bootstrap,
     kind: args.kind,
+    complete: args.complete,
   });
   void reportOnboardingEvent("tree_chat_started", {
-    agentUuid: agent.uuid,
+    agentUuid: args.agent.uuid,
     chatId,
     treeMode: args.treeMode,
+    kind: args.kind,
     ...(args.joinPath ? { joinPath: args.joinPath } : {}),
+  });
+  return chatId;
+}
+
+/** Shared "prepare workspace + create chat + send the first task + finish" sequence. */
+async function runKickoff(args: {
+  bootstrap: string | ((agent: KickoffAgent) => string);
+  orgWrites: { organizationId: string; sourceRepos: string[]; contextTreeUrl: string | null } | null;
+  treeMode: "new" | "existing";
+  /** The selected org — scopes agent resolution so the seed never lands on an
+   *  agent from a different org (notably the build-tree recovery surface). */
+  organizationId: string | null;
+  /** "intro" = meet-only; "work" = value-first first chat; "tree" = Context Tree setup/update chat. */
+  kind: KickoffKind;
+  joinPath?: "invite";
+  complete: (chatId: string) => Promise<void>;
+}): Promise<void> {
+  const agent = await resolveOnboardingAgent(args.organizationId);
+  await prepareKickoffWorkspace({ orgWrites: args.orgWrites, treeMode: args.treeMode });
+  const bootstrap = typeof args.bootstrap === "function" ? args.bootstrap(agent) : args.bootstrap;
+  const chatId = await startKickoffChat({
+    agent,
+    bootstrap,
+    organizationId: args.organizationId,
+    kind: args.kind,
+    treeMode: args.treeMode,
+    joinPath: args.joinPath,
   });
   await args.complete(chatId);
 }
@@ -190,7 +218,7 @@ function AdminKickoff({
     try {
       if (!hasRepos) {
         await runKickoff({
-          bootstrap: NO_REPO_BOOTSTRAP,
+          bootstrap: (agent) => buildNoRepoBootstrap(agent.displayName || "your agent"),
           orgWrites: null,
           treeMode: "new",
           organizationId,
@@ -241,7 +269,7 @@ function AdminKickoff({
       // tree from repos the app can no longer access.
       if (repos.length === 0) {
         await runKickoff({
-          bootstrap: NO_REPO_BOOTSTRAP,
+          bootstrap: (agent) => buildNoRepoBootstrap(agent.displayName || "your agent"),
           orgWrites: null,
           treeMode: "new",
           organizationId,
@@ -253,9 +281,9 @@ function AdminKickoff({
 
       const useExisting = treeMode === "existing";
       const detectedUrl = treeUrl.trim();
-      const bootstrap = useExisting ? buildBindBootstrap(repos, detectedUrl) : buildCreateBootstrap(repos);
-      await runKickoff({
-        bootstrap,
+      const resolvedTreeMode = useExisting ? "existing" : "new";
+      const agent = await resolveOnboardingAgent(organizationId);
+      await prepareKickoffWorkspace({
         orgWrites: organizationId
           ? {
               organizationId,
@@ -263,11 +291,30 @@ function AdminKickoff({
               contextTreeUrl: useExisting ? detectedUrl : null,
             }
           : null,
-        treeMode: useExisting ? "existing" : "new",
+        treeMode: resolvedTreeMode,
+      });
+
+      const workChatId = await startKickoffChat({
+        agent,
+        bootstrap: buildValueFirstBootstrap(repos, {
+          agentDisplayName: agent.displayName || "your agent",
+          contextTreeMode: resolvedTreeMode,
+        }),
+        organizationId,
+        kind: "work",
+        treeMode: resolvedTreeMode,
+        complete: false,
+      });
+
+      await startKickoffChat({
+        agent,
+        bootstrap: useExisting ? buildBindBootstrap(repos, detectedUrl) : buildCreateBootstrap(repos),
         organizationId,
         kind: "tree",
-        complete: completeAndEnterChat,
+        treeMode: resolvedTreeMode,
+        complete: false,
       });
+      await completeAndEnterChat(workChatId);
       // The kickoff just provisioned/confirmed the team's tree binding
       // server-side. Drop the cached org `context_tree` setting so the recovery
       // gate (useNeedsTreeSetup) and the Settings/Context surfaces read the
@@ -455,14 +502,20 @@ function InviteeReady({ treeUrl }: { treeUrl: string }) {
     setPhase("starting");
     try {
       // The agent already inherits the team's repos; a joining teammate's first
-      // message is "read the tree to get oriented, then introduce yourself" —
-      // not the admin's "reflect these repos into the tree".
+      // chat is value-first: read the team's tree/recommended repos, show
+      // concrete understanding, then ask which useful first task to do.
       await runKickoff({
-        bootstrap: buildInviteeBootstrap(treeUrl),
+        bootstrap: (agent) =>
+          buildValueFirstBootstrap([], {
+            agentDisplayName: agent.displayName || "your agent",
+            contextTreeMode: "existing",
+          }) +
+          "\n\n" +
+          buildInviteeBootstrap(treeUrl),
         orgWrites: null,
         treeMode: "existing",
         organizationId,
-        kind: "tree",
+        kind: "work",
         joinPath: "invite",
         complete: completeAndEnterChat,
       });
@@ -517,7 +570,7 @@ function InviteeNotReady() {
     setPhase("starting");
     try {
       await runKickoff({
-        bootstrap: NO_REPO_BOOTSTRAP,
+        bootstrap: (agent) => buildNoRepoBootstrap(agent.displayName || "your agent"),
         orgWrites: null, // never mutate team config as an invitee
         treeMode: "existing",
         organizationId,

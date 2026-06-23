@@ -489,8 +489,7 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
 
 /**
  * Install the **core** (Context-Tree-independent) first-tree skill payloads.
- * Currently a no-op because `CORE_SKILL_NAMES` is empty — the wiring stays
- * so re-introducing a core skill needs no bootstrap edit.
+ * These are useful even before a team has a Context Tree binding.
  *
  * Same inline-from-bundled-payload model as
  * {@link installFirstTreeIntegration}: no shell-out, no CLI dependency.

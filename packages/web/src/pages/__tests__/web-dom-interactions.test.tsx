@@ -1810,16 +1810,29 @@ describe("web DOM interaction coverage", () => {
       treeUrl: "https://github.com/acme/context-tree",
     });
     await waitForText("Your agent's ready to get to work", adminExisting.container);
-    await click(findButton(adminExisting.container, "Start"));
+    await click(findButton(adminExisting.container, "Start with your agent"));
     await waitForText("Starting your agent", adminExisting.container);
     expect(agentApiMocks.listManagedAgents).toHaveBeenCalled();
-    // Chat-create + bootstrap + completion are now one idempotent server call.
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+    // Repo kickoff now creates a value-first work chat for the user, then a
+    // separate Context Tree setup chat in the background.
+    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        organizationId: "org-1",
+        agentUuid: "agent-1",
+        bootstrap: expect.stringContaining("getting Nova up to speed"),
+        kind: "work",
+        complete: false,
+      }),
+    );
+    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         organizationId: "org-1",
         agentUuid: "agent-1",
         bootstrap: expect.stringContaining("https://github.com/acme/context-tree"),
         kind: "tree",
+        complete: false,
       }),
     );
     expect(resourceMocks.createTeamResourceForOrg).toHaveBeenCalledWith("org-1", {
@@ -1869,27 +1882,27 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(inviteeNoInstall.root);
 
     // Invitee · tree present but the install probe FAILS (unknown) → hold in
-    // not-ready, never render "ready"/Start working. An optimistic hasInstallation
+    // not-ready, never render "ready"/Start with your agent. An optimistic hasInstallation
     // (null → true) must not launch tree-reading without an authoritative
     // install=true, or the agent would 403 on its first git op.
     githubAppMocks.getGithubAppInstallationExists.mockRejectedValueOnce(new Error("probe failed"));
     const inviteeProbeFail = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
     await waitForText("Your team is still setting up", inviteeProbeFail.container);
-    expect(findButton(inviteeProbeFail.container, "Start working")).toBeNull();
+    expect(findButton(inviteeProbeFail.container, "Start with your agent")).toBeNull();
     await unmountRoot(inviteeProbeFail.root);
 
     // Invitee · ready (tree + install) → a single launch, no repo selection. The
     // agent already inherits the team's recommended repos.
     const inviteeReady = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
     await waitForText("Your agent's ready to go", inviteeReady.container);
-    await click(findButton(inviteeReady.container, "Start working"));
-    // Pin the invitee bootstrap (a swap back to buildBindBootstrap would still
-    // send a string — assert the joining-teammate voice).
+    await click(findButton(inviteeReady.container, "Start with your agent"));
+    // Ready invitee also lands in a value-first work chat, not the tree setup
+    // chat. The inherited team tree is context for orientation.
     expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("just joined the team"),
-        kind: "tree",
+        bootstrap: expect.stringContaining("getting Nova up to speed"),
+        kind: "work",
       }),
     );
     expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith(

@@ -1004,11 +1004,10 @@ function skillsSection(
   // header so we can splice it under the new `# Skills` umbrella.
   const teamBlock = buildResourceSkillsBriefing(workspacePath, payload).trim();
 
-  // First Tree family skills are gated on `contextTreePath` — they ship
-  // via `installFirstTreeIntegration`, which `agent-bootstrap.ts` only
-  // runs when a Context Tree is bound. Listing them for a tree-less
-  // agent would tell it to load files that the runtime never put on disk
-  // (`CORE_SKILL_NAMES` is empty, so no fallback install path either).
+  // The full First Tree family map is gated on `contextTreePath` because most
+  // rows are tree-bound skills installed by `installFirstTreeIntegration`.
+  // Core skills (for example onboarding kickoff) are installed separately and
+  // can still be invoked directly by a system kickoff in a tree-less workspace.
   const familyBlock = contextTreePath !== null ? firstTreeFamilyMap() : null;
 
   // Skip the `# Skills` umbrella entirely when both inner blocks are
@@ -1022,14 +1021,11 @@ function skillsSection(
 }
 
 function firstTreeFamilyMap(): string {
-  // Listed skills MUST match what `installFirstTreeIntegration` actually
-  // deploys (`runtime/first-tree-skills/installer.ts` →
-  // `TREE_SKILL_NAMES`). Adding an aspirational row here would tell every
-  // tree-bound agent to load a skill the runtime never puts on disk. A
-  // unit test in `agent-briefing.test.ts` walks the repo's `skills/`
-  // directory and asserts the names listed below match the shipped set;
-  // `bundled-skill-list-sync.test.ts` additionally locks the installer
-  // list against the prebuild copy script.
+  // Listed skills MUST match what the inline installer actually deploys
+  // (`CORE_SKILL_NAMES` + `TREE_SKILL_NAMES`). Adding an aspirational row here
+  // would tell every agent to load a skill the runtime never puts on disk.
+  // Tests lock this map against the repo's `skills/` directory and the prebuild
+  // copy script.
   return `## First Tree Family
 
 \`first-tree-write\` is **unconditional** — load it on every task per
@@ -1041,6 +1037,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 
 | Skill | Load when |
 |---|---|
+| \`first-tree-kickoff\` | First Tree onboarding system kickoff asks for the value-first first chat |
 | \`first-tree-write\`   | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |`;
@@ -1049,10 +1046,15 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 /**
  * Names of the First Tree skill payloads listed in the Skill Map. Exported
  * so the unit test can cross-check against the on-disk `skills/` directory
- * AND against `TREE_SKILL_NAMES` in
+ * AND against `CORE_SKILL_NAMES` / `TREE_SKILL_NAMES` in
  * `runtime/first-tree-skills/installer.ts` (the single source of truth for
  * what the inline installer actually copies into the workspace). Drift
  * between these two lists would tell agents to load a skill that isn't
  * on disk; the cross-check test in `agent-briefing.test.ts` blocks that.
  */
-export const FIRST_TREE_FAMILY_SKILL_NAMES = ["first-tree-write", "first-tree-read", "first-tree-seed"] as const;
+export const FIRST_TREE_FAMILY_SKILL_NAMES = [
+  "first-tree-kickoff",
+  "first-tree-write",
+  "first-tree-read",
+  "first-tree-seed",
+] as const;

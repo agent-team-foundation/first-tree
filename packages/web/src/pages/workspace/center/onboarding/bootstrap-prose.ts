@@ -49,6 +49,67 @@ function formatSourceList(sourceUrls: readonly string[]): string[] {
   return ["Source repos:", ...sourceUrls.map((u) => `- ${u}`)];
 }
 
+function formatInlineScope(sourceUrls: readonly string[]): string {
+  if (sourceUrls.length === 0) return "your team's connected repos";
+  if (sourceUrls.length === 1) return sourceUrls[0] ?? "the connected repo";
+  return `${sourceUrls.length} connected repos`;
+}
+
+export function buildValueFirstBootstrap(
+  sourceUrls: readonly string[],
+  opts: {
+    agentDisplayName: string;
+    contextTreeMode: "none" | "new" | "existing";
+  },
+): string {
+  const sourceLines = sourceUrls.length > 0 ? ["", ...formatSourceList(sourceUrls)] : [];
+  const treeLine =
+    opts.contextTreeMode === "new"
+      ? "A separate Context Tree setup chat will handle the heavier shared-memory bootstrap; mention it lightly, but do not make tree setup the user's first task."
+      : opts.contextTreeMode === "existing"
+        ? "A separate Context Tree setup chat may refresh the team's shared memory; keep this chat focused on helping the user get useful work done."
+        : "If the user later points you at a repo, help them get immediate value before asking for any long-term team setup.";
+
+  return [
+    `First Tree is getting ${opts.agentDisplayName} up to speed on ${formatInlineScope(sourceUrls)}.`,
+    "",
+    "Use the first-tree-kickoff skill for this onboarding first chat.",
+    "",
+    "Goal: read before speaking, show concrete understanding, then help the user complete one useful first task.",
+    ...sourceLines,
+    "",
+    "First response requirements:",
+    "- Cite specific evidence from the repo or team context: stack, entry points, modules, tests, TODOs, conventions, or a concrete risk you actually observed.",
+    "- Offer 2–3 evidence-backed first tasks that are small, low-risk, verifiable, and likely to produce user-visible value quickly.",
+    "- Send the task menu as format=request with concise options, a `Skip for now` option, and free-text accepted.",
+    "- If evidence is thin, prefer read-only orientation tasks such as mapping the architecture or explaining the test strategy; do not invent bugs.",
+    `- ${treeLine}`,
+    "- Do not impersonate the user or say the user asked for this. First Tree sent this system kickoff.",
+    "",
+    `Reference: ${FIRST_TREE_REFERENCE_URL}`,
+  ].join("\n");
+}
+
+export function buildNoRepoBootstrap(agentDisplayName: string): string {
+  return [
+    `First Tree is introducing ${agentDisplayName} before a repo is connected.`,
+    "",
+    "Use the first-tree-kickoff skill for this onboarding first chat.",
+    "",
+    "Goal: be useful immediately, then invite the user to point you at real code without requiring GitHub authorization first.",
+    "",
+    "First response requirements:",
+    "- Introduce yourself briefly as the user's agent.",
+    "- Ask for either a local clone path or a GitHub URL so you can read the code on this machine.",
+    "- Make clear that reading a local clone or accessible URL can happen before any long-term team setup.",
+    "- If the user gives code, inspect it and then send a format=request menu with 2–3 evidence-backed, bounded first tasks plus `Skip for now`.",
+    "- Only after showing value should you ask whether the repo should become long-term team code.",
+    "- Do not ask for broad GitHub authorization before the user has seen repo-specific value.",
+    "",
+    `Reference: ${FIRST_TREE_REFERENCE_URL}`,
+  ].join("\n");
+}
+
 export function buildBindBootstrap(sourceUrls: readonly string[], treeUrl: string): string {
   const sourceLines = formatSourceList(sourceUrls);
   const single = sourceUrls.length === 1;

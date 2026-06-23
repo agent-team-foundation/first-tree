@@ -306,20 +306,20 @@ export const COPY = {
       for this bookend. */
   kickoff: {
     // admin · new tree (the default — the team has none yet). Lead with the
-    // agent + the outcome (it seeds your team's memory from your code), not a
-    // Context-Tree lecture; the term is named once, lightly.
+    // agent + immediate code value; the Context Tree setup moves into its own
+    // background chat and is named/explained there.
     newTitle: "Your agent's ready to get to work",
     newWhy: (repoCount: number): string =>
-      `It'll read your ${repoCount === 1 ? "repo" : `${repoCount} repos`} and draft your team's Context Tree — shared memory every agent works from.`,
-    startBuilding: "Build tree & start",
+      `It'll read your ${repoCount === 1 ? "repo" : `${repoCount} repos`}, show what it understands, and suggest a useful first task.`,
+    startBuilding: "Start with your agent",
 
     // admin · the team already has a Context Tree (re-run / second admin /
     // CLI-bound). Detected silently — no fork, no paste — the agent reads it
     // instead of seeding.
     existingTitle: "Your agent's ready to get to work",
     existingWhy: (repoCount: number): string =>
-      `Your team already has a Context Tree — your agent gets oriented and starts on your ${repoCount === 1 ? "repo" : `${repoCount} repos`}.`,
-    startExisting: "Start",
+      `It'll get oriented from your team's shared knowledge and start with your ${repoCount === 1 ? "repo" : `${repoCount} repos`}.`,
+    startExisting: "Start with your agent",
 
     // admin · no repo connected (connect-code skipped / 0 picked). "No repo" and
     // "no Context Tree" are the same state, so frame it as the tree being absent
@@ -350,8 +350,8 @@ export const COPY = {
     // an agent clones with the host's git credentials, so "works with your team's
     // repos" stays true regardless — a member without access to a private repo just
     // can't reach that one.
-    inviteeReadyBody: "Your team's all set up — your agent works with your team's repos and shared Context Tree.",
-    startWorking: "Start working",
+    inviteeReadyBody: "Your team's all set up — your agent can get oriented from the team's code and shared knowledge.",
+    startWorking: "Start with your agent",
 
     // shared launch transition
     starting: "Starting your agent…",

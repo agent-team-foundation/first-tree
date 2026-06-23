@@ -46,7 +46,7 @@ const repoRoot = (() => {
   throw new Error("Could not locate repo root from drift-guard test");
 })();
 
-const SHIPPED_SKILLS = ["first-tree-write", "first-tree-read", "first-tree-seed"];
+const SHIPPED_SKILLS = ["first-tree-kickoff", "first-tree-write", "first-tree-read", "first-tree-seed"];
 
 const RETIRED_TREE_SUBCOMMANDS = [
   "status",
