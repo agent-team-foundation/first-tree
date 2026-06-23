@@ -1,5 +1,11 @@
+// @vitest-environment happy-dom
+
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { describe, expect, it } from "vitest";
-import { descriptionFirstLine } from "../chat-summary.js";
+import { ChatSummary, descriptionFirstLine } from "../chat-summary.js";
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 /**
  * `descriptionFirstLine` powers the collapsed chat-summary bar: it picks the
@@ -72,5 +78,101 @@ describe("descriptionFirstLine", () => {
 
   it("returns an empty string for an all-whitespace description", () => {
     expect(descriptionFirstLine("   \n\n  ")).toBe("");
+  });
+});
+
+describe("ChatSummary", () => {
+  async function renderSummary(scrollEl: HTMLDivElement): Promise<{ container: HTMLDivElement; root: Root }> {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        createElement(ChatSummary, {
+          chatId: "chat-1",
+          description: "Status: shipping **DescBody** soon.",
+          descriptionUpdatedAt: null,
+          lastReadAt: null,
+          freshnessReady: true,
+          scrollContainerRef: { current: scrollEl },
+        }),
+      );
+    });
+    return { container, root };
+  }
+
+  it("keeps a manual expand open when the stream was already scrolled", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    scrollEl.scrollTop = 120;
+    const { container, root } = await renderSummary(scrollEl);
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
+    if (!button) throw new Error("summary button missing");
+
+    await act(async () => {
+      button.click();
+    });
+    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+
+    await act(async () => {
+      scrollEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("still collapses after a fresh downward scroll from a manual expand point", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    scrollEl.scrollTop = 120;
+    const { container, root } = await renderSummary(scrollEl);
+    const button = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
+    if (!button) throw new Error("summary button missing");
+
+    await act(async () => {
+      button.click();
+    });
+    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+
+    await act(async () => {
+      scrollEl.scrollTop = 170;
+      scrollEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector("strong")).toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("expands on the first click from the sticky-collapsed bar", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const { container, root } = await renderSummary(scrollEl);
+    const initialButton = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
+    if (!initialButton) throw new Error("summary button missing");
+
+    await act(async () => {
+      initialButton.click();
+    });
+    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+
+    await act(async () => {
+      scrollEl.scrollTop = 120;
+      scrollEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector("strong")).toBeNull();
+
+    const stickyButton = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
+    if (!stickyButton) throw new Error("sticky summary button missing");
+    await act(async () => {
+      stickyButton.click();
+    });
+    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+
+    await act(async () => root.unmount());
+    container.remove();
   });
 });

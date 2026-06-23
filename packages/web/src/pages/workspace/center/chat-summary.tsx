@@ -182,10 +182,15 @@ export function ChatSummary({
   // Manual toggles for the current version always win (see onToggle).
   const decidedForKey = useRef<string | null>(null);
   const entryKey = `${chatId}|${descriptionUpdatedAt ?? ""}`;
+  // When the user manually expands while already scrolled down, sticky-collapse
+  // must not immediately fold the panel on the next scroll event that reports the
+  // same scrollTop. Store the expansion point and require a fresh downward move.
+  const manualExpandTopRef = useRef<number | null>(null);
   useEffect(() => {
     if (!hasDescription || !freshnessReady) return;
     if (decidedForKey.current === entryKey) return;
     decidedForKey.current = entryKey;
+    manualExpandTopRef.current = null;
     setScrollCollapsed(false);
     setUnreadCleared(false);
     if (unread && isStaleSinceLastView(lastReadMs, Date.now())) {
@@ -199,14 +204,16 @@ export function ChatSummary({
 
   const onToggle = useCallback(() => {
     setOpen((prev) => {
-      const next = !prev;
+      const next = scrollCollapsedRef.current ? true : !prev;
+      const el = scrollContainerRef.current;
+      manualExpandTopRef.current = next && el ? el.scrollTop : null;
       saveManualPref(chatId, next);
       return next;
     });
     setHighlighted(false);
     setUnreadCleared(true);
     setScrollCollapsed(false);
-  }, [chatId]);
+  }, [chatId, scrollContainerRef]);
 
   // Sticky-collapse: while open, scrolling the message stream down folds the
   // header to its one-line bar; returning to the top restores it. Transient —
@@ -227,7 +234,13 @@ export function ChatSummary({
       const top = el.scrollTop;
       const nextScrolled = top > 1;
       if (nextScrolled !== scrolledRef.current) setScrolled(nextScrolled);
-      if (top > SCROLL_COLLAPSE_PX && openRef.current && !scrollCollapsedRef.current) {
+      const manualExpandTop = manualExpandTopRef.current;
+      if (top <= SCROLL_RESTORE_PX) {
+        manualExpandTopRef.current = null;
+      }
+      const collapseTop = manualExpandTop === null ? SCROLL_COLLAPSE_PX : manualExpandTop + SCROLL_COLLAPSE_PX;
+      if (top > collapseTop && openRef.current && !scrollCollapsedRef.current) {
+        manualExpandTopRef.current = null;
         setScrollCollapsed(true);
       } else if (top <= SCROLL_RESTORE_PX && scrollCollapsedRef.current) {
         setScrollCollapsed(false);
