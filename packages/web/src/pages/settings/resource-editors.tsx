@@ -1,4 +1,5 @@
 import type { CreateTeamResource, ResourceRow, ResourceType } from "@first-tree/shared";
+import { deriveRepoShortLabel } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { type FormEvent, type ReactNode, useRef, useState } from "react";
@@ -14,6 +15,7 @@ import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
 import { Textarea } from "../../components/ui/textarea.js";
+import { normalizeRepoUrl } from "../../lib/normalize-repo-url.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Shared types + constants
@@ -391,30 +393,31 @@ function titleFor(state: EditorState): string {
 
 function RepoEditor({ state, save, onClose }: EditorProps) {
   const init = state.mode === "edit" ? state.resource : null;
-  const [name, setName] = useState(init?.name ?? "");
   const [url, setUrl] = useState(str(init?.payload, "url"));
   const [defaultBranch, setDefaultBranch] = useState(str(init?.payload, "defaultBranch"));
 
-  // Repos are always a team-wide default for now: we don't offer per-repo
-  // Opt-in, so pin `defaultEnabled: "recommended"` instead of rendering the
-  // On-by-default / Opt-in selector the other resource types show. Editing a
-  // legacy Opt-in repo and saving normalizes it to recommended.
+  // A repo has no user-meaningful name — it's the `owner/repo` of the URL — so we
+  // don't ask for one: the display name is derived from the (normalized) URL. The
+  // URL is normalized first so common paste shapes (github.com/org/repo, org/repo)
+  // work without a scheme; the server schema still validates the result. Repos are
+  // always a team-wide default: pin `defaultEnabled: "recommended"` (editing a
+  // legacy Opt-in repo normalizes it to recommended).
+  const normalizedUrl = normalizeRepoUrl(url);
   const payload = (): CreateTeamResource => ({
     type: "repo",
-    name: name.trim() || url.trim(),
+    name: deriveRepoShortLabel(normalizedUrl) || normalizedUrl,
     defaultEnabled: "recommended",
-    payload: { url: url.trim(), ...(defaultBranch.trim() ? { defaultBranch: defaultBranch.trim() } : {}) },
+    payload: { url: normalizedUrl, ...(defaultBranch.trim() ? { defaultBranch: defaultBranch.trim() } : {}) },
   });
 
   return (
     <ModalEditor state={state} save={save} onClose={onClose} payload={payload}>
-      <Field id="repo-name" label="Name" value={name} onChange={setName} placeholder="Resource name" />
       <Field
         id="repo-url"
         label="Repository URL"
         value={url}
         onChange={setUrl}
-        placeholder="git@github.com:org/repo.git"
+        placeholder="github.com/org/repo"
         mono
         required
       />
