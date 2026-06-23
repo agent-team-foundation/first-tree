@@ -25,21 +25,22 @@
       same host gate before sending, as defense in depth.
     -->
     <script>
-      if (window.location.hostname === "cloud.first-tree.ai") {
+      (() => {
+        if (window.location.hostname !== "cloud.first-tree.ai") return;
         window.dataLayer = window.dataLayer || [];
-        window.gtag = function () {
-          dataLayer.push(arguments);
+        window.gtag = (...args) => {
+          window.dataLayer.push(args);
         };
-        var s = document.createElement("script");
-        s.async = true;
-        s.src = "https://www.googletagmanager.com/gtag/js?id=G-BHG918MZ02";
-        document.head.appendChild(s);
-        gtag("js", new Date());
-        gtag("config", "G-BHG918MZ02", {
+        const tag = document.createElement("script");
+        tag.async = true;
+        tag.src = "https://www.googletagmanager.com/gtag/js?id=G-BHG918MZ02";
+        document.head.appendChild(tag);
+        window.gtag("js", new Date());
+        window.gtag("config", "G-BHG918MZ02", {
           send_page_view: false,
           linker: { domains: ["first-tree.ai", "cloud.first-tree.ai"] },
         });
-      }
+      })();
     </script>
     <script>
       (() => {
