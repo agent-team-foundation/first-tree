@@ -200,7 +200,7 @@ function makeContext(
   };
 }
 
-function makeHandler(fake: FakeAppServerClient) {
+function makeHandler(fake: FakeAppServerClient, extraConfig: Record<string, unknown> = {}) {
   return createCodexAppServerHandler({
     workspaceRoot,
     codexRuntimeBinaryResolver: async () => ({
@@ -215,7 +215,45 @@ function makeHandler(fake: FakeAppServerClient) {
       fake.onClose = options.onClose ?? null;
       return fake;
     },
+    ...extraConfig,
   });
+}
+
+/**
+ * Minimal mutable agent-config cache: `.get()` / `.refresh()` return a codex
+ * payload whose prompt body the test can flip mid-session to simulate an admin
+ * prompt change. Only the methods the handler actually calls are real.
+ */
+function makeMutableConfigCache(initialAppend: string) {
+  const state = { append: initialAppend };
+  const config = () => ({
+    agentId: AGENT_ID,
+    version: 1,
+    payload: {
+      kind: "codex" as const,
+      prompt: { append: state.append },
+      model: "",
+      mcpServers: [],
+      env: [],
+      gitRepos: [],
+      resourceSkills: [],
+      reasoningEffort: "high" as const,
+    },
+    updatedAt: "",
+    updatedBy: "",
+  });
+  return {
+    cache: {
+      get: () => config(),
+      refresh: async () => config(),
+      maybeRefresh: async () => config(),
+      updateUrls: () => {},
+      forget: () => {},
+    } as unknown as Record<string, unknown>,
+    setAppend: (value: string) => {
+      state.append = value;
+    },
+  };
 }
 
 function makeDeliveryToken(): DeliveryToken {
@@ -934,5 +972,33 @@ describe("codex app-server briefing-update notice", () => {
     completeTurn(okFake, "turn-1", "ok");
     await resumePromise;
     await okHandler.shutdown();
+  });
+
+  it("prepends the notice on an injected turn when the prompt changed mid active session (no resume)", async () => {
+    const { cache, setAppend } = makeMutableConfigCache("BEFORE_MARKER");
+    const fake = new FakeAppServerClient();
+    const handler = makeHandler(fake, { agentConfigCache: cache });
+    const ctx = makeContext({ finishTurn: async () => {} });
+
+    // Start the session and finish its first turn (seeds the briefing baseline
+    // for the BEFORE prompt). Session is now idle/active.
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    completeTurn(fake, "turn-1", "first answer");
+    await startPromise;
+    const startTurns = fake.requests.filter((request) => request.method === "turn/start").length;
+
+    // Admin changes the prompt mid-session, then a message arrives — no
+    // suspend/resume. The injected turn must pick up the new briefing and carry
+    // the re-read notice.
+    setAppend("AFTER_MARKER");
+    handler.inject(makeMessage("m2", "again"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === startTurns + 1);
+
+    const injectedStart = fake.requests.filter((request) => request.method === "turn/start")[startTurns];
+    expect(JSON.stringify(injectedStart?.params ?? {})).toContain("<system-reminder>");
+
+    completeTurn(fake, "turn-2", "second answer");
+    await handler.shutdown();
   });
 });

@@ -3,7 +3,11 @@ import type { AgentRuntimeConfigPayload, SessionEvent, ToolFileRef } from "@firs
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../../../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../../../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../../../runtime/agent-config-cache.js";
-import { FIRST_TREE_WORKSPACE_MARKER, type PredeclaredSourceRepo } from "../../../runtime/bootstrap.js";
+import {
+  FIRST_TREE_WORKSPACE_MARKER,
+  type PredeclaredSourceRepo,
+  writeAgentBriefing,
+} from "../../../runtime/bootstrap.js";
 import { type CodexBinaryResolution, resolveCodexRuntimeBinary } from "../../../runtime/capabilities/codex.js";
 import { type ChatContext, fetchChatContext } from "../../../runtime/chat-context.js";
 import { renderChatContextPrompt } from "../../../runtime/chat-context-section.js";
@@ -1052,6 +1056,26 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     }
   }
 
+  /**
+   * Active-session config hot-switch for the Codex app-server: a thread reads
+   * AGENTS.md once at init and never re-reads it, so a mid-session prompt change
+   * would otherwise only land after a suspend/resume. Before an injected turn we
+   * rebuild the briefing from the latest cached config; if it changed, rewrite
+   * AGENTS.md and report so the caller prepends the re-read notice. Synchronous
+   * + `.get()` so it adds no await on the drain path. The prompt is the target;
+   * model / MCP hot-switch (which needs a thread restart) stays out of scope.
+   */
+  function refreshBriefingForActiveTurn(sessionCtx: SessionContext): { fingerprint: string; changed: boolean } | null {
+    if (!agentConfigCache || !cwd || !threadId) return null;
+    const payload = agentConfigCache.get(sessionCtx.agent.agentId)?.payload;
+    if (!payload) return null;
+    const briefing = buildBriefing(sessionCtx, payload, cwd);
+    const fingerprint = computeBriefingFingerprint(briefing);
+    if (readSessionBriefingFingerprint(cwd, threadId) === fingerprint) return { fingerprint, changed: false };
+    writeAgentBriefing(cwd, briefing);
+    return { fingerprint, changed: true };
+  }
+
   async function startTurnFromPendingInputs(sessionCtx: SessionContext): Promise<void> {
     if (pendingInputs.length === 0 || turnStartInProgress) return;
     const batch = pendingInputs.slice();
@@ -1067,18 +1091,32 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     removePendingPrefix(batch);
     const token = batch[0]?.token;
     if (!token) return;
+    // Active-session hot-switch: pick up a mid-session briefing change before
+    // this injected turn and surface the re-read notice.
+    const refreshed = refreshBriefingForActiveTurn(sessionCtx);
+    if (refreshed?.changed && cwd) {
+      const notice = buildBriefingUpdateNotice(join(cwd, "AGENTS.md"));
+      pendingChatContextPrompt = pendingChatContextPrompt ? `${notice}\n\n${pendingChatContextPrompt}` : notice;
+      sessionCtx.log(`Active session briefing changed — prepending re-read notice (${threadId})`);
+    }
     void runTurnFromText(
       text,
       batch.map((entry) => entry.message),
       token,
       sessionCtx,
-    ).catch((err) => {
-      sessionCtx.log(`codex app-server pending turn failed: ${err instanceof Error ? err.message : String(err)}`);
-      token.retry(
-        batch.map((entry) => entry.message),
-        "codex_pending_turn_failed",
-      );
-    });
+    )
+      .then((delivered) => {
+        if (refreshed?.changed && delivered && cwd && threadId) {
+          writeSessionBriefingFingerprint(cwd, threadId, refreshed.fingerprint);
+        }
+      })
+      .catch((err) => {
+        sessionCtx.log(`codex app-server pending turn failed: ${err instanceof Error ? err.message : String(err)}`);
+        token.retry(
+          batch.map((entry) => entry.message),
+          "codex_pending_turn_failed",
+        );
+      });
   }
 
   async function formatBatchInput(
