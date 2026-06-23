@@ -202,26 +202,41 @@ afterEach(() => {
 });
 
 describe("resource editors", () => {
-  it("creates a repo via the type-first add menu", async () => {
+  it("creates a repo from the URL, deriving the name (no name field)", async () => {
     const { root } = await render();
     // Section-local entry: each section's "+" icon (aria "Add <Type>") opens that type's editor.
     await click(byAria("Add Repo"));
 
-    const name = document.getElementById("repo-name");
+    // No Name field — the display name is derived from the URL.
+    expect(document.getElementById("repo-name")).toBeNull();
     const url = document.getElementById("repo-url");
-    expect(name).toBeTruthy();
     expect(url).toBeTruthy();
-    if (!(name instanceof HTMLInputElement) || !(url instanceof HTMLInputElement)) throw new Error("inputs");
-    await setInputValue(name, "web");
+    if (!(url instanceof HTMLInputElement)) throw new Error("inputs");
     await setInputValue(url, "git@github.com:acme/web.git");
 
     await click(byText("Create"));
 
     expect(resourceMocks.createTeamResource).toHaveBeenCalledTimes(1);
     // Assert on the first arg only — react-query passes its own context as a
-    // trailing arg to mutationFn.
+    // trailing arg to mutationFn. Name is derived (owner/repo); the scp-like URL
+    // is already valid so it is saved unchanged.
     expect(resourceMocks.createTeamResource.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ type: "repo", name: "web", payload: { url: "git@github.com:acme/web.git" } }),
+      expect.objectContaining({ type: "repo", name: "acme/web", payload: { url: "git@github.com:acme/web.git" } }),
+    );
+    await act(async () => root.unmount());
+  });
+
+  it("normalizes a scheme-less repo URL and derives the name on create", async () => {
+    const { root } = await render();
+    await click(byAria("Add Repo"));
+    const url = document.getElementById("repo-url");
+    if (!(url instanceof HTMLInputElement)) throw new Error("inputs");
+    await setInputValue(url, "github.com/acme/web");
+
+    await click(byText("Create"));
+
+    expect(resourceMocks.createTeamResource.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ type: "repo", name: "acme/web", payload: { url: "https://github.com/acme/web" } }),
     );
     await act(async () => root.unmount());
   });
