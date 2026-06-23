@@ -762,16 +762,24 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
    * fuses queued messages into one input. Completion acks through the last
    * consumed message id instead of shifting a count from SessionManager state.
    */
+  /**
+   * Returns whether the turn was actually delivered to the provider and
+   * settled as complete. The briefing-update notice rides this turn's input
+   * (consumed from `pendingChatContextPrompt`), so the caller must only advance
+   * the briefing baseline when this is `true` — a pre-provider / aborted /
+   * retried turn never showed the notice to the model, and a redelivery must
+   * still surface it.
+   */
   async function runTurn(
     input: Input,
     sessionCtx: SessionContext,
     messages: readonly SessionMessage[],
     token: DeliveryToken,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const activeThread = thread;
     if (!activeThread) {
       token.retry(messages, "codex_missing_thread");
-      return;
+      return false;
     }
     const providerInput = consumePendingChatContext(input);
 
@@ -993,8 +1001,9 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     }
 
     if (abort.signal.aborted) {
-      // Suspend/shutdown raced ahead — let the abort handler set state.
-      return;
+      // Suspend/shutdown raced ahead — let the abort handler set state. Not a
+      // delivered turn: the notice (if any) must survive for the redelivery.
+      return false;
     }
 
     // Match @openai/codex-sdk's Thread.run() success semantics: when a turn
@@ -1175,6 +1184,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       kind: "turn_end",
       payload: { status: settlement.status },
     });
+    const turnDelivered = settlement.action.kind === "complete";
     if (settlement.action.kind === "complete") {
       await token.complete(messages, settlement.action.outcome);
     } else {
@@ -1199,6 +1209,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     }
 
     scheduleQueuedMessagesDrain();
+    return turnDelivered;
   }
 
   function scheduleQueuedMessagesDrain(): void {
@@ -1433,17 +1444,20 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       if (message) {
         initialTurnPreparing = true;
         let initialTurnCompleted = false;
+        let turnDelivered = false;
         try {
           const input = await toCodexInput(message, sessionCtx);
-          await runTurn(input, sessionCtx, [message], deliveryToken);
+          turnDelivered = await runTurn(input, sessionCtx, [message], deliveryToken);
           initialTurnCompleted = true;
         } finally {
           initialTurnPreparing = false;
           if (initialTurnCompleted) scheduleQueuedMessagesDrain();
         }
-        // Turn delivered → advance the baseline (also seeds it for a session
-        // that had none).
-        if (initialTurnCompleted) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
+        // Advance the baseline ONLY when the notice-bearing turn was actually
+        // delivered (settled complete). A pre-provider / retried turn consumed
+        // the notice without the model seeing it, so leaving the baseline
+        // unchanged lets the redelivery's resume re-surface it.
+        if (turnDelivered) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
       }
       return hasExplicitDeliveryToken
         ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }

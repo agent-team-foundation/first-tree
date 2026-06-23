@@ -908,4 +908,31 @@ describe("codex app-server briefing-update notice", () => {
     await resumePromise;
     await resumeHandler.shutdown();
   });
+
+  it("keeps the notice for the next resume when the turn fails before reaching the provider", async () => {
+    // First resume hits a pre-provider turn/start failure: the notice was
+    // consumed for that attempt but the model never saw it, so the baseline
+    // must NOT advance.
+    const failFake = new FakeAppServerClient();
+    failFake.turnStartError = new CodexAppServerTransportError("codex app-server request timed out: turn/start");
+    const failHandler = makeHandler(failFake);
+    const failCtx = makeContext({ failSessionForRecovery: vi.fn(), finishTurn: async () => {} });
+    await failHandler.resume(makeMessage("m1", "hello"), "thread-app-server", failCtx);
+    expect(failFake.requests.some((request) => request.method === "turn/start")).toBe(true);
+    await failHandler.shutdown();
+
+    // Second resume of the same thread: baseline was never recorded, so the
+    // briefing still reads as changed and the re-read notice reappears.
+    const okFake = new FakeAppServerClient();
+    const okHandler = makeHandler(okFake);
+    const okCtx = makeContext({ finishTurn: async () => {} });
+    const resumePromise = okHandler.resume(makeMessage("m2", "again"), "thread-app-server", okCtx);
+    await waitFor(() => okFake.requests.some((request) => request.method === "turn/start"));
+    const start = okFake.requests.find((request) => request.method === "turn/start");
+    expect(JSON.stringify(start?.params ?? {})).toContain("<system-reminder>");
+
+    completeTurn(okFake, "turn-1", "ok");
+    await resumePromise;
+    await okHandler.shutdown();
+  });
 });

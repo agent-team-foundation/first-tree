@@ -659,24 +659,32 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     await shutdown;
   }
 
+  /**
+   * Returns whether the turn actually reached the provider (turn/start
+   * accepted, turn id assigned). The briefing-update notice rides this turn's
+   * input (consumed from `pendingChatContextPrompt`), so the caller must only
+   * advance the briefing baseline when this is `true`: every early `token.retry`
+   * path below bounced the message for redelivery before the model saw the
+   * notice, and advancing the baseline there would suppress it on redelivery.
+   */
   async function runTurnFromText(
     inputText: string,
     messages: readonly SessionMessage[],
     token: DeliveryToken,
     sessionCtx: SessionContext,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const client = appServer;
     if (!client || !threadId) {
       token.retry(messages, "codex_app_server_missing_thread");
-      return;
+      return false;
     }
     if (shutdownRequested) {
       token.retry(messages, "codex_app_server_shutdown_before_turn_start");
-      return;
+      return false;
     }
     if (turnStartInProgress) {
       token.retry(messages, "codex_app_server_turn_start_already_in_progress");
-      return;
+      return false;
     }
 
     const providerInputText = consumePendingChatContext(inputText);
@@ -699,7 +707,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         : "codex_app_server_turn_start_unknown_custody_failed";
       token.retry(messages, reason);
       await closeAppServerAfterUnknownCustody(sessionCtx, reason, err);
-      return;
+      return false;
     }
 
     const turnRecord = asRecord(asRecord(result)?.turn);
@@ -709,7 +717,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       const reason = "codex_app_server_turn_start_missing_id_unknown_custody";
       token.retry(messages, reason);
       await closeAppServerAfterUnknownCustody(sessionCtx, reason, "missing turn id in turn/start response");
-      return;
+      return false;
     }
 
     const turn = await createCurrentTurn(turnId, messages, token, sessionCtx);
@@ -728,6 +736,9 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       if (currentTurn === turn) currentTurn = null;
       schedulePendingDrain();
     }
+    // Reached the provider (turn/start accepted, turn id assigned), so the
+    // notice-bearing input was delivered to the model.
+    return true;
   }
 
   function consumePendingChatContext(inputText: string): string {
@@ -1151,10 +1162,10 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           );
           return hasExplicitDeliveryToken ? { sessionId: id, route: { kind: "owned", mode: "queued" } } : id;
         }
-        await runTurnFromText(input, [message], deliveryToken, sessionCtx);
-        // Fresh thread: seed the briefing baseline now that the thread id is
-        // known, so a later resume only nudges on a real briefing change.
-        if (cwd) writeSessionBriefingFingerprint(cwd, id, briefingFingerprint);
+        const delivered = await runTurnFromText(input, [message], deliveryToken, sessionCtx);
+        // Fresh thread: seed the briefing baseline once the turn actually
+        // delivered, so a later resume only nudges on a real briefing change.
+        if (cwd && delivered) writeSessionBriefingFingerprint(cwd, id, briefingFingerprint);
         return hasExplicitDeliveryToken ? { sessionId: id, route: { kind: "owned", mode: "processing" } } : id;
       } finally {
         startupTurnPending = false;
@@ -1198,9 +1209,10 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
             );
             return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "queued" } } : sessionId;
           }
-          await runTurnFromText(input, [message], deliveryToken, sessionCtx);
-          // Turn delivered → advance / seed the baseline.
-          if (cwd) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
+          const delivered = await runTurnFromText(input, [message], deliveryToken, sessionCtx);
+          // Advance the baseline ONLY when the notice-bearing turn actually
+          // delivered; a retried / pre-provider turn leaves it for redelivery.
+          if (cwd && delivered) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
         }
         return hasExplicitDeliveryToken
           ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
