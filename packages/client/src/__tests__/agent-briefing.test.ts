@@ -428,15 +428,26 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("first-tree chat update --description");
     expect(briefing).not.toMatch(/server rejects a `?chat send`? to a human/);
 
-    // yuezengwu 2026-06-16: all output-streaming framing is removed from the
-    // briefing — no reasoning-trace channel, no `agent-final-text` mirror, no
-    // "separate channel" / "reach path" / "decoupled channels" phrasing survives.
-    expect(briefing).not.toMatch(/output stream/i);
-    expect(briefing).not.toMatch(/reasoning trace/i);
+    // yuezengwu 2026-06-23: reinstate the "your output stream is your reasoning
+    // trace" framing as a deliberate prompt principle (reverses the 2026-06-16
+    // removal), but with the PRECISE product boundary (codex R1/R5): the output
+    // stream is not an addressed reply and not durable chat history, yet it is
+    // NOT private — a one-line preview surfaces as live session activity
+    // (`liveActivity.detail` / `turnText`) to viewers. So communication is
+    // always an explicit send, and narration is never a substitute for it.
+    expect(briefing).toMatch(/output stream is your reasoning trace/i);
+    expect(briefing).toMatch(/never written to durable\s+chat history/i);
+    expect(briefing).toMatch(/not\s+private/i);
+    expect(briefing).toMatch(/live session\s+activity to anyone viewing the chat/i);
+    expect(briefing).toMatch(/has sent\s+nothing/);
+    // The retired mirror term stays out — there is no `agent-final-text` row
+    // post-#1190.
     expect(briefing).not.toContain("agent-final-text");
-    expect(briefing).not.toMatch(/separate channel/i);
-    expect(briefing).not.toMatch(/reach path/i);
-    expect(briefing).not.toMatch(/decoupled channels/i);
+    // Must NOT overclaim invisibility/privacy: the output stream is NOT
+    // undelivered-to-everyone (it shows as live activity), and chat send is NOT
+    // the sole channel a teammate ever sees (`chat ask` / `chat update` too).
+    expect(briefing).not.toMatch(/does not deliver it to anyone/i);
+    expect(briefing).not.toMatch(/only ever sees what you `?chat send`?/);
 
     // Courtesy-send guard stays — the brake is on the *send* side.
     expect(briefing).toContain("Don't fire a courtesy");
