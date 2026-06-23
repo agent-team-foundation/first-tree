@@ -102,16 +102,24 @@ describe("Context Reviewer PR prompt", () => {
 describe("normalizeGithubRepo", () => {
   it.each([
     ["https://github.com/Owner/Repo.git", "owner/repo"],
+    ["https://github.com/Owner/Repo.git///", "owner/repo"],
     ["ssh://git@github.com/Owner/Repo.git", "owner/repo"],
     ["git@github.com:Owner/Repo.git", "owner/repo"],
+    ["git@github.com:Owner/Repo.git///", "owner/repo"],
     ["Owner/Repo.git", "owner/repo"],
+    ["Owner/Repo.git///", "owner/repo"],
     ["owner/repo", "owner/repo"],
   ])("normalizes %s", (input, expected) => {
     expect(normalizeGithubRepo(input)).toBe(expected);
   });
 
+  it("normalizes slash-heavy repo values in linear time", () => {
+    expect(normalizeGithubRepo(`https://github.com/Owner/Repo.git${"/".repeat(10_000)}`)).toBe("owner/repo");
+  });
+
   it("rejects non-GitHub URLs and malformed values", () => {
     expect(normalizeGithubRepo("https://gitlab.com/owner/repo")).toBeNull();
+    expect(normalizeGithubRepo("/owner/repo")).toBeNull();
     expect(normalizeGithubRepo("owner/repo/extra")).toBeNull();
     expect(normalizeGithubRepo("not-a-repo")).toBeNull();
   });

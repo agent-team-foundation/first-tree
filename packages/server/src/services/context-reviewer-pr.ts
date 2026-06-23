@@ -101,8 +101,16 @@ export function normalizeGithubRepo(value: string | null | undefined): string | 
 }
 
 function stripGitSuffix(value: string): string {
-  const withoutTrailingSlash = value.replace(/\/+$/, "");
+  const withoutTrailingSlash = trimTrailingSlashes(value);
   return withoutTrailingSlash.endsWith(".git") ? withoutTrailingSlash.slice(0, -4) : withoutTrailingSlash;
+}
+
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
 }
 
 function normalizeOwnerRepo(owner: string, repo: string): string | null {
