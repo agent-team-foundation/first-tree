@@ -58,8 +58,8 @@ describe("registerClient — legacy user_id NULL claim + conflict rejection", ()
 
     // Connection ownership is per-user only — a different user attempting
     // to re-register the same clientId is rejected with CLIENT_USER_MISMATCH
-    // (the operator runs `login <token> --override`, which rotates the local
-    // client identity and registers a fresh clientId instead).
+    // (the operator must purge local state before logging in with a different
+    // account, generating a fresh clientId instead).
     await expect(
       registerClient(app.db, {
         clientId,

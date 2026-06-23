@@ -53,17 +53,21 @@ first-tree
 ## login
 
 ```
-first-tree login <token> [--no-start] [--override]
+first-tree login <token> [--no-start]
 ```
 
 Sign this computer in using a connect token from the web console. The
 token's `iss` claim carries the server URL — no `--server` flag needed,
 and switching to a different deployment only requires a fresh token.
+If this machine already has credentials for another user, `login` refuses to
+overwrite them. If credentials are missing, `login` preserves `client.yaml` and
+local agent state so the same user can reconnect after a normal `logout`. Switch
+accounts by running `first-tree logout --purge` first, then login with the new
+token.
 
 | Flag | Effect |
 |---|---|
 | `--no-start` | Write credentials and exit without installing/starting the background daemon. |
-| `--override` | Take over this machine from a different account: rotates the local client identity (backs up `client.yaml`) and registers a fresh clientId. No server-side ownership transfer happens; the previous account's client entry stays until that account removes it. |
 
 ## logout
 
@@ -72,8 +76,13 @@ first-tree logout [--purge]
 ```
 
 Stop the daemon and clear credentials. `--purge` additionally removes
-`client.yaml` (server URL, generated `client.id`); the default keeps it
-so the next `login` reuses the same `client.id`.
+`client.yaml`, local agent configs, agent workspaces, and session state. Use
+`--purge` before switching this machine to a different account. The purge is
+local-only: server-side clients, agents, chats, and history are not deleted,
+but the previous client and agents stop running from this machine unless they
+are set up again. If the daemon is active and cannot be stopped, `--purge`
+refuses to delete local agent state. The default keeps local client/agent state
+for the same user to reconnect later.
 
 ## status
 
@@ -129,7 +138,6 @@ first-tree agent
 ├── list [--remote] [--org <id>]
 ├── add --agent-id <uuid>
 ├── create <name> --type <t> --client-id <id> [--runtime <r>] [--display-name <s>] [--org <id>]
-├── claim <agentName>
 ├── remove <name>
 ├── prune [--yes] [--dry-run]
 ├── status [name]
@@ -169,15 +177,6 @@ Register an existing server-side agent on this client. Use this when the
 daemon was not running at the moment the agent was pinned, or when
 moving an agent to a second computer that's already signed into the
 same user.
-
-### agent claim
-
-```
-first-tree agent claim <agentName>
-```
-
-Become the manager of an agent. Admins can reassign any agent in their
-org; non-admins can self-claim an unmanaged agent.
 
 ### agent remove / agent prune
 

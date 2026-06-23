@@ -66,7 +66,6 @@ describe("CLI command registration", () => {
     expect(subcommands(root, "agent")).toEqual([
       "add",
       "bind",
-      "claim",
       "config",
       "create",
       "debug",
@@ -128,7 +127,7 @@ describe("CLI command registration", () => {
 
     const optionNames = (cmd: Command) => cmd.options.map((option) => option.long).sort();
 
-    expect(optionNames(command(root, "login"))).toEqual(["--no-start", "--override"]);
+    expect(optionNames(command(root, "login"))).toEqual(["--no-start"]);
     expect(optionNames(command(command(root, "agent"), "create"))).toEqual([
       "--client-id",
       "--display-name",

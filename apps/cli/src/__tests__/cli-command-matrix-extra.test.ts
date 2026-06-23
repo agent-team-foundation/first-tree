@@ -250,19 +250,7 @@ describe("daemon utility commands", () => {
 });
 
 describe("agent admin and local commands", () => {
-  it("claims, binds, resets, removes, debugs, and controls sessions", async () => {
-    cliFetchMock
-      .mockResolvedValueOnce(jsonResponse({ memberId: "member-1" }))
-      .mockResolvedValueOnce(jsonResponse({ ok: true }));
-    await runAgent(["claim", "nova"]);
-    expect(cliFetchMock).toHaveBeenLastCalledWith(
-      "https://hub.example/api/v1/agents/agent-1",
-      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ managerId: "member-1" }) }),
-    );
-
-    cliFetchMock.mockResolvedValueOnce(jsonResponse("nope", false, 500));
-    await expect(runAgent(["claim", "nova"])).rejects.toMatchObject({ code: "CLAIM_ERROR", exitCode: 1 });
-
+  it("binds, resets, removes, debugs, and controls sessions", async () => {
     cliFetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
     await runAgent(["bind", "client", "nova", "--client-id", "client-1"]);
     expect(outputMocks.success).toHaveBeenCalledWith({ agentId: "agent-1", clientId: "client-1" });

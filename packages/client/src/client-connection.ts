@@ -250,11 +250,10 @@ export class ClientOrgMismatchError extends Error {
 /**
  * Thrown when the server refuses `client:register` because the local
  * client.yaml is owned by a different user. The CLI detects this via
- * `instanceof` and guides the operator to run
- * `<binName> login <token> --override`, which rotates the machine's local
- * client identity and registers a fresh clientId under the new account —
- * there is no server-side ownership transfer; the previous owner's client
- * row and pinned agents are left untouched (offline).
+ * `instanceof` and guides the operator to run `logout --purge` before logging
+ * in with another account. The purge is local-only: it removes this machine's
+ * client identity and agent runtime state without deleting server-side clients,
+ * pinned agents, chats, or history.
  */
 export class ClientUserMismatchError extends Error {
   readonly code = "CLIENT_USER_MISMATCH";
@@ -1246,9 +1245,8 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const message = typeof msg.message === "string" ? msg.message : "unknown";
       // Mark closing so the WS `close` handler does not auto-reconnect — a
       // reconnect with the same clientId would just re-trigger the rejection.
-      // The caller (CLI) is expected to surface the mismatch to the user,
-      // abandon the local clientId, and start a fresh connection with a new
-      // one. See first-tree-context:agent-hub/multi-tenancy.md (B4).
+      // The caller (CLI) is expected to surface the mismatch to the user and
+      // guide account switches through `logout --purge` before another login.
       this.closing = true;
       const err =
         code === "CLIENT_USER_MISMATCH"

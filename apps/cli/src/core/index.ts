@@ -18,8 +18,8 @@ export type { CapabilityRefresherDeps } from "./capability-refresh.js";
 // Runtime-capability refresh (reconnect re-probe + bounded background poll)
 export { CapabilityRefresher, stableCapabilitiesJson } from "./capability-refresh.js";
 export { cliFetch } from "./cli-fetch.js";
-// Local client identity rotation (on CLIENT_ORG_MISMATCH)
-export { handleClientOrgMismatch, rotateClientIdWithBackup } from "./client-reidentify.js";
+// Local client identity recovery helpers
+export { handleClientOrgMismatch } from "./client-reidentify.js";
 export type { ClientRuntimeOptions } from "./client-runtime.js";
 // Client runtime
 export { ClientRuntime } from "./client-runtime.js";

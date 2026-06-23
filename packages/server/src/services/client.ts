@@ -20,8 +20,8 @@ import { runtimeFieldsReset } from "./presence.js";
  * and "not yours" to prevent UUID enumeration. The client is owned by exactly
  * one user; cross-user admin access is no longer supported by this code path
  * (see decouple-client-from-identity-design §4.10.5 option A). There is no
- * cross-user ownership transfer: machine handover rotates the local client
- * identity (`login --override`) and registers a fresh clientId.
+ * cross-user ownership transfer: machine handover is local-only via
+ * `logout --purge` followed by login, which generates a fresh clientId.
  */
 export async function assertClientOwner(db: Database, clientId: string, scope: { userId: string }): Promise<void> {
   const [row] = await db
@@ -46,9 +46,8 @@ export async function assertClientOwner(db: Database, clientId: string, scope: {
  *     at first insert sticks for the row's lifetime.
  *   - Existing row with a different user_id → raises
  *     {@link ClientUserMismatchError} (WS close 4403). The CLI guides the
- *     operator through `<binName> login <token> --override`, which rotates
- *     the machine's local client identity and registers a fresh clientId
- *     under the new user; the previous owner's row stays untouched.
+ *     operator through `logout --purge` before a new login; the previous
+ *     owner's row stays untouched.
  */
 export async function registerClient(
   db: Database,
@@ -81,8 +80,7 @@ export async function registerClient(
   if (existing?.userId && existing.userId !== data.userId) {
     throw new ClientUserMismatchError(
       `Client "${data.clientId}" is owned by a different user. ` +
-        `Run \`${getServerCliBinding().binName} login <token> --override\` to re-register this machine ` +
-        "under your account with a fresh client identity.",
+        `Run \`${getServerCliBinding().binName} logout --purge\`, then login with the new account's connect token.`,
     );
   }
 

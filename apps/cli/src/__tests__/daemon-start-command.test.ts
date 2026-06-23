@@ -180,12 +180,6 @@ function output(): string {
   return stderrSpy.mock.calls.map((call) => String(call[0])).join("");
 }
 
-async function flushAsync(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
 describe("daemon start command", () => {
   it("fails closed when credentials are missing", async () => {
     coreMocks.loadCredentials.mockReturnValueOnce(null);
@@ -372,10 +366,10 @@ describe("daemon start command", () => {
     await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
     const mismatchText = output();
     expect(mismatchText).toContain("client.yaml is owned by a different user");
-    expect(mismatchText).toContain("login <token> --override");
-    // Fresh-client takeover model — must NOT resurrect the removed
-    // server-side transfer/unpin language.
-    expect(mismatchText).toContain("fresh client identity");
+    expect(mismatchText).toContain("logout --purge");
+    expect(mismatchText).toContain("local agent configs, workspaces, and session state");
+    // Purge-first account switching must NOT resurrect the removed server-side
+    // transfer/unpin language.
     expect(mismatchText).not.toContain("transfer ownership");
     expect(mismatchText).not.toContain("unpinned");
 

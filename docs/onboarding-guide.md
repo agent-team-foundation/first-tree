@@ -88,7 +88,7 @@ name — there is no separate "local alias" to invent.
 | Cross-subsystem readiness check | `first-tree doctor` |
 | List local agent bindings | `first-tree agent list` |
 | List every agent you manage on the server | `first-tree agent list --remote` |
-| Take over a machine bound to another user (fresh client identity) | `first-tree login <token> --override` |
+| Switch a machine to another user | `first-tree logout --purge`, then `first-tree login <token>` |
 | Send a chat message | `first-tree chat send <agent-name> "message"` |
 | List chats | `first-tree chat list` |
 | View chat history | `first-tree chat history <chat-id>` |
@@ -145,7 +145,7 @@ and ack via `connection.sendInboxAck(entryId)`.
 | `HTTP_401` | Invalid or revoked token | Run `first-tree login <token>` with a fresh token |
 | `HTTP_403` | Agent suspended or deleted | Check the agent's status in the admin UI |
 | `CONNECTION_ERROR` | Server unreachable | Verify `FIRST_TREE_SERVER_URL` or that the local server is running |
-| `CLIENT_USER_MISMATCH` (WS close 4403) | Machine already bound to another user | Run `first-tree login <token> --override` |
+| `CLIENT_USER_MISMATCH` (WS close 4403) | Machine already bound to another user | Run `first-tree logout --purge`, then `first-tree login <token>` |
 | `AMBIGUOUS_AGENT` | Multiple local agents and no `--agent` flag | Pass `--agent <name>` explicitly |
 
 ## For AI agents driving onboarding
@@ -158,13 +158,11 @@ and ack via `connection.sendInboxAck(entryId)`.
 - `--agent <name>` defaults to the first locally-configured agent. Pass
   it explicitly when more than one agent runs on the same client to
   avoid `AMBIGUOUS_AGENT`.
-- If the user already has a connect token bound to a different account
-  on this machine, use `first-tree login <token> --override` rather
-  than `logout` + `login`: it rotates the machine's local client
-  identity (the old `client.yaml` is backed up) and registers a fresh
-  clientId under your account. The previous account's client entry and
-  agents stay on the server and show offline until that account removes
-  them.
+- If the user already has local First Tree state for a different account
+  on this machine, run `first-tree logout --purge` before logging in with
+  the new connect token. This signs out the current user and removes the
+  local client identity plus local agent configs, workspaces, and session
+  state. Server-side clients, agents, chats, and history are not deleted.
 
 ## See also
 

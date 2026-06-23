@@ -54,7 +54,6 @@ export {
   resolveCliInvocation,
   resolveServerUrl,
   restartClientService,
-  rotateClientIdWithBackup,
   startClientService,
   status,
   stopClientService,
