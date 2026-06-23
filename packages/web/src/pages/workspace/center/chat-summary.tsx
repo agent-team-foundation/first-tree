@@ -204,7 +204,7 @@ export function ChatSummary({
 
   const onToggle = useCallback(() => {
     setOpen((prev) => {
-      const next = !prev;
+      const next = scrollCollapsedRef.current ? true : !prev;
       const el = scrollContainerRef.current;
       manualExpandTopRef.current = next && el ? el.scrollTop : null;
       saveManualPref(chatId, next);

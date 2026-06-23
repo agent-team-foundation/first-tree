@@ -146,4 +146,33 @@ describe("ChatSummary", () => {
     await act(async () => root.unmount());
     container.remove();
   });
+
+  it("expands on the first click from the sticky-collapsed bar", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const { container, root } = await renderSummary(scrollEl);
+    const initialButton = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
+    if (!initialButton) throw new Error("summary button missing");
+
+    await act(async () => {
+      initialButton.click();
+    });
+    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+
+    await act(async () => {
+      scrollEl.scrollTop = 120;
+      scrollEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector("strong")).toBeNull();
+
+    const stickyButton = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
+    if (!stickyButton) throw new Error("sticky summary button missing");
+    await act(async () => {
+      stickyButton.click();
+    });
+    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
 });
