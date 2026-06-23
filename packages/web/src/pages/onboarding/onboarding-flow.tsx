@@ -18,7 +18,7 @@ import {
 import { type AgentCreationPhase, type CreateAgentArgs, useAgentCreation } from "./use-agent-creation.js";
 import { type ComputerConnection, useComputerConnection } from "./use-computer-connection.js";
 
-export type TreeMode = "new" | "existing";
+export type TreeBindingPlan = "createBinding" | "useBoundTree";
 
 export type OnboardingFlowValue = {
   path: OnboardingPath;
@@ -64,17 +64,17 @@ export type OnboardingFlowValue = {
    * is never overwritten back to "all".
    */
   hasRepoDraft: boolean;
-  treeMode: TreeMode;
-  setTreeMode: (next: TreeMode) => void;
+  treeBindingPlan: TreeBindingPlan;
+  setTreeBindingPlan: (next: TreeBindingPlan) => void;
   treeUrl: string;
   setTreeUrl: (next: string) => void;
   /**
-   * True once the kickoff step's existing-tree auto-detect has run. Held here
+   * True once the kickoff step's bound-tree auto-detect has run. Held here
    * (not in a per-mount ref) so leaving kickoff and coming back doesn't re-fire
-   * the detect and overwrite the user's explicit "Create new instead" choice.
+   * the detect and overwrite the resolved binding plan.
    */
-  treeAutoInitDone: boolean;
-  markTreeAutoInitDone: () => void;
+  treeAutoDetectDone: boolean;
+  markTreeAutoDetectDone: () => void;
 
   /** Mark setup finished and drop the user into their first chat. */
   completeAndEnterChat: (chatId: string) => Promise<void>;
@@ -255,10 +255,10 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
     },
     [organizationId],
   );
-  const [treeMode, setTreeMode] = useState<TreeMode>("new");
+  const [treeBindingPlan, setTreeBindingPlan] = useState<TreeBindingPlan>("createBinding");
   const [treeUrl, setTreeUrl] = useState<string>("");
-  const [treeAutoInitDone, setTreeAutoInitDone] = useState(false);
-  const markTreeAutoInitDone = useCallback(() => setTreeAutoInitDone(true), []);
+  const [treeAutoDetectDone, setTreeAutoDetectDone] = useState(false);
+  const markTreeAutoDetectDone = useCallback(() => setTreeAutoDetectDone(true), []);
 
   const completeAndEnterChat = useCallback(
     async (chatId: string) => {
@@ -330,12 +330,12 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       selectedRepoUrls,
       setSelectedRepoUrls,
       hasRepoDraft,
-      treeMode,
-      setTreeMode,
+      treeBindingPlan,
+      setTreeBindingPlan,
       treeUrl,
       setTreeUrl,
-      treeAutoInitDone,
-      markTreeAutoInitDone,
+      treeAutoDetectDone,
+      markTreeAutoDetectDone,
       completeAndEnterChat,
       finishLater,
     }),
@@ -364,10 +364,10 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       selectedRepoUrls,
       setSelectedRepoUrls,
       hasRepoDraft,
-      treeMode,
+      treeBindingPlan,
       treeUrl,
-      treeAutoInitDone,
-      markTreeAutoInitDone,
+      treeAutoDetectDone,
+      markTreeAutoDetectDone,
       completeAndEnterChat,
       finishLater,
     ],

@@ -11,6 +11,7 @@ import {
 import { getChannelConfig } from "@first-tree/shared/channel";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
@@ -33,10 +34,15 @@ import {
   selfCreateOrganization,
 } from "../services/membership.js";
 import { notifyRecipients } from "../services/notifier.js";
-import { kickoffOnboarding } from "../services/onboarding-kickoff.js";
+import { hasTreeSetupKickoffMessage, kickoffOnboarding } from "../services/onboarding-kickoff.js";
+import { getOrgContextTreeWithMeta } from "../services/org-settings.js";
 import { resolvePublicUrl } from "../utils/public-url.js";
 import { serializeDate } from "../utils.js";
 import { clientCommandVersionHint } from "./client-command-version.js";
+
+const onboardingTreeSetupStatusQuerySchema = z.object({
+  organizationId: z.string().optional(),
+});
 
 /**
  * `/me` and self-service organization routes (Class A — User-scoped).
@@ -242,6 +248,50 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       app.log.info({ event: "onboarding.kickoff", userId, chatId: result.chatId }, "onboarding funnel: kickoff");
     }
     return reply.status(200).send({ chatId: result.chatId });
+  });
+
+  /**
+   * GET /me/onboarding/tree-setup-status — recovery probe for the standalone
+   * `/build-tree` surface and Settings nav. A missing tree binding still needs
+   * setup. A binding created after the value-first work chat completed also
+   * needs setup until a tree kickoff bootstrap message exists; this covers the
+   * recoverable edge where Cloud wrote `context_tree` but the background tree
+   * kickoff failed before notifying the agent.
+   */
+  app.get("/me/onboarding/tree-setup-status", async (request) => {
+    const { userId } = requireUser(request);
+    const query = onboardingTreeSetupStatusQuerySchema.parse(request.query);
+    const memberId = await resolveOnboardingMembershipId(app, userId, query.organizationId);
+    const [member] = await app.db
+      .select({
+        organizationId: members.organizationId,
+        role: members.role,
+        onboardingCompletedAt: members.onboardingCompletedAt,
+      })
+      .from(members)
+      .where(eq(members.id, memberId))
+      .limit(1);
+    if (!member) throw new NotFoundError("Membership not found");
+
+    if (member.role !== "admin" || member.onboardingCompletedAt === null) {
+      return {
+        needsTreeSetup: false,
+        hasTreeBinding: false,
+        hasTreeSetupKickoff: false,
+      };
+    }
+
+    const tree = await getOrgContextTreeWithMeta(app.db, member.organizationId);
+    const hasTreeBinding = !!tree.repo;
+    const hasTreeSetupKickoff = await hasTreeSetupKickoffMessage(app.db, member.organizationId);
+    const bindingCreatedAfterCompletion =
+      hasTreeBinding && tree.updatedAt !== null && tree.updatedAt >= member.onboardingCompletedAt;
+
+    return {
+      needsTreeSetup: !hasTreeBinding || (bindingCreatedAfterCompletion && !hasTreeSetupKickoff),
+      hasTreeBinding,
+      hasTreeSetupKickoff,
+    };
   });
 
   /**

@@ -138,6 +138,25 @@ export async function getOrgContextTree(db: Database, orgId: string): Promise<Or
 }
 
 /**
+ * Read the Context Tree binding plus row freshness. Onboarding recovery uses
+ * `updatedAt` to distinguish a tree binding created after the user completed
+ * the value-first work chat from an older, already-adopted team tree.
+ */
+export async function getOrgContextTreeWithMeta(
+  db: Database,
+  orgId: string,
+): Promise<OrgContextTreeStorage & { updatedAt: Date | null }> {
+  const [row] = await db
+    .select({ value: organizationSettings.value, updatedAt: organizationSettings.updatedAt })
+    .from(organizationSettings)
+    .where(and(eq(organizationSettings.organizationId, orgId), eq(organizationSettings.namespace, "context_tree")))
+    .limit(1);
+  if (!row) return { ...emptyStorage("context_tree"), updatedAt: null };
+  const storage = ORG_SETTINGS_NAMESPACES.context_tree.storage.parse(row.value) as OrgContextTreeStorage;
+  return { ...storage, updatedAt: row.updatedAt };
+}
+
+/**
  * Upsert a setting. Returns the masked output of the resulting row.
  *
  * The fetch + merge + upsert sequence runs inside a single transaction so

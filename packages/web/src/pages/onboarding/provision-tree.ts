@@ -50,10 +50,9 @@ function repoKey(url: string): string {
 }
 
 /**
- * Provision a fresh Context Tree for the new-tree onboarding path: create the
- * repo + write the org `context_tree` binding via the admin initializer. Runs
- * before the kickoff message is sent so the agent's session resolves the
- * binding and `first-tree-seed`'s preconditions hold.
+ * Provision a fresh Context Tree for the tree setup lane: create the repo +
+ * write the org `context_tree` binding via the admin initializer. Runs before
+ * the tree setup kickoff is sent so the agent's session resolves the binding.
  *
  * A `409` from the initializer is ambiguous — it can mean the tree is **already
  * provisioned** (a detect→create race, or a retry after a later kickoff step
@@ -79,12 +78,10 @@ export async function provisionNewTree(organizationId: string): Promise<void> {
 }
 
 /**
- * Register the selected source repos as `recommended` team repo resources —
- * REQUIRED for new-tree mode, because that is the only path by which they reach
- * the agent's runtime `gitRepos` → on-disk sources → `workspace.json.sources` →
- * the source set `first-tree-seed` requires. Without this, a silently-dropped
- * resource write would leave onboarding with a provisioned tree but a missing
- * bound source, and the seed flow would refuse or seed an incomplete set.
+ * Register the selected source repos as `recommended` team repo resources.
+ * This is required before the value-first work chat and before any tree setup
+ * lane: it is the path by which selected repos reach the agent's runtime
+ * `gitRepos`, on-disk sources, and `workspace.json.sources`.
  *
  * Creates each resource (tolerating "already exists" conflicts from a re-run —
  * the canonical-key unique index makes a duplicate create throw 409), then
@@ -120,7 +117,7 @@ export async function ensureSourceReposRegistered(organizationId: string, repoUr
   const missing = repoUrls.filter((url) => !registered.has(repoKey(url)));
   if (missing.length > 0) {
     throw new Error(
-      `Couldn't register ${missing.length} source repo${missing.length > 1 ? "s" : ""} for the new Context Tree (${missing
+      `Couldn't register ${missing.length} source repo${missing.length > 1 ? "s" : ""} for onboarding (${missing
         .map(repoLabel)
         .join(", ")}). Try again.`,
     );

@@ -7,7 +7,7 @@ import { InviteAcceptCard, InviteAcceptError, InviteAcceptShell, InviteAcceptSke
 import { BuildTreeShell } from "./onboarding/build-tree-shell.js";
 import { COPY } from "./onboarding/copy.js";
 import { WorkingState } from "./onboarding/flow-ui.js";
-import { OnboardingFlowContext, type OnboardingFlowValue, type TreeMode } from "./onboarding/onboarding-flow.js";
+import { OnboardingFlowContext, type OnboardingFlowValue, type TreeBindingPlan } from "./onboarding/onboarding-flow.js";
 import { OnboardingShell } from "./onboarding/onboarding-shell.js";
 import { BuildTreeAgentPanel } from "./onboarding/steps/build-tree-agent-panel.js";
 import { StepConnectCode } from "./onboarding/steps/step-connect-code.js";
@@ -634,7 +634,11 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     group: "Admin happy path",
     role: "admin",
     view: "flow",
-    wizard: { step: "kickoff", flow: { selectedRepoUrls: [REPO_WEB], treeMode: "new" }, net: { contextTree: null } },
+    wizard: {
+      step: "kickoff",
+      flow: { selectedRepoUrls: [REPO_WEB], treeBindingPlan: "createBinding" },
+      net: { contextTree: null },
+    },
   },
   {
     id: "admin-ko-existing",
@@ -688,7 +692,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     wizard: {
       step: "kickoff",
       shell: "build-tree",
-      flow: { selectedRepoUrls: [REPO_WEB, REPO_API], treeMode: "new" },
+      flow: { selectedRepoUrls: [REPO_WEB, REPO_API], treeBindingPlan: "createBinding" },
       net: { contextTree: null },
       // `recovery` → no per-step heading (the shell's constant title carries it).
       // The agent picker lives on THIS step, above the CTA.
@@ -861,12 +865,12 @@ function baseFlow(path: OnboardingPath): OnboardingFlowValue {
     selectedRepoUrls: [],
     setSelectedRepoUrls: NOOP,
     hasRepoDraft: false,
-    treeMode: "new",
-    setTreeMode: NOOP,
+    treeBindingPlan: "createBinding",
+    setTreeBindingPlan: NOOP,
     treeUrl: "",
     setTreeUrl: NOOP,
-    treeAutoInitDone: false,
-    markTreeAutoInitDone: NOOP,
+    treeAutoDetectDone: false,
+    markTreeAutoDetectDone: NOOP,
     completeAndEnterChat: ASYNC_NOOP,
     finishLater: ASYNC_NOOP,
   };
@@ -901,9 +905,9 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
   const [agentDisplayName, setAgentDisplayName] = useState<string>(init.agentDisplayName ?? DEFAULT_AGENT_NAME);
   const [visibility, setVisibility] = useState<AgentVisibility>(init.visibility ?? "organization");
   const [selectedRepoUrls, setSelectedRepoUrls] = useState<string[]>(init.selectedRepoUrls ?? []);
-  const [treeMode, setTreeMode] = useState<TreeMode>(init.treeMode ?? "new");
+  const [treeBindingPlan, setTreeBindingPlan] = useState<TreeBindingPlan>(init.treeBindingPlan ?? "createBinding");
   const [treeUrl, setTreeUrl] = useState<string>(init.treeUrl ?? "");
-  const [treeAutoInitDone, setTreeAutoInitDone] = useState<boolean>(init.treeAutoInitDone ?? false);
+  const [treeAutoDetectDone, setTreeAutoDetectDone] = useState<boolean>(init.treeAutoDetectDone ?? false);
   // Back the injected computer's runtime selection with local state so the
   // single-select runtime pills actually switch when clicked.
   const [selectedRuntime, setSelectedRuntime] = useState<string | null>(init.computer?.selectedRuntime ?? null);
@@ -927,12 +931,12 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
     setVisibility,
     selectedRepoUrls,
     setSelectedRepoUrls,
-    treeMode,
-    setTreeMode,
+    treeBindingPlan,
+    setTreeBindingPlan,
     treeUrl,
     setTreeUrl,
-    treeAutoInitDone,
-    markTreeAutoInitDone: () => setTreeAutoInitDone(true),
+    treeAutoDetectDone,
+    markTreeAutoDetectDone: () => setTreeAutoDetectDone(true),
     // Override the injected computer's runtime selection with the stateful
     // pair so clicking a runtime pill re-renders with the new choice.
     computer: init.computer ? { ...init.computer, selectedRuntime, setSelectedRuntime } : base.computer,

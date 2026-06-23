@@ -6,6 +6,7 @@ import { clients } from "../db/schema/clients.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { organizationSettings } from "../db/schema/organization-settings.js";
 import { createAgent } from "../services/agent.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -35,6 +36,7 @@ async function createOrgAgent(
 }
 
 const KICKOFF_URL = "/api/v1/me/onboarding/kickoff";
+const TREE_STATUS_URL = "/api/v1/me/onboarding/tree-setup-status";
 
 describe("POST /me/onboarding/kickoff", () => {
   const getApp = useTestApp();
@@ -277,5 +279,139 @@ describe("POST /me/onboarding/kickoff", () => {
     const treeMsgs = await app.db.select().from(messages).where(eq(messages.chatId, treeChatId));
     expect(treeMsgs).toHaveLength(1);
     expect(treeMsgs[0]?.content).toBe("Seed the team tree.");
+  });
+});
+
+describe("GET /me/onboarding/tree-setup-status", () => {
+  const getApp = useTestApp();
+
+  async function stampCompleted(
+    app: ReturnType<ReturnType<typeof useTestApp>>,
+    admin: Awaited<ReturnType<typeof createTestAdmin>>,
+    at: Date,
+  ): Promise<void> {
+    await app.db
+      .update(members)
+      .set({
+        onboardingCompletedAt: at,
+        onboardingSuppressedAt: at,
+        onboardingSuppressedReason: "completed",
+      })
+      .where(eq(members.id, admin.memberId));
+  }
+
+  async function putTreeBinding(
+    app: ReturnType<ReturnType<typeof useTestApp>>,
+    admin: Awaited<ReturnType<typeof createTestAdmin>>,
+    updatedAt: Date,
+  ): Promise<void> {
+    await app.db.insert(organizationSettings).values({
+      organizationId: admin.organizationId,
+      namespace: "context_tree",
+      value: { repo: "https://github.com/acme/context-tree.git", branch: "main" },
+      version: 1,
+      updatedBy: admin.userId,
+      updatedAt,
+    });
+  }
+
+  it("offers recovery to a completed admin whose org has no tree binding", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await stampCompleted(app, admin, new Date("2026-06-23T10:00:00Z"));
+
+    const res = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${admin.organizationId}`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      needsTreeSetup: true,
+      hasTreeBinding: false,
+      hasTreeSetupKickoff: false,
+    });
+  });
+
+  it("recovers a post-completion tree binding until a tree kickoff message exists", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    await stampCompleted(app, admin, new Date("2026-06-23T10:00:00Z"));
+    await putTreeBinding(app, admin, new Date("2026-06-23T10:01:00Z"));
+
+    const before = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${admin.organizationId}`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(before.statusCode).toBe(200);
+    expect(before.json()).toMatchObject({
+      needsTreeSetup: true,
+      hasTreeBinding: true,
+      hasTreeSetupKickoff: false,
+    });
+
+    const emptyChatId = `chat-${crypto.randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: emptyChatId,
+      organizationId: admin.organizationId,
+      type: "direct",
+      onboardingKickoffKey: `${admin.humanAgentUuid}:${agent.uuid}:tree`,
+    });
+
+    const withEmptyChat = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${admin.organizationId}`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(withEmptyChat.statusCode).toBe(200);
+    expect(withEmptyChat.json()).toMatchObject({
+      needsTreeSetup: true,
+      hasTreeSetupKickoff: false,
+    });
+
+    await app.db.insert(messages).values({
+      id: `msg-${crypto.randomUUID()}`,
+      chatId: emptyChatId,
+      senderId: admin.humanAgentUuid,
+      format: "text",
+      content: "Seed the tree.",
+      source: "api",
+      metadata: { systemSender: "first_tree_onboarding" },
+    });
+
+    const after = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${admin.organizationId}`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(after.statusCode).toBe(200);
+    expect(after.json()).toMatchObject({
+      needsTreeSetup: false,
+      hasTreeBinding: true,
+      hasTreeSetupKickoff: true,
+    });
+  });
+
+  it("does not offer recovery for an older adopted binding with no onboarding tree chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await putTreeBinding(app, admin, new Date("2026-06-23T09:00:00Z"));
+    await stampCompleted(app, admin, new Date("2026-06-23T10:00:00Z"));
+
+    const res = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${admin.organizationId}`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      needsTreeSetup: false,
+      hasTreeBinding: true,
+      hasTreeSetupKickoff: false,
+    });
   });
 });
