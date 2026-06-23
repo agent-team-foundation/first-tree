@@ -5,7 +5,6 @@ import {
   ClientUserMismatchError,
   configureClientLoggerForService,
   discoverClaudeCodeSkills,
-  probeCapabilities,
 } from "@first-tree/client";
 import {
   agentConfigSchema,
@@ -188,16 +187,13 @@ export function registerDaemonStartCommand(daemon: Command): void {
           print.status("⚠️", `agent-dir migration skipped: ${msg}`);
         }
 
-        // Pre-flight runtime-provider reconciliation: probe local runtime SDKs
-        // and rewrite any local `agent.yaml::runtime` whose value drifted from
-        // the authoritative `agents.runtime_provider` (so the spawn loop sees
-        // up-to-date config). The capabilities upload itself runs AFTER WS
-        // registration — see post-start block — because the `clients` row is
-        // created lazily during the `client:register` handshake.
-        let probedCapabilities: Awaited<ReturnType<typeof probeCapabilities>> | null = null;
+        // Pre-flight runtime-provider reconciliation rewrites any local
+        // `agent.yaml::runtime` whose value drifted from the server-authoritative
+        // `agents.runtime_provider`, so the spawn loop sees up-to-date config.
+        // Do NOT run full capability probes here: provider smokes can take
+        // seconds and should not delay the daemon from connecting/registering.
         try {
           const accessToken = await ensureFreshAccessToken();
-          probedCapabilities = await probeCapabilities();
           await reconcileLocalRuntimeProviders({
             serverUrl: config.server.url,
             accessToken,
@@ -246,16 +242,11 @@ export function registerDaemonStartCommand(daemon: Command): void {
         }
 
         // Runtime-capability refresh as a single probing model. The refresher
-        // owns BOTH the WS-reconnect re-probe AND a bounded, backoff-scheduled
-        // background poll that runs while the daemon stays connected — the gap
-        // this fixes: the startup snapshot goes stale the instant the operator
-        // installs / logs into a provider, and with no reconnect there was
-        // otherwise no refresh until a restart or a manual `daemon probe`. The
-        // poll re-probes only while a provider is non-`ok` and stops once every
-        // provider is `ok`; reconnect and poll share one in-flight guard so
-        // providers are never launched concurrently. Uploads are deduped.
+        // owns startup, WS-reconnect, and bounded background probes. Startup is
+        // deliberately post-registration and fire-and-forget: capability rows
+        // still come from launch-verified full probes, but slow provider smokes
+        // must not delay `Connecting...`, WS registration, or agent bind.
         const capabilityRefresher = new CapabilityRefresher({
-          initial: probedCapabilities,
           upload: async (capabilities) => {
             const accessToken = await ensureFreshAccessToken();
             await uploadClientCapabilities({
@@ -302,7 +293,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // so the first PATCH runs here rather than pre-flight. Best-effort: a
         // transient failure logs and moves on; agents still bind, and the poll
         // (or a later restart) retries.
-        await capabilityRefresher.start();
+        void capabilityRefresher.start();
 
         // Post-register slash-command skill upload. Phase 1B scope is
         // user-global Claude Code skills — every claude-code agent on this
