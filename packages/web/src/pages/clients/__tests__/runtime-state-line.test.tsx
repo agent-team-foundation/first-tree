@@ -81,7 +81,7 @@ describe("RuntimeStateLine", () => {
       authenticated: false,
       sdkVersion: null,
       authMethod: "none",
-      error: "@anthropic-ai/claude-agent-sdk bundled cli.js missing",
+      error: "@anthropic-ai/claude-agent-sdk bundled Claude binary could not be located",
       detectedAt: "2026-06-12T12:00:00.000Z",
     };
 

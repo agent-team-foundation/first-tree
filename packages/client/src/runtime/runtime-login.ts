@@ -18,10 +18,7 @@ export function stripAnsi(text: string): string {
 /** Terminal outcome of a CLI login run. */
 export type LoginOutcome =
   | { ok: true }
-  | { ok: false; reason: "spawn-error" | "exit-nonzero" | "timeout" | "aborted" | "no-prompt"; error: string };
-
-/** Default ceiling for the device-code flow: just past codex's 15-min expiry. */
-export const DEVICE_AUTH_TIMEOUT_MS = 16 * 60_000;
+  | { ok: false; reason: "spawn-error" | "exit-nonzero" | "timeout" | "aborted"; error: string };
 
 /** Default ceiling for the browser-OAuth flow: the user signs in interactively. */
 export const BROWSER_LOGIN_TIMEOUT_MS = 5 * 60_000;
@@ -33,7 +30,7 @@ export type LoginSubprocessOptions = {
   signal?: AbortSignal;
   timeoutMs: number;
   spawnFn: typeof spawn;
-  /** Human label for error messages, e.g. `codex login --device-auth`. */
+  /** Human label for error messages, e.g. `codex login` / `claude auth login`. */
   label: string;
   /** Called for every ANSI-stripped output chunk plus the full buffer so far. */
   onOutput?: (cleanChunk: string, fullBuffer: string) => void;

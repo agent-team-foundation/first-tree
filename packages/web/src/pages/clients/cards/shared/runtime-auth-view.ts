@@ -7,16 +7,14 @@ import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
  * `entry.pendingAuth`, surfaced by polling capabilities).
  *
  * Kinds:
- *   - "browser-pending": PRIMARY browser OAuth is running on the host; show a
+ *   - "browser-pending": browser OAuth is running on the host; show a
  *     "finish sign-in in the browser that opened on this computer" state.
- *   - "device-code": FALLBACK headless login; show the verification URL + code.
  *   - "connectable": launchable but unauthenticated; show a "Connect" button
  *     (only for providers the daemon can drive in-product).
  *   - "none": nothing to offer here (ok / missing / error → other surfaces).
  */
 export type RuntimeAuthView =
   | { kind: "browser-pending"; authUrl?: string }
-  | { kind: "device-code"; verificationUrl: string; userCode: string; expiresAt: string }
   | { kind: "connectable" }
   | { kind: "none" };
 
@@ -50,17 +48,7 @@ export function deriveRuntimeAuthView(
   if (pending) {
     const expiresMs = Date.parse(pending.expiresAt);
     const live = Number.isNaN(expiresMs) || expiresMs > nowMs;
-    if (live) {
-      if (pending.method === "browser") return { kind: "browser-pending", authUrl: pending.authUrl };
-      if (pending.method === "device-code" && pending.verificationUrl && pending.userCode) {
-        return {
-          kind: "device-code",
-          verificationUrl: pending.verificationUrl,
-          userCode: pending.userCode,
-          expiresAt: pending.expiresAt,
-        };
-      }
-    }
+    if (live && pending.method === "browser") return { kind: "browser-pending", authUrl: pending.authUrl };
     // Expired / malformed pending: fall through to offer a fresh Connect.
   }
 
@@ -72,17 +60,5 @@ export function deriveRuntimeAuthView(
 
 /** True while the card should keep polling capabilities for this provider. */
 export function runtimeAuthIsPending(view: RuntimeAuthView): boolean {
-  return view.kind === "browser-pending" || view.kind === "device-code";
-}
-
-/**
- * Whether to offer the "use a one-time code instead" headless fallback. Only
- * **before** a login starts (the `connectable` state) and only for codex, which
- * has a device-code login. It must NOT appear during `browser-pending`: the
- * daemon has already marked that provider interactive, so a second start is
- * dropped as a duplicate — the button would be a dead action. The headless
- * choice is therefore made upfront (code vs browser), not mid-flight.
- */
-export function offersDeviceCodeFallback(provider: RuntimeProvider, view: RuntimeAuthView): boolean {
-  return provider === "codex" && view.kind === "connectable";
+  return view.kind === "browser-pending";
 }

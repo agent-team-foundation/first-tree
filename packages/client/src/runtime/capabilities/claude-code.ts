@@ -1,4 +1,5 @@
 import { existsSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,30 +24,107 @@ export const CLAUDE_SMOKE_TIMEOUT_MS = 60_000;
 export const CLAUDE_SMOKE_PROMPT = "Reply with exactly: OK";
 
 /**
- * Locate the SDK's bundled `cli.js` — the exact artifact the SDK spawns
- * (`node <sdk-dir>/cli.js`) when `query()` is given no
- * `pathToClaudeCodeExecutable`. Vite SSR (vitest) strips
- * `import.meta.resolve`, so when it is unavailable we walk parent
- * `node_modules` to the same package (realpath'd so pnpm symlinks resolve
+ * Per-platform native package the SDK ships its bundled `claude` binary in,
+ * keyed by `<process.platform>-<process.arch>`. Linux lists both the glibc and
+ * the musl variant: only the one matching the host's libc is installed (npm
+ * gates on the package's `libc` field), so we try both and use whichever
+ * actually resolved. Mirrors `@anthropic-ai/claude-agent-sdk`'s own
+ * `optionalDependencies`.
+ */
+const CLAUDE_PLATFORM_PACKAGES: Record<string, readonly string[]> = {
+  "darwin-x64": ["@anthropic-ai/claude-agent-sdk-darwin-x64"],
+  "darwin-arm64": ["@anthropic-ai/claude-agent-sdk-darwin-arm64"],
+  "linux-x64": ["@anthropic-ai/claude-agent-sdk-linux-x64", "@anthropic-ai/claude-agent-sdk-linux-x64-musl"],
+  "linux-arm64": ["@anthropic-ai/claude-agent-sdk-linux-arm64", "@anthropic-ai/claude-agent-sdk-linux-arm64-musl"],
+  "win32-x64": ["@anthropic-ai/claude-agent-sdk-win32-x64"],
+  "win32-arm64": ["@anthropic-ai/claude-agent-sdk-win32-arm64"],
+};
+
+/**
+ * Locate the `@anthropic-ai/claude-agent-sdk` package directory. Vite SSR
+ * (vitest) strips `import.meta.resolve`, so when it is unavailable we walk
+ * parent `node_modules` to the package (realpath'd so pnpm symlinks resolve
  * exactly like Node's own resolution would) — mirrors codex's anchor.
  */
-export function locateSdkCliJs(): string {
+function locateSdkDir(): string {
   if (typeof import.meta.resolve === "function") {
-    return join(dirname(fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"))), "cli.js");
+    return dirname(fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk")));
   }
   let dir = dirname(fileURLToPath(import.meta.url));
   for (let depth = 0; depth < 12; depth += 1) {
-    const candidate = join(dir, "node_modules", "@anthropic-ai", "claude-agent-sdk", "cli.js");
-    if (existsSync(candidate)) return realpathSync(candidate);
+    const candidate = join(dir, "node_modules", "@anthropic-ai", "claude-agent-sdk", "package.json");
+    if (existsSync(candidate)) return dirname(realpathSync(candidate));
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  throw new Error("not found in any parent node_modules");
+  throw new Error("@anthropic-ai/claude-agent-sdk not found in any parent node_modules");
+}
+
+/** How the SDK's bundled Claude CLI is launched on this host. */
+export type BundledClaudeBinary =
+  /** Legacy layout (older SDKs): `node <sdk-dir>/cli.js`. */
+  | { kind: "cli-js"; path: string }
+  /** Modern layout (SDK 0.2.x+): spawn the per-platform native binary directly. */
+  | { kind: "native"; path: string };
+
+/** Injectable seams for {@link resolveBundledClaudeBinary} (tests only). */
+export type ResolveBundledClaudeDeps = {
+  /** Locate the `@anthropic-ai/claude-agent-sdk` package directory. */
+  locateSdkDir?: () => string;
+  /** Resolve a platform package's install root by name, or null when not installed. */
+  resolvePlatformPackageRoot?: (pkg: string) => string | null;
+};
+
+/** Default platform-package resolver: the SDK's own `require`, null when a variant is absent. */
+function platformPackageRootResolver(sdkDir: string): (pkg: string) => string | null {
+  const sdkRequire = createRequire(join(sdkDir, "package.json"));
+  return (pkg) => {
+    try {
+      return dirname(sdkRequire.resolve(`${pkg}/package.json`));
+    } catch {
+      // Optional platform package not installed for this libc variant.
+      return null;
+    }
+  };
 }
 
 /**
- * Launch-verify the SDK's bundled `cli.js` via `node <cli.js> --version`.
+ * Resolve the bundled Claude CLI the SDK would spawn when `query()` is given no
+ * `pathToClaudeCodeExecutable`. Two layouts are supported because the SDK
+ * changed how it ships the CLI:
+ *   - legacy: a `cli.js` inside the SDK package, run via `node cli.js`.
+ *   - modern (0.2.x+): a per-platform native binary (`claude`) in an optional
+ *     `@anthropic-ai/claude-agent-sdk-<platform>` package, spawned directly.
+ * Throws when neither resolves — exactly when the SDK itself would throw
+ * "Native CLI binary for <platform>-<arch> not found".
+ */
+export function resolveBundledClaudeBinary(deps: ResolveBundledClaudeDeps = {}): BundledClaudeBinary {
+  const sdkDir = (deps.locateSdkDir ?? locateSdkDir)();
+  // Legacy layout first — preserves behaviour for SDK builds that still ship cli.js.
+  const cliJs = join(sdkDir, "cli.js");
+  if (existsSync(cliJs)) return { kind: "cli-js", path: realpathSync(cliJs) };
+
+  const target = `${process.platform}-${process.arch}`;
+  const candidates = CLAUDE_PLATFORM_PACKAGES[target] ?? [];
+  if (candidates.length === 0) {
+    throw new Error(`no bundled Claude binary for ${target} (no cli.js and no known platform package)`);
+  }
+  const resolvePlatformPackageRoot = deps.resolvePlatformPackageRoot ?? platformPackageRootResolver(sdkDir);
+  const binaryName = process.platform === "win32" ? "claude.exe" : "claude";
+  for (const pkg of candidates) {
+    const pkgRoot = resolvePlatformPackageRoot(pkg);
+    if (!pkgRoot) continue;
+    const binary = join(pkgRoot, binaryName);
+    if (existsSync(binary)) return { kind: "native", path: realpathSync(binary) };
+  }
+  throw new Error(
+    `no installed Claude native binary for ${target} (checked ${candidates.join(", ")}); is @anthropic-ai/claude-agent-sdk installed with its optional per-platform dependency?`,
+  );
+}
+
+/**
+ * Launch-verify the SDK's bundled Claude CLI via `<artifact> --version`.
  *
  * This is the resolve-stage proof for the no-on-disk-binary path: when no
  * real `claude` resolves, the runtime spawns this bundled artifact, so a
@@ -59,18 +137,21 @@ export function locateSdkCliJs(): string {
 export async function verifyBundledClaudeArtifact(): Promise<
   { ok: true; version: string | null } | { ok: false; error: string }
 > {
-  let cliJs: string;
+  let bundled: BundledClaudeBinary;
   try {
-    cliJs = locateSdkCliJs();
+    bundled = resolveBundledClaudeBinary();
   } catch (err) {
     return {
       ok: false,
-      error: `@anthropic-ai/claude-agent-sdk bundled cli.js could not be located: ${err instanceof Error ? err.message : String(err)}`,
+      error: `@anthropic-ai/claude-agent-sdk bundled Claude binary could not be located: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  if (!existsSync(cliJs)) return { ok: false, error: `SDK bundled cli.js missing at ${cliJs}` };
-  const res = await runCommand(process.execPath, [cliJs, "--version"], { timeoutMs: 10_000 });
-  if (!res.ok) return { ok: false, error: commandFailureDigest("`node cli.js --version`", res) };
+  const [command, args, label] =
+    bundled.kind === "cli-js"
+      ? [process.execPath, [bundled.path, "--version"], "`node cli.js --version`"]
+      : [bundled.path, ["--version"], "`claude --version`"];
+  const res = await runCommand(command, args, { timeoutMs: 10_000 });
+  if (!res.ok) return { ok: false, error: commandFailureDigest(label, res) };
   const match = res.stdout.match(/\d+\.\d+(?:\.\d+)?/);
   return { ok: true, version: match ? match[0] : null };
 }
@@ -173,16 +254,17 @@ export type ClaudeCodeProbeDeps = {
  *   1. resolve — the SDK package must import, AND the artifact the runtime
  *      would spawn must pass a real `--version` launch: a resolved on-disk
  *      `claude` (env override / PATH / well-known dirs), or — when none
- *      resolves — the SDK's bundled `cli.js` (`node cli.js --version`). A
- *      missing/broken bundle fails HERE (`missing`), so it can no longer be
- *      masked by a failing auth precheck downstream.
+ *      resolves — the SDK's bundled Claude binary (`<artifact> --version`,
+ *      where the artifact is a legacy `cli.js` or a modern per-platform native
+ *      binary). A missing/broken bundle fails HERE (`missing`), so it can no
+ *      longer be masked by a failing auth precheck downstream.
  *   2. auth precheck — the marker-file/env heuristic is only a NEGATIVE gate:
  *      no credentials → `unauthenticated` without spending a smoke. It no
  *      longer has the authority to declare the machine authenticated.
  *   3. smoke — 1-turn haiku query through the SDK; the only path to `ok`.
  *
  * `sdkVersion` carries the launch-verified CLI's real version (the resolved
- * binary's, or the bundled `cli.js`'s).
+ * binary's, or the bundled artifact's).
  */
 export async function probeClaudeCodeCapability(deps: ClaudeCodeProbeDeps = {}): Promise<CapabilityEntry> {
   const importSdk = deps.importSdk ?? (() => import("@anthropic-ai/claude-agent-sdk"));
@@ -211,10 +293,11 @@ export async function probeClaudeCodeCapability(deps: ClaudeCodeProbeDeps = {}):
         resolvedBinary = resolution.path;
         return { ok: true, binary: resolution.path, version: verified.version };
       }
-      // No on-disk binary — the SDK will spawn its bundled `cli.js` via node.
-      // Launch-verify that artifact now so a missing/broken bundle resolves to
-      // `missing` regardless of auth state (the smoke still exercises the full
-      // path, but it only runs after a passing auth precheck).
+      // No on-disk binary — the SDK will spawn its bundled Claude binary
+      // (legacy cli.js, or a modern per-platform native binary). Launch-verify
+      // that artifact now so a missing/broken bundle resolves to `missing`
+      // regardless of auth state (the smoke still exercises the full path, but
+      // it only runs after a passing auth precheck).
       const verified = await verifyBundledArtifact();
       if (!verified.ok) return { ok: false, error: verified.error };
       return { ok: true, version: verified.version };

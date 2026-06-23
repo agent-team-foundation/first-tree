@@ -58,14 +58,13 @@ const codexUnauth = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
 const codexPending = (): CapabilityEntry =>
   codexUnauth({
     pendingAuth: {
-      method: "device-code",
-      verificationUrl: "https://auth.openai.com/codex/device",
-      userCode: "0WYJ-KDUHH",
+      method: "browser",
+      authUrl: "https://auth.openai.com/auth?x=1",
       expiresAt: "2099-01-01T00:00:00.000Z",
     },
   });
 
-/** Snapshot with codex mid-device-auth (unauthenticated + a pending code). */
+/** Snapshot with codex mid-browser-auth (unauthenticated + a pending login). */
 const codexPendingSnapshot = (): ClientCapabilities => ({
   "claude-code": ok(),
   "claude-code-tui": ok(),
@@ -149,11 +148,11 @@ describe("CapabilityRefresher", () => {
   });
 
   // Regression (real-QA): the background poll must NOT clobber a provider's
-  // pending device-code while an interactive runtime-auth login is in flight —
-  // otherwise the web device-code panel vanishes ~30s in, before auth finishes.
-  it("preserves an interactive provider's pending device-code across a background poll", async () => {
+  // pending browser-auth marker while an interactive runtime-auth login is in
+  // flight — otherwise the web Connect panel vanishes ~30s in, before auth finishes.
+  it("preserves an interactive provider's pending browser-auth across a background poll", async () => {
     const { refresher, upload, revalidate } = makeRefresher({ initial: codexPendingSnapshot() });
-    revalidate.mockResolvedValue(codexUnauthSnapshot()); // a fresh probe drops the pending code
+    revalidate.mockResolvedValue(codexUnauthSnapshot()); // a fresh probe drops the pending marker
 
     refresher.beginInteractive("codex");
     await refresher.start();
@@ -162,7 +161,7 @@ describe("CapabilityRefresher", () => {
     // A poll fires: revalidate runs, but the interactive provider is preserved.
     await vi.advanceTimersByTimeAsync(BASE);
     expect(revalidate).toHaveBeenCalledTimes(1);
-    // Snapshot still carries the pending device-code…
+    // Snapshot still carries the pending browser-auth marker…
     expect(refresher.currentEntry("codex")?.pendingAuth).toBeDefined();
     // …and the unchanged snapshot is NOT re-uploaded (no panel flicker).
     expect(upload).toHaveBeenCalledTimes(1);

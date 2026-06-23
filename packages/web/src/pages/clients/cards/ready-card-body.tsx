@@ -43,8 +43,8 @@ export function ReadyCardBody({ client, boundAgents, agentName }: ReadyCardBodyP
               const entry = client.capabilities[provider];
               if (entry == null) return null;
               // A reported-but-unauthenticated provider (e.g. Codex while Claude
-              // is ok) gets the in-product Connect / device-code panel beneath
-              // its status line, so the operator never leaves the console.
+              // is ok) gets the in-product Connect panel beneath its status
+              // line, so the operator never leaves the console.
               const offerAuth = deriveRuntimeAuthView(provider, entry, Date.now()).kind !== "none";
               return (
                 <div key={provider} className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>

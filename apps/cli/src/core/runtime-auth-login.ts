@@ -2,7 +2,6 @@ import {
   BROWSER_LOGIN_TIMEOUT_MS,
   type ClaudeLoginInvocation,
   type CodexBinaryResolution,
-  type DeviceCodePrompt,
   type LoginOutcome,
   probeClaudeCodeCapability,
   probeClaudeCodeTuiCapability,
@@ -12,7 +11,6 @@ import {
   resolveCodexRuntimeBinary,
   runClaudeBrowserLogin,
   runCodexBrowserLogin,
-  runCodexDeviceAuthLogin,
 } from "@first-tree/client";
 import type { CapabilityEntry, PendingAuth } from "@first-tree/shared";
 
@@ -26,14 +24,10 @@ import type { CapabilityEntry, PendingAuth } from "@first-tree/shared";
  * screen with no bespoke realtime channel, and the capability probe stays the
  * single source of truth. The OAuth token never transits First Tree.
  *
- * Consistent PRIMARY across providers — browser OAuth:
+ * Browser OAuth across both providers:
  *   - codex: bare `codex login` → writes `~/.codex/auth.json`.
  *   - claude-code: `claude auth login` → writes keychain `Claude Code-credentials`.
- * FALLBACK (codex only, headless): `codex login --device-auth` device code.
  */
-
-/** Fallback expiry when the device-code prompt does not state one (codex says 15). */
-const DEFAULT_DEVICE_CODE_MINUTES = 15;
 
 export type RuntimeAuthLoginDeps = {
   /** Latest known entry for a provider, to preserve fields while pending. */
@@ -45,7 +39,6 @@ export type RuntimeAuthLoginDeps = {
   /** Seams for tests — production callers omit these. */
   resolveCodexBinary?: () => Promise<CodexBinaryResolution>;
   runBrowserLogin?: typeof runCodexBrowserLogin;
-  runDeviceAuth?: typeof runCodexDeviceAuthLogin;
   probeCodex?: () => Promise<CapabilityEntry>;
   resolveClaudeLogin?: () => ClaudeLoginInvocation;
   runClaudeBrowser?: typeof runClaudeBrowserLogin;
@@ -104,9 +97,7 @@ async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAut
   const now = deps.now ?? Date.now;
   const resolveBinary = deps.resolveCodexBinary ?? resolveCodexRuntimeBinary;
   const probeCodex = deps.probeCodex ?? probeCodexCapability;
-  // Browser OAuth is the primary, consistent experience; device-auth is the
-  // explicit headless fallback (only when the host has no usable browser).
-  const method = command.method === "device-auth" ? "device-auth" : "browser";
+  const runBrowserLogin = deps.runBrowserLogin ?? runCodexBrowserLogin;
 
   const reflectRealState = async (label: string): Promise<void> => {
     try {
@@ -116,7 +107,7 @@ async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAut
     }
   };
 
-  deps.log("•", `runtime-auth: starting codex login (method=${method}, ref ${command.ref})`);
+  deps.log("•", `runtime-auth: starting codex login (method=browser, ref ${command.ref})`);
 
   const resolved = await resolveBinary();
   if (!resolved.ok) {
@@ -125,12 +116,16 @@ async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAut
     return;
   }
 
+  const setPending = (authUrl?: string): Promise<void> =>
+    deps.setProviderEntry("codex", pendingEntry(deps.currentEntry("codex"), browserPending(now(), authUrl), now()));
+  await setPending();
+  deps.log("•", "runtime-auth: codex browser sign-in opened on this host");
+
   let outcome: LoginOutcome;
   try {
-    outcome =
-      method === "device-auth"
-        ? await runCodexDeviceAuthFlow(resolved.binary, deps, now)
-        : await runCodexBrowserFlow(resolved.binary, deps, now);
+    // Surface the sign-in URL into the pending marker once codex prints it, so
+    // the web can offer a fallback link when the host browser does not auto-open.
+    outcome = await runBrowserLogin({ binary: resolved.binary, onAuthUrl: (url) => void setPending(url) });
   } catch (err) {
     deps.log("⚠️", `runtime-auth: codex login threw: ${message(err)}`);
     await reflectRealState("after login threw");
@@ -141,49 +136,7 @@ async function runCodexRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAut
   logOutcome("codex", command.ref, outcome, deps);
 }
 
-/** PRIMARY codex: mark a browser pending, then run `codex login`. */
-async function runCodexBrowserFlow(
-  binary: string,
-  deps: RuntimeAuthLoginDeps,
-  now: () => number,
-): Promise<LoginOutcome> {
-  const runBrowserLogin = deps.runBrowserLogin ?? runCodexBrowserLogin;
-  const setPending = (authUrl?: string): Promise<void> =>
-    deps.setProviderEntry("codex", pendingEntry(deps.currentEntry("codex"), browserPending(now(), authUrl), now()));
-  await setPending();
-  deps.log("•", "runtime-auth: codex browser sign-in opened on this host");
-  // Surface the sign-in URL into the pending marker once codex prints it, so
-  // the web can offer a fallback link when the host browser does not auto-open.
-  return runBrowserLogin({ binary, onAuthUrl: (url) => void setPending(url) });
-}
-
-/** FALLBACK codex: surface the verification URL + code as pending-auth. */
-async function runCodexDeviceAuthFlow(
-  binary: string,
-  deps: RuntimeAuthLoginDeps,
-  now: () => number,
-): Promise<LoginOutcome> {
-  const runDeviceAuth = deps.runDeviceAuth ?? runCodexDeviceAuthLogin;
-  const publishPending = async (prompt: DeviceCodePrompt): Promise<void> => {
-    const minutes = prompt.expiresInMinutes ?? DEFAULT_DEVICE_CODE_MINUTES;
-    const pending: PendingAuth = {
-      method: "device-code",
-      verificationUrl: prompt.verificationUrl,
-      userCode: prompt.userCode,
-      expiresAt: new Date(now() + minutes * 60_000).toISOString(),
-    };
-    await deps.setProviderEntry("codex", pendingEntry(deps.currentEntry("codex"), pending, now()));
-    deps.log("•", `runtime-auth: codex device code ${prompt.userCode} → ${prompt.verificationUrl}`);
-  };
-  return runDeviceAuth({
-    binary,
-    onDeviceCode: (prompt) => {
-      void publishPending(prompt);
-    },
-  });
-}
-
-/** PRIMARY claude-code: `claude auth login` (browser OAuth → keychain). */
+/** claude-code: `claude auth login` (browser OAuth → keychain). */
 async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAuthLoginDeps): Promise<void> {
   const now = deps.now ?? Date.now;
   const resolveLogin = deps.resolveClaudeLogin ?? resolveClaudeLoginInvocation;

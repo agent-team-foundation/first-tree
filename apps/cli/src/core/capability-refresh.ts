@@ -99,12 +99,12 @@ export class CapabilityRefresher {
   private providerWriteVersion = 0;
   private readonly providerWriteVersions = new Map<string, number>();
   /**
-   * Providers with an in-flight interactive login (runtime-auth device-code).
+   * Providers with an in-flight interactive login (runtime-auth browser OAuth).
    * While a provider is in this set, a background re-probe must NOT overwrite
    * its entry — the orchestrator owns it and is publishing a pending
-   * device-code that a fresh probe would clobber (the web panel would vanish
-   * mid-login). The flag also serializes logins: the daemon ignores a second
-   * `runtime-auth:start` for a provider already mid-login.
+   * browser-auth marker that a fresh probe would clobber (the web panel would
+   * vanish mid-login). The flag also serializes logins: the daemon ignores a
+   * second `runtime-auth:start` for a provider already mid-login.
    */
   private readonly interactiveProviders = new Set<string>();
   /** A reconnect that landed while a refresh was in flight, to be drained (in
@@ -170,7 +170,7 @@ export class CapabilityRefresher {
   /**
    * Latest known capability entry for a provider, or undefined. The runtime-auth
    * login flow reads this to preserve a provider's existing fields (version,
-   * runtimeSource) while it attaches/clears a pending device-code.
+   * runtimeSource) while it attaches/clears a pending browser-auth marker.
    */
   currentEntry(provider: string): CapabilityEntry | undefined {
     return this.snapshot?.[provider];
@@ -179,7 +179,7 @@ export class CapabilityRefresher {
   /**
    * Replace a single provider's entry in the snapshot and upload the merged
    * snapshot (deduped), then re-arm the poll so convergence continues. The
-   * runtime-auth login flow uses this to surface a pending device-code
+   * runtime-auth login flow uses this to surface a pending browser-auth marker
    * immediately and to clear it after the post-login re-probe — without waiting
    * for the next scheduled poll. Best-effort upload: a failure is logged and a
    * later poll retries.
@@ -199,8 +199,8 @@ export class CapabilityRefresher {
   /**
    * Mark a provider as having an in-flight interactive login. A background
    * re-probe will then preserve that provider's current entry (incl. a pending
-   * device-code) instead of overwriting it, and {@link isInteractive} lets the
-   * caller drop duplicate `runtime-auth:start` commands. Idempotent.
+   * browser-auth marker) instead of overwriting it, and {@link isInteractive}
+   * lets the caller drop duplicate `runtime-auth:start` commands. Idempotent.
    */
   beginInteractive(provider: string): void {
     this.interactiveProviders.add(provider);

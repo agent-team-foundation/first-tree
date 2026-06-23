@@ -62,9 +62,9 @@ export function SetupIncompleteCardBody({ client, boundAgents, agentName }: Setu
         >
           {installableProviders.map((provider) => {
             const entry = client.capabilities[provider] ?? null;
-            // When the daemon can drive this provider's login in-product (codex
-            // device-auth), offer the one-click Connect / device-code panel
-            // instead of a "run `codex login` yourself" command box.
+            // When the daemon can drive this provider's login in-product
+            // (browser OAuth), offer the one-click Connect panel instead of a
+            // "run `codex login` yourself" command box.
             if (deriveRuntimeAuthView(provider, entry, Date.now()).kind !== "none") {
               return <RuntimeAuthControls key={provider} clientId={client.id} provider={provider} entry={entry} />;
             }
