@@ -428,22 +428,21 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("first-tree chat update --description");
     expect(briefing).not.toMatch(/server rejects a `?chat send`? to a human/);
 
-    // yuezengwu 2026-06-16: all output-streaming framing is removed from the
-    // briefing — no reasoning-trace channel, no `agent-final-text` mirror, no
-    // "separate channel" / "reach path" / "decoupled channels" phrasing survives.
-    expect(briefing).not.toMatch(/output stream/i);
-    expect(briefing).not.toMatch(/reasoning trace/i);
-    expect(briefing).not.toContain("agent-final-text");
-    expect(briefing).not.toMatch(/separate channel/i);
-    expect(briefing).not.toMatch(/reach path/i);
-    expect(briefing).not.toMatch(/decoupled channels/i);
-
-    // yuezengwu 2026-06-23: the WHY is stated as a mechanism (working text is
-    // not a delivered message, so you must send) WITHOUT reviving any
-    // output-streaming framing AND without absolutizing it to `chat send` —
-    // `chat ask` / `chat update` stay valid human-visible channels (codex R1).
-    expect(briefing).toMatch(/not a message addressed to anyone/);
+    // yuezengwu 2026-06-23: reinstate the "your output stream is your reasoning
+    // trace, fully decoupled from communication" framing as a deliberate prompt
+    // principle (reverses the 2026-06-16 removal). The agent should narrate
+    // freely in its output stream AND understand that reaching a teammate is
+    // therefore always an explicit send. Stated WITHOUT the absolute
+    // "chat send is the only visible channel" claim — `chat ask` / `chat update`
+    // stay valid human-visible channels (codex R1).
+    expect(briefing).toMatch(/output stream is your reasoning trace/i);
+    expect(briefing).toMatch(/fully decoupled from\s+communication/i);
+    expect(briefing).toMatch(/not a message\s+addressed to anyone/);
     expect(briefing).toMatch(/has sent nothing/);
+    // The retired mirror term stays out — there is no `agent-final-text` row
+    // post-#1190; the brief says the output stream is NOT mirrored into chat.
+    expect(briefing).not.toContain("agent-final-text");
+    expect(briefing).toMatch(/does not mirror\s+it into the chat/i);
     // Must NOT claim chat send is the sole channel a teammate ever sees.
     expect(briefing).not.toMatch(/only ever sees what you `?chat send`?/);
 

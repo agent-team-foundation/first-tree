@@ -141,12 +141,12 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     expect(briefing).toContain("first-tree-staging chat --help");
     expect(briefing).toContain("first-tree-staging chat send");
     // `chat send` reaches any teammate — agent or human; a human also has
-    // `chat ask` (decisions) / `chat update --description` (progress). No
-    // output-stream or `agent-final-text` mirror framing survives in the
-    // briefing.
+    // `chat ask` (decisions) / `chat update --description` (progress). The
+    // output stream is framed as the agent's decoupled reasoning trace, but the
+    // retired `agent-final-text` mirror term must NOT survive (post-#1190).
     expect(briefing).toContain("first-tree-staging chat ask <human>");
     expect(briefing).toContain("first-tree-staging chat update --description");
-    expect(briefing).not.toMatch(/output stream/i);
+    expect(briefing).toMatch(/output stream is your reasoning trace/i);
     expect(briefing).not.toContain("agent-final-text");
     // The new Skill Map and Context Tree section are now part of every
     // briefing — pin both so a regenerator dropping them doesn't slip past
