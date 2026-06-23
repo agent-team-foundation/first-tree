@@ -1,8 +1,10 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { FirstTreeHubSDK } from "@first-tree/client";
 import type { ClientCapabilities, RuntimeProvider, SkillDescriptor } from "@first-tree/shared";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { cliFetch } from "./cli-fetch.js";
+import { CLI_USER_AGENT } from "./version.js";
 
 type LogFn = (level: "info" | "warn", msg: string) => void;
 
@@ -81,8 +83,11 @@ export async function reconcileLocalRuntimeProviders(opts: {
 
 /**
  * Member-scoped capabilities upload. Server stores the snapshot under
- * `clients.metadata.capabilities`. Best-effort: failure does not block
- * client startup since capabilities only matter for UI / admin checks.
+ * `clients.metadata.capabilities`. Uses the SDK retry/timeout layer because
+ * this runs on the daemon's background path where transient socket/DNS failures
+ * should converge silently instead of surfacing as one-shot `fetch failed`
+ * warnings. Best-effort: terminal failure still does not block client startup
+ * since capabilities only matter for UI / admin checks.
  */
 export async function uploadClientCapabilities(opts: {
   serverUrl: string;
@@ -90,17 +95,12 @@ export async function uploadClientCapabilities(opts: {
   clientId: string;
   capabilities: ClientCapabilities;
 }): Promise<void> {
-  const res = await cliFetch(`${opts.serverUrl}/api/v1/clients/${encodeURIComponent(opts.clientId)}/capabilities`, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${opts.accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ capabilities: opts.capabilities }),
+  const sdk = new FirstTreeHubSDK({
+    serverUrl: opts.serverUrl,
+    getAccessToken: () => opts.accessToken,
+    userAgent: CLI_USER_AGENT,
   });
-  if (!res.ok) {
-    throw new Error(`server returned ${res.status} on PATCH /clients/${opts.clientId}/capabilities`);
-  }
+  await sdk.updateCapabilities(opts.clientId, opts.capabilities);
 }
 
 /**
