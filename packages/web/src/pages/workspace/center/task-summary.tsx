@@ -1,4 +1,4 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Info } from "lucide-react";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "../../../components/ui/markdown.js";
@@ -7,7 +7,7 @@ import { stripInlineMarkdown } from "../../../lib/strip-inline-markdown.js";
 import { formatRelative } from "../../../lib/utils.js";
 
 /**
- * Task header — the chat's running summary (`chat.description`), surfaced as a
+ * Task summary — the chat's running summary (`chat.description`), surfaced as a
  * pinned, collapsible strip between the chat header and the message stream
  * rather than buried in the right rail. Read-only: the description is the chat
  * `description`, maintained by agents via `chat update --description`; there is
@@ -46,7 +46,7 @@ const SCROLL_RESTORE_PX = 6;
 
 // Per-chat manual expand/collapse preference. Mirrors the localStorage pattern
 // used elsewhere in the chat view (private-mode safe, per-chat key suffix).
-const MANUAL_PREF_KEY = "first-tree:chat-task-header-expanded:v1";
+const MANUAL_PREF_KEY = "first-tree:chat-task-summary-expanded:v1";
 
 function loadManualPref(chatId: string): boolean | null {
   if (typeof window === "undefined") return null;
@@ -70,12 +70,16 @@ function saveManualPref(chatId: string, expanded: boolean): void {
 
 /**
  * Best-effort single-line preview of a markdown description for the collapsed
- * bar: the first line with real content, with common leading + inline markdown
- * markers stripped so a `## Heading` or `- bullet` reads as plain text. Visual
+ * bar. A leading `## 任务` / `## Goals`-style section heading is a structural
+ * label, not the summary itself — the real one-line gist is the prose under it.
+ * So this prefers the first NON-heading content line (markdown markers stripped),
+ * and falls back to a heading only when the description is nothing but heading(s)
+ * (SPEC §七.7: a heading first line degrades to the first content line). Visual
  * truncation is left to CSS; this only removes markup noise. Returns "" when
  * nothing usable is found (the caller shows a fallback).
  */
 export function descriptionFirstLine(description: string): string {
+  let headingFallback = "";
   for (const rawLine of description.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line) continue;
@@ -83,6 +87,7 @@ export function descriptionFirstLine(description: string): string {
     // (---/***/___) and table delimiter rows (| --- | :--: |).
     if (/^([-*_])\1{2,}$/.test(line)) continue;
     if (/^\|?[\s:|-]+\|?$/.test(line) && line.includes("-")) continue;
+    const isHeading = /^#{1,6}\s+/.test(line);
     // Strip leading block markers (heading / bullet / ordered / quote / a
     // leading table pipe), then peel inline emphasis/code/link markers with the
     // shared delimiter-aware helper. Crucially that helper leaves literal
@@ -99,9 +104,15 @@ export function descriptionFirstLine(description: string): string {
     )
       .replace(/\s+/g, " ")
       .trim();
-    if (stripped) return stripped;
+    if (!stripped) continue;
+    if (isHeading) {
+      // Remember the first heading as a fallback, but keep scanning for prose.
+      if (!headingFallback) headingFallback = stripped;
+      continue;
+    }
+    return stripped;
   }
-  return "";
+  return headingFallback;
 }
 
 function isStaleSinceLastView(lastReadAtMs: number | null, nowMs: number): boolean {
@@ -111,7 +122,7 @@ function isStaleSinceLastView(lastReadAtMs: number | null, nowMs: number): boole
   return new Date(lastReadAtMs).toDateString() !== new Date(nowMs).toDateString();
 }
 
-export function TaskHeader({
+export function TaskSummary({
   chatId,
   description,
   descriptionUpdatedAt,
@@ -232,7 +243,12 @@ export function TaskHeader({
     <div
       className="shrink-0"
       style={{
-        background: amberActive ? "var(--bg-warn-soft)" : "var(--bg-raised)",
+        // A recessed band (`--bg-sunken`) so the summary reads as its own pinned
+        // strip at the top of the conversation — distinct from the white header
+        // chrome above (header + composer share `--bg-raised`), not fused into
+        // it. Hairlines top + bottom delimit the band without a heavy card.
+        background: amberActive ? "var(--bg-warn-soft)" : "var(--bg-sunken)",
+        borderTop: `var(--hairline) solid ${amberActive ? "var(--state-blocked-border)" : "var(--border-faint)"}`,
         borderBottom: `var(--hairline) solid ${amberActive ? "var(--state-blocked-border)" : "var(--border-faint)"}`,
         transition: "background 160ms ease",
       }}
@@ -290,10 +306,13 @@ export function TaskHeader({
           </span>
         ) : null}
         <ChevronRight
-          size={15}
-          strokeWidth={2.25}
+          size={13}
+          strokeWidth={1.75}
           className="shrink-0"
           style={{
+            // Deliberately quiet (smaller + thinner): the activity dot and the
+            // "2h ago · updater" text are the primary right-side signal; the
+            // chevron is just a low-key "expandable" hint, not a competing mark.
             color: "var(--fg-4)",
             transform: expanded ? "rotate(90deg)" : "none",
             transition: "transform 180ms ease",
@@ -326,10 +345,11 @@ export function TaskHeader({
             </span>
             <span
               className="inline-flex shrink-0 items-center"
-              style={{ gap: "var(--sp-1)" }}
+              role="img"
               title="The summary is the chat description — agents keep it current. To correct it, tell an agent in the chat."
+              aria-label="Maintained by an agent — to correct it, tell an agent in the chat"
             >
-              <span aria-hidden="true">↻</span> Maintained by agent
+              <Info size={13} strokeWidth={2} aria-hidden="true" />
             </span>
           </div>
         </div>

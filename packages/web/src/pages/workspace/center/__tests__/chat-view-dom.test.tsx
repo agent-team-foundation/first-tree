@@ -1391,16 +1391,16 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  // The chat summary (`chat.description`) now renders in the pinned TaskHeader
+  // The chat summary (`chat.description`) now renders in the pinned TaskSummary
   // between the chat header and the message stream — NOT in the right rail.
-  describe("task header (chat summary)", () => {
+  describe("pinned task summary", () => {
     // Distinct from BASE_MESSAGES' body so assertions can't match unrelated chrome.
     const DESCRIPTION_MD = "Status: shipping **DescBody** soon.";
 
     function sidebarOpen(container: ParentNode): boolean {
       return container.querySelector('aside[aria-label="Chat details"]') !== null;
     }
-    function taskHeaderButton(container: ParentNode): HTMLButtonElement | null {
+    function taskSummaryButton(container: ParentNode): HTMLButtonElement | null {
       return container.querySelector<HTMLButtonElement>('button[aria-label$="task summary"]');
     }
 
@@ -1416,11 +1416,11 @@ describe("ChatView", () => {
       );
 
       await waitForCondition(
-        () => taskHeaderButton(container) !== null,
-        "Expected the task header to render for a chat with a description",
+        () => taskSummaryButton(container) !== null,
+        "Expected the task summary to render for a chat with a description",
       );
-      const button = taskHeaderButton(container);
-      if (!button) throw new Error("task header button missing");
+      const button = taskSummaryButton(container);
+      if (!button) throw new Error("task summary button missing");
       // Collapsed bar = the first line with markdown markers stripped.
       expect(button.textContent).toContain("Status: shipping DescBody soon.");
 
@@ -1430,13 +1430,13 @@ describe("ChatView", () => {
       });
       await waitForCondition(
         () => [...container.querySelectorAll("strong")].some((el) => el.textContent === "DescBody"),
-        "Expected the expanded task header to render the description markdown",
+        "Expected the expanded task summary to render the description markdown",
       );
 
       await act(async () => root.unmount());
     });
 
-    it("renders no task header when the chat has no description", async () => {
+    it("renders no task summary when the chat has no description", async () => {
       localStorage.clear();
       const { ChatView } = await import("../chat-view.js");
       const noDescription = chatDetail({ description: null });
@@ -1449,12 +1449,12 @@ describe("ChatView", () => {
 
       await waitForText(container, "Launch planning");
       await flush();
-      expect(taskHeaderButton(container)).toBeNull();
+      expect(taskSummaryButton(container)).toBeNull();
 
       await act(async () => root.unmount());
     });
 
-    it("does NOT auto-open the right rail for a described chat — the summary lives in the task header", async () => {
+    it("does NOT auto-open the right rail for a described chat — the summary lives in the task summary", async () => {
       localStorage.clear();
       const { ChatView } = await import("../chat-view.js");
       const withDescription = chatDetail({ description: DESCRIPTION_MD });
@@ -1465,7 +1465,7 @@ describe("ChatView", () => {
         "/",
       );
 
-      await waitForCondition(() => taskHeaderButton(container) !== null, "Expected the task header to render");
+      await waitForCondition(() => taskSummaryButton(container) !== null, "Expected the task summary to render");
       await flush();
       // The rail no longer pops open just because the chat has a description.
       expect(sidebarOpen(container)).toBe(false);
@@ -1484,17 +1484,18 @@ describe("ChatView", () => {
         "/",
       );
 
-      await waitForCondition(() => taskHeaderButton(container) !== null, "Expected the task header to render");
-      const button = taskHeaderButton(container);
-      if (!button) throw new Error("task header button missing");
+      await waitForCondition(() => taskSummaryButton(container) !== null, "Expected the task summary to render");
+      const button = taskSummaryButton(container);
+      if (!button) throw new Error("task summary button missing");
       // Expand to reveal the footer and confirm no edit surface appears.
       await act(async () => {
         button.click();
       });
       await flush();
       const headerRoot = button.parentElement;
-      if (!headerRoot) throw new Error("task header root missing");
-      expect(headerRoot.textContent).toContain("Maintained by agent");
+      if (!headerRoot) throw new Error("task summary root missing");
+      // Read-only affordance is the quiet ⓘ hint (aria-label / title), not body text.
+      expect(headerRoot.querySelector('[aria-label^="Maintained by an agent"]')).not.toBeNull();
       // The only control is the expand/collapse toggle — no edit button / input.
       expect(headerRoot.querySelectorAll("button")).toHaveLength(1);
       expect(headerRoot.querySelector("input")).toBeNull();

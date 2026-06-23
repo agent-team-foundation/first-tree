@@ -1,8 +1,8 @@
 import { useRef } from "react";
-import { TaskHeader } from "./workspace/center/task-header.js";
+import { TaskSummary } from "./workspace/center/task-summary.js";
 
 /**
- * DEV-only visual review for the pinned chat TaskHeader (chat.description).
+ * DEV-only visual review for the pinned chat TaskSummary (chat.description).
  * No backend / no auth — same gating as the other `/preview/*` routes (DEV-only
  * in `app.tsx`). Covers: the auto-expanded "unread + not seen in a while" state
  * (amber highlight + green pulse dot), the collapsed-with-freshness state, the
@@ -29,9 +29,9 @@ const RICH = [
 const PLAIN = "Reviewing PR 1207 — server-side freshness fields landed; wiring the collapsed-bar first line next.";
 
 const HEADING_FIRST = [
-  "# 这是一个很长的标题，用来验证折叠行去掉 markdown 标记后的单行截断与优雅降级表现",
+  "# 任务标题（章节标题，折叠行应跳过它）",
   "",
-  "正文段落。",
+  "首个正文段落会被折叠行采用，这一句刻意写得很长，用来验证去掉 markdown 标记后仍以单行省略号截断、不撑高 chrome。",
 ].join("\n");
 
 const PANEL: React.CSSProperties = {
@@ -60,7 +60,7 @@ function Demo({
   const scrollRef = useRef<HTMLDivElement>(null);
   return (
     <div style={PANEL}>
-      <TaskHeader
+      <TaskSummary
         chatId={chatId}
         description={description}
         descriptionUpdatedAt={descriptionUpdatedAt}
@@ -96,7 +96,7 @@ function Col({ label, note, children }: { label: string; note: string; children:
   );
 }
 
-export function TaskHeaderPreviewPage() {
+export function TaskSummaryPreviewPage() {
   return (
     <div
       style={{
@@ -110,7 +110,7 @@ export function TaskHeaderPreviewPage() {
     >
       <div>
         <h1 className="text-title" style={{ color: "var(--fg)" }}>
-          Chat task header — states
+          Chat task summary — states
         </h1>
         <p className="text-body" style={{ color: "var(--fg-3)" }}>
           Click a header to expand / collapse. Read-only: there is no edit affordance anywhere — the footer states it is
@@ -166,8 +166,8 @@ export function TaskHeaderPreviewPage() {
         </Col>
 
         <Col
-          label="First line is a heading + very long"
-          note="collapsed bar strips markdown markers and truncates to one line"
+          label="First line is a section heading"
+          note="collapsed bar skips the heading → shows the first prose line (truncated if long)"
         >
           <Demo
             chatId="preview-edge"

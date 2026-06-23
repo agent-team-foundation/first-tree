@@ -1,16 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { descriptionFirstLine } from "../task-header.js";
+import { descriptionFirstLine } from "../task-summary.js";
 
 /**
- * `descriptionFirstLine` powers the collapsed task-header bar: it picks the
- * first line of the chat description with real content and strips the common
- * markdown markers so a `## Heading` or `- bullet` reads as plain text (visual
- * truncation is left to CSS). It must degrade gracefully past structural-only
- * lines.
+ * `descriptionFirstLine` powers the collapsed task-summary bar: it picks the
+ * first content line of the chat description and strips the common markdown
+ * markers so a `- bullet` reads as plain text (visual truncation is left to
+ * CSS). A leading section heading (`## 任务`) is skipped in favor of the prose
+ * below it, falling back to the heading only when there is nothing else. It
+ * must also degrade gracefully past structural-only lines.
  */
 describe("descriptionFirstLine", () => {
-  it("strips a leading heading marker", () => {
-    expect(descriptionFirstLine("## Goals\nbody")).toBe("Goals");
+  it("prefers the first content line over a leading section heading", () => {
+    expect(descriptionFirstLine("## Goals\nbody")).toBe("body");
+  });
+
+  it("degrades a section-label heading to the prose below it", () => {
+    expect(descriptionFirstLine("## 任务\n把右侧 summary 改为任务头")).toBe("把右侧 summary 改为任务头");
+  });
+
+  it("skips multiple stacked headings to reach the prose", () => {
+    expect(descriptionFirstLine("# Title\n## Section\nThe real summary")).toBe("The real summary");
+  });
+
+  it("falls back to the heading when the description is only heading(s)", () => {
+    expect(descriptionFirstLine("# Just a title")).toBe("Just a title");
   });
 
   it("strips a leading bullet", () => {

@@ -127,7 +127,7 @@ import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
 import { computeRequiresMention, shouldPrimeMentionOnFocus } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
-import { TaskHeader } from "./task-header.js";
+import { TaskSummary } from "./task-summary.js";
 
 const SIDEBAR_OPEN_STORAGE_KEY = "first-tree:chat-right-sidebar:open:v1";
 
@@ -1138,7 +1138,7 @@ export function ChatView({
     onChange: () => setUploadError(null),
   });
   // Right-rail visibility. The rail holds participants + GitHub bindings; the
-  // running summary now lives in the pinned TaskHeader above the stream, not
+  // running summary now lives in the pinned TaskSummary above the stream, not
   // here. Default: the user's stored preference if they have ever toggled the
   // rail (a global preference, not per-chat), otherwise collapsed for the full
   // reading column.
@@ -1359,7 +1359,7 @@ export function ChatView({
   });
 
   // The right rail no longer auto-opens per chat: the running summary moved to
-  // the pinned TaskHeader (above the stream), so the rail — now just
+  // the pinned TaskSummary (above the stream), so the rail — now just
   // participants + GitHub bindings — simply follows the user's stored
   // open/closed preference.
 
@@ -2964,7 +2964,7 @@ export function ChatView({
             style={{
               // Min-height as a comfortable floor for a now-stable single-row
               // header: the topic sits on one line (truncating with an ellipsis
-              // when long) and the description lives in the pinned task header
+              // when long) and the description lives in the pinned task summary
               // directly below, so the header no longer grows with content.
               // Vertical padding centers that single row within the min-height.
               minHeight: 52,
@@ -3030,7 +3030,7 @@ export function ChatView({
                   the optional GitHub entity link. The description text is not
                   rendered inline (it made the header height jitter with the
                   running summary and buried the topic) — it now lives in the
-                  pinned task header directly below. With the multi-line
+                  pinned task summary directly below. With the multi-line
                   description gone the row is naturally bounded, so the old
                   narrow-viewport `line-clamp-3` cap is no longer needed. */}
               <div className="flex min-w-0 items-center" style={{ flex: 1, gap: "var(--sp-1)" }}>
@@ -3152,7 +3152,7 @@ export function ChatView({
                 )}
                 <EntityLink metadata={chatDetail?.metadata} />
                 {/* Chat description (running work summary) is NOT shown in the
-                    header. It lives in the pinned task header between this
+                    header. It lives in the pinned task summary between this
                     header and the message stream (rendered as markdown).
                     Read-only on the web — written by the owning agent via
                     `chat update --description`. */}
@@ -3248,7 +3248,7 @@ export function ChatView({
             </div>
           </div>
 
-          <TaskHeader
+          <TaskSummary
             chatId={chatId}
             description={chatDetail?.description ?? null}
             descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
