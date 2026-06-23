@@ -348,7 +348,7 @@ const CONFIG: AgentRuntimeConfig = {
       sections: [
         {
           scope: "team",
-          name: "Code review style",
+          name: "Team style guide",
           body: "Follow the team house style when reviewing diffs.\n\n- Prefer small, focused changes.\n- Call out missing tests and error handling.\n- Flag any public-API change for a second reviewer.\n- Keep comments about the code, not the author.",
         },
         { scope: "agent", name: "", body: "Always summarize tradeoffs before recommending.", editable: true },

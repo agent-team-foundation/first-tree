@@ -267,13 +267,15 @@ function EffectiveInstructionsBlock({ prompt, sections }: { prompt: string; sect
   );
 }
 
-// A quiet provenance label for each merged instruction segment: the team /
-// agent resource's own name, or a scope fallback for the agent's standalone
-// inline fragment (which carries no name).
+// A provenance label for each merged instruction segment: "<name> · <source>",
+// aligned with the source rows below so a segment maps cleanly to its row. The
+// name is the resource's own (the same `row.name` the row shows); the agent's
+// standalone inline fragment carries no name, so it reads "Custom instructions"
+// exactly like its row does.
 function segmentLabel(section: PromptSection): string {
-  const name = section.name.trim();
-  if (name) return name;
-  return section.scope === "team" ? "Team instructions" : "Custom instructions";
+  const name = section.name.trim() || "Custom instructions";
+  const source = section.scope === "team" ? "From your team" : "Added by you";
+  return `${name} · ${source}`;
 }
 
 type PromptEditorState = {

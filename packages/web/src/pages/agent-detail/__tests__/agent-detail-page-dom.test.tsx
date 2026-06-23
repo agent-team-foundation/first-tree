@@ -501,8 +501,9 @@ describe("AgentDetailPage", () => {
     const effBlock = container.querySelector('[aria-label="All instructions"]');
     expect(effBlock).toBeTruthy();
     const segLabels = [...(effBlock?.querySelectorAll(".text-eyebrow") ?? [])].map((n) => n.textContent?.trim());
-    expect(segLabels).toContain("Team style guide");
-    expect(segLabels).toContain("Custom instructions");
+    // Each segment label is "<name> · <source>", aligned with the source rows.
+    expect(segLabels.some((l) => l?.includes("Team style guide") && l?.includes("From your team"))).toBe(true);
+    expect(segLabels.some((l) => l?.includes("Custom instructions") && l?.includes("Added by you"))).toBe(true);
     expect(effBlock?.textContent).toContain("Use the team house style.");
 
     // The custom prompt's edit action now lives in the row's ⋯ overflow menu.
