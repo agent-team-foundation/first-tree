@@ -49,6 +49,27 @@ describe("classifyProviderFailure", () => {
     ).toMatchObject({ category: "provider_capacity", reasonCode: "provider_rate_limited" });
   });
 
+  it("maps Claude session limits to unrecoverable provider capacity", () => {
+    const c = classifyProviderFailure(new Error("You've hit your session limit \u00b7 resets 9:50pm (Asia/Shanghai)"), {
+      provider: "claude-code",
+      scope: "provider_turn",
+      source: "stream",
+    });
+    expect(c).toMatchObject({ category: "provider_capacity", reasonCode: "provider_usage_limit" });
+    expect(
+      decideProviderRetry({
+        classification: c,
+        scope: "provider_turn",
+        attempt: 1,
+        replaySafety: "provider_entered",
+      }),
+    ).toMatchObject({
+      action: "stop",
+      reasonCode: "capacity_wait_required",
+      terminalKind: "capacity_wait_required",
+    });
+  });
+
   it("maps network and 5xx failures to transient_transport", () => {
     for (const err of [new Error("fetch failed"), Object.assign(new Error("upstream 503"), { status: 503 })]) {
       expect(classifyProviderFailure(err, { provider: "codex", scope: "provider_turn", source: "sdk" }).category).toBe(

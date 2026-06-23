@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectStreamApiError } from "../handlers/claude-code.js";
+import { detectClaudeSessionLimitResult, detectStreamApiError } from "../handlers/claude-code.js";
 
 /**
  * Task 8 (Bug 6): the `detectStreamApiError` sniffer recognises Claude SDK
@@ -98,5 +98,28 @@ Hope that helps!`.trim();
       const r = detectStreamApiError(`API Error: server returned ${code}`);
       expect(r, `expected detection for ${code}`).not.toBeNull();
     }
+  });
+});
+
+describe("detectClaudeSessionLimitResult", () => {
+  it("flags the Claude Code session-limit success payload", () => {
+    const r = detectClaudeSessionLimitResult("You've hit your session limit \u00b7 resets 9:50pm (Asia/Shanghai)");
+    expect(r).toEqual({ message: "You've hit your session limit \u00b7 resets 9:50pm (Asia/Shanghai)" });
+  });
+
+  it("flags the typographic apostrophe variant", () => {
+    const r = detectClaudeSessionLimitResult("You\u2019ve hit your session limit \u00b7 resets 9:50pm (Asia/Shanghai)");
+    expect(r).not.toBeNull();
+  });
+
+  it("does NOT flag normal text that only mentions a session limit", () => {
+    expect(
+      detectClaudeSessionLimitResult("If you've hit your session limit, wait until the reset time and try again."),
+    ).toBeNull();
+    expect(
+      detectClaudeSessionLimitResult(
+        "You've hit your session limit \u00b7 resets 9:50pm (Asia/Shanghai)\n\nThis is how Claude Code reports it.",
+      ),
+    ).toBeNull();
   });
 });
