@@ -408,4 +408,31 @@ describe("CapabilityRefresher", () => {
     }
     refresher.stop();
   });
+
+  it("preserves provider state published after interactive login completes while startup probe is in flight", async () => {
+    const gate = deferred<{ capabilities: ClientCapabilities; mode: "full" | "revalidate" }>();
+    const { refresher, upload, reprobe } = makeRefresher({ initial: null });
+    reprobe.mockReturnValueOnce(gate.promise);
+
+    await refresher.start();
+    expect(reprobe).toHaveBeenCalledWith({});
+
+    refresher.beginInteractive("codex");
+    await refresher.setProviderEntry("codex", codexPending());
+    refresher.endInteractive("codex");
+    await refresher.setProviderEntry("codex", ok({ detectedAt: "2026-06-17T00:01:00.000Z" }));
+
+    gate.resolve({ capabilities: codexUnauthSnapshot(), mode: "full" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(refresher.currentEntry("codex")).toMatchObject({ state: "ok", authenticated: true });
+    const uploadedSnapshots = upload.mock.calls.map(([snapshot]) => snapshot as ClientCapabilities);
+    expect(uploadedSnapshots).toHaveLength(3);
+    expect(uploadedSnapshots.some(({ codex }) => codex?.state === "unauthenticated" && !codex.pendingAuth)).toBe(false);
+    expect(uploadedSnapshots[uploadedSnapshots.length - 1]?.codex).toMatchObject({
+      state: "ok",
+      authenticated: true,
+    });
+    refresher.stop();
+  });
 });

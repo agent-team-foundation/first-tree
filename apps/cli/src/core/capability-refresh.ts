@@ -91,6 +91,14 @@ export class CapabilityRefresher {
   private lastUploadedSyncJson: string | null = null;
   private inFlight = false;
   /**
+   * Monotonic per-provider local write tracking. Runtime-auth can publish a
+   * provider update via setProviderEntry() while a slow aggregate probe is in
+   * flight; the version lets the merge preserve that newer local entry even if
+   * the interactive flag has already been cleared by the time the probe returns.
+   */
+  private providerWriteVersion = 0;
+  private readonly providerWriteVersions = new Map<string, number>();
+  /**
    * Providers with an in-flight interactive login (runtime-auth device-code).
    * While a provider is in this set, a background re-probe must NOT overwrite
    * its entry — the orchestrator owns it and is publishing a pending
@@ -179,6 +187,7 @@ export class CapabilityRefresher {
   async setProviderEntry(provider: string, entry: CapabilityEntry): Promise<void> {
     const next: ClientCapabilities = { ...(this.snapshot ?? {}), [provider]: entry };
     this.snapshot = next;
+    this.providerWriteVersions.set(provider, ++this.providerWriteVersion);
     try {
       await this.uploadIfChanged(next);
     } catch (err) {
@@ -228,6 +237,7 @@ export class CapabilityRefresher {
 
     this.inFlight = true;
     const refreshStartedAt = Date.now();
+    const refreshStartedProviderWriteVersion = this.providerWriteVersion;
     try {
       // A reconnect that arrived (now, or while a prior refresh ran) wins over a
       // poll: it carries the stricter TTL/full re-probe semantics. Drain the
@@ -249,15 +259,20 @@ export class CapabilityRefresher {
           modeLabel = "poll";
         }
         probed = true;
-        // Re-read at merge time: runtime-auth may have published a pendingAuth
-        // entry while this provider probe was awaiting a slow smoke.
+        // Re-read at merge time: runtime-auth may have published provider state
+        // while this aggregate probe was awaiting a slow smoke.
         const current = this.snapshot ?? previous;
-        // Preserve any provider with an in-flight interactive login: the
-        // orchestrator owns its entry (a pending device-code) and a fresh probe
-        // would clobber it, making the web device-code panel vanish mid-login.
-        if (this.interactiveProviders.size > 0) {
+        // Preserve providers still owned by an interactive login, plus provider
+        // entries written after this refresh started. The latter covers the
+        // common race where login completes and clears the interactive flag
+        // before a slow startup/full probe returns with stale aggregate state.
+        const providersToPreserve = new Set(this.interactiveProviders);
+        for (const [provider, version] of this.providerWriteVersions) {
+          if (version > refreshStartedProviderWriteVersion) providersToPreserve.add(provider);
+        }
+        if (providersToPreserve.size > 0) {
           const preserved: ClientCapabilities = { ...next };
-          for (const provider of this.interactiveProviders) {
+          for (const provider of providersToPreserve) {
             const owned = current[provider] ?? previous[provider];
             if (owned) preserved[provider] = owned;
           }
