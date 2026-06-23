@@ -68,6 +68,27 @@ export type BundledClaudeBinary =
   /** Modern layout (SDK 0.2.x+): spawn the per-platform native binary directly. */
   | { kind: "native"; path: string };
 
+/** Injectable seams for {@link resolveBundledClaudeBinary} (tests only). */
+export type ResolveBundledClaudeDeps = {
+  /** Locate the `@anthropic-ai/claude-agent-sdk` package directory. */
+  locateSdkDir?: () => string;
+  /** Resolve a platform package's install root by name, or null when not installed. */
+  resolvePlatformPackageRoot?: (pkg: string) => string | null;
+};
+
+/** Default platform-package resolver: the SDK's own `require`, null when a variant is absent. */
+function platformPackageRootResolver(sdkDir: string): (pkg: string) => string | null {
+  const sdkRequire = createRequire(join(sdkDir, "package.json"));
+  return (pkg) => {
+    try {
+      return dirname(sdkRequire.resolve(`${pkg}/package.json`));
+    } catch {
+      // Optional platform package not installed for this libc variant.
+      return null;
+    }
+  };
+}
+
 /**
  * Resolve the bundled Claude CLI the SDK would spawn when `query()` is given no
  * `pathToClaudeCodeExecutable`. Two layouts are supported because the SDK
@@ -78,8 +99,8 @@ export type BundledClaudeBinary =
  * Throws when neither resolves — exactly when the SDK itself would throw
  * "Native CLI binary for <platform>-<arch> not found".
  */
-export function resolveBundledClaudeBinary(): BundledClaudeBinary {
-  const sdkDir = locateSdkDir();
+export function resolveBundledClaudeBinary(deps: ResolveBundledClaudeDeps = {}): BundledClaudeBinary {
+  const sdkDir = (deps.locateSdkDir ?? locateSdkDir)();
   // Legacy layout first — preserves behaviour for SDK builds that still ship cli.js.
   const cliJs = join(sdkDir, "cli.js");
   if (existsSync(cliJs)) return { kind: "cli-js", path: realpathSync(cliJs) };
@@ -89,16 +110,13 @@ export function resolveBundledClaudeBinary(): BundledClaudeBinary {
   if (candidates.length === 0) {
     throw new Error(`no bundled Claude binary for ${target} (no cli.js and no known platform package)`);
   }
-  const sdkRequire = createRequire(join(sdkDir, "package.json"));
+  const resolvePlatformPackageRoot = deps.resolvePlatformPackageRoot ?? platformPackageRootResolver(sdkDir);
   const binaryName = process.platform === "win32" ? "claude.exe" : "claude";
   for (const pkg of candidates) {
-    try {
-      const pkgRoot = dirname(sdkRequire.resolve(`${pkg}/package.json`));
-      const binary = join(pkgRoot, binaryName);
-      if (existsSync(binary)) return { kind: "native", path: realpathSync(binary) };
-    } catch {
-      // Optional platform package not installed for this libc variant — try next.
-    }
+    const pkgRoot = resolvePlatformPackageRoot(pkg);
+    if (!pkgRoot) continue;
+    const binary = join(pkgRoot, binaryName);
+    if (existsSync(binary)) return { kind: "native", path: realpathSync(binary) };
   }
   throw new Error(
     `no installed Claude native binary for ${target} (checked ${candidates.join(", ")}); is @anthropic-ai/claude-agent-sdk installed with its optional per-platform dependency?`,

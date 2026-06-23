@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +6,7 @@ import type { ClaudeExecutableResolution } from "../handlers/claude-executable.j
 import {
   classifyClaudeSmokeFailure,
   probeClaudeCodeCapability,
+  resolveBundledClaudeBinary,
   verifyBundledClaudeArtifact,
 } from "../runtime/capabilities/claude-code.js";
 import {
@@ -451,6 +452,66 @@ describe("verifyBundledClaudeArtifact (real node_modules)", () => {
     const res = await verifyBundledClaudeArtifact();
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.version === null || /^\d+\.\d+(\.\d+)?$/.test(res.version)).toBe(true);
+  });
+});
+
+describe("resolveBundledClaudeBinary (hermetic — covers the SDK layout change)", () => {
+  // The real-node_modules test above runs against whatever the lockfile pins,
+  // which may still ship `cli.js` — so it does NOT exercise the native-package
+  // branch the bug fix added. These fixture tests pin that branch directly: a
+  // no-`cli.js` SDK dir + a per-platform package whose root holds the `claude`
+  // binary is exactly the modern SDK 0.2.x+ layout that broke detection.
+  const binaryName = process.platform === "win32" ? "claude.exe" : "claude";
+
+  it("resolves the per-platform native binary when the SDK ships no cli.js", () => {
+    const root = mkdtempSync(join(tmpdir(), "claude-bundle-"));
+    try {
+      const sdkDir = join(root, "sdk"); // deliberately no cli.js inside
+      const nativeDir = join(root, "native");
+      mkdirSync(sdkDir);
+      mkdirSync(nativeDir);
+      const binaryPath = join(nativeDir, binaryName);
+      writeFileSync(binaryPath, "#!/bin/sh\necho fake-claude\n");
+      const res = resolveBundledClaudeBinary({
+        locateSdkDir: () => sdkDir,
+        resolvePlatformPackageRoot: () => nativeDir,
+      });
+      expect(res).toEqual({ kind: "native", path: realpathSync(binaryPath) });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the legacy cli.js when present and never consults platform packages", () => {
+    const root = mkdtempSync(join(tmpdir(), "claude-bundle-"));
+    try {
+      const sdkDir = join(root, "sdk");
+      mkdirSync(sdkDir);
+      const cliJs = join(sdkDir, "cli.js");
+      writeFileSync(cliJs, "// fake bundled cli.js");
+      const res = resolveBundledClaudeBinary({
+        locateSdkDir: () => sdkDir,
+        resolvePlatformPackageRoot: () => {
+          throw new Error("platform resolver must not be consulted when cli.js exists");
+        },
+      });
+      expect(res).toEqual({ kind: "cli-js", path: realpathSync(cliJs) });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("throws when neither cli.js nor an installed native package is present", () => {
+    const root = mkdtempSync(join(tmpdir(), "claude-bundle-"));
+    try {
+      const sdkDir = join(root, "sdk");
+      mkdirSync(sdkDir);
+      expect(() =>
+        resolveBundledClaudeBinary({ locateSdkDir: () => sdkDir, resolvePlatformPackageRoot: () => null }),
+      ).toThrow(/no installed Claude native binary|no bundled Claude binary/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
