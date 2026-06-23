@@ -374,6 +374,60 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     await act(async () => root.unmount());
   });
 
+  it("commits a pending name edit when Done is clicked without an explicit blur", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onOpenChange = vi.fn();
+    const { root } = await renderDom(
+      <ProfileEditDialog agent={agent()} open onOpenChange={onOpenChange} onSave={onSave} onSaved={vi.fn()} />,
+    );
+    const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
+    if (!displayInput) throw new Error("Expected display field");
+    // Type a new name but do NOT blur — click Done straight away.
+    await setInputValue(displayInput, "Nova Done");
+    await click(buttonByText(document.body, "Done"));
+    // Done commits the pending name before closing, so the edit isn't lost.
+    expect(onSave).toHaveBeenCalledWith({ displayName: "Nova Done" });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    await act(async () => root.unmount());
+  });
+
+  it("serializes field saves — controls and Done disable while a save is in flight", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    let resolveSave: (() => void) | undefined;
+    const onSave = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const onOpenChange = vi.fn();
+    const { root } = await renderDom(
+      <ProfileEditDialog
+        agent={agent({ avatarColorToken: "hue-1" })}
+        open
+        onOpenChange={onOpenChange}
+        onSave={onSave}
+        onSaved={vi.fn()}
+      />,
+    );
+    // Pick a color — the save starts and stays pending (unresolved).
+    await click(document.body.querySelector('button[title="hue-3"]'));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    // While pending: other swatches + Done are disabled, and a second click is
+    // dropped by the in-flight guard — no overlapping PATCH, no close mid-save.
+    expect(document.body.querySelector<HTMLButtonElement>('button[title="hue-2"]')?.disabled).toBe(true);
+    expect(buttonByText(document.body, "Done")?.disabled).toBe(true);
+    await click(document.body.querySelector('button[title="hue-2"]'));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    // Resolve the save → controls re-enable.
+    await act(async () => {
+      resolveSave?.();
+    });
+    expect(buttonByText(document.body, "Done")?.disabled).toBe(false);
+    await act(async () => root.unmount());
+  });
+
   it("offers the pixel-avatar generator only for non-human agents (humans use their GitHub avatar)", async () => {
     const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
 
