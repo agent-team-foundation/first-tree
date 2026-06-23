@@ -30,6 +30,7 @@ export function mockCtxPlumbing(
   buildAgentEnv: (env: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
   formatInboundContent: (msg: SessionMessage) => Promise<string>;
   resolveSenderLabel: (senderId: string) => Promise<string>;
+  formatFromHeader: (msg: SessionMessage) => Promise<string>;
 } {
   return {
     // Turn-completion hook — delivers nothing (final-text mirror retired).
@@ -44,6 +45,7 @@ export function mockCtxPlumbing(
       return msg.senderId ? `[From: ${msg.senderId}]\n\n${raw}` : raw;
     },
     resolveSenderLabel: async (senderId) => senderId,
+    formatFromHeader: async (msg) => (msg.senderId ? `[From: ${msg.senderId}]` : ""),
   };
 }
 

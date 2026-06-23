@@ -30,7 +30,7 @@ import { buildAgentBriefing } from "../runtime/agent-briefing.js";
 import type { AgentConfigCache } from "../runtime/agent-config-cache.js";
 import { type PredeclaredSourceRepo, writeAgentBriefing } from "../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../runtime/chat-context.js";
-import { renderChatContextPrompt } from "../runtime/chat-context-section.js";
+import { renderChatContextPrompt, renderRuntimeOutputContract } from "../runtime/chat-context-section.js";
 import { resolveContextTreeRelativePath, toolFileRefsFromShellCommand } from "../runtime/context-tree-file-refs.js";
 import {
   type ContextTreeGitWriteTracker,
@@ -688,12 +688,18 @@ export function buildClaudeQueryOptions(
   if (payload?.kind === "claude-code" && payload.reasoningEffort) {
     options.effort = payload.reasoningEffort;
   }
-  const chatPrompt = renderChatContextPrompt(chatContext);
-  if (chatPrompt) {
+  // The runtime output contract always rides along (it does not depend on
+  // chatContext); the per-chat context block is appended after it when present.
+  // Both live in `systemPrompt.append`, which the SDK places after the
+  // `claude_code` base preset but at higher salience than the project CLAUDE.md.
+  const append = [renderRuntimeOutputContract(), renderChatContextPrompt(chatContext)]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n");
+  if (append) {
     options.systemPrompt = {
       type: "preset",
       preset: "claude_code",
-      append: chatPrompt,
+      append,
     };
   }
   return options;
@@ -838,10 +844,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // does not reliably forward `{ type: "image" }` blocks to the underlying
     // model.
     if (message.format === "file") {
-      // Resolve the sender's chat-local name once up front so both branches
-      // emit the same `[From: <name>]` header as the default text path.
-      const senderLabel = message.senderId ? await sessionCtx.resolveSenderLabel(message.senderId) : "";
-      const prefix = senderLabel ? `[From: ${senderLabel}]\n\n` : "";
+      // Build the full attribution header (name · type · sent) once up front so
+      // both branches emit the same `[From: …]` header as the default text path.
+      const header = await sessionCtx.formatFromHeader(message);
+      const prefix = header ? `${header}\n\n` : "";
 
       // Batched send (caption + N images in one message). Resolve every
       // imageId to a local path the Read tool can open; missing-byte cases

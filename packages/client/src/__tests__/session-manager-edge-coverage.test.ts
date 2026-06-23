@@ -442,8 +442,11 @@ describe("SessionManager edge coverage", () => {
       ],
     });
     expect(formatted).toContain("[Earlier in chat");
-    expect(formatted).toContain("[From: helper] prior text");
-    expect(formatted).toContain("[From: alice]");
+    // Header now carries name + optional type/sent annotations; assert the
+    // attribution prefix and the body rather than the exact bracket close.
+    expect(formatted).toContain("[From: helper");
+    expect(formatted).toContain("prior text");
+    expect(formatted).toContain("[From: alice");
     expect(await ctx.resolveSenderLabel("sender-1")).toBe("alice");
 
     // Final-text delivery is retired: forwardResult writes nothing to chat.

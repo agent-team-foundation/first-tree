@@ -1,7 +1,11 @@
 import type { ChatDetail, ChatParticipantDetail } from "@first-tree/shared";
 import { describe, expect, it, vi } from "vitest";
 import { fetchChatContext } from "../runtime/chat-context.js";
-import { renderChatContextPrompt, renderChatContextSection } from "../runtime/chat-context-section.js";
+import {
+  renderChatContextPrompt,
+  renderChatContextSection,
+  renderRuntimeOutputContract,
+} from "../runtime/chat-context-section.js";
 
 function mkParticipant(extras: Partial<ChatParticipantDetail>): ChatParticipantDetail {
   return {
@@ -38,6 +42,37 @@ function mkChatDetail(overrides?: Partial<ChatDetail>): ChatDetail {
     ...overrides,
   };
 }
+
+describe("renderRuntimeOutputContract", () => {
+  // The contract resolves the base-harness conflict by REBINDING "the user"
+  // (runtime, not teammates) rather than negating "output is displayed to the
+  // user". Pin the three load-bearing framings + the accurate visibility
+  // boundary so a future edit can't silently gut or over-claim them.
+  const contract = renderRuntimeOutputContract();
+
+  it("rebinds the harness 'user' to the First Tree runtime", () => {
+    expect(contract).toMatch(/that user is the First Tree runtime/i);
+  });
+
+  it("frames reach as an explicit outbound publish (console vs outbox)", () => {
+    expect(contract).toMatch(/outbound publish to the chat service/i);
+    expect(contract).toMatch(/output stream is the console; `chat send` is the outbox/i);
+    expect(contract).toContain("`chat send`");
+    expect(contract).toContain("`chat ask`");
+    expect(contract).toContain("`chat update`");
+  });
+
+  it("keeps the visibility boundary accurate — not private, but never a delivered message", () => {
+    expect(contract).toMatch(/it is not private/i);
+    expect(contract).toMatch(/never delivered to anyone as a message/i);
+    // Must not over-claim that nobody ever sees the trace.
+    expect(contract).not.toMatch(/no one (?:can )?sees?/i);
+  });
+
+  it("does not resurrect the retired agent-final-text mirror term", () => {
+    expect(contract).not.toContain("agent-final-text");
+  });
+});
 
 describe("fetchChatContext", () => {
   it("returns a narrow ChatContext with only name/displayName/type for participants", async () => {

@@ -24,8 +24,16 @@ describe("buildClaudeQueryOptions", () => {
   // through SDK `systemPrompt.append` so sibling chats sharing one agent home
   // cannot race on the shared briefing file.
 
-  it("returns an empty slice when there is no payload", () => {
-    expect(buildClaudeQueryOptions(undefined)).toEqual({});
+  it("injects the runtime output contract even with no payload (no model/mcp/effort)", () => {
+    // The runtime output contract does not depend on payload or chatContext, so
+    // it always rides along through `systemPrompt.append`; nothing else is set.
+    const opts = buildClaudeQueryOptions(undefined);
+    expect(opts.systemPrompt).toEqual(expect.objectContaining({ type: "preset", preset: "claude_code" }));
+    expect(opts.systemPrompt?.append).toContain("<first-tree-runtime-contract>");
+    expect(opts.systemPrompt?.append).not.toContain("<first-tree-current-chat-context");
+    expect("model" in opts).toBe(false);
+    expect("mcpServers" in opts).toBe(false);
+    expect("effort" in opts).toBe(false);
   });
 
   it("omits `effort` when reasoningEffort is '' (inherit the local effortLevel)", () => {
@@ -67,8 +75,15 @@ describe("buildClaudeQueryOptions", () => {
         preset: "claude_code",
       }),
     );
-    expect(opts.systemPrompt?.append).toContain('<first-tree-current-chat-context format="json">');
-    expect(opts.systemPrompt?.append).toContain('"chatId": "chat-claude"');
-    expect(opts.systemPrompt?.append).toContain('"name": "alice"');
+    // Both blocks ride in the append: the runtime contract first, the per-chat
+    // context after it.
+    const append = opts.systemPrompt?.append ?? "";
+    expect(append).toContain("<first-tree-runtime-contract>");
+    expect(append).toContain('<first-tree-current-chat-context format="json">');
+    expect(append).toContain('"chatId": "chat-claude"');
+    expect(append).toContain('"name": "alice"');
+    expect(append.indexOf("<first-tree-runtime-contract>")).toBeLessThan(
+      append.indexOf("<first-tree-current-chat-context"),
+    );
   });
 });
