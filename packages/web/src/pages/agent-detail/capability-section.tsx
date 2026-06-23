@@ -21,6 +21,7 @@ import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Popover } from "../../components/ui/popover.js";
 import { Section } from "../../components/ui/section.js";
+import { normalizeRepoUrl } from "../../lib/normalize-repo-url.js";
 import { typeLabelSingular } from "../settings/resource-editors.js";
 import { ResourceRowView, type RowMenu, type RowStatusMarker, type RowToggle } from "./resource-row.js";
 import { sourceLabel } from "./resource-source.js";
@@ -398,23 +399,24 @@ function AgentRepoDialog(props: {
   onSubmit: (repo: { url: string; name?: string; defaultBranch?: string }) => void;
 }) {
   const [url, setUrl] = useState("");
-  const [name, setName] = useState("");
   const [branch, setBranch] = useState("");
   const [error, setError] = useState<string | null>(null);
   function submit(e: FormEvent) {
     e.preventDefault();
-    const trimmed = url.trim();
-    if (!trimmed) {
+    // Normalize so common paste shapes (github.com/org/repo, org/repo) work
+    // without a scheme, then derive the name — matching the Settings → Resources
+    // repo editor. A repo has no user-meaningful name, so we don't ask for one.
+    const normalized = normalizeRepoUrl(url);
+    if (!normalized) {
       setError("URL is required.");
       return;
     }
     props.onSubmit({
-      url: trimmed,
-      ...(name.trim() ? { name: name.trim() } : { name: deriveRepoLocalPath(trimmed) }),
+      url: normalized,
+      name: deriveRepoLocalPath(normalized),
       ...(branch.trim() ? { defaultBranch: branch.trim() } : {}),
     });
     setUrl("");
-    setName("");
     setBranch("");
   }
   return (
@@ -424,21 +426,7 @@ function AgentRepoDialog(props: {
           <DialogTitle>Add agent repository</DialogTitle>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
-          <Field
-            id="agent-repo-url"
-            label="URL"
-            value={url}
-            onChange={setUrl}
-            placeholder="git@github.com:org/repo.git"
-            mono
-          />
-          <Field
-            id="agent-repo-name"
-            label="Name"
-            value={name}
-            onChange={setName}
-            placeholder={deriveRepoLocalPath(url) || "repo"}
-          />
+          <Field id="agent-repo-url" label="URL" value={url} onChange={setUrl} placeholder="github.com/org/repo" mono />
           <Field id="agent-repo-branch" label="Default branch" value={branch} onChange={setBranch} placeholder="main" />
           {error ? (
             <p className="text-body" style={{ color: "var(--state-error)" }}>
