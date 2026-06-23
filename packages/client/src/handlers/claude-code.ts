@@ -55,6 +55,12 @@ import {
   type ProviderRetryDecision,
 } from "../runtime/provider-retry-policy.js";
 import { materializeResourceSkills } from "../runtime/resource-skills.js";
+import {
+  buildBriefingUpdateNotice,
+  computeBriefingFingerprint,
+  readSessionBriefingFingerprint,
+  writeSessionBriefingFingerprint,
+} from "../runtime/session-briefing-fingerprint.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspace.js";
 import { chunkAssistantText } from "./assistant-text.js";
@@ -909,6 +915,22 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       message: { role: "user", content: await sessionCtx.formatInboundContent(message) },
       parent_tool_use_id: null,
       session_id: sessionId,
+    };
+  }
+
+  /**
+   * Prepend the one-time "your instructions changed — re-read CLAUDE.md" notice
+   * to a resumed turn's user message, so the agent reads it before acting on
+   * the message. Only the text content shape is handled (every
+   * `toSDKUserMessage` branch returns a string `content`); anything else is
+   * returned untouched.
+   */
+  function prependBriefingUpdateNotice(sdkMsg: SDKUserMessage, claudeMdPath: string): SDKUserMessage {
+    const { content } = sdkMsg.message;
+    if (typeof content !== "string") return sdkMsg;
+    return {
+      ...sdkMsg,
+      message: { ...sdkMsg.message, content: `${buildBriefingUpdateNotice(claudeMdPath)}\n\n${content}` },
     };
   }
 
@@ -1811,6 +1833,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // circuit the expensive integrate path on its presence.
       markWorkspaceInitComplete(cwd);
 
+      // Record the briefing this session is starting under, so a later resume
+      // can detect a runtime-upgrade briefing change and nudge the agent to
+      // re-read CLAUDE.md (see session-briefing-fingerprint.ts).
+      writeSessionBriefingFingerprint(cwd, claudeSessionId, computeBriefingFingerprint(briefing));
+
       sessionCtx.log(
         `Starting session (${claudeSessionId}), cwd=${cwd}, permissionMode=${config.permissionMode ?? "bypassPermissions"}`,
       );
@@ -1922,6 +1949,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             "First Tree message history is preserved.",
         );
         claudeSessionId = freshSessionId;
+        // Cold start under a fresh id: record the current briefing as this
+        // session's baseline. No update notice — there is no prior transcript
+        // built under a stale briefing to warn about.
+        writeSessionBriefingFingerprint(cwd, freshSessionId, computeBriefingFingerprint(briefing));
         let freshSdkMsg: SDKUserMessage | null = null;
         if (message) {
           freshSdkMsg = await toSDKUserMessage(message, sessionCtx, freshSessionId);
@@ -1938,9 +1969,29 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       }
 
       sessionCtx.log(`Resuming session (${sessionId}), cwd=${cwd}`);
+
+      // Briefing-change detection: the freshly-rewritten briefing this resume
+      // reads may differ from the one this session's transcript was built
+      // under (typically a runtime upgrade that changed the operating contract
+      // or skill set). A resumed Claude session does not reliably act on the
+      // changed CLAUDE.md against its established behavior, so surface a
+      // one-time notice into this turn telling it to re-read CLAUDE.md. A
+      // missing baseline (a session predating this mechanism) counts as
+      // changed — those are exactly the stale sessions worth nudging once.
+      // Only touch this on a message-bearing turn: a no-message reclaim has no
+      // turn to carry the notice and must not advance the baseline, or the
+      // next real turn would miss the change.
       let resumeSdkMsg: SDKUserMessage | null = null;
       if (message) {
+        const briefingFingerprint = computeBriefingFingerprint(briefing);
+        const briefingChanged = readSessionBriefingFingerprint(cwd, sessionId) !== briefingFingerprint;
         resumeSdkMsg = await toSDKUserMessage(message, sessionCtx, sessionId);
+        if (briefingChanged) {
+          sessionCtx.log(`Resume: briefing changed since last turn — prepending re-read notice (${sessionId})`);
+          resumeSdkMsg = prependBriefingUpdateNotice(resumeSdkMsg, join(cwd, "CLAUDE.md"));
+        }
+        // Advance the baseline to what the agent is told this turn.
+        writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
       }
       spawnQuery(sessionId, sessionCtx, sessionId);
       if (resumeSdkMsg) {
