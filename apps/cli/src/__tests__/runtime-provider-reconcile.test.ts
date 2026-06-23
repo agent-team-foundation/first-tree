@@ -188,6 +188,8 @@ describe("uploadClientCapabilities", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("PATCHes /clients/:id/capabilities with the snapshot", async () => {
@@ -244,9 +246,48 @@ describe("uploadClientCapabilities", () => {
         clientId: "cli-1",
         capabilities: {},
       }),
-    ).rejects.toThrow(/403/);
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("retries transient fetch failures through the SDK upload path", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+
+    const upload = uploadClientCapabilities({
+      serverUrl: "http://first-tree.test",
+      accessToken: "tok",
+      clientId: "cli-1",
+      capabilities: {},
+    });
+    await flush(upload);
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
+
+async function flush(promise: Promise<unknown>, maxFlushes = 50): Promise<void> {
+  let settled = false;
+  let error: unknown;
+  promise.then(
+    () => {
+      settled = true;
+    },
+    (err) => {
+      error = err;
+      settled = true;
+    },
+  );
+  for (let i = 0; i < maxFlushes && !settled; i++) {
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1000);
+  }
+  if (!settled) throw new Error("flush did not settle within maxFlushes");
+  if (error !== undefined) throw error;
+}
 
 describe("uploadAgentSkills", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
