@@ -129,6 +129,15 @@ async function setInputValue(element: HTMLInputElement, value: string): Promise<
   await flush();
 }
 
+async function blurInput(element: Element | null): Promise<void> {
+  if (!element) throw new Error("Expected element to blur");
+  await act(async () => {
+    // React's onBlur listens to the bubbling `focusout` event.
+    element.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  });
+  await flush();
+}
+
 async function setFileInput(element: HTMLInputElement, file: File): Promise<void> {
   Object.defineProperty(element, "files", { configurable: true, value: [file] });
   await act(async () => {
@@ -324,11 +333,12 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     await click(buttonByText(document.body, "Remove image"));
     expect(agentApiMocks.deleteAgentAvatar).toHaveBeenCalledWith("agent-1");
 
-    // Save commits identity fields + the fallback color in one PATCH.
+    // Colour saves instantly on swatch click — there is no Save button.
     await click(document.body.querySelector('button[title="hue-3"]'));
-    await click(buttonByText(document.body, "Save"));
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ displayName: "Nova", avatarColorToken: "hue-3" }));
-    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith({ avatarColorToken: "hue-3" });
+    expect(onSaved).toHaveBeenCalled();
+    // "Done" just closes — every field already saved on its own commit.
+    await click(buttonByText(document.body, "Done"));
     expect(onOpenChange).toHaveBeenCalledWith(false);
 
     await act(async () => root.unmount());
@@ -346,15 +356,17 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
 
     const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
     if (!displayInput) throw new Error("Expected display field");
+    // Name commits on blur: empty → inline error, no save.
     await setInputValue(displayInput, " ");
-    await click(buttonByText(document.body, "Save"));
+    await blurInput(displayInput);
     expect(document.body.textContent).toContain("Display name is required.");
     expect(onSave).not.toHaveBeenCalled();
 
+    // Valid name commits on blur; the (rejected) save surfaces an error and does
+    // not flash "saved". Nothing closes the dialog (Done was never clicked).
     await setInputValue(displayInput, "Nova Updated");
-    await click(buttonByText(document.body, "Save"));
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ displayName: "Nova Updated" }));
-    // Save failed → dialog stays open (no close), error surfaced, no saved flash.
+    await blurInput(displayInput);
+    expect(onSave).toHaveBeenCalledWith({ displayName: "Nova Updated" });
     expect(document.body.textContent).toContain("Identity update failed");
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(onSaved).not.toHaveBeenCalled();
@@ -412,17 +424,14 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     const visibilitySelect = document.body.querySelector<HTMLButtonElement>("#profile-visibility");
     const delegateSelect = document.body.querySelector<HTMLButtonElement>("#profile-delegate");
     if (!displayInput || !visibilitySelect || !delegateSelect) throw new Error("Expected fields");
+    // Each field saves on its own commit — no Save button.
     await setInputValue(displayInput, "Bestony Renamed");
+    await blurInput(displayInput);
+    expect(onSave).toHaveBeenCalledWith({ displayName: "Bestony Renamed" });
     await chooseSelectOption(visibilitySelect, "Visible to your team");
+    expect(onSave).toHaveBeenCalledWith({ visibility: "organization" });
     await chooseSelectOption(delegateSelect, "Second Helper");
-    await click(buttonByText(document.body, "Save"));
-    expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({
-        displayName: "Bestony Renamed",
-        delegateMention: "delegate-2",
-        visibility: "organization",
-      }),
-    );
+    expect(onSave).toHaveBeenCalledWith({ delegateMention: "delegate-2" });
     await act(async () => owner.root.unmount());
 
     authMock.value = { memberId: "member-other", role: "member", agentId: "human-other" };

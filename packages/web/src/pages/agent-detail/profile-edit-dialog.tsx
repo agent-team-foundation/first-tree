@@ -8,21 +8,14 @@ import {
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Check } from "lucide-react";
-import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { deleteAgentAvatar, listAgents, uploadAgentAvatar } from "../../api/agents.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { AgentChip } from "../../components/agent-chip.js";
 import { resolveAvatarHue } from "../../components/chat/chat-row-avatar.js";
 import { Identicon } from "../../components/identicon.js";
 import { Button } from "../../components/ui/button.js";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../components/ui/dialog.js";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
@@ -134,7 +127,8 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
   const [picked, setPicked] = useState<AvatarColorToken | null>(initialColor);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
   const [pixelCandidates, setPixelCandidates] = useState<Array<{ seed: string; hueIdx: number }>>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -156,7 +150,8 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
     setDelegateMention(agent.delegateMention ?? "");
     setVisibility(agent.visibility);
     setPicked(AVATAR_COLOR_TOKENS.find((t) => t === agent.avatarColorToken) ?? null);
-    setFormError(null);
+    setSaveError(null);
+    setNameError(null);
     setImageError(null);
     setPixelCandidates([]);
   }, [open, agent]);
@@ -188,29 +183,33 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
     [assistantsQuery.data],
   );
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setFormError(null);
-    const trimmed = displayName.trim();
-    if (!trimmed) {
-      setFormError("Display name is required.");
-      return;
-    }
+  // Every field saves on its own commit (text on blur / Enter, selects + colour
+  // on change) — consistent with the rest of the agent-detail page, which has no
+  // Save button. Each save is a partial PATCH /agents/:uuid; the avatar image is
+  // handled eagerly below, separately.
+  async function saveField(patch: UpdateAgent) {
+    setSaveError(null);
     setSaving(true);
     try {
-      // Identity fields and the fallback color are all PATCH /agents/:uuid, so
-      // they go in one atomic call. Image is handled eagerly below, separately.
-      const patch: UpdateAgent = { displayName: trimmed, avatarColorToken: picked };
-      if (canEditDelegate) patch.delegateMention = delegateMention || null;
-      if (visibility !== agent.visibility) patch.visibility = visibility;
       await onSave(patch);
       onSaved?.();
-      onOpenChange(false);
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : String(err));
+      setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
+  }
+
+  // Display name is required, so it commits on blur / Enter (not per keystroke):
+  // empty → inline error and no save; changed + valid → save.
+  function commitName() {
+    const trimmed = displayName.trim();
+    if (!trimmed) {
+      setNameError("Display name is required.");
+      return;
+    }
+    setNameError(null);
+    if (trimmed !== agent.displayName) saveField({ displayName: trimmed });
   }
 
   async function onFileChange(e: ChangeEvent<HTMLInputElement>) {
@@ -283,16 +282,17 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>Edit profile</DialogTitle>
-          <DialogDescription>
-            {isHuman
-              ? "Avatar changes (image) save immediately. Other details save when you click Save."
-              : "Avatar changes (image or pixel avatar) save immediately. Other details save when you click Save."}
-          </DialogDescription>
         </DialogHeader>
-        <form onSubmit={submit} className="space-y-5">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            commitName();
+          }}
+          className="space-y-5"
+        >
           {/* Identity */}
           <div className="space-y-2">
             <Label>Agent name</Label>
@@ -307,9 +307,11 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
               id="profile-display"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
+              onBlur={commitName}
               placeholder="How teammates see this agent"
               maxLength={200}
             />
+            {nameError && <p className="text-caption text-destructive">{nameError}</p>}
           </div>
           <div className="space-y-2">
             <Label htmlFor="profile-visibility">Visibility</Label>
@@ -317,7 +319,11 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
               id="profile-visibility"
               aria-label="Visibility"
               value={visibility}
-              onChange={(v) => setVisibility(v as typeof visibility)}
+              onChange={(v) => {
+                const next = v as typeof visibility;
+                setVisibility(next);
+                saveField({ visibility: next });
+              }}
               disabled={!canChangeVisibility}
               options={[
                 { value: AGENT_VISIBILITY.ORGANIZATION, label: VISIBILITY_LABELS[AGENT_VISIBILITY.ORGANIZATION] },
@@ -334,7 +340,10 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
                   id="profile-delegate"
                   aria-label="Delegate Mention"
                   value={delegateMention}
-                  onChange={setDelegateMention}
+                  onChange={(v) => {
+                    setDelegateMention(v);
+                    saveField({ delegateMention: v || null });
+                  }}
                   options={delegateOptions}
                   searchable
                 />
@@ -445,7 +454,10 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
               <Swatch
                 label="Auto"
                 selected={picked === null}
-                onClick={() => setPicked(null)}
+                onClick={() => {
+                  setPicked(null);
+                  saveField({ avatarColorToken: null });
+                }}
                 background={resolveAvatarHue(null, agent.uuid)}
                 isAuto
               />
@@ -454,24 +466,26 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
                   key={token}
                   label={token}
                   selected={picked === token}
-                  onClick={() => setPicked(token)}
+                  onClick={() => {
+                    setPicked(token);
+                    saveField({ avatarColorToken: token });
+                  }}
                   background={`var(--avatar-${token})`}
                 />
               ))}
             </div>
             <p className="text-caption text-muted-foreground">
-              Auto chooses a stable color for this agent. The color is used only when no image is set, and saves with
-              the identity fields below.
+              Auto chooses a stable color for this agent. Used only when no image is set.
             </p>
           </div>
 
-          {formError && <p className="text-body text-destructive">{formError}</p>}
+          {saveError && <p className="text-body text-destructive">{saveError}</p>}
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={saving || uploading}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={saving || uploading}>
-              {saving ? "Saving…" : "Save"}
+            <span className="mr-auto self-center text-caption text-muted-foreground" aria-live="polite">
+              {saving ? "Saving…" : null}
+            </span>
+            <Button type="button" onClick={() => onOpenChange(false)} disabled={uploading}>
+              Done
             </Button>
           </DialogFooter>
         </form>
