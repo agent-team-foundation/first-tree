@@ -2,7 +2,7 @@
  * The two kickoff bootstrap messages the onboarding "Your Context Tree" step
  * sends to a freshly-created agent, chosen by the user's "new vs existing tree"
  * choice. Prose, not shell recipes: the agent's workspace has the shipped
- * First Tree skills (`first-tree-guide`, `first-tree-write`, `first-tree-read`,
+ * First Tree skills (`first-tree-welcome`, `first-tree-write`, `first-tree-read`,
  * `first-tree-seed`), and those skills own the concrete flow. These messages
  * only state the goal + the source repos (and, for the existing path, the
  * tree URL) and defer the mechanics, so they don't drift as the CLI / skills
@@ -16,12 +16,12 @@
  * skills directly instead of asking the agent to self-provision.
  *
  * Three paths:
- *   - existing tree (buildBindBootstrap): the team's tree already exists and is
- *     populated, and the binding (workspace.json) is written automatically by
- *     the runtime — so the agent is NOT asked to bind or open a PR back to the
- *     source. `first-tree-seed` does not apply to a populated tree; the agent
- *     reads the tree and uses `first-tree-write` for any further writes. Sent
- *     for the admin who just connected repos to an already-existing team tree.
+ *   - existing tree (buildBindBootstrap): the team already has a Context Tree
+ *     binding, and the runtime writes workspace.json automatically — so the
+ *     agent is NOT asked to bind or open a PR back to the source. Today this
+ *     legacy bootstrap asks the agent to read the tree and use
+ *     `first-tree-write` for further writes; the tree setup chat owns deciding
+ *     whether a bound tree is empty enough for `first-tree-seed`.
  *   - new tree (buildCreateBootstrap): Cloud has already created the empty tree
  *     repo, written `context_tree`, and (on this session) the runtime writes
  *     `workspace.json`, so the new-tree self-check preconditions for
@@ -73,7 +73,7 @@ export function buildValueFirstBootstrap(
   return [
     `First Tree is getting ${opts.agentDisplayName} up to speed on ${formatInlineScope(sourceUrls)}.`,
     "",
-    "Use the first-tree-guide skill for this onboarding first chat.",
+    "Use the first-tree-welcome skill for this onboarding first chat.",
     "",
     "Goal: read before speaking, show concrete understanding, then help the user complete one useful first task.",
     ...sourceLines,
@@ -81,7 +81,7 @@ export function buildValueFirstBootstrap(
     "First response requirements:",
     "- Cite specific evidence from the repo or team context: stack, entry points, modules, tests, TODOs, conventions, or a concrete risk you actually observed.",
     "- Offer 2–3 evidence-backed first tasks that are small, low-risk, verifiable, and likely to produce user-visible value quickly.",
-    "- Send the task menu as format=request with concise options, a `Skip for now` option, and free-text accepted.",
+    "- Send the task menu as format=request with concise real-task options and free-text accepted; do not add a separate skip option because the Web ask footer already provides Skip.",
     "- If evidence is thin, prefer read-only orientation tasks such as mapping the architecture or explaining the test strategy; do not invent bugs.",
     `- ${treeLine}`,
     "- Do not impersonate the user or say the user asked for this. First Tree sent this system kickoff.",
@@ -94,7 +94,7 @@ export function buildNoRepoBootstrap(agentDisplayName: string): string {
   return [
     `First Tree is introducing ${agentDisplayName} before a repo is connected.`,
     "",
-    "Use the first-tree-guide skill for this onboarding first chat.",
+    "Use the first-tree-welcome skill for this onboarding first chat.",
     "",
     "Goal: be useful immediately, then invite the user to point you at real code without requiring GitHub authorization first.",
     "",
@@ -102,7 +102,7 @@ export function buildNoRepoBootstrap(agentDisplayName: string): string {
     "- Introduce yourself briefly as the user's agent.",
     "- Ask for either a local clone path or a GitHub URL so you can read the code on this machine.",
     "- Make clear that reading a local clone or accessible URL can happen before any long-term team setup.",
-    "- If the user gives code, inspect it and then send a format=request menu with 2–3 evidence-backed, bounded first tasks plus `Skip for now`.",
+    "- If the user gives code, inspect it and then send a format=request menu with 2–3 evidence-backed, bounded first tasks and free-text accepted; do not add a separate skip option because the Web ask footer already provides Skip.",
     "- Only after showing value should you ask whether the repo should become long-term team code.",
     "- Do not ask for broad GitHub authorization before the user has seen repo-specific value.",
     "",
