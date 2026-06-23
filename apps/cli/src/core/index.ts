@@ -68,7 +68,7 @@ export {
 export { blank, status } from "./output.js";
 // Interactive prompts
 export { isInteractive, promptAddAgent, promptMissingFields } from "./prompt.js";
-// Runtime-auth login orchestrator (device-code / browser provider login)
+// Runtime-auth login orchestrator (browser-OAuth provider login)
 export { type RuntimeAuthLoginDeps, runRuntimeAuthLogin } from "./runtime-auth-login.js";
 export type { PinnedAgentRuntimeRecord } from "./runtime-provider-reconcile.js";
 // Pre-flight runtime-provider reconciliation (P2 — capabilities + YAML rewrite)

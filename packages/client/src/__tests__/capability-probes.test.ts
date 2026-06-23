@@ -347,7 +347,7 @@ describe("probeClaudeCodeCapability", () => {
     expect(runSmoke).toHaveBeenCalledWith("/usr/local/bin/claude");
   });
 
-  it("no on-disk binary is NOT missing when the bundled cli.js launch-verifies", async () => {
+  it("no on-disk binary is NOT missing when the bundled artifact launch-verifies", async () => {
     const runSmoke = vi.fn(smokeOk);
     const entry = await probeClaudeCodeCapability({
       resolveExecutable: bundledOnly,
@@ -356,13 +356,13 @@ describe("probeClaudeCodeCapability", () => {
       runSmoke,
     });
     expect(entry.state).toBe("ok");
-    // Version is the real CLI version from `node cli.js --version`.
+    // Version is the real CLI version from the bundled artifact's `--version`.
     expect(entry.sdkVersion).toBe("2.1.84");
-    // undefined binary → the SDK spawns its own bundled cli.js.
+    // undefined binary → the SDK spawns its own bundled Claude binary.
     expect(runSmoke).toHaveBeenCalledWith(undefined);
   });
 
-  it("`missing` when no on-disk binary AND the bundled cli.js fails to launch — even while unauthenticated", async () => {
+  it("`missing` when no on-disk binary AND the bundled artifact fails to launch — even while unauthenticated", async () => {
     // Regression for the bind-gate false positive (PR #996 review): a broken
     // SDK bundle must resolve to `missing` regardless of auth state. Before
     // the fix a failing auth precheck short-circuited to
@@ -371,13 +371,13 @@ describe("probeClaudeCodeCapability", () => {
     const runSmoke = vi.fn(smokeOk);
     const entry = await probeClaudeCodeCapability({
       resolveExecutable: bundledOnly,
-      verifyBundledArtifact: async () => ({ ok: false, error: "SDK bundled cli.js missing at /x/cli.js" }),
+      verifyBundledArtifact: async () => ({ ok: false, error: "bundled Claude binary could not be located" }),
       detectAuth: noAuth,
       runSmoke,
     });
     expect(entry.state).toBe("missing");
     expect(entry.available).toBe(false);
-    expect(entry.error).toContain("cli.js missing");
+    expect(entry.error).toContain("bundled Claude binary could not be located");
     // The launch artifact failed in resolve — neither auth precheck nor smoke run.
     expect(runSmoke).not.toHaveBeenCalled();
   });
@@ -441,11 +441,13 @@ describe("probeClaudeCodeCapability", () => {
 });
 
 describe("verifyBundledClaudeArtifact (real node_modules)", () => {
-  it("launch-verifies the SDK's bundled cli.js via `node cli.js --version`", async () => {
+  it("launch-verifies the SDK's bundled Claude binary via `<artifact> --version`", async () => {
     // The repo depends on @anthropic-ai/claude-agent-sdk, so on any dev/CI
-    // machine the bundled cli.js resolves and `node cli.js --version` runs.
-    // This guards the import.meta.resolve / pnpm-symlink fragility (the same
-    // class of bug that bit the codex anchor under vitest SSR).
+    // machine the bundled artifact resolves — a legacy `cli.js` or a modern
+    // per-platform native binary — and its `--version` runs. This guards the
+    // import.meta.resolve / pnpm-symlink fragility (the same class of bug that
+    // bit the codex anchor under vitest SSR) and the SDK's cli.js → native-binary
+    // layout change.
     const res = await verifyBundledClaudeArtifact();
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.version === null || /^\d+\.\d+(\.\d+)?$/.test(res.version)).toBe(true);

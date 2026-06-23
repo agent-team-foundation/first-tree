@@ -262,15 +262,15 @@ export function registerDaemonStartCommand(daemon: Command): void {
 
         // In-product runtime-auth: the server pushes `runtime-auth:start` when a
         // member clicks "Connect <provider>" in the console. The daemon drives
-        // the provider's official login on this host and surfaces progress
-        // (device code / success / failure) by re-PATCHing capabilities through
-        // the refresher, which the web already polls — no bespoke channel.
+        // the provider's official browser-OAuth login on this host and surfaces
+        // progress (success / failure) by re-PATCHing capabilities through the
+        // refresher, which the web already polls — no bespoke channel.
         runtime.onRuntimeAuthStart((command) => {
           // Serialize per provider: ignore a duplicate start while a login is
-          // already running, else a second `codex login --device-auth` spawns
-          // and its device code races the first. The interactive flag also
-          // tells the background poll to preserve the pending device-code entry
-          // instead of clobbering it on the next re-probe.
+          // already running, else a second `codex login` spawns and races the
+          // first. The interactive flag also tells the background poll to
+          // preserve the pending browser-auth entry instead of clobbering it on
+          // the next re-probe.
           if (capabilityRefresher.isInteractive(command.provider)) {
             print.status(
               "•",

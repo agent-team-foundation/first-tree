@@ -2,7 +2,6 @@ import type { CapabilityEntry, PendingAuth } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import {
   deriveRuntimeAuthView,
-  offersDeviceCodeFallback,
   providerAuthHandledInProduct,
   providerSupportsInProductAuth,
   runtimeAuthIsPending,
@@ -20,12 +19,6 @@ const entry = (over: Partial<CapabilityEntry>): CapabilityEntry => ({
 });
 
 const browserPending = (expiresAt: string): PendingAuth => ({ method: "browser", expiresAt });
-const deviceCodePending = (expiresAt: string): PendingAuth => ({
-  method: "device-code",
-  verificationUrl: "https://auth.openai.com/codex/device",
-  userCode: "0WYJ-KDUHH",
-  expiresAt,
-});
 
 describe("deriveRuntimeAuthView", () => {
   it("shows the browser-pending state while a browser login is live (PRIMARY)", () => {
@@ -47,21 +40,6 @@ describe("deriveRuntimeAuthView", () => {
     expect(view).toEqual({ kind: "browser-pending", authUrl: "https://x/auth" });
   });
 
-  it("shows the device code while a device-code login is live (FALLBACK)", () => {
-    const view = deriveRuntimeAuthView(
-      "codex",
-      entry({ pendingAuth: deviceCodePending("2026-06-22T12:10:00.000Z") }),
-      NOW,
-    );
-    expect(view).toEqual({
-      kind: "device-code",
-      verificationUrl: "https://auth.openai.com/codex/device",
-      userCode: "0WYJ-KDUHH",
-      expiresAt: "2026-06-22T12:10:00.000Z",
-    });
-    expect(runtimeAuthIsPending(view)).toBe(true);
-  });
-
   it("offers Connect for an unauthenticated codex with no pending login", () => {
     expect(deriveRuntimeAuthView("codex", entry({}), NOW)).toEqual({ kind: "connectable" });
   });
@@ -70,18 +48,6 @@ describe("deriveRuntimeAuthView", () => {
     expect(
       deriveRuntimeAuthView("codex", entry({ pendingAuth: browserPending("2026-06-22T11:50:00.000Z") }), NOW),
     ).toEqual({ kind: "connectable" });
-    expect(
-      deriveRuntimeAuthView("codex", entry({ pendingAuth: deviceCodePending("2026-06-22T11:50:00.000Z") }), NOW),
-    ).toEqual({ kind: "connectable" });
-  });
-
-  it("ignores a device-code pending missing its url/code", () => {
-    const view = deriveRuntimeAuthView(
-      "codex",
-      entry({ pendingAuth: { method: "device-code", expiresAt: "2026-06-22T12:10:00.000Z" } }),
-      NOW,
-    );
-    expect(view).toEqual({ kind: "connectable" });
   });
 
   it("offers Connect for an unauthenticated claude-code (cc/codex parity)", () => {
@@ -107,25 +73,6 @@ describe("deriveRuntimeAuthView", () => {
       NOW,
     );
     expect(view.kind).toBe("browser-pending");
-  });
-
-  it("offers the device-code fallback only upfront for codex, never mid-browser-login", () => {
-    const connectable = deriveRuntimeAuthView("codex", entry({}), NOW);
-    expect(connectable.kind).toBe("connectable");
-    expect(offersDeviceCodeFallback("codex", connectable)).toBe(true);
-
-    // Mid-browser-login the daemon drops a duplicate start, so the fallback
-    // would be a dead action — it must not be offered.
-    const pending = deriveRuntimeAuthView(
-      "codex",
-      entry({ pendingAuth: browserPending("2026-06-22T12:05:00.000Z") }),
-      NOW,
-    );
-    expect(pending.kind).toBe("browser-pending");
-    expect(offersDeviceCodeFallback("codex", pending)).toBe(false);
-
-    // Claude has no device-code login.
-    expect(offersDeviceCodeFallback("claude-code", connectable)).toBe(false);
   });
 
   it("knows which providers support in-product auth", () => {

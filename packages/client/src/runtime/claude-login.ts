@@ -1,6 +1,6 @@
 import type { spawn } from "node:child_process";
 import { resolveClaudeCodeExecutable } from "../handlers/claude-executable.js";
-import { locateSdkCliJs } from "./capabilities/claude-code.js";
+import { resolveBundledClaudeBinary } from "./capabilities/claude-code.js";
 import { BROWSER_LOGIN_TIMEOUT_MS, type LoginOutcome, runBrowserLogin } from "./runtime-login.js";
 
 /**
@@ -11,9 +11,10 @@ import { BROWSER_LOGIN_TIMEOUT_MS, type LoginOutcome, runBrowserLogin } from "./
  * First Tree never sees the token.
  *
  * Resolution mirrors the capability probe: prefer a real `claude` resolved on
- * env / PATH / a well-known dir; otherwise run the SDK-bundled `cli.js` via
- * `node cli.js` (the same artifact the runtime spawns when no on-disk `claude`
- * resolves).
+ * env / PATH / a well-known dir; otherwise run the SDK's bundled Claude binary
+ * (legacy `cli.js` via `node`, or a modern per-platform native binary spawned
+ * directly) — the same artifact the runtime spawns when no on-disk `claude`
+ * resolves.
  */
 
 export type ClaudeLoginInvocation = { ok: true; command: string; baseArgs: string[] } | { ok: false; error: string };
@@ -24,13 +25,16 @@ export function resolveClaudeLoginInvocation(env: NodeJS.ProcessEnv = process.en
   if (resolution.source !== "default" && resolution.path) {
     return { ok: true, command: resolution.path, baseArgs: [] };
   }
-  // No on-disk `claude` — drive the SDK-bundled cli.js with node.
+  // No on-disk `claude` — drive the SDK-bundled Claude binary.
   try {
-    return { ok: true, command: process.execPath, baseArgs: [locateSdkCliJs()] };
+    const bundled = resolveBundledClaudeBinary();
+    return bundled.kind === "cli-js"
+      ? { ok: true, command: process.execPath, baseArgs: [bundled.path] }
+      : { ok: true, command: bundled.path, baseArgs: [] };
   } catch (err) {
     return {
       ok: false,
-      error: `no \`claude\` on PATH and the SDK-bundled cli.js could not be located: ${
+      error: `no \`claude\` on PATH and the SDK-bundled Claude binary could not be located: ${
         err instanceof Error ? err.message : String(err)
       }`,
     };

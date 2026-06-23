@@ -1,9 +1,4 @@
-import {
-  BROWSER_LOGIN_TIMEOUT_MS,
-  type CodexBrowserLoginOptions,
-  type CodexDeviceAuthOptions,
-  type DeviceAuthOutcome,
-} from "@first-tree/client";
+import { BROWSER_LOGIN_TIMEOUT_MS, type CodexBrowserLoginOptions, type LoginOutcome } from "@first-tree/client";
 import type { CapabilityEntry } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import { runRuntimeAuthLogin } from "../core/runtime-auth-login.js";
@@ -34,8 +29,7 @@ type Recorded = { provider: string; entry: CapabilityEntry };
 
 function harness(opts: {
   resolveOk?: boolean;
-  outcome?: DeviceAuthOutcome;
-  fireDeviceCode?: boolean;
+  outcome?: LoginOutcome;
   fireAuthUrl?: string;
   probeResult?: CapabilityEntry;
   current?: CapabilityEntry;
@@ -61,20 +55,8 @@ function harness(opts: {
             runtimePath: null,
             version: "0.130.0",
           } as const),
-    runBrowserLogin: async (o: CodexBrowserLoginOptions): Promise<DeviceAuthOutcome> => {
+    runBrowserLogin: async (o: CodexBrowserLoginOptions): Promise<LoginOutcome> => {
       if (opts.fireAuthUrl) o.onAuthUrl?.(opts.fireAuthUrl);
-      await new Promise((r) => setTimeout(r, 0));
-      return opts.outcome ?? ({ ok: true } as const);
-    },
-    runDeviceAuth: async (o: CodexDeviceAuthOptions): Promise<DeviceAuthOutcome> => {
-      if (opts.fireDeviceCode !== false) {
-        o.onDeviceCode({
-          verificationUrl: "https://auth.openai.com/codex/device",
-          userCode: "0WYJ-KDUHH",
-          expiresInMinutes: 15,
-        });
-      }
-      // Let the fire-and-forget publishPending settle before resolving.
       await new Promise((r) => setTimeout(r, 0));
       return opts.outcome ?? ({ ok: true } as const);
     },
@@ -89,7 +71,7 @@ describe("runRuntimeAuthLogin — primary browser OAuth", () => {
     await runRuntimeAuthLogin({ provider: "codex", ref: "r1" }, h.deps);
 
     expect(h.calls).toHaveLength(2);
-    // First: a browser pending (no device code), so the web shows "finish in browser".
+    // First: a browser pending, so the web shows "finish in browser".
     expect(h.calls[0]?.entry.state).toBe("unauthenticated");
     expect(h.calls[0]?.entry.pendingAuth).toEqual({
       method: "browser",
@@ -136,38 +118,8 @@ describe("runRuntimeAuthLogin — primary browser OAuth", () => {
   });
 });
 
-describe("runRuntimeAuthLogin — device-code fallback (method override)", () => {
-  it("publishes a device-code pending then ok in order on success", async () => {
-    const h = harness({ outcome: { ok: true }, probeResult: okEntry() });
-    await runRuntimeAuthLogin({ provider: "codex", method: "device-auth", ref: "d1" }, h.deps);
-
-    expect(h.calls).toHaveLength(2);
-    expect(h.calls[0]?.entry.pendingAuth).toEqual({
-      method: "device-code",
-      verificationUrl: "https://auth.openai.com/codex/device",
-      userCode: "0WYJ-KDUHH",
-      expiresAt: new Date(NOW + 15 * 60_000).toISOString(),
-    });
-    expect(h.calls[1]?.entry.state).toBe("ok");
-    expect(h.calls[1]?.entry.pendingAuth).toBeUndefined();
-  });
-
-  it("on failure without a code, only the cleared re-probe entry is published", async () => {
-    const h = harness({
-      fireDeviceCode: false,
-      outcome: { ok: false, reason: "no-prompt", error: "bad config" },
-      probeResult: unauthEntry(),
-    });
-    await runRuntimeAuthLogin({ provider: "codex", method: "device-auth", ref: "d2" }, h.deps);
-
-    expect(h.calls).toHaveLength(1);
-    expect(h.calls[0]?.entry.pendingAuth).toBeUndefined();
-    expect(h.logs.some((l) => l.includes("no-prompt"))).toBe(true);
-  });
-});
-
 describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", () => {
-  function claudeHarness(opts: { resolveOk?: boolean; outcome?: DeviceAuthOutcome; probeResult?: CapabilityEntry }) {
+  function claudeHarness(opts: { resolveOk?: boolean; outcome?: LoginOutcome; probeResult?: CapabilityEntry }) {
     const calls: Recorded[] = [];
     const logs: string[] = [];
     const deps = {
@@ -183,7 +135,7 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
         opts.resolveOk === false
           ? ({ ok: false, error: "no claude CLI" } as const)
           : ({ ok: true, command: "/usr/local/bin/claude", baseArgs: [] as string[] } as const),
-      runClaudeBrowser: async (): Promise<DeviceAuthOutcome> => opts.outcome ?? ({ ok: true } as const),
+      runClaudeBrowser: async (): Promise<LoginOutcome> => opts.outcome ?? ({ ok: true } as const),
       probeClaude: async (): Promise<CapabilityEntry> => opts.probeResult ?? unauthEntry(),
       // Claude auth is shared with the TUI runtime — re-probe it too.
       probeClaudeTui: async (): Promise<CapabilityEntry> => opts.probeResult ?? unauthEntry(),

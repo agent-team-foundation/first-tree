@@ -102,10 +102,10 @@ export function disconnectClient(clientId: string): Promise<{ disconnected: bool
 /**
  * Start an in-product runtime-auth login on this client's daemon (the
  * "Connect <provider>" action). The server forwards a command to the daemon,
- * which runs the provider's official login (browser OAuth, or the device-code
- * fallback) and surfaces progress by re-PATCHing capabilities — so the caller
- * just polls {@link listClients} / {@link getClientCapabilities} afterwards and
- * reads `entry.pendingAuth` then the flipped `state`.
+ * which runs the provider's official browser-OAuth login and surfaces progress
+ * by re-PATCHing capabilities — so the caller just polls {@link listClients} /
+ * {@link getClientCapabilities} afterwards and reads `entry.pendingAuth` then
+ * the flipped `state`.
  */
 export function startRuntimeAuth(
   clientId: string,
