@@ -452,6 +452,33 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     await act(async () => root.unmount());
   });
 
+  it("from a focused display-name input, a blur racing the Done click still saves once and closes", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onOpenChange = vi.fn();
+    const { root } = await renderDom(
+      <ProfileEditDialog agent={agent()} open onOpenChange={onOpenChange} onSave={onSave} onSaved={vi.fn()} />,
+    );
+    const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
+    if (!displayInput) throw new Error("Expected display field");
+    displayInput.focus();
+    await setInputValue(displayInput, "Nova Focused");
+    // Reproduce the real pointer order with the blur-started save still in flight
+    // when Done's click lands — dispatched together, no flush between. Done must
+    // wait for the save and still close, saving the name exactly once.
+    const done = buttonByText(document.body, "Done");
+    await act(async () => {
+      done?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      displayInput.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      done?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith({ displayName: "Nova Focused" });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    await act(async () => root.unmount());
+  });
+
   it("offers the pixel-avatar generator only for non-human agents (humans use their GitHub avatar)", async () => {
     const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
 

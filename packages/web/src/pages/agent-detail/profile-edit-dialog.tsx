@@ -145,6 +145,10 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
   // the disabled controls, so a ref (not lagging state) is what actually serializes
   // the partial PATCHes and prevents an older write landing after a newer one.
   const savingRef = useRef(false);
+  // An in-flight display-name commit (or null). Done awaits THIS same commit
+  // before closing, so a save a focused-input blur started still finishes — and
+  // isn't fired a second time by the Done click.
+  const pendingNameRef = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -236,18 +240,34 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
     }
     setNameError(null);
     if (trimmed === savedNameRef.current) return true;
-    const ok = await saveField({ displayName: trimmed });
-    // Advance the dedupe baseline only after a SUCCESSFUL save. If the PATCH is
-    // rejected, the baseline stays put so a retry (blur / Done) re-attempts the
-    // save instead of treating the unsaved value as already committed.
-    if (ok) savedNameRef.current = trimmed;
-    return ok;
+    // Track this commit so a racing Done click awaits the SAME save instead of
+    // firing a second one. Advance the dedupe baseline only after the PATCH
+    // succeeds (inside the chain, before it resolves) — a rejected save stays
+    // retryable rather than being treated as already committed.
+    const p = saveField({ displayName: trimmed }).then((ok) => {
+      if (ok) savedNameRef.current = trimmed;
+      return ok;
+    });
+    pendingNameRef.current = p;
+    try {
+      return await p;
+    } finally {
+      if (pendingNameRef.current === p) pendingNameRef.current = null;
+    }
   }
 
   // Done commits a pending (valid, changed) name and waits for it before closing,
   // so a typed-but-not-yet-blurred name isn't lost; a rejected save keeps the
   // dialog open with its inline error.
   async function handleDone() {
+    // A focused-input blur can start a name save just before this click. Await
+    // THAT same in-flight commit (don't fire a second one); otherwise commit any
+    // pending name here. Close only when the name actually persisted.
+    const inflight = pendingNameRef.current;
+    if (inflight) {
+      if (await inflight) onOpenChange(false);
+      return;
+    }
     if (await commitName()) onOpenChange(false);
   }
 
@@ -531,10 +551,17 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
             <span className="mr-auto self-center text-caption text-muted-foreground" aria-live="polite">
               {saving ? "Saving…" : justSaved ? "Saved" : null}
             </span>
-            {/* Done commits a pending name edit (and waits for it) before closing,
-                so a typed-but-not-yet-blurred name isn't lost. Disabled while a
-                save is in flight so the dialog never closes mid-PATCH. */}
-            <Button type="button" onClick={() => void handleDone()} disabled={editsDisabled}>
+            {/* preventDefault on mousedown keeps focus on a focused display-name
+                input (so it doesn't blur), which means THIS click — not a racing
+                blur-triggered save — owns the commit + close. Done then commits a
+                pending name and closes only if it persisted; disabled while a save
+                is in flight so the dialog never closes mid-PATCH. */}
+            <Button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void handleDone()}
+              disabled={editsDisabled}
+            >
               Done
             </Button>
           </DialogFooter>
