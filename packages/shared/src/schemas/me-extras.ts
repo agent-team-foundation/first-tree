@@ -68,9 +68,9 @@ export type KickoffKind = z.infer<typeof kickoffKindSchema>;
 
 /**
  * Body for `POST /me/onboarding/kickoff` — the idempotent server-side chat
- * creation/send tail of onboarding. Single-chat kickoffs keep the default
- * completion stamp; multi-chat flows can defer the stamp until every required
- * kickoff side effect succeeds.
+ * creation/send tail of onboarding. Callers decide whether this kickoff should
+ * stamp completion after the chat exists; background/support chats can pass
+ * `complete: false`.
  *
  * `agentUuid` is the bootstrap agent the chat is opened with. `bootstrap` is
  * the first message body. `kind` separates the intro vs tree-building intents
@@ -104,12 +104,14 @@ export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSche
  * Web reports:
  *   - `team_renamed`           — Step 1 user changed the auto-named team
  *   - `agent_created`          — Step 2 successfully created the agent
- *   - `tree_chat_started`      — Step 3 [Yes, set it up] succeeded
+ *   - `kickoff_chat_started`   — an intro/work/tree kickoff chat was created
+ *   - `tree_chat_started`      — legacy name for the Step 3 tree kickoff event
  *   - `tree_intro_dismissed`   — Step 3 [I'll do it later] clicked
  */
 export const onboardingEventNameSchema = z.enum([
   "team_renamed",
   "agent_created",
+  "kickoff_chat_started",
   "tree_chat_started",
   "tree_intro_dismissed",
 ]);

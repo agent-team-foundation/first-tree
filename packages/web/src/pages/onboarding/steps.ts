@@ -262,21 +262,18 @@ export type TreeRecoveryFacts = {
   onboardingCompletedAt: string | null;
   /** The caller's role in the selected org. Only admins own the team tree. */
   role: string | null;
-  /**
-   * Whether the selected org has a Context Tree binding
-   * (`context_tree.repo` is set). The skip-the-code-step path leaves this
-   * `false` — onboarding completes without ever provisioning a tree.
-   */
-  hasTreeBinding: boolean;
+  /** Server-side probe result: no tree binding, or a new binding with no tree
+   *  kickoff bootstrap message yet. */
+  treeSetupNeedsAttention: boolean;
 };
 
 /**
  * Should the workspace offer the standalone "build your Context Tree" recovery?
  *
- * True only for an admin who finished onboarding yet whose org never got a tree
- * — the exact state the skip-the-code-step path leaves behind. The onboarding
- * model has no notion of "tree" (completion = "has a usable agent"), so this is
- * the first-class signal for "finished setup but never built a tree".
+ * True only for an admin who finished onboarding yet still has recoverable tree
+ * setup work. The onboarding model has no notion of "tree" (completion = "has a
+ * usable agent"), so this is the first-class signal for "finished setup but
+ * never built / queued the tree setup chat".
  *
  * Deliberately NOT wired into `shouldEnterOnboarding`: recovery is opt-in (the
  * user chose to skip), surfaced via an explicit card / banner — never an
@@ -287,5 +284,5 @@ export function needsTreeSetup(facts: TreeRecoveryFacts): boolean {
   if (!facts.meLoaded) return false;
   if (facts.onboardingCompletedAt === null) return false;
   if (facts.role !== "admin") return false;
-  return !facts.hasTreeBinding;
+  return facts.treeSetupNeedsAttention;
 }

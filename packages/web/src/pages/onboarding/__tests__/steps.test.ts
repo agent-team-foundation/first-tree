@@ -236,13 +236,13 @@ describe("needsTreeSetup", () => {
     meLoaded: true,
     onboardingCompletedAt: "2026-06-10T00:00:00Z",
     role: "admin",
-    hasTreeBinding: false,
+    treeSetupNeedsAttention: true,
   };
-  it("offers recovery to a completed admin whose org has no tree (the skip-the-code-step state)", () => {
+  it("offers recovery to a completed admin whose tree setup still needs attention", () => {
     expect(needsTreeSetup(base)).toBe(true);
   });
-  it("does not offer once the org already has a tree binding", () => {
-    expect(needsTreeSetup({ ...base, hasTreeBinding: true })).toBe(false);
+  it("does not offer once the server reports tree setup is done", () => {
+    expect(needsTreeSetup({ ...base, treeSetupNeedsAttention: false })).toBe(false);
   });
   it("excludes members — they never own the team tree", () => {
     expect(needsTreeSetup({ ...base, role: "member" })).toBe(false);

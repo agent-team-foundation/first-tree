@@ -59,3 +59,14 @@ export async function markOnboardingCompleted(organizationId?: string): Promise<
 export async function kickoffOnboarding(args: KickoffOnboarding): Promise<KickoffOnboardingResult> {
   return api.post<KickoffOnboardingResult>("/me/onboarding/kickoff", args);
 }
+
+export type TreeSetupStatus = {
+  needsTreeSetup: boolean;
+  hasTreeBinding: boolean;
+  hasTreeSetupKickoff: boolean;
+};
+
+export async function getTreeSetupStatus(organizationId: string): Promise<TreeSetupStatus> {
+  const params = new URLSearchParams({ organizationId });
+  return api.get<TreeSetupStatus>(`/me/onboarding/tree-setup-status?${params.toString()}`);
+}
