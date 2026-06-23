@@ -1427,10 +1427,38 @@ describe("ChatView", () => {
       await act(async () => {
         button.click();
       });
+      expect(chatSummaryButton(container)?.textContent).toContain("Summary");
+      expect(chatSummaryButton(container)?.textContent).not.toContain("Status: shipping DescBody soon.");
       await waitForCondition(
         () => [...container.querySelectorAll("strong")].some((el) => el.textContent === "DescBody"),
         "Expected the expanded summary to render the description markdown",
       );
+
+      await act(async () => root.unmount());
+    });
+
+    it("auto-expands an unread summary version on entry", async () => {
+      localStorage.clear();
+      const { ChatView } = await import("../chat-view.js");
+      const unreadDescription = chatDetail({
+        description: DESCRIPTION_MD,
+        descriptionUpdatedAt: "2026-05-28T12:05:00.000Z",
+        lastReadAt: "2026-05-28T12:00:00.000Z",
+      });
+      chatMocks.getChat.mockResolvedValue(unreadDescription);
+      const { container, root } = await renderDom(
+        <ChatView agentId="agent-1" chatId="chat-1" />,
+        (queryClient) => seedChat(queryClient, unreadDescription),
+        "/",
+      );
+
+      await waitForCondition(
+        () =>
+          chatSummaryButton(container)?.getAttribute("aria-label") === "Collapse summary" &&
+          [...container.querySelectorAll("strong")].some((el) => el.textContent === "DescBody"),
+        "Expected the unread summary version to auto-expand on entry",
+      );
+      expect(chatSummaryButton(container)?.textContent).toContain("Summary");
 
       await act(async () => root.unmount());
     });

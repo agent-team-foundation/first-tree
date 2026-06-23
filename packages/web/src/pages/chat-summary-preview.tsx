@@ -7,8 +7,8 @@ import { ChatSummary } from "./workspace/center/chat-summary.js";
  * `app.tsx`). Each demo wraps the summary in a faux white "chat header" + grey
  * "message stream" so the surface reads as it does live: the summary shares the
  * content canvas (`--bg`), set off from the white header (`--bg-raised`) above
- * by a single hairline + the natural bg step. Covers: the auto-expanded "unread
- * + not seen in a while" state (amber highlight), collapsed-with-freshness, the
+ * by a single hairline + the natural bg step. Covers: the auto-expanded unread
+ * summary-version state (amber highlight), collapsed-with-freshness, the
  * no-freshness-data fallback, the empty (renders nothing) case, and first-line
  * heading degradation. Click to expand / collapse. Scroll sticky-collapse + the
  * pinned shadow need the real stream and are verified in the live app.
@@ -121,16 +121,13 @@ export function ChatSummaryPreviewPage() {
         </h1>
         <p className="text-body" style={{ color: "var(--fg-3)" }}>
           Each demo sits under a faux white header and over the grey content canvas, as it does live. Click to expand /
-          collapse. Read-only: no edit affordance; expanded is just the markdown; the freshness ("9 days ago") lives on
-          the bar in both states.
+          collapse. Read-only: no edit affordance; expanded uses a fixed Summary label above the markdown; the freshness
+          ("9 days ago") lives on the bar in both states.
         </p>
       </div>
 
       <section style={{ display: "flex", flexDirection: "column", gap: "var(--sp-6)" }}>
-        <Col
-          label="Unread + not seen in a while"
-          note="auto-expands once + amber highlight · faithful markdown · freshness on the bar"
-        >
+        <Col label="Unread new summary version" note="auto-expands once + amber highlight · freshness on the bar">
           <Demo chatId="preview-unread" description={RICH} descriptionUpdatedAt={hoursAgo(2)} lastReadAt={null} />
         </Col>
 
