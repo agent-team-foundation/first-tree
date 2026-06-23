@@ -236,8 +236,12 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
     }
     setNameError(null);
     if (trimmed === savedNameRef.current) return true;
-    savedNameRef.current = trimmed;
-    return saveField({ displayName: trimmed });
+    const ok = await saveField({ displayName: trimmed });
+    // Advance the dedupe baseline only after a SUCCESSFUL save. If the PATCH is
+    // rejected, the baseline stays put so a retry (blur / Done) re-attempts the
+    // save instead of treating the unsaved value as already committed.
+    if (ok) savedNameRef.current = trimmed;
+    return ok;
   }
 
   // Done commits a pending (valid, changed) name and waits for it before closing,
@@ -356,9 +360,10 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
               aria-label="Visibility"
               value={visibility}
               onChange={(v) => {
+                if (savingRef.current) return;
                 const next = v as typeof visibility;
                 setVisibility(next);
-                saveField({ visibility: next });
+                void saveField({ visibility: next });
               }}
               disabled={!canChangeVisibility || editsDisabled}
               options={[
@@ -377,8 +382,9 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
                   aria-label="Delegate Mention"
                   value={delegateMention}
                   onChange={(v) => {
+                    if (savingRef.current) return;
                     setDelegateMention(v);
-                    saveField({ delegateMention: v || null });
+                    void saveField({ delegateMention: v || null });
                   }}
                   options={delegateOptions}
                   searchable
@@ -492,8 +498,9 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
                 label="Auto"
                 selected={picked === null}
                 onClick={() => {
+                  if (savingRef.current) return;
                   setPicked(null);
-                  saveField({ avatarColorToken: null });
+                  void saveField({ avatarColorToken: null });
                 }}
                 background={resolveAvatarHue(null, agent.uuid)}
                 isAuto
@@ -505,8 +512,9 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
                   label={token}
                   selected={picked === token}
                   onClick={() => {
+                    if (savingRef.current) return;
                     setPicked(token);
-                    saveField({ avatarColorToken: token });
+                    void saveField({ avatarColorToken: token });
                   }}
                   background={`var(--avatar-${token})`}
                   disabled={editsDisabled}

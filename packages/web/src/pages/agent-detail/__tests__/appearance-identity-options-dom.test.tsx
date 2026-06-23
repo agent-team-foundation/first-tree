@@ -428,6 +428,30 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     await act(async () => root.unmount());
   });
 
+  it("retries a rejected name save and does not close on Done", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const onSave = vi.fn().mockRejectedValueOnce(new Error("Name update failed")).mockResolvedValueOnce(undefined);
+    const onOpenChange = vi.fn();
+    const { root } = await renderDom(
+      <ProfileEditDialog agent={agent()} open onOpenChange={onOpenChange} onSave={onSave} onSaved={vi.fn()} />,
+    );
+    const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
+    if (!displayInput) throw new Error("Expected display field");
+    await setInputValue(displayInput, "Nova X");
+    // First Done: the name PATCH rejects → error shown, dialog NOT closed, and the
+    // value is NOT marked saved (the dedupe baseline only advances on success).
+    await click(buttonByText(document.body, "Done"));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("Name update failed");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    // Second Done: Done retries the same value (not skipped); it succeeds and closes.
+    await click(buttonByText(document.body, "Done"));
+    expect(onSave).toHaveBeenCalledTimes(2);
+    expect(onSave).toHaveBeenLastCalledWith({ displayName: "Nova X" });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    await act(async () => root.unmount());
+  });
+
   it("offers the pixel-avatar generator only for non-human agents (humans use their GitHub avatar)", async () => {
     const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
 
