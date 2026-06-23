@@ -200,6 +200,15 @@ function buttonByText(container: ParentNode, text: string): HTMLButtonElement | 
   return [...container.querySelectorAll("button")].find((button) => button.textContent?.includes(text)) ?? null;
 }
 
+async function setInputValue(element: HTMLInputElement, value: string): Promise<void> {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    setter?.call(element, value);
+    element.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  });
+  await flush();
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   document.body.innerHTML = "";
@@ -386,6 +395,38 @@ describe("ResourcesTab", () => {
     // …but the menu stays actionable: add a private repo or jump to Settings.
     expect(buttonByText(document.body, "Add agent repo")).toBeTruthy();
     expect(buttonByText(document.body, "Manage in Settings → Resources")).toBeTruthy();
+  });
+
+  it("agent repo dialog aligns with Settings: no Name field; normalizes URL + derives the name", async () => {
+    const { ResourceTypeSection } = await import("../capability-section.js");
+    const data = agentResources({
+      effective: { version: 1, repos: [], prompts: [], skills: [], mcp: [], unavailable: [] },
+      availableTeamResources: [],
+    });
+    const onMutate = vi.fn();
+    const container = await renderRouted(
+      <ResourceTypeSection type="repo" data={data} canEdit pending={false} onMutate={onMutate} />,
+    );
+    await click(container.querySelector('button[aria-label="Add Repo"]'));
+    await click(buttonByText(document.body, "Add agent repo"));
+    // Two fields only — URL + Default branch — no Name (matches Settings → Resources).
+    expect(document.getElementById("agent-repo-url")).toBeTruthy();
+    expect(document.getElementById("agent-repo-name")).toBeNull();
+    const url = document.getElementById("agent-repo-url");
+    if (!(url instanceof HTMLInputElement)) throw new Error("Expected url input");
+    await setInputValue(url, "github.com/acme/web");
+    const addBtn = [...document.body.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Add") ?? null;
+    await click(addBtn);
+    // Scheme-less URL normalized, name derived from it, no Name field was asked.
+    expect(onMutate).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "repo",
+          mode: "include",
+          agentExtraRepo: { url: "https://github.com/acme/web", name: "web" },
+        }),
+      ]),
+    );
   });
 
   it("keeps the MCP add menu actionable with no team MCP (routes to Settings, no dead end)", async () => {
