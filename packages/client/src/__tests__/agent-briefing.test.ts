@@ -659,15 +659,20 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toMatch(/\*\*Asking a human\*\*/);
     expect(briefing).toMatch(/\*\*Reporting progress to a human\*\*/);
     expect(briefing).toMatch(/\*\*Reaching an agent to make them act\*\*/);
-    // Plain human reply is the explicit replacement for the retired final-text
-    // mirror, collected into ONE concise message near the turn's end.
-    expect(briefing).toContain("explicit replacement for the retired final-text");
-    expect(briefing).toMatch(/Replying to a human \/ your result for this turn/);
+    // A human-directed message gets a required reply, gathered into ONE concise
+    // message. The human-vs-agent asymmetry is explicit: a human never auto-wakes
+    // from a reply (no loop risk in answering), and the courtesy-send brake is
+    // scoped to agents only.
+    expect(briefing).toContain("Replying to a human is required, not optional");
+    expect(briefing).toContain("no loop risk in always answering");
+    expect(briefing).toMatch(/This brake is for agents/);
     // Anti-spam discipline: at most one plain human reply per turn; ongoing
-    // progress goes to `chat update --description`; no "nothing changed" replies.
+    // progress goes to `chat update --description`. The only skip-the-reply case
+    // is a re-delivery / no-op wake-up, NOT a fresh human message judged "covered".
     expect(briefing).toContain("Don't stream a human through repeated");
     expect(briefing).toContain("at most one plain human reply");
-    expect(briefing).toMatch(/Don't send a reply just to say nothing changed/);
+    expect(briefing).toMatch(/skip a human reply entirely is a turn/);
+    expect(briefing).toMatch(/not merely because you judge a fresh/);
     // A decision the human must make goes through `chat ask`, not a plain send.
     expect(briefing).toMatch(/must decide, approve, or answer before you proceed/);
     expect(briefing).toContain("chat invite <name>");
