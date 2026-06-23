@@ -157,6 +157,15 @@ export type OnboardingGateFacts = {
    */
   currentOrgReady: boolean;
   onboardingSuppressedAt: string | null;
+  /**
+   * The *currently selected* membership's completion stamp
+   * (`auth.onboardingCompletedAt`, resolved per-membership) — non-null only
+   * once the kickoff/completion path has run for THIS org. `shouldLeaveOnboarding`
+   * gates the `/onboarding` → `/` bounce on it; `shouldEnterOnboarding` ignores
+   * it (the `/` auto-entry gate keys off connect + org readiness only, never
+   * completion — connect-code and kickoff are not auto-entry predicates).
+   */
+  onboardingCompletedAt: string | null;
 };
 
 /**
@@ -193,17 +202,30 @@ export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
 /**
  * Should the `/onboarding` route bounce the user back to the workspace?
  *
- * Once there is nothing left to set up *for the selected org*: the user is
- * connected AND the org has a usable agent. A user still on `connect`, or in
- * an org without a usable agent, is allowed to stay and work through the
- * wizard (including a "finish later"-dismissed user who deliberately
- * returned via "Resume"). Mirror image of `shouldEnterOnboarding` minus the
- * suppress escape hatch, so the two can't fight over the same user.
+ * Only once the selected org's onboarding is terminally done: the user is
+ * connected, the org has a usable agent, AND this membership carries its
+ * completion stamp (`onboardingCompletedAt`). The stamp is the load-bearing
+ * gate. Creating the agent flips `currentOrgReady` true and makes the server
+ * infer `onboardingStep="completed"` the instant the agent comes online, but
+ * the admin still has connect-code + kickoff ahead (the invitee, kickoff).
+ * The in-page leave decision is frozen in a ref so an active session isn't
+ * ejected mid-flow, yet a full page reload builds a fresh component that
+ * recomputes from `/me`; without the completion gate that reload bounces the
+ * user out before those steps finish. Only the kickoff/completion path writes
+ * the stamp, so gating on it keeps a reloaded user in the flow until setup is
+ * genuinely finished.
+ *
+ * A user still on `connect`, in an org without a usable agent, or in an org
+ * whose membership has not been stamped complete is allowed to stay and work
+ * through the wizard (including a "finish later"-dismissed user who returned
+ * via "Resume"). They leave via the explicit completion / finish-later
+ * navigate, never an entry-time bounce.
  */
 export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
   if (!facts.meLoaded) return false;
   if (facts.onboardingStep === "connect" || facts.onboardingStep === null) return false;
-  return facts.currentOrgReady;
+  if (!facts.currentOrgReady) return false;
+  return facts.onboardingCompletedAt !== null;
 }
 
 /**

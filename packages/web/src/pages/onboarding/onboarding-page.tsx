@@ -26,9 +26,18 @@ import { resolveOnboardingPath, shouldLeaveOnboarding } from "./steps.js";
  * they made their agent, skipping those steps. Freezing the decision at entry
  * lets them finish; they leave via the explicit `completeAndEnterChat`
  * navigate at the end of kickoff (or `finishLater`).
+ *
+ * The ref freeze only protects the current component instance, so it cannot
+ * help a full page reload: that builds a fresh `OnboardingPage` whose ref
+ * starts null and recomputes the guard from `/me`. After create-agent a reload
+ * sees `onboardingStep="completed"` + a ready org and would bounce out before
+ * connect-code/kickoff. The guard therefore also requires this membership's
+ * `onboardingCompletedAt` stamp (written only by the kickoff/completion path),
+ * so a reload mid-flow resumes the remaining step instead of leaving.
  */
 export function OnboardingPage() {
-  const { meLoaded, role, onboardingStep, onboardingDismissedAt, currentOrgHasUsableAgent } = useAuth();
+  const { meLoaded, role, onboardingStep, onboardingDismissedAt, onboardingCompletedAt, currentOrgHasUsableAgent } =
+    useAuth();
   const leaveDecision = useRef<boolean | null>(null);
 
   if (!meLoaded) {
@@ -40,6 +49,7 @@ export function OnboardingPage() {
       onboardingStep,
       onboardingSuppressedAt: onboardingDismissedAt,
       currentOrgReady: currentOrgHasUsableAgent,
+      onboardingCompletedAt,
     });
   }
   if (leaveDecision.current) {

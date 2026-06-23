@@ -130,6 +130,26 @@ describe("OnboardingPage", () => {
     expect(container.textContent).toContain("Workspace Home");
   });
 
+  it("keeps a user in the flow on a hard reload after create-agent (no completion stamp yet)", async () => {
+    // A full page reload builds a fresh OnboardingPage whose leave-decision ref
+    // starts null and recomputes from /me. Post-create-agent the server reports
+    // onboardingStep "completed" + a ready org, but this membership's completion
+    // stamp is still null (connect-code / kickoff haven't run). The route must
+    // resume the remaining step, NOT bounce to the workspace.
+    authMock.value = {
+      ...authMock.value,
+      onboardingStep: "completed",
+      currentOrgHasUsableAgent: true,
+      onboardingCompletedAt: null,
+    };
+    flowMock.activeStep = "connect-code";
+
+    const container = await renderRoute(<OnboardingPage />);
+
+    expect(container.textContent).not.toContain("Workspace Home");
+    expect(container.textContent).toContain("Connect Code Step");
+  });
+
   it("does NOT eject a user whose org gains a usable agent mid-flow (created at create-agent)", async () => {
     // Entry: actively onboarding, no usable agent yet → on the create-agent step.
     authMock.value = { ...authMock.value, onboardingStep: "create_agent", currentOrgHasUsableAgent: false };
