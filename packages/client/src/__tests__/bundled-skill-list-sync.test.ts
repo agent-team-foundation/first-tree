@@ -26,7 +26,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { TREE_SKILL_NAMES } from "../runtime/first-tree-skills/installer.js";
+import { CORE_SKILL_NAMES, TREE_SKILL_NAMES } from "../runtime/first-tree-skills/installer.js";
 
 const clientPackageRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -45,11 +45,11 @@ function extractBundledSkillsFromScript(): readonly string[] {
 }
 
 describe("bundled skill list — runtime vs prebuild script", () => {
-  it("TREE_SKILL_NAMES (installer) and BUNDLED_SKILLS (prebuild) carry exactly the same names", () => {
+  it("installer skill names and BUNDLED_SKILLS (prebuild) carry exactly the same names", () => {
     const bundled = extractBundledSkillsFromScript();
     // Use a Set for the equality assertion so the diff vitest shows on
     // failure surfaces "missing in installer" vs "missing in script"
     // directly, rather than an order-sensitive array compare.
-    expect(new Set(bundled)).toEqual(new Set(TREE_SKILL_NAMES));
+    expect(new Set(bundled)).toEqual(new Set([...CORE_SKILL_NAMES, ...TREE_SKILL_NAMES]));
   });
 });

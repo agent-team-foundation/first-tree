@@ -3,10 +3,41 @@ import {
   buildBindBootstrap,
   buildCreateBootstrap,
   buildInviteeBootstrap,
+  buildNoRepoBootstrap,
+  buildValueFirstBootstrap,
   FIRST_TREE_REFERENCE_URL,
 } from "../bootstrap-prose.js";
 
 describe("kickoff bootstrap prose", () => {
+  it("builds a value-first kickoff that asks for evidence-backed task options before tree work", () => {
+    const message = buildValueFirstBootstrap(["https://github.com/acme/app"], {
+      agentDisplayName: "Nova",
+      contextTreeMode: "new",
+    });
+
+    expect(message).toContain("First Tree is getting Nova up to speed on https://github.com/acme/app");
+    expect(message).toContain("Use the first-tree-kickoff skill");
+    expect(message).toContain("evidence-backed");
+    expect(message).toContain("2–3");
+    expect(message).toContain("format=request");
+    expect(message).toContain("Skip for now");
+    expect(message).toContain("separate Context Tree setup chat");
+    expect(message).not.toContain("My team's Context Tree");
+    expect(message).not.toContain("Build tree");
+  });
+
+  it("builds a no-repo kickoff that asks for local code before authorization", () => {
+    const message = buildNoRepoBootstrap("Nova");
+
+    expect(message).toContain("First Tree is introducing Nova before a repo is connected");
+    expect(message).toContain("Use the first-tree-kickoff skill");
+    expect(message).toContain("local clone path or a GitHub URL");
+    expect(message).toContain("before any long-term team setup");
+    expect(message).toContain("format=request");
+    expect(message).toContain("Skip for now");
+    expect(message).toContain("broad GitHub authorization before the user has seen repo-specific value");
+  });
+
   it("builds singular existing-tree instructions", () => {
     const message = buildBindBootstrap(["https://github.com/acme/app"], "https://github.com/acme/context");
 

@@ -14,13 +14,14 @@ export type KickoffOnboardingArgs = {
   humanAgentId: string;
   /** The bootstrap agent the kickoff chat is opened with. */
   targetAgentId: string;
-  /** The first message body sent into the kickoff chat. */
+  /** The First Tree-authored system trigger body sent into the kickoff chat. */
   bootstrap: string;
   /**
-   * Separates the intro vs tree-building kickoff for the same (human, agent)
-   * pair so they get distinct idempotency keys — see `kickoffKindSchema`. An
-   * "intro" chat must not absorb a later "tree" (`/build-tree`) kickoff, or the
-   * tree-seeding bootstrap would be silently skipped.
+   * Separates intro, value-first work, and tree-building kickoffs for the same
+   * (human, agent) pair so they get distinct idempotency keys — see
+   * `kickoffKindSchema`. An "intro" chat must not absorb a later "tree"
+   * (`/build-tree`) kickoff, and a value-first "work" chat must stay separate
+   * from the heavier Context Tree setup chat.
    */
   kind: KickoffKind;
 };
@@ -48,8 +49,8 @@ export type KickoffOnboardingResult = {
  * Re-running it — a reopened tab, a network retry, or the build-tree recovery
  * surface — converges on the same chat and a single completion stamp instead of
  * leaving the half-completed state the browser-orchestrated flow could produce.
- * The `kind` is part of the key so an "intro" kickoff and a later "tree"
- * (`/build-tree`) kickoff for the same agent stay distinct chats.
+ * The `kind` is part of the key so an "intro", value-first "work", and later
+ * "tree" (`/build-tree`) kickoff for the same agent stay distinct chats.
  */
 export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArgs): Promise<KickoffOnboardingResult> {
   const kickoffKey = `${args.humanAgentId}:${args.targetAgentId}:${args.kind}`;
@@ -93,13 +94,16 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
     const message: SendMessage = {
       format: "text",
       content: args.bootstrap,
-      source: "web",
-      metadata: { mentions: [args.targetAgentId] },
+      source: "api",
+      metadata: { systemSender: "first_tree_onboarding" },
     };
     // tx → Database: drizzle transaction handles aren't structurally Database;
     // the `as unknown as` bridge is the same pattern used in member.ts /
     // resources.ts / org-settings.ts for tx-scoped service calls.
-    const result = await sendMessage(tx as unknown as Database, chatId, args.humanAgentId, message);
+    const result = await sendMessage(tx as unknown as Database, chatId, args.humanAgentId, message, {
+      addressedToAgentIds: [args.targetAgentId],
+      allowSystemSender: true,
+    });
     sent = { recipients: result.recipients, messageId: result.message.id };
   });
 

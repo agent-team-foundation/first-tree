@@ -602,11 +602,11 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
   });
 });
 
-describe("installCoreSkills (no-op for current empty core list)", () => {
-  it("returns true without writing anything because CORE_SKILL_NAMES is empty", () => {
-    const workspace = join(tmpBase, "core-noop");
+describe("installCoreSkills", () => {
+  it("installs core skills even without a Context Tree binding", () => {
+    const workspace = join(tmpBase, "core-skills");
     mkdirSync(workspace, { recursive: true });
-    const bundledSkillsRoot = makeFixtureSkillsRoot("core-noop", []);
+    const bundledSkillsRoot = makeFixtureSkillsRoot("core-skills", [{ name: "first-tree-kickoff", version: "1.0.0" }]);
 
     const logs: string[] = [];
     const result = installCoreSkills({
@@ -616,11 +616,11 @@ describe("installCoreSkills (no-op for current empty core list)", () => {
     });
 
     expect(result).toBe(true);
-    // No .agents/skills/ should have been created.
-    expect(existsSync(join(workspace, ".agents"))).toBe(false);
-    expect(existsSync(join(workspace, ".claude"))).toBe(false);
-    // No log line when nothing was installed/skipped/failed.
-    expect(logs).toEqual([]);
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-kickoff", "SKILL.md"))).toBe(true);
+    expect(readlinkSync(join(workspace, ".claude", "skills", "first-tree-kickoff"))).toBe(
+      `../../${join(".agents", "skills", "first-tree-kickoff")}`,
+    );
+    expect(logs.join("\n")).toContain("installed first-tree-kickoff");
   });
 });
 

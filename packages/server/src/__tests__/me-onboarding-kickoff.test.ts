@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
+import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createAgent } from "../services/agent.js";
@@ -72,6 +73,44 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(member?.onboardingCompletedAt).not.toBeNull();
     expect(member?.onboardingSuppressedAt).not.toBeNull();
     expect(member?.onboardingSuppressedReason).toBe("completed");
+  });
+
+  it("sends kickoff as a trusted First Tree system trigger without impersonating the user", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+
+    const res = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        organizationId: admin.organizationId,
+        agentUuid: agent.uuid,
+        bootstrap: "First Tree is getting Bootstrap Agent up to speed on acme/web.",
+        kind: "work",
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const { chatId } = res.json<{ chatId: string }>();
+
+    const [chat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(chat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work`);
+
+    const [msg] = await app.db.select().from(messages).where(eq(messages.chatId, chatId)).limit(1);
+    expect(msg?.senderId).toBe(admin.humanAgentUuid);
+    expect(msg?.source).toBe("api");
+    expect(msg?.format).toBe("text");
+    expect(msg?.content).toBe("First Tree is getting Bootstrap Agent up to speed on acme/web.");
+    expect(msg?.metadata).toEqual({ systemSender: "first_tree_onboarding" });
+
+    const deliveries = await app.db
+      .select()
+      .from(inboxEntries)
+      .where(eq(inboxEntries.messageId, msg?.id ?? ""));
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.notify).toBe(true);
+    expect(res.json<{ chatId: string }>().chatId).toBe(chatId);
   });
 
   it("is idempotent — a second call reuses the chat, sends no duplicate, keeps the stamp", async () => {

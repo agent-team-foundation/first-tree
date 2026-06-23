@@ -51,15 +51,19 @@ export type CompleteOnboarding = z.infer<typeof completeOnboardingSchema>;
  * idempotency key doesn't conflate distinct intents:
  *   - "intro" — "meet your agent" with no tree work (admin connected no repo,
  *     or an invitee launching while the team isn't set up yet).
+ *   - "work"  — wake the agent for the value-first first chat: read the repo /
+ *     team context, show concrete understanding, and ask the user to pick a
+ *     first useful task.
  *   - "tree"  — wake the agent to seed/read the team's Context Tree (admin with
- *     repos, invitee on a ready team, AND the `/build-tree` recovery surface).
+ *     repos AND the `/build-tree` recovery surface). It is intentionally
+ *     separate from "work" so heavy tree setup can run in its own chat.
  *
  * Without this, an admin who first does an "intro" kickoff and later runs
  * `/build-tree` with the same agent would resolve to the intro chat, and the
  * send-if-empty guard would skip the tree-seeding bootstrap — the UI completes
  * but the agent is never woken to build the tree.
  */
-export const kickoffKindSchema = z.enum(["intro", "tree"]);
+export const kickoffKindSchema = z.enum(["intro", "work", "tree"]);
 export type KickoffKind = z.infer<typeof kickoffKindSchema>;
 
 /**

@@ -43,10 +43,10 @@ import { readManagedState, updateManagedState } from "../managed-state.js";
 
 /**
  * Skills always shipped, regardless of whether the agent has a Context Tree
- * binding. Currently empty — kept as a named list so re-introducing a core
- * skill is a one-line change with no bootstrap-path edits.
+ * binding. Kickoff is core because onboarding can start before a team has a
+ * Context Tree, especially in the no-repo path.
  */
-export const CORE_SKILL_NAMES = [] as const;
+export const CORE_SKILL_NAMES = ["first-tree-kickoff"] as const;
 
 /**
  * Skills that ship for Context-Tree-bound agents. Installed by
@@ -313,8 +313,7 @@ export type InstallFirstTreeSkillsOptions = {
 
 /**
  * Install the core skill payloads (Context-Tree-independent) into the
- * workspace. Currently a no-op because `CORE_SKILL_NAMES` is empty;
- * the wiring stays so re-introducing a core skill needs no bootstrap edit.
+ * workspace.
  */
 export function installCoreSkills(options: InstallCoreSkillsOptions): InstallSkillsResult {
   const bundledSkillsRoot = options.bundledSkillsRoot ?? resolveBundledSkillsRoot();
