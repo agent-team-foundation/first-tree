@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import {
   type AgentRuntimeConfigPayload,
   deriveRepoLocalPath,
@@ -56,6 +56,12 @@ import {
   type ProviderRetryDecision,
 } from "../../runtime/provider-retry-policy.js";
 import { materializeResourceSkills } from "../../runtime/resource-skills.js";
+import {
+  buildBriefingUpdateNotice,
+  computeBriefingFingerprint,
+  readSessionBriefingFingerprint,
+  writeSessionBriefingFingerprint,
+} from "../../runtime/session-briefing-fingerprint.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/workspace.js";
 import { chunkAssistantText } from "../assistant-text.js";
@@ -1354,6 +1360,10 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       if (!threadId) {
         throw new Error("codex did not assign a thread id during the first turn");
       }
+      // Seed the briefing baseline now that Codex has assigned the thread id
+      // (only known after the first turn). A fresh thread starts in sync, so a
+      // later resume only nudges on a real change.
+      if (cwd) writeSessionBriefingFingerprint(cwd, threadId, computeBriefingFingerprint(briefing));
       return hasExplicitDeliveryToken
         ? { sessionId: threadId, route: { kind: "owned", mode: "processing" } }
         : threadId;
@@ -1395,6 +1405,24 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       ensureCodexBootstrap(cwd, sessionCtx, briefing, payload, resumePayloadResolved);
       markWorkspaceInitComplete(cwd);
 
+      // Briefing-staleness notice: a resumed Codex thread read AGENTS.md once at
+      // thread init and never re-reads it, so a briefing rewritten by a runtime
+      // upgrade (changed operating contract / skill set) would otherwise never
+      // reach the resumed thread. If the current briefing differs from what this
+      // session last ran a turn under — or there is no baseline, i.e. a session
+      // predating this mechanism — prepend a one-time re-read notice ahead of the
+      // Current Chat Context in the next provider turn. The baseline is advanced
+      // only after the turn actually runs, so a failed turn keeps the notice
+      // pending for the retry.
+      const briefingFingerprint = computeBriefingFingerprint(briefing);
+      const briefingChanged =
+        Boolean(message) && readSessionBriefingFingerprint(cwd, sessionId) !== briefingFingerprint;
+      if (briefingChanged) {
+        const notice = buildBriefingUpdateNotice(join(cwd, "AGENTS.md"));
+        pendingChatContextPrompt = pendingChatContextPrompt ? `${notice}\n\n${pendingChatContextPrompt}` : notice;
+        sessionCtx.log(`Resume: briefing changed since last turn — prepending re-read notice (${sessionId})`);
+      }
+
       codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
       // Footgun F2: resumeThread does NOT inherit first-call ThreadOptions —
       // re-pass them every time.
@@ -1413,6 +1441,9 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
           initialTurnPreparing = false;
           if (initialTurnCompleted) scheduleQueuedMessagesDrain();
         }
+        // Turn delivered → advance the baseline (also seeds it for a session
+        // that had none).
+        if (initialTurnCompleted) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
       }
       return hasExplicitDeliveryToken
         ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }

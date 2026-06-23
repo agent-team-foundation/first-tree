@@ -861,3 +861,51 @@ describe("codex app-server handler", () => {
     await handler.shutdown();
   });
 });
+
+describe("codex app-server briefing-update notice", () => {
+  it("prepends a re-read notice on resume when the session has no recorded briefing baseline", async () => {
+    const fake = new FakeAppServerClient();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ finishTurn: async () => {} });
+
+    const resumePromise = handler.resume(makeMessage("m1", "hello"), "thread-app-server", ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    const start = fake.requests.find((request) => request.method === "turn/start");
+    const input = JSON.stringify(start?.params ?? {});
+    expect(input).toContain("<system-reminder>");
+    expect(input).toContain("re-read");
+
+    completeTurn(fake, "turn-1", "ok");
+    await resumePromise;
+    await handler.shutdown();
+  });
+
+  it("adds no notice when the briefing is unchanged since the session last ran a turn", async () => {
+    // First session start seeds the briefing baseline for this thread id at the
+    // shared agent home (keyed off `workspaceRoot`).
+    const startFake = new FakeAppServerClient();
+    const startHandler = makeHandler(startFake);
+    const startCtx = makeContext({ finishTurn: async () => {} });
+    const startPromise = startHandler.start(makeMessage("m1", "first"), startCtx);
+    await waitFor(() => startFake.requests.some((request) => request.method === "turn/start"));
+    completeTurn(startFake, "turn-1", "first answer");
+    await startPromise;
+    await startHandler.shutdown();
+
+    // A later resume of the same thread, same config (briefing unchanged) →
+    // baseline matches → no re-read notice.
+    const resumeFake = new FakeAppServerClient();
+    const resumeHandler = makeHandler(resumeFake);
+    const resumeCtx = makeContext({ finishTurn: async () => {} });
+    const resumePromise = resumeHandler.resume(makeMessage("m2", "again"), "thread-app-server", resumeCtx);
+    await waitFor(() => resumeFake.requests.some((request) => request.method === "turn/start"));
+
+    const start = resumeFake.requests.find((request) => request.method === "turn/start");
+    expect(JSON.stringify(start?.params ?? {})).not.toContain("<system-reminder>");
+
+    completeTurn(resumeFake, "turn-1", "second answer");
+    await resumePromise;
+    await resumeHandler.shutdown();
+  });
+});

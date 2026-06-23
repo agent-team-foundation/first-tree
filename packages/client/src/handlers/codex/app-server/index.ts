@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { AgentRuntimeConfigPayload, SessionEvent, ToolFileRef } from "@first-tree/shared";
 import { ensureAgentBootstrap as ensureAgentBootstrapShared } from "../../../runtime/agent-bootstrap.js";
 import { buildAgentBriefing } from "../../../runtime/agent-briefing.js";
@@ -27,6 +27,12 @@ import type {
 } from "../../../runtime/handler.js";
 import { deliveryTokenFromSessionContext } from "../../../runtime/handler.js";
 import { materializeResourceSkills } from "../../../runtime/resource-skills.js";
+import {
+  buildBriefingUpdateNotice,
+  computeBriefingFingerprint,
+  readSessionBriefingFingerprint,
+  writeSessionBriefingFingerprint,
+} from "../../../runtime/session-briefing-fingerprint.js";
 import { currentSourceRepoNamesFromPayload, declaredSourceRepos } from "../../../runtime/source-repos.js";
 import { acquireAgentHome, markWorkspaceInitComplete } from "../../../runtime/workspace.js";
 import { chunkAssistantText } from "../../assistant-text.js";
@@ -258,6 +264,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   async function prepareSession(sessionCtx: SessionContext): Promise<{
     payload: AgentRuntimeConfigPayload;
     env: NodeJS.ProcessEnv;
+    briefingFingerprint: string;
   }> {
     cwd = acquireAgentHome(workspaceRoot);
     const { payload, resolved } = await resolvePayload(sessionCtx);
@@ -270,7 +277,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     markWorkspaceInitComplete(cwd);
     currentModel = payload.model || "";
     currentReasoningEffort = payload.kind === "codex" ? payload.reasoningEffort : "high";
-    return { payload, env: buildEnv(sessionCtx) };
+    return { payload, env: buildEnv(sessionCtx), briefingFingerprint: computeBriefingFingerprint(briefing) };
   }
 
   async function startAppServer(sessionCtx: SessionContext, env: NodeJS.ProcessEnv): Promise<void> {
@@ -1131,7 +1138,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       startupTurnPending = true;
       ctx = sessionCtx;
       try {
-        const { payload, env } = await prepareSession(sessionCtx);
+        const { payload, env, briefingFingerprint } = await prepareSession(sessionCtx);
         await startAppServer(sessionCtx, env);
         const id = await startThread(payload);
         let input: string;
@@ -1145,6 +1152,9 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           return hasExplicitDeliveryToken ? { sessionId: id, route: { kind: "owned", mode: "queued" } } : id;
         }
         await runTurnFromText(input, [message], deliveryToken, sessionCtx);
+        // Fresh thread: seed the briefing baseline now that the thread id is
+        // known, so a later resume only nudges on a real briefing change.
+        if (cwd) writeSessionBriefingFingerprint(cwd, id, briefingFingerprint);
         return hasExplicitDeliveryToken ? { sessionId: id, route: { kind: "owned", mode: "processing" } } : id;
       } finally {
         startupTurnPending = false;
@@ -1159,7 +1169,22 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       startupTurnPending = message !== undefined;
       ctx = sessionCtx;
       try {
-        const { payload, env } = await prepareSession(sessionCtx);
+        const { payload, env, briefingFingerprint } = await prepareSession(sessionCtx);
+        // Briefing-staleness notice: a resumed Codex thread read AGENTS.md once
+        // at thread init and never re-reads it. If the briefing changed since
+        // this session last ran a turn — or there is no baseline (a session
+        // predating this mechanism) — prepend a one-time re-read notice ahead of
+        // the Current Chat Context that prepareSession just staged. The baseline
+        // advances only after the turn runs, so a failed turn keeps it pending.
+        const briefingChanged =
+          message !== undefined &&
+          cwd !== null &&
+          readSessionBriefingFingerprint(cwd, sessionId) !== briefingFingerprint;
+        if (briefingChanged && cwd) {
+          const notice = buildBriefingUpdateNotice(join(cwd, "AGENTS.md"));
+          pendingChatContextPrompt = pendingChatContextPrompt ? `${notice}\n\n${pendingChatContextPrompt}` : notice;
+          sessionCtx.log(`Resume: briefing changed since last turn — prepending re-read notice (${sessionId})`);
+        }
         await startAppServer(sessionCtx, env);
         await resumeThread(sessionId, payload);
         if (message) {
@@ -1174,6 +1199,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
             return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "queued" } } : sessionId;
           }
           await runTurnFromText(input, [message], deliveryToken, sessionCtx);
+          // Turn delivered → advance / seed the baseline.
+          if (cwd) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
         }
         return hasExplicitDeliveryToken
           ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
