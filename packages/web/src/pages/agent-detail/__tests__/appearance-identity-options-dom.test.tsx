@@ -129,6 +129,15 @@ async function setInputValue(element: HTMLInputElement, value: string): Promise<
   await flush();
 }
 
+async function blurInput(element: Element | null): Promise<void> {
+  if (!element) throw new Error("Expected element to blur");
+  await act(async () => {
+    // React's onBlur listens to the bubbling `focusout` event.
+    element.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  });
+  await flush();
+}
+
 async function setFileInput(element: HTMLInputElement, file: File): Promise<void> {
   Object.defineProperty(element, "files", { configurable: true, value: [file] });
   await act(async () => {
@@ -324,11 +333,12 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     await click(buttonByText(document.body, "Remove image"));
     expect(agentApiMocks.deleteAgentAvatar).toHaveBeenCalledWith("agent-1");
 
-    // Save commits identity fields + the fallback color in one PATCH.
+    // Colour saves instantly on swatch click — there is no Save button.
     await click(document.body.querySelector('button[title="hue-3"]'));
-    await click(buttonByText(document.body, "Save"));
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ displayName: "Nova", avatarColorToken: "hue-3" }));
-    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith({ avatarColorToken: "hue-3" });
+    expect(onSaved).toHaveBeenCalled();
+    // "Done" just closes — every field already saved on its own commit.
+    await click(buttonByText(document.body, "Done"));
     expect(onOpenChange).toHaveBeenCalledWith(false);
 
     await act(async () => root.unmount());
@@ -346,19 +356,126 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
 
     const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
     if (!displayInput) throw new Error("Expected display field");
+    // Name commits on blur: empty → inline error, no save.
     await setInputValue(displayInput, " ");
-    await click(buttonByText(document.body, "Save"));
+    await blurInput(displayInput);
     expect(document.body.textContent).toContain("Display name is required.");
     expect(onSave).not.toHaveBeenCalled();
 
+    // Valid name commits on blur; the (rejected) save surfaces an error and does
+    // not flash "saved". Nothing closes the dialog (Done was never clicked).
     await setInputValue(displayInput, "Nova Updated");
-    await click(buttonByText(document.body, "Save"));
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ displayName: "Nova Updated" }));
-    // Save failed → dialog stays open (no close), error surfaced, no saved flash.
+    await blurInput(displayInput);
+    expect(onSave).toHaveBeenCalledWith({ displayName: "Nova Updated" });
     expect(document.body.textContent).toContain("Identity update failed");
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(onSaved).not.toHaveBeenCalled();
 
+    await act(async () => root.unmount());
+  });
+
+  it("commits a pending name edit when Done is clicked without an explicit blur", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onOpenChange = vi.fn();
+    const { root } = await renderDom(
+      <ProfileEditDialog agent={agent()} open onOpenChange={onOpenChange} onSave={onSave} onSaved={vi.fn()} />,
+    );
+    const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
+    if (!displayInput) throw new Error("Expected display field");
+    // Type a new name but do NOT blur — click Done straight away.
+    await setInputValue(displayInput, "Nova Done");
+    await click(buttonByText(document.body, "Done"));
+    // Done commits the pending name before closing, so the edit isn't lost.
+    expect(onSave).toHaveBeenCalledWith({ displayName: "Nova Done" });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    await act(async () => root.unmount());
+  });
+
+  it("serializes field saves — controls and Done disable while a save is in flight", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    let resolveSave: (() => void) | undefined;
+    const onSave = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    const onOpenChange = vi.fn();
+    const { root } = await renderDom(
+      <ProfileEditDialog
+        agent={agent({ avatarColorToken: "hue-1" })}
+        open
+        onOpenChange={onOpenChange}
+        onSave={onSave}
+        onSaved={vi.fn()}
+      />,
+    );
+    // Pick a color — the save starts and stays pending (unresolved).
+    await click(document.body.querySelector('button[title="hue-3"]'));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    // While pending: other swatches + Done are disabled, and a second click is
+    // dropped by the in-flight guard — no overlapping PATCH, no close mid-save.
+    expect(document.body.querySelector<HTMLButtonElement>('button[title="hue-2"]')?.disabled).toBe(true);
+    expect(buttonByText(document.body, "Done")?.disabled).toBe(true);
+    await click(document.body.querySelector('button[title="hue-2"]'));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    // Resolve the save → controls re-enable.
+    await act(async () => {
+      resolveSave?.();
+    });
+    expect(buttonByText(document.body, "Done")?.disabled).toBe(false);
+    await act(async () => root.unmount());
+  });
+
+  it("retries a rejected name save and does not close on Done", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const onSave = vi.fn().mockRejectedValueOnce(new Error("Name update failed")).mockResolvedValueOnce(undefined);
+    const onOpenChange = vi.fn();
+    const { root } = await renderDom(
+      <ProfileEditDialog agent={agent()} open onOpenChange={onOpenChange} onSave={onSave} onSaved={vi.fn()} />,
+    );
+    const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
+    if (!displayInput) throw new Error("Expected display field");
+    await setInputValue(displayInput, "Nova X");
+    // First Done: the name PATCH rejects → error shown, dialog NOT closed, and the
+    // value is NOT marked saved (the dedupe baseline only advances on success).
+    await click(buttonByText(document.body, "Done"));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("Name update failed");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    // Second Done: Done retries the same value (not skipped); it succeeds and closes.
+    await click(buttonByText(document.body, "Done"));
+    expect(onSave).toHaveBeenCalledTimes(2);
+    expect(onSave).toHaveBeenLastCalledWith({ displayName: "Nova X" });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    await act(async () => root.unmount());
+  });
+
+  it("from a focused display-name input, a blur racing the Done click still saves once and closes", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    const onOpenChange = vi.fn();
+    const { root } = await renderDom(
+      <ProfileEditDialog agent={agent()} open onOpenChange={onOpenChange} onSave={onSave} onSaved={vi.fn()} />,
+    );
+    const displayInput = document.body.querySelector<HTMLInputElement>("#profile-display");
+    if (!displayInput) throw new Error("Expected display field");
+    displayInput.focus();
+    await setInputValue(displayInput, "Nova Focused");
+    // Reproduce the real pointer order with the blur-started save still in flight
+    // when Done's click lands — dispatched together, no flush between. Done must
+    // wait for the save and still close, saving the name exactly once.
+    const done = buttonByText(document.body, "Done");
+    await act(async () => {
+      done?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+      displayInput.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      done?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flush();
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith({ displayName: "Nova Focused" });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
     await act(async () => root.unmount());
   });
 
@@ -412,17 +529,14 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     const visibilitySelect = document.body.querySelector<HTMLButtonElement>("#profile-visibility");
     const delegateSelect = document.body.querySelector<HTMLButtonElement>("#profile-delegate");
     if (!displayInput || !visibilitySelect || !delegateSelect) throw new Error("Expected fields");
+    // Each field saves on its own commit — no Save button.
     await setInputValue(displayInput, "Bestony Renamed");
+    await blurInput(displayInput);
+    expect(onSave).toHaveBeenCalledWith({ displayName: "Bestony Renamed" });
     await chooseSelectOption(visibilitySelect, "Visible to your team");
+    expect(onSave).toHaveBeenCalledWith({ visibility: "organization" });
     await chooseSelectOption(delegateSelect, "Second Helper");
-    await click(buttonByText(document.body, "Save"));
-    expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({
-        displayName: "Bestony Renamed",
-        delegateMention: "delegate-2",
-        visibility: "organization",
-      }),
-    );
+    expect(onSave).toHaveBeenCalledWith({ delegateMention: "delegate-2" });
     await act(async () => owner.root.unmount());
 
     authMock.value = { memberId: "member-other", role: "member", agentId: "human-other" };

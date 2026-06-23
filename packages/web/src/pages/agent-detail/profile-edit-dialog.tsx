@@ -8,34 +8,31 @@ import {
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Check } from "lucide-react";
-import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { deleteAgentAvatar, listAgents, uploadAgentAvatar } from "../../api/agents.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { AgentChip } from "../../components/agent-chip.js";
 import { resolveAvatarHue } from "../../components/chat/chat-row-avatar.js";
 import { Identicon } from "../../components/identicon.js";
 import { Button } from "../../components/ui/button.js";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../../components/ui/dialog.js";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
 import { Label } from "../../components/ui/label.js";
 import { Select, type SelectOption } from "../../components/ui/select.js";
 import { AVATAR_HUE_COUNT, avatarHueColor, fgOnVividColor } from "../../lib/avatar-hues.js";
 import { useAgentIdentityMap } from "../../lib/use-agent-name-map.js";
 import { AvatarPreview } from "./appearance-section.js";
+import { useJustSaved } from "./save-semantics.js";
 
 /**
- * PR2 §Profile: one "Edit profile" dialog merging the former Identity and
- * Appearance dialogs. Two independent save paths, each with its own error so a
- * partial failure never silently swallows one half:
- *   - Identity + fallback color → one PATCH /agents/:uuid on the Save button
- *     (`onSave`). Closes the dialog + flashes "Saved" only when this succeeds.
+ * One "Edit profile" dialog merging the former Identity and Appearance dialogs.
+ * Every field saves on its own commit (immediate-save, like the rest of the
+ * agent-detail page) — there is no Save button:
+ *   - Identity / visibility / fallback color → a partial PATCH /agents/:uuid per
+ *     field (`onSave`): display name on blur / Enter, the rest on change. Saves
+ *     serialize — controls + Done disable while one is in flight — so partial
+ *     PATCHes never race and the dialog never closes mid-save; a rejected save
+ *     surfaces inline. Done just commits any pending name, then closes.
  *   - Avatar image → eager PUT/DELETE /agents/:uuid/avatar on pick/remove
  *     (raw bytes don't share the JSON envelope); never closes the dialog.
  */
@@ -126,6 +123,7 @@ export type ProfileEditDialogProps = {
 export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh, onSaved }: ProfileEditDialogProps) {
   const { memberId, role, agentId } = useAuth();
   const resolveAgent = useAgentIdentityMap();
+  const { justSaved, markSaved } = useJustSaved();
 
   const initialColor: AvatarColorToken | null = AVATAR_COLOR_TOKENS.find((t) => t === agent.avatarColorToken) ?? null;
   const [displayName, setDisplayName] = useState(agent.displayName);
@@ -134,11 +132,23 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
   const [picked, setPicked] = useState<AvatarColorToken | null>(initialColor);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
   const [pixelCandidates, setPixelCandidates] = useState<Array<{ seed: string; hueIdx: number }>>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const initializedFor = useRef<string | null>(null);
+  // The display name we last issued a PATCH for — dedupes a blur + Done so the
+  // same name change isn't saved twice.
+  const savedNameRef = useRef(agent.displayName);
+  // Synchronous in-flight guard: two quick clicks can fire before React re-renders
+  // the disabled controls, so a ref (not lagging state) is what actually serializes
+  // the partial PATCHes and prevents an older write landing after a newer one.
+  const savingRef = useRef(false);
+  // An in-flight display-name commit (or null). Done awaits THIS same commit
+  // before closing, so a save a focused-input blur started still finishes — and
+  // isn't fired a second time by the Done click.
+  const pendingNameRef = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -153,10 +163,12 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
     if (initializedFor.current === agent.uuid) return;
     initializedFor.current = agent.uuid;
     setDisplayName(agent.displayName);
+    savedNameRef.current = agent.displayName;
     setDelegateMention(agent.delegateMention ?? "");
     setVisibility(agent.visibility);
     setPicked(AVATAR_COLOR_TOKENS.find((t) => t === agent.avatarColorToken) ?? null);
-    setFormError(null);
+    setSaveError(null);
+    setNameError(null);
     setImageError(null);
     setPixelCandidates([]);
   }, [open, agent]);
@@ -165,6 +177,10 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
   const canChangeVisibility = role === "admin" || agent.managerId === memberId;
   const canEditDelegate = isHuman && agent.uuid === agentId;
   const delegateIdentity = agent.delegateMention ? resolveAgent(agent.delegateMention) : null;
+  // While any save (field PATCH or avatar upload) is in flight, every control and
+  // Done disable — this serializes saves (no racing partial PATCHes) and keeps
+  // the dialog open until the save settles (a rejected save always surfaces).
+  const editsDisabled = saving || uploading;
 
   const assistantsQuery = useQuery({
     queryKey: ["agents-for-delegate", memberId],
@@ -188,29 +204,71 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
     [assistantsQuery.data],
   );
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setFormError(null);
-    const trimmed = displayName.trim();
-    if (!trimmed) {
-      setFormError("Display name is required.");
-      return;
-    }
+  // Every field saves on its own commit (text on blur / Enter, selects + colour
+  // on change) — consistent with the rest of the agent-detail page, which has no
+  // Save button. Each save is a partial PATCH /agents/:uuid; the avatar image is
+  // handled eagerly below, separately.
+  async function saveField(patch: UpdateAgent): Promise<boolean> {
+    // Serialize: ignore a new save while one is in flight, so overlapping partial
+    // PATCHes can't race and leave the server with a stale value.
+    if (savingRef.current) return false;
+    savingRef.current = true;
+    setSaveError(null);
     setSaving(true);
     try {
-      // Identity fields and the fallback color are all PATCH /agents/:uuid, so
-      // they go in one atomic call. Image is handled eagerly below, separately.
-      const patch: UpdateAgent = { displayName: trimmed, avatarColorToken: picked };
-      if (canEditDelegate) patch.delegateMention = delegateMention || null;
-      if (visibility !== agent.visibility) patch.visibility = visibility;
       await onSave(patch);
       onSaved?.();
-      onOpenChange(false);
+      markSaved();
+      return true;
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : String(err));
+      setSaveError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
+  }
+
+  // Display name is required, so it commits on blur / Enter (not per keystroke):
+  // empty → inline error and no save; changed + valid → save. `savedNameRef`
+  // dedupes so a blur immediately followed by Done doesn't fire the PATCH twice.
+  async function commitName(): Promise<boolean> {
+    const trimmed = displayName.trim();
+    if (!trimmed) {
+      setNameError("Display name is required.");
+      return false;
+    }
+    setNameError(null);
+    if (trimmed === savedNameRef.current) return true;
+    // Track this commit so a racing Done click awaits the SAME save instead of
+    // firing a second one. Advance the dedupe baseline only after the PATCH
+    // succeeds (inside the chain, before it resolves) — a rejected save stays
+    // retryable rather than being treated as already committed.
+    const p = saveField({ displayName: trimmed }).then((ok) => {
+      if (ok) savedNameRef.current = trimmed;
+      return ok;
+    });
+    pendingNameRef.current = p;
+    try {
+      return await p;
+    } finally {
+      if (pendingNameRef.current === p) pendingNameRef.current = null;
+    }
+  }
+
+  // Done commits a pending (valid, changed) name and waits for it before closing,
+  // so a typed-but-not-yet-blurred name isn't lost; a rejected save keeps the
+  // dialog open with its inline error.
+  async function handleDone() {
+    // A focused-input blur can start a name save just before this click. Await
+    // THAT same in-flight commit (don't fire a second one); otherwise commit any
+    // pending name here. Close only when the name actually persisted.
+    const inflight = pendingNameRef.current;
+    if (inflight) {
+      if (await inflight) onOpenChange(false);
+      return;
+    }
+    if (await commitName()) onOpenChange(false);
   }
 
   async function onFileChange(e: ChangeEvent<HTMLInputElement>) {
@@ -283,16 +341,17 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>Edit profile</DialogTitle>
-          <DialogDescription>
-            {isHuman
-              ? "Avatar changes (image) save immediately. Other details save when you click Save."
-              : "Avatar changes (image or pixel avatar) save immediately. Other details save when you click Save."}
-          </DialogDescription>
         </DialogHeader>
-        <form onSubmit={submit} className="space-y-5">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void commitName();
+          }}
+          className="space-y-5"
+        >
           {/* Identity */}
           <div className="space-y-2">
             <Label>Agent name</Label>
@@ -307,9 +366,12 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
               id="profile-display"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
+              onBlur={() => void commitName()}
+              disabled={editsDisabled}
               placeholder="How teammates see this agent"
               maxLength={200}
             />
+            {nameError && <p className="text-caption text-destructive">{nameError}</p>}
           </div>
           <div className="space-y-2">
             <Label htmlFor="profile-visibility">Visibility</Label>
@@ -317,8 +379,13 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
               id="profile-visibility"
               aria-label="Visibility"
               value={visibility}
-              onChange={(v) => setVisibility(v as typeof visibility)}
-              disabled={!canChangeVisibility}
+              onChange={(v) => {
+                if (savingRef.current) return;
+                const next = v as typeof visibility;
+                setVisibility(next);
+                void saveField({ visibility: next });
+              }}
+              disabled={!canChangeVisibility || editsDisabled}
               options={[
                 { value: AGENT_VISIBILITY.ORGANIZATION, label: VISIBILITY_LABELS[AGENT_VISIBILITY.ORGANIZATION] },
                 { value: AGENT_VISIBILITY.PRIVATE, label: VISIBILITY_LABELS[AGENT_VISIBILITY.PRIVATE] },
@@ -334,9 +401,14 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
                   id="profile-delegate"
                   aria-label="Delegate Mention"
                   value={delegateMention}
-                  onChange={setDelegateMention}
+                  onChange={(v) => {
+                    if (savingRef.current) return;
+                    setDelegateMention(v);
+                    void saveField({ delegateMention: v || null });
+                  }}
                   options={delegateOptions}
                   searchable
+                  disabled={editsDisabled}
                 />
               ) : (
                 <div className="flex h-9 w-full items-center rounded-[var(--radius-input)] border border-input bg-transparent px-3 text-body opacity-70">
@@ -445,33 +517,52 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
               <Swatch
                 label="Auto"
                 selected={picked === null}
-                onClick={() => setPicked(null)}
+                onClick={() => {
+                  if (savingRef.current) return;
+                  setPicked(null);
+                  void saveField({ avatarColorToken: null });
+                }}
                 background={resolveAvatarHue(null, agent.uuid)}
                 isAuto
+                disabled={editsDisabled}
               />
               {AVATAR_COLOR_TOKENS.map((token) => (
                 <Swatch
                   key={token}
                   label={token}
                   selected={picked === token}
-                  onClick={() => setPicked(token)}
+                  onClick={() => {
+                    if (savingRef.current) return;
+                    setPicked(token);
+                    void saveField({ avatarColorToken: token });
+                  }}
                   background={`var(--avatar-${token})`}
+                  disabled={editsDisabled}
                 />
               ))}
             </div>
             <p className="text-caption text-muted-foreground">
-              Auto chooses a stable color for this agent. The color is used only when no image is set, and saves with
-              the identity fields below.
+              Auto chooses a stable color for this agent. Used only when no image is set.
             </p>
           </div>
 
-          {formError && <p className="text-body text-destructive">{formError}</p>}
+          {saveError && <p className="text-body text-destructive">{saveError}</p>}
           <DialogFooter>
-            <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={saving || uploading}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={saving || uploading}>
-              {saving ? "Saving…" : "Save"}
+            <span className="mr-auto self-center text-caption text-muted-foreground" aria-live="polite">
+              {saving ? "Saving…" : justSaved ? "Saved" : null}
+            </span>
+            {/* preventDefault on mousedown keeps focus on a focused display-name
+                input (so it doesn't blur), which means THIS click — not a racing
+                blur-triggered save — owns the commit + close. Done then commits a
+                pending name and closes only if it persisted; disabled while a save
+                is in flight so the dialog never closes mid-PATCH. */}
+            <Button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void handleDone()}
+              disabled={editsDisabled}
+            >
+              Done
             </Button>
           </DialogFooter>
         </form>
@@ -486,12 +577,14 @@ function Swatch({
   onClick,
   background,
   isAuto,
+  disabled,
 }: {
   label: string;
   selected: boolean;
   onClick: () => void;
   background: string;
   isAuto?: boolean;
+  disabled?: boolean;
 }) {
   // Selection follows the OptionCard rule: the border stays the same faint
   // hairline in both states; selection is signalled by a filled neutral marker,
@@ -502,6 +595,7 @@ function Swatch({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       aria-pressed={selected}
       title={label}
       className="relative inline-flex items-center justify-center focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-1"
@@ -511,7 +605,8 @@ function Swatch({
         borderRadius: "var(--radius-full)",
         background,
         border: "var(--hairline) solid var(--border)",
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.5 : 1,
         padding: 0,
       }}
     >
