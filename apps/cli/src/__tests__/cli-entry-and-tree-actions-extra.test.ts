@@ -132,6 +132,6 @@ describe("CLI entry and public exports", () => {
     expect(api.SdkError).toBe(clientMocks.SdkError);
     expect(api.HubUrlDerivationError).toBeDefined();
     expect(api.ClientRuntime).toBeDefined();
-    expect(api.rotateClientIdWithBackup).toBeTypeOf("function");
+    expect("rotateClientIdWithBackup" in api).toBe(false);
   });
 });

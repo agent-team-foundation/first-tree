@@ -8,7 +8,7 @@ import { ClientConnection, ClientUserMismatchError } from "../client-connection.
  * when the server rejects `client:register` with
  * `code: "CLIENT_USER_MISMATCH"`, the SDK must
  *   1. reject the `connect()` promise with a typed `ClientUserMismatchError`
- *      (CLI pattern-matches on `instanceof` to show the claim guidance),
+ *      (CLI pattern-matches on `instanceof` to show purge-first recovery),
  *   2. stop attempting to reconnect — the same clientId would hit the same
  *      rejection forever, so an auto-reconnect would devolve into a tight
  *      loop the operator can't see and would be a free attack surface

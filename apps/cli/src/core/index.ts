@@ -19,7 +19,7 @@ export type { CapabilityRefresherDeps } from "./capability-refresh.js";
 export { CapabilityRefresher, stableCapabilitiesJson } from "./capability-refresh.js";
 export { cliFetch } from "./cli-fetch.js";
 // Local client identity recovery helpers
-export { handleClientOrgMismatch, rotateClientIdWithBackup } from "./client-reidentify.js";
+export { handleClientOrgMismatch } from "./client-reidentify.js";
 export type { ClientRuntimeOptions } from "./client-runtime.js";
 // Client runtime
 export { ClientRuntime } from "./client-runtime.js";
