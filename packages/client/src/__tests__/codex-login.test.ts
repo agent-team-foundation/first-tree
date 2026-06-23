@@ -6,12 +6,25 @@ import { extractAuthUrl } from "../runtime/runtime-login.js";
 const ESC = "\u001b";
 
 describe("extractAuthUrl", () => {
+  it("returns null for a loopback-only output (the CLI's local callback server, not a sign-in page)", () => {
+    // codex auto-opens the browser and prints only its local server line. That
+    // origin's root 404s, so surfacing it as "Open the sign-in page" is the QA
+    // #1225 / redirect-404 bug — we want no fallback link here.
+    expect(extractAuthUrl("Starting local login server on http://localhost:1455.\n")).toBeNull();
+    expect(extractAuthUrl("listening on http://127.0.0.1:1455\n")).toBeNull();
+  });
+
+  it("captures the external provider URL, skipping the loopback line", () => {
+    const url = extractAuthUrl(
+      "Starting local login server on http://localhost:1455.\nIf it didn't open, navigate to https://auth.openai.com/oauth/authorize?x=1\n",
+    );
+    expect(url).toBe("https://auth.openai.com/oauth/authorize?x=1");
+    expect(() => new URL(url ?? "")).not.toThrow();
+  });
+
   it("strips trailing sentence punctuation so the result parses as a URL", () => {
-    // codex prints the local sign-in server inside prose ("... visit
-    // http://localhost:1455.") — the period must not end up in the href, or
-    // `new URL()` rejects the port "1455." as invalid (the QA blocker).
-    const url = extractAuthUrl("If it didn't open, visit http://localhost:1455.\n");
-    expect(url).toBe("http://localhost:1455");
+    const url = extractAuthUrl("If it didn't open, visit https://auth.openai.com/oauth?x=1.\n");
+    expect(url).toBe("https://auth.openai.com/oauth?x=1");
     expect(() => new URL(url ?? "")).not.toThrow();
   });
 
@@ -22,8 +35,8 @@ describe("extractAuthUrl", () => {
   });
 
   it("returns null until the URL is whitespace-terminated (no truncated capture across chunks)", () => {
-    expect(extractAuthUrl("…navigate to http://localhost:145")).toBeNull();
-    expect(extractAuthUrl("…navigate to http://localhost:1455\n")).toBe("http://localhost:1455");
+    expect(extractAuthUrl("…navigate to https://auth.openai.com/x")).toBeNull();
+    expect(extractAuthUrl("…navigate to https://auth.openai.com/x\n")).toBe("https://auth.openai.com/x");
   });
 
   it("returns null when there is no URL yet", () => {
@@ -85,7 +98,10 @@ describe("runCodexBrowserLogin", () => {
     expect(urls).toEqual(["https://auth.openai.com/auth?x=1"]);
   });
 
-  it("surfaces a prose-wrapped local URL without its trailing period (QA #1225 repro)", async () => {
+  it("does NOT surface the loopback callback server as a fallback link (QA #1225 / redirect-404)", async () => {
+    // codex auto-opened the browser and printed only its local server. That
+    // origin's root 404s, so the fallback link must stay absent rather than
+    // point users at a dead URL.
     const child = new FakeChild();
     const urls: string[] = [];
     const run = runCodexBrowserLogin({
@@ -98,8 +114,7 @@ describe("runCodexBrowserLogin", () => {
     child.close(0);
 
     await expect(run).resolves.toEqual({ ok: true });
-    expect(urls).toEqual(["http://localhost:1455"]);
-    expect(() => new URL(urls[0] ?? "")).not.toThrow();
+    expect(urls).toEqual([]);
   });
 
   it("reports exit-nonzero with the stderr tail when login fails", async () => {
