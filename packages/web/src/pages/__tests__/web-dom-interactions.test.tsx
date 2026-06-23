@@ -82,6 +82,7 @@ const resourceMocks = vi.hoisted(() => ({
 const onboardingEventMocks = vi.hoisted(() => ({
   reportOnboardingEvent: vi.fn(),
   kickoffOnboarding: vi.fn(),
+  getTreeSetupStatus: vi.fn(),
 }));
 
 const meChatMocks = vi.hoisted(() => ({
@@ -92,6 +93,10 @@ const meChatMocks = vi.hoisted(() => ({
 
 const clientApiMocks = vi.hoisted(() => ({
   post: vi.fn(),
+}));
+
+const contextTreeMocks = vi.hoisted(() => ({
+  initializeContextTree: vi.fn(),
 }));
 
 const authMock = vi.hoisted(() => {
@@ -139,6 +144,7 @@ vi.mock("../../api/chats.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/chats.js")>()),
   ...chatApiMocks,
 }));
+vi.mock("../../api/context-tree.js", () => contextTreeMocks);
 vi.mock("../../api/github.js", () => githubMocks);
 vi.mock("../../api/github-app.js", () => githubAppMocks);
 vi.mock("../../api/image-store.js", () => imageStoreMocks);
@@ -470,12 +476,12 @@ function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): Onboardi
     selectedRepoUrls: ["https://github.com/acme/web.git"],
     setSelectedRepoUrls: vi.fn(),
     hasRepoDraft: true,
-    treeMode: "existing",
-    setTreeMode: vi.fn(),
+    treeBindingPlan: "useBoundTree",
+    setTreeBindingPlan: vi.fn(),
     treeUrl: "https://github.com/acme/context-tree",
     setTreeUrl: vi.fn(),
-    treeAutoInitDone: true,
-    markTreeAutoInitDone: vi.fn(),
+    treeAutoDetectDone: true,
+    markTreeAutoDetectDone: vi.fn(),
     completeAndEnterChat: vi.fn(async () => undefined),
     finishLater: vi.fn(async () => undefined),
     ...overrides,
@@ -690,6 +696,16 @@ beforeEach(() => {
   meChatMocks.createMeTaskChat.mockResolvedValue({ chatId: "chat-created" });
   onboardingEventMocks.reportOnboardingEvent.mockResolvedValue(undefined);
   onboardingEventMocks.kickoffOnboarding.mockResolvedValue({ chatId: "chat-onboarding" });
+  onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
+    needsTreeSetup: false,
+    hasTreeBinding: true,
+    hasTreeSetupKickoff: true,
+  });
+  contextTreeMocks.initializeContextTree.mockResolvedValue({
+    repo: "https://github.com/acme/context-tree",
+    htmlUrl: "https://github.com/acme/context-tree",
+    defaultBranch: "main",
+  });
   orgSettingsMocks.getContextTreeSetting.mockResolvedValue({
     repo: "https://github.com/acme/context-tree",
     branch: "main",
@@ -1779,34 +1795,33 @@ describe("web DOM interaction coverage", () => {
       ([...container.querySelectorAll("button")].find((button) => button.textContent?.includes(text)) ??
         null) as HTMLButtonElement | null;
 
-    // Admin · silently detects an existing team tree → switches the first task to
-    // "read it" (no fork, no URL input). The heading is agent + outcome.
-    const setTreeMode = vi.fn();
+    // Admin · silently detects a bound team tree → switches the tree setup plan
+    // to "use bound tree" (no fork, no URL input). The heading is agent + outcome.
+    const setTreeBindingPlan = vi.fn();
     const setTreeUrl = vi.fn();
-    const markTreeAutoInitDone = vi.fn();
+    const markTreeAutoDetectDone = vi.fn();
     const adminAutoDetect = await renderOnboardingDom(<StepKickoff />, {
       activeStep: "kickoff",
       selectedRepoUrls: ["https://github.com/acme/web.git"],
-      treeMode: "new",
+      treeBindingPlan: "createBinding",
       treeUrl: "",
-      treeAutoInitDone: false,
-      setTreeMode,
+      treeAutoDetectDone: false,
+      setTreeBindingPlan,
       setTreeUrl,
-      markTreeAutoInitDone,
+      markTreeAutoDetectDone,
     });
     await waitForText("Your agent's ready to get to work", adminAutoDetect.container);
-    expect(markTreeAutoInitDone).toHaveBeenCalled();
-    expect(setTreeMode).toHaveBeenCalledWith("existing");
+    expect(markTreeAutoDetectDone).toHaveBeenCalled();
+    expect(setTreeBindingPlan).toHaveBeenCalledWith("useBoundTree");
     expect(setTreeUrl).toHaveBeenCalledWith("https://github.com/acme/context-tree");
     await unmountRoot(adminAutoDetect.root);
 
-    // Admin · existing tree → Start reads it: bind bootstrap (names the tree),
-    // caches the repo + tree setting, enters the chat. (New-tree provisioning is
-    // covered by provision-tree.test.ts.)
+    // Admin · bound tree → Start enters the value-first work chat first, while a
+    // separate tree setup chat starts in the background.
     const adminExisting = await renderOnboardingDom(<StepKickoff />, {
       activeStep: "kickoff",
       selectedRepoUrls: ["https://github.com/acme/web.git"],
-      treeMode: "existing",
+      treeBindingPlan: "useBoundTree",
       treeUrl: "https://github.com/acme/context-tree",
     });
     await waitForText("Your agent's ready to get to work", adminExisting.container);
@@ -1822,15 +1837,19 @@ describe("web DOM interaction coverage", () => {
         agentUuid: "agent-1",
         bootstrap: expect.stringContaining("getting Nova up to speed"),
         kind: "work",
-        complete: false,
+        complete: true,
       }),
+    );
+    await waitForCondition(
+      () => onboardingEventMocks.kickoffOnboarding.mock.calls.length >= 2,
+      "Expected the background tree setup chat to start",
     );
     expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         organizationId: "org-1",
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("https://github.com/acme/context-tree"),
+        bootstrap: expect.stringContaining("Read the bound Context Tree first"),
         kind: "tree",
         complete: false,
       }),
@@ -1841,9 +1860,6 @@ describe("web DOM interaction coverage", () => {
       defaultEnabled: "recommended",
       payload: { url: "https://github.com/acme/web.git" },
     });
-    expect(orgSettingsMocks.putContextTreeSetting).toHaveBeenCalledWith("org-1", {
-      repo: "https://github.com/acme/context-tree",
-    });
     expect(adminExisting.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
     await unmountRoot(adminExisting.root);
 
@@ -1851,7 +1867,7 @@ describe("web DOM interaction coverage", () => {
     const adminNoProject = await renderOnboardingDom(<StepKickoff />, {
       activeStep: "kickoff",
       selectedRepoUrls: [],
-      treeMode: "new",
+      treeBindingPlan: "createBinding",
       treeUrl: "",
     });
     await waitForText("No repo connected", adminNoProject.container);
@@ -1901,16 +1917,89 @@ describe("web DOM interaction coverage", () => {
     expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("getting Nova up to speed"),
+        bootstrap: expect.stringContaining("welcoming Nova"),
         kind: "work",
       }),
     );
     expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith(
-      "tree_chat_started",
+      "kickoff_chat_started",
       expect.objectContaining({ joinPath: "invite" }),
     );
     expect(inviteeReady.flow.completeAndEnterChat).toHaveBeenCalled();
     await unmountRoot(inviteeReady.root);
+  });
+
+  it("lets the admin enter the work chat when background tree initialization fails", async () => {
+    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    orgSettingsMocks.getContextTreeSetting.mockResolvedValue({ repo: "", branch: null });
+    contextTreeMocks.initializeContextTree.mockRejectedValueOnce(new Error("initializer down"));
+
+    try {
+      const view = await renderOnboardingDom(<StepKickoff />, {
+        activeStep: "kickoff",
+        selectedRepoUrls: ["https://github.com/acme/web.git"],
+        treeBindingPlan: "createBinding",
+        treeUrl: "",
+      });
+      await waitForText("Your agent's ready to get to work", view.container);
+      await click(
+        ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
+          null) as HTMLButtonElement | null,
+      );
+      await waitForText("Starting your agent", view.container);
+
+      expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentUuid: "agent-1",
+          kind: "work",
+          complete: true,
+        }),
+      );
+      expect(view.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
+      await waitForCondition(
+        () => contextTreeMocks.initializeContextTree.mock.calls.length > 0,
+        "Expected the background tree initializer to run",
+      );
+      expect(onboardingEventMocks.kickoffOnboarding.mock.calls.some(([body]) => body.kind === "tree")).toBe(false);
+      await unmountRoot(view.root);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("keeps build-tree recovery focused on the tree setup chat", async () => {
+    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    orgSettingsMocks.getContextTreeSetting
+      .mockResolvedValueOnce({ repo: "", branch: null })
+      .mockResolvedValueOnce({ repo: "https://github.com/acme/context-tree", branch: "main" });
+
+    const view = await renderOnboardingDom(<StepKickoff recovery />, {
+      activeStep: "kickoff",
+      selectedRepoUrls: ["https://github.com/acme/web.git"],
+      treeBindingPlan: "createBinding",
+      treeUrl: "",
+    });
+    await waitForText("Start with your agent", view.container);
+    await click(
+      ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
+        null) as HTMLButtonElement | null,
+    );
+    await waitForText("Starting your agent", view.container);
+
+    expect(contextTreeMocks.initializeContextTree).toHaveBeenCalledWith("org-1");
+    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledTimes(1);
+    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentUuid: "agent-1",
+        bootstrap: expect.stringContaining("Read the bound Context Tree first"),
+        kind: "tree",
+        complete: true,
+      }),
+    );
+    expect(onboardingEventMocks.kickoffOnboarding).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "work" }));
+    expect(view.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
+    await unmountRoot(view.root);
   });
 
   it("prunes a no-longer-granted repo at kickoff before writing team resources", async () => {
@@ -1926,7 +2015,7 @@ describe("web DOM interaction coverage", () => {
     const view = await renderOnboardingDom(<StepKickoff />, {
       activeStep: "kickoff",
       selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
-      treeMode: "existing",
+      treeBindingPlan: "useBoundTree",
       treeUrl: "https://github.com/acme/context-tree",
     });
     await waitForText("Your agent's ready to get to work", view.container);
@@ -1957,7 +2046,7 @@ describe("web DOM interaction coverage", () => {
     const view = await renderOnboardingDom(<StepKickoff />, {
       activeStep: "kickoff",
       selectedRepoUrls: ["https://github.com/acme/web.git"],
-      treeMode: "existing",
+      treeBindingPlan: "useBoundTree",
       treeUrl: "https://github.com/acme/context-tree",
     });
     await waitForText("Your agent's ready to get to work", view.container);
@@ -1987,7 +2076,7 @@ describe("web DOM interaction coverage", () => {
       {
         activeStep: "kickoff",
         selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
-        treeMode: "existing",
+        treeBindingPlan: "useBoundTree",
         treeUrl: "https://github.com/acme/context-tree",
       },
       (queryClient) => {

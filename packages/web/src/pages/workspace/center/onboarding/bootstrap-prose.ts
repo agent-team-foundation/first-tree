@@ -1,46 +1,21 @@
 /**
- * The two kickoff bootstrap messages the onboarding "Your Context Tree" step
- * sends to a freshly-created agent, chosen by the user's "new vs existing tree"
- * choice. Prose, not shell recipes: the agent's workspace has the shipped
- * First Tree skills (`first-tree-welcome`, `first-tree-write`, `first-tree-read`,
- * `first-tree-seed`), and those skills own the concrete flow. These messages
- * only state the goal + the source repos (and, for the existing path, the
- * tree URL) and defer the mechanics, so they don't drift as the CLI / skills
- * evolve.
+ * Kickoff bootstrap prose for onboarding-created chats. Prose, not shell
+ * recipes: the agent's workspace has the shipped First Tree skills
+ * (`first-tree-welcome`, `first-tree-write`, `first-tree-read`,
+ * `first-tree-seed`), and those skills own the concrete flow.
  *
- * Both paths now assume Cloud has provisioned + bound the tree BEFORE the
- * kickoff message is sent: `runKickoff` creates the tree repo + writes the
- * org's `context_tree` setting (new-tree, via the initializer), and the
- * runtime writes `<workspace>/.first-tree/workspace.json` once the agent's
- * session resolves the binding. That precondition is what lets the prose name
- * skills directly instead of asking the agent to self-provision.
- *
- * Three paths:
- *   - existing tree (buildBindBootstrap): the team already has a Context Tree
- *     binding, and the runtime writes workspace.json automatically — so the
- *     agent is NOT asked to bind or open a PR back to the source. Today this
- *     legacy bootstrap asks the agent to read the tree and use
- *     `first-tree-write` for further writes; the tree setup chat owns deciding
- *     whether a bound tree is empty enough for `first-tree-seed`.
- *   - new tree (buildCreateBootstrap): Cloud has already created the empty tree
- *     repo, written `context_tree`, and (on this session) the runtime writes
- *     `workspace.json`, so the new-tree self-check preconditions for
- *     `first-tree-seed` hold. The prose names `first-tree-seed` directly and
- *     asks the agent to seed the already-bound, still-empty tree with real
- *     content drawn from the source repos — it no longer asks the agent to
- *     create the GitHub repo or record its URL (Cloud owns both).
- *   - invitee joining a set-up team (buildInviteeBootstrap): the team's tree and
- *     repos already exist and the agent inherits them automatically (recommended
- *     team resources), so the invitee never connected anything. The prose is in a
- *     joining-teammate voice — get oriented by reading the tree, then introduce
- *     yourself — NOT the admin's "my repos are now connected, reflect them into
- *     the tree" (a brand-new teammate shouldn't open with tree writes).
+ * Work/intro chats are value-first. Tree setup chats are separate and resilient:
+ * Cloud owns creating/adopting the minimum tree repo binding, while the agent
+ * reads the actual bound tree content and chooses seed vs read/write from that
+ * evidence. A mere binding does not imply a populated tree.
  *
  * Single source of truth: only the kickoff step sends these. If a future surface
  * needs the same prompts, hoist these builders to `packages/shared`.
  */
 
 export const FIRST_TREE_REFERENCE_URL = "https://github.com/agent-team-foundation/first-tree";
+
+export type TreeSetupBootstrapPlan = "createBinding" | "useBoundTree";
 
 function formatSourceList(sourceUrls: readonly string[]): string[] {
   if (sourceUrls.length === 1) {
@@ -59,14 +34,14 @@ export function buildValueFirstBootstrap(
   sourceUrls: readonly string[],
   opts: {
     agentDisplayName: string;
-    contextTreeMode: "none" | "new" | "existing";
+    treeSetup: "none" | "pending" | "bound";
   },
 ): string {
   const sourceLines = sourceUrls.length > 0 ? ["", ...formatSourceList(sourceUrls)] : [];
   const treeLine =
-    opts.contextTreeMode === "new"
+    opts.treeSetup === "pending"
       ? "A separate Context Tree setup chat will handle the heavier shared-memory bootstrap; mention it lightly, but do not make tree setup the user's first task."
-      : opts.contextTreeMode === "existing"
+      : opts.treeSetup === "bound"
         ? "A separate Context Tree setup chat may refresh the team's shared memory; keep this chat focused on helping the user get useful work done."
         : "If the user later points you at a repo, help them get immediate value before asking for any long-term team setup.";
 
@@ -110,67 +85,59 @@ export function buildNoRepoBootstrap(agentDisplayName: string): string {
   ].join("\n");
 }
 
-export function buildBindBootstrap(sourceUrls: readonly string[], treeUrl: string): string {
+export function buildTreeSetupBootstrap(
+  sourceUrls: readonly string[],
+  opts: { treeBindingPlan: TreeSetupBootstrapPlan; treeUrl: string | null },
+): string {
   const sourceLines = formatSourceList(sourceUrls);
-  const single = sourceUrls.length === 1;
-  const opener = single
-    ? "My source repo is now connected to our team's existing Context Tree."
-    : "My source repos are now connected to our team's existing Context Tree.";
-  const skillLine = single
-    ? "Read the tree first to get oriented — start at its root NODE.md. If this repo introduces decisions, ownership, or context worth recording, use the first-tree-write skill to reflect them into the tree — show me the diff and walk me through any PR before it's pushed."
-    : "Read the tree first to get oriented — start at its root NODE.md. If these repos introduce decisions, ownership, or context worth recording, use the first-tree-write skill to reflect them into the tree — show me the diffs and walk me through any PRs before they're pushed.";
+  const bindingLine = opts.treeUrl
+    ? `Bound Context Tree: ${opts.treeUrl}`
+    : "Bound Context Tree: resolved by First Tree Cloud";
+  const setupLine =
+    opts.treeBindingPlan === "createBinding"
+      ? "First Tree Cloud has created or adopted the team's Context Tree repo and recorded the org binding for this setup lane."
+      : "First Tree Cloud found an existing org Context Tree binding for this setup lane.";
   return [
-    opener,
+    "First Tree has connected the selected source repos and opened this separate Context Tree setup chat.",
     "",
     ...sourceLines,
-    `Existing tree: ${treeUrl}`,
+    bindingLine,
     "",
-    skillLine,
+    setupLine,
     "",
-    `Reference: ${FIRST_TREE_REFERENCE_URL}`,
-  ].join("\n");
-}
-
-export function buildCreateBootstrap(sourceUrls: readonly string[]): string {
-  const sourceLines = formatSourceList(sourceUrls);
-  const single = sourceUrls.length === 1;
-  const opener = single
-    ? "My team's Context Tree is set up and bound to my source repo — now seed it with real starting content."
-    : "My team's Context Tree is set up and bound to my source repos — now seed it with real starting content.";
-  const skillLine = single
-    ? "Use the first-tree-seed skill: read the bound source repo, then draft the tree's initial structure and starting content from what's actually in it — not placeholders."
-    : "Use the first-tree-seed skill: read every bound source repo, then draft the tree's initial structure and starting content from what's actually in them — not placeholders.";
-  const walkthrough = single
-    ? "Show me the diff before anything is pushed, and walk me through each PR as it opens."
-    : "Show me the diffs before anything is pushed, and walk me through each PR as it opens.";
-  return [
-    opener,
+    "Read the bound Context Tree first, starting at root NODE.md.",
+    "If the tree is still empty or only contains the Cloud bootstrap placeholder, use the first-tree-seed skill to draft the initial tree from the bound source repos.",
+    "If the tree already has real structure or content, use first-tree-read to orient and first-tree-write only for warranted incremental updates from the connected repos.",
+    "Show the user the diff and walk through any PR before pushing.",
+    "This tree chat owns shared-memory setup/update; do not turn it into the user's first value task.",
     "",
-    ...sourceLines,
-    "",
-    skillLine,
-    "",
-    walkthrough,
+    "Do not impersonate the user or say the user asked for this. First Tree sent this system kickoff.",
     "",
     `Reference: ${FIRST_TREE_REFERENCE_URL}`,
   ].join("\n");
 }
 
 /**
- * Invitee joining a team that's already set up. The agent already inherits the
- * team's repos + Context Tree (recommended team resources + the runtime's
- * workspace.json), so the invitee never connected anything and is NOT asked to
- * reflect decisions into the tree on its first message. Instead: read the tree
- * to get oriented, then introduce yourself — the right tone for a brand-new
- * teammate's first hello.
+ * Invitee joining a team that's already set up. The agent inherits the team's
+ * recommended repos + Context Tree automatically, so the invitee never selects
+ * repos or runs org setup. Keep the first chat value-first, not tree-authoring.
  */
-export function buildInviteeBootstrap(treeUrl: string): string {
+export function buildInviteeReadyBootstrap(agentDisplayName: string, treeUrl: string): string {
   return [
-    "I've just joined the team and you're my agent. The team already has its repos connected and a shared Context Tree.",
+    `First Tree is welcoming ${agentDisplayName} for a teammate joining a team that already has code access and a shared Context Tree.`,
+    "",
+    "Use the first-tree-welcome skill for this onboarding first chat.",
     "",
     `Team Context Tree: ${treeUrl}`,
     "",
-    "Read the tree first to get oriented — start at its root NODE.md — so you understand how the team works and what it's building. Then introduce yourself to me: what can you help with, and what's a good first thing for us to try?",
+    "First response requirements:",
+    "- Read the team's Context Tree first, starting at root NODE.md, and use inherited recommended repos where available.",
+    "- Cite concrete evidence from the tree, repos, or both; do not promise access to private repos the member's local credentials cannot reach.",
+    "- Briefly introduce what you can help with as this teammate's agent.",
+    "- Offer 2–3 evidence-backed first tasks that are small, low-risk, verifiable, and likely to produce user-visible value quickly.",
+    "- Send the task menu as format=request with concise real-task options and free-text accepted; do not add a separate skip option because the Web ask footer already provides Skip.",
+    "- Do not make writing or seeding the Context Tree the invitee's first task.",
+    "- Do not impersonate the user or say the user asked for this. First Tree sent this system kickoff.",
     "",
     `Reference: ${FIRST_TREE_REFERENCE_URL}`,
   ].join("\n");

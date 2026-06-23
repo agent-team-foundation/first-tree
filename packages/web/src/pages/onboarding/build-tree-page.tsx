@@ -14,11 +14,10 @@ import { useNeedsTreeSetup } from "./use-needs-tree-setup.js";
  *
  * For the admin who finished onboarding without ever connecting code (so the
  * skipped kickoff never provisioned a tree). It reuses the onboarding provider
- * and the `connect-code` → `kickoff` step components — they already perform the
- * full correct sequence (provision tree + register source repos + send the
- * `first-tree-seed`-pointing message) — under recovery chrome, so routing
- * through the has-repos branch closes the empty-`sources` / no-seed-message
- * gaps for free. See docs/superpowers/specs/2026-06-10-build-tree-recovery-design.md.
+ * and the `connect-code` → `kickoff` step components — they already register
+ * source repos, ensure the Context Tree binding for the tree setup lane, and
+ * send the resilient tree setup kickoff — under recovery chrome. See
+ * docs/superpowers/specs/2026-06-10-build-tree-recovery-design.md.
  *
  * It does NOT reuse the `/onboarding` route: that route bounces any user whose
  * org already has a usable agent (`shouldLeaveOnboarding`), which a completed

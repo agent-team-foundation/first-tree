@@ -1,5 +1,5 @@
 import type { KickoffKind, SendMessage } from "@first-tree/shared";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, like } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
@@ -35,6 +35,22 @@ export type KickoffOnboardingResult = {
    *  message already there. */
   sent?: { recipients: string[]; messageId: string };
 };
+
+/**
+ * True only after a tree setup kickoff has a bootstrap message. A chat row by
+ * itself is not enough: `kickoffOnboarding` creates the chat before sending the
+ * message, so a send failure can leave an empty idempotency-keyed chat that a
+ * later `/build-tree` retry should still fill.
+ */
+export async function hasTreeSetupKickoffMessage(db: Database, organizationId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: messages.id })
+    .from(chats)
+    .innerJoin(messages, eq(messages.chatId, chats.id))
+    .where(and(eq(chats.organizationId, organizationId), like(chats.onboardingKickoffKey, "%:tree")))
+    .limit(1);
+  return !!row;
+}
 
 /**
  * Idempotent server-side tail of onboarding. Folds the three steps the browser

@@ -30,6 +30,10 @@ const settingsMocks = vi.hoisted(() => ({
   putSourceReposSetting: vi.fn(),
 }));
 
+const onboardingEventMocks = vi.hoisted(() => ({
+  getTreeSetupStatus: vi.fn(),
+}));
+
 const contextApiMocks = vi.hoisted(() => ({
   initializeContextTree: vi.fn(),
 }));
@@ -45,6 +49,8 @@ vi.mock("../../auth/auth-context.js", () => ({
 vi.mock("../../api/organizations.js", () => orgMocks);
 
 vi.mock("../../api/org-settings.js", () => settingsMocks);
+
+vi.mock("../../api/onboarding-events.js", () => onboardingEventMocks);
 
 vi.mock("../../api/context-tree.js", () => contextApiMocks);
 
@@ -215,6 +221,11 @@ beforeEach(() => {
   settingsMocks.putSourceReposSetting.mockImplementation(async (_id: string, body: Partial<OrgSourceReposOutput>) =>
     sourceRepos(body),
   );
+  onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
+    needsTreeSetup: false,
+    hasTreeBinding: true,
+    hasTreeSetupKickoff: true,
+  });
 });
 
 afterEach(() => {
