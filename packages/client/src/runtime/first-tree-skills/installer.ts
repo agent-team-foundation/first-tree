@@ -43,12 +43,12 @@ import { readManagedState, updateManagedState } from "../managed-state.js";
 
 /**
  * Skills always shipped, regardless of whether the agent has a Context Tree
- * binding. Guide is core because onboarding can start before a team has a
+ * binding. Welcome is core because onboarding can start before a team has a
  * Context Tree, especially in the no-repo path.
  */
-export const CORE_SKILL_NAMES = ["first-tree-guide"] as const;
+export const CORE_SKILL_NAMES = ["first-tree-welcome"] as const;
 
-const RETIRED_CORE_SKILL_NAMES = ["first-tree-kickoff"] as const;
+const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as const;
 
 /**
  * Skills that ship for Context-Tree-bound agents. Installed by
