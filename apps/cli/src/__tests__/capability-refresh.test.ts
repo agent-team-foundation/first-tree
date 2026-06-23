@@ -367,17 +367,72 @@ describe("CapabilityRefresher", () => {
     expect(revalidate).not.toHaveBeenCalled();
   });
 
-  it("treats a null startup snapshot as degraded and recovers via the poll", async () => {
-    const { refresher, upload, revalidate } = makeRefresher({ initial: null });
-    revalidate.mockResolvedValueOnce(allOk());
+  it("starts an immediate background full probe when no startup snapshot exists", async () => {
+    const gate = deferred<{ capabilities: ClientCapabilities; mode: "full" | "revalidate" }>();
+    const { refresher, upload, log, reprobe, revalidate } = makeRefresher({ initial: null });
+    reprobe.mockReturnValueOnce(gate.promise);
 
     await refresher.start();
-    expect(upload).not.toHaveBeenCalled(); // nothing to upload yet
+    expect(reprobe).toHaveBeenCalledTimes(1);
+    expect(reprobe).toHaveBeenCalledWith({});
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled(); // start() did not wait for the full probe
 
-    await vi.advanceTimersByTimeAsync(BASE);
-    expect(revalidate).toHaveBeenCalledTimes(1);
-    expect(revalidate).toHaveBeenCalledWith({}); // empty previous
+    gate.resolve({ capabilities: allOk(), mode: "full" });
+    await vi.advanceTimersByTimeAsync(0);
     expect(upload).toHaveBeenCalledWith(allOk());
+    expect(log).toHaveBeenCalledWith("•", expect.stringContaining("runtime capabilities re-probed (startup, full)"));
+    refresher.stop();
+  });
+
+  it("preserves pendingAuth published while a startup full probe is in flight", async () => {
+    const gate = deferred<{ capabilities: ClientCapabilities; mode: "full" | "revalidate" }>();
+    const { refresher, upload, reprobe } = makeRefresher({ initial: null });
+    reprobe.mockReturnValueOnce(gate.promise);
+
+    await refresher.start();
+    expect(reprobe).toHaveBeenCalledWith({});
+
+    refresher.beginInteractive("codex");
+    await refresher.setProviderEntry("codex", codexPending());
+    expect(refresher.currentEntry("codex")?.pendingAuth).toBeDefined();
+    expect(upload).toHaveBeenCalledTimes(1);
+
+    gate.resolve({ capabilities: codexUnauthSnapshot(), mode: "full" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(refresher.currentEntry("codex")?.pendingAuth).toBeDefined();
+    expect(upload).toHaveBeenCalledTimes(2);
+    for (const [snapshot] of upload.mock.calls) {
+      expect((snapshot as ClientCapabilities).codex?.pendingAuth).toBeDefined();
+    }
+    refresher.stop();
+  });
+
+  it("preserves provider state published after interactive login completes while startup probe is in flight", async () => {
+    const gate = deferred<{ capabilities: ClientCapabilities; mode: "full" | "revalidate" }>();
+    const { refresher, upload, reprobe } = makeRefresher({ initial: null });
+    reprobe.mockReturnValueOnce(gate.promise);
+
+    await refresher.start();
+    expect(reprobe).toHaveBeenCalledWith({});
+
+    refresher.beginInteractive("codex");
+    await refresher.setProviderEntry("codex", codexPending());
+    refresher.endInteractive("codex");
+    await refresher.setProviderEntry("codex", ok({ detectedAt: "2026-06-17T00:01:00.000Z" }));
+
+    gate.resolve({ capabilities: codexUnauthSnapshot(), mode: "full" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(refresher.currentEntry("codex")).toMatchObject({ state: "ok", authenticated: true });
+    const uploadedSnapshots = upload.mock.calls.map(([snapshot]) => snapshot as ClientCapabilities);
+    expect(uploadedSnapshots).toHaveLength(3);
+    expect(uploadedSnapshots.some(({ codex }) => codex?.state === "unauthenticated" && !codex.pendingAuth)).toBe(false);
+    expect(uploadedSnapshots[uploadedSnapshots.length - 1]?.codex).toMatchObject({
+      state: "ok",
+      authenticated: true,
+    });
     refresher.stop();
   });
 });

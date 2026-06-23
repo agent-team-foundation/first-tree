@@ -262,7 +262,7 @@ describe("daemon start command", () => {
     expect(coreMocks.promptMissingFields).toHaveBeenCalledWith(expect.objectContaining({ noInteractive: false }));
     expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "info" });
     expect(coreMocks.migrateLocalAgentDirs).toHaveBeenCalled();
-    expect(clientMocks.probeCapabilities).toHaveBeenCalled();
+    expect(clientMocks.probeCapabilities).not.toHaveBeenCalled();
     expect(coreMocks.reconcileLocalRuntimeProviders).toHaveBeenCalled();
     expect(coreMocks.ClientRuntime).toHaveBeenCalledWith(
       "https://first-tree.example",
@@ -271,12 +271,13 @@ describe("daemon start command", () => {
     );
     expect(runtimeInstance.addAgent).toHaveBeenCalledWith("nova", expect.objectContaining({ agentId: "agent-1" }));
     expect(runtimeInstance.start).toHaveBeenCalled();
-    // Capability refresh is owned by the refresher: it is seeded with the
-    // startup probe snapshot, wired to reconnect, and started (which uploads
-    // the snapshot and arms the background poll).
+    // Capability refresh is owned by the refresher: daemon start no longer runs
+    // a blocking provider smoke before Connecting; the refresher starts the
+    // post-registration background full probe.
     expect(coreMocks.CapabilityRefresher).toHaveBeenCalledWith(
-      expect.objectContaining({ initial: { "claude-code": { state: "ok" } } }),
+      expect.objectContaining({ upload: expect.any(Function), log: expect.any(Function) }),
     );
+    expect(coreMocks.CapabilityRefresher.mock.calls[0]?.[0]).not.toHaveProperty("initial");
     expect(runtimeInstance.onReconnect).toHaveBeenCalledWith(expect.any(Function));
     expect(refresherInstance.start).toHaveBeenCalled();
     expect(coreMocks.listPinnedAgents).toHaveBeenCalledWith({

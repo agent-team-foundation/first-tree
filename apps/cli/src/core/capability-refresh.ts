@@ -44,7 +44,8 @@ export type CapabilityRefresherDeps = {
   upload: (capabilities: ClientCapabilities) => Promise<void>;
   /** Status logger (symbol + message), e.g. `print.status`. */
   log: (symbol: string, message: string) => void;
-  /** Initial snapshot from the daemon's startup probe (null if it failed). */
+  /** Optional initial snapshot from a caller-owned probe. Daemon startup normally
+   * omits this so full launch probes run only after WS registration. */
   initial?: ClientCapabilities | null;
   /** Override the backoff base (test seam). */
   baseMs?: number;
@@ -60,11 +61,13 @@ export type CapabilityRefresherDeps = {
 
 /**
  * Owns the daemon's post-registration runtime-capability refresh as a SINGLE
- * probing model, so the two refresh triggers never overlap or fight:
+ * probing model, so the refresh triggers never overlap or fight:
  *
- *   1. WS reconnect (`onReconnect`) — TTL-aware full-or-revalidate via
+ *   1. Startup (`start`) — if no caller supplied an initial snapshot, immediately
+ *      launch a full probe in the background after the Client has registered.
+ *   2. WS reconnect (`onReconnect`) — TTL-aware full-or-revalidate via
  *      {@link reprobeOnReconnect}, preserving the existing reconnect behavior.
- *   2. A bounded, backoff-scheduled background poll (`start`) that fires *while
+ *   3. A bounded, backoff-scheduled background poll (`start`) that fires *while
  *      the daemon stays connected* — the gap this fixes. A capability snapshot
  *      goes stale the moment the operator installs / logs into a provider; with
  *      no reconnect there was previously no refresh until a restart or a manual
@@ -87,6 +90,14 @@ export class CapabilityRefresher {
   private snapshot: ClientCapabilities | null;
   private lastUploadedSyncJson: string | null = null;
   private inFlight = false;
+  /**
+   * Monotonic per-provider local write tracking. Runtime-auth can publish a
+   * provider update via setProviderEntry() while a slow aggregate probe is in
+   * flight; the version lets the merge preserve that newer local entry even if
+   * the interactive flag has already been cleared by the time the probe returns.
+   */
+  private providerWriteVersion = 0;
+  private readonly providerWriteVersions = new Map<string, number>();
   /**
    * Providers with an in-flight interactive login (runtime-auth device-code).
    * While a provider is in this set, a background re-probe must NOT overwrite
@@ -115,10 +126,10 @@ export class CapabilityRefresher {
   }
 
   /**
-   * Push the startup snapshot to the server (deduped) and arm the background
-   * poll if a refresh is still warranted (a non-`ok` provider, or a snapshot
-   * the server has not confirmed). Best-effort: an upload failure is logged and
-   * the poll is still armed (a later poll re-tries the upload).
+   * Start post-registration capability refresh. If an initial snapshot was
+   * supplied, upload it (deduped) and arm the background poll. Otherwise kick off
+   * an immediate full probe in the background. Best-effort: failures are logged
+   * and later polls retry convergence.
    */
   async start(): Promise<void> {
     if (this.snapshot) {
@@ -127,6 +138,9 @@ export class CapabilityRefresher {
       } catch (err) {
         this.deps.log("⚠️", `capabilities upload skipped: ${message(err)}`);
       }
+    } else {
+      void this.runRefresh("startup");
+      return;
     }
     this.idleAttempts = 0;
     this.scheduleNext();
@@ -173,6 +187,7 @@ export class CapabilityRefresher {
   async setProviderEntry(provider: string, entry: CapabilityEntry): Promise<void> {
     const next: ClientCapabilities = { ...(this.snapshot ?? {}), [provider]: entry };
     this.snapshot = next;
+    this.providerWriteVersions.set(provider, ++this.providerWriteVersion);
     try {
       await this.uploadIfChanged(next);
     } catch (err) {
@@ -216,16 +231,18 @@ export class CapabilityRefresher {
     return true;
   }
 
-  private async runRefresh(trigger: "reconnect" | "poll"): Promise<void> {
+  private async runRefresh(trigger: "startup" | "reconnect" | "poll"): Promise<void> {
     if (this.stopped) return;
     if (this.inFlight) return; // a coincident reconnect is held in pendingReconnect
 
     this.inFlight = true;
+    const refreshStartedAt = Date.now();
+    const refreshStartedProviderWriteVersion = this.providerWriteVersion;
     try {
       // A reconnect that arrived (now, or while a prior refresh ran) wins over a
       // poll: it carries the stricter TTL/full re-probe semantics. Drain the
       // intent into this run so it is honored rather than dropped.
-      const effective: "reconnect" | "poll" = this.pendingReconnect ? "reconnect" : trigger;
+      const effective: "startup" | "reconnect" | "poll" = this.pendingReconnect ? "reconnect" : trigger;
       this.pendingReconnect = false;
 
       const previous = this.snapshot ?? {};
@@ -233,27 +250,35 @@ export class CapabilityRefresher {
       try {
         let next: ClientCapabilities;
         let modeLabel: string;
-        if (effective === "reconnect") {
+        if (effective === "startup" || effective === "reconnect") {
           const { capabilities, mode } = await this.reprobe(previous);
           next = capabilities;
-          modeLabel = `reconnect, ${mode}`;
+          modeLabel = `${effective}, ${mode}`;
         } else {
           next = await this.revalidate(previous);
           modeLabel = "poll";
         }
         probed = true;
-        // Preserve any provider with an in-flight interactive login: the
-        // orchestrator owns its entry (a pending device-code) and a fresh probe
-        // would clobber it, making the web device-code panel vanish mid-login.
-        if (this.interactiveProviders.size > 0) {
+        // Re-read at merge time: runtime-auth may have published provider state
+        // while this aggregate probe was awaiting a slow smoke.
+        const current = this.snapshot ?? previous;
+        // Preserve providers still owned by an interactive login, plus provider
+        // entries written after this refresh started. The latter covers the
+        // common race where login completes and clears the interactive flag
+        // before a slow startup/full probe returns with stale aggregate state.
+        const providersToPreserve = new Set(this.interactiveProviders);
+        for (const [provider, version] of this.providerWriteVersions) {
+          if (version > refreshStartedProviderWriteVersion) providersToPreserve.add(provider);
+        }
+        if (providersToPreserve.size > 0) {
           const preserved: ClientCapabilities = { ...next };
-          for (const provider of this.interactiveProviders) {
-            const owned = previous[provider];
+          for (const provider of providersToPreserve) {
+            const owned = current[provider] ?? previous[provider];
             if (owned) preserved[provider] = owned;
           }
           next = preserved;
         }
-        const changed = stableCapabilitySyncJson(next) !== stableCapabilitySyncJson(previous);
+        const changed = stableCapabilitySyncJson(next) !== stableCapabilitySyncJson(current);
         this.snapshot = next;
         // Upload is tracked separately from the probe: a probe that recovered a
         // provider to `ok` but whose PATCH failed must NOT let the poll stop —
@@ -263,17 +288,27 @@ export class CapabilityRefresher {
         try {
           const uploaded = await this.uploadIfChanged(next);
           if (uploaded) {
-            this.deps.log("•", `runtime capabilities re-probed (${modeLabel}) and uploaded`);
+            this.deps.log(
+              "•",
+              `runtime capabilities re-probed (${modeLabel}) and uploaded in ${Date.now() - refreshStartedAt}ms`,
+            );
           }
         } catch (uploadErr) {
           uploadFailed = true;
-          this.deps.log("⚠️", `capabilities upload skipped: ${message(uploadErr)}`);
+          this.deps.log(
+            "⚠️",
+            `capabilities upload skipped after ${Date.now() - refreshStartedAt}ms: ${message(uploadErr)}`,
+          );
         }
         // A reconnect, an observed state change, or a failed upload all warrant
         // a prompt next attempt; only an unchanged, fully-synced poll backs off.
-        this.idleAttempts = effective === "reconnect" || changed || uploadFailed ? 0 : this.idleAttempts + 1;
+        this.idleAttempts =
+          effective === "startup" || effective === "reconnect" || changed || uploadFailed ? 0 : this.idleAttempts + 1;
       } catch (probeErr) {
-        this.deps.log("⚠️", `${effective} capability re-probe skipped: ${message(probeErr)}`);
+        this.deps.log(
+          "⚠️",
+          `${effective} capability re-probe skipped after ${Date.now() - refreshStartedAt}ms: ${message(probeErr)}`,
+        );
         // Keep polling on a transient probe failure so the daemon still converges.
       }
       if (!probed) this.idleAttempts += 1;
