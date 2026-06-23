@@ -61,6 +61,7 @@ describe("isTransientCodexErrorMessage", () => {
       "authentication failed",
       "context length exceeded",
       "context_length_exceeded",
+      "Error running remote compact task: Codex ran out of room in the model's context window.",
       "sandbox denied write to /etc/passwd",
       "approval policy rejected the action",
     ];

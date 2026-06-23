@@ -60,6 +60,7 @@ class FakeAppServerClient {
   onClose: CloseHandler | null = null;
   steerError: Error | null = null;
   turnStartError: Error | null = null;
+  beforeTurnStartError: (() => void) | null = null;
   threadStartDeferred: { promise: Promise<unknown>; resolve: (value: unknown) => void } | null = null;
   steerDeferred: {
     promise: Promise<unknown>;
@@ -78,7 +79,10 @@ class FakeAppServerClient {
       return { thread: { id: "thread-app-server" } };
     }
     if (method === "turn/start") {
-      if (this.turnStartError) throw this.turnStartError;
+      if (this.turnStartError) {
+        this.beforeTurnStartError?.();
+        throw this.turnStartError;
+      }
       this.turnCounter += 1;
       return {
         turn: {
@@ -761,6 +765,30 @@ describe("codex app-server handler", () => {
     await handler.shutdown();
   });
 
+  it("does not classify normal app-server assistant text that mentions provider error keywords", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ emitEvent });
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    completeTurn(fake, "turn-1", "Normal answer mentioning 401 Unauthorized and context window.");
+    await startPromise;
+
+    expect(token.complete).toHaveBeenCalledWith([message], { status: "success", terminal: true });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+    expect(emitEvent.mock.calls.some(([event]) => event.kind === "error" && event.payload.source === "runtime")).toBe(
+      false,
+    );
+
+    await handler.shutdown();
+  });
+
   it("keeps transient app-server turn failures retryable", async () => {
     const fake = new FakeAppServerClient();
     const token = makeDeliveryToken();
@@ -784,6 +812,61 @@ describe("codex app-server handler", () => {
     await handler.shutdown();
   });
 
+  it("consumes accepted-turn capacity wait stops instead of terminal-rejecting them", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    failTurn(fake, "turn-1", { message: "rate limit exceeded; retry later" });
+    await startPromise;
+
+    expect(token.complete).toHaveBeenCalledWith([message], {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "capacity_wait_required",
+    });
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+    expect(token.retry).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it("consumes unsafe replay stops after visible output instead of terminal-rejecting them", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext();
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-1",
+      item: { type: "agentMessage", id: "item-turn-1", text: "partial answer", phase: null, memoryCitation: null },
+    });
+    fake.close("transport is closed");
+    await startPromise;
+
+    expect(token.complete).toHaveBeenCalledWith([message], {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "unsafe_replay",
+    });
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+    expect(token.retry).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
   it("does not classify ordinary transport close text as deterministic", async () => {
     const fake = new FakeAppServerClient();
     const token = makeDeliveryToken();
@@ -800,6 +883,100 @@ describe("codex app-server handler", () => {
     expect(token.retry).toHaveBeenCalledWith([message], "codex_unknown_failure");
     expect(token.terminalRejected).not.toHaveBeenCalled();
     expect(token.complete).not.toHaveBeenCalled();
+
+    await handler.shutdown();
+  });
+
+  it("consumes pre-turn 401 credential failures instead of retrying turn/start", async () => {
+    const fake = new FakeAppServerClient();
+    fake.turnStartError = new Error(
+      "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+    );
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const failSessionForRecovery = vi.fn<(reason: string, sessionId?: string) => void>();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ retryTurn, failSessionForRecovery });
+    const message = makeMessage("m1", "first");
+
+    await handler.start(message, ctx, token);
+
+    expect(token.complete).toHaveBeenCalledWith([message], {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_credential_required",
+    });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+    expect(retryTurn).not.toHaveBeenCalled();
+    expect(failSessionForRecovery).toHaveBeenCalledWith("provider_credential_required", "thread-app-server");
+    expect(fake.isClosed).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  it("consumes pre-turn compact context-window failures instead of retrying turn/start", async () => {
+    const fake = new FakeAppServerClient();
+    fake.turnStartError = new Error(
+      "Error running remote compact task: Codex ran out of room in the model's context window. Start a new thread.",
+    );
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const failSessionForRecovery = vi.fn<(reason: string, sessionId?: string) => void>();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ retryTurn, failSessionForRecovery });
+    const message = makeMessage("m1", "first");
+
+    await handler.start(message, ctx, token);
+
+    expect(token.complete).toHaveBeenCalledWith([message], {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "codex_context_window_exceeded",
+    });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(token.terminalRejected).not.toHaveBeenCalled();
+    expect(retryTurn).not.toHaveBeenCalled();
+    expect(failSessionForRecovery).toHaveBeenCalledWith("codex_context_window_exceeded", "thread-app-server");
+    expect(fake.isClosed).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  it("uses pre-currentTurn turnId error notifications when later turn/start rejects", async () => {
+    const fake = new FakeAppServerClient();
+    fake.turnStartError = new CodexAppServerTransportError("codex app-server request timed out: turn/start");
+    fake.beforeTurnStartError = () => {
+      fake.emit("error", {
+        threadId: "thread-app-server",
+        turnId: "turn-before-rpc",
+        error: {
+          message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+          codexErrorInfo: null,
+          additionalDetails: null,
+        },
+      });
+    };
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const failSessionForRecovery = vi.fn<(reason: string, sessionId?: string) => void>();
+    const token = makeDeliveryToken();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ retryTurn, failSessionForRecovery });
+    const message = makeMessage("m1", "first");
+
+    await handler.start(message, ctx, token);
+
+    expect(token.complete).toHaveBeenCalledWith([message], {
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_credential_required",
+    });
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(retryTurn).not.toHaveBeenCalled();
+    expect(failSessionForRecovery).toHaveBeenCalledWith("provider_credential_required", "thread-app-server");
 
     await handler.shutdown();
   });

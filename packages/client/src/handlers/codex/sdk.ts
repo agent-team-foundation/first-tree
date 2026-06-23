@@ -51,14 +51,8 @@ import type {
   TurnConsumedErrorReason,
 } from "../../runtime/handler.js";
 import { deliveryTokenFromSessionContext } from "../../runtime/handler.js";
-import {
-  buildProviderRetryEvent,
-  classifyProviderFailure,
-  decideProviderRetry,
-  maxProviderTurnRetryAttempts,
-  type ProviderFailureClassification,
-  type ProviderRetryDecision,
-} from "../../runtime/provider-retry-policy.js";
+import { ProviderAttempt, type ProviderAttemptSettlement } from "../../runtime/provider-attempt.js";
+import { classifyProviderFailure, maxProviderTurnRetryAttempts } from "../../runtime/provider-retry-policy.js";
 import { materializeResourceSkills } from "../../runtime/resource-skills.js";
 import {
   buildBriefingUpdateNotice,
@@ -118,7 +112,7 @@ export function isTransientCodexErrorMessage(message: string): boolean {
   return classification.category === "transient_transport" || classification.category === "provider_capacity";
 }
 
-function isCodexStreamDiagnosticMessage(message: string): boolean {
+export function isCodexStreamDiagnosticMessage(message: string): boolean {
   return /\breconnecting\b.*\b\d+\s*\/\s*\d+\b/i.test(message);
 }
 
@@ -450,27 +444,12 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
    */
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
 
-  function emitProviderTurnRetryEvent(
-    sessionCtx: SessionContext,
-    event: "provider_retry_scheduled" | "provider_retry_exhausted" | "provider_failure_terminal",
-    classification: ProviderFailureClassification,
-    decision: ProviderRetryDecision,
-    messagePreview: string,
-  ): void {
+  function emitProviderTurnSettlementEvent(sessionCtx: SessionContext, settlement: ProviderAttemptSettlement): void {
     sessionCtx.emitEvent({
       kind: "error",
       payload: {
         source: "runtime",
-        message: encodeProviderRetryEventMessage(
-          buildProviderRetryEvent({
-            event,
-            provider: runtimeProvider,
-            scope: "provider_turn",
-            classification,
-            decision,
-            messagePreview,
-          }),
-        ),
+        message: encodeProviderRetryEventMessage(settlement.eventPayload),
       },
     });
   }
@@ -803,48 +782,28 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     const usageBox: { value: Usage | null } = { value: null };
     const turnStartedAt = Date.now();
     const retryAfterHelperStopBox: { value: string | null } = { value: null };
-    const decideCodexFailure = (
-      message: string,
-      attemptIndex: number,
+    let lastProviderAttempt: ProviderAttempt | null = null;
+    let lastProviderAttemptNumber = 1;
+
+    const updateAttemptReplaySafety = (
+      attemptState: ProviderAttempt,
       providerEntered: boolean,
-    ): {
-      classification: ProviderFailureClassification;
-      decision: ProviderRetryDecision;
-    } => {
-      const classification = classifyProviderFailure(new Error(message), {
-        provider: runtimeProvider,
-        scope: "provider_turn",
-        source: "sdk",
-      });
-      const replaySafety = userVisibleEmitted
-        ? "user_visible"
-        : !providerEntered
-          ? "pre_provider"
-          : classification.category === "provider_capacity"
-            ? "provider_entered"
-            : "pre_visible";
-      return {
-        classification,
-        decision: decideProviderRetry({
-          classification,
-          scope: "provider_turn",
-          attempt: attemptIndex + 1,
-          replaySafety,
-        }),
-      };
-    };
-    const stopCodexFailure = (
-      message: string,
-      classification: ProviderFailureClassification,
-      decision: Extract<ProviderRetryDecision, { action: "stop" }>,
+      providerCapacity: boolean,
     ): void => {
-      emitProviderTurnRetryEvent(
-        sessionCtx,
-        decision.terminalKind === "exhausted" ? "provider_retry_exhausted" : "provider_failure_terminal",
-        classification,
-        decision,
-        message,
-      );
+      if (userVisibleEmitted) {
+        attemptState.markUserVisibleOutput();
+      } else if (!providerEntered) {
+        attemptState.setReplaySafety("pre_provider");
+      } else if (providerCapacity) {
+        attemptState.setReplaySafety("provider_entered");
+      } else {
+        attemptState.setReplaySafety("pre_visible");
+      }
+    };
+    const stopCodexFailure = (settlement: ProviderAttemptSettlement): void => {
+      emitProviderTurnSettlementEvent(sessionCtx, settlement);
+      const decision = settlement.decision;
+      if (decision.action !== "stop") return;
       if (decision.replaySafety === "pre_provider" && decision.terminalKind === "exhausted") {
         retryAfterHelperStopBox.value = decision.reasonCode;
       } else {
@@ -855,7 +814,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
               ? "provider_retry_exhausted"
               : decision.reasonCode;
       }
-      const formatted = formatCodexSdkError(message);
+      const formatted = formatCodexSdkError(settlement.messagePreview);
       sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: formatted } });
     };
     const promise = (async () => {
@@ -869,6 +828,24 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         let retryRequested = false;
         let retryDelay = 0;
         let retryReason = "";
+        const providerAttempt = new ProviderAttempt({
+          provider: runtimeProvider,
+          scope: "provider_turn",
+          source: "sdk",
+        });
+        lastProviderAttempt = providerAttempt;
+        lastProviderAttemptNumber = attempt + 1;
+
+        const applySettlement = (settlement: ProviderAttemptSettlement, reasonPrefix: string): void => {
+          if (settlement.decision.action === "retry") {
+            retryRequested = true;
+            retryDelay = settlement.decision.delayMs;
+            retryReason = `${reasonPrefix} (${settlement.classification.category}): ${settlement.messagePreview}`;
+            emitProviderTurnSettlementEvent(sessionCtx, settlement);
+            return;
+          }
+          stopCodexFailure(settlement);
+        };
 
         // Per-attempt child AbortController (PR #600 review nit #4): keep
         // parent suspend/shutdown cancellation scoped to the active
@@ -893,7 +870,10 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
               } else if (event.type === "item.completed") {
                 const text = processItem(event.item, sessionCtx);
                 if (text) finalResponse = text;
-                if (isUserVisibleItem(event.item)) userVisibleEmitted = true;
+                if (isUserVisibleItem(event.item)) {
+                  userVisibleEmitted = true;
+                  providerAttempt.markUserVisibleOutput();
+                }
               } else if (event.type === "item.started" || event.type === "item.updated") {
                 // Stream-only intermediate states — claude-code likewise emits
                 // events on terminal items only; codex's run-to-completion model
@@ -904,21 +884,14 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
                 usageBox.value = event.usage;
                 providerCompletedBox.value = true;
               } else if (event.type === "turn.failed") {
-                const { classification, decision } = decideCodexFailure(event.error.message, attempt, true);
-                if (decision.action === "retry") {
-                  retryRequested = true;
-                  retryDelay = decision.delayMs;
-                  retryReason = `turn.failed (${classification.category}): ${event.error.message}`;
-                  emitProviderTurnRetryEvent(
-                    sessionCtx,
-                    "provider_retry_scheduled",
-                    classification,
-                    decision,
-                    event.error.message,
-                  );
-                  break;
-                }
-                stopCodexFailure(event.error.message, classification, decision);
+                const classification = providerAttempt.recordSignal({
+                  kind: "provider_error",
+                  error: new Error(event.error.message),
+                });
+                updateAttemptReplaySafety(providerAttempt, true, classification?.category === "provider_capacity");
+                const settlement = providerAttempt.settle({ attempt: attempt + 1 });
+                if (settlement) applySettlement(settlement, "turn.failed");
+                break;
               } else if (event.type === "error") {
                 // Codex SDK bare `error` stream events are diagnostic: they
                 // can be followed by more items and a successful
@@ -927,41 +900,38 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
                 // stream failures still go through the shared retry policy.
                 if (isCodexStreamDiagnosticMessage(event.message)) {
                   diagnosticErrorEmittedBox.value = true;
-                  sessionCtx.emitEvent({
-                    kind: "error",
-                    payload: { source: "sdk", message: event.message },
+                  const classification = providerAttempt.recordSignal({
+                    kind: "diagnostic",
+                    error: new Error(event.message),
                   });
+                  if (classification) {
+                    updateAttemptReplaySafety(providerAttempt, true, classification.category === "provider_capacity");
+                    const settlement = providerAttempt.settle({ attempt: attempt + 1 });
+                    if (settlement) applySettlement(settlement, "stream diagnostic");
+                    break;
+                  }
                   continue;
                 }
-                const { classification, decision } = decideCodexFailure(event.message, attempt, true);
-                if (decision.action === "retry") {
-                  retryRequested = true;
-                  retryDelay = decision.delayMs;
-                  retryReason = `stream error (${classification.category}): ${event.message}`;
-                  emitProviderTurnRetryEvent(
-                    sessionCtx,
-                    "provider_retry_scheduled",
-                    classification,
-                    decision,
-                    event.message,
-                  );
-                  break;
-                }
-                stopCodexFailure(event.message, classification, decision);
+                const classification = providerAttempt.recordSignal({
+                  kind: "provider_error",
+                  error: new Error(event.message),
+                });
+                updateAttemptReplaySafety(providerAttempt, true, classification?.category === "provider_capacity");
+                const settlement = providerAttempt.settle({ attempt: attempt + 1 });
+                if (settlement) applySettlement(settlement, "stream error");
+                break;
               }
             }
           } catch (err) {
             if (abort.signal.aborted) return;
             const msg = err instanceof Error ? err.message : String(err);
-            const { classification, decision } = decideCodexFailure(msg, attempt, false);
-            if (decision.action === "retry") {
-              retryRequested = true;
-              retryDelay = decision.delayMs;
-              retryReason = `runStreamed threw (${classification.category}): ${msg}`;
-              emitProviderTurnRetryEvent(sessionCtx, "provider_retry_scheduled", classification, decision, msg);
-            } else {
-              stopCodexFailure(msg, classification, decision);
-            }
+            const classification = providerAttempt.recordSignal({
+              kind: "local_error",
+              error: err instanceof Error ? err : new Error(msg),
+            });
+            updateAttemptReplaySafety(providerAttempt, false, classification?.category === "provider_capacity");
+            const settlement = providerAttempt.settle({ attempt: attempt + 1 });
+            if (settlement) applySettlement(settlement, "runStreamed threw");
           }
         } finally {
           // Detach the parent listener whether we retry or break. Even
@@ -1127,27 +1097,55 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       const streamEndReason = diagnosticErrorEmittedBox.value
         ? "codex_stream_ended_after_diagnostic_error"
         : "codex_stream_ended_without_completion";
-      if (userVisibleEmitted) {
-        const message = `${streamEndReason}: stream ended without turn.completed after user-visible output`;
-        const classification = classifyProviderFailure(new Error(message), {
+      const message = userVisibleEmitted
+        ? `${streamEndReason}: stream ended without turn.completed after user-visible output`
+        : `${streamEndReason}: stream ended without turn.completed`;
+      const attemptState =
+        lastProviderAttempt ??
+        new ProviderAttempt({
           provider: runtimeProvider,
           scope: "provider_turn",
           source: "sdk",
         });
-        const decision = decideProviderRetry({
-          classification,
-          scope: "provider_turn",
-          attempt: 1,
-          replaySafety: "user_visible",
-        });
-        if (decision.action === "stop") {
-          emitProviderTurnRetryEvent(sessionCtx, "provider_failure_terminal", classification, decision, message);
-          consumedErrorReason = decision.reasonCode;
-          sessionCtx.log(`codex stream ended without turn.completed; stopping unsafe replay (${decision.reasonCode})`);
-        } else {
-          retryReason = streamEndReason;
+      if (userVisibleEmitted) {
+        attemptState.markUserVisibleOutput();
+      } else {
+        attemptState.setReplaySafety("pre_provider");
+      }
+      const streamEndSettlement = attemptState.settle({
+        attempt: lastProviderAttemptNumber,
+        fallback: {
+          kind: "transport_close",
+          error: new Error(message),
+        },
+      });
+      if (streamEndSettlement?.decision.action === "stop") {
+        emitProviderTurnSettlementEvent(sessionCtx, streamEndSettlement);
+        if (
+          streamEndSettlement.decision.replaySafety === "pre_provider" &&
+          streamEndSettlement.decision.terminalKind === "exhausted"
+        ) {
+          retryReason = streamEndSettlement.decision.reasonCode;
           sessionCtx.log(`codex stream ended without turn.completed; scheduling recovery (${retryReason})`);
+        } else {
+          consumedErrorReason =
+            streamEndSettlement.decision.terminalKind === "capacity_wait_required"
+              ? "capacity_wait_required"
+              : streamEndSettlement.decision.terminalKind === "exhausted"
+                ? "provider_retry_exhausted"
+                : streamEndSettlement.decision.reasonCode;
+          sessionCtx.emitEvent({
+            kind: "error",
+            payload: { source: "sdk", message: formatCodexSdkError(streamEndSettlement.messagePreview) },
+          });
+          sessionCtx.log(
+            `codex stream ended without turn.completed; stopping replay (${streamEndSettlement.decision.reasonCode})`,
+          );
         }
+      } else if (streamEndSettlement?.decision.action === "retry") {
+        emitProviderTurnSettlementEvent(sessionCtx, streamEndSettlement);
+        retryReason = streamEndSettlement.decision.reasonCode;
+        sessionCtx.log(`codex stream ended without turn.completed; scheduling recovery (${retryReason})`);
       } else {
         retryReason = streamEndReason;
         sessionCtx.log(`codex stream ended without turn.completed; scheduling recovery (${retryReason})`);
