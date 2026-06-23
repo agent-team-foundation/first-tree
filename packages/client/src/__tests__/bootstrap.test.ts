@@ -606,7 +606,7 @@ describe("installCoreSkills", () => {
   it("installs core skills even without a Context Tree binding", () => {
     const workspace = join(tmpBase, "core-skills");
     mkdirSync(workspace, { recursive: true });
-    const bundledSkillsRoot = makeFixtureSkillsRoot("core-skills", [{ name: "first-tree-kickoff", version: "1.0.0" }]);
+    const bundledSkillsRoot = makeFixtureSkillsRoot("core-skills", [{ name: "first-tree-guide", version: "1.0.0" }]);
 
     const logs: string[] = [];
     const result = installCoreSkills({
@@ -616,11 +616,36 @@ describe("installCoreSkills", () => {
     });
 
     expect(result).toBe(true);
-    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-kickoff", "SKILL.md"))).toBe(true);
-    expect(readlinkSync(join(workspace, ".claude", "skills", "first-tree-kickoff"))).toBe(
-      `../../${join(".agents", "skills", "first-tree-kickoff")}`,
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-guide", "SKILL.md"))).toBe(true);
+    expect(readlinkSync(join(workspace, ".claude", "skills", "first-tree-guide"))).toBe(
+      `../../${join(".agents", "skills", "first-tree-guide")}`,
     );
-    expect(logs.join("\n")).toContain("installed first-tree-kickoff");
+    expect(logs.join("\n")).toContain("installed first-tree-guide");
+  });
+
+  it("removes the retired kickoff core skill when installing the guide skill", () => {
+    const workspace = join(tmpBase, "core-skills-retired");
+    mkdirSync(join(workspace, ".agents", "skills", "first-tree-kickoff"), { recursive: true });
+    writeFileSync(join(workspace, ".agents", "skills", "first-tree-kickoff", "SKILL.md"), "stale kickoff skill\n");
+    mkdirSync(join(workspace, ".claude", "skills"), { recursive: true });
+    symlinkSync(
+      `../../${join(".agents", "skills", "first-tree-kickoff")}`,
+      join(workspace, ".claude", "skills", "first-tree-kickoff"),
+    );
+    const bundledSkillsRoot = makeFixtureSkillsRoot("core-skills-retired", [
+      { name: "first-tree-guide", version: "1.0.0" },
+    ]);
+
+    const result = installCoreSkills({
+      workspacePath: workspace,
+      bundledSkillsRoot,
+      log: () => {},
+    });
+
+    expect(result).toBe(true);
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-kickoff"))).toBe(false);
+    expect(() => lstatSync(join(workspace, ".claude", "skills", "first-tree-kickoff"))).toThrow();
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-guide", "SKILL.md"))).toBe(true);
   });
 });
 

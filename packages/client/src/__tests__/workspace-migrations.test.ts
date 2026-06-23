@@ -183,6 +183,7 @@ describe("workspace-migrations registry", () => {
       "first-tree-context",
       "first-tree-sync",
       "first-tree-github",
+      "first-tree-kickoff",
     ];
     mkdirSync(join(workspace, ".claude", "skills"), { recursive: true });
     for (const name of legacy) {
