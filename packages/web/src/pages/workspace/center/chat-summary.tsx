@@ -238,8 +238,7 @@ export function ChatSummary({
       if (top <= SCROLL_RESTORE_PX) {
         manualExpandTopRef.current = null;
       }
-      const collapseTop =
-        manualExpandTop === null ? SCROLL_COLLAPSE_PX : manualExpandTop + SCROLL_COLLAPSE_PX;
+      const collapseTop = manualExpandTop === null ? SCROLL_COLLAPSE_PX : manualExpandTop + SCROLL_COLLAPSE_PX;
       if (top > collapseTop && openRef.current && !scrollCollapsedRef.current) {
         manualExpandTopRef.current = null;
         setScrollCollapsed(true);
