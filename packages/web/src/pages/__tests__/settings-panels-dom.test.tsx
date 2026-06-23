@@ -1,6 +1,11 @@
 // @vitest-environment happy-dom
 
-import type { Organization, OrgContextTreeOutput, OrgSourceReposOutput } from "@first-tree/shared";
+import type {
+  Organization,
+  OrgContextTreeFeaturesOutput,
+  OrgContextTreeOutput,
+  OrgSourceReposOutput,
+} from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -24,10 +29,16 @@ const orgMocks = vi.hoisted(() => ({
 }));
 
 const settingsMocks = vi.hoisted(() => ({
+  getContextTreeFeaturesSetting: vi.fn(),
   getContextTreeSetting: vi.fn(),
+  putContextTreeFeaturesSetting: vi.fn(),
   getSourceReposSetting: vi.fn(),
   putContextTreeSetting: vi.fn(),
   putSourceReposSetting: vi.fn(),
+}));
+
+const agentApiMocks = vi.hoisted(() => ({
+  listManagedAgents: vi.fn(),
 }));
 
 const onboardingEventMocks = vi.hoisted(() => ({
@@ -49,6 +60,8 @@ vi.mock("../../auth/auth-context.js", () => ({
 vi.mock("../../api/organizations.js", () => orgMocks);
 
 vi.mock("../../api/org-settings.js", () => settingsMocks);
+
+vi.mock("../../api/agents.js", () => agentApiMocks);
 
 vi.mock("../../api/onboarding-events.js", () => onboardingEventMocks);
 
@@ -86,6 +99,38 @@ function sourceRepos(overrides: Partial<OrgSourceReposOutput> = {}): OrgSourceRe
       { url: "https://github.com/acme/web", defaultBranch: "main" },
       { url: "https://github.com/acme/api" },
     ],
+  };
+}
+
+function contextTreeFeatures(overrides: Partial<OrgContextTreeFeaturesOutput["contextReviewer"]> = {}) {
+  return {
+    contextReviewer: {
+      enabled: overrides.enabled ?? false,
+      agentUuid: overrides.agentUuid ?? null,
+    },
+  } satisfies OrgContextTreeFeaturesOutput;
+}
+
+function managedAgent(overrides: {
+  uuid: string;
+  displayName?: string;
+  name?: string | null;
+  organizationId?: string;
+  type?: string;
+  status?: string;
+}) {
+  return {
+    uuid: overrides.uuid,
+    name: overrides.name ?? overrides.uuid,
+    displayName: overrides.displayName ?? overrides.name ?? overrides.uuid,
+    type: overrides.type ?? "agent",
+    organizationId: overrides.organizationId ?? "org-1",
+    inboxId: `inbox-${overrides.uuid}`,
+    visibility: "private",
+    runtimeProvider: "claude-code",
+    clientId: `client-${overrides.uuid}`,
+    status: overrides.status ?? "active",
+    avatarImageUrl: null,
   };
 }
 
@@ -162,6 +207,17 @@ async function click(element: Element | null): Promise<void> {
   await flush();
 }
 
+async function selectOption(container: ParentNode, label: string): Promise<void> {
+  await click(container.querySelector('[aria-label="Context Reviewer agent"]'));
+  await waitForCondition(
+    () => [...document.body.querySelectorAll('[role="option"]')].some((option) => option.textContent?.includes(label)),
+    `Expected select option "${label}"`,
+  );
+  const option =
+    [...document.body.querySelectorAll('[role="option"]')].find((node) => node.textContent?.includes(label)) ?? null;
+  await click(option);
+}
+
 async function waitForText(container: ParentNode, text: string, timeoutMs = 3000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -223,9 +279,20 @@ beforeEach(() => {
     organization({ ...patch, updatedAt: "2026-05-28T12:01:00.000Z" }),
   );
   settingsMocks.getContextTreeSetting.mockResolvedValue(contextTree());
+  settingsMocks.getContextTreeFeaturesSetting.mockResolvedValue(contextTreeFeatures());
   settingsMocks.putContextTreeSetting.mockImplementation(async (_id: string, body: Partial<OrgContextTreeOutput>) =>
     contextTree(body),
   );
+  settingsMocks.putContextTreeFeaturesSetting.mockImplementation(
+    async (_id: string, body: OrgContextTreeFeaturesOutput) => body,
+  );
+  agentApiMocks.listManagedAgents.mockResolvedValue([
+    managedAgent({ uuid: "agent-beta", displayName: "Beta Reviewer", name: "beta" }),
+    managedAgent({ uuid: "agent-alpha", displayName: "Alpha Reviewer", name: "alpha" }),
+    managedAgent({ uuid: "human-1", displayName: "Human User", type: "human" }),
+    managedAgent({ uuid: "suspended-1", displayName: "Suspended", status: "suspended" }),
+    managedAgent({ uuid: "other-org-1", displayName: "Other Org", organizationId: "org-2" }),
+  ]);
   contextApiMocks.initializeContextTree.mockResolvedValue({
     repo: "https://github.com/acme/acme-context-tree.git",
     htmlUrl: "https://github.com/acme/acme-context-tree",
@@ -400,7 +467,7 @@ describe("settings panels", () => {
     await act(async () => root.unmount());
   });
 
-  it("shows an empty features tab without resetting manual draft values", async () => {
+  it("renders Context Reviewer settings without resetting manual draft values", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
     await waitForText(container, "Manual Set");
@@ -412,14 +479,129 @@ describe("settings panels", () => {
     await setInputValue(repoInput, "https://github.com/acme/draft-context");
 
     await click(buttonByText(container, "Features"));
-    await waitForText(container, "No feature settings yet.");
+    await waitForText(container, "Context Reviewer");
     expect(buttonByText(container, "Initial")?.getAttribute("aria-selected")).toBe("false");
     expect(buttonByText(container, "Features")?.getAttribute("aria-selected")).toBe("true");
     expect(container.textContent).not.toContain("Repo URL");
     expect(container.textContent).not.toContain("Branch");
+    expect(inputByLabel(container, "Context Reviewer")?.checked).toBe(false);
+    expect(container.textContent).toContain("Context Reviewer is disabled.");
+    expect(settingsMocks.getContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1");
+    expect(agentApiMocks.listManagedAgents).not.toHaveBeenCalled();
 
     await click(buttonByText(container, "Initial"));
     expect(inputByLabel(container, "Repo URL")?.value).toBe("https://github.com/acme/draft-context");
+
+    await act(async () => root.unmount());
+  });
+
+  it("saves disabled Context Reviewer as disabled/null", async () => {
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Manual Set");
+
+    await click(buttonByText(container, "Features"));
+    await waitForText(container, "Context Reviewer is disabled.");
+    await click(buttonByText(container, "Save"));
+
+    expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
+      contextReviewer: { enabled: false, agentUuid: null },
+    });
+    expect(agentApiMocks.listManagedAgents).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("enables Context Reviewer, filters eligible agents, and saves the selected agent", async () => {
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Manual Set");
+
+    await click(buttonByText(container, "Features"));
+    await waitForText(container, "Context Reviewer");
+    await click(inputByLabel(container, "Context Reviewer"));
+    await waitForText(container, "Reviewer agent");
+    await waitForCondition(() => agentApiMocks.listManagedAgents.mock.calls.length > 0, "Expected agents to load");
+    expect(container.textContent).toContain("Select an agent");
+
+    await selectOption(container, "Alpha Reviewer");
+    expect(document.body.textContent).not.toContain("Human User");
+    expect(document.body.textContent).not.toContain("Suspended");
+    expect(document.body.textContent).not.toContain("Other Org");
+    await click(buttonByText(container, "Save"));
+
+    expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
+      contextReviewer: { enabled: true, agentUuid: "agent-alpha" },
+    });
+
+    await act(async () => root.unmount());
+  });
+
+  it("initializes an already saved Context Reviewer selection", async () => {
+    settingsMocks.getContextTreeFeaturesSetting.mockResolvedValueOnce(
+      contextTreeFeatures({ enabled: true, agentUuid: "agent-beta" }),
+    );
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Manual Set");
+
+    await click(buttonByText(container, "Features"));
+    await waitForText(container, "Beta Reviewer");
+    expect(inputByLabel(container, "Context Reviewer")?.checked).toBe(true);
+    expect(container.textContent).toContain("Beta Reviewer");
+
+    await act(async () => root.unmount());
+  });
+
+  it("disables Save when Context Reviewer is enabled but no eligible agents exist", async () => {
+    agentApiMocks.listManagedAgents.mockResolvedValueOnce([
+      managedAgent({ uuid: "human-only", displayName: "Only Human", type: "human" }),
+      managedAgent({ uuid: "suspended-only", displayName: "Only Suspended", status: "suspended" }),
+    ]);
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Manual Set");
+
+    await click(buttonByText(container, "Features"));
+    await click(inputByLabel(container, "Context Reviewer"));
+    await waitForText(container, "No active non-human agents are available.");
+    expect(buttonByText(container, "Save")?.disabled).toBe(true);
+
+    await act(async () => root.unmount());
+  });
+
+  it("warns when the saved Context Reviewer is not visible to the current admin", async () => {
+    settingsMocks.getContextTreeFeaturesSetting.mockResolvedValueOnce(
+      contextTreeFeatures({ enabled: true, agentUuid: "agent-hidden" }),
+    );
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Manual Set");
+
+    await click(buttonByText(container, "Features"));
+    await waitForText(container, "Current reviewer is not your active agent.");
+    expect(buttonByText(container, "Save")?.disabled).toBe(true);
+
+    await click(inputByLabel(container, "Context Reviewer"));
+    await click(buttonByText(container, "Save"));
+    expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
+      contextReviewer: { enabled: false, agentUuid: null },
+    });
+
+    await act(async () => root.unmount());
+  });
+
+  it("shows admin-only Context Reviewer copy for members without requesting feature settings", async () => {
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    authMock.value = { ...authMock.value, role: "member" };
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Manual Set");
+
+    await click(buttonByText(container, "Features"));
+    await waitForText(container, "Only admins can configure Context Reviewer.");
+    expect(settingsMocks.getContextTreeFeaturesSetting).not.toHaveBeenCalled();
+    expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
+    expect(agentApiMocks.listManagedAgents).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });

@@ -1,6 +1,7 @@
 import {
   isOrgSettingNamespace,
   ORG_SETTINGS_NAMESPACES,
+  type OrgContextTreeFeaturesInput,
   type OrgContextTreeStorage,
   type OrgSettingInput,
   type OrgSettingNamespace,
@@ -9,10 +10,11 @@ import {
 } from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
+import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
 import { organizationSettings } from "../db/schema/organization-settings.js";
 import { organizations } from "../db/schema/organizations.js";
-import { BadRequestError, NotFoundError } from "../errors.js";
+import { BadRequestError, ForbiddenError, NotFoundError } from "../errors.js";
 import { pickDefaultMembership } from "./auth.js";
 
 /**
@@ -85,6 +87,16 @@ function applyInputDelta<K extends OrgSettingNamespace>(
     };
     return next as OrgSettingStorage<K>;
   }
+  if (namespace === "context_tree_features") {
+    const inp = input as OrgSettingInput<"context_tree_features">;
+    const next: OrgSettingStorage<"context_tree_features"> = {
+      contextReviewer: {
+        enabled: inp.contextReviewer.enabled,
+        agentUuid: inp.contextReviewer.enabled ? inp.contextReviewer.agentUuid : null,
+      },
+    };
+    return next as OrgSettingStorage<K>;
+  }
   // Exhaustiveness — adding a new namespace forces a compile error here.
   const _exhaustive: never = namespace;
   return _exhaustive;
@@ -107,6 +119,16 @@ function toOutput<K extends OrgSettingNamespace>(namespace: K, storage: OrgSetti
     const s = storage as OrgSettingStorage<"source_repos">;
     const out: OrgSettingOutput<"source_repos"> = {
       repos: s.repos,
+    };
+    return out as OrgSettingOutput<K>;
+  }
+  if (namespace === "context_tree_features") {
+    const s = storage as OrgSettingStorage<"context_tree_features">;
+    const out: OrgSettingOutput<"context_tree_features"> = {
+      contextReviewer: {
+        enabled: s.contextReviewer.enabled,
+        agentUuid: s.contextReviewer.agentUuid,
+      },
     };
     return out as OrgSettingOutput<K>;
   }
@@ -170,7 +192,7 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
   orgId: string,
   namespace: K,
   rawInput: unknown,
-  options: { updatedBy: string },
+  options: { updatedBy: string; memberId?: string },
 ): Promise<OrgSettingOutput<K>> {
   assertNamespace(namespace);
 
@@ -190,6 +212,9 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
 
     const current = (await fetchStorageRow(txDb, orgId, namespace)) ?? emptyStorage(namespace);
     const merged = applyInputDelta(namespace, current, input);
+    if (namespace === "context_tree_features") {
+      await assertContextReviewerAgentAllowed(txDb, orgId, input as OrgContextTreeFeaturesInput, options.memberId);
+    }
 
     // Final shape check (defensive — should always pass after applyInputDelta).
     const storageSchema = ORG_SETTINGS_NAMESPACES[namespace].storage;
@@ -217,6 +242,44 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
 
     return toOutput(namespace, validated);
   });
+}
+
+async function assertContextReviewerAgentAllowed(
+  db: Database,
+  orgId: string,
+  input: OrgContextTreeFeaturesInput,
+  memberId: string | undefined,
+): Promise<void> {
+  if (!input.contextReviewer.enabled) return;
+  if (!memberId) {
+    throw new ForbiddenError("Context Reviewer can only be assigned by an active member of this organization");
+  }
+  const agentUuid = input.contextReviewer.agentUuid;
+  if (!agentUuid) {
+    throw new BadRequestError("agentUuid is required when Context Reviewer is enabled");
+  }
+
+  const [agent] = await db
+    .select({
+      uuid: agents.uuid,
+      type: agents.type,
+      status: agents.status,
+      organizationId: agents.organizationId,
+      managerId: agents.managerId,
+    })
+    .from(agents)
+    .where(eq(agents.uuid, agentUuid))
+    .limit(1);
+
+  if (
+    !agent ||
+    agent.organizationId !== orgId ||
+    agent.managerId !== memberId ||
+    agent.type === "human" ||
+    agent.status !== "active"
+  ) {
+    throw new BadRequestError("Context Reviewer agent must be an active non-human agent managed by the caller");
+  }
 }
 
 /**

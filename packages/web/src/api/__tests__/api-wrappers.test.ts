@@ -76,6 +76,10 @@ describe("api wrapper paths", () => {
     await orgSettings.getContextTreeSetting("org/id");
     await orgSettings.putContextTreeSetting("org/id", { repo: "https://github.com/acme/tree", branch: "main" });
     await orgSettings.deleteContextTreeSetting("org/id");
+    await orgSettings.getContextTreeFeaturesSetting("org/id");
+    await orgSettings.putContextTreeFeaturesSetting("org/id", {
+      contextReviewer: { enabled: true, agentUuid: "agent/id" },
+    });
     await orgSettings.getSourceReposSetting("org/id");
     await orgSettings.putSourceReposSetting("org/id", { repos: [{ url: "https://github.com/acme/web.git" }] });
     await orgSettings.deleteSourceReposSetting("org/id");
@@ -119,6 +123,10 @@ describe("api wrapper paths", () => {
     expect(apiMock.put).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree", {
       repo: "https://github.com/acme/tree",
       branch: "main",
+    });
+    expect(apiMock.get).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree_features");
+    expect(apiMock.put).toHaveBeenCalledWith("/orgs/org%2Fid/settings/context_tree_features", {
+      contextReviewer: { enabled: true, agentUuid: "agent/id" },
     });
     expect(apiMock.put).toHaveBeenCalledWith("/orgs/org%2Fid/settings/source_repos", {
       repos: [{ url: "https://github.com/acme/web.git" }],

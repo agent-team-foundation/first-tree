@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   isOrgSettingNamespace,
+  orgContextTreeFeaturesInputSchema,
+  orgContextTreeFeaturesStorageSchema,
   orgContextTreeInputSchema,
   orgSettingNamespaceSchema,
   orgSourceReposInputSchema,
@@ -58,9 +60,34 @@ describe("org settings schemas", () => {
 
   it("checks setting namespace values", () => {
     expect(orgSettingNamespaceSchema.parse("context_tree")).toBe("context_tree");
+    expect(orgSettingNamespaceSchema.parse("context_tree_features")).toBe("context_tree_features");
     expect(isOrgSettingNamespace("context_tree")).toBe(true);
     expect(isOrgSettingNamespace("source_repos")).toBe(true);
+    expect(isOrgSettingNamespace("context_tree_features")).toBe(true);
     expect(isOrgSettingNamespace("unknown")).toBe(false);
     expect(isOrgSettingNamespace(null)).toBe(false);
+  });
+
+  it("validates context tree feature settings", () => {
+    expect(orgContextTreeFeaturesStorageSchema.parse({})).toEqual({
+      contextReviewer: { enabled: false, agentUuid: null },
+    });
+    expect(
+      orgContextTreeFeaturesInputSchema.parse({
+        contextReviewer: { enabled: true, agentUuid: "agent-1" },
+      }),
+    ).toEqual({
+      contextReviewer: { enabled: true, agentUuid: "agent-1" },
+    });
+    expect(() =>
+      orgContextTreeFeaturesInputSchema.parse({
+        contextReviewer: { enabled: true, agentUuid: null },
+      }),
+    ).toThrow("agentUuid is required");
+    expect(() =>
+      orgContextTreeFeaturesInputSchema.parse({
+        contextReviewer: { enabled: true },
+      }),
+    ).toThrow("agentUuid is required");
   });
 });
