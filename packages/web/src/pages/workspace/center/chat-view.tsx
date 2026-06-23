@@ -132,6 +132,7 @@ import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
 import { computeRequiresMention, shouldPrimeMentionOnFocus } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
+import { TaskSummary } from "./task-summary.js";
 
 const SIDEBAR_OPEN_STORAGE_KEY = "first-tree:chat-right-sidebar:open:v1";
 
@@ -1149,19 +1150,17 @@ export function ChatView({
     // user adds or removes an image — they're already fixing it.
     onChange: () => setUploadError(null),
   });
-  // Right-rail visibility. Two-tier default:
-  //   • If the user has ever toggled the rail, that stored preference wins
-  //     and persists across chats (a global preference, not per-chat).
-  //   • Otherwise (no stored preference) the rail auto-opens for chats that
-  //     HAVE a description, so the running summary is visible by default;
-  //     chats without a description stay collapsed for the full reading
-  //     column. This default is applied below once `chatDetail` resolves.
+  // Right-rail visibility. The rail holds participants + GitHub bindings; the
+  // running summary now lives in the pinned TaskSummary above the stream, not
+  // here. Default: the user's stored preference if they have ever toggled the
+  // rail (a global preference, not per-chat), otherwise collapsed for the full
+  // reading column.
   const storedSidebarPref = useRef<boolean | null>(loadSidebarOpen());
   const [showSidebar, setShowSidebar] = useState<boolean>(storedSidebarPref.current ?? false);
   // Persist only genuine user choices (toggle / dismiss / open), never the
-  // transient doc-preview stash or the description-driven auto-open — those
-  // must not masquerade as an explicit preference. `setSidebarByUser` writes
-  // through to localStorage; system-driven changes use `setShowSidebar`.
+  // transient doc-preview stash — that must not masquerade as an explicit
+  // preference. `setSidebarByUser` writes through to localStorage;
+  // system-driven changes use `setShowSidebar`.
   const setSidebarByUser = useCallback((open: boolean | ((v: boolean) => boolean)) => {
     setShowSidebar((prev) => {
       const next = typeof open === "function" ? open(prev) : open;
@@ -1187,11 +1186,6 @@ export function ChatView({
   }, []);
   const hideFinalTextActive = finalTextToggleEnabled && hideAgentFinalText;
   // The chat id the description-driven rail default was last applied for.
-  // `ChatView` is NOT remounted on chat switch (the `chat-detail` query
-  // just refetches by `chatId`), so this must be keyed by chat id — not a
-  // one-shot boolean — or the default would only ever apply to the first
-  // chat viewed in the session.
-  const descriptionDefaultChatRef = useRef<string | null>(null);
   // Doc-preview opens to the right of chat-view (mounted at workspace level);
   // we render two right rails on the same row, so when the user clicks a doc
   // link we collapse this sidebar to give the preview the right slot it
@@ -1365,7 +1359,11 @@ export function ChatView({
     queryFn: () => listSessionEvents(agentId, chatId, { limit: 200, direction: "desc" }),
   });
 
-  const { data: chatDetail, isLoading: chatDetailLoading } = useQuery({
+  const {
+    data: chatDetail,
+    isLoading: chatDetailLoading,
+    isFetching: chatDetailFetching,
+  } = useQuery({
     queryKey: ["chat-detail", chatId],
     queryFn: () => getChat(chatId),
     enabled: !!chatId,
@@ -1373,27 +1371,10 @@ export function ChatView({
     staleTime: 10_000,
   });
 
-  // Apply the description-driven right-rail default once per chat, after that
-  // chat's `chatDetail` resolves — but only when the user has no stored
-  // preference (otherwise their explicit choice is honored untouched). A chat
-  // with a non-empty description auto-opens the rail so the summary is visible
-  // by default; a chat without one collapses it (so a previous chat's transient
-  // auto-open doesn't leak across navigation). This auto-open does NOT persist,
-  // so only a later explicit toggle creates a sticky preference. While a
-  // doc-preview owns the right rail we bail out WITHOUT marking the chat
-  // applied — otherwise a chat entered via a doc-preview deep link would be
-  // marked done while the open was skipped, and closing the preview (which
-  // re-runs this effect via `hasDocPreview`) would hit the per-chat guard and
-  // never apply the default. Leaving it unmarked lets the close re-evaluate.
-  useEffect(() => {
-    if (chatDetailLoading || !chatDetail || chatDetail.id !== chatId) return;
-    if (descriptionDefaultChatRef.current === chatId) return;
-    if (hasDocPreview) return;
-    descriptionDefaultChatRef.current = chatId;
-    if (storedSidebarPref.current !== null) return;
-    const hasDescription = Boolean(chatDetail.description && chatDetail.description.trim().length > 0);
-    setShowSidebar(hasDescription);
-  }, [chatId, chatDetail, chatDetailLoading, hasDocPreview]);
+  // The right rail no longer auto-opens per chat: the running summary moved to
+  // the pinned TaskSummary (above the stream), so the rail — now just
+  // participants + GitHub bindings — simply follows the user's stored
+  // open/closed preference.
 
   // Cumulative token usage for the whole chat (server SUM over token_usage
   // events). Polled on the same cadence as messages so the composer marker
@@ -2996,9 +2977,9 @@ export function ChatView({
             style={{
               // Min-height as a comfortable floor for a now-stable single-row
               // header: the topic sits on one line (truncating with an ellipsis
-              // when long) and the description lives behind the ⓘ affordance, so
-              // the header no longer grows with content. Vertical padding
-              // centers that single row within the min-height.
+              // when long) and the description lives in the pinned task summary
+              // directly below, so the header no longer grows with content.
+              // Vertical padding centers that single row within the min-height.
               minHeight: 52,
               padding: "var(--sp-1_5) var(--sp-6)",
               gap: 10,
@@ -3062,7 +3043,7 @@ export function ChatView({
                   the optional GitHub entity link. The description text is not
                   rendered inline (it made the header height jitter with the
                   running summary and buried the topic) — it now lives in the
-                  right rail's DescriptionSection. With the multi-line
+                  pinned task summary directly below. With the multi-line
                   description gone the row is naturally bounded, so the old
                   narrow-viewport `line-clamp-3` cap is no longer needed. */}
               <div className="flex min-w-0 items-center" style={{ flex: 1, gap: "var(--sp-1)" }}>
@@ -3184,12 +3165,10 @@ export function ChatView({
                 )}
                 <EntityLink metadata={chatDetail?.metadata} />
                 {/* Chat description (running work summary) is NOT shown in the
-                    header. It lives in the right rail's DescriptionSection
-                    (rendered as markdown at the top of the rail), which
-                    auto-opens for chats that have a description. The former
-                    header ⓘ hover-card was removed as redundant with that
-                    section. Read-only on the web — written by the owning agent
-                    via `chat update --description`. */}
+                    header. It lives in the pinned task summary between this
+                    header and the message stream (rendered as markdown).
+                    Read-only on the web — written by the owning agent via
+                    `chat update --description`. */}
               </div>
               {/* Audience — compact stats icon + quick-add icon. Replaces
               the previous chip-row, which one-shot the panel width once
@@ -3281,6 +3260,15 @@ export function ChatView({
               </button>
             </div>
           </div>
+
+          <TaskSummary
+            chatId={chatId}
+            description={chatDetail?.description ?? null}
+            descriptionUpdatedAt={chatDetail?.descriptionUpdatedAt ?? null}
+            lastReadAt={chatDetail?.lastReadAt ?? null}
+            freshnessReady={!chatDetailFetching && chatDetail?.id === chatId}
+            scrollContainerRef={scrollContainerRef}
+          />
 
           {chatDetail?.engagementStatus === CHAT_ENGAGEMENT_STATUSES.DELETED && (
             <div
@@ -3807,7 +3795,6 @@ export function ChatView({
               <div className="absolute top-0 bottom-0 right-0 z-30 flex" style={{ boxShadow: "var(--shadow-md)" }}>
                 <ChatRightSidebar
                   chatId={chatId}
-                  description={chatDetail?.description ?? null}
                   participants={chatDetail?.participants ?? []}
                   participantsLoading={chatDetailLoading}
                   managedByMe={managedByMeMap}
@@ -3820,7 +3807,6 @@ export function ChatView({
           ) : (
             <ChatRightSidebar
               chatId={chatId}
-              description={chatDetail?.description ?? null}
               participants={chatDetail?.participants ?? []}
               participantsLoading={chatDetailLoading}
               managedByMe={managedByMeMap}

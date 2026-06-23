@@ -131,6 +131,8 @@ function chatDetail(overrides: Partial<ChatDetail> = {}): ChatDetail {
     type: overrides.type ?? "group",
     topic: overrides.topic ?? "Launch",
     description: overrides.description ?? null,
+    descriptionUpdatedAt: overrides.descriptionUpdatedAt ?? null,
+    lastReadAt: overrides.lastReadAt ?? null,
     lifecyclePolicy: overrides.lifecyclePolicy ?? null,
     metadata: overrides.metadata ?? {},
     createdAt: overrides.createdAt ?? NOW,

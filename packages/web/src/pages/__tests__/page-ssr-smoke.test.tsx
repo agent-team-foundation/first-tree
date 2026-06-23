@@ -308,6 +308,8 @@ function chatDetail(overrides: Partial<ChatDetail> = {}): ChatDetail {
     type: overrides.type ?? "group",
     topic: overrides.topic ?? "Launch planning",
     description: overrides.description ?? null,
+    descriptionUpdatedAt: overrides.descriptionUpdatedAt ?? null,
+    lastReadAt: overrides.lastReadAt ?? null,
     lifecyclePolicy: overrides.lifecyclePolicy ?? null,
     metadata:
       overrides.metadata ??
@@ -1071,7 +1073,6 @@ describe("page SSR smoke coverage", () => {
       renderPage(
         <ChatRightSidebar
           chatId="chat-1"
-          description={null}
           participants={CHAT_PARTICIPANTS}
           participantsLoading={false}
           managedByMe={new Map([["agent-1", true]])}

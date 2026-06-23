@@ -260,6 +260,17 @@ function broadcast(msg: WsMessage) {
         // the takeover without waiting for its own 5s poll.
         latestQc.invalidateQueries({ queryKey: ["chat-open-requests", chatId] });
       }
+    } else if (msg.type === "chat:updated") {
+      // A chat's metadata changed (e.g. an agent ran `chat update --description`).
+      // Refresh the open chat's detail — the pinned task summary reads description
+      // + freshness off `["chat-detail", chatId]` — and the conversation list,
+      // whose row renders the description. No message arrived, so the message
+      // timeline is deliberately NOT invalidated.
+      const chatId = typeof msg.chatId === "string" ? msg.chatId : null;
+      meChatsInvalidator.invalidate(latestQc);
+      if (chatId) {
+        latestQc.invalidateQueries({ queryKey: ["chat-detail", chatId] });
+      }
     } else if (msg.type === "pulse:tick") {
       // Per-org runtime-state aggregate (pulse-aggregator broadcasts every 5s).
       // The composite `offline` (client_id → null) and runtime-`error` → failed

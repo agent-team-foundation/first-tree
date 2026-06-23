@@ -204,12 +204,17 @@ async function createLegacyEmptyChat(
   const kickoffKey = input.mode === "legacy-empty-agent" ? (input.onboardingKickoffKey ?? null) : null;
 
   return db.transaction(async (tx) => {
+    const initialDescription = input.description ?? null;
     const values = {
       id: chatId,
       organizationId: orgId,
       type: "group",
       topic: input.topic ?? null,
-      description: input.description ?? null,
+      description: initialDescription,
+      // A description present at creation is "updated now", so the task summary
+      // shows real freshness immediately rather than a blank line until the
+      // first `chat update` (mirrors `updateChatMetadata`).
+      descriptionUpdatedAt: initialDescription != null ? new Date() : null,
       onboardingKickoffKey: kickoffKey,
       metadata: input.mode === "legacy-empty-agent" ? (input.metadata ?? {}) : {},
     };
@@ -351,6 +356,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
 
   const chatId = randomUUID();
   const chat = await db.transaction(async (tx) => {
+    const initialDescription = input.description && input.description.length > 0 ? input.description : null;
     const [inserted] = await tx
       .insert(chats)
       .values({
@@ -358,7 +364,11 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
         organizationId: input.organizationId,
         type: "group",
         topic: input.topic && input.topic.length > 0 ? input.topic : null,
-        description: input.description && input.description.length > 0 ? input.description : null,
+        description: initialDescription,
+        // Stamp freshness so a task chat created with a description shows a
+        // real "X ago" line immediately (mirrors `updateChatMetadata` for later
+        // edits).
+        descriptionUpdatedAt: initialDescription != null ? new Date() : null,
         metadata: chatMetadata,
       })
       .returning();
@@ -506,6 +516,55 @@ export async function getChat(db: Database, chatId: string) {
     throw new NotFoundError(`Chat "${chatId}" not found`);
   }
   return chat;
+}
+
+/**
+ * Apply a `topic` / `description` patch to a chat and return the updated row.
+ *
+ * Freshness: a *real* `description` change — the value actually differs, tested
+ * with SQL `IS DISTINCT FROM` so a no-op re-write of identical text does not
+ * count — stamps `description_updated_at = now`. A topic-only patch, or a
+ * description patch that does not change the value, leaves that column
+ * untouched; the whole-row `updated_at` always advances. The `descriptionChanged`
+ * flag this returns also gates the caller's realtime `chat:updated` notify.
+ */
+export async function updateChatMetadata(
+  db: Database,
+  chatId: string,
+  patch: { topic?: string | null; description?: string | null },
+): Promise<{ chat: typeof chats.$inferSelect; descriptionChanged: boolean }> {
+  const now = new Date();
+  let descriptionChanged = false;
+  const set: {
+    topic?: string | null;
+    description?: string | null;
+    descriptionUpdatedAt?: Date;
+    updatedAt: Date;
+  } = { updatedAt: now };
+  if (patch.topic !== undefined) {
+    set.topic = patch.topic && patch.topic.length > 0 ? patch.topic : null;
+  }
+  if (patch.description !== undefined) {
+    const nextDescription = patch.description && patch.description.length > 0 ? patch.description : null;
+    set.description = nextDescription;
+    // Detect a real change (null-safe) to gate BOTH the freshness stamp and the
+    // realtime `chat:updated` notify the caller fires. A no-op re-write of
+    // identical text — or a topic-only edit routed through here — leaves the
+    // "X ago · who" line and the notify untouched. The read-then-write window is
+    // acceptable: chat descriptions are low-frequency, single-maintainer writes.
+    const [current] = await db
+      .select({ description: chats.description })
+      .from(chats)
+      .where(eq(chats.id, chatId))
+      .limit(1);
+    descriptionChanged = (current?.description ?? null) !== nextDescription;
+    if (descriptionChanged) {
+      set.descriptionUpdatedAt = now;
+    }
+  }
+  const [updated] = await db.update(chats).set(set).where(eq(chats.id, chatId)).returning();
+  if (!updated) throw new Error(`Unexpected: chat "${chatId}" missing after update`);
+  return { chat: updated, descriptionChanged };
 }
 
 /**

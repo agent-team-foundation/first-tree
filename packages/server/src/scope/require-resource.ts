@@ -146,6 +146,9 @@ type ChatRow = {
   organizationId: string;
   type: string;
   topic: string | null;
+  // Description-freshness column the task-summary detail route serializes
+  // (the row genuinely carries it; the guard just exposes a curated view).
+  descriptionUpdatedAt: Date | null;
   lifecyclePolicy: string | null;
   parentChatId: string | null;
   metadata: Record<string, unknown>;

@@ -14,6 +14,16 @@ export const chats = pgTable(
     type: text("type").notNull().default("direct"),
     topic: text("topic"),
     description: text("description"),
+    /**
+     * Freshness for `description` specifically — the data behind the task
+     * summary's "X ago" line and its unread/auto-expand logic. Deliberately
+     * distinct from the row-level `updatedAt`, which a topic edit or a
+     * projection write also bumps; only a *real* description change stamps it
+     * (see `updateChatMetadata`). NULL until the first description write lands;
+     * existing rows are intentionally NOT backfilled — we surface "no freshness
+     * yet" rather than fabricate a time we do not truly have.
+     */
+    descriptionUpdatedAt: timestamp("description_updated_at", { withTimezone: true }),
     lifecyclePolicy: text("lifecycle_policy").default("persistent"),
     /**
      * Decision-inert column. First Tree keeps a single group-chat model — there is no

@@ -9,7 +9,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter, useNavigate } from "react-router";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../../api/activity.js";
 import type { MessageWithDelivery, PaginatedMessages } from "../../../../api/chats.js";
@@ -240,6 +240,8 @@ function chatDetail(overrides: Partial<ChatDetail> = {}): ChatDetail {
     type: overrides.type ?? "group",
     topic: overrides.topic ?? "Launch planning",
     description: overrides.description ?? null,
+    descriptionUpdatedAt: overrides.descriptionUpdatedAt ?? null,
+    lastReadAt: overrides.lastReadAt ?? null,
     lifecyclePolicy: overrides.lifecyclePolicy ?? null,
     metadata: overrides.metadata ?? { source: "github", entityUrl: "https://github.com/acme/web/pull/42" },
     createdAt: overrides.createdAt ?? NOW,
@@ -1388,19 +1390,21 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  // Requirement D — the right rail's DescriptionSection auto-opens for chats
-  // that have a description, when the user has no stored rail preference.
-  describe("description-driven right-rail default", () => {
-    const SIDEBAR_KEY = "first-tree:chat-right-sidebar:open:v1";
-    // Distinct from BASE_MESSAGES' "Description"-free body so the assertion
-    // can't accidentally match unrelated chrome.
+  // The chat summary (`chat.description`) now renders in the pinned TaskSummary
+  // between the chat header and the message stream — NOT in the right rail.
+  describe("pinned task summary", () => {
+    // Distinct from BASE_MESSAGES' body so assertions can't match unrelated chrome.
     const DESCRIPTION_MD = "Status: shipping **DescBody** soon.";
 
     function sidebarOpen(container: ParentNode): boolean {
       return container.querySelector('aside[aria-label="Chat details"]') !== null;
     }
+    function taskSummaryButton(container: ParentNode): HTMLButtonElement | null {
+      return container.querySelector<HTMLButtonElement>('button[aria-label$="task summary"]');
+    }
 
-    it("auto-opens the rail and renders the DescriptionSection markdown when a chat HAS a description and no stored preference", async () => {
+    it("renders the description's first line collapsed and the full markdown when expanded", async () => {
+      localStorage.clear();
       const { ChatView } = await import("../chat-view.js");
       const withDescription = chatDetail({ description: DESCRIPTION_MD });
       chatMocks.getChat.mockResolvedValue(withDescription);
@@ -1410,18 +1414,29 @@ describe("ChatView", () => {
         "/",
       );
 
-      await waitForCondition(() => sidebarOpen(container), "Expected rail to auto-open for a chat with a description");
-      const aside = container.querySelector('aside[aria-label="Chat details"]');
-      if (!aside) throw new Error("Sidebar aside missing");
-      // Summary section eyebrow (was "Description") + markdown body (bold renders as <strong>).
-      expect(aside.textContent).toContain("Summary");
-      expect(aside.textContent).toContain("shipping");
-      expect([...aside.querySelectorAll("strong")].some((el) => el.textContent === "DescBody")).toBe(true);
+      await waitForCondition(
+        () => taskSummaryButton(container) !== null,
+        "Expected the task summary to render for a chat with a description",
+      );
+      const button = taskSummaryButton(container);
+      if (!button) throw new Error("task summary button missing");
+      // Collapsed bar = the first line with markdown markers stripped.
+      expect(button.textContent).toContain("Status: shipping DescBody soon.");
+
+      // Expand → faithful markdown (bold renders as <strong>DescBody</strong>).
+      await act(async () => {
+        button.click();
+      });
+      await waitForCondition(
+        () => [...container.querySelectorAll("strong")].some((el) => el.textContent === "DescBody"),
+        "Expected the expanded task summary to render the description markdown",
+      );
 
       await act(async () => root.unmount());
     });
 
-    it("keeps the rail collapsed when a chat has NO description and no stored preference", async () => {
+    it("renders no task summary when the chat has no description", async () => {
+      localStorage.clear();
       const { ChatView } = await import("../chat-view.js");
       const noDescription = chatDetail({ description: null });
       chatMocks.getChat.mockResolvedValue(noDescription);
@@ -1432,72 +1447,15 @@ describe("ChatView", () => {
       );
 
       await waitForText(container, "Launch planning");
-      // Give the description-default effect a chance to (not) fire.
       await flush();
-      expect(sidebarOpen(container)).toBe(false);
+      expect(taskSummaryButton(container)).toBeNull();
 
       await act(async () => root.unmount());
     });
 
-    // The actual regression: ChatView is NOT remounted on chat switch (the
-    // chat-detail query just refetches by chatId). The old once-per-mount guard
-    // applied the default only to the FIRST chat — a second chat with a
-    // description stayed collapsed. The per-chat-keyed fix must auto-open the
-    // second chat too.
-    it("auto-opens the rail for a SECOND chat after switching chatId on a mounted ChatView", async () => {
+    it("does NOT auto-open the right rail for a described chat — the summary lives in the task summary", async () => {
+      localStorage.clear();
       const { ChatView } = await import("../chat-view.js");
-      // First chat: no description → rail stays collapsed.
-      const first = chatDetail({ id: "chat-1", description: null });
-      const second = chatDetail({
-        id: "chat-2",
-        title: "Second chat",
-        topic: "Second chat",
-        description: DESCRIPTION_MD,
-      });
-      chatMocks.getChat.mockImplementation((id: string) => Promise.resolve(id === "chat-2" ? second : first));
-
-      const container = document.createElement("div");
-      document.body.appendChild(container);
-      const root = createRoot(container);
-      const queryClient = createClient();
-      seedChat(queryClient, first);
-      seedChat(queryClient, second);
-
-      const renderAt = async (chatId: string): Promise<void> => {
-        await act(async () => {
-          root.render(
-            <MemoryRouter initialEntries={["/"]}>
-              <QueryClientProvider client={queryClient}>
-                <ToastProvider>
-                  <ChatView agentId="agent-1" chatId={chatId} />
-                </ToastProvider>
-              </QueryClientProvider>
-            </MemoryRouter>,
-          );
-        });
-        await flush();
-      };
-
-      await renderAt("chat-1");
-      await waitForText(container, "Launch planning");
-      await flush();
-      expect(sidebarOpen(container)).toBe(false);
-
-      // Switch to the second chat WITHOUT remounting (same root, new chatId).
-      await renderAt("chat-2");
-      await waitForCondition(
-        () => sidebarOpen(container),
-        "Expected rail to auto-open for the SECOND chat after a chatId switch (regression: once-per-mount guard)",
-      );
-      const aside = container.querySelector('aside[aria-label="Chat details"]');
-      expect(aside?.textContent).toContain("DescBody");
-
-      await act(async () => root.unmount());
-    });
-
-    it("does not auto-open when the user has an explicit stored 'closed' preference, even with a description", async () => {
-      const { ChatView } = await import("../chat-view.js");
-      localStorage.setItem(SIDEBAR_KEY, "0");
       const withDescription = chatDetail({ description: DESCRIPTION_MD });
       chatMocks.getChat.mockResolvedValue(withDescription);
       const { container, root } = await renderDom(
@@ -1506,111 +1464,41 @@ describe("ChatView", () => {
         "/",
       );
 
-      await waitForText(container, "Launch planning");
+      await waitForCondition(() => taskSummaryButton(container) !== null, "Expected the task summary to render");
       await flush();
+      // The rail no longer pops open just because the chat has a description.
       expect(sidebarOpen(container)).toBe(false);
 
       await act(async () => root.unmount());
     });
 
-    // The doc-preview-deep-link regression: a described chat entered while a
-    // doc-preview already owns the right rail (params present on first mount)
-    // must STILL auto-open its DescriptionSection once the preview closes. The
-    // pre-fix ordering marked the chat "applied" before the `hasDocPreview`
-    // bail, so closing the preview hit the per-chat guard and the rail never
-    // opened. The fix bails WITHOUT marking, so the preview-close re-run applies
-    // the default. ChatView must NOT remount across the close — navigation is
-    // driven through the live router so `descriptionDefaultChatRef` survives.
-    it("auto-opens a described chat's rail after a doc-preview deep link closes (no remount)", async () => {
+    it("exposes no edit affordance — read-only", async () => {
+      localStorage.clear();
       const { ChatView } = await import("../chat-view.js");
       const withDescription = chatDetail({ description: DESCRIPTION_MD });
       chatMocks.getChat.mockResolvedValue(withDescription);
-
-      // Capture the live router's navigate so the test can clear the
-      // doc-preview params on the SAME mounted tree (simulating the preview
-      // closing) without remounting ChatView.
-      let navigate: ((to: string) => void) | null = null;
-      function NavProbe(): null {
-        navigate = useNavigate();
-        return null;
-      }
-
-      const container = document.createElement("div");
-      document.body.appendChild(container);
-      const root = createRoot(container);
-      const queryClient = createClient();
-      seedChat(queryClient, withDescription);
-
-      // First mount carries doc-preview params → `hasDocPreview` is true, so the
-      // auto-open is suppressed and (crucially) the chat is NOT marked applied.
-      await act(async () => {
-        root.render(
-          <MemoryRouter
-            initialEntries={["/?docChat=chat-1&docMsg=msg-1&docAttachment=00000000-0000-4000-8000-000000000001"]}
-          >
-            <QueryClientProvider client={queryClient}>
-              <ToastProvider>
-                <NavProbe />
-                <ChatView agentId="agent-1" chatId="chat-1" />
-              </ToastProvider>
-            </QueryClientProvider>
-          </MemoryRouter>,
-        );
-      });
-      await flush();
-      await waitForText(container, "Launch planning");
-      await flush();
-      // Preview owns the rail → DescriptionSection / chat-details aside hidden.
-      expect(sidebarOpen(container)).toBe(false);
-
-      // Close the preview by clearing the doc params on the live router. This
-      // flips `hasDocPreview` to false and re-runs the auto-open effect WITHOUT
-      // remounting ChatView.
-      if (!navigate) throw new Error("NavProbe did not capture navigate");
-      await act(async () => {
-        navigate?.("/");
-      });
-      await waitForCondition(
-        () => sidebarOpen(container),
-        "Expected the described chat's rail to auto-open after the doc-preview closed (regression: mark-before-docPreview-guard)",
-      );
-      const aside = container.querySelector('aside[aria-label="Chat details"]');
-      expect(aside?.textContent).toContain("Summary");
-      expect([...(aside?.querySelectorAll("strong") ?? [])].some((el) => el.textContent === "DescBody")).toBe(true);
-
-      await act(async () => root.unmount());
-    });
-
-    // Regression: the rail keys its stateful sections (Participants, Summary) by
-    // chatId to reset fold state on switch. Those keys MUST be per-section unique
-    // — keying both with the bare chatId made them collide, and React duplicated
-    // the sections (two "Participants" stacked). Guard by asserting React emits no
-    // "two children with the same key" console error while the rail renders.
-    it("renders the rail's keyed sections without a duplicate-key collision", async () => {
-      const { ChatView } = await import("../chat-view.js");
-      const withDescription = chatDetail({ description: DESCRIPTION_MD });
-      chatMocks.getChat.mockResolvedValue(withDescription);
-      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       const { container, root } = await renderDom(
         <ChatView agentId="agent-1" chatId="chat-1" />,
         (queryClient) => seedChat(queryClient, withDescription),
         "/",
       );
-      await waitForCondition(() => sidebarOpen(container), "Expected rail to auto-open for a chat with a description");
 
-      const dupKeyWarnings = errorSpy.mock.calls.filter((args) =>
-        args.some((a) => typeof a === "string" && a.includes("two children with the same key")),
-      );
-      expect(dupKeyWarnings).toEqual([]);
+      await waitForCondition(() => taskSummaryButton(container) !== null, "Expected the task summary to render");
+      const button = taskSummaryButton(container);
+      if (!button) throw new Error("task summary button missing");
+      // Expand and confirm the expanded surface still exposes no edit affordance.
+      await act(async () => {
+        button.click();
+      });
+      await flush();
+      const headerRoot = button.parentElement;
+      if (!headerRoot) throw new Error("task summary root missing");
+      // Read-only is self-evident: the only control is the expand/collapse toggle —
+      // no edit button / input / textarea (the footer + info hint were removed).
+      expect(headerRoot.querySelectorAll("button")).toHaveLength(1);
+      expect(headerRoot.querySelector("input")).toBeNull();
+      expect(headerRoot.querySelector("textarea")).toBeNull();
 
-      // And exactly one of each keyed section is in the DOM.
-      const eyebrows = [...container.querySelectorAll('aside[aria-label="Chat details"] .text-eyebrow')].map((e) =>
-        (e.textContent ?? "").trim(),
-      );
-      expect(eyebrows.filter((t) => t.startsWith("Participants"))).toHaveLength(1);
-      expect(eyebrows.filter((t) => t.startsWith("Summary"))).toHaveLength(1);
-
-      errorSpy.mockRestore();
       await act(async () => root.unmount());
     });
   });

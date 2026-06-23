@@ -29,6 +29,14 @@ const CHAT_MESSAGE_CHANNEL = "chat_message_events";
  * pushes to a just-added member) for up to the cache TTL.
  */
 const CHAT_AUDIENCE_CHANNEL = "chat_audience_events";
+/**
+ * Chat metadata change (e.g. an agent running `chat update --description`).
+ * Carries the bare `<chatId>`. Lets admin WS sockets translate a description /
+ * topic edit into a `chat:updated` frame so an open chat's pinned task summary
+ * (which reads `description` + freshness off chat-detail) and the conversation
+ * list refresh in realtime, with no accompanying message.
+ */
+const CHAT_UPDATED_CHANNEL = "chat_updated_events";
 
 export type ConfigChangeHandler = (channel: string) => void;
 export type SessionStateChangeHandler = (payload: {
@@ -67,6 +75,7 @@ export type SessionRuntimeChangeHandler = (payload: {
 }) => void;
 export type ChatMessageChangeHandler = (payload: { chatId: string; messageId: string }) => void;
 export type ChatAudienceChangeHandler = (payload: { chatId: string }) => void;
+export type ChatUpdatedChangeHandler = (payload: { chatId: string }) => void;
 
 /**
  * Per-socket push handler for the WS data plane. When a NOTIFY arrives on
@@ -104,6 +113,8 @@ export type Notifier = {
   notifyChatMessage(chatId: string, messageId: string): Promise<void>;
   /** Fan a chat-audience-cache invalidation for `chatId` to every replica. */
   notifyChatAudience(chatId: string): Promise<void>;
+  /** Chat metadata changed (description / topic): kick admin WS sockets to invalidate `["chat-detail", chatId]` + `["me","chats"]`. */
+  notifyChatUpdated(chatId: string): Promise<void>;
   /**
    * Push a raw JSON frame to every socket currently subscribed to `inboxId`
    * on **this server instance only**. Unlike `notify`, does not fan out
@@ -126,6 +137,8 @@ export type Notifier = {
   onChatMessage(handler: ChatMessageChangeHandler): void;
   /** Register a handler for cross-replica chat-audience invalidations. */
   onChatAudience(handler: ChatAudienceChangeHandler): void;
+  /** Register a handler for chat:updated (metadata change) notifications. */
+  onChatUpdated(handler: ChatUpdatedChangeHandler): void;
   /** Start listening for PG notifications */
   start(): Promise<void>;
   /** Stop listening */
@@ -141,6 +154,7 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const sessionRuntimeHandlers: SessionRuntimeChangeHandler[] = [];
   const chatMessageHandlers: ChatMessageChangeHandler[] = [];
   const chatAudienceHandlers: ChatAudienceChangeHandler[] = [];
+  const chatUpdatedHandlers: ChatUpdatedChangeHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
@@ -149,6 +163,7 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   let unlistenSessionRuntimeFn: (() => Promise<void>) | null = null;
   let unlistenChatMessageFn: (() => Promise<void>) | null = null;
   let unlistenChatAudienceFn: (() => Promise<void>) | null = null;
+  let unlistenChatUpdatedFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
     // payload format: "inboxId:messageId"
@@ -265,6 +280,14 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    async notifyChatUpdated(chatId: string) {
+      try {
+        await listenClient`SELECT pg_notify(${CHAT_UPDATED_CHANNEL}, ${chatId})`;
+      } catch {
+        // fire-and-forget — realtime is best-effort; web reconnect refetches.
+      }
+    },
+
     async pushFrameToInbox(inboxId: string, frame: string): Promise<number> {
       const map = subscriptions.get(inboxId);
       if (!map) return 0;
@@ -311,6 +334,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
 
     onChatAudience(handler: ChatAudienceChangeHandler) {
       chatAudienceHandlers.push(handler);
+    },
+
+    onChatUpdated(handler: ChatUpdatedChangeHandler) {
+      chatUpdatedHandlers.push(handler);
     },
 
     async start() {
@@ -443,6 +470,20 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         }
       });
       unlistenChatAudienceFn = chatAudienceResult.unlisten;
+
+      const chatUpdatedResult = await listenClient.listen(CHAT_UPDATED_CHANNEL, (payload) => {
+        if (!payload) return;
+        // payload is the bare chatId (a UUID).
+        const chatId = payload;
+        for (const handler of chatUpdatedHandlers) {
+          try {
+            handler({ chatId });
+          } catch {
+            // swallow — handler errors must not poison fan-out
+          }
+        }
+      });
+      unlistenChatUpdatedFn = chatUpdatedResult.unlisten;
     },
 
     async stop() {
@@ -477,6 +518,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenChatAudienceFn) {
         await unlistenChatAudienceFn();
         unlistenChatAudienceFn = null;
+      }
+      if (unlistenChatUpdatedFn) {
+        await unlistenChatUpdatedFn();
+        unlistenChatUpdatedFn = null;
       }
     },
   };

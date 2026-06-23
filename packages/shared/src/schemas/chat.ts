@@ -156,6 +156,26 @@ export const chatDetailSchema = chatSchema.extend({
    *  so the chat-detail page can decide between speaker UI and watcher UI
    *  without round-tripping through the conversation-list query. */
   viewerMembershipKind: z.enum(["participant", "watching"]).nullable(),
+  /**
+   * Task-summary freshness for the `description` specifically (NOT the
+   * row-level `updatedAt`, which a topic edit also bumps). `descriptionUpdatedAt`
+   * is the ISO time of the last *real* description change — NULL when no
+   * description write has landed yet, in which case the summary renders the
+   * description with no freshness line rather than a fabricated one.
+   * `.default(null)`: version skew, and the agent-route detail payload
+   * (`services/chat.ts:getChatDetail`) does not populate it.
+   */
+  descriptionUpdatedAt: z.string().nullable().default(null),
+  /**
+   * The caller's own `chat_user_state.last_read_at` (ISO) as it stood when
+   * this detail was fetched — i.e. BEFORE opening the chat marks it read.
+   * The task header compares it against `descriptionUpdatedAt` to detect an
+   * unread description update, and uses its age to gate the one-shot
+   * auto-expand ("haven't looked in a while"). NULL when the caller has
+   * never read this chat. `.default(null)`: version skew / agent-route
+   * payload.
+   */
+  lastReadAt: z.string().nullable().default(null),
 });
 export type ChatDetail = z.infer<typeof chatDetailSchema>;
 

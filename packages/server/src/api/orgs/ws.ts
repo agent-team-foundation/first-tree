@@ -98,6 +98,10 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
     void dispatchChatMessage(chatId);
   });
 
+  notifier.onChatUpdated(({ chatId }) => {
+    void dispatchChatUpdated(chatId);
+  });
+
   /**
    * Deliver a session:state / session:event / session:runtime frame. The
    * recomputed agent status carries the agent's narration (activity.detail
@@ -152,6 +156,25 @@ export function orgWsRoutes(notifier: Notifier, jwtSecret: string) {
     const audience = await getCachedAudience(getDbForChatLookup(), chatId);
     if (!audience || audience.size === 0) return;
     const frame = JSON.stringify({ type: "chat:message", chatId });
+    for (const [ws, meta] of adminSockets) {
+      if (ws.readyState !== 1) continue;
+      if (!audience.has(meta.humanAgentId)) continue;
+      try {
+        ws.send(frame);
+      } catch {
+        // socket-level errors surface via close handler
+      }
+    }
+  }
+
+  // Metadata-change sibling of dispatchChatMessage: same chat-audience gate, but
+  // emits a `chat:updated` frame (no messageId) so clients refresh chat-detail +
+  // the conversation list without touching the message timeline.
+  async function dispatchChatUpdated(chatId: string): Promise<void> {
+    if (adminSockets.size === 0) return;
+    const audience = await getCachedAudience(getDbForChatLookup(), chatId);
+    if (!audience || audience.size === 0) return;
+    const frame = JSON.stringify({ type: "chat:updated", chatId });
     for (const [ws, meta] of adminSockets) {
       if (ws.readyState !== 1) continue;
       if (!audience.has(meta.humanAgentId)) continue;

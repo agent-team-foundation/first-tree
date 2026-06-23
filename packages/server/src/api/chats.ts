@@ -13,7 +13,6 @@ import type { FastifyInstance } from "fastify";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
-import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
@@ -22,7 +21,7 @@ import { BadRequestError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
 import { resolveAvatarImageUrl } from "../services/agent.js";
 import { getChatAgentStatuses } from "../services/agent-chat-status.js";
-import { ensureParticipant, leaveChat } from "../services/chat.js";
+import { ensureParticipant, leaveChat, updateChatMetadata } from "../services/chat.js";
 import { declareEntityFollow, listChatGithubEntities, removeEntityFollow } from "../services/github-entity-follow.js";
 import {
   addMeChatParticipants,
@@ -104,6 +103,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     const [callerState] = await app.db.execute<{
       engagement_status: ChatEngagementStatus | null;
       access_mode: "speaker" | "watcher" | null;
+      last_read_at: Date | string | null;
     }>(sql`
       SELECT
         (
@@ -119,7 +119,14 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
            WHERE ${chatMembership.chatId} = ${chat.id}
              AND ${chatMembership.agentId} = ${scope.humanAgentId}
            LIMIT 1
-        ) AS access_mode
+        ) AS access_mode,
+        (
+          SELECT ${chatUserState.lastReadAt}
+            FROM ${chatUserState}
+           WHERE ${chatUserState.chatId} = ${chat.id}
+             AND ${chatUserState.agentId} = ${scope.humanAgentId}
+           LIMIT 1
+        ) AS last_read_at
     `);
     const engagementStatus = callerState?.engagement_status ?? CHAT_ENGAGEMENT_STATUSES.ACTIVE;
     // Caller's own membership row drives speaker-vs-watcher UI. `null` means
@@ -139,6 +146,11 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       viewerMembershipKind,
       createdAt: chat.createdAt.toISOString(),
       updatedAt: chat.updatedAt.toISOString(),
+      // Task-summary freshness: the description-specific time, and the caller's
+      // prior last-read cursor (captured BEFORE the open marks the chat read)
+      // so the client can decide unread/auto-expand.
+      descriptionUpdatedAt: chat.descriptionUpdatedAt ? chat.descriptionUpdatedAt.toISOString() : null,
+      lastReadAt: callerState?.last_read_at ? new Date(callerState.last_read_at).toISOString() : null,
       participants: participants.map((p) => ({
         agentId: p.agentId,
         role: p.role,
@@ -298,15 +310,17 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.patch<{ Params: { chatId: string } }>("/:chatId", { config: { otelRecordBody: true } }, async (request) => {
+    // Access enforcement only — the patch attributes to no specific actor now.
     await requireChatAccess(request, app.db);
     const body = updateChatSchema.parse(request.body);
-    const patch: { topic?: string | null; description?: string | null; updatedAt: Date } = { updatedAt: new Date() };
-    if (body.topic !== undefined) patch.topic = body.topic && body.topic.length > 0 ? body.topic : null;
-    if (body.description !== undefined)
-      patch.description = body.description && body.description.length > 0 ? body.description : null;
-
-    const [updated] = await app.db.update(chats).set(patch).where(eq(chats.id, request.params.chatId)).returning();
-    if (!updated) throw new Error("Unexpected: chat missing after update");
+    // Both the console rename / re-describe and the agent `chat update` path go
+    // through `updateChatMetadata`, so description-freshness stamping stays in
+    // one place.
+    const { chat: updated, descriptionChanged } = await updateChatMetadata(app.db, request.params.chatId, body);
+    // A real description change must reach an already-open client: the pinned
+    // task summary reads the summary + freshness off chat-detail, which the web
+    // only refetches on a realtime kick.
+    if (descriptionChanged) void app.notifier.notifyChatUpdated(request.params.chatId);
     return {
       ...updated,
       createdAt: updated.createdAt.toISOString(),
