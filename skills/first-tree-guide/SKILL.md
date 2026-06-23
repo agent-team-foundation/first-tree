@@ -1,12 +1,12 @@
 ---
-name: first-tree-kickoff
+name: first-tree-guide
 version: 1.0.0
-description: Use only for First Tree onboarding kickoff system messages. Guides the agent's first value-first chat: read the user's repo or team context, show concrete understanding, ask the user to choose a bounded first task, and keep Context Tree setup in a separate/background lane.
+description: Use only for First Tree onboarding system messages. Guides the agent's first value-first chat: read the user's repo or team context, show concrete understanding, ask the user to choose a bounded first task, and keep Context Tree setup in a separate/background lane.
 ---
 
-# First Tree Kickoff
+# First Tree Guide
 
-Use this skill only when a First Tree system kickoff message explicitly asks you to use `first-tree-kickoff`, or when the chat is clearly the onboarding first chat created by First Tree. Do not use it for ordinary chats, PR reviews, tree writes, or maintenance work.
+Use this skill only when a First Tree system onboarding message explicitly asks you to use `first-tree-guide`, or when the chat is clearly the onboarding first chat created by First Tree. Do not use it for ordinary chats, PR reviews, tree writes, or maintenance work.
 
 ## Goal
 
@@ -100,4 +100,4 @@ Do not run a heavy tree seed in this chat unless First Tree explicitly put you i
 - Keep the menu as a request so the user is guided toward one real task.
 - Do not block the value chat on Context Tree setup.
 - Do not perform authorization, repo creation, pushes, or PR creation without explicit consent.
-- Do not use the retired `first-tree-onboarding` skill name.
+- Do not use retired onboarding skill names such as `first-tree-onboarding` or `first-tree-kickoff`.

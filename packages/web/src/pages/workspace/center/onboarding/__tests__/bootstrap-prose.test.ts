@@ -16,7 +16,7 @@ describe("kickoff bootstrap prose", () => {
     });
 
     expect(message).toContain("First Tree is getting Nova up to speed on https://github.com/acme/app");
-    expect(message).toContain("Use the first-tree-kickoff skill");
+    expect(message).toContain("Use the first-tree-guide skill");
     expect(message).toContain("evidence-backed");
     expect(message).toContain("2–3");
     expect(message).toContain("format=request");
@@ -30,7 +30,7 @@ describe("kickoff bootstrap prose", () => {
     const message = buildNoRepoBootstrap("Nova");
 
     expect(message).toContain("First Tree is introducing Nova before a repo is connected");
-    expect(message).toContain("Use the first-tree-kickoff skill");
+    expect(message).toContain("Use the first-tree-guide skill");
     expect(message).toContain("local clone path or a GitHub URL");
     expect(message).toContain("before any long-term team setup");
     expect(message).toContain("format=request");
@@ -48,7 +48,8 @@ describe("kickoff bootstrap prose", () => {
     // the agent is told the repo is already connected and pointed at reading /
     // reflecting — never at performing a manual bind + PR-back.
     expect(message).toContain("connected");
-    expect(message).toContain("first-tree-context");
+    expect(message).toContain("first-tree-write");
+    expect(message).not.toContain("first-tree-context");
     expect(message).not.toContain("bind the repo to that existing tree");
     expect(message).not.toContain("PR back to the source");
     // A populated team tree must never invoke the one-shot seed skill.
@@ -68,7 +69,8 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("- https://github.com/acme/api");
     expect(message).toContain("Existing tree: https://github.com/acme/context");
     expect(message).toContain("connected");
-    expect(message).toContain("first-tree-context");
+    expect(message).toContain("first-tree-write");
+    expect(message).not.toContain("first-tree-context");
     expect(message).not.toContain("bind every repo to that existing tree");
   });
 

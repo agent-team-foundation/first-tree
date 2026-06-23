@@ -43,10 +43,12 @@ import { readManagedState, updateManagedState } from "../managed-state.js";
 
 /**
  * Skills always shipped, regardless of whether the agent has a Context Tree
- * binding. Kickoff is core because onboarding can start before a team has a
+ * binding. Guide is core because onboarding can start before a team has a
  * Context Tree, especially in the no-repo path.
  */
-export const CORE_SKILL_NAMES = ["first-tree-kickoff"] as const;
+export const CORE_SKILL_NAMES = ["first-tree-guide"] as const;
+
+const RETIRED_CORE_SKILL_NAMES = ["first-tree-kickoff"] as const;
 
 /**
  * Skills that ship for Context-Tree-bound agents. Installed by
@@ -317,6 +319,7 @@ export type InstallFirstTreeSkillsOptions = {
  */
 export function installCoreSkills(options: InstallCoreSkillsOptions): InstallSkillsResult {
   const bundledSkillsRoot = options.bundledSkillsRoot ?? resolveBundledSkillsRoot();
+  reconcileCoreSkillState(options.workspacePath);
   return installSkillSet(options.workspacePath, CORE_SKILL_NAMES, bundledSkillsRoot);
 }
 
@@ -328,15 +331,21 @@ export function installCoreSkills(options: InstallCoreSkillsOptions): InstallSki
  * recorded as installed by a previous CLI version but that's no longer in
  * `TREE_SKILL_NAMES` gets its `.agents/skills/<name>/` payload and
  * `.claude/skills/<name>` symlink removed. The current set is then written
- * back to state. Core skills are not tracked here — `CORE_SKILL_NAMES` is
- * presently empty, and re-introducing one later can extend the state
- * schema.
+ * back to state. Core skills are reconciled separately because they also ship
+ * for tree-less workspaces, where there may be no managed-state tree skill
+ * install.
  */
 export function installFirstTreeSkills(options: InstallFirstTreeSkillsOptions): InstallSkillsResult {
   const bundledSkillsRoot = options.bundledSkillsRoot ?? resolveBundledSkillsRoot();
   const result = installSkillSet(options.workspacePath, TREE_SKILL_NAMES, bundledSkillsRoot);
   reconcileTreeSkillState(options.workspacePath);
   return result;
+}
+
+function reconcileCoreSkillState(workspacePath: string): void {
+  for (const retiredSkill of RETIRED_CORE_SKILL_NAMES) {
+    removeManagedSkill(workspacePath, retiredSkill);
+  }
 }
 
 /**
