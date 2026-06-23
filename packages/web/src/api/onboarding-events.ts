@@ -49,10 +49,9 @@ export async function markOnboardingCompleted(organizationId?: string): Promise<
 
 /**
  * Run the idempotent server-side onboarding kickoff: create-or-reuse the first
- * chat, send the bootstrap message if the chat is empty, and stamp completion —
- * all in one request. Replaces the browser-orchestrated create-chat → send →
- * stamp sequence, whose mid-way failure could leave an orphan chat, a duplicate
- * bootstrap, or a completion stamp decoupled from the chat actually existing.
+ * chat, send the bootstrap message if the chat is empty, and optionally stamp
+ * completion. Single-chat paths use the default stamp; multi-chat paths defer it
+ * until every required kickoff side effect has succeeded.
  *
  * NOT best-effort: a failure here means the kickoff didn't happen, so the caller
  * surfaces it and lets the user retry (the endpoint is safe to re-run).

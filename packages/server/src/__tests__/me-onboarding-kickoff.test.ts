@@ -113,6 +113,56 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(res.json<{ chatId: string }>().chatId).toBe(chatId);
   });
 
+  it("can defer completion for multi-chat onboarding until the caller finishes all required chats", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const base = {
+      organizationId: admin.organizationId,
+      agentUuid: agent.uuid,
+      complete: false,
+    };
+
+    const work = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...base, bootstrap: "Start with useful work.", kind: "work" },
+    });
+    expect(work.statusCode).toBe(200);
+
+    const [afterWork] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
+    expect(afterWork?.onboardingCompletedAt).toBeNull();
+    expect(afterWork?.onboardingSuppressedAt).toBeNull();
+    expect(afterWork?.onboardingSuppressedReason).toBeNull();
+
+    const tree = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...base, bootstrap: "Seed the Context Tree.", kind: "tree" },
+    });
+    expect(tree.statusCode).toBe(200);
+
+    const [afterTree] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
+    expect(afterTree?.onboardingCompletedAt).toBeNull();
+    expect(afterTree?.onboardingSuppressedAt).toBeNull();
+    expect(afterTree?.onboardingSuppressedReason).toBeNull();
+
+    const complete = await app.inject({
+      method: "POST",
+      url: "/api/v1/me/onboarding-completed",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { organizationId: admin.organizationId },
+    });
+    expect(complete.statusCode).toBe(200);
+
+    const [member] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
+    expect(member?.onboardingCompletedAt).not.toBeNull();
+    expect(member?.onboardingSuppressedAt).not.toBeNull();
+    expect(member?.onboardingSuppressedReason).toBe("completed");
+  });
+
   it("is idempotent — a second call reuses the chat, sends no duplicate, keeps the stamp", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);

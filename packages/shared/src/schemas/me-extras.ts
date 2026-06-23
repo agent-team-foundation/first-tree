@@ -67,12 +67,10 @@ export const kickoffKindSchema = z.enum(["intro", "work", "tree"]);
 export type KickoffKind = z.infer<typeof kickoffKindSchema>;
 
 /**
- * Body for `POST /me/onboarding/kickoff` — the idempotent server-side tail of
- * onboarding. Folds the three previously browser-orchestrated steps (create
- * the first chat, send the bootstrap message, stamp completion) into one
- * resumable request: re-running it (a reopened tab, a network retry, the
- * build-tree recovery surface) reuses the same kickoff chat instead of
- * creating duplicates, and stamps completion only once the chat exists.
+ * Body for `POST /me/onboarding/kickoff` — the idempotent server-side chat
+ * creation/send tail of onboarding. Single-chat kickoffs keep the default
+ * completion stamp; multi-chat flows can defer the stamp until every required
+ * kickoff side effect succeeds.
  *
  * `agentUuid` is the bootstrap agent the chat is opened with. `bootstrap` is
  * the first message body. `kind` separates the intro vs tree-building intents
@@ -84,6 +82,7 @@ export const kickoffOnboardingSchema = z.object({
   agentUuid: z.string().min(1),
   bootstrap: z.string().min(1),
   kind: kickoffKindSchema,
+  complete: z.boolean().optional(),
 });
 export type KickoffOnboarding = z.infer<typeof kickoffOnboardingSchema>;
 

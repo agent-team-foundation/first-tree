@@ -29,7 +29,7 @@ vi.mock("../runtime/bootstrap.js", () => ({
 }));
 
 import { ensureAgentBootstrap } from "../runtime/agent-bootstrap.js";
-import { installFirstTreeIntegration } from "../runtime/bootstrap.js";
+import { installCoreSkills, installFirstTreeIntegration } from "../runtime/bootstrap.js";
 import type { SessionContext } from "../runtime/handler.js";
 import { INIT_COMPLETE_SENTINEL_REL } from "../runtime/workspace.js";
 
@@ -70,6 +70,7 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
     state.cachedTreeHead = null;
     state.cachedCli = null;
     vi.mocked(installFirstTreeIntegration).mockReset();
+    vi.mocked(installCoreSkills).mockReset();
   });
 
   afterEach(() => {
@@ -157,5 +158,24 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
     ensureAgentBootstrap(params);
     // No Context Tree → installFirstTreeIntegration is never called regardless.
     expect(installFirstTreeIntegration).not.toHaveBeenCalled();
+  });
+
+  it("installs core skills even when an existing tree-less workspace takes the sentinel fast path", () => {
+    const params = {
+      workspace,
+      sessionCtx: fakeSessionCtx(),
+      contextTreePath: null,
+      briefing: "# Agent Identity\n\nstub briefing\n",
+      currentSourceRepoNames: null,
+    };
+
+    ensureAgentBootstrap(params);
+
+    expect(installFirstTreeIntegration).not.toHaveBeenCalled();
+    expect(installCoreSkills).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspacePath: workspace,
+      }),
+    );
   });
 });

@@ -262,11 +262,11 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
 
   const completeAndEnterChat = useCallback(
     async (chatId: string) => {
-      // The DURABLE completion stamp is now written server-side, atomically with
-      // the kickoff chat, inside POST /me/onboarding/kickoff (called just before
-      // this). This client call is only an OPTIMISTIC local flip so the Settings
-      // → Onboarding entry disappears without waiting for the next /me refetch —
-      // hence it stays best-effort and we always navigate even if it fails.
+      // Single-chat kickoff paths may already have stamped completion inside
+      // POST /me/onboarding/kickoff. Multi-chat paths deliberately defer that
+      // stamp until every required kickoff side effect succeeds, then call this
+      // helper. The write stays idempotent and best-effort so a network blip
+      // does not strand the user after the required chat(s) exist.
       //
       // Deliberately NOT `dismissOnboarding()`: completion writes a
       // membership-scoped suppress stamp with reason="completed". Reusing the

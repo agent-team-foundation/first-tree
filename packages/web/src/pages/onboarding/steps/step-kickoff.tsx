@@ -80,18 +80,19 @@ async function startKickoffChat(args: {
   kind: KickoffKind;
   treeMode: "new" | "existing";
   joinPath?: "invite";
+  complete?: boolean;
 }): Promise<string> {
-  // Create-or-reuse the kickoff chat, send the bootstrap, and stamp completion
-  // in one idempotent server call. Folding these three steps server-side means a
-  // mid-way failure (closed tab, dropped network) no longer strands the user in
-  // a half-finished state: a retry — including the build-tree recovery surface —
-  // converges on the same chat and a single completion stamp. A failure here is
-  // surfaced to the caller (the kickoff didn't happen) rather than swallowed.
+  // Create-or-reuse the kickoff chat and send the bootstrap in one idempotent
+  // server call. Single-chat paths also let the server stamp completion after
+  // the chat exists; multi-chat paths pass `complete: false` and finish only
+  // after every required kickoff chat has succeeded. A failure here surfaces to
+  // the caller rather than being swallowed.
   const { chatId } = await kickoffOnboarding({
     ...(args.organizationId ? { organizationId: args.organizationId } : {}),
     agentUuid: args.agent.uuid,
     bootstrap: args.bootstrap,
     kind: args.kind,
+    complete: args.complete,
   });
   void reportOnboardingEvent("tree_chat_started", {
     agentUuid: args.agent.uuid,
@@ -302,6 +303,7 @@ function AdminKickoff({
         organizationId,
         kind: "work",
         treeMode: resolvedTreeMode,
+        complete: false,
       });
 
       await startKickoffChat({
@@ -310,6 +312,7 @@ function AdminKickoff({
         organizationId,
         kind: "tree",
         treeMode: resolvedTreeMode,
+        complete: false,
       });
       await completeAndEnterChat(workChatId);
       // The kickoff just provisioned/confirmed the team's tree binding

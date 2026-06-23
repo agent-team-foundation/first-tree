@@ -152,6 +152,10 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   if (sentinelPresent && !cliDrifted && !integrationNeverPinned) {
     ensureStableIdentity(workspace, sessionCtx, contextTreePath);
     writeAgentBriefing(workspace, briefing);
+    installCoreSkills({
+      workspacePath: workspace,
+      log: (msg) => sessionCtx.log(msg),
+    });
     return;
   }
 
@@ -169,10 +173,8 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
   });
   writeAgentBriefing(workspace, briefing);
 
-  // Core skills ship with every agent, tree or not. The core skill set is
-  // currently empty so this is effectively a no-op, but the wiring stays so
-  // re-introducing one needs no bootstrap change. Degrade gracefully when the
-  // CLI is unavailable.
+  // Core skills ship with every agent, tree or not. Degrade gracefully when the
+  // bundled payload is unavailable.
   installCoreSkills({
     workspacePath: workspace,
     log: (msg) => sessionCtx.log(msg),

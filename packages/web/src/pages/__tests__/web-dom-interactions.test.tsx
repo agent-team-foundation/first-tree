@@ -1822,6 +1822,7 @@ describe("web DOM interaction coverage", () => {
         agentUuid: "agent-1",
         bootstrap: expect.stringContaining("getting Nova up to speed"),
         kind: "work",
+        complete: false,
       }),
     );
     expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenNthCalledWith(
@@ -1831,6 +1832,7 @@ describe("web DOM interaction coverage", () => {
         agentUuid: "agent-1",
         bootstrap: expect.stringContaining("https://github.com/acme/context-tree"),
         kind: "tree",
+        complete: false,
       }),
     );
     expect(resourceMocks.createTeamResourceForOrg).toHaveBeenCalledWith("org-1", {

@@ -24,6 +24,8 @@ export type KickoffOnboardingArgs = {
    * from the heavier Context Tree setup chat.
    */
   kind: KickoffKind;
+  /** Whether this kickoff should stamp onboarding completion after the chat exists. */
+  complete: boolean;
 };
 
 export type KickoffOnboardingResult = {
@@ -43,14 +45,15 @@ export type KickoffOnboardingResult = {
  *      (race-safe via the unique index on `chats.onboarding_kickoff_key`);
  *   2. send the bootstrap message only if the chat has no messages yet, under a
  *      row lock so concurrent requests can't both send;
- *   3. stamp `onboarding_completed_at` (+ suppressed/reason) only after the
- *      chat exists, and only if not already stamped.
+ *   3. optionally stamp `onboarding_completed_at` (+ suppressed/reason) only
+ *      after the chat exists, and only if not already stamped.
  *
  * Re-running it — a reopened tab, a network retry, or the build-tree recovery
- * surface — converges on the same chat and a single completion stamp instead of
- * leaving the half-completed state the browser-orchestrated flow could produce.
- * The `kind` is part of the key so an "intro", value-first "work", and later
- * "tree" (`/build-tree`) kickoff for the same agent stay distinct chats.
+ * surface — converges on the same chat. Single-chat onboarding paths keep
+ * `complete: true`; multi-chat paths use `complete: false` and stamp completion
+ * only after all required chats exist. The `kind` is part of the key so an
+ * "intro", value-first "work", and later "tree" (`/build-tree`) kickoff for the
+ * same agent stay distinct chats.
  */
 export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArgs): Promise<KickoffOnboardingResult> {
   const kickoffKey = `${args.humanAgentId}:${args.targetAgentId}:${args.kind}`;
@@ -107,18 +110,21 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
     sent = { recipients: result.recipients, messageId: result.message.id };
   });
 
-  // 3. Stamp completion now that the chat exists — idempotent (only writes when
-  //    still NULL). Mirrors POST /me/onboarding-completed: completion writes the
+  // 3. Stamp completion now that the chat exists, when requested. Multi-chat
+  //    onboarding paths defer this until every required kickoff chat has
+  //    succeeded. Mirrors POST /me/onboarding-completed: completion writes the
   //    audit stamp AND the suppressor (reason="completed") together.
-  const now = new Date();
-  await db
-    .update(members)
-    .set({
-      onboardingCompletedAt: now,
-      onboardingSuppressedAt: now,
-      onboardingSuppressedReason: "completed",
-    })
-    .where(and(eq(members.id, args.memberId), isNull(members.onboardingCompletedAt)));
+  if (args.complete) {
+    const now = new Date();
+    await db
+      .update(members)
+      .set({
+        onboardingCompletedAt: now,
+        onboardingSuppressedAt: now,
+        onboardingSuppressedReason: "completed",
+      })
+      .where(and(eq(members.id, args.memberId), isNull(members.onboardingCompletedAt)));
+  }
 
   return { chatId, sent };
 }
