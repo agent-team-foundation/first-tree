@@ -146,7 +146,13 @@ function config(overrides: Partial<AgentRuntimeConfig> = {}): AgentRuntimeConfig
     version: overrides.version ?? 7,
     payload: overrides.payload ?? {
       kind: "claude-code",
-      prompt: { append: "Always explain tradeoffs." },
+      prompt: {
+        append: "Use the team house style.\n\nAlways explain tradeoffs.",
+        sections: [
+          { scope: "team", name: "Team style guide", body: "Use the team house style." },
+          { scope: "agent", name: "", body: "Always explain tradeoffs.", editable: true },
+        ],
+      },
       model: "sonnet",
       reasoningEffort: "high",
       mcpServers: [],
@@ -486,10 +492,18 @@ describe("AgentDetailPage", () => {
       "Usage",
     ]);
     expect(container.textContent).toContain("Always explain tradeoffs.");
-    expect(container.textContent).toContain("Effective");
+    expect(container.textContent).toContain("All instructions");
     await waitForText(container, "Team style guide");
     expect(container.textContent).toContain("Team style guide");
     expect(container.textContent).toContain("Added by you");
+    // The merged block renders each contributed instruction as its own labelled
+    // segment (not one blob): the team segment + the agent's own "Custom" segment.
+    const effBlock = container.querySelector('[aria-label="All instructions"]');
+    expect(effBlock).toBeTruthy();
+    const segLabels = [...(effBlock?.querySelectorAll(".text-eyebrow") ?? [])].map((n) => n.textContent?.trim());
+    expect(segLabels).toContain("Team style guide");
+    expect(segLabels).toContain("Custom instructions");
+    expect(effBlock?.textContent).toContain("Use the team house style.");
 
     // The custom prompt's edit action now lives in the row's ⋯ overflow menu.
     await clickRowMenuItem(container, "More actions for Custom instructions", "Edit custom instructions");

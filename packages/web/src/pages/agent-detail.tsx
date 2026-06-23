@@ -307,10 +307,6 @@ function AgentDetailPageView() {
     : null;
   const boundClientLabel: string | null =
     boundClientId && canEditConfig ? (boundClient?.hostname ?? boundClientId) : null;
-  // The bound computer's OWN connection state (the matched client row), distinct
-  // from this agent's presence: a connected computer with no active agent presence
-  // row must still read as online. null when no computer is bound / unknown.
-  const boundComputerOnline: boolean | null = boundClient ? boundClient.status === "connected" : null;
 
   const setupRuntimeProvider: RuntimeProvider = agent.runtimeProvider ?? "claude-code";
 
@@ -341,7 +337,6 @@ function AgentDetailPageView() {
     isUnclaimed,
     isOffline,
     boundClientLabel,
-    boundComputerOnline,
     setupRuntimeProvider,
     onOpenBindDialog: () => setBindClientOpen(true),
     bindClientPending: bindClientMutation.isPending,

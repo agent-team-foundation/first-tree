@@ -345,6 +345,14 @@ const CONFIG: AgentRuntimeConfig = {
     prompt: {
       append:
         "Follow the team house style when reviewing diffs.\n\n- Prefer small, focused changes.\n- Call out missing tests and error handling.\n- Flag any public-API change for a second reviewer.\n- Keep comments about the code, not the author.\n\nAlways summarize tradeoffs before recommending.",
+      sections: [
+        {
+          scope: "team",
+          name: "Code review style",
+          body: "Follow the team house style when reviewing diffs.\n\n- Prefer small, focused changes.\n- Call out missing tests and error handling.\n- Flag any public-API change for a second reviewer.\n- Keep comments about the code, not the author.",
+        },
+        { scope: "agent", name: "", body: "Always summarize tradeoffs before recommending.", editable: true },
+      ],
     },
     model: "sonnet",
     reasoningEffort: "high",
@@ -531,27 +539,14 @@ export function AgentDetailPreviewPage() {
           </div>
 
           <h1 className="text-title m-0" style={{ marginTop: "var(--sp-8)", color: "var(--fg)" }}>
-            Execution — computer presence
+            Execution
           </h1>
           <p className="text-body" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1)" }}>
-            Runtime row is label:value only; the bound Computer row keeps the computer name and connection state on one
-            line.
+            Runtime row is label:value; the bound Computer row shows the computer name only — live presence lives in the
+            page header, so it is not repeated here.
           </p>
           <div style={{ marginTop: "var(--sp-4)" }}>
-            <RuntimeSection
-              runtimeProvider="claude-code"
-              computerLabel="gandy-macbook"
-              computerOnline={true}
-              canBindComputer={false}
-            />
-          </div>
-          <div style={{ marginTop: "var(--sp-4)" }}>
-            <RuntimeSection
-              runtimeProvider="claude-code"
-              computerLabel="gandy-macbook"
-              computerOnline={false}
-              canBindComputer={false}
-            />
+            <RuntimeSection runtimeProvider="claude-code" computerLabel="gandy-macbook" canBindComputer={false} />
           </div>
         </div>
         <button
