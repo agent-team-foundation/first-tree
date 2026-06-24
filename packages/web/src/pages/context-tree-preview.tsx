@@ -40,8 +40,13 @@ const REPO_RESOURCE = [
   { type: "repo", defaultEnabled: "recommended", payload: { url: "https://github.com/acme/acme-web" } },
 ];
 const FEATURES_DISABLED = { contextReviewer: { enabled: false, agentUuid: null } };
+const FEATURES_ENABLED = { contextReviewer: { enabled: true, agentUuid: "0192bbbb-bot2" } };
+// Enabled, but the saved reviewer is no longer one of the admin's active agents.
+const FEATURES_ENABLED_MISSING = { contextReviewer: { enabled: true, agentUuid: "0192ffff-gone" } };
 const BOUND = { repo: "https://github.com/acme/acme-context", branch: "main" };
 const UNBOUND = { repo: null, branch: null };
+// The Context Reviewer section loads candidate agents from this key once on.
+const REVIEWER_AGENTS_KEY = ["context-reviewer", "managed-agents", ORG] as const;
 
 type Seed = ReadonlyArray<readonly [readonly unknown[], unknown]>;
 
@@ -145,6 +150,39 @@ export function ContextTreePreviewPage() {
           title="Settings → Context tree · member (read-only)"
           authRole="member"
           seed={[[["org-setting", ORG, "context_tree"], BOUND]]}
+        />
+      </div>
+
+      <div className="text-eyebrow" style={{ color: "var(--fg-3)", margin: "var(--sp-4) 0 var(--sp-3)" }}>
+        Context Reviewer · immediate-save Switch (replaces the old checkbox + Save). Toggle on/off to see setup ↔ saved.
+      </div>
+      <div style={{ marginTop: "var(--sp-2)" }}>
+        <FullPageCase
+          title="Context Reviewer · OFF (flip the Switch on → agent selector appears, pick one to enable)"
+          authRole="admin"
+          seed={[
+            [["org-setting", ORG, "context_tree"], BOUND],
+            [["org-setting", ORG, "context_tree_features"], FEATURES_DISABLED],
+            [REVIEWER_AGENTS_KEY, AGENTS],
+          ]}
+        />
+        <FullPageCase
+          title="Context Reviewer · ON with a selected agent (Switch on, agent in the Select)"
+          authRole="admin"
+          seed={[
+            [["org-setting", ORG, "context_tree"], BOUND],
+            [["org-setting", ORG, "context_tree_features"], FEATURES_ENABLED],
+            [REVIEWER_AGENTS_KEY, AGENTS],
+          ]}
+        />
+        <FullPageCase
+          title="Context Reviewer · ON but saved reviewer no longer available (warning + re-pick / turn off)"
+          authRole="admin"
+          seed={[
+            [["org-setting", ORG, "context_tree"], BOUND],
+            [["org-setting", ORG, "context_tree_features"], FEATURES_ENABLED_MISSING],
+            [REVIEWER_AGENTS_KEY, AGENTS],
+          ]}
         />
       </div>
 
