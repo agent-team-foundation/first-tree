@@ -19,16 +19,45 @@
  *     than waiting on a never-answered question. There is no "dismiss but keep it
  *     open" path — skip is an answer, not a deferral.
  *
- * The answer is plain text: selected option labels join on one line, any typed
- * note follows — `buildResolveAnswer` owns the format. This is the ONLY way to
+ * The free-text answer surface mirrors the chat composer: it supports `@mention`
+ * autocomplete (against the chat's members) and image attachments (paste / drop /
+ * file-picker), so answering an ask is as expressive as a normal message. The
+ * readable answer is still plain text (`buildResolveAnswer`: selected option
+ * labels join on one line, any typed note follows); the host turns the assembled
+ * {content, mentions, images} into the resolving reply. This is the ONLY way to
  * resolve a question: the target human answers here, in the web UI; an agent can
  * only ask, never answer or close.
  */
-import type { AskOption, AskRequest } from "@first-tree/shared";
-import { useEffect, useRef, useState } from "react";
+import type { AskOption, AskRequest, MentionParticipant } from "@first-tree/shared";
+import { extractMentions } from "@first-tree/shared";
+import { AtSign, Paperclip, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
+import { usePendingImages } from "../../lib/use-pending-images.js";
+import { MentionAutocompletePopover, type MentionCandidate, useMentionAutocomplete } from "../mention-autocomplete.js";
+import { MentionHighlightOverlay } from "../mention-highlight-overlay.js";
 import { Markdown } from "../ui/markdown.js";
 import { allRequiredAnswered, buildResolveAnswer } from "./request-state.js";
+
+/**
+ * The composed answer handed back to the host on Reply. The host owns the
+ * actual send + resolve (it has the chat/request context and the upload
+ * machinery); this card only assembles the answer.
+ *
+ *   - `content` — the readable answer (`buildResolveAnswer`): selected option
+ *     labels and/or the typed note.
+ *   - `mentions` — agentIds the free-text `@<name>` tokens resolved to (against
+ *     `mentionCandidates`); the host routes the resolving reply to the asker
+ *     PLUS these.
+ *   - `images` — staged image files to upload + attach; a non-empty list makes
+ *     the resolving reply a `format="file"` message (which the server resolves
+ *     just like a text answer — the resolve gate is format-agnostic).
+ */
+export type AskAnswer = {
+  content: string;
+  mentions: string[];
+  images: File[];
+};
 
 /**
  * Height (px) the on-screen keyboard currently steals from the bottom of the
@@ -64,6 +93,8 @@ export function AskTakeover({
   payload,
   askerName,
   sending = false,
+  mentionCandidates = [],
+  error,
   onReply,
   onSkip,
 }: {
@@ -72,8 +103,15 @@ export function AskTakeover({
   payload: AskRequest;
   askerName?: string;
   sending?: boolean;
-  /** Resolve the question with the composed answer content. */
-  onReply: (content: string) => void;
+  /** Chat members the free-text `@` autocomplete suggests + resolves against
+   *  (self-excluded, same source as the composer). Empty → no autocomplete and
+   *  every `@<token>` stays plain text. */
+  mentionCandidates?: MentionCandidate[];
+  /** A host-side send failure to surface in the card (the composer is covered,
+   *  so a failed resolve must show here or it looks like nothing happened). */
+  error?: string;
+  /** Resolve the question with the composed answer. */
+  onReply: (answer: AskAnswer) => void;
   /** Resolve the question with a "skipped" answer (caller sends the reply). */
   onSkip: () => void;
 }) {
@@ -81,12 +119,50 @@ export function AskTakeover({
   const multi = payload.multiSelect === true;
   const [selected, setSelected] = useState<string[]>([]);
   const [freeText, setFreeText] = useState("");
+  const [cursor, setCursor] = useState(0);
   // Tighten the horizontal padding on phone widths so the card uses the
   // available width instead of burning it on gutters.
   const viewport = useWorkspaceViewport();
   const padX = viewport === "narrow" ? "var(--sp-4)" : "var(--sp-6)";
   // Keep the card (and its pinned footer) above the on-screen keyboard.
   const keyboardInset = useKeyboardInset();
+
+  // Staged image attachments — same hook (and same `image/* ≤5MB` rules + object-
+  // URL lifecycle) the chat composer uses. A local validation error (oversized
+  // image) renders alongside any host send error below.
+  const [imageError, setImageError] = useState<string | null>(null);
+  const { pendingImages, addImages, removeImage } = usePendingImages({
+    onError: setImageError,
+    onChange: () => setImageError(null),
+  });
+
+  // Self-excluded membership projection for `@` resolution + the mirror overlay.
+  const mentionParticipants = useMemo<MentionParticipant[]>(
+    () => mentionCandidates.map((c) => ({ agentId: c.agentId, name: c.name })),
+    [mentionCandidates],
+  );
+
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const mention = useMentionAutocomplete({
+    value: freeText,
+    cursor,
+    candidates: mentionCandidates,
+    disabled: sending,
+    onSelect: (update) => {
+      setFreeText(update.text);
+      setCursor(update.cursor);
+      // Defer so React commits the new value before we move the selection —
+      // otherwise the textarea snaps back to its old caret position.
+      requestAnimationFrame(() => {
+        const el = taRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(update.cursor, update.cursor);
+      });
+    },
+  });
 
   const toggle = (label: string) => {
     setSelected((prev) => {
@@ -95,10 +171,34 @@ export function AskTakeover({
     });
   };
 
-  const canReply = allRequiredAnswered(payload, selected, freeText) && !sending;
-  const reply = () => {
+  // An attached image is itself an answer, so it lifts the "must select or type"
+  // gate even on a free-text ask with an empty box.
+  const canReply = (allRequiredAnswered(payload, selected, freeText) || pendingImages.length > 0) && !sending;
+  // Memoized so the window-level keydown effect below has a stable dep (it would
+  // otherwise re-bind the listener every render).
+  const reply = useCallback(() => {
     if (!canReply) return;
-    onReply(buildResolveAnswer(payload, selected, freeText));
+    onReply({
+      content: buildResolveAnswer(payload, selected, freeText),
+      mentions: extractMentions(freeText, mentionParticipants),
+      images: pendingImages.map((p) => p.file),
+    });
+  }, [canReply, onReply, payload, selected, freeText, mentionParticipants, pendingImages]);
+
+  // Insert `@` at the caret (or over the selection) and refocus — the
+  // autocomplete picks it up from the resulting value/cursor, same path as
+  // typing `@`. Mirrors the composer's explicit `@` button.
+  const insertMentionTrigger = () => {
+    const el = taRef.current;
+    const start = el?.selectionStart ?? freeText.length;
+    const end = el?.selectionEnd ?? start;
+    const next = `${freeText.slice(0, start)}@${freeText.slice(end)}`;
+    setFreeText(next);
+    setCursor(start + 1);
+    requestAnimationFrame(() => {
+      el?.focus();
+      el?.setSelectionRange(start + 1, start + 1);
+    });
   };
 
   // Keyboard shortcuts, mirroring the chat composer: Enter (no Shift, and not
@@ -110,9 +210,9 @@ export function AskTakeover({
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.isComposing) return;
-      // A focused control already claimed this keystroke (e.g. the composer's
-      // mention/slash popover, which preventDefaults Enter/Escape). Don't also
-      // resolve the ask behind it.
+      // A focused control already claimed this keystroke (e.g. the free-text
+      // box's mention popover, which preventDefaults Enter/Escape to drive
+      // selection). Don't also resolve the ask behind it.
       if (e.defaultPrevented) return;
       // A modal layered ABOVE the card owns the keyboard. Radix dialogs (the
       // ⌘K command palette, etc.) render in a body-level portal and mark the
@@ -133,12 +233,12 @@ export function AskTakeover({
         if (e.target instanceof HTMLElement && e.target.tagName === "BUTTON") return;
         if (!canReply) return;
         e.preventDefault();
-        onReply(buildResolveAnswer(payload, selected, freeText));
+        reply();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [sending, canReply, onReply, onSkip, payload, selected, freeText]);
+  }, [sending, canReply, onSkip, reply]);
 
   const ftStyle = {
     width: "100%",
@@ -152,6 +252,175 @@ export function AskTakeover({
     resize: "vertical" as const,
     outline: "none",
   };
+
+  // The mirror overlay MUST share the textarea's box metrics so painted chips
+  // stay character-aligned with the (transparent) textarea glyphs.
+  const mirrorStyle = {
+    padding: "var(--sp-2_5) var(--sp-3)",
+    lineHeight: 1.5,
+    fontFamily: "inherit",
+    boxSizing: "border-box" as const,
+  };
+
+  /** The shared free-text answer surface (used as "Other" beside options, or
+   *  as the sole box on a free-text ask): mention autocomplete + highlight +
+   *  image paste, with the text drawn by the mirror overlay. */
+  const renderAnswerInput = (placeholder: string, minHeight: number) => (
+    <div style={{ position: "relative" }}>
+      <MentionAutocompletePopover
+        trigger={mention.trigger}
+        results={mention.results}
+        highlightIndex={mention.highlightIndex}
+        anchorRef={taRef}
+        onPick={mention.pick}
+      />
+      <MentionHighlightOverlay
+        value={freeText}
+        participants={mentionParticipants}
+        textareaRef={taRef}
+        chipClassName="mention-text"
+        mirrorStyle={mirrorStyle}
+      />
+      <textarea
+        ref={taRef}
+        value={freeText}
+        onChange={(e) => {
+          setFreeText(e.target.value);
+          setCursor(e.target.selectionStart ?? e.target.value.length);
+        }}
+        onSelect={(e) => setCursor(e.currentTarget.selectionStart ?? freeText.length)}
+        onPaste={(e) => {
+          const files = Array.from(e.clipboardData.files);
+          if (files.length > 0) {
+            e.preventDefault();
+            addImages(files);
+          }
+        }}
+        onKeyDown={(e) => {
+          // Skip while an IME is composing so Enter confirms the candidate.
+          if (e.nativeEvent.isComposing) return;
+          // Mention autocomplete gets first crack: when the caret is inside an
+          // active `@trigger`, Enter/Tab/Arrows/Escape drive the popover (and
+          // are preventDefaulted, so the window-level Enter→Reply / Esc→Skip
+          // backstop sees `defaultPrevented` and stays out of the way).
+          mention.handleKey(e);
+        }}
+        placeholder={placeholder}
+        style={{
+          ...ftStyle,
+          minHeight,
+          // Text is painted by the mirror overlay behind the textarea; keep
+          // only the caret + selection visible here.
+          color: "transparent",
+          caretColor: "var(--fg)",
+          // Promote above the overlay so the caret isn't hidden by it.
+          position: "relative",
+          zIndex: 1,
+        }}
+      />
+    </div>
+  );
+
+  /** Staged-image thumbnails with a remove affordance — above the input. */
+  const renderImageTray = () =>
+    pendingImages.length > 0 ? (
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: "var(--sp-2)" }}>
+        {pendingImages.map((img) => (
+          <div
+            key={img.id}
+            style={{
+              position: "relative",
+              flexShrink: 0,
+              borderRadius: 4,
+              border: "var(--hairline) solid var(--border)",
+              overflow: "hidden",
+            }}
+          >
+            <img
+              src={img.previewUrl}
+              alt={img.file.name}
+              style={{ height: 44, width: "auto", display: "block", objectFit: "cover" }}
+            />
+            <button
+              type="button"
+              onClick={() => removeImage(img.id)}
+              aria-label="Remove image"
+              style={{
+                position: "absolute",
+                top: 2,
+                right: 2,
+                width: 16,
+                height: 16,
+                borderRadius: "50%",
+                background: "var(--color-overlay-scrim)",
+                border: "none",
+                color: "var(--bg-raised)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              <X className="h-2.5 w-2.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+    ) : null;
+
+  /** The @ / attach icon row + hidden file input — below the input. */
+  const renderInputToolbar = () => (
+    <div style={{ display: "flex", alignItems: "center", gap: "var(--sp-3)", marginTop: "var(--sp-2)" }}>
+      <button
+        type="button"
+        onClick={insertMentionTrigger}
+        title="Mention an agent (or type @)"
+        aria-label="Mention an agent"
+        style={{
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          color: "var(--fg-3)",
+          padding: 0,
+          display: "inline-flex",
+          alignItems: "center",
+        }}
+      >
+        <AtSign className="h-3.5 w-3.5" />
+      </button>
+      <button
+        type="button"
+        onClick={() => fileInputRef.current?.click()}
+        title="Attach image"
+        aria-label="Attach image"
+        style={{
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          color: "var(--fg-3)",
+          padding: 0,
+          display: "inline-flex",
+          alignItems: "center",
+        }}
+      >
+        <Paperclip className="h-3.5 w-3.5" />
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        style={{ display: "none" }}
+        onChange={(e) => {
+          if (e.target.files) {
+            addImages(Array.from(e.target.files));
+            e.target.value = "";
+          }
+        }}
+      />
+    </div>
+  );
 
   return (
     <div
@@ -215,11 +484,19 @@ export function AskTakeover({
             <Markdown>{body}</Markdown>
           </div>
 
-          {/* Answer surface — options + Other (or a single free-text box). */}
+          {/* Answer surface — options + Other (or a single free-text box),
+              both with `@mention` + image attachments. Drop anywhere here to
+              stage images, matching the composer. */}
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: drop target for image upload (keyboard users use the attach button) */}
           <div
             style={{
               padding: `var(--sp-4) ${padX} var(--sp-5)`,
               borderTop: "var(--hairline) solid var(--border-faint)",
+            }}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              addImages(Array.from(e.dataTransfer.files));
             }}
           >
             {options ? (
@@ -235,20 +512,27 @@ export function AskTakeover({
                     />
                   ))}
                 </div>
-                <textarea
-                  value={freeText}
-                  onChange={(e) => setFreeText(e.target.value)}
-                  placeholder="Other (type your own)…"
-                  style={{ ...ftStyle, marginTop: "var(--sp-2)", minHeight: 42 }}
-                />
+                <div style={{ marginTop: "var(--sp-2)" }}>
+                  {renderImageTray()}
+                  {renderAnswerInput("Other (type your own)…", 42)}
+                  {renderInputToolbar()}
+                </div>
               </>
             ) : (
-              <textarea
-                value={freeText}
-                onChange={(e) => setFreeText(e.target.value)}
-                placeholder="Type your answer…"
-                style={{ ...ftStyle, minHeight: 110 }}
-              />
+              <>
+                {renderImageTray()}
+                {renderAnswerInput("Type your answer…", 110)}
+                {renderInputToolbar()}
+              </>
+            )}
+
+            {(imageError || error) && (
+              <p
+                className="mono text-label"
+                style={{ color: "var(--state-error)", padding: "var(--sp-2) var(--sp-0_5) 0" }}
+              >
+                {imageError ?? error}
+              </p>
             )}
           </div>
         </div>

@@ -74,7 +74,7 @@ import { useAuth } from "../../../auth/auth-context.js";
 import { AddParticipantDropdown } from "../../../components/add-participant-dropdown.js";
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AgentHovercard } from "../../../components/chat/agent-hovercard.js";
-import { AskTakeover } from "../../../components/chat/ask-takeover.js";
+import { type AskAnswer, AskTakeover } from "../../../components/chat/ask-takeover.js";
 import { awaitedAgentsFromMessage, ChatOfflineNotice } from "../../../components/chat/chat-offline-notice.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
@@ -1160,6 +1160,13 @@ export function ChatView({
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Answering a blocking ask is owned by the AskTakeover overlay, which composes
+  // its own text + @mentions + image attachments. `askBusy` disables the card
+  // while its resolving reply is in flight (kept true through success so the
+  // card stays inert until the resolved request unmounts it — no double-submit);
+  // `askError` surfaces a send failure IN the card (the composer is covered).
+  const [askBusy, setAskBusy] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
   const { pendingImages, addImages, removeImage, clearImages } = usePendingImages({
     onError: setUploadError,
     // Dismiss a stale upload error (e.g. "image too large") the moment the
@@ -1831,6 +1838,59 @@ export function ChatView({
     });
   };
 
+  // Resolve the blocking ask with the answer composed in the AskTakeover card.
+  // Routed here (not through the composer's `sendMut`) because the card owns its
+  // own text + @mentions + staged images, and an image answer must go out as a
+  // `format="file"` message carrying `metadata.resolves` (the server's resolve
+  // gate is format-agnostic — it authorizes off sender == target).
+  //
+  // Deliberately NON-optimistic: the card stays mounted until the server's
+  // resolving reply lands (via the messages invalidate -> refetch -> request
+  // reads as resolved -> overlay unmounts). So a send failure neither unmounts
+  // the card nor drops the typed answer / staged images — the user just sees
+  // the error and retries. On success `askBusy` stays true so the card is inert
+  // during the refetch window (no double-submit) and clears when it unmounts.
+  const submitAskAnswer = async (request: { id: string; senderId: string }, answer: AskAnswer) => {
+    if (askBusy) return;
+    setAskError(null);
+    setAskBusy(true);
+    // Route to the asker PLUS anyone the free text @mentioned (deduped).
+    const routedMentions = [...new Set([request.senderId, ...answer.mentions])];
+    const resolves: RequestResolution = { request: request.id, kind: "answered" };
+    try {
+      if (answer.images.length > 0) {
+        const refs: ImageRefContent[] = [];
+        for (const file of answer.images) {
+          const uploaded = await uploadImageAttachment(file);
+          // Warm the per-browser cache so the sender renders its own image
+          // instantly. Best-effort — the render path re-fetches on a miss.
+          try {
+            await putImage({ imageId: uploaded.id, base64: await readFileAsBase64(file), mimeType: file.type });
+          } catch {
+            // IndexedDB quota / availability — ignore, fall back to server fetch.
+          }
+          refs.push({ imageId: uploaded.id, mimeType: file.type, filename: file.name, size: file.size });
+        }
+        await sendFileMessageBatch(
+          chatId,
+          { ...(answer.content ? { caption: answer.content } : {}), attachments: refs },
+          { mentions: routedMentions },
+          { inReplyTo: request.id, resolves },
+        );
+      } else {
+        await sendChatMessage(chatId, answer.content, routedMentions, { inReplyTo: request.id, resolves });
+      }
+      queryClient.invalidateQueries({ queryKey: messagesQueryKey });
+      queryClient.invalidateQueries({ queryKey: agentSessionsQueryKey(agentId) });
+      scrollToBottom("smooth");
+      // Leave `askBusy` true: the overlay disables itself until the resolved
+      // request unmounts it, so a slow refetch can't invite a second submit.
+    } catch (err) {
+      setAskError(err instanceof Error ? err.message : "Failed to send your answer");
+      setAskBusy(false);
+    }
+  };
+
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -1945,6 +2005,15 @@ export function ChatView({
   // resolving reply lands; there is no "dismiss but keep it open" path.
   const askOverlayActive = dockRequest != null && dockPayload != null;
   const dockRequestId = askOverlayActive ? dockRequest.id : undefined;
+  // Reset the ask card's send state whenever the blocking question changes (a
+  // resolved one unmounts the card; a different FIFO ask takes over): a stale
+  // error or a stuck "Replying…" from the previous question must not bleed into
+  // the next card.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed intentionally on the request id — the reset fires when the blocking ask changes, not on every render.
+  useEffect(() => {
+    setAskError(null);
+    setAskBusy(false);
+  }, [dockRequestId]);
   useEffect(() => {
     if (!dockRequestId || draft !== "@" || !autoPrimedDraftRef.current) return;
     // Real message data can arrive after an empty group composer already
@@ -2958,27 +3027,23 @@ export function ChatView({
                 body={typeof dockRequest.content === "string" ? dockRequest.content : ""}
                 payload={dockPayload}
                 askerName={chatScopedAgentName(dockRequest.senderId)}
-                sending={sendMut.isPending}
-                onReply={(content) =>
-                  sendMut.mutate({
-                    content,
-                    mentions: [dockRequest.senderId],
-                    inReplyTo: dockRequest.id,
-                    resolves: { request: dockRequest.id, kind: "answered" },
-                  })
-                }
-                onSkip={() =>
+                sending={askBusy}
+                error={askError ?? undefined}
+                mentionCandidates={mentionCandidates}
+                onReply={(answer) => {
+                  void submitAskAnswer(dockRequest, answer);
+                }}
+                onSkip={() => {
                   // Skip is an answer, not a dismiss: send a resolving reply
                   // (kind="answered") carrying a "skipped" body so the open
                   // request resolves, the red dot clears, and the asking agent
                   // unblocks and proceeds with its own judgment.
-                  sendMut.mutate({
+                  void submitAskAnswer(dockRequest, {
                     content: "(Skipped — no answer provided.)",
-                    mentions: [dockRequest.senderId],
-                    inReplyTo: dockRequest.id,
-                    resolves: { request: dockRequest.id, kind: "answered" },
-                  })
-                }
+                    mentions: [],
+                    images: [],
+                  });
+                }}
               />
             </div>
           ) : null}
