@@ -33,15 +33,18 @@ import { formatRelative } from "../../../lib/utils.js";
  *
  * Auto behavior: default collapsed; auto-expand once on entry when the update
  * is unread for this viewer, unless they already manually dismissed this exact
- * summary version; while expanded, scrolling the stream folds it to the bar
- * (restores at the top); a manual toggle always wins and is remembered per
- * chat. Renders nothing when the chat has no description.
+ * summary version; while expanded, scrolling the stream folds it to the bar;
+ * expanding again is an explicit toggle. A manual toggle always wins and is
+ * remembered per chat. Renders nothing when the chat has no description.
  */
 
-// Scroll sticky-collapse thresholds (px from the stream top). The hysteresis
-// gap (40 vs 6) debounces the boundary so a hair of scroll doesn't flutter it.
+// Scroll sticky-collapse threshold (px from the stream top). Moving beyond this
+// folds the expanded summary to its one-line bar.
 const SCROLL_COLLAPSE_PX = 40;
-const SCROLL_RESTORE_PX = 6;
+// When a manual expand happens while already scrolled down, returning near the
+// top clears that temporary anchor so later downward movement uses the standard
+// collapse threshold. It does not auto-expand a sticky-collapsed summary.
+const MANUAL_EXPAND_RESET_PX = 6;
 
 // Per-chat manual expand/collapse preference. Mirrors the localStorage pattern
 // used elsewhere in the chat view (private-mode safe, per-chat key suffix).
@@ -254,9 +257,9 @@ export function ChatSummary({
   }, [chatId, descriptionUpdatedAt, scrollContainerRef, unread]);
 
   // Sticky-collapse: while open, scrolling the message stream down folds the
-  // header to its one-line bar; returning to the top restores it. Transient —
-  // never persisted — and a manual toggle clears it. Refs keep the scroll
-  // handler cheap and free of stale closures.
+  // header to its one-line bar. It never auto-expands on scroll; opening again
+  // is an explicit toggle. Transient — never persisted — and a manual toggle
+  // clears it. Refs keep the scroll handler cheap and free of stale closures.
   const openRef = useRef(open);
   openRef.current = open;
   const scrollCollapsedRef = useRef(scrollCollapsed);
@@ -273,15 +276,13 @@ export function ChatSummary({
       const nextScrolled = top > 1;
       if (nextScrolled !== scrolledRef.current) setScrolled(nextScrolled);
       const manualExpandTop = manualExpandTopRef.current;
-      if (top <= SCROLL_RESTORE_PX) {
+      if (top <= MANUAL_EXPAND_RESET_PX) {
         manualExpandTopRef.current = null;
       }
       const collapseTop = manualExpandTop === null ? SCROLL_COLLAPSE_PX : manualExpandTop + SCROLL_COLLAPSE_PX;
       if (top > collapseTop && openRef.current && !scrollCollapsedRef.current) {
         manualExpandTopRef.current = null;
         setScrollCollapsed(true);
-      } else if (top <= SCROLL_RESTORE_PX && scrollCollapsedRef.current) {
-        setScrollCollapsed(false);
       }
     };
     el.addEventListener("scroll", onScroll, { passive: true });
