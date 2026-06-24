@@ -204,6 +204,16 @@ export type SessionContext = HandlerContext & {
    * to keep `[From: ...]` attribution consistent with the text path.
    */
   resolveSenderLabel: (senderId: string) => Promise<string>;
+
+  /**
+   * Build the full `[From: <name> · type=<human|agent> · sent=<ts>]`
+   * attribution header for an inbound message — name plus, when known, the
+   * sender's participant type and the message send time. Returns `""` when
+   * the message has no senderId. Handlers that synthesise content (e.g. the
+   * image path) call this so every inbound header is framed identically to
+   * the text path. Async for the same one-time participant fetch.
+   */
+  formatFromHeader: (message: SessionMessage) => Promise<string>;
 };
 
 export function deliveryTokenFromSessionContext(ctx: SessionContext): DeliveryToken {
@@ -233,6 +243,14 @@ export type SessionMessage = {
   content: string | Record<string, unknown>;
   /** Optional metadata. */
   metadata: Record<string, unknown> | null;
+  /**
+   * Server-stamped message creation time (ISO 8601). Carried so the
+   * `[From: …]` attribution header can annotate when a message was sent —
+   * the agent weighs recency. Optional because some synthetic/legacy
+   * SessionMessage construction sites do not have it; the header omits the
+   * `sent=` segment when absent.
+   */
+  createdAt?: string;
   /**
    * Group-chat history the recipient missed (mention_only + not @mentioned)
    * up to this triggering message. Sorted oldest-first. Server attaches and

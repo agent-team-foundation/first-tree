@@ -86,7 +86,24 @@ describe("formatInboundContent", () => {
       content: "hello",
       metadata: null,
     };
-    expect(await formatInboundContent(msg, cache)).toBe("[From: alice]\n\nhello");
+    expect(await formatInboundContent(msg, cache)).toBe("[From: alice · type=agent]\n\nhello");
+  });
+
+  it("annotates the header with the sender type and send time when both are known", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "text",
+      content: "hello",
+      metadata: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    expect(await formatInboundContent(msg, cache)).toBe(
+      "[From: alice · type=agent · sent=2026-01-01T00:00:00.000Z]\n\nhello",
+    );
   });
 
   it("falls back to senderId in the prefix when the sender is not a participant", async () => {
@@ -114,7 +131,9 @@ describe("formatInboundContent", () => {
       content: { title: "hi" },
       metadata: null,
     };
-    expect(await formatInboundContent(msg, cache)).toBe(`[From: alice]\n\n${JSON.stringify({ title: "hi" })}`);
+    expect(await formatInboundContent(msg, cache)).toBe(
+      `[From: alice · type=agent]\n\n${JSON.stringify({ title: "hi" })}`,
+    );
   });
 
   it("omits the attribution prefix when senderId is empty", async () => {
@@ -152,7 +171,7 @@ describe("formatInboundContent", () => {
     // Bytes never landed on this client (no `writeImage` ran in the test
     // harness) so each attachment surfaces the not-available placeholder.
     // The point: caption + per-image lines, not a `{"caption":"…"}` blob.
-    expect(out).toContain("[From: alice]");
+    expect(out).toContain("[From: alice · type=agent]");
     expect(out).toContain("look at these");
     expect(out).toContain("2 images were shared");
     expect(out).toContain("a.png");
@@ -176,7 +195,7 @@ describe("formatInboundContent", () => {
       metadata: null,
     };
     const out = await formatInboundContent(msg, cache);
-    expect(out).toContain("[From: alice]");
+    expect(out).toContain("[From: alice · type=agent]");
     expect(out).toContain("legacy.png");
     expect(out).not.toContain('{"imageId"');
   });
@@ -271,7 +290,7 @@ describe("formatInboundContent", () => {
           format: "text",
           content: "anyone seen the report?",
           metadata: {},
-          createdAt: new Date().toISOString(),
+          createdAt: "2026-01-01T00:00:00.000Z",
         },
         {
           id: "m2",
@@ -279,19 +298,19 @@ describe("formatInboundContent", () => {
           format: "text",
           content: "yeah, working on it",
           metadata: {},
-          createdAt: new Date().toISOString(),
+          createdAt: "2026-01-01T00:00:01.000Z",
         },
       ],
     };
     const out = await formatInboundContent(msg, cache);
     expect(out).toContain("[Earlier in chat — context you missed]");
-    expect(out).toContain("[From: alice] anyone seen the report?");
-    expect(out).toContain("[From: bob] yeah, working on it");
+    expect(out).toContain("[From: alice · type=agent · sent=2026-01-01T00:00:00.000Z] anyone seen the report?");
+    expect(out).toContain("[From: bob · type=agent · sent=2026-01-01T00:00:01.000Z] yeah, working on it");
     expect(out).toContain("[Now — message that woke you]");
-    expect(out).toContain("[From: carol]\n\n@me what do you think?");
+    expect(out).toContain("[From: carol · type=agent]\n\n@me what do you think?");
     // Ordering: earlier block must precede the trigger.
     expect(out.indexOf("[Earlier in chat")).toBeLessThan(out.indexOf("[Now — message"));
-    expect(out.indexOf("[Now — message")).toBeLessThan(out.indexOf("[From: carol]"));
+    expect(out.indexOf("[Now — message")).toBeLessThan(out.indexOf("[From: carol · type=agent]"));
   });
 
   it("serializes structured preceding message content", async () => {
@@ -312,14 +331,16 @@ describe("formatInboundContent", () => {
           format: "card",
           content: { title: "earlier" },
           metadata: {},
-          createdAt: new Date().toISOString(),
+          createdAt: "2026-01-01T00:00:00.000Z",
         },
       ],
     };
 
     const out = await formatInboundContent(msg, cache);
 
-    expect(out).toContain(`[From: alice] ${JSON.stringify({ title: "earlier" })}`);
+    expect(out).toContain(
+      `[From: alice · type=agent · sent=2026-01-01T00:00:00.000Z] ${JSON.stringify({ title: "earlier" })}`,
+    );
   });
 
   it("omits the [Earlier in chat] block when precedingMessages is empty / absent", async () => {
@@ -335,7 +356,7 @@ describe("formatInboundContent", () => {
       precedingMessages: [],
     };
     const out = await formatInboundContent(msg, cache);
-    expect(out).toBe("[From: alice]\n\nhi");
+    expect(out).toBe("[From: alice · type=agent]\n\nhi");
     expect(out).not.toContain("[Earlier in chat");
   });
 });

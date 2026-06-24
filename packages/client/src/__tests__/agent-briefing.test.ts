@@ -428,17 +428,20 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("first-tree chat update --description");
     expect(briefing).not.toMatch(/server rejects a `?chat send`? to a human/);
 
-    // yuezengwu 2026-06-23: reinstate the "your output stream is your reasoning
-    // trace" framing as a deliberate prompt principle (reverses the 2026-06-16
-    // removal), but with the PRECISE product boundary (codex R1/R5): the output
-    // stream is not an addressed reply and not durable chat history, yet it is
-    // NOT private — a one-line preview surfaces as live session activity
-    // (`liveActivity.detail` / `turnText`) to viewers. So communication is
-    // always an explicit send, and narration is never a substitute for it.
-    expect(briefing).toMatch(/output stream is your reasoning trace/i);
-    expect(briefing).toMatch(/never written to durable\s+chat history/i);
+    // yuezengwu 2026-06-23: rebind, rather than negate, the base Claude Code
+    // harness ("all text you output … is displayed to the user"). The brief
+    // pins the harness's "user" to the First Tree runtime and frames teammates
+    // as a separate audience reached only by an explicit send (console vs
+    // outbox). Keep the PRECISE product boundary (codex R1/R5): the output
+    // stream is not an addressed reply, yet it is NOT private — a one-line
+    // preview surfaces as live session activity (`liveActivity.detail` /
+    // `turnText`) to viewers. So communication is always an explicit send.
+    expect(briefing).toMatch(/the "user" the Claude Code harness writes to is the First Tree runtime/i);
+    expect(briefing).toMatch(/reasoning\/activity\s+trace/i);
+    expect(briefing).toMatch(/never delivered to\s+anyone as a message/i);
     expect(briefing).toMatch(/not\s+private/i);
-    expect(briefing).toMatch(/live session\s+activity to anyone viewing the chat/i);
+    expect(briefing).toMatch(/live session activity/i);
+    expect(briefing).toMatch(/console; `?chat send`? is the outbox/i);
     expect(briefing).toMatch(/has sent\s+nothing/);
     // The retired mirror term stays out — there is no `agent-final-text` row
     // post-#1190.

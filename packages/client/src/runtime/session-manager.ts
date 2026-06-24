@@ -20,7 +20,13 @@ import {
 import type { pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import type { AgentConfigCache } from "./agent-config-cache.js";
-import { buildAgentEnv, createParticipantCache, formatInboundContent, resolveSenderLabel } from "./agent-io.js";
+import {
+  buildAgentEnv,
+  buildFromHeader,
+  createParticipantCache,
+  formatInboundContent,
+  resolveSenderLabel,
+} from "./agent-io.js";
 import { type ContextTreeBinding, resolveAgentContextTreeBinding } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
 import { reresolveUnboundTree } from "./context-tree-rebind.js";
@@ -1989,6 +1995,7 @@ export class SessionManager {
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),
       resolveSenderLabel: async (senderId) => resolveSenderLabel(senderId, await participants.get()),
+      formatFromHeader: (message) => buildFromHeader(message, participants),
     };
   }
 
@@ -2129,6 +2136,7 @@ export class SessionManager {
       format: msg.format,
       content: msg.content as string | Record<string, unknown>,
       metadata: msg.metadata,
+      createdAt: msg.createdAt,
       precedingMessages: msg.precedingMessages ?? [],
     };
   }

@@ -219,6 +219,51 @@ export function resolveSenderLabel(senderId: string, participants: ChatParticipa
 }
 
 /**
+ * Resolve `senderId` → participant `type` ("human" | "agent" | …). Returns
+ * null when the sender is not among the known participants (stale cache /
+ * ex-member) or carries an empty type. The `[From: …]` header surfaces this so
+ * the agent applies the right reply discipline — a human directing a message
+ * requires a `chat send` reply; an agent wake-up with nothing new does not.
+ */
+export function resolveSenderType(senderId: string, participants: ChatParticipantDetail[]): string | null {
+  for (const p of participants) {
+    if (p.agentId !== senderId) continue;
+    return p.type.length > 0 ? p.type : null;
+  }
+  return null;
+}
+
+/**
+ * Build the `[From: …]` attribution line for an inbound message: the sender's
+ * chat-local name plus, when available, the participant `type` and the message
+ * send time (ISO 8601). Both annotations are appended as ` · key=value`
+ * segments and omitted when unknown, so callers without participant or
+ * timestamp data degrade cleanly to the bare `[From: <name>]` form.
+ */
+export function formatFromHeaderLine(
+  senderId: string,
+  createdAt: string | undefined,
+  participants: ChatParticipantDetail[],
+): string {
+  const parts = [resolveSenderLabel(senderId, participants)];
+  const type = resolveSenderType(senderId, participants);
+  if (type) parts.push(`type=${type}`);
+  if (createdAt) parts.push(`sent=${createdAt}`);
+  return `[From: ${parts.join(" · ")}]`;
+}
+
+/**
+ * SessionContext-facing wrapper: resolve the participant cache and build the
+ * `[From: …]` header for `message`, or `""` when it has no sender. Shared by
+ * the runtime text path and the handlers' synthesised (image) path so every
+ * inbound header is framed identically.
+ */
+export async function buildFromHeader(message: SessionMessage, participants: ParticipantCache): Promise<string> {
+  if (!message.senderId) return "";
+  return formatFromHeaderLine(message.senderId, message.createdAt, await participants.get());
+}
+
+/**
  * Produce the handler-facing string form of an inbound message. Prefixes a
  * `[From: <name>]` line when the sender is a known participant. Structured
  * content is serialised to JSON — handlers that want to feed structured
@@ -301,15 +346,14 @@ export async function formatInboundContent(message: SessionMessage, participants
     const ps = await participants.get();
     const lines: string[] = ["[Earlier in chat — context you missed]"];
     for (const p of preceding) {
-      const label = resolveSenderLabel(p.senderId, ps);
       const text = typeof p.content === "string" ? p.content : JSON.stringify(p.content);
-      lines.push(`[From: ${label}] ${text}`);
+      lines.push(`${formatFromHeaderLine(p.senderId, p.createdAt, ps)} ${text}`);
     }
     lines.push("", "[Now — message that woke you]");
     header = `${lines.join("\n")}\n\n`;
   }
 
   if (!message.senderId) return `${header}${rawContent}`;
-  const label = resolveSenderLabel(message.senderId, await participants.get());
-  return `${header}[From: ${label}]\n\n${rawContent}`;
+  const headerLine = formatFromHeaderLine(message.senderId, message.createdAt, await participants.get());
+  return `${header}${headerLine}\n\n${rawContent}`;
 }
