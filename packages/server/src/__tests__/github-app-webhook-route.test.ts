@@ -1166,16 +1166,24 @@ describe("POST /webhooks/github-app", () => {
       .where(eq(messages.chatId, chatRows[0]?.id ?? ""));
     expect(messageRows).toHaveLength(2);
     const followUpMessage = messageRows.find((message) => message.metadata.triggerEvent === "issue_comment.created");
-    expect(followUpMessage?.content).toBe(FOLLOW_UP_NOTICE);
-    expect(followUpMessage?.content).not.toContain("Trigger event: issue_comment.created");
+    expect(followUpMessage?.content).toBe(
+      [
+        FOLLOW_UP_NOTICE,
+        "Comment author: context-commenter",
+        "Comment URL: https://github.com/owner/context-tree/pull/42#issuecomment-2",
+      ].join("\n"),
+    );
     expect(followUpMessage?.content).not.toContain("gh pr comment 42 --repo owner/context-tree --body");
     expect(followUpMessage?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
       action: "created",
       triggerEvent: "issue_comment.created",
+      entityType: "pull_request",
       entityKey: "owner/context-tree#42",
       contextTreeReviewer: true,
+      commentAuthorLogin: "context-commenter",
+      commentUrl: "https://github.com/owner/context-tree/pull/42#issuecomment-2",
       mentions: [reviewer],
     });
 

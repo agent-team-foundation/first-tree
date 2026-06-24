@@ -8,6 +8,7 @@ import type { FastifyInstance } from "fastify";
 import { isRecord, readNumber, readString } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
+import { authIdentities } from "../db/schema/auth-identities.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
@@ -65,6 +66,8 @@ type PullRequestPayloadInfo = ContextReviewerPrTemplateInput & {
   eventType: "pull_request" | "issue_comment" | "pull_request_review_comment";
   action: "opened" | "synchronize" | "created" | "edited";
   entityKey: string;
+  senderType: string | null;
+  commentAuthorType: string | null;
 };
 
 type ContextReviewerPrTrigger =
@@ -74,7 +77,7 @@ type ContextReviewerPrTrigger =
 
 type ReviewerAgent = {
   uuid: string;
-  name: string | null;
+  managerUserId: string;
   managerHumanAgentId: string;
 };
 
@@ -256,6 +259,7 @@ export async function handleContextReviewerPrEvent(
       chatId: existingChatId,
       info,
       reviewer,
+      appSlug: app.config.oauth?.githubApp?.slug ?? null,
     });
     if (suppressedEchoMessageId) {
       log.info(
@@ -283,7 +287,7 @@ export async function handleContextReviewerPrEvent(
       {
         source: "github",
         format: "markdown",
-        content: FOLLOW_UP_NOTICE,
+        content: contextReviewerFollowUpContent(info),
         metadata: contextReviewerMessageMetadata(info, reviewer),
       },
       { normalizeMentionsInContent: false },
@@ -370,6 +374,7 @@ function extractPullRequestPayloadInfo(
     ...trigger,
     repoFullName,
     senderLogin,
+    senderType: readString(sender?.type),
     organizationId,
   };
 
@@ -388,6 +393,7 @@ function extractPullRequestPayloadInfo(
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
       commentUrl: null,
       commentAuthorLogin: null,
+      commentAuthorType: null,
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }
@@ -399,6 +405,7 @@ function extractPullRequestPayloadInfo(
     const title = readString(issue?.title);
     const htmlUrl = readString(prInfo?.html_url) ?? readString(issue?.html_url);
     const comment = isRecord(payload.comment) ? payload.comment : null;
+    const commentAuthor = readCommentAuthor(comment);
     if (!prInfo || prNumber === null || !title || !htmlUrl) return null;
     return {
       ...common,
@@ -408,7 +415,8 @@ function extractPullRequestPayloadInfo(
       baseRef: null,
       headRef: null,
       commentUrl: readString(comment?.html_url),
-      commentAuthorLogin: readCommentAuthorLogin(comment) ?? senderLogin,
+      commentAuthorLogin: commentAuthor.login ?? senderLogin,
+      commentAuthorType: commentAuthor.type ?? common.senderType,
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }
@@ -419,6 +427,7 @@ function extractPullRequestPayloadInfo(
     const title = readString(pr?.title);
     const htmlUrl = readString(pr?.html_url);
     const comment = isRecord(payload.comment) ? payload.comment : null;
+    const commentAuthor = readCommentAuthor(comment);
     if (prNumber === null || !title || !htmlUrl) return null;
     return {
       ...common,
@@ -428,7 +437,8 @@ function extractPullRequestPayloadInfo(
       baseRef: readString(isRecord(pr?.base) ? pr.base.ref : null),
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
       commentUrl: readString(comment?.html_url),
-      commentAuthorLogin: readCommentAuthorLogin(comment) ?? senderLogin,
+      commentAuthorLogin: commentAuthor.login ?? senderLogin,
+      commentAuthorType: commentAuthor.type ?? common.senderType,
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }
@@ -436,16 +446,24 @@ function extractPullRequestPayloadInfo(
   return null;
 }
 
-function readCommentAuthorLogin(comment: Record<string, unknown> | null): string | null {
+function readCommentAuthor(comment: Record<string, unknown> | null): { login: string | null; type: string | null } {
   const user = isRecord(comment?.user) ? comment.user : null;
-  return readString(user?.login);
+  return { login: readString(user?.login), type: readString(user?.type) };
+}
+
+function contextReviewerFollowUpContent(info: PullRequestPayloadInfo): string {
+  const details = [
+    info.commentAuthorLogin ? `Comment author: ${info.commentAuthorLogin}` : null,
+    info.commentUrl ? `Comment URL: ${info.commentUrl}` : null,
+  ].filter((line): line is string => line !== null);
+  return [FOLLOW_UP_NOTICE, ...details].join("\n");
 }
 
 function contextReviewerMessageMetadata(
   info: PullRequestPayloadInfo,
   reviewer: ReviewerAgent,
 ): Record<string, unknown> {
-  return {
+  const metadata: Record<string, unknown> = {
     source: "github",
     event: info.eventType,
     action: info.action,
@@ -455,6 +473,13 @@ function contextReviewerMessageMetadata(
     contextTreeReviewer: true,
     mentions: [reviewer.uuid],
   };
+  if (info.commentAuthorLogin) {
+    metadata.commentAuthorLogin = info.commentAuthorLogin;
+  }
+  if (info.commentUrl) {
+    metadata.commentUrl = info.commentUrl;
+  }
+  return metadata;
 }
 
 async function loadValidReviewerAgent(
@@ -464,7 +489,7 @@ async function loadValidReviewerAgent(
   const [agent] = await db
     .select({
       uuid: agents.uuid,
-      name: agents.name,
+      managerUserId: members.userId,
       managerHumanAgentId: members.agentId,
     })
     .from(agents)
@@ -505,29 +530,38 @@ async function findExistingReviewerChat(
 
 async function findSuppressibleReviewerEchoMessageId(
   db: Database,
-  input: { chatId: string; info: PullRequestPayloadInfo; reviewer: ReviewerAgent },
+  input: { chatId: string; info: PullRequestPayloadInfo; reviewer: ReviewerAgent; appSlug: string | null },
 ): Promise<string | null> {
   if (input.info.eventType !== "issue_comment" || input.info.action !== "created") return null;
 
   const commentAuthorLogin = input.info.commentAuthorLogin?.trim().toLowerCase();
   if (!commentAuthorLogin) return null;
 
-  const reviewerGithubLogin = input.reviewer.name?.trim().toLowerCase();
-  if (!reviewerGithubLogin) {
+  const appBotLogin = input.appSlug ? `${input.appSlug.toLowerCase()}[bot]` : null;
+  const commentAuthorIsAppBot =
+    appBotLogin !== null && commentAuthorLogin === appBotLogin && isCommentAuthorBot(input.info);
+  const managerGithubLogin = await loadManagerGithubLogin(db, input.reviewer.managerUserId);
+  const commentAuthorIsManager = managerGithubLogin !== null && commentAuthorLogin === managerGithubLogin;
+  if (!commentAuthorIsManager && !commentAuthorIsAppBot) {
     log.debug(
-      { reviewerAgentUuid: input.reviewer.uuid, entityKey: input.info.entityKey },
-      "context reviewer echo comment not suppressed: reviewer github login is unavailable",
+      {
+        reviewerAgentUuid: input.reviewer.uuid,
+        managerUserId: input.reviewer.managerUserId,
+        entityKey: input.info.entityKey,
+        commentAuthorLogin: input.info.commentAuthorLogin,
+        managerGithubLoginAvailable: managerGithubLogin !== null,
+        appBotLogin,
+        commentAuthorType: input.info.commentAuthorType,
+        senderType: input.info.senderType,
+      },
+      "context reviewer echo comment not suppressed: comment author is not the manager or app bot",
     );
     return null;
   }
-  if (commentAuthorLogin !== reviewerGithubLogin) return null;
 
-  const [latestReviewerTask] = await db
+  const [initialOpenedTask] = await db
     .select({
       id: messages.id,
-      event: sql<string>`${messages.metadata}->>'event'`,
-      action: sql<string>`${messages.metadata}->>'action'`,
-      triggerEvent: sql<string>`${messages.metadata}->>'triggerEvent'`,
     })
     .from(messages)
     .where(
@@ -535,23 +569,42 @@ async function findSuppressibleReviewerEchoMessageId(
         eq(messages.chatId, input.chatId),
         sql`${messages.metadata}->>'entityKey' = ${input.info.entityKey}`,
         sql`${messages.metadata}->>'contextTreeReviewer' = 'true'`,
+        sql`${messages.metadata}->>'event' = 'pull_request'`,
+        sql`${messages.metadata}->>'action' = 'opened'`,
+        sql`${messages.metadata}->>'triggerEvent' = 'pull_request.opened'`,
         sql`${messages.createdAt} >= NOW() - make_interval(secs => ${REVIEWER_OPENED_ECHO_SUPPRESSION_WINDOW_SECONDS})`,
       ),
     )
     .orderBy(desc(messages.createdAt), desc(messages.id))
     .limit(1);
 
-  const isInitialOpenedTask =
-    latestReviewerTask?.event === "pull_request" &&
-    latestReviewerTask.action === "opened" &&
-    latestReviewerTask.triggerEvent === "pull_request.opened";
-  return isInitialOpenedTask ? latestReviewerTask.id : null;
+  return initialOpenedTask?.id ?? null;
+}
+
+function isCommentAuthorBot(info: PullRequestPayloadInfo): boolean {
+  if (info.commentAuthorType?.toLowerCase() === "bot") return true;
+  return (
+    info.senderType?.toLowerCase() === "bot" &&
+    info.commentAuthorLogin?.trim().toLowerCase() === info.senderLogin.trim().toLowerCase()
+  );
+}
+
+async function loadManagerGithubLogin(db: Database, userId: string): Promise<string | null> {
+  const [identity] = await db
+    .select({ metadata: authIdentities.metadata })
+    .from(authIdentities)
+    .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, "github")))
+    .limit(1);
+  const login = identity?.metadata?.login;
+  return typeof login === "string" && login.trim() ? login.trim().toLowerCase() : null;
 }
 
 export const contextReviewerPrTestInternals = {
+  contextReviewerFollowUpContent,
   extractPullRequestPayloadInfo,
   findExistingReviewerChat,
   isSupportedContextReviewerPrEvent,
+  loadManagerGithubLogin,
   loadValidReviewerAgent,
   parseBareRepo,
   parseScpLikeRepo,
