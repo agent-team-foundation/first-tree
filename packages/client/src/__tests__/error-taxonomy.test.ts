@@ -349,6 +349,60 @@ describe("error-taxonomy.classify", () => {
       expect(c.message).toContain('"nested":true');
     });
   });
+
+  describe("source=config", () => {
+    // The agent row and its config row are created in the same DB transaction
+    // (server `agent.ts` create path), so a 4xx from `/agent/config` is a
+    // deterministic, non-self-healing condition — never a bring-up race.
+    const cfg = (statusCode: number, message = "config error") => Object.assign(new Error(message), { statusCode });
+
+    it("401 → permanent (auth rejected, won't self-heal)", () => {
+      const c = classify(cfg(401), { source: "config" });
+      expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
+      expect(c.strategy.kind).toBe("none");
+      expect(c.reasonCode).toBe("config_unauthorized");
+    });
+
+    it("403 → permanent (forbidden)", () => {
+      const c = classify(cfg(403), { source: "config" });
+      expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
+      expect(c.reasonCode).toBe("config_unauthorized");
+    });
+
+    it("404 → permanent (agent/config row is gone, not a race)", () => {
+      const c = classify(cfg(404), { source: "config" });
+      expect(c.kind).toBe(ERROR_KINDS.PERMANENT);
+      expect(c.reasonCode).toBe("config_rejected");
+    });
+
+    it("400 → permanent (deterministic bad request)", () => {
+      expect(classify(cfg(400), { source: "config" }).kind).toBe(ERROR_KINDS.PERMANENT);
+    });
+
+    it("503 → transient with exponential backoff", () => {
+      const c = classify(cfg(503), { source: "config" });
+      expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
+      expect(c.strategy.kind).toBe("exponentialBackoff");
+    });
+
+    it("429 → transient (rate limited)", () => {
+      expect(classify(cfg(429), { source: "config" }).kind).toBe(ERROR_KINDS.TRANSIENT);
+    });
+
+    it("408 → transient (request timeout)", () => {
+      expect(classify(cfg(408), { source: "config" }).kind).toBe(ERROR_KINDS.TRANSIENT);
+    });
+
+    it("network failure → transient", () => {
+      const c = classify(Object.assign(new Error("fetch failed"), { code: "ECONNRESET" }), { source: "config" });
+      expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
+    });
+
+    it("unknown non-HTTP failure → transient (conservative)", () => {
+      expect(classify(new Error("weird"), { source: "config" }).kind).toBe(ERROR_KINDS.TRANSIENT);
+      expect(classify("oops", { source: "config" }).kind).toBe(ERROR_KINDS.TRANSIENT);
+    });
+  });
 });
 
 describe("error-taxonomy.nextRetryDelayMs", () => {
