@@ -1,4 +1,5 @@
 import type { AgentVisibility } from "@first-tree/shared";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getAgentClientStatus } from "../../api/agent-config.js";
 import { api, withOrg } from "../../api/client.js";
@@ -37,6 +38,7 @@ export type CreateAgentArgs = {
  * creation. On success, `onOnline(uuid)` fires once.
  */
 export function useAgentCreation(onOnline: (uuid: string) => void) {
+  const queryClient = useQueryClient();
   const [phase, setPhase] = useState<AgentCreationPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const createdRef = useRef<string | null>(null);
@@ -100,6 +102,7 @@ export function useAgentCreation(onOnline: (uuid: string) => void) {
         agentUuid = res.uuid;
         createdRef.current = agentUuid;
         writeOnboardingAgentUuid(agentUuid);
+        await queryClient.invalidateQueries({ queryKey: ["agents"] });
         void reportOnboardingEvent("agent_created", { runtimeProvider: args.runtimeProvider });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to add your agent to the team");
@@ -108,7 +111,7 @@ export function useAgentCreation(onOnline: (uuid: string) => void) {
       }
       await pollUntilReady(agentUuid);
     },
-    [pollUntilReady],
+    [pollUntilReady, queryClient],
   );
 
   const retry = useCallback(async (): Promise<void> => {
