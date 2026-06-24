@@ -1,4 +1,4 @@
-import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
+import type { CapabilityEntry, RuntimeAuthLastError, RuntimeProvider } from "@first-tree/shared";
 
 /**
  * Pure view-model for the in-product runtime-auth controls on a provider card.
@@ -10,12 +10,14 @@ import type { CapabilityEntry, RuntimeProvider } from "@first-tree/shared";
  *   - "browser-pending": browser OAuth is running on the host; show a
  *     "finish sign-in in the browser that opened on this computer" state.
  *   - "connectable": launchable but unauthenticated; show a "Connect" button
- *     (only for providers the daemon can drive in-product).
+ *     (only for providers the daemon can drive in-product). Carries
+ *     `lastError` when the previous in-product login terminally failed, so the
+ *     card can say "sign-in failed — try again" instead of resetting silently.
  *   - "none": nothing to offer here (ok / missing / error → other surfaces).
  */
 export type RuntimeAuthView =
   | { kind: "browser-pending"; authUrl?: string }
-  | { kind: "connectable" }
+  | { kind: "connectable"; lastError?: RuntimeAuthLastError }
   | { kind: "none" };
 
 /** Providers whose login the daemon can drive in-product today. */
@@ -53,7 +55,7 @@ export function deriveRuntimeAuthView(
   }
 
   if (entry.state === "unauthenticated" && providerSupportsInProductAuth(provider)) {
-    return { kind: "connectable" };
+    return entry.lastAuthError ? { kind: "connectable", lastError: entry.lastAuthError } : { kind: "connectable" };
   }
   return { kind: "none" };
 }

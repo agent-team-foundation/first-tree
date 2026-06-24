@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { runtimeAuthLastErrorSchema } from "./runtime-auth.js";
 
 export const CAPABILITY_STATES = {
   OK: "ok",
@@ -93,6 +94,13 @@ export const capabilityEntrySchema = z.object({
    * this provider. Absent in steady state. See `pendingAuthSchema`.
    */
   pendingAuth: pendingAuthSchema.nullable().optional(),
+  /**
+   * Terminal failure of the most recent in-product login the daemon drove for
+   * this provider, so the web can distinguish "sign-in failed — retry" from
+   * "never attempted". Set by the daemon's runtime-auth orchestrator; cleared on
+   * the next login start or a successful re-probe. See `runtimeAuthLastErrorSchema`.
+   */
+  lastAuthError: runtimeAuthLastErrorSchema.nullable().optional(),
 });
 export type CapabilityEntry = z.infer<typeof capabilityEntrySchema>;
 

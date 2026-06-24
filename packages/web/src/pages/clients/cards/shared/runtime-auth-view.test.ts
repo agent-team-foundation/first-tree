@@ -44,6 +44,30 @@ describe("deriveRuntimeAuthView", () => {
     expect(deriveRuntimeAuthView("codex", entry({}), NOW)).toEqual({ kind: "connectable" });
   });
 
+  it("surfaces a prior login failure on the connectable view (so the card can say 'retry')", () => {
+    const lastAuthError = {
+      reason: "exit-nonzero",
+      message: "account not authorized",
+      at: "2026-06-22T11:59:00.000Z",
+    } as const;
+    expect(deriveRuntimeAuthView("codex", entry({ lastAuthError }), NOW)).toEqual({
+      kind: "connectable",
+      lastError: lastAuthError,
+    });
+  });
+
+  it("a live pending login wins over a recorded failure (a fresh attempt is running)", () => {
+    const view = deriveRuntimeAuthView(
+      "codex",
+      entry({
+        pendingAuth: browserPending("2026-06-22T12:05:00.000Z"),
+        lastAuthError: { reason: "timeout", at: "2026-06-22T11:50:00.000Z" },
+      }),
+      NOW,
+    );
+    expect(view.kind).toBe("browser-pending");
+  });
+
   it("falls back to connectable once a pending login has expired", () => {
     expect(
       deriveRuntimeAuthView("codex", entry({ pendingAuth: browserPending("2026-06-22T11:50:00.000Z") }), NOW),

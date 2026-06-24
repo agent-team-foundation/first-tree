@@ -103,7 +103,71 @@ export function runLoginSubprocess(opts: LoginSubprocessOptions): Promise<LoginO
   });
 }
 
-const AUTH_URL_PATTERN = /https?:\/\/[^\s]+/;
+// Only an `http(s)://` token is a candidate sign-in URL. Anchored at the token
+// start so it is linear (no backtracking) — we tokenise on whitespace rather
+// than scanning the buffer with a greedy URL regex, which risks polynomial
+// backtracking on adversarial output (CodeQL js/polynomial-redos).
+const URL_PREFIX = /^https?:\/\//;
+
+// The CLIs print the URL inside prose ("If it didn't open, visit
+// http://localhost:1455."), so a captured token can carry trailing sentence
+// punctuation. Left on, the href is an INVALID URL — e.g. a port "1455." fails
+// `new URL()` parsing — so trim a trailing run of these closers (a linear loop,
+// not a `[...]+$` regex which CodeQL flags as polynomial-ReDoS).
+const TRAILING_URL_PUNCT = new Set([".", ",", ";", ":", "!", "?", ")", "]", "}", ">", "'", '"']);
+
+function stripTrailingPunct(value: string): string {
+  let end = value.length;
+  while (end > 0 && TRAILING_URL_PUNCT.has(value[end - 1] ?? "")) end--;
+  return value.slice(0, end);
+}
+
+/**
+ * A loopback host is the login CLI's OWN local OAuth callback server (e.g. codex
+ * prints "Starting local login server on http://localhost:1455."), never a
+ * sign-in page: its root path 404s and opening it does not start the flow. We
+ * never surface it as the fallback link.
+ */
+function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host === "[::1]" || host === "::1" || /^127\./.test(host);
+}
+
+/**
+ * Pull a usable fallback *sign-in* URL out of accumulated, ANSI-stripped login
+ * output, or `null` if none is present yet. The fallback link exists for when
+ * the host browser did not auto-open, so it must be the provider's external
+ * authorization URL — NOT the CLI's loopback callback server (codex prints that
+ * first and, on a successful auto-open, prints nothing else, so a naive "first
+ * URL" capture surfaces a link whose root 404s). We therefore:
+ *   - only treat a whitespace-terminated token as complete (a trailing,
+ *     unterminated token may still be streaming in across a stdout chunk
+ *     boundary, so we skip it),
+ *   - strip trailing sentence punctuation (so the result parses), and
+ *   - skip loopback origins, returning the first external URL (or `null`).
+ * Tokenising on whitespace keeps this linear in the buffer length. Exported for
+ * unit tests.
+ */
+export function extractAuthUrl(buffer: string): string | null {
+  const terminated = /\s$/.test(buffer);
+  const tokens = buffer.split(/\s+/);
+  // The last token is only known-complete if the buffer ended on whitespace.
+  const completeCount = terminated ? tokens.length : tokens.length - 1;
+  for (let i = 0; i < completeCount; i++) {
+    const token = tokens[i];
+    if (!token || !URL_PREFIX.test(token)) continue;
+    const url = stripTrailingPunct(token);
+    if (!url) continue;
+    let hostname: string;
+    try {
+      hostname = new URL(url).hostname;
+    } catch {
+      continue;
+    }
+    if (isLoopbackHost(hostname)) continue;
+    return url;
+  }
+  return null;
+}
 
 export type BrowserLoginOptions = {
   /** Command to spawn (a binary path, or `process.execPath` for `node cli.js`). */
@@ -142,10 +206,10 @@ export function runBrowserLogin(options: BrowserLoginOptions): Promise<LoginOutc
     onOutput: (clean, full) => {
       onRawOutput?.(clean);
       if (urlFired || !onAuthUrl) return;
-      const match = full.match(AUTH_URL_PATTERN);
-      if (match) {
+      const url = extractAuthUrl(full);
+      if (url) {
         urlFired = true;
-        onAuthUrl(match[0]);
+        onAuthUrl(url);
       }
     },
     classifyExit: ({ code, stderrTail }) => ({

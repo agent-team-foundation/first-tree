@@ -77,3 +77,21 @@ export const runtimeAuthFailureReasonSchema = z.enum([
   "unsupported",
 ]);
 export type RuntimeAuthFailureReason = z.infer<typeof runtimeAuthFailureReasonSchema>;
+
+/**
+ * The terminal failure of the most recent in-product login the daemon drove for
+ * a provider, recorded on the capability entry so the web console can tell
+ * "sign-in failed — try again" apart from "never attempted". Written by the
+ * daemon's runtime-auth orchestrator (not the probe), and cleared on the next
+ * login start (the fresh pending entry omits it) or a successful re-probe (the
+ * `ok` entry omits it). Distinct from `CapabilityEntry.error`, which carries the
+ * probe's own verbatim reason for a non-`ok` state.
+ */
+export const runtimeAuthLastErrorSchema = z.object({
+  reason: runtimeAuthFailureReasonSchema,
+  /** Provider's own failure text (truncated), when the login produced one. */
+  message: z.string().optional(),
+  /** ISO8601 instant the failure was recorded — lets the web ignore stale ones. */
+  at: z.string(),
+});
+export type RuntimeAuthLastError = z.infer<typeof runtimeAuthLastErrorSchema>;

@@ -14,6 +14,10 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const activityMocks = vi.hoisted(() => ({
   getClientCapabilities: vi.fn(),
   listClients: vi.fn(),
+  startRuntimeAuth: vi.fn(async (_clientId: string, _body: { provider: string; method?: string }) => ({
+    ref: "ref-1",
+    started: true as const,
+  })),
 }));
 
 const agentMocks = vi.hoisted(() => ({
@@ -293,6 +297,27 @@ describe("NewAgentDialog extra branches", () => {
     );
     expect(authMock.value.refreshMe).toHaveBeenCalled();
     expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ uuid: "agent-created" }), "codex");
+  });
+
+  it("offers in-product Connect when the picked computer has an unauthenticated runtime but none ok", async () => {
+    const { NewAgentDialog } = await import("../new-agent-dialog.js");
+    const caps = { codex: capability("unauthenticated") };
+    activityMocks.listClients.mockResolvedValue([client({ capabilities: caps })]);
+    activityMocks.getClientCapabilities.mockResolvedValue(client({ capabilities: caps }));
+    const container = await renderDom(
+      <NewAgentDialog open onOpenChange={() => undefined} onCreated={() => undefined} />,
+    );
+
+    // Connectable runtime → Connect in place, not the "install and come back"
+    // dead-end. Create stays disabled until a runtime actually flips to ok.
+    await waitForText(container, "Connect Codex");
+    expect(document.body.textContent ?? "").not.toContain("No runtime ready");
+    expect(buttonByText(document.body, "Create").disabled).toBe(true);
+
+    await click(buttonByText(document.body, "Connect Codex"));
+    await waitForCondition(() => activityMocks.startRuntimeAuth.mock.calls.length > 0, "Expected startRuntimeAuth");
+    expect(activityMocks.startRuntimeAuth.mock.calls[0]?.[0]).toBe("client-1");
+    expect(activityMocks.startRuntimeAuth.mock.calls[0]?.[1]).toEqual({ provider: "codex" });
   });
 
   it("surfaces client validation, server issues, root errors, and no-runtime states", async () => {
