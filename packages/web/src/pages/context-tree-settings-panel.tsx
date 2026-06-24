@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Check } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { ArrowRight } from "lucide-react";
+import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { listManagedAgents, type ManagedAgent } from "../api/agents.js";
 import {
@@ -14,6 +14,8 @@ import { Button } from "../components/ui/button.js";
 import { Section } from "../components/ui/section.js";
 import { Select } from "../components/ui/select.js";
 import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
+import { Switch } from "../components/ui/switch.js";
+import { titleWithSemantics, useJustSaved } from "./agent-detail/save-semantics.js";
 
 /**
  * Settings → Context tree. Per-org Context Tree **configuration**: which repo /
@@ -240,10 +242,22 @@ function NoTree({
 }
 
 /** Context Reviewer: assign an agent to auto-review Context Tree PRs. Meaningful
- *  only once a tree is bound. Was the old "Features" tab; now a plain section. */
+ *  only once a tree is bound. Was the old "Features" tab; now a plain section.
+ *
+ *  This is an immediate-save config block (no page-level Save), mirroring the
+ *  Agent Detail Switch rows: flipping the Switch or picking an agent persists at
+ *  once and flashes "Saved" next to the title. The one wrinkle is the backend
+ *  contract — `enabled=true` is rejected without a valid `agentUuid` — so turning
+ *  the Switch ON cannot blindly PATCH `enabled`. Instead it opens a local "setup"
+ *  on-state (`setupOpen`) that reveals the agent selector; the enable actually
+ *  persists only once an agent is chosen. State is driven from the server query,
+ *  not a local mirror, and every save passes an explicit payload so an instant
+ *  handler never reads stale local state. */
 function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
   const { organizationId } = useAuth();
   const queryClient = useQueryClient();
+  const { justSaved, markSaved } = useJustSaved();
+  const toggleLabelId = useId();
 
   const featuresQuery = useQuery({
     queryKey: ["org-setting", organizationId, "context_tree_features"],
@@ -252,20 +266,20 @@ function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
     enabled: !!organizationId,
   });
 
-  const [reviewerEnabled, setReviewerEnabled] = useState(false);
-  const [reviewerAgentUuid, setReviewerAgentUuid] = useState<string | null>(null);
-  const [featuresSaved, setFeaturesSaved] = useState(false);
+  const serverEnabled = featuresQuery.data?.contextReviewer.enabled ?? false;
+  const serverAgentUuid = featuresQuery.data?.contextReviewer.agentUuid ?? null;
 
-  useEffect(() => {
-    if (!featuresQuery.data) return;
-    setReviewerEnabled(featuresQuery.data.contextReviewer.enabled);
-    setReviewerAgentUuid(featuresQuery.data.contextReviewer.agentUuid);
-  }, [featuresQuery.data]);
+  // Pre-persistence on-state: the Switch is flipped on but `enabled` is not yet
+  // saved (no agent picked). Once enabled persists, `serverEnabled` carries the
+  // on-state and this resets. Off + already-enabled persists `enabled=false`;
+  // off while only `setupOpen` just abandons the un-saved setup.
+  const [setupOpen, setSetupOpen] = useState(false);
+  const switchOn = serverEnabled || setupOpen;
 
   const managedAgentsQuery = useQuery({
     queryKey: ["context-reviewer", "managed-agents", organizationId],
     queryFn: listManagedAgents,
-    enabled: !!organizationId && reviewerEnabled,
+    enabled: !!organizationId && switchOn,
   });
 
   const reviewerCandidates = useMemo(() => {
@@ -277,40 +291,45 @@ function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
       });
   }, [managedAgentsQuery.data, organizationId]);
 
-  const selectedReviewerIsCandidate = reviewerCandidates.some((agent) => agent.uuid === reviewerAgentUuid);
-  const reviewerSelectionInvalid = reviewerEnabled && (!reviewerAgentUuid || !selectedReviewerIsCandidate);
-  const featuresSaveDisabled =
-    featuresQuery.isLoading ||
-    featuresQuery.isError ||
-    managedAgentsQuery.isLoading ||
-    (reviewerEnabled && (reviewerCandidates.length === 0 || reviewerSelectionInvalid));
+  const agentsLoading = managedAgentsQuery.isLoading;
+  const selectedIsCandidate = reviewerCandidates.some((agent) => agent.uuid === serverAgentUuid);
+  // Enabled, but the saved reviewer is no longer an active agent this admin can
+  // see: keep the Switch on, warn, and let them re-pick or turn it off.
+  const reviewerMissing = serverEnabled && !selectedIsCandidate && !agentsLoading && reviewerCandidates.length > 0;
+  // Switch is on for setup but no agent chosen yet — prompt for the pick that
+  // actually enables the feature.
+  const awaitingAgent = setupOpen && !serverEnabled && !agentsLoading && reviewerCandidates.length > 0;
 
   const featuresMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (next: { enabled: boolean; agentUuid: string | null }) => {
       if (!organizationId) throw new Error("organization not loaded");
-      return putContextTreeFeaturesSetting(organizationId, {
-        contextReviewer: {
-          enabled: reviewerEnabled,
-          agentUuid: reviewerEnabled ? reviewerAgentUuid : null,
-        },
-      });
+      return putContextTreeFeaturesSetting(organizationId, { contextReviewer: next });
     },
     onSuccess: (next) => {
       queryClient.setQueryData(["org-setting", organizationId, "context_tree_features"], next);
-      setFeaturesSaved(true);
-      setTimeout(() => setFeaturesSaved(false), 2000);
+      setSetupOpen(false);
+      markSaved();
     },
   });
+  const saving = featuresMutation.isPending;
 
-  const handleFeaturesSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    if (featuresSaveDisabled) return;
-    featuresMutation.mutate();
+  const handleToggle = (next: boolean) => {
+    if (next) {
+      setSetupOpen(true);
+      return;
+    }
+    setSetupOpen(false);
+    if (serverEnabled) featuresMutation.mutate({ enabled: false, agentUuid: null });
+  };
+
+  const handleSelectAgent = (uuid: string) => {
+    if (!uuid) return;
+    featuresMutation.mutate({ enabled: true, agentUuid: uuid });
   };
 
   return (
     <Section
-      title="Context Reviewer"
+      title={titleWithSemantics("Context Reviewer", justSaved)}
       description="Assign one of your agents to automatically review Context Tree pull requests."
     >
       <div style={{ paddingTop: "var(--sp-4)" }}>
@@ -327,39 +346,27 @@ function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
             {featuresQuery.error instanceof Error ? featuresQuery.error.message : "Failed to load feature settings"}
           </div>
         ) : (
-          <form onSubmit={handleFeaturesSubmit}>
-            <div className="flex items-baseline justify-between" style={{ gap: "var(--sp-2)" }}>
-              <label
-                className="text-body inline-flex items-center font-medium"
-                style={{ color: "var(--fg)", gap: "var(--sp-2)" }}
-              >
-                <input
-                  type="checkbox"
-                  checked={reviewerEnabled}
-                  onChange={(e) => {
-                    setReviewerEnabled(e.target.checked);
-                    if (!e.target.checked) setReviewerAgentUuid(null);
-                  }}
-                />
-                <span>Enabled</span>
-              </label>
-              {featuresSaved && (
-                <span
-                  className="text-label inline-flex items-center fade-in"
-                  style={{ gap: "var(--sp-1)", color: "var(--fg-confirm)" }}
-                >
-                  <Check className="h-3 w-3" />
-                  Saved
-                </span>
-              )}
+          <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+            {/* Config row: the feature's on/off control, mirroring the agent-detail
+                Switch rows (label left, Switch right, instant save). */}
+            <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+              <span id={toggleLabelId} className="text-body font-medium" style={{ color: "var(--fg)" }}>
+                Automatic PR review
+              </span>
+              <Switch
+                checked={switchOn}
+                onCheckedChange={handleToggle}
+                disabled={saving}
+                aria-labelledby={toggleLabelId}
+              />
             </div>
 
-            {reviewerEnabled ? (
-              <div className="flex flex-col" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-4)" }}>
+            {switchOn ? (
+              <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
                 <span className="text-label font-medium" style={{ color: "var(--fg)" }}>
                   Reviewer agent
                 </span>
-                {managedAgentsQuery.isLoading ? (
+                {agentsLoading ? (
                   <div className="text-body" style={{ color: "var(--fg-3)" }}>
                     Loading agents…
                   </div>
@@ -370,8 +377,9 @@ function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
                 ) : (
                   <Select
                     aria-label="Context Reviewer agent"
-                    value={selectedReviewerIsCandidate ? (reviewerAgentUuid ?? "") : ""}
-                    onChange={(value) => setReviewerAgentUuid(value || null)}
+                    value={serverEnabled && selectedIsCandidate ? (serverAgentUuid ?? "") : ""}
+                    onChange={handleSelectAgent}
+                    disabled={saving}
                     options={[
                       { value: "", label: "Select an agent", disabled: true },
                       ...reviewerCandidates.map((agent) => ({
@@ -384,6 +392,16 @@ function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
                     searchable={reviewerCandidates.length > 6}
                   />
                 )}
+                {awaitingAgent ? (
+                  <div className="text-label" style={{ color: "var(--fg-3)" }}>
+                    Select an agent to enable Context Reviewer.
+                  </div>
+                ) : null}
+                {reviewerMissing ? (
+                  <div className="text-label" style={{ color: "var(--fg-3)" }}>
+                    Current reviewer is not your active agent. Choose one of your agents, or turn Context Reviewer off.
+                  </div>
+                ) : null}
                 {managedAgentsQuery.error ? (
                   <div className="text-body" style={{ color: "var(--state-error)" }}>
                     {managedAgentsQuery.error instanceof Error
@@ -391,26 +409,15 @@ function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
                       : "Failed to load agents"}
                   </div>
                 ) : null}
-                {reviewerAgentUuid && !selectedReviewerIsCandidate && !managedAgentsQuery.isLoading ? (
-                  <div className="text-label" style={{ color: "var(--fg-3)" }}>
-                    Current reviewer is not your active agent. Choose one of your agents or turn Context Reviewer off.
-                  </div>
-                ) : null}
               </div>
             ) : null}
 
-            <div className="flex items-center justify-end" style={{ gap: "var(--sp-2)", marginTop: "var(--sp-4)" }}>
-              <Button type="submit" size="sm" disabled={featuresMutation.isPending || featuresSaveDisabled}>
-                <Check className="h-4 w-4" />
-                <span>Save</span>
-              </Button>
-            </div>
-            {featuresMutation.error instanceof Error && (
-              <div className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
+            {featuresMutation.error instanceof Error ? (
+              <div className="text-body" style={{ color: "var(--state-error)" }}>
                 {featuresMutation.error.message}
               </div>
-            )}
-          </form>
+            ) : null}
+          </div>
         )}
       </div>
     </Section>

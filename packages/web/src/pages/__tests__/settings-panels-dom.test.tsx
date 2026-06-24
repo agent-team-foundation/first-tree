@@ -244,6 +244,11 @@ function inputByLabel(container: ParentNode, label: string): HTMLInputElement | 
   return control instanceof HTMLInputElement ? control : null;
 }
 
+/** The Context Reviewer on/off Switch — the only ARIA switch in this panel. */
+function reviewerSwitch(container: ParentNode): HTMLButtonElement | null {
+  return container.querySelector<HTMLButtonElement>('button[role="switch"]');
+}
+
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
@@ -428,7 +433,7 @@ describe("settings panels", () => {
     await setInputValue(repoInput, "https://github.com/acme/draft-context");
 
     await waitForText(container, "Context Reviewer");
-    expect(inputByLabel(container, "Enabled")?.checked).toBe(false);
+    expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("false");
     expect(settingsMocks.getContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1");
     expect(agentApiMocks.listManagedAgents).not.toHaveBeenCalled();
     expect(inputByLabel(container, "Repo URL")?.value).toBe("https://github.com/acme/draft-context");
@@ -436,17 +441,36 @@ describe("settings panels", () => {
     await act(async () => root.unmount());
   });
 
-  it("saves disabled Context Reviewer as disabled/null", async () => {
+  it("turning the Context Reviewer Switch off saves disabled/null immediately", async () => {
+    settingsMocks.getContextTreeFeaturesSetting.mockResolvedValueOnce(
+      contextTreeFeatures({ enabled: true, agentUuid: "agent-alpha" }),
+    );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
     await waitForText(container, "Context Reviewer");
+    await waitForText(container, "Alpha Reviewer");
+    expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
 
-    await click(buttonByText(container, "Save"));
+    await click(reviewerSwitch(container));
 
     expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
       contextReviewer: { enabled: false, agentUuid: null },
     });
-    expect(agentApiMocks.listManagedAgents).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not save when flipping the Switch on (no agent) and back off", async () => {
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Context Reviewer");
+
+    await click(reviewerSwitch(container));
+    await waitForText(container, "Reviewer agent");
+    await click(reviewerSwitch(container));
+
+    expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
+    expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("false");
 
     await act(async () => root.unmount());
   });
@@ -456,17 +480,17 @@ describe("settings panels", () => {
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
     await waitForText(container, "Context Reviewer");
 
-    await click(inputByLabel(container, "Enabled"));
+    await click(reviewerSwitch(container));
     await waitForText(container, "Reviewer agent");
     await waitForCondition(() => agentApiMocks.listManagedAgents.mock.calls.length > 0, "Expected agents to load");
-    expect(container.textContent).toContain("Select an agent");
+    await waitForText(container, "Select an agent to enable Context Reviewer.");
 
     await selectOption(container, "Alpha Reviewer");
     expect(document.body.textContent).not.toContain("Human User");
     expect(document.body.textContent).not.toContain("Suspended");
     expect(document.body.textContent).not.toContain("Other Org");
-    await click(buttonByText(container, "Save"));
 
+    // The pick itself persists — there is no separate Save step.
     expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
       contextReviewer: { enabled: true, agentUuid: "agent-alpha" },
     });
@@ -483,13 +507,13 @@ describe("settings panels", () => {
     await waitForText(container, "Context Reviewer");
 
     await waitForText(container, "Beta Reviewer");
-    expect(inputByLabel(container, "Enabled")?.checked).toBe(true);
+    expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
     expect(container.textContent).toContain("Beta Reviewer");
 
     await act(async () => root.unmount());
   });
 
-  it("disables Save when Context Reviewer is enabled but no eligible agents exist", async () => {
+  it("shows the empty state and saves nothing when no eligible agents exist", async () => {
     agentApiMocks.listManagedAgents.mockResolvedValueOnce([
       managedAgent({ uuid: "human-only", displayName: "Only Human", type: "human" }),
       managedAgent({ uuid: "suspended-only", displayName: "Only Suspended", status: "suspended" }),
@@ -498,9 +522,10 @@ describe("settings panels", () => {
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
     await waitForText(container, "Context Reviewer");
 
-    await click(inputByLabel(container, "Enabled"));
+    await click(reviewerSwitch(container));
     await waitForText(container, "No active non-human agents are available.");
-    expect(buttonByText(container, "Save")?.disabled).toBe(true);
+    expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
+    expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });
@@ -514,10 +539,10 @@ describe("settings panels", () => {
     await waitForText(container, "Context Reviewer");
 
     await waitForText(container, "Current reviewer is not your active agent.");
-    expect(buttonByText(container, "Save")?.disabled).toBe(true);
+    expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
 
-    await click(inputByLabel(container, "Enabled"));
-    await click(buttonByText(container, "Save"));
+    // Turning it off from the warning state persists disabled/null at once.
+    await click(reviewerSwitch(container));
     expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
       contextReviewer: { enabled: false, agentUuid: null },
     });
