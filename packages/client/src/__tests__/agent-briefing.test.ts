@@ -470,18 +470,22 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("persistent state");
   });
 
-  it("emits the Worktrees block (read + write worktree convention) regardless of source repos presence", () => {
+  it("emits the Worktrees block (one read+write worktree per task) regardless of source repos presence", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("## Worktrees");
     expect(briefing).toContain("No worktrees are pre-created");
     // Bare-clone worktree commands run against the clone with `git -C <source>`.
     expect(briefing).toContain("worktree add");
-    // Bare-clone model: both a read worktree and a task (write) worktree are
-    // documented. Only `<name>` / `<task-name>` / `<new-branch>` are literal
-    // placeholders; the home prefix is interpolated.
-    expect(briefing).toContain(`${AGENT_HOME}/worktrees/<name>-read`);
+    // Unified model: ONE worktree per task, used for read AND write. Only
+    // `<task-name>` / `<new-branch>` are literal placeholders; the home
+    // prefix is interpolated.
+    expect(briefing).toContain("One worktree per task");
     expect(briefing).toContain(`${AGENT_HOME}/worktrees/<task-name>`);
     expect(briefing).toContain("worktree remove");
+    // The separate ephemeral "read worktree" is gone — no `-read` path and
+    // no read-vs-task split.
+    expect(briefing).not.toContain(`${AGENT_HOME}/worktrees/<name>-read`);
+    expect(briefing).not.toContain("Task (write) worktree");
     // No literal `<placeholder>` for the home prefix — LLMs sometimes copy
     // those verbatim.
     expect(briefing).not.toContain("<agent-home>/worktrees/");
