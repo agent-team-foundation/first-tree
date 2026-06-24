@@ -3,15 +3,14 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { ConflictError } from "../../errors.js";
 import { requireOrgAdmin } from "../../scope/require-org.js";
 import {
-  createOrganizationRepo,
-  createRepoFileWithToken,
-  GithubAppApiError,
-  getRepoFileWithToken,
-  getRepository,
-} from "../../services/github-app.js";
-import { findInstallationByOrg, type InstallationRow } from "../../services/github-app-installations.js";
+  ContextTreeRepoProvisionError,
+  ensureInstallationOwnedContextTreeRepo,
+} from "../../services/context-tree-repo-provisioner.js";
+import { createRepoFileWithToken, GithubAppApiError, getRepoFileWithToken } from "../../services/github-app.js";
+import { findInstallationByOrg } from "../../services/github-app-installations.js";
 import { mintContextTreeInstallationToken } from "../../services/github-app-token.js";
 import type { GithubCreatedRepo } from "../../services/github-oauth.js";
+import { GithubUserTokenError, getFreshGithubUserToken } from "../../services/github-user-token.js";
 import { getOrgContextTree, putOrgSetting } from "../../services/org-settings.js";
 import { getOrganization } from "../../services/organization.js";
 
@@ -59,12 +58,6 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
         code: "no_installation",
       });
     }
-    if (installation.accountType !== "Organization") {
-      return reply.status(409).send({
-        error: "One-click Context Tree initialization requires a GitHub organization installation.",
-        code: "organization_installation_required",
-      });
-    }
     if (!hasInitializationPermissions(mint.permissions)) {
       return reply.status(403).send({
         error:
@@ -88,28 +81,45 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
       "context tree initialize: creating or adopting github repo",
     );
 
+    const refreshConfig = app.config.oauth?.githubApp;
     let repo: GithubCreatedRepo;
     try {
-      repo = await createOrAdoptContextTreeRepo({
-        installationToken: mint.token,
+      repo = await ensureInstallationOwnedContextTreeRepo({
         installation,
+        installationToken: mint.token,
         repoName,
         teamName,
+        getUserToken: () =>
+          getFreshGithubUserToken(app.db, scope.userId, app.config.secrets.encryptionKey, refreshConfig),
       });
     } catch (err) {
-      if (err instanceof ContextTreeInitializeError) {
+      if (err instanceof ContextTreeRepoProvisionError) {
         app.log.warn(
           {
             err,
             organizationId: scope.organizationId,
             installationId: installation.installationId,
             githubAccount: installation.accountLogin,
+            accountType: installation.accountType,
             repoName,
             code: err.code,
           },
-          "context tree initialize: create or adopt github repo failed",
+          "context tree initialize: provision repo failed",
         );
         return reply.status(err.statusCode).send({ error: err.message, code: err.code });
+      }
+      if (err instanceof GithubUserTokenError) {
+        app.log.warn(
+          {
+            err: err.cause ?? err,
+            organizationId: scope.organizationId,
+            userId: scope.userId,
+            installationId: installation.installationId,
+            githubAccount: installation.accountLogin,
+          },
+          "context tree initialize: github user token unavailable",
+        );
+        return reply.status(err.statusCode).send({ error: err.message, code: "github_user_token_required" });
       }
       app.log.warn(
         {
@@ -119,7 +129,7 @@ export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> 
           githubAccount: installation.accountLogin,
           repoName,
         },
-        "context tree initialize: create or adopt github repo failed",
+        "context tree initialize: provision repo failed",
       );
       throw err;
     }
@@ -271,61 +281,6 @@ function hasInitializationPermissions(permissions: Record<string, "read" | "writ
   return (
     permissions.administration === "write" && permissions.contents === "write" && permissions.workflows === "write"
   );
-}
-
-async function createOrAdoptContextTreeRepo(input: {
-  installationToken: string;
-  installation: InstallationRow;
-  repoName: string;
-  teamName: string;
-}): Promise<GithubCreatedRepo> {
-  try {
-    const created = await createOrganizationRepo(input.installationToken, {
-      org: input.installation.accountLogin,
-      name: input.repoName,
-      private: true,
-      description: `${input.teamName} Context Tree`,
-    });
-    return await verifyCreatedRepository(input.installationToken, created.ownerLogin, created.name);
-  } catch (err) {
-    if (err instanceof GithubAppApiError && err.status === 422) {
-      return await adoptExistingRepository(input.installationToken, input.installation.accountLogin, input.repoName);
-    }
-    if (err instanceof GithubAppApiError && isRepoAccessError(err)) {
-      throw repoUnavailableError(input.installation.accountLogin, input.repoName);
-    }
-    throw mapUpstreamError(err, "Couldn't create the GitHub repo. Try again in a moment.");
-  }
-}
-
-async function verifyCreatedRepository(
-  installationToken: string,
-  owner: string,
-  repoName: string,
-): Promise<GithubCreatedRepo> {
-  try {
-    return await getRepository(installationToken, owner, repoName);
-  } catch (err) {
-    if (err instanceof GithubAppApiError && isRepoAccessError(err)) {
-      throw repoUnavailableError(owner, repoName);
-    }
-    throw mapUpstreamError(err, "Couldn't verify the created GitHub repo. Try again in a moment.");
-  }
-}
-
-async function adoptExistingRepository(
-  installationToken: string,
-  owner: string,
-  repoName: string,
-): Promise<GithubCreatedRepo> {
-  try {
-    return await getRepository(installationToken, owner, repoName);
-  } catch (err) {
-    if (err instanceof GithubAppApiError && isRepoAccessError(err)) {
-      throw repoUnavailableError(owner, repoName);
-    }
-    throw mapUpstreamError(err, "Couldn't verify the existing GitHub repo. Try again in a moment.");
-  }
 }
 
 async function ensureRepoFile(

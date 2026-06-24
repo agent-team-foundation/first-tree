@@ -406,8 +406,12 @@ export const COPY = {
    * that code; an unmapped code falls back to the generic chat-failed message.
    */
   provisionErrors: {
-    organization_installation_required:
-      "First Tree is connected to a personal GitHub account, but a team Context Tree needs a GitHub organization. Connect First Tree to an org, then try again.",
+    context_tree_repo_access_required:
+      "First Tree's GitHub App can't access your team's Context Tree repo yet. Grant the App access to the repo on GitHub, then try again.",
+    context_tree_repo_account_mismatch:
+      "Your Context Tree repo must be created by the GitHub account that installed First Tree. Sign in as that account, or install First Tree on a GitHub organization.",
+    github_user_token_required:
+      "First Tree needs access to your GitHub account to create your team's Context Tree repo. Reconnect GitHub, then try again.",
     installation_permissions_insufficient:
       "First Tree's GitHub App is missing permissions it needs to create your team's tree. Update its access on GitHub, then try again.",
     no_installation: "GitHub isn't connected for your team yet. Connect it first, then try again.",

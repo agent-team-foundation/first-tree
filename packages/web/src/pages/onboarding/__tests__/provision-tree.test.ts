@@ -51,8 +51,10 @@ describe("provisionNewTree", () => {
     await expect(provisionNewTree("org-1")).resolves.toBeUndefined();
   });
 
-  it("re-throws a 409 when no tree was created (e.g. org installation required)", async () => {
-    mocks.initializeContextTree.mockRejectedValue(new ApiError(409, "requires a GitHub organization installation"));
+  it("re-throws a 409 when no tree was created (e.g. repo access required)", async () => {
+    mocks.initializeContextTree.mockRejectedValue(
+      new ApiError(409, "repo access required", undefined, "context_tree_repo_access_required"),
+    );
     mocks.getContextTreeSetting.mockResolvedValue({ repo: null, branch: null });
     await expect(provisionNewTree("org-1")).rejects.toBeInstanceOf(ApiError);
   });
@@ -134,15 +136,19 @@ describe("repoLabel", () => {
 describe("kickoffErrorMessage", () => {
   it("maps a known provisioning code to a plain message (not the raw server string)", () => {
     const msg = kickoffErrorMessage(
-      new ApiError(409, "administration: write and contents: write", undefined, "organization_installation_required"),
+      new ApiError(409, "GitHub repo octocat/team-context-tree exists", undefined, "context_tree_repo_access_required"),
       "fallback",
     );
-    expect(msg).toMatch(/GitHub organization/);
-    expect(msg).not.toMatch(/administration: write/);
+    expect(msg).toMatch(/Grant the App access/i);
+    expect(msg).not.toMatch(/octocat\/team-context-tree/);
     // repo_unavailable (repo create/access denied by the App installation) is mapped too.
     expect(kickoffErrorMessage(new ApiError(409, "not accessible", undefined, "repo_unavailable"), "fallback")).toMatch(
       /couldn't create or access/,
     );
+    // A missing/expired GitHub user token maps to a "reconnect GitHub" message.
+    expect(
+      kickoffErrorMessage(new ApiError(503, "token", undefined, "github_user_token_required"), "fallback"),
+    ).toMatch(/Reconnect GitHub/);
   });
   it("falls back for an ApiError with an unknown / missing code (never leaks the server string)", () => {
     expect(kickoffErrorMessage(new ApiError(500, "internal detail"), "fallback")).toBe("fallback");
