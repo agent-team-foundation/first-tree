@@ -203,7 +203,7 @@ async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAu
     }
   };
 
-  deps.log("•", `runtime-auth: starting claude login (method=browser, ref ${command.ref})`);
+  deps.log("•", `runtime-auth: starting claude auth login (method=browser, ref ${command.ref})`);
 
   const invocation = resolveLogin();
   if (!invocation.ok) {
@@ -228,7 +228,7 @@ async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAu
       onAuthUrl: (url) => void setPending(url),
     });
   } catch (err) {
-    deps.log("⚠️", `runtime-auth: claude login threw: ${message(err)}`);
+    deps.log("⚠️", `runtime-auth: claude auth login threw: ${message(err)}`);
     await reflect("after login threw", { reason: "spawn-error", message: message(err) });
     return;
   }

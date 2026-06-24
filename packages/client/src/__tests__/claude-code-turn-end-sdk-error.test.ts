@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionEvent } from "@first-tree/shared";
+import { parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
@@ -105,16 +105,28 @@ describe("claude-code handler — turn_end on SDK-reported subtype error", () =>
     await handler.suspend();
     await new Promise((r) => setImmediate(r));
 
-    // Success path was NOT taken.
-    expect(sendMessage).not.toHaveBeenCalled();
+    // Success path was NOT taken; the only chat write is an explicit runtime
+    // notice, not final-text forwarding.
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      source: "api",
+      format: "text",
+      purpose: "agent-final-text",
+    });
+    expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("exceeded max turns");
 
     // Error event carries the SDK-reported cause.
     const errors = emitted.filter((e) => e.kind === "error");
-    expect(errors).toHaveLength(1);
-    const err = errors[0];
-    if (!err || err.kind !== "error") throw new Error("expected error event");
-    expect(err.payload.source).toBe("sdk");
-    expect(err.payload.message).toContain("exceeded max turns");
+    expect(errors).toHaveLength(2);
+    const providerPayload = parseProviderRetryEventMessage(errors[0]?.payload.message ?? "");
+    expect(providerPayload).toMatchObject({
+      event: "provider_failure_terminal",
+      provider: "claude-code",
+      scope: "provider_turn",
+    });
+    const sdkErr = errors.find((event) => event.payload.source === "sdk");
+    if (!sdkErr || sdkErr.kind !== "error") throw new Error("expected sdk error event");
+    expect(sdkErr.payload.message).toContain("exceeded max turns");
 
     // turn_end:error closes the turn — and comes AFTER the error event.
     const turnEnds = emitted.filter((e) => e.kind === "turn_end");
@@ -123,7 +135,7 @@ describe("claude-code handler — turn_end on SDK-reported subtype error", () =>
     if (!te || te.kind !== "turn_end") throw new Error("expected turn_end event");
     expect(te.payload.status).toBe("error");
 
-    const errIdx = emitted.findIndex((e) => e.kind === "error");
+    const errIdx = emitted.findIndex((e) => e.kind === "error" && e.payload.source === "sdk");
     const turnEndIdx = emitted.findIndex((e) => e.kind === "turn_end");
     expect(errIdx).toBeLessThan(turnEndIdx);
   });

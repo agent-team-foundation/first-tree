@@ -64,6 +64,15 @@ export function classifyProviderFailure(
   const retryAfterMs = readRetryAfterMs(shape);
   const status = shape.status ?? shape.statusCode;
 
+  if (isBillingLimit(text)) {
+    return {
+      category: "provider_capacity",
+      reasonCode: "provider_billing_limit",
+      message: base.message,
+      retryAfterMs,
+      sourceKind: base.kind,
+    };
+  }
   if (isCredential(text, base, status)) {
     return {
       category: "credential",
@@ -227,6 +236,9 @@ function decideProviderTurnCapacity(
   retryAfterMs: number | undefined,
   replaySafety: ReplaySafety,
 ): ProviderRetryDecision {
+  if (reasonCode === "provider_billing_limit") {
+    return stop(reasonCode, "capacity_wait_required", replaySafety, "error");
+  }
   if (replaySafety === "pre_provider") {
     return decideProviderTurnTransient(reasonCode, attempt, replaySafety);
   }
@@ -392,7 +404,9 @@ function isCredential(text: string, base: Classification, status: number | undef
     base.reasonCode.includes("auth") ||
     base.reasonCode.includes("unauthorized") ||
     AUTH_HTTP_CODE_RE.test(text) ||
-    /unauthorized|forbidden|invalid api key|invalid_api_key|authentication|login required|not authenticated/.test(text)
+    /unauthorized|forbidden|invalid api key|invalid_api_key|authentication|login required|not authenticated|oauth_org_not_allowed/.test(
+      text,
+    )
   );
 }
 
@@ -407,7 +421,7 @@ function isCapability(text: string, base: Classification): boolean {
 function isConfiguration(text: string, base: Classification): boolean {
   return (
     base.reasonCode.includes("mismatch") ||
-    /provider mismatch|runtime_provider_mismatch|bad config|sandbox|approval/.test(text)
+    /provider mismatch|runtime_provider_mismatch|bad config|sandbox|approval|model_not_found|model not found/.test(text)
   );
 }
 
@@ -418,7 +432,9 @@ function configurationReason(base: Classification): string {
 function isDeterministicInput(text: string, base: Classification): boolean {
   return (
     base.reasonCode.includes("context") ||
-    /context length|context_length|context window|invalid request|bad request/.test(text) ||
+    /context length|context_length|context window|invalid request|invalid_request|bad request|max_output_tokens|error_max_turns|exceeded max turns|error_max_budget_usd|error_max_structured_output_retries/.test(
+      text,
+    ) ||
     (text.includes("ran out of room") && text.includes("context"))
   );
 }
@@ -438,7 +454,9 @@ function isCapacity(text: string, base: Classification, retryAfterMs: number | u
 function isTransportText(text: string): boolean {
   return (
     TRANSIENT_HTTP_CODE_RE.test(text) ||
-    /server error|unavailable|timed out|timeout|fetch failed|network|econnreset|econnrefused|etimedout|epipe/.test(text)
+    /server error|server_error|unavailable|timed out|timeout|fetch failed|network|econnreset|econnrefused|etimedout|epipe/.test(
+      text,
+    )
   );
 }
 
@@ -447,6 +465,13 @@ function capacityReason(text: string, base: Classification): string {
   if (/overloaded|capacity/.test(text)) return "provider_overloaded";
   if (/rate.?limit/.test(text) || base.reasonCode.includes("rate_limit")) return "provider_rate_limited";
   return base.reasonCode === "unknown" ? "provider_capacity" : base.reasonCode;
+}
+
+function isBillingLimit(text: string): boolean {
+  return (
+    /billing_error|insufficient account balance|credit balance is too low|credits_required|out_of_credits/.test(text) ||
+    (text.includes("billing") && text.includes("credit"))
+  );
 }
 
 function transientReason(base: Classification, provider: RuntimeProvider): string {

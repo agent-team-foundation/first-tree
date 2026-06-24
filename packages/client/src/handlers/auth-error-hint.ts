@@ -71,8 +71,8 @@ export function formatAuthHint(runtime: Runtime, originalMessage: string): strin
   // packages/web/src/pages/clients/cards/shared/providers.ts so the in-chat
   // hint matches what the Setup-incomplete card already prints. Keeping them
   // textually identical is intentional — if the provider's canonical command
-  // ever changes (e.g. `claude auth login`), update both call sites together.
-  const reauth = runtime === "codex" ? "`codex login`" : "`claude login`";
+  // ever changes, update both call sites together.
+  const reauth = runtime === "codex" ? "`codex login`" : "`claude auth login`";
   const provider = runtime === "codex" ? "OpenAI" : "Anthropic";
   // Cap the appended raw message so an upstream stack-trace envelope (codex
   // wraps its `event.error.message` in surprising ways) doesn't bloat the

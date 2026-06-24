@@ -65,14 +65,14 @@ export const PROVIDER_NPM_PACKAGE: Record<RuntimeProvider, string> = {
 
 /**
  * Per-runtime login command shown after install. Codex prints
- * `codex login`; Claude Code prints `claude login`. Both accept
+ * `codex login`; Claude Code prints `claude auth login`. Both accept
  * `--api-key` flavored alternatives the user discovers on the install
  * step's stdout — the card surfaces the OAuth form by default since
  * it's the documented happy path.
  */
 export const PROVIDER_LOGIN_COMMAND: Record<RuntimeProvider, string> = {
-  "claude-code": "claude login",
-  "claude-code-tui": "claude login",
+  "claude-code": "claude auth login",
+  "claude-code-tui": "claude auth login",
   codex: "codex login",
 };
 

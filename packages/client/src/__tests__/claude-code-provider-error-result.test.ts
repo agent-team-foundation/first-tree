@@ -1,0 +1,339 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+const BILLING_RESULT = "Failed to authenticate. API Error: 403 Insufficient account balance.";
+const TRANSIENT_RESULT =
+  "API Error: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()";
+const mockState = vi.hoisted(() => ({
+  nextMessages: [] as unknown[],
+  queryCalls: 0,
+  observedInputMessages: [] as Array<{ attempt: number; content: string }>,
+}));
+
+vi.mock("@anthropic-ai/claude-agent-sdk", () => {
+  const drainPrompt = async (prompt: AsyncIterable<{ message?: { content?: unknown } }>, attempt: number) => {
+    let drained = 0;
+    for await (const sdkMsg of prompt) {
+      const content = sdkMsg.message?.content;
+      mockState.observedInputMessages.push({
+        attempt,
+        content: typeof content === "string" ? content : JSON.stringify(content),
+      });
+      drained += 1;
+      if (drained >= 1) break;
+    }
+  };
+  return {
+    query: (args: { prompt: AsyncIterable<{ message?: { content?: unknown } }> }) => {
+      mockState.queryCalls += 1;
+      const attempt = mockState.queryCalls;
+      const messages = mockState.nextMessages.slice();
+      void drainPrompt(args.prompt, attempt);
+      return {
+        [Symbol.asyncIterator]() {
+          let idx = 0;
+          return {
+            next: async () => {
+              if (idx < messages.length) {
+                const value = messages[idx];
+                idx += 1;
+                return { done: false, value };
+              }
+              return { done: true, value: undefined };
+            },
+          };
+        },
+        close: () => {},
+        setModel: async () => {},
+      };
+    },
+  };
+});
+
+import { createClaudeCodeHandler } from "../handlers/claude-code.js";
+import { createAgentConfigCache } from "../runtime/agent-config-cache.js";
+import type { SessionContext, TurnOutcome } from "../runtime/handler.js";
+import { mockCtxPlumbing } from "./test-helpers.js";
+
+const AGENT_ID = "019ef431-0000-7000-9000-000000000002";
+
+let workspaceRoot: string;
+
+beforeAll(() => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), "ftt-claude-provider-error-"));
+});
+
+afterAll(() => {
+  rmSync(workspaceRoot, { recursive: true, force: true });
+});
+
+function buildCache() {
+  const stubSdk = {
+    fetchAgentConfig: async () => ({
+      agentId: AGENT_ID,
+      version: 1,
+      payload: { prompt: { append: "" }, model: "", mcpServers: [], env: [], gitRepos: [] },
+      updatedAt: new Date().toISOString(),
+      updatedBy: "test",
+    }),
+  } as unknown as Parameters<typeof createAgentConfigCache>[0]["sdk"];
+  return createAgentConfigCache({ sdk: stubSdk });
+}
+
+async function runSingleResultTurn() {
+  mockState.queryCalls = 0;
+  mockState.observedInputMessages.length = 0;
+  const sendMessage = vi.fn().mockResolvedValue(undefined);
+  const forwardResult = vi.fn<SessionContext["forwardResult"]>().mockResolvedValue(undefined);
+  const emitted: SessionEvent[] = [];
+  const completed: Array<{ count: number; outcome: TurnOutcome }> = [];
+  const logs: string[] = [];
+
+  const cache = buildCache();
+  await cache.refresh(AGENT_ID);
+
+  const handler = createClaudeCodeHandler({ workspaceRoot, agentConfigCache: cache });
+  const ctx: SessionContext = {
+    agent: {
+      agentId: AGENT_ID,
+      inboxId: "inbox-test",
+      displayName: "test",
+      type: "agent",
+      visibility: "organization",
+      delegateMention: null,
+      metadata: {},
+    },
+    sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
+    chatId: "chat-claude-provider-error",
+    log: (m) => logs.push(m),
+    recordProviderActivity: () => {},
+    emitEvent: (e) => emitted.push(e),
+    ...mockCtxPlumbing({ sendMessage }, "chat-claude-provider-error"),
+    forwardResult,
+    finishTurn: async (messages, outcome) => {
+      completed.push({ count: Array.isArray(messages) ? messages.length : 1, outcome });
+    },
+  };
+
+  await handler.start(
+    {
+      id: "m1",
+      chatId: "chat-claude-provider-error",
+      senderId: "user-1",
+      format: "text",
+      content: "hello",
+      metadata: null,
+    },
+    ctx,
+  );
+  await handler.suspend();
+  await new Promise((r) => setImmediate(r));
+
+  return { sendMessage, forwardResult, emitted, completed, logs };
+}
+
+describe("claude-code handler — structured provider error result", () => {
+  it("posts a runtime notice and consumes a billing failure instead of forwarding final text", async () => {
+    mockState.nextMessages = [
+      {
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        api_error_status: 403,
+        result: BILLING_RESULT,
+      },
+    ];
+    const { sendMessage, forwardResult, emitted, completed, logs } = await runSingleResultTurn();
+
+    expect(forwardResult).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
+      source: "api",
+      format: "text",
+      purpose: "agent-final-text",
+    });
+    expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("insufficient account balance");
+    expect(logs.some((line) => line.includes("Claude SDK provider failure"))).toBe(true);
+
+    const providerPayloads = emitted
+      .filter((event) => event.kind === "error")
+      .map((event) => parseProviderRetryEventMessage(event.payload.message))
+      .filter((payload) => payload !== null);
+    expect(providerPayloads).toHaveLength(1);
+    expect(providerPayloads[0]).toMatchObject({
+      event: "provider_failure_terminal",
+      provider: "claude-code",
+      scope: "provider_turn",
+      category: "provider_capacity",
+      reasonCode: "provider_billing_limit",
+      userSeverity: "error",
+    });
+
+    expect(
+      emitted.some(
+        (event) =>
+          event.kind === "error" &&
+          event.payload.source === "sdk" &&
+          event.payload.message.includes("provider_billing_limit"),
+      ),
+    ).toBe(true);
+    expect(emitted.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);
+    expect(completed).toEqual([
+      {
+        count: 1,
+        outcome: {
+          status: "error",
+          terminal: true,
+          completion: "consumed",
+          reason: "provider_billing_limit",
+        },
+      },
+    ]);
+  });
+
+  it("keeps structured auth failures as credential failures with a relogin notice", async () => {
+    mockState.nextMessages = [
+      {
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        api_error_status: 401,
+        result: "authentication_failed",
+      },
+    ];
+    const { sendMessage, forwardResult, emitted, completed } = await runSingleResultTurn();
+
+    expect(forwardResult).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("`claude auth login`");
+
+    const providerPayloads = emitted
+      .filter((event) => event.kind === "error")
+      .map((event) => parseProviderRetryEventMessage(event.payload.message))
+      .filter((payload) => payload !== null);
+    expect(providerPayloads[0]).toMatchObject({
+      event: "provider_failure_terminal",
+      provider: "claude-code",
+      scope: "provider_turn",
+      category: "credential",
+      reasonCode: "provider_credential_required",
+      userSeverity: "error",
+    });
+    expect(completed[0]?.outcome).toMatchObject({
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_credential_required",
+    });
+  });
+
+  it("does not replay a transient structured failure after assistant text was emitted", async () => {
+    mockState.nextMessages = [
+      {
+        type: "assistant",
+        message: {
+          content: [{ type: "text", text: "I started working on this." }],
+        },
+      },
+      {
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        api_error_status: 503,
+        result: TRANSIENT_RESULT,
+      },
+    ];
+    const { sendMessage, forwardResult, emitted, completed } = await runSingleResultTurn();
+
+    expect(mockState.queryCalls).toBe(1);
+    expect(forwardResult).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(emitted.some((event) => event.kind === "assistant_text")).toBe(true);
+
+    const providerPayloads = emitted
+      .filter((event) => event.kind === "error")
+      .map((event) => parseProviderRetryEventMessage(event.payload.message))
+      .filter((payload) => payload !== null);
+    expect(providerPayloads[0]).toMatchObject({
+      event: "provider_failure_terminal",
+      provider: "claude-code",
+      scope: "provider_turn",
+      category: "transient_transport",
+      reasonCode: "unsafe_replay",
+      replaySafety: "user_visible",
+    });
+    expect(completed[0]?.outcome).toMatchObject({
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "unsafe_replay",
+    });
+  });
+
+  it("keeps assistant billing_error as the primary classification for a generic 403 result", async () => {
+    mockState.nextMessages = [
+      {
+        type: "assistant",
+        error: "billing_error",
+      },
+      {
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        api_error_status: 403,
+        result: "Failed to authenticate.",
+      },
+    ];
+    const { sendMessage, forwardResult, emitted, completed } = await runSingleResultTurn();
+
+    expect(forwardResult).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const notice = String(sendMessage.mock.calls[0]?.[1].content);
+    expect(notice).toContain("insufficient account balance");
+    expect(notice).not.toContain("`claude auth login`");
+
+    const providerPayloads = emitted
+      .filter((event) => event.kind === "error")
+      .map((event) => parseProviderRetryEventMessage(event.payload.message))
+      .filter((payload) => payload !== null);
+    expect(providerPayloads[0]).toMatchObject({
+      event: "provider_failure_terminal",
+      provider: "claude-code",
+      scope: "provider_turn",
+      category: "provider_capacity",
+      reasonCode: "provider_billing_limit",
+      userSeverity: "error",
+    });
+    expect(completed[0]?.outcome).toMatchObject({
+      status: "error",
+      terminal: true,
+      completion: "consumed",
+      reason: "provider_billing_limit",
+    });
+  });
+
+  it("does not sniff ordinary success result text as a provider error", async () => {
+    const resultText = "API Error: 401 Unauthorized is an example the user asked about.";
+    mockState.nextMessages = [
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: resultText,
+      },
+    ];
+    const { sendMessage, forwardResult, emitted } = await runSingleResultTurn();
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(forwardResult).toHaveBeenCalledWith(resultText);
+    expect(
+      emitted
+        .filter((event) => event.kind === "error")
+        .some((event) => parseProviderRetryEventMessage(event.payload.message) !== null),
+    ).toBe(false);
+    expect(emitted.some((event) => event.kind === "turn_end" && event.payload.status === "success")).toBe(true);
+  });
+});
