@@ -1,8 +1,9 @@
 import { access, readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { chatMetadataSchema } from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
-import { render } from "ejs";
+import type * as ejs from "ejs";
 import type { FastifyInstance } from "fastify";
 import { isRecord, readNumber, readString } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
@@ -17,6 +18,10 @@ import { getOrgContextTree, getOrgSetting } from "./org-settings.js";
 import { applyMembershipWrite } from "./participant-mode.js";
 
 const log = createLogger("ContextReviewerPr");
+const require = createRequire(import.meta.url);
+// EJS is published as CommonJS at runtime even though its types expose named
+// exports, so native ESM cannot import `render` directly.
+const ejsRuntime: typeof ejs = require("ejs");
 const TEMPLATE_CANDIDATE_URLS = [
   // Built tsdown chunks live directly under `dist/`; copied assets live in
   // `dist/prompts/`.
@@ -64,7 +69,7 @@ let templateCache: Promise<string> | null = null;
 
 export async function renderContextReviewerPrPrompt(input: ContextReviewerPrTemplateInput): Promise<string> {
   const template = await readTemplate();
-  return render(template, input, { filename: fileURLToPath(await resolveTemplateUrl()) }).trim();
+  return ejsRuntime.render(template, input, { filename: fileURLToPath(await resolveTemplateUrl()) }).trim();
 }
 
 async function readTemplate(): Promise<string> {
