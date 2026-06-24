@@ -69,9 +69,54 @@ function validateFileContent(content: unknown): void {
   );
 }
 
-function validateMessageContent(data: SendMessage): void {
+/**
+ * Placeholder sentinels that are never a legitimate whole message body. They
+ * are the residue of a half-built send — e.g. `chat send "$(cat plan.md
+ * 2>/dev/null || echo PLACEHOLDER)"` run before `plan.md` was written, which
+ * fires a real, irreversible message (and for `request`, a blocking human ask)
+ * carrying only the scaffold token. Matched case-insensitively against the
+ * ENTIRE trimmed body, so a message that merely mentions the word is untouched.
+ */
+const PLACEHOLDER_BODY_SENTINELS = new Set(["placeholder", "todo", "fixme", "tbd", "xxx"]);
+
+/**
+ * Guard a string message body before it is persisted and fanned out. A text
+ * body (text / markdown / request — the human-readable formats carry their
+ * content as a string) must be real content: not empty, not whitespace-only,
+ * and not a lone placeholder sentinel. This fails closed at the write boundary
+ * so a half-built send (an empty command substitution, a `|| echo PLACEHOLDER`
+ * fallback) surfaces as an error the caller must fix instead of a meaningless
+ * message — for a `request`, a blocking ask card the target human must skip.
+ */
+function validateTextBody(content: string, isRequest: boolean): void {
+  const trimmed = content.trim();
+  if (trimmed.length === 0) {
+    throw new BadRequestError(
+      isRequest
+        ? "An ask ('request') needs a non-empty body — the question/background IS the message content."
+        : "Message content cannot be empty or whitespace-only.",
+    );
+  }
+  if (PLACEHOLDER_BODY_SENTINELS.has(trimmed.toLowerCase())) {
+    throw new BadRequestError(
+      `Message content is just a placeholder ("${trimmed}") — this is almost always a half-built send ` +
+        "(e.g. a file read that ran before the file was written). Compose the real body, then send.",
+    );
+  }
+}
+
+// Structural param (not `SendMessage`) so the edit path can reuse it against
+// the effective post-edit `{ format, content }`, where `format` is a plain
+// string off the stored row.
+function validateMessageContent(data: { format: string; content: unknown }): void {
   if (data.format === "file") {
     validateFileContent(data.content);
+    return;
+  }
+  // Non-string content (card / reference object shapes) is out of scope here;
+  // only string-bearing bodies are guarded against empty / placeholder sends.
+  if (typeof data.content === "string") {
+    validateTextBody(data.content, data.format === "request");
   }
 }
 
@@ -205,6 +250,16 @@ export function preflightMessageSendIntent(input: {
       );
       effectiveContent = unwrapped;
     }
+  }
+
+  // Re-validate the UNWRAPPED body. `validateMessageContent(data)` above checked
+  // the raw `data.content`, but for a non-human sender a double-encoded string
+  // (e.g. `JSON.stringify("TODO\n")`) only reveals its empty / whitespace /
+  // placeholder body after `maybeUnwrapDoubleEncoded`. `effectiveContent` is
+  // what gets normalized and persisted, so guard it here too — before mention
+  // normalization can salvage an empty body into a bare "@name".
+  if (typeof effectiveContent === "string") {
+    validateTextBody(effectiveContent, data.format === "request");
   }
 
   const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
@@ -798,7 +853,14 @@ export async function editMessage(
 
   const setClause: Record<string, unknown> = {};
   if (data.format !== undefined) setClause.format = data.format;
-  if (data.content !== undefined) setClause.content = data.content;
+  if (data.content !== undefined) {
+    // An edit can replace the body of any message — including an already-open
+    // `format=request` ask whose format is frozen above. Reuse the send-path
+    // guard against the effective post-edit `{ format, content }` so an edit
+    // can't turn a live message into an empty / placeholder blocking card.
+    validateMessageContent({ format: data.format ?? msg.format, content: data.content });
+    setClause.content = data.content;
+  }
 
   // Track edit in metadata
   const meta = (msg.metadata ?? {}) as Record<string, unknown>;
