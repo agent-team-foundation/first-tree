@@ -49,6 +49,14 @@ type FakeRequest = {
   params: unknown;
 };
 
+type TestTokenUsageBreakdown = {
+  totalTokens: number;
+  inputTokens: number;
+  cachedInputTokens: number;
+  outputTokens: number;
+  reasoningOutputTokens: number;
+};
+
 type NotificationHandler = (notification: { method: string; params?: unknown }) => void;
 type CloseHandler = (error: CodexAppServerTransportError) => void;
 
@@ -61,6 +69,8 @@ class FakeAppServerClient {
   steerError: Error | null = null;
   turnStartError: Error | null = null;
   beforeTurnStartError: (() => void) | null = null;
+  beforeTurnStartReturn: (() => void) | null = null;
+  beforeThreadResumeReturn: (() => void) | null = null;
   threadStartDeferred: { promise: Promise<unknown>; resolve: (value: unknown) => void } | null = null;
   steerDeferred: {
     promise: Promise<unknown>;
@@ -68,6 +78,7 @@ class FakeAppServerClient {
     reject: (error: Error) => void;
   } | null = null;
   turnCounter = 0;
+  tokenUsageTotal = emptyTestTokenUsage();
 
   async request(method: string, params?: unknown): Promise<unknown> {
     this.requests.push({ method, params });
@@ -76,6 +87,7 @@ class FakeAppServerClient {
       return { thread: { id: "thread-app-server" } };
     }
     if (method === "thread/resume") {
+      this.beforeThreadResumeReturn?.();
       return { thread: { id: "thread-app-server" } };
     }
     if (method === "turn/start") {
@@ -83,6 +95,7 @@ class FakeAppServerClient {
         this.beforeTurnStartError?.();
         throw this.turnStartError;
       }
+      this.beforeTurnStartReturn?.();
       this.turnCounter += 1;
       return {
         turn: {
@@ -283,27 +296,65 @@ async function flushAsync(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-function completeTurn(fake: FakeAppServerClient, turnId: string, text: string): void {
+function emptyTestTokenUsage(): TestTokenUsageBreakdown {
+  return {
+    totalTokens: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+  };
+}
+
+function addTestTokenUsage(left: TestTokenUsageBreakdown, right: TestTokenUsageBreakdown): TestTokenUsageBreakdown {
+  return {
+    totalTokens: left.totalTokens + right.totalTokens,
+    inputTokens: left.inputTokens + right.inputTokens,
+    cachedInputTokens: left.cachedInputTokens + right.cachedInputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    reasoningOutputTokens: left.reasoningOutputTokens + right.reasoningOutputTokens,
+  };
+}
+
+function emitTokenUsage(
+  fake: FakeAppServerClient,
+  turnId: string,
+  last: TestTokenUsageBreakdown,
+  total: TestTokenUsageBreakdown = addTestTokenUsage(fake.tokenUsageTotal, last),
+): void {
+  fake.tokenUsageTotal = { ...total };
   fake.emit("thread/tokenUsage/updated", {
     threadId: "thread-app-server",
     turnId,
     tokenUsage: {
-      last: {
-        totalTokens: 3,
-        inputTokens: 2,
-        cachedInputTokens: 0,
-        outputTokens: 1,
-        reasoningOutputTokens: 0,
-      },
-      total: {
-        totalTokens: 3,
-        inputTokens: 2,
-        cachedInputTokens: 0,
-        outputTokens: 1,
-        reasoningOutputTokens: 0,
-      },
+      last,
+      total,
       modelContextWindow: null,
     },
+  });
+}
+
+function findTokenUsageEvent(
+  emitEvent: ReturnType<typeof vi.fn<(event: SessionEvent) => void>>,
+): Extract<SessionEvent, { kind: "token_usage" }> | undefined {
+  return tokenUsageEvents(emitEvent)[0];
+}
+
+function tokenUsageEvents(
+  emitEvent: ReturnType<typeof vi.fn<(event: SessionEvent) => void>>,
+): Extract<SessionEvent, { kind: "token_usage" }>[] {
+  return emitEvent.mock.calls
+    .map(([event]) => event)
+    .filter((event): event is Extract<SessionEvent, { kind: "token_usage" }> => event.kind === "token_usage");
+}
+
+function completeTurn(fake: FakeAppServerClient, turnId: string, text: string): void {
+  emitTokenUsage(fake, turnId, {
+    totalTokens: 3,
+    inputTokens: 2,
+    cachedInputTokens: 0,
+    outputTokens: 1,
+    reasoningOutputTokens: 0,
   });
   fake.emit("item/completed", {
     threadId: "thread-app-server",
@@ -396,6 +447,285 @@ describe("codex app-server handler", () => {
 
     expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1", "m2"]]);
     expect(emitEvent.mock.calls.some(([event]) => event.kind === "token_usage")).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  it("emits one token usage event from the cumulative total delta across app-server updates", async () => {
+    const fake = new FakeAppServerClient();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ emitEvent });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    emitTokenUsage(fake, "turn-1", {
+      totalTokens: 125,
+      inputTokens: 100,
+      cachedInputTokens: 20,
+      outputTokens: 5,
+      reasoningOutputTokens: 0,
+    });
+    emitTokenUsage(fake, "turn-1", {
+      totalTokens: 77,
+      inputTokens: 60,
+      cachedInputTokens: 10,
+      outputTokens: 7,
+      reasoningOutputTokens: 0,
+    });
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-1",
+      item: { type: "agentMessage", id: "item-turn-1", text: "final answer", phase: null, memoryCitation: null },
+    });
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        items: [],
+        error: null,
+      },
+    });
+    await startPromise;
+
+    expect(findTokenUsageEvent(emitEvent)?.payload).toMatchObject({
+      provider: "codex",
+      model: "codex-default",
+      inputTokens: 130,
+      cachedInputTokens: 30,
+      outputTokens: 12,
+    });
+
+    await handler.shutdown();
+  });
+
+  it("uses replayed cumulative usage as the resumed thread baseline", async () => {
+    const fake = new FakeAppServerClient();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ emitEvent });
+
+    fake.beforeThreadResumeReturn = () => {
+      emitTokenUsage(fake, "turn-old", {
+        totalTokens: 1050,
+        inputTokens: 1000,
+        cachedInputTokens: 200,
+        outputTokens: 50,
+        reasoningOutputTokens: 0,
+      });
+    };
+
+    const resumePromise = handler.resume(makeMessage("m1", "first"), "thread-app-server", ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    emitTokenUsage(
+      fake,
+      "turn-1",
+      {
+        totalTokens: 25,
+        inputTokens: 20,
+        cachedInputTokens: 0,
+        outputTokens: 5,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 1155,
+        inputTokens: 1100,
+        cachedInputTokens: 220,
+        outputTokens: 55,
+        reasoningOutputTokens: 0,
+      },
+    );
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-1",
+      item: { type: "agentMessage", id: "item-turn-1", text: "resumed answer", phase: null, memoryCitation: null },
+    });
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        items: [],
+        error: null,
+      },
+    });
+    await resumePromise;
+
+    expect(findTokenUsageEvent(emitEvent)?.payload).toMatchObject({
+      provider: "codex",
+      model: "codex-default",
+      inputTokens: 80,
+      cachedInputTokens: 20,
+      outputTokens: 5,
+    });
+
+    await handler.shutdown();
+  });
+
+  it("uses buffered cumulative usage replayed while turn/start is in flight", async () => {
+    const fake = new FakeAppServerClient();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ emitEvent });
+
+    fake.beforeTurnStartReturn = () => {
+      emitTokenUsage(fake, "turn-old", {
+        totalTokens: 1050,
+        inputTokens: 1000,
+        cachedInputTokens: 200,
+        outputTokens: 50,
+        reasoningOutputTokens: 0,
+      });
+    };
+
+    const resumePromise = handler.resume(makeMessage("m1", "first"), "thread-app-server", ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    emitTokenUsage(
+      fake,
+      "turn-1",
+      {
+        totalTokens: 25,
+        inputTokens: 20,
+        cachedInputTokens: 0,
+        outputTokens: 5,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 1155,
+        inputTokens: 1100,
+        cachedInputTokens: 220,
+        outputTokens: 55,
+        reasoningOutputTokens: 0,
+      },
+    );
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-1",
+      item: {
+        type: "agentMessage",
+        id: "item-turn-1",
+        text: "resumed answer",
+        phase: null,
+        memoryCitation: null,
+      },
+    });
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        items: [],
+        error: null,
+      },
+    });
+    await resumePromise;
+
+    expect(findTokenUsageEvent(emitEvent)?.payload).toMatchObject({
+      provider: "codex",
+      model: "codex-default",
+      inputTokens: 80,
+      cachedInputTokens: 20,
+      outputTokens: 5,
+    });
+
+    await handler.shutdown();
+  });
+
+  it("advances the next baseline when compaction lowers the current turn cumulative total", async () => {
+    const fake = new FakeAppServerClient();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ emitEvent });
+
+    fake.beforeThreadResumeReturn = () => {
+      emitTokenUsage(fake, "turn-old", {
+        totalTokens: 10_000,
+        inputTokens: 9_000,
+        cachedInputTokens: 0,
+        outputTokens: 1_000,
+        reasoningOutputTokens: 0,
+      });
+    };
+
+    const resumePromise = handler.resume(makeMessage("m1", "first"), "thread-app-server", ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    emitTokenUsage(
+      fake,
+      "turn-1",
+      {
+        totalTokens: 100,
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 2_000,
+        inputTokens: 1_800,
+        cachedInputTokens: 0,
+        outputTokens: 200,
+        reasoningOutputTokens: 0,
+      },
+    );
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-1",
+      item: { type: "agentMessage", id: "item-turn-1", text: "first answer", phase: null, memoryCitation: null },
+    });
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        items: [],
+        error: null,
+      },
+    });
+    await resumePromise;
+
+    handler.inject(makeMessage("m2", "second"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === 2);
+
+    emitTokenUsage(fake, "turn-2", {
+      totalTokens: 500,
+      inputTokens: 500,
+      cachedInputTokens: 0,
+      outputTokens: 0,
+      reasoningOutputTokens: 0,
+    });
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-2",
+      item: { type: "agentMessage", id: "item-turn-2", text: "second answer", phase: null, memoryCitation: null },
+    });
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-2",
+        status: "completed",
+        items: [],
+        error: null,
+      },
+    });
+    await waitFor(() => tokenUsageEvents(emitEvent).length === 2);
+
+    expect(tokenUsageEvents(emitEvent).map((event) => event.payload)).toMatchObject([
+      {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+      },
+      {
+        inputTokens: 500,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+      },
+    ]);
 
     await handler.shutdown();
   });
