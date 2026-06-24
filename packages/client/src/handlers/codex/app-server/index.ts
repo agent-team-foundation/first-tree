@@ -174,6 +174,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let pendingChatContextPrompt: string | null = null;
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
   let latestThreadUsageTotal: TokenUsageBreakdown | null = null;
+  let latestCurrentSessionUsageTurnId: string | null = null;
 
   const pendingInputs: QueueEntry[] = [];
   const pendingNotificationsByTurn = new Map<string, CodexAppServerNotification[]>();
@@ -432,13 +433,13 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     const id = extractThreadId(result);
     if (!id) throw new CodexAppServerStartupError("thread-start", "missing thread id");
     threadId = id;
-    latestThreadUsageTotal = emptyTokenUsage();
+    resetThreadUsageTracking(emptyTokenUsage());
     return id;
   }
 
   async function resumeThread(sessionId: string, payload: AgentRuntimeConfigPayload): Promise<void> {
     const client = requireAppServer();
-    latestThreadUsageTotal = null;
+    resetThreadUsageTracking(null);
     try {
       await client.request("thread/resume", {
         threadId: sessionId,
@@ -639,8 +640,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       if (error) recordAppServerFailureSignal(turnStartAttempt, error);
     }
     if (notificationTurnId && (!turn || turn.turnId !== notificationTurnId)) {
-      if (!turnStartInProgress) recordHistoricalTokenUsage(notification);
-      bufferNotification(notificationTurnId, notification);
+      const historicalTokenUsageRecorded = !turnStartInProgress && recordHistoricalTokenUsage(notification);
+      if (!historicalTokenUsageRecorded) bufferNotification(notificationTurnId, notification);
       return;
     }
     applyNotification(notification, sessionCtx, turn);
@@ -747,11 +748,23 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     pendingNotificationsByTurn.set(turnId, list);
   }
 
-  function recordHistoricalTokenUsage(notification: CodexAppServerNotification): void {
-    if (notification.method !== "thread/tokenUsage/updated") return;
+  function recordHistoricalTokenUsage(notification: CodexAppServerNotification): boolean {
+    if (notification.method !== "thread/tokenUsage/updated") return false;
     const params = asRecord(notification.params);
     const usage = parseThreadTokenUsage(asRecord(params?.tokenUsage));
-    if (usage) recordLatestThreadUsageTotal(usage.total);
+    if (!usage) return true;
+
+    const turn = currentTurn;
+    if (turn?.usageLatestTotal) return true;
+    const notificationTurnId = params ? (readString(params, "turnId") ?? readString(params, "turn_id")) : null;
+
+    if (latestCurrentSessionUsageTurnId) {
+      if (notificationTurnId === latestCurrentSessionUsageTurnId) acceptHistoricalTokenUsageTotal(usage.total);
+      return true;
+    }
+
+    acceptHistoricalTokenUsageTotal(usage.total);
+    return true;
   }
 
   function recordBufferedHistoricalTokenUsageExcept(currentTurnId: string): void {
@@ -763,9 +776,29 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   }
 
   function recordCurrentTurnTokenUsage(turn: CurrentTurn, usage: ThreadTokenUsageSnapshot): void {
+    latestCurrentSessionUsageTurnId = turn.turnId;
     turn.usageLatestTotal = cloneTokenUsage(usage.total);
     turn.usageLastSum = addTokenUsage(turn.usageLastSum ?? emptyTokenUsage(), usage.last);
     advanceCurrentThreadUsageTotal(usage.total);
+  }
+
+  function acceptHistoricalTokenUsageTotal(usage: TokenUsageBreakdown): void {
+    if (latestCurrentSessionUsageTurnId) {
+      advanceCurrentThreadUsageTotal(usage);
+    } else {
+      recordLatestThreadUsageTotal(usage);
+    }
+    syncCurrentTurnUsageBaseline();
+  }
+
+  function syncCurrentTurnUsageBaseline(): void {
+    const turn = currentTurn;
+    if (turn && !turn.usageLatestTotal) turn.usageBaselineTotal = cloneTokenUsage(latestThreadUsageTotal);
+  }
+
+  function resetThreadUsageTracking(baseline: TokenUsageBreakdown | null): void {
+    latestThreadUsageTotal = cloneTokenUsage(baseline);
+    latestCurrentSessionUsageTurnId = null;
   }
 
   function recordLatestThreadUsageTotal(usage: TokenUsageBreakdown): void {
@@ -803,7 +836,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     const resumeThreadId = threadId ?? undefined;
     appServer = null;
     threadId = null;
-    latestThreadUsageTotal = null;
+    resetThreadUsageTracking(null);
     pendingNotificationsByTurn.clear();
     sessionCtx.log(
       `codex app-server session closed after unknown input custody (${reason}): ${
@@ -826,7 +859,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     const resumeThreadId = threadId ?? undefined;
     appServer = null;
     threadId = null;
-    latestThreadUsageTotal = null;
+    resetThreadUsageTracking(null);
     pendingNotificationsByTurn.clear();
     sessionCtx.log(`codex app-server session closed after terminal turn/start failure (${reason})`);
     const shutdown = client?.shutdown();
@@ -842,7 +875,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     const resumeThreadId = threadId ?? undefined;
     appServer = null;
     threadId = null;
-    latestThreadUsageTotal = null;
+    resetThreadUsageTracking(null);
     pendingNotificationsByTurn.clear();
     sessionCtx.log(`codex app-server session closed after uncommittable turn prefix (${reason})`);
     const shutdown = client?.shutdown();
@@ -1572,7 +1605,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       await appServer?.shutdown();
       appServer = null;
       pendingChatContextPrompt = null;
-      latestThreadUsageTotal = null;
+      resetThreadUsageTracking(null);
     },
 
     async shutdown() {
@@ -1590,7 +1623,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       threadId = null;
       ctx = null;
       pendingChatContextPrompt = null;
-      latestThreadUsageTotal = null;
+      resetThreadUsageTracking(null);
     },
   } satisfies AgentHandler;
 };

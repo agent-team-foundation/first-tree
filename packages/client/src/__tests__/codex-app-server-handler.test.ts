@@ -635,6 +635,85 @@ describe("codex app-server handler", () => {
     await handler.shutdown();
   });
 
+  it("uses late replayed cumulative usage as the current resumed turn baseline", async () => {
+    const fake = new FakeAppServerClient();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ emitEvent });
+
+    const resumePromise = handler.resume(makeMessage("m1", "first"), "thread-app-server", ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    await flushAsync();
+
+    emitTokenUsage(
+      fake,
+      "turn-old",
+      {
+        totalTokens: 1050,
+        inputTokens: 1000,
+        cachedInputTokens: 200,
+        outputTokens: 50,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 1050,
+        inputTokens: 1000,
+        cachedInputTokens: 200,
+        outputTokens: 50,
+        reasoningOutputTokens: 0,
+      },
+    );
+    emitTokenUsage(
+      fake,
+      "turn-1",
+      {
+        totalTokens: 25,
+        inputTokens: 20,
+        cachedInputTokens: 0,
+        outputTokens: 5,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 1155,
+        inputTokens: 1100,
+        cachedInputTokens: 220,
+        outputTokens: 55,
+        reasoningOutputTokens: 0,
+      },
+    );
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-1",
+      item: {
+        type: "agentMessage",
+        id: "item-turn-1",
+        text: "resumed answer",
+        phase: null,
+        memoryCitation: null,
+      },
+    });
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        items: [],
+        error: null,
+      },
+    });
+    await resumePromise;
+
+    expect(findTokenUsageEvent(emitEvent)?.payload).toMatchObject({
+      provider: "codex",
+      model: "codex-default",
+      inputTokens: 80,
+      cachedInputTokens: 20,
+      outputTokens: 5,
+    });
+
+    await handler.shutdown();
+  });
+
   it("advances the next baseline when compaction lowers the current turn cumulative total", async () => {
     const fake = new FakeAppServerClient();
     const emitEvent = vi.fn<(event: SessionEvent) => void>();
@@ -688,16 +767,46 @@ describe("codex app-server handler", () => {
     });
     await resumePromise;
 
+    emitTokenUsage(
+      fake,
+      "turn-old-stale",
+      {
+        totalTokens: 10_000,
+        inputTokens: 9_000,
+        cachedInputTokens: 0,
+        outputTokens: 1_000,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 10_000,
+        inputTokens: 9_000,
+        cachedInputTokens: 0,
+        outputTokens: 1_000,
+        reasoningOutputTokens: 0,
+      },
+    );
+
     handler.inject(makeMessage("m2", "second"));
     await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === 2);
 
-    emitTokenUsage(fake, "turn-2", {
-      totalTokens: 500,
-      inputTokens: 500,
-      cachedInputTokens: 0,
-      outputTokens: 0,
-      reasoningOutputTokens: 0,
-    });
+    emitTokenUsage(
+      fake,
+      "turn-2",
+      {
+        totalTokens: 500,
+        inputTokens: 500,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 2_500,
+        inputTokens: 2_300,
+        cachedInputTokens: 0,
+        outputTokens: 200,
+        reasoningOutputTokens: 0,
+      },
+    );
     fake.emit("item/completed", {
       threadId: "thread-app-server",
       turnId: "turn-2",
@@ -717,6 +826,177 @@ describe("codex app-server handler", () => {
     expect(tokenUsageEvents(emitEvent).map((event) => event.payload)).toMatchObject([
       {
         inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+      },
+      {
+        inputTokens: 500,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+      },
+    ]);
+
+    await handler.shutdown();
+  });
+
+  it("syncs a waiting turn baseline from late usage on the previous own turn", async () => {
+    const fake = new FakeAppServerClient();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ emitEvent });
+
+    fake.beforeThreadResumeReturn = () => {
+      emitTokenUsage(fake, "turn-old", {
+        totalTokens: 10_000,
+        inputTokens: 9_000,
+        cachedInputTokens: 0,
+        outputTokens: 1_000,
+        reasoningOutputTokens: 0,
+      });
+    };
+
+    const resumePromise = handler.resume(makeMessage("m1", "first"), "thread-app-server", ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    emitTokenUsage(
+      fake,
+      "turn-1",
+      {
+        totalTokens: 100,
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 2_000,
+        inputTokens: 1_800,
+        cachedInputTokens: 0,
+        outputTokens: 200,
+        reasoningOutputTokens: 0,
+      },
+    );
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-1",
+      item: { type: "agentMessage", id: "item-turn-1", text: "first answer", phase: null, memoryCitation: null },
+    });
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: { id: "turn-1", status: "completed", items: [], error: null },
+    });
+    await resumePromise;
+
+    handler.inject(makeMessage("m2", "second"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === 2);
+    await flushAsync();
+
+    emitTokenUsage(
+      fake,
+      "turn-1",
+      {
+        totalTokens: 100,
+        inputTokens: 100,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 2_100,
+        inputTokens: 1_900,
+        cachedInputTokens: 0,
+        outputTokens: 200,
+        reasoningOutputTokens: 0,
+      },
+    );
+    emitTokenUsage(
+      fake,
+      "turn-2",
+      {
+        totalTokens: 500,
+        inputTokens: 500,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 2_600,
+        inputTokens: 2_400,
+        cachedInputTokens: 0,
+        outputTokens: 200,
+        reasoningOutputTokens: 0,
+      },
+    );
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-2",
+      item: { type: "agentMessage", id: "item-turn-2", text: "second answer", phase: null, memoryCitation: null },
+    });
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: { id: "turn-2", status: "completed", items: [], error: null },
+    });
+    await waitFor(() => tokenUsageEvents(emitEvent).length === 2);
+
+    emitTokenUsage(
+      fake,
+      "turn-1",
+      {
+        totalTokens: 10_000,
+        inputTokens: 9_000,
+        cachedInputTokens: 0,
+        outputTokens: 1_000,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 10_000,
+        inputTokens: 9_000,
+        cachedInputTokens: 0,
+        outputTokens: 1_000,
+        reasoningOutputTokens: 0,
+      },
+    );
+
+    handler.inject(makeMessage("m3", "third"));
+    await waitFor(() => fake.requests.filter((request) => request.method === "turn/start").length === 3);
+
+    emitTokenUsage(
+      fake,
+      "turn-3",
+      {
+        totalTokens: 500,
+        inputTokens: 500,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+        reasoningOutputTokens: 0,
+      },
+      {
+        totalTokens: 3_100,
+        inputTokens: 2_900,
+        cachedInputTokens: 0,
+        outputTokens: 200,
+        reasoningOutputTokens: 0,
+      },
+    );
+    fake.emit("item/completed", {
+      threadId: "thread-app-server",
+      turnId: "turn-3",
+      item: { type: "agentMessage", id: "item-turn-3", text: "third answer", phase: null, memoryCitation: null },
+    });
+    fake.emit("turn/completed", {
+      threadId: "thread-app-server",
+      turn: { id: "turn-3", status: "completed", items: [], error: null },
+    });
+    await waitFor(() => tokenUsageEvents(emitEvent).length === 3);
+
+    expect(tokenUsageEvents(emitEvent).map((event) => event.payload)).toMatchObject([
+      {
+        inputTokens: 0,
+        cachedInputTokens: 0,
+        outputTokens: 0,
+      },
+      {
+        inputTokens: 500,
         cachedInputTokens: 0,
         outputTokens: 0,
       },
