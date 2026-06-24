@@ -776,6 +776,27 @@
   }
 }
 
+/* Chat summary floating card: drops in from the bar's lower edge. */
+@keyframes chat-summary-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.chat-summary-card-in {
+  animation: chat-summary-card-in 170ms ease-out;
+  transform-origin: top;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-summary-card-in {
+    animation: none;
+  }
+}
+
 @keyframes context-live-halo-breathe {
   0%,
   100% {
