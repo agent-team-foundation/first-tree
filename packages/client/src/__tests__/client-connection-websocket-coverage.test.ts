@@ -530,6 +530,37 @@ describe("ClientConnection — WebSocket edge coverage", () => {
       reason: "recover_failed",
     });
     await expect(rejected).rejects.toThrow("recover_failed");
+    expect(socket.closeCalls).toHaveLength(0);
+  });
+
+  it("forces a reconnect when an inbox recovery confirmation times out", async () => {
+    vi.useFakeTimers();
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const events: string[] = [];
+    connection.on("reconnecting", () => events.push("reconnecting"));
+    const socket = await openRegisteredConnection(connection, { wsInboxAckConfirm: true });
+
+    const bindPromise = internal.sendBind("agent-1", "codex");
+    const bindFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "agent:bound",
+      ref: bindFrame.ref,
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+    });
+    await bindPromise;
+
+    const recovering = connection.sendInboxRecover("agent-1", "chat-timeout");
+    const rejection = expect(recovering).rejects.toThrow("inbox:recover rejected (timeout)");
+    await vi.advanceTimersByTimeAsync(3000);
+
+    await rejection;
+    expect(socket.closeCalls.at(-1)).toEqual({ code: 1011, reason: "inbox recover timeout" });
+    expect(events).toContain("reconnecting");
+
+    internal.clearTimers();
   });
 
   it("holds agent-scoped confirmed inbox ACKs until that agent is rebound on the current socket", async () => {
