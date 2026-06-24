@@ -7,21 +7,27 @@ import { listTeamResourcesForOrg } from "../api/resources.js";
 import { useAuth } from "../auth/auth-context.js";
 import { Button } from "../components/ui/button.js";
 import { Select } from "../components/ui/select.js";
+import type { TreeBindingPlan } from "./onboarding/onboarding-flow.js";
 import { kickoffErrorMessage } from "./onboarding/provision-tree.js";
 import { ensureKickoffRepos, startTreeSetupKickoff } from "./onboarding/tree-kickoff.js";
 
 /**
- * The team's single "build your Context Tree" action, on the Context tab's
- * empty state. Building is one chat-driven flow: connect code (if needed) →
- * provision the binding → start the `tree` agent chat that seeds it. This
- * replaced the standalone `/build-tree` wizard page — there is one build home,
- * the place an admin first notices they have no tree.
+ * The team's single "build your Context Tree" action, on the Context tab.
+ * Building is one chat-driven flow: connect code (if needed) → provision or
+ * reuse the binding → start the `tree` agent chat that seeds/updates it. This
+ * replaced the standalone `/build-tree` wizard page — there is one build home.
  *
- * Admin-only (the caller gates on role + no binding). It never edits the tree in
- * the tab; it just launches the chat where the agent does, so it does not breach
- * the Context tab's read-only-perception boundary.
+ * Admin-only (the caller gates on role + setup status). It never edits the tree
+ * in the tab; it just launches the chat where the agent does, so it does not
+ * breach the Context tab's read-only-perception boundary.
  */
-export function ContextTreeBuildEntry() {
+export function ContextTreeBuildEntry({
+  treeBindingPlan = "createBinding",
+  detectedTreeUrl = null,
+}: {
+  treeBindingPlan?: TreeBindingPlan;
+  detectedTreeUrl?: string | null;
+}) {
   const { organizationId } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -60,6 +66,7 @@ export function ContextTreeBuildEntry() {
         .filter((u) => u.length > 0),
     [resourcesQuery.data],
   );
+  const usesBoundTree = treeBindingPlan === "useBoundTree";
 
   const loading = agentsQuery.isLoading || resourcesQuery.isLoading;
   const chosenAgent: ManagedAgent | undefined = agents.find((a) => a.uuid === selectedAgentUuid) ?? agents[0];
@@ -69,15 +76,16 @@ export function ContextTreeBuildEntry() {
     setError(null);
     setPhase("building");
     try {
-      // The empty state only shows when there's no binding yet, so this always
-      // creates one (Cloud one-click), then sends the tree kickoff that seeds it.
-      await ensureKickoffRepos(organizationId, repoUrls);
+      // New-tree setup registers selected repos before Cloud one-click creates
+      // the binding; recovery states with an existing binding only need to
+      // resend the idempotent tree kickoff.
+      if (repoUrls.length > 0) await ensureKickoffRepos(organizationId, repoUrls);
       const chatId = await startTreeSetupKickoff({
         agent: chosenAgent,
         organizationId,
         sourceRepos: repoUrls,
-        treeBindingPlan: "createBinding",
-        detectedTreeUrl: null,
+        treeBindingPlan,
+        detectedTreeUrl,
         queryClient,
         complete: true,
       });
@@ -96,8 +104,10 @@ export function ContextTreeBuildEntry() {
     );
   }
 
-  // No code connected → nothing to seed a tree from. Point at where repos live.
-  if (repoUrls.length === 0) {
+  // No code connected and no tree binding → nothing to seed a new tree from.
+  // Recovery with an existing binding can still launch the setup chat so the
+  // agent reads the bound tree and decides seed vs. incremental update there.
+  if (!usesBoundTree && repoUrls.length === 0) {
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
         <span className="text-body" style={{ color: "var(--fg-2)" }}>

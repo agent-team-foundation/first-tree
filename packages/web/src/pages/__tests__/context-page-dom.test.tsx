@@ -23,6 +23,16 @@ const resourceApiMocks = vi.hoisted(() => ({
   listTeamResourcesForOrg: vi.fn(),
 }));
 
+const onboardingEventMocks = vi.hoisted(() => ({
+  getTreeSetupStatus: vi.fn(),
+  kickoffOnboarding: vi.fn(),
+  reportOnboardingEvent: vi.fn(),
+}));
+
+const orgSettingsMocks = vi.hoisted(() => ({
+  getContextTreeSetting: vi.fn(),
+}));
+
 const authMock = vi.hoisted(() => ({
   value: {
     organizationId: "org-1" as string | null,
@@ -33,6 +43,8 @@ const authMock = vi.hoisted(() => ({
 vi.mock("../../api/context-tree.js", () => contextApiMocks);
 vi.mock("../../api/agents.js", () => agentApiMocks);
 vi.mock("../../api/resources.js", () => resourceApiMocks);
+vi.mock("../../api/onboarding-events.js", () => onboardingEventMocks);
+vi.mock("../../api/org-settings.js", () => orgSettingsMocks);
 
 vi.mock("../../auth/auth-context.js", () => ({
   useAuth: () => authMock.value,
@@ -166,8 +178,22 @@ beforeEach(() => {
   contextApiMocks.initializeContextTree.mockReset();
   agentApiMocks.listManagedAgents.mockReset();
   resourceApiMocks.listTeamResourcesForOrg.mockReset();
+  onboardingEventMocks.getTreeSetupStatus.mockReset();
+  onboardingEventMocks.kickoffOnboarding.mockReset();
+  onboardingEventMocks.reportOnboardingEvent.mockReset();
+  orgSettingsMocks.getContextTreeSetting.mockReset();
   agentApiMocks.listManagedAgents.mockResolvedValue([]);
   resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
+  orgSettingsMocks.getContextTreeSetting.mockResolvedValue({
+    repo: "https://github.com/acme/context-tree",
+    branch: "main",
+  });
+  onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
+    needsTreeSetup: false,
+    hasTreeBinding: true,
+    hasTreeSetupKickoff: true,
+  });
+  onboardingEventMocks.kickoffOnboarding.mockResolvedValue({ chatId: "chat-tree-setup" });
   contextApiMocks.initializeContextTree.mockResolvedValue({
     repo: "https://github.com/acme/acme-context-tree.git",
     htmlUrl: "https://github.com/acme/acme-context-tree",
@@ -419,6 +445,57 @@ describe("ContextPage DOM behavior", () => {
     await waitForText(container, "Create an agent for your team first");
     await click(buttonByText(container, "Create an agent"));
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/onboarding");
+
+    await act(async () => root.unmount());
+  });
+
+  it("recovers a bound tree whose setup kickoff was never sent", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    onboardingEventMocks.getTreeSetupStatus.mockResolvedValueOnce({
+      needsTreeSetup: true,
+      hasTreeBinding: true,
+      hasTreeSetupKickoff: false,
+    });
+    agentApiMocks.listManagedAgents.mockResolvedValue([
+      {
+        uuid: "agent-1",
+        name: "agent-1",
+        displayName: "Tree Agent",
+        type: "agent",
+        organizationId: "org-1",
+        inboxId: "inbox-agent-1",
+        visibility: "private",
+        runtimeProvider: "claude-code",
+        clientId: "client-agent-1",
+        status: "active",
+        avatarImageUrl: null,
+      },
+    ]);
+    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
+    const { ContextPage } = await import("../context.js");
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
+      snapshot({
+        repo: "https://github.com/acme/context-tree",
+        branch: "main",
+        snapshotStatus: "active",
+        contextStatus: { label: "Live", detail: null, severity: "ok" },
+      }),
+    );
+
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "Finish Context Tree setup");
+    await click(buttonByText(container, "Build your Context Tree"));
+
+    expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
+    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentUuid: "agent-1",
+        bootstrap: expect.stringContaining("First Tree Cloud found an existing org Context Tree binding"),
+        kind: "tree",
+        complete: true,
+      }),
+    );
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?c=chat-tree-setup");
 
     await act(async () => root.unmount());
   });
