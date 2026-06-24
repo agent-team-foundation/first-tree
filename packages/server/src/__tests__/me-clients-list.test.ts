@@ -1,4 +1,5 @@
 import { eq } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
 import { describe, expect, it } from "vitest";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
@@ -18,30 +19,6 @@ describe("GET /me/clients", () => {
   const getApp = useTestApp();
   const getSemverApp = useTestApp({ commandVersion: "0.6.0" });
   const getProdApp = useTestApp({ channel: "prod", commandVersion: "0.6.0" });
-
-  /** Attach `userId` to a fresh side-org as `role`. */
-  async function attachMember(
-    app: ReturnType<typeof getApp>,
-    userId: string,
-    role: "admin" | "member",
-  ): Promise<{ orgId: string; memberId: string }> {
-    const orgId = `org-mc-${crypto.randomUUID().slice(0, 8)}`;
-    const memberId = uuidv7();
-    await app.db.transaction(async (tx) => {
-      await tx
-        .insert(organizations)
-        .values({ id: orgId, name: `mc-${crypto.randomUUID().slice(0, 6)}`, displayName: "Side Org" });
-      const human = await createAgent(tx as unknown as typeof app.db, {
-        name: `mc-h-${crypto.randomUUID().slice(0, 6)}`,
-        type: "human",
-        displayName: "Side Human",
-        managerId: memberId,
-        organizationId: orgId,
-      });
-      await tx.insert(members).values({ id: memberId, userId, organizationId: orgId, agentId: human.uuid, role });
-    });
-    return { orgId, memberId };
-  }
 
   it("returns only the caller's own clients", async () => {
     const app = getApp();
@@ -214,6 +191,30 @@ describe("GET /me/clients", () => {
   });
 });
 
+/** Attach `userId` to a fresh side-org as `role`. */
+async function attachMember(
+  app: FastifyInstance,
+  userId: string,
+  role: "admin" | "member",
+): Promise<{ orgId: string; memberId: string }> {
+  const orgId = `org-mc-${crypto.randomUUID().slice(0, 8)}`;
+  const memberId = uuidv7();
+  await app.db.transaction(async (tx) => {
+    await tx
+      .insert(organizations)
+      .values({ id: orgId, name: `mc-${crypto.randomUUID().slice(0, 6)}`, displayName: "Side Org" });
+    const human = await createAgent(tx as unknown as typeof app.db, {
+      name: `mc-h-${crypto.randomUUID().slice(0, 6)}`,
+      type: "human",
+      displayName: "Side Human",
+      managerId: memberId,
+      organizationId: orgId,
+    });
+    await tx.insert(members).values({ id: memberId, userId, organizationId: orgId, agentId: human.uuid, role });
+  });
+  return { orgId, memberId };
+}
+
 /**
  * Admin team listing — same capability surfacing as `/me/clients`, but for
  * cross-user audit view. The pill derivation is shared between member
@@ -257,6 +258,52 @@ describe("GET /orgs/:orgId/clients (admin team view)", () => {
     expect(row).toBeDefined();
     expect(row?.capabilities["claude-code"]?.state).toBe("unauthenticated");
     expect(row?.capabilities["claude-code"]?.sdkVersion).toBe("0.8.1");
+  });
+
+  it("counts only agents in the requested org for team listing", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const sideOrg = await attachMember(app, admin.userId, "member");
+
+    await createAgent(app.db, {
+      name: `org-a-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Org A Agent",
+      managerId: admin.memberId,
+      clientId: admin.clientId,
+    });
+    await createAgent(app.db, {
+      name: `org-b-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Org B Agent 1",
+      managerId: sideOrg.memberId,
+      clientId: admin.clientId,
+    });
+    await createAgent(app.db, {
+      name: `org-b-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Org B Agent 2",
+      managerId: sideOrg.memberId,
+      clientId: admin.clientId,
+    });
+
+    const teamRes = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/clients`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(teamRes.statusCode).toBe(200);
+    const teamBody = teamRes.json() as Array<{ id: string; agentCount: number }>;
+    expect(teamBody.find((c) => c.id === admin.clientId)?.agentCount).toBe(1);
+
+    const meRes = await app.inject({
+      method: "GET",
+      url: "/api/v1/me/clients",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(meRes.statusCode).toBe(200);
+    const meBody = meRes.json() as Array<{ id: string; agentCount: number }>;
+    expect(meBody.find((c) => c.id === admin.clientId)?.agentCount).toBe(3);
   });
 
   it("includes server command version for stale clients in the team listing", async () => {

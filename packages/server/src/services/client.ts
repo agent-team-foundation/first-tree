@@ -315,7 +315,7 @@ export async function listClientsForOrgAdmin(db: Database, orgId: string) {
     .from(clients)
     .innerJoin(members, eq(members.userId, clients.userId))
     .where(and(eq(members.organizationId, orgId), eq(members.status, "active")));
-  return attachAgentCounts(db, rows);
+  return attachAgentCounts(db, rows, { organizationId: orgId });
 }
 
 /**
@@ -349,14 +349,24 @@ export function deriveAuthState(
 async function attachAgentCounts<T extends { id: string }>(
   db: Database,
   rows: T[],
+  options: { organizationId?: string } = {},
 ): Promise<Array<T & { agentCount: number }>> {
+  if (rows.length === 0) return [];
+
+  const clientIds = rows.map((row) => row.id);
   const counts = await db
     .select({
       clientId: agents.clientId,
       count: sql<number>`count(*)::int`,
     })
     .from(agents)
-    .where(and(sql`${agents.clientId} IS NOT NULL`, ne(agents.status, "deleted")))
+    .where(
+      and(
+        inArray(agents.clientId, clientIds),
+        ne(agents.status, "deleted"),
+        options.organizationId ? eq(agents.organizationId, options.organizationId) : undefined,
+      ),
+    )
     .groupBy(agents.clientId);
 
   const countMap = new Map(counts.map((c) => [c.clientId, c.count]));
