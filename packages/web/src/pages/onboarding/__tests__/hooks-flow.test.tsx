@@ -308,7 +308,7 @@ describe("onboarding hooks and flow", () => {
         organizationId: null,
       });
       await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(31_000);
+      await vi.advanceTimersByTimeAsync(61_000);
       await promise;
     });
     await slowCreate;
@@ -317,7 +317,7 @@ describe("onboarding hooks and flow", () => {
     const retry = act(async () => {
       const promise = expectHookValue(latest.current).retry();
       await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(31_000);
+      await vi.advanceTimersByTimeAsync(61_000);
       await promise;
     });
     await retry;

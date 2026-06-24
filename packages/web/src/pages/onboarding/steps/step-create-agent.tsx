@@ -41,6 +41,7 @@ export function StepCreateAgent() {
     organizationId,
     createAgent,
     retryAgent,
+    finishLater,
     agentPhase,
     agentError,
     goTo,
@@ -85,15 +86,25 @@ export function StepCreateAgent() {
   if (agentPhase === "timeout") {
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-        {/* One plain paragraph — the shell's step h1 ("Add your agent to the team")
-            already heads the screen, so no second bold title here — then retry. */}
+        {/* Slow-start, not a failure: the shell's step h1 already heads the screen,
+            so one plain paragraph, then two paths — keep waiting (re-poll) or the
+            graceful, resumable "finish later" so a genuinely-stuck runtime is never
+            a dead end. */}
         <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
           {COPY.createAgent.timeoutBody}
         </p>
-        <div className="flex">
+        <div className="flex items-center" style={{ gap: "var(--sp-3)" }}>
           <Button type="button" onClick={() => void retryAgent()}>
-            {COPY.createAgent.retry}
+            {COPY.createAgent.keepWaiting}
           </Button>
+          <button
+            type="button"
+            className="text-label font-medium underline underline-offset-2"
+            style={{ color: "var(--fg-3)" }}
+            onClick={() => void finishLater()}
+          >
+            {COPY.finishLater}
+          </button>
         </div>
       </div>
     );
