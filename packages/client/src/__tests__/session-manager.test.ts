@@ -12,6 +12,7 @@ import type {
   SessionMessage,
   TurnOutcome,
 } from "../runtime/handler.js";
+import type { SubprocessProbe } from "../runtime/process-tree-probe.js";
 import { SessionManager } from "../runtime/session-manager.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 import { recordingLogger, silentLogger } from "./_logger-helpers.js";
@@ -108,6 +109,7 @@ function createSessionManager(opts: {
   agentConfigCache?: AgentConfigCache;
   recoverChat?: (chatId: string) => Promise<void>;
   onSessionEvent?: (chatId: string, event: SessionEvent) => void;
+  subprocessProbe?: SubprocessProbe;
 }) {
   const handler = opts.handler ?? createMockHandler();
   const factory: HandlerFactory = opts.handlerFactory ?? (() => handler);
@@ -121,6 +123,7 @@ function createSessionManager(opts: {
       reconcile_interval_seconds: 300,
     },
     concurrency: opts.concurrency ?? 5,
+    subprocessProbe: opts.subprocessProbe,
     handlerFactory: factory,
     handlerConfig: opts.handlerConfig ?? { workspaceRoot: "/tmp/test" },
     // Tests never want the live git-backed resolver — default to a no-op so a
@@ -1969,6 +1972,110 @@ describe("SessionManager lazy Context Tree binding", () => {
     await sm.dispatch(mockEntry({ id: 2, chatId: "c-once", messageId: "m2" }));
 
     expect(resolve).toHaveBeenCalledTimes(1);
+
+    await sm.shutdown();
+  });
+});
+
+describe("SessionManager subprocess-aware suspend/eviction", () => {
+  it("defers idle-suspend while the provider has a live subprocess, then suspends once it clears", async () => {
+    vi.useFakeTimers();
+    try {
+      let ctx: SessionContext | undefined;
+      const handler = createMockHandler({
+        async start(_msg, c) {
+          ctx = c;
+          return "sid";
+        },
+      });
+      const hasLive = vi.fn().mockReturnValue(true);
+      const probe: SubprocessProbe = { hasLiveSubprocess: hasLive, stop: vi.fn() };
+      const sm = createSessionManager({
+        handler,
+        subprocessProbe: probe,
+        session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 100, reconcile_interval_seconds: 300 },
+      });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
+      await finishEntry(ctx, 1, "chat-1");
+
+      // Past idle_timeout (1s) but well under the hard cap (1 + 100s): the live
+      // subprocess keeps the session active.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(handler.suspend).not.toHaveBeenCalled();
+
+      // Subprocess gone -> the next idle tick suspends as usual.
+      hasLive.mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(11_000);
+      expect(handler.suspend).toHaveBeenCalledTimes(1);
+
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("suspends past the idle_timeout + working_grace hard cap even with a live subprocess", async () => {
+    vi.useFakeTimers();
+    try {
+      let ctx: SessionContext | undefined;
+      const handler = createMockHandler({
+        async start(_msg, c) {
+          ctx = c;
+          return "sid";
+        },
+      });
+      const probe: SubprocessProbe = { hasLiveSubprocess: vi.fn().mockReturnValue(true), stop: vi.fn() };
+      const sm = createSessionManager({
+        handler,
+        subprocessProbe: probe,
+        // Hard cap = idle_timeout(1) + working_grace(2) = 3s.
+        session: { idle_timeout: 1, max_sessions: 10, working_grace_seconds: 2, reconcile_interval_seconds: 300 },
+      });
+
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
+      await finishEntry(ctx, 1, "chat-1");
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(handler.suspend).toHaveBeenCalledTimes(1);
+
+      await sm.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prefers an idle session without a live subprocess as the concurrency-yield victim", async () => {
+    const handlers: AgentHandler[] = [];
+    const ctxs: Record<string, SessionContext> = {};
+    const factory: HandlerFactory = () => {
+      const h = createMockHandler({
+        async start(msg, c) {
+          ctxs[(msg as { chatId: string }).chatId] = c;
+          return `sid-${(msg as { chatId: string }).chatId}`;
+        },
+      });
+      handlers.push(h);
+      return h;
+    };
+    // chat-1 has a live watcher; chat-2 does not.
+    const probe: SubprocessProbe = {
+      hasLiveSubprocess: vi.fn((chatId: string) => chatId === "chat-1"),
+      stop: vi.fn(),
+    };
+    const sm = createSessionManager({ handlerFactory: factory, concurrency: 2, subprocessProbe: probe });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-1" }));
+    await finishEntry(ctxs["chat-1"], 1, "chat-1");
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-2" }));
+    await finishEntry(ctxs["chat-2"], 2, "chat-2");
+
+    // Slots full (concurrency 2), both idle. chat-1 is older, so the old logic
+    // would yield it — but it has a live subprocess, so chat-2 must yield.
+    await sm.dispatch(mockEntry({ id: 3, chatId: "chat-3" }));
+
+    expect(handlers[0]?.suspend).not.toHaveBeenCalled();
+    expect(handlers[1]?.suspend).toHaveBeenCalledTimes(1);
 
     await sm.shutdown();
   });

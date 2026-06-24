@@ -17,6 +17,7 @@ import { resolveAgentContextTreeBinding } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
 import { clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./error-taxonomy.js";
 import type { HandlerFactory } from "./handler.js";
+import { PsSubprocessProbe } from "./process-tree-probe.js";
 import { SessionManager } from "./session-manager.js";
 
 /**
@@ -244,9 +245,17 @@ export class AgentSlot {
       const recoverChat = (chatId: string) => this.clientConnection.sendInboxRecover(agent.agentId, chatId);
       const runtimeProvider = runtimeProviderSchema.safeParse(runtimeType);
 
+      // Defer idle-suspend while a provider has a live background subprocess
+      // (default on; opt out via `session.defer_suspend_on_subprocess: false`).
+      const subprocessProbe =
+        this.config.session.defer_suspend_on_subprocess !== false
+          ? new PsSubprocessProbe({ log: this.logger })
+          : undefined;
+
       this.sessionManager = new SessionManager({
         session: this.config.session,
         concurrency: this.config.concurrency,
+        subprocessProbe,
         handlerFactory: this.config.handlerFactory,
         handlerConfig: {
           workspaceRoot,

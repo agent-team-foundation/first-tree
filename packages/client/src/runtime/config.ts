@@ -26,6 +26,14 @@ const sessionConfigSchema = z
      * `session-manager.ts`.
      */
     working_grace_seconds: z.number().int().positive().default(3600),
+    /**
+     * Defer idle-suspend (and deprioritize concurrency eviction) for a session
+     * whose provider still has a live background subprocess, up to the
+     * `idle_timeout + working_grace_seconds` hard cap. Optional here (the
+     * authoritative default lives in `@first-tree/shared` `agentConfigSchema`);
+     * unset is treated as enabled by `agent-slot`.
+     */
+    defer_suspend_on_subprocess: z.boolean().optional(),
     /** How often the client reconciles its local chatIds with the server. */
     reconcile_interval_seconds: z.number().int().min(30).max(3600).default(300),
   })

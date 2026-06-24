@@ -47,6 +47,7 @@ import type {
 } from "./handler.js";
 import { findImagePath, writeImage } from "./image-store.js";
 import { InboxDeliveryCoordinator } from "./inbox-delivery-coordinator.js";
+import type { SubprocessProbe } from "./process-tree-probe.js";
 import {
   buildProviderRetryEvent,
   classifyProviderFailure,
@@ -262,6 +263,15 @@ function repoLocalPath(repo: GitRepo): string {
 type SessionManagerConfig = {
   session: SessionConfig;
   concurrency: number;
+  /**
+   * Optional process-tree probe. When present, an idle session whose provider
+   * still has a live descendant (e.g. a `run_in_background` watcher) is not
+   * idle-suspended and is deprioritized as a concurrency-eviction victim, up to
+   * the `idle_timeout + working_grace_seconds` hard cap. Absent => behaviour is
+   * exactly as before (no deferral). Wired by `agent-slot` per the
+   * `session.defer_suspend_on_subprocess` config flag.
+   */
+  subprocessProbe?: SubprocessProbe;
   handlerFactory: HandlerFactory;
   handlerConfig: HandlerConfig;
   agentIdentity: AgentIdentity;
@@ -696,6 +706,7 @@ export class SessionManager {
 
   /** Shut down all sessions gracefully. */
   async shutdown(): Promise<void> {
+    this.config.subprocessProbe?.stop();
     if (this.idleTimer) {
       clearInterval(this.idleTimer);
       this.idleTimer = null;
@@ -1591,30 +1602,55 @@ export class SessionManager {
   ): boolean {
     if (this._activeCount < this.config.concurrency) return true;
 
-    const idleVictim = this.findOldestActiveSession(
-      (session) => session.chatId !== chatId && !this.inboxDelivery.hasProcessingOwnedWork(session.chatId),
-    );
-    if (idleVictim) {
+    // Pick a victim, preferring (a) idle over working, and (b) within each
+    // tier, sessions with no live background subprocess. A `run_in_background`
+    // watcher cannot be recovered once its session is torn down, so a session
+    // that has one is the worst thing to sacrifice — but it is still a valid
+    // last-resort victim (the evictIdle hard cap bounds how long it could hold
+    // the slot anyway), so we fall back to allowing it rather than starve the
+    // requester. `protectSubprocess=false` is that fallback pass.
+    const choose = (protectSubprocess: boolean): { victim: SessionEntry; kind: "idle" | "working" } | null => {
+      const idle = this.findOldestActiveSession(
+        (session) =>
+          session.chatId !== chatId &&
+          !this.inboxDelivery.hasProcessingOwnedWork(session.chatId) &&
+          (!protectSubprocess || !this.hasLiveSubprocess(session.chatId)),
+      );
+      if (idle) return { victim: idle, kind: "idle" };
+      if (deliveryKind === "fresh") {
+        const working = this.findOldestActiveSession(
+          (session) => session.chatId !== chatId && (!protectSubprocess || !this.hasLiveSubprocess(session.chatId)),
+        );
+        if (working) return { victim: working, kind: "working" };
+      }
+      return null;
+    };
+
+    const chosen = choose(true) ?? choose(false);
+
+    if (chosen?.kind === "idle") {
       this.config.log.info(
-        { chatId: idleVictim.chatId, requesterChatId: chatId },
+        { chatId: chosen.victim.chatId, requesterChatId: chatId },
         "idle session yielded for concurrency",
       );
-      this.suspendSession(idleVictim, { reason: "concurrency_idle_yield", ackConsumedPrefix: true, drainQueue: false });
+      this.suspendSession(chosen.victim, {
+        reason: "concurrency_idle_yield",
+        ackConsumedPrefix: true,
+        drainQueue: false,
+      });
       return true;
     }
 
-    const workingVictim =
-      deliveryKind === "fresh" ? this.findOldestActiveSession((session) => session.chatId !== chatId) : null;
-    if (workingVictim) {
+    if (chosen?.kind === "working") {
       this.config.log.info(
-        { chatId: workingVictim.chatId, requesterChatId: chatId },
+        { chatId: chosen.victim.chatId, requesterChatId: chatId },
         "working session preempted for fresh input",
       );
-      this.emitResilienceEvent(workingVictim.chatId, "resilience.session.preempted", {
+      this.emitResilienceEvent(chosen.victim.chatId, "resilience.session.preempted", {
         reason: "concurrency_preempted",
         requesterChatId: chatId,
       });
-      this.suspendSession(workingVictim, {
+      this.suspendSession(chosen.victim, {
         reason: "concurrency_preempted",
         ackConsumedPrefix: false,
         drainQueue: false,
@@ -1624,6 +1660,15 @@ export class SessionManager {
 
     this.queueForSlot(chatId, message, deliveryKind, "concurrency_limit");
     return false;
+  }
+
+  /**
+   * Whether the session's provider currently has a live background subprocess,
+   * per the optional {@link SubprocessProbe}. Absent probe => always false, so
+   * suspend/eviction behave exactly as before the probe was introduced.
+   */
+  private hasLiveSubprocess(chatId: string): boolean {
+    return this.config.subprocessProbe?.hasLiveSubprocess(chatId) === true;
   }
 
   private findOldestActiveSession(eligible: (session: SessionEntry) => boolean): SessionEntry | null {
@@ -1762,8 +1807,12 @@ export class SessionManager {
     // Prefer non-active sessions, then idle active sessions. Working active
     // sessions are not memory-management victims: dropping them silently loses
     // replies/tool side effects unless their work is explicitly recovered.
+    // Within idle active sessions, deprioritize ones with a live background
+    // subprocess (their watcher's completion wake-up cannot be recovered after
+    // a shutdown) — they are evicted only as a last resort.
     let nonActiveCandidate: { key: string; session: SessionEntry } | null = null;
     let idleActiveCandidate: { key: string; session: SessionEntry } | null = null;
+    let idleActiveSubprocessCandidate: { key: string; session: SessionEntry } | null = null;
     for (const [key, session] of this.sessions) {
       if (session.status !== "active") {
         if (!nonActiveCandidate || session.lastActivity < nonActiveCandidate.session.lastActivity) {
@@ -1772,13 +1821,20 @@ export class SessionManager {
         continue;
       }
       if (!this.inboxDelivery.hasProcessingOwnedWork(key)) {
-        if (!idleActiveCandidate || session.lastActivity < idleActiveCandidate.session.lastActivity) {
+        if (this.hasLiveSubprocess(key)) {
+          if (
+            !idleActiveSubprocessCandidate ||
+            session.lastActivity < idleActiveSubprocessCandidate.session.lastActivity
+          ) {
+            idleActiveSubprocessCandidate = { key, session };
+          }
+        } else if (!idleActiveCandidate || session.lastActivity < idleActiveCandidate.session.lastActivity) {
           idleActiveCandidate = { key, session };
         }
       }
     }
 
-    const candidate = nonActiveCandidate ?? idleActiveCandidate;
+    const candidate = nonActiveCandidate ?? idleActiveCandidate ?? idleActiveSubprocessCandidate;
     if (!candidate) {
       if (chatId && message) {
         this.queueForSlot(chatId, message, deliveryKind, "max_sessions_all_working");
@@ -1847,22 +1903,27 @@ export class SessionManager {
 
       const currentState = this.sessionRuntimeStates.get(session.chatId);
       const hasProcessingWork = this.inboxDelivery.hasProcessingOwnedWork(session.chatId);
+      // A live background subprocess (e.g. a `run_in_background` watcher) is
+      // real in-flight work even though no turn is processing: suspending would
+      // close the provider stream and lose its completion wake-up.
+      const hasLiveSubprocess = this.hasLiveSubprocess(session.chatId);
 
       // Hard cap: regardless of unsettled work, once we are past
       // `idle_timeout + working_grace_seconds` the slot MUST be reclaimed.
-      // Anything else means a stuck handler can hold a slot forever just
-      // by never closing the delivery work.
+      // Anything else means a stuck handler — or a forgotten background
+      // subprocess — can hold a slot forever just by never closing the work.
       const pastHardCap = inactiveMs >= timeoutMs + workingGraceMs;
 
-      if (hasProcessingWork && !pastHardCap) {
+      if ((hasProcessingWork || hasLiveSubprocess) && !pastHardCap) {
         this.config.log.info(
           {
             chatId: session.chatId,
             runtimeState: currentState,
             inactiveSec: Math.round(inactiveMs / 1000),
             graceSec: this.config.session.working_grace_seconds,
+            reason: hasProcessingWork ? "processing_work" : "live_subprocess",
           },
-          "session idle threshold reached but provider work is still processing — skipping suspend",
+          "session idle threshold reached but work is still in flight — skipping suspend",
         );
         continue;
       }
