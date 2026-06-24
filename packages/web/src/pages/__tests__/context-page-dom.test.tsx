@@ -15,6 +15,24 @@ const contextApiMocks = vi.hoisted(() => ({
   initializeContextTree: vi.fn(),
 }));
 
+const agentApiMocks = vi.hoisted(() => ({
+  listManagedAgents: vi.fn(),
+}));
+
+const resourceApiMocks = vi.hoisted(() => ({
+  listTeamResourcesForOrg: vi.fn(),
+}));
+
+const onboardingEventMocks = vi.hoisted(() => ({
+  getTreeSetupStatus: vi.fn(),
+  kickoffOnboarding: vi.fn(),
+  reportOnboardingEvent: vi.fn(),
+}));
+
+const orgSettingsMocks = vi.hoisted(() => ({
+  getContextTreeSetting: vi.fn(),
+}));
+
 const authMock = vi.hoisted(() => ({
   value: {
     organizationId: "org-1" as string | null,
@@ -23,6 +41,10 @@ const authMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../api/context-tree.js", () => contextApiMocks);
+vi.mock("../../api/agents.js", () => agentApiMocks);
+vi.mock("../../api/resources.js", () => resourceApiMocks);
+vi.mock("../../api/onboarding-events.js", () => onboardingEventMocks);
+vi.mock("../../api/org-settings.js", () => orgSettingsMocks);
 
 vi.mock("../../auth/auth-context.js", () => ({
   useAuth: () => authMock.value,
@@ -58,10 +80,12 @@ async function renderDom(
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
           {/* Outside Routes so it keeps tracking the location after a navigate
-              away from "/" (e.g. the "Build Context Tree" link → /build-tree). */}
+              away from "/" (e.g. the Context build entry → Settings/Onboarding). */}
           <LocationProbe />
           <Routes>
             <Route path="/" element={element} />
+            <Route path="/settings/resources" element={<div>Resources route</div>} />
+            <Route path="/onboarding" element={<div>Onboarding route</div>} />
           </Routes>
         </QueryClientProvider>
       </MemoryRouter>,
@@ -79,6 +103,8 @@ async function rerender(root: Root, queryClient: QueryClient, element: ReactElem
           <LocationProbe />
           <Routes>
             <Route path="/" element={element} />
+            <Route path="/settings/resources" element={<div>Resources route</div>} />
+            <Route path="/onboarding" element={<div>Onboarding route</div>} />
           </Routes>
         </QueryClientProvider>
       </MemoryRouter>,
@@ -150,6 +176,24 @@ beforeEach(() => {
   authMock.value = { organizationId: "org-1", role: "member" };
   contextApiMocks.getContextTreeSnapshot.mockReset();
   contextApiMocks.initializeContextTree.mockReset();
+  agentApiMocks.listManagedAgents.mockReset();
+  resourceApiMocks.listTeamResourcesForOrg.mockReset();
+  onboardingEventMocks.getTreeSetupStatus.mockReset();
+  onboardingEventMocks.kickoffOnboarding.mockReset();
+  onboardingEventMocks.reportOnboardingEvent.mockReset();
+  orgSettingsMocks.getContextTreeSetting.mockReset();
+  agentApiMocks.listManagedAgents.mockResolvedValue([]);
+  resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
+  orgSettingsMocks.getContextTreeSetting.mockResolvedValue({
+    repo: "https://github.com/acme/context-tree",
+    branch: "main",
+  });
+  onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
+    needsTreeSetup: false,
+    hasTreeBinding: true,
+    hasTreeSetupKickoff: true,
+  });
+  onboardingEventMocks.kickoffOnboarding.mockResolvedValue({ chatId: "chat-tree-setup" });
   contextApiMocks.initializeContextTree.mockResolvedValue({
     repo: "https://github.com/acme/acme-context-tree.git",
     htmlUrl: "https://github.com/acme/acme-context-tree",
@@ -332,13 +376,29 @@ describe("ContextPage DOM behavior", () => {
       />,
     );
     expect(disconnected.container.textContent).toContain("Connect Context Tree");
-    expect(disconnected.container.textContent).toContain("Ask an admin to initialize");
+    expect(disconnected.container.textContent).toContain("Ask an admin to set up your team's Context Tree.");
     expect(buttonByText(disconnected.container, "Create private GitHub repo")).toBeNull();
     await act(async () => disconnected.root.unmount());
   });
 
-  it("offers a Build Context Tree link (not the raw initializer) to a no-tree admin", async () => {
+  it("offers the Context tab build entry to a no-tree admin and routes no-repo setup to Resources", async () => {
     authMock.value = { organizationId: "org-1", role: "admin" };
+    agentApiMocks.listManagedAgents.mockResolvedValue([
+      {
+        uuid: "agent-1",
+        name: "agent-1",
+        displayName: "Tree Agent",
+        type: "agent",
+        organizationId: "org-1",
+        inboxId: "inbox-agent-1",
+        visibility: "private",
+        runtimeProvider: "claude-code",
+        clientId: "client-agent-1",
+        status: "active",
+        avatarImageUrl: null,
+      },
+    ]);
+    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
     const { ContextPage } = await import("../context.js");
     const unavailable = snapshot({
       repo: null,
@@ -349,17 +409,93 @@ describe("ContextPage DOM behavior", () => {
     contextApiMocks.getContextTreeSnapshot.mockResolvedValue(unavailable);
 
     const { container, root } = await renderDom(<ContextPage />);
-    await waitForText(container, "Connect your code & build your Context Tree");
+    await waitForText(container, "Connect a code repository first");
+    await waitForText(container, "Connect your code");
     // The low-level "create an empty private repo" button is gone (it lived in
-    // Settings → Context tree, now also a link); the Context page no longer
-    // initializes the tree in place.
+    // Settings → Context tree). The Context page build entry launches the
+    // chat-driven flow only after a repo exists.
     expect(container.textContent).not.toContain("Create private GitHub repo");
     expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
 
-    // Clicking the link routes into the build-tree flow.
-    await click(buttonByText(container, "Connect your code & build your Context Tree"));
+    // Clicking the link routes to the existing team resource configuration.
+    await click(buttonByText(container, "Connect your code"));
     const location = container.querySelector('[data-testid="location"]');
-    expect(location?.textContent).toBe("/build-tree");
+    expect(location?.textContent).toBe("/settings/resources");
+
+    await act(async () => root.unmount());
+  });
+
+  it("routes a no-tree admin without an active agent into onboarding before tree build", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    agentApiMocks.listManagedAgents.mockResolvedValue([]);
+    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([
+      { id: "repo-1", type: "repo", defaultEnabled: "recommended", payload: { url: "https://github.com/acme/web" } },
+    ]);
+    const { ContextPage } = await import("../context.js");
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
+      snapshot({
+        repo: null,
+        branch: null,
+        snapshotStatus: "unavailable",
+        contextStatus: { label: "Not configured", detail: null, severity: "warning" },
+      }),
+    );
+
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "Create an agent for your team first");
+    await click(buttonByText(container, "Create an agent"));
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/onboarding");
+
+    await act(async () => root.unmount());
+  });
+
+  it("recovers a bound tree whose setup kickoff was never sent", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    onboardingEventMocks.getTreeSetupStatus.mockResolvedValueOnce({
+      needsTreeSetup: true,
+      hasTreeBinding: true,
+      hasTreeSetupKickoff: false,
+    });
+    agentApiMocks.listManagedAgents.mockResolvedValue([
+      {
+        uuid: "agent-1",
+        name: "agent-1",
+        displayName: "Tree Agent",
+        type: "agent",
+        organizationId: "org-1",
+        inboxId: "inbox-agent-1",
+        visibility: "private",
+        runtimeProvider: "claude-code",
+        clientId: "client-agent-1",
+        status: "active",
+        avatarImageUrl: null,
+      },
+    ]);
+    resourceApiMocks.listTeamResourcesForOrg.mockResolvedValue([]);
+    const { ContextPage } = await import("../context.js");
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
+      snapshot({
+        repo: "https://github.com/acme/context-tree",
+        branch: "main",
+        snapshotStatus: "active",
+        contextStatus: { label: "Live", detail: null, severity: "ok" },
+      }),
+    );
+
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "Finish Context Tree setup");
+    await click(buttonByText(container, "Build your Context Tree"));
+
+    expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
+    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentUuid: "agent-1",
+        bootstrap: expect.stringContaining("First Tree Cloud found an existing org Context Tree binding"),
+        kind: "tree",
+        complete: true,
+      }),
+    );
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?c=chat-tree-setup");
 
     await act(async () => root.unmount());
   });

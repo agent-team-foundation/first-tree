@@ -372,21 +372,20 @@ describe("settings panels", () => {
     await act(async () => failed.root.unmount());
   });
 
-  it("renders configured context tree settings directly", async () => {
+  it("renders Context Tree binding configuration and keeps manual editing hidden by default", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Repo URL");
 
-    const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    expect([...tabs].map((tab) => tab.textContent?.trim())).toEqual(["Initial", "Features"]);
-    expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
-    expect(tabs[1]?.getAttribute("aria-selected")).toBe("false");
-    expect(tabs[1]?.disabled).toBe(false);
-    expect(tabs[1]?.getAttribute("aria-disabled")).toBeNull();
+    await waitForText(container, "Repository");
+    expect(container.textContent).toContain("Your team's Context Tree");
+    expect(container.textContent).toContain("https://github.com/acme/context");
+    expect(container.textContent).toContain("branch main");
+    expect(container.textContent).toContain("View on the Context page");
+    expect(container.textContent).toContain("Context Reviewer");
+    expect(container.querySelectorAll<HTMLButtonElement>('[role="tab"]').length).toBe(0);
     expect(container.textContent).not.toContain("Connect your code & build your Context Tree");
-    expect(container.textContent).not.toContain("Manual Set");
-    expect(inputByLabel(container, "Repo URL")?.value).toBe("https://github.com/acme/context");
-    expect(inputByLabel(container, "Branch")?.value).toBe("main");
+    expect(container.textContent).not.toContain("Repo URL");
+    expect(container.textContent).not.toContain("Branch");
 
     await act(async () => root.unmount());
   });
@@ -394,6 +393,9 @@ describe("settings panels", () => {
   it("shows and saves manual context tree settings with blank values normalized to null", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Your team's Context Tree");
+
+    await click(buttonByText(container, "Edit"));
     await waitForText(container, "Repo URL");
 
     const repoInput = inputByLabel(container, "Repo URL");
@@ -406,9 +408,13 @@ describe("settings panels", () => {
     await submit(container.querySelector("form"));
 
     expect(settingsMocks.putContextTreeSetting).toHaveBeenCalledWith("org-1", { repo: null, branch: "trunk" });
-    expect(container.textContent).toContain("Saved");
+    await waitForCondition(
+      () => !container.textContent?.includes("Repo URL"),
+      "Expected manual form to close after save",
+    );
 
     settingsMocks.putContextTreeSetting.mockRejectedValueOnce(new Error("context save failed"));
+    await click(buttonByText(container, "Edit"));
     await submit(container.querySelector("form"));
     await waitForText(container, "context save failed");
 
@@ -420,30 +426,27 @@ describe("settings panels", () => {
     await act(async () => failed.root.unmount());
   });
 
-  it("links a no-tree admin into the build-tree flow (no in-place repo creation)", async () => {
+  it("points a no-tree admin to the Context page and keeps manual binding as an escape hatch", async () => {
     settingsMocks.getContextTreeSetting.mockResolvedValueOnce({ branch: "main" });
 
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Connect your code & build your Context Tree");
-    expect(container.textContent).toContain("Manual Set");
+    await waitForText(container, "Your team doesn't have a Context Tree yet.");
+    expect(container.textContent).toContain("Set one up on the Context page");
+    expect(container.textContent).toContain("Already have a tree repo? Bind it manually");
     expect(container.textContent).not.toContain("Repo URL");
     expect(container.textContent).not.toContain("Branch");
-    const featuresTab = buttonByText(container, "Features");
-    expect(featuresTab?.disabled).toBe(true);
-    expect(featuresTab?.getAttribute("aria-disabled")).toBe("true");
-    await click(featuresTab);
-    expect(buttonByText(container, "Initial")?.getAttribute("aria-selected")).toBe("true");
-    expect(buttonByText(container, "Features")?.getAttribute("aria-selected")).toBe("false");
-    expect(container.textContent).not.toContain("Context Reviewer");
-    // No raw "create private repo" button, and the panel no longer initializes
-    // the tree in place — that's the /build-tree flow's job now.
+    // No raw initializer and no Settings build button; building lives on the
+    // Context page, while Settings only edits an existing binding.
     expect(container.textContent).not.toContain("Create private GitHub repo");
     expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
 
-    await click(buttonByText(container, "Connect your code"));
-    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/build-tree");
+    await click(buttonByText(container, "Set one up on the Context page"));
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/context");
     expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
+
+    await click(buttonByText(container, "Already have a tree repo? Bind it manually"));
+    await waitForText(container, "Repo URL");
 
     await act(async () => root.unmount());
   });
@@ -452,13 +455,14 @@ describe("settings panels", () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Repo URL");
+    await waitForText(container, "Your team's Context Tree");
 
-    expect(inputByLabel(container, "Repo URL")?.hasAttribute("readonly")).toBe(true);
-    expect(inputByLabel(container, "Branch")?.hasAttribute("readonly")).toBe(true);
-    // No Save affordance for members.
+    expect(container.textContent).toContain("https://github.com/acme/context");
+    expect(container.textContent).toContain("branch main");
+    expect(buttonByText(container, "Edit")).toBeNull();
+    expect(container.textContent).not.toContain("Context Reviewer");
+    expect(container.textContent).not.toContain("Repo URL");
     expect(container.querySelector('button[type="submit"]')).toBeNull();
-    expect(container.textContent).not.toContain("Manual Set");
     await act(async () => root.unmount());
   });
 
@@ -467,32 +471,26 @@ describe("settings panels", () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Ask an admin to initialize");
+    await waitForText(container, "Ask an admin to set one up.");
     expect(container.textContent).not.toContain("Create private GitHub repo");
-    expect(container.textContent).toContain("Manual Set");
     await act(async () => root.unmount());
   });
 
-  it("renders Context Reviewer settings without resetting manual draft values", async () => {
+  it("renders Context Reviewer settings without resetting manual binding draft values", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Your team's Context Tree");
+
+    await click(buttonByText(container, "Edit"));
     await waitForText(container, "Repo URL");
     const repoInput = inputByLabel(container, "Repo URL");
     if (!repoInput) throw new Error("Expected repo input");
     await setInputValue(repoInput, "https://github.com/acme/draft-context");
 
-    await click(buttonByText(container, "Features"));
     await waitForText(container, "Context Reviewer");
-    expect(buttonByText(container, "Initial")?.getAttribute("aria-selected")).toBe("false");
-    expect(buttonByText(container, "Features")?.getAttribute("aria-selected")).toBe("true");
-    expect(container.textContent).not.toContain("Repo URL");
-    expect(container.textContent).not.toContain("Branch");
-    expect(inputByLabel(container, "Context Reviewer")?.checked).toBe(false);
-    expect(container.textContent).toContain("Context Reviewer is disabled.");
+    expect(inputByLabel(container, "Enabled")?.checked).toBe(false);
     expect(settingsMocks.getContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1");
     expect(agentApiMocks.listManagedAgents).not.toHaveBeenCalled();
-
-    await click(buttonByText(container, "Initial"));
     expect(inputByLabel(container, "Repo URL")?.value).toBe("https://github.com/acme/draft-context");
 
     await act(async () => root.unmount());
@@ -501,10 +499,8 @@ describe("settings panels", () => {
   it("saves disabled Context Reviewer as disabled/null", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Repo URL");
+    await waitForText(container, "Context Reviewer");
 
-    await click(buttonByText(container, "Features"));
-    await waitForText(container, "Context Reviewer is disabled.");
     await click(buttonByText(container, "Save"));
 
     expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
@@ -518,11 +514,9 @@ describe("settings panels", () => {
   it("enables Context Reviewer, filters eligible agents, and saves the selected agent", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Repo URL");
-
-    await click(buttonByText(container, "Features"));
     await waitForText(container, "Context Reviewer");
-    await click(inputByLabel(container, "Context Reviewer"));
+
+    await click(inputByLabel(container, "Enabled"));
     await waitForText(container, "Reviewer agent");
     await waitForCondition(() => agentApiMocks.listManagedAgents.mock.calls.length > 0, "Expected agents to load");
     expect(container.textContent).toContain("Select an agent");
@@ -546,11 +540,10 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Repo URL");
+    await waitForText(container, "Context Reviewer");
 
-    await click(buttonByText(container, "Features"));
     await waitForText(container, "Beta Reviewer");
-    expect(inputByLabel(container, "Context Reviewer")?.checked).toBe(true);
+    expect(inputByLabel(container, "Enabled")?.checked).toBe(true);
     expect(container.textContent).toContain("Beta Reviewer");
 
     await act(async () => root.unmount());
@@ -563,10 +556,9 @@ describe("settings panels", () => {
     ]);
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Repo URL");
+    await waitForText(container, "Context Reviewer");
 
-    await click(buttonByText(container, "Features"));
-    await click(inputByLabel(container, "Context Reviewer"));
+    await click(inputByLabel(container, "Enabled"));
     await waitForText(container, "No active non-human agents are available.");
     expect(buttonByText(container, "Save")?.disabled).toBe(true);
 
@@ -579,13 +571,12 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Repo URL");
+    await waitForText(container, "Context Reviewer");
 
-    await click(buttonByText(container, "Features"));
     await waitForText(container, "Current reviewer is not your active agent.");
     expect(buttonByText(container, "Save")?.disabled).toBe(true);
 
-    await click(inputByLabel(container, "Context Reviewer"));
+    await click(inputByLabel(container, "Enabled"));
     await click(buttonByText(container, "Save"));
     expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
       contextReviewer: { enabled: false, agentUuid: null },
@@ -598,10 +589,9 @@ describe("settings panels", () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Repo URL");
 
-    await click(buttonByText(container, "Features"));
-    await waitForText(container, "Only admins can configure Context Reviewer.");
+    await waitForText(container, "Your team's Context Tree");
+    expect(container.textContent).not.toContain("Context Reviewer");
     expect(settingsMocks.getContextTreeFeaturesSetting).not.toHaveBeenCalled();
     expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
     expect(agentApiMocks.listManagedAgents).not.toHaveBeenCalled();

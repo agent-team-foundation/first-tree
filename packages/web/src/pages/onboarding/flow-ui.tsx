@@ -15,8 +15,7 @@ import { cn } from "../../lib/utils.js";
 export function StepHeading({ title, why }: { title: string; why?: ReactNode }) {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-2_5)" }}>
-      {/* Skip the h1 on an empty title — the build-tree recovery surface
-          supplies its own constant title and suppresses the per-step one. */}
+      {/* Skip the h1 on an empty title so state-specific copy can omit a heading. */}
       {title ? (
         <h1 className="text-title font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
           {title}

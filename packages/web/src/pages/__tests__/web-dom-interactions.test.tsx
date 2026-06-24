@@ -1965,24 +1965,19 @@ describe("web DOM interaction coverage", () => {
     }
   });
 
-  it("keeps build-tree recovery focused on the tree setup chat", async () => {
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+  it("builds a missing tree from the Context page entry via the tree setup chat", async () => {
+    const { ContextTreeBuildEntry } = await import("../context-tree-build-entry.js");
     orgSettingsMocks.getContextTreeSetting
       .mockResolvedValueOnce({ repo: "", branch: null })
       .mockResolvedValueOnce({ repo: "https://github.com/acme/context-tree", branch: "main" });
 
-    const view = await renderOnboardingDom(<StepKickoff recovery />, {
-      activeStep: "kickoff",
-      selectedRepoUrls: ["https://github.com/acme/web.git"],
-      treeBindingPlan: "createBinding",
-      treeUrl: "",
-    });
-    await waitForText("Start with your agent", view.container);
+    const view = await renderDom(<ContextTreeBuildEntry />);
+    await waitForText("Build your Context Tree", view.container);
     await click(
-      ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
+      ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Build your Context Tree")) ??
         null) as HTMLButtonElement | null,
     );
-    await waitForText("Starting your agent", view.container);
+    await waitForText("Building", view.container);
 
     expect(contextTreeMocks.initializeContextTree).toHaveBeenCalledWith("org-1");
     expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledTimes(1);
@@ -1995,7 +1990,6 @@ describe("web DOM interaction coverage", () => {
       }),
     );
     expect(onboardingEventMocks.kickoffOnboarding).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "work" }));
-    expect(view.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
     await unmountRoot(view.root);
   });
 

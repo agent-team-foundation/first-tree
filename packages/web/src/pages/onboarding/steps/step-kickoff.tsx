@@ -1,114 +1,29 @@
 import type { KickoffKind } from "@first-tree/shared";
-import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
-import { kickoffOnboarding, reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting } from "../../../api/org-settings.js";
 import { Button } from "../../../components/ui/button.js";
 import {
   buildInviteeReadyBootstrap,
   buildNoRepoBootstrap,
-  buildTreeSetupBootstrap,
   buildValueFirstBootstrap,
 } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
 import { FlowHint, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { type TreeBindingPlan, useOnboardingFlow } from "../onboarding-flow.js";
-import { ensureSourceReposRegistered, kickoffErrorMessage, provisionNewTree } from "../provision-tree.js";
+import { kickoffErrorMessage } from "../provision-tree.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
-
-type KickoffAgent = Awaited<ReturnType<typeof resolveOnboardingAgent>>;
-
-async function ensureKickoffRepos(organizationId: string | null, sourceRepos: readonly string[]): Promise<void> {
-  if (!organizationId || sourceRepos.length === 0) return;
-  await ensureSourceReposRegistered(organizationId, sourceRepos);
-}
-
-async function ensureTreeBindingForSetup(args: {
-  organizationId: string;
-  treeBindingPlan: TreeBindingPlan;
-  detectedTreeUrl: string | null;
-}): Promise<string | null> {
-  if (args.treeBindingPlan === "createBinding") {
-    await provisionNewTree(args.organizationId);
-  }
-  const setting = await getContextTreeSetting(args.organizationId).catch(() => null);
-  return setting?.repo ?? args.detectedTreeUrl;
-}
-
-async function startKickoffChat(args: {
-  agent: KickoffAgent;
-  bootstrap: string;
-  /** The selected org — scopes the membership completion stamped by the server. */
-  organizationId: string | null;
-  /** "intro" = meet-only; "work" = value-first first chat; "tree" = Context Tree setup/update chat. */
-  kind: KickoffKind;
-  treeBindingPlan: TreeBindingPlan | "none";
-  joinPath?: "invite";
-  complete?: boolean;
-}): Promise<string> {
-  // Create-or-reuse the kickoff chat and send the bootstrap in one idempotent
-  // server call. Value-first work/intro paths can let the server stamp
-  // completion after the user-facing chat exists; background tree setup passes
-  // `complete: false` because it should not control the user's first-chat entry.
-  // A failure here surfaces to the caller rather than being swallowed.
-  const { chatId } = await kickoffOnboarding({
-    ...(args.organizationId ? { organizationId: args.organizationId } : {}),
-    agentUuid: args.agent.uuid,
-    bootstrap: args.bootstrap,
-    kind: args.kind,
-    complete: args.complete,
-  });
-  void reportOnboardingEvent("kickoff_chat_started", {
-    agentUuid: args.agent.uuid,
-    chatId,
-    treeBindingPlan: args.treeBindingPlan,
-    kind: args.kind,
-    ...(args.joinPath ? { joinPath: args.joinPath } : {}),
-  });
-  return chatId;
-}
-
-async function startTreeSetupKickoff(args: {
-  agent: KickoffAgent;
-  organizationId: string;
-  sourceRepos: readonly string[];
-  treeBindingPlan: TreeBindingPlan;
-  detectedTreeUrl: string | null;
-  queryClient: QueryClient;
-  complete?: boolean;
-}): Promise<string> {
-  const treeUrl = await ensureTreeBindingForSetup({
-    organizationId: args.organizationId,
-    treeBindingPlan: args.treeBindingPlan,
-    detectedTreeUrl: args.detectedTreeUrl,
-  });
-  args.queryClient.removeQueries({ queryKey: ["org-setting", args.organizationId, "context_tree"] });
-  args.queryClient.removeQueries({ queryKey: ["onboarding", "context-tree", args.organizationId] });
-  args.queryClient.removeQueries({ queryKey: ["me", "onboarding", "tree-setup-status", args.organizationId] });
-  const chatId = await startKickoffChat({
-    agent: args.agent,
-    bootstrap: buildTreeSetupBootstrap(args.sourceRepos, {
-      treeBindingPlan: args.treeBindingPlan,
-      treeUrl,
-    }),
-    organizationId: args.organizationId,
-    kind: "tree",
-    treeBindingPlan: args.treeBindingPlan,
-    complete: args.complete,
-  });
-  args.queryClient.removeQueries({ queryKey: ["me", "onboarding", "tree-setup-status", args.organizationId] });
-  return chatId;
-}
+import { ensureKickoffRepos, type KickoffAgent, startKickoffChat, startTreeSetupKickoff } from "../tree-kickoff.js";
 
 /** Shared "create chat + send kickoff + finish" sequence for single-chat paths. */
 async function runKickoff(args: {
   bootstrap: string | ((agent: KickoffAgent) => string);
   /** The selected org — scopes agent resolution so the seed never lands on an
-   *  agent from a different org (notably the build-tree recovery surface). */
+   *  agent from a different org. */
   organizationId: string | null;
   /** "intro" = meet-only; "work" = value-first first chat; "tree" = Context Tree setup/update chat. */
   kind: KickoffKind;
@@ -129,43 +44,14 @@ async function runKickoff(args: {
   await args.complete(chatId);
 }
 
-/**
- * `recovery` (set ONLY by the standalone /build-tree surface) suppresses the
- * per-step heading — the recovery shell supplies the constant "Build your team's
- * Context Tree" title. `agentPicker` is an optional slot rendered just above the
- * CTA — the recovery surface passes its "which agent builds the tree?" control
- * here, so the choice sits with the build action. Onboarding renders
- * `<StepKickoff />` with neither prop — unchanged. (The existing-tree fork was
- * already removed for everyone in PR 943, so there's no extra path to hide here.)
- */
-export function StepKickoff({
-  recovery,
-  agentPicker,
-  buildDisabled,
-}: {
-  recovery?: boolean;
-  agentPicker?: ReactNode;
-  buildDisabled?: boolean;
-} = {}) {
+export function StepKickoff() {
   const { path } = useOnboardingFlow();
-  return path === "admin" ? (
-    <AdminKickoff recovery={recovery} agentPicker={agentPicker} buildDisabled={buildDisabled} />
-  ) : (
-    <InviteeKickoff />
-  );
+  return path === "admin" ? <AdminKickoff /> : <InviteeKickoff />;
 }
 
 // ── Admin ───────────────────────────────────────────────────────────────
 
-function AdminKickoff({
-  recovery,
-  agentPicker,
-  buildDisabled,
-}: {
-  recovery?: boolean;
-  agentPicker?: ReactNode;
-  buildDisabled?: boolean;
-}) {
+function AdminKickoff() {
   const {
     organizationId,
     selectedRepoUrls,
@@ -280,21 +166,6 @@ function AdminKickoff({
       const agent = await resolveOnboardingAgent(organizationId);
       await ensureKickoffRepos(organizationId, repos);
 
-      if (recovery) {
-        if (!organizationId) throw new Error(COPY.errors.chatFailed);
-        const treeChatId = await startTreeSetupKickoff({
-          agent,
-          organizationId,
-          sourceRepos: repos,
-          treeBindingPlan: resolvedTreeBindingPlan,
-          detectedTreeUrl: detectedUrl,
-          queryClient,
-          complete: true,
-        });
-        await completeAndEnterChat(treeChatId);
-        return;
-      }
-
       const workChatId = await startKickoffChat({
         agent,
         bootstrap: buildValueFirstBootstrap(repos, {
@@ -380,23 +251,18 @@ function AdminKickoff({
   const usesBoundTree = treeBindingPlan === "useBoundTree";
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      {/* Recovery suppresses the per-step heading — its shell supplies the
-          constant "Build your team's Context Tree" title. */}
       <StepHeading
-        title={recovery ? "" : usesBoundTree ? COPY.kickoff.existingTitle : COPY.kickoff.newTitle}
+        title={usesBoundTree ? COPY.kickoff.existingTitle : COPY.kickoff.newTitle}
         why={usesBoundTree ? COPY.kickoff.existingWhy(repoCount) : COPY.kickoff.newWhy(repoCount)}
       />
       <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
-        {/* Recovery's "which agent builds the tree?" control sits here, right
-            above the CTA. Undefined (renders nothing) in onboarding. */}
-        {agentPicker}
         {error && (
           <FlowHint tone="error" role="alert">
             {error}
           </FlowHint>
         )}
         <div className="flex">
-          <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart || buildDisabled}>
+          <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
             <span>{usesBoundTree ? COPY.kickoff.startExisting : COPY.kickoff.startBuilding}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>

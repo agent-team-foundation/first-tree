@@ -7,7 +7,7 @@ import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../../../api/github-app.js";
 import { Button } from "../../../components/ui/button.js";
 import { COPY } from "../copy.js";
-import { FlowHint, RepoPicker, RepoTokenPicker, StatusRow } from "../flow-ui.js";
+import { FlowHint, RepoTokenPicker, StatusRow } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
@@ -30,14 +30,7 @@ const INSTALL_ATTEMPT_KEY = "onboarding:connect-code:install-attempt";
  * dialog without anything installed. Each case gets a plain message and
  * a way forward (never a dead end).
  */
-/**
- * `recovery` (set ONLY by the standalone /build-tree surface) makes a repo
- * MANDATORY: no "Skip" / "continue without a repo" outs, and Continue is
- * disabled until at least one repo is selected — a Context Tree can't be built
- * without source repos to seed from. Onboarding renders `<StepConnectCode />`
- * with no prop (friction, not a block) — unchanged.
- */
-export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
+export function StepConnectCode() {
   const { organizationId, goNext, selectedRepoUrls, setSelectedRepoUrls, hasRepoDraft } = useOnboardingFlow();
   const [installError, setInstallError] = useState<"not_configured" | "not_admin" | "generic" | null>(null);
   const [redirecting, setRedirecting] = useState(false);
@@ -110,13 +103,7 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
     // tab and lands it on /onboarding/connected to auto-close, while this tab
     // keeps polling and advances on its own.
     const installTab = window.open("", "_blank");
-    // The post-install landing differs by path: a real popup (has an opener)
-    // lands on /onboarding/connected to auto-close; but if the popup was blocked
-    // we redirect THIS tab, so it must return to the surface it came from —
-    // `/build-tree` on the recovery surface, else the wizard itself
-    // (`/onboarding`). Returning a recovery admin to `/onboarding` would bounce
-    // them out (shouldLeaveOnboarding), so this must be path-aware.
-    const postInstallNext = installTab ? "/onboarding/connected" : recovery ? "/build-tree" : "/onboarding";
+    const postInstallNext = installTab ? "/onboarding/connected" : "/onboarding";
     try {
       const url = await getGithubAppInstallUrl(organizationId, postInstallNext);
       window.sessionStorage.setItem(INSTALL_ATTEMPT_KEY, String(Date.now()));
@@ -169,9 +156,8 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
 
         {installError === "not_configured" || installError === "not_admin" ? (
           // Just the message — the unified "Skip for now" at the bottom of the
-          // step is the way forward (recovery has no skip; a blocked admin leaves
-          // via the shell's "Back to workspace").
-          <FlowHint>{recovery ? COPY.connectCode.cantConnectRecovery : COPY.connectCode.cantConnect}</FlowHint>
+          // step is the way forward.
+          <FlowHint>{COPY.connectCode.cantConnect}</FlowHint>
         ) : (
           <>
             {/* Primary CTA only — "Skip for now" lives at the bottom of the step
@@ -212,8 +198,8 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
                 if the GitHub tab didn't work, "Start over" re-mints (the only
                 safe way to retry — see the CTA-lock note above). */}
             {attempted ? (
-              // Stuck recovery (replaces the old "Need help?" disclosure): the
-              // live "waiting" status + a re-mint retry. notOwnerHint above
+              // Stuck install recovery: the live "waiting" status + a re-mint retry.
+              // notOwnerHint above
               // already covers who can install / owner approval, so no extra
               // troubleshooting line here.
               <div className="flex items-center" style={{ gap: "var(--sp-2_5)", flexWrap: "wrap" }}>
@@ -228,16 +214,14 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
         {/* Unified "Skip for now" at the bottom — the same quiet link in every
             not-installed state (was beside the CTA / under the error message).
             handleSkip clears any in-flight install marker first. */}
-        {!recovery && (
-          <Button
-            type="button"
-            variant="link"
-            className="h-auto self-start p-0 text-label underline underline-offset-2"
-            onClick={handleSkip}
-          >
-            {COPY.skipForNow}
-          </Button>
-        )}
+        <Button
+          type="button"
+          variant="link"
+          className="h-auto self-start p-0 text-label underline underline-offset-2"
+          onClick={handleSkip}
+        >
+          {COPY.skipForNow}
+        </Button>
       </div>
     );
   }
@@ -274,28 +258,13 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
             {COPY.connectCode.loading}
           </p>
         ) : loadFailed ? (
-          // Recovery has no "continue without a repo", so the failure isn't a
-          // dead end via skip — offer a retry instead and reword the copy.
           <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
             <FlowHint tone="error" role="alert">
-              {recovery ? COPY.connectCode.loadFailedRecovery : COPY.connectCode.loadFailed}
+              {COPY.connectCode.loadFailed}
             </FlowHint>
-            {recovery ? (
-              <Button
-                type="button"
-                variant="link"
-                className="h-auto self-start p-0 text-label"
-                onClick={() => void reposQuery.refetch()}
-              >
-                {COPY.connectCode.loadFailedRetry}
-              </Button>
-            ) : null}
           </div>
         ) : (reposQuery.data?.length ?? 0) === 0 ? (
-          <FlowHint>{recovery ? COPY.connectCode.noReposRecovery : COPY.connectCode.noRepos}</FlowHint>
-        ) : recovery ? (
-          // Recovery (/build-tree) keeps the plain list picker.
-          <RepoPicker repos={reposQuery.data ?? []} selected={selectedRepoUrls} onToggle={toggleRepo} fill />
+          <FlowHint>{COPY.connectCode.noRepos}</FlowHint>
         ) : (
           // Onboarding: search + selected-chips-in-field token picker, default none.
           <RepoTokenPicker
@@ -314,20 +283,6 @@ export function StepConnectCode({ recovery }: { recovery?: boolean } = {}) {
             <span>{COPY.continue}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
-        ) : recovery ? (
-          // Recovery: a repo is MANDATORY (the tree is built from it) — show the
-          // consequence and a DISABLED Continue, never a skip.
-          <>
-            {hasPickableRepos && (
-              <p className="text-label" style={{ margin: 0, color: "var(--fg-4)" }}>
-                {COPY.buildTree.connectRepoHint}
-              </p>
-            )}
-            <Button type="button" className="self-start" disabled>
-              <span>{COPY.continue}</span>
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </>
         ) : (
           // No repo (didn't pick / couldn't load / none exist): continuing
           // without one is never the desired path, so it's always a very weak

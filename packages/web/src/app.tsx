@@ -18,7 +18,6 @@ import { ContextPage } from "./pages/context.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
-import { BuildTreePage } from "./pages/onboarding/build-tree-page.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
@@ -42,6 +41,10 @@ const queryClient = new QueryClient({
 
 const ContextPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/context-preview.js").then((module) => ({ default: module.ContextPreviewPage })))
+  : null;
+
+const ContextTreePreviewPage = import.meta.env.DEV
+  ? lazy(() => import("./pages/context-tree-preview.js").then((module) => ({ default: module.ContextTreePreviewPage })))
   : null;
 
 const ChatRowAvatarPreviewPage = import.meta.env.DEV
@@ -147,6 +150,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <ContextPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {ContextTreePreviewPage ? (
+                <Route
+                  path="/preview/context-tree"
+                  element={
+                    <Suspense fallback={null}>
+                      <ContextTreePreviewPage />
                     </Suspense>
                   }
                 />
@@ -297,11 +310,6 @@ export function App() {
                     chrome. The workspace root redirects incomplete users
                     here; this route redirects back once setup is complete. */}
                 <Route path="/onboarding" element={<OnboardingPage />} />
-                {/* Standalone "build your Context Tree" recovery — same
-                    full-screen, outside-the-workspace treatment as onboarding.
-                    Self-gates on tree-absence; redirects to the workspace when
-                    there's nothing to recover. */}
-                <Route path="/build-tree" element={<BuildTreePage />} />
                 <Route
                   element={
                     <PulseProvider>

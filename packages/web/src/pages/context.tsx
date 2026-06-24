@@ -7,17 +7,17 @@ import type {
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { stratify, tree } from "d3-hierarchy";
-import { AlertTriangle, ArrowRight, Network, RefreshCw } from "lucide-react";
+import { AlertTriangle, Network, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
+import { getTreeSetupStatus } from "../api/onboarding-events.js";
 import { useAuth } from "../auth/auth-context.js";
 import { resolveAvatarHue } from "../components/chat/chat-row-avatar.js";
 import { Identicon } from "../components/identicon.js";
-import { Button } from "../components/ui/button.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
-import { COPY } from "./onboarding/copy.js";
+import { ContextTreeBuildEntry } from "./context-tree-build-entry.js";
 
 const CONTEXT_WINDOW = "7d";
 // Live-feed refetch cadence. The usage feed inside the snapshot is what wants
@@ -43,7 +43,18 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
     refetchIntervalInBackground: false,
   });
 
+  const treeSetupQuery = useQuery({
+    queryKey: ["me", "onboarding", "tree-setup-status", organizationId],
+    queryFn: () => {
+      if (!organizationId) throw new Error("No organization selected");
+      return getTreeSetupStatus(organizationId);
+    },
+    enabled: !preview && !!organizationId && isAdmin,
+  });
+
   const snapshot = previewSnapshot ?? query.data;
+  const treeSetupStatus = treeSetupQuery.data;
+  const needsTreeSetup = !preview && isAdmin && (treeSetupStatus?.needsTreeSetup ?? false);
   const selectedUpdate = useMemo(() => {
     if (!snapshot) return null;
     return snapshot.updates.find((update) => update.id === selectedUpdateId) ?? snapshot.updates[0] ?? null;
@@ -75,10 +86,13 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
             <UnavailableState
               snapshot={snapshot}
               isAdmin={isAdmin}
-              canInitialize={!preview && isAdmin && !snapshot.repo}
+              canInitialize={!preview && isAdmin && (needsTreeSetup || !snapshot.repo)}
             />
           ) : (
             <>
+              {needsTreeSetup ? (
+                <ContextTreeSetupRecovery repo={snapshot.repo} hasTreeBinding={!!treeSetupStatus?.hasTreeBinding} />
+              ) : null}
               <ContextStatusNote snapshot={snapshot} />
               <ChangeMap
                 snapshot={snapshot}
@@ -95,6 +109,27 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
         ) : null}
       </div>
     </>
+  );
+}
+
+function ContextTreeSetupRecovery({ repo, hasTreeBinding }: { repo: string | null; hasTreeBinding: boolean }) {
+  return (
+    <Panel>
+      <PanelBody className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
+        <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+          <span className="text-subtitle" style={{ color: "var(--fg)" }}>
+            Finish Context Tree setup
+          </span>
+          <span className="text-body" style={{ color: "var(--fg-3)" }}>
+            Your team has a Context Tree binding, but the setup chat still needs to start.
+          </span>
+        </div>
+        <ContextTreeBuildEntry
+          treeBindingPlan={hasTreeBinding ? "useBoundTree" : "createBinding"}
+          detectedTreeUrl={repo}
+        />
+      </PanelBody>
+    </Panel>
   );
 }
 
@@ -643,17 +678,16 @@ function UnavailableState({
   isAdmin: boolean;
   canInitialize: boolean;
 }) {
-  const navigate = useNavigate();
   const title = snapshot.repo
     ? "Context Tree sync unavailable"
     : isAdmin
-      ? COPY.buildTree.bannerTitle
+      ? "Your team doesn't have a Context Tree yet"
       : "Connect Context Tree";
   const detail = snapshot.repo
     ? "First Tree cannot read the team Context Tree yet. Agents and users will see context here after the server can sync the configured repo."
     : isAdmin
-      ? COPY.buildTree.bannerBody
-      : "Ask an admin to initialize this team's Context Tree.";
+      ? "Connect your code and your agent will build your team's shared memory with you in a chat."
+      : "Ask an admin to set up your team's Context Tree.";
   const syncDetail = snapshot.contextStatus.detail;
   const repoLabel = snapshot.repo ? redactRepoForDisplay(snapshot.repo) : null;
   return (
@@ -671,17 +705,15 @@ function UnavailableState({
                 {syncDetail}
               </div>
             ) : null}
+            {/* The team's single setup entry — admin + recoverable tree setup.
+                It launches the tree-build agent chat; it never edits the tree in
+                the tab, so the read-only-perception boundary holds. */}
             {canInitialize ? (
-              <div style={{ marginTop: "var(--sp-2)" }}>
-                {/* A quiet link, not a CTA button — routes into the build-tree
-                    flow (connect code -> build -> seed). /build-tree self-gates,
-                    so a non-eligible click just bounces back to the workspace.
-                    The low-level "create an empty private repo" config lives in
-                    Settings -> Context tree. */}
-                <Button type="button" variant="link" className="h-auto p-0" onClick={() => navigate("/build-tree")}>
-                  <span>{COPY.buildTree.buildCta}</span>
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
+              <div style={{ marginTop: "var(--sp-3)" }}>
+                <ContextTreeBuildEntry
+                  treeBindingPlan={snapshot.repo ? "useBoundTree" : "createBinding"}
+                  detectedTreeUrl={snapshot.repo}
+                />
               </div>
             ) : null}
             {snapshot.repo || snapshot.branch ? (

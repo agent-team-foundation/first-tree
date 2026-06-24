@@ -63,7 +63,7 @@ export type ManagedAgent = {
   clientId: string | null;
   /** Lifecycle status — `active` / `suspended` (deleted agents are excluded
    *  server-side). A suspended agent cannot bind/run, so callers that need a
-   *  *usable* agent (e.g. the build-tree seeding picker) must filter to active. */
+   *  *usable* agent must filter to active. */
   status: string;
   /**
    * Resolved avatar URL: uploaded agent image if present, else — for
