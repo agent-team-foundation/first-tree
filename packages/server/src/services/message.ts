@@ -269,7 +269,21 @@ export function preflightMessageSendIntent(input: {
     throw new BadRequestError(`Cannot route to "${label}" because the agent is ${participant.status}. ${recovery}`);
   }
 
-  const metadataToStore = mergedMentions.length > 0 ? { ...incomingMeta, mentions: mergedMentions } : incomingMeta;
+  // Persist the addressed live non-human agents — the real routed recipients.
+  // `mentions` only carries explicit @s / receiverNames, NOT the system
+  // `addressedToAgentIds` routing (e.g. the onboarding kickoff bootstrap), so a
+  // surface that needs to know who a turn actually awaits a reply from (the chat
+  // offline notice) can't rely on `mentions` alone. `routedRecipientIds` is the
+  // validated fan-out set; keep only its active non-human agents.
+  const addressedAgentIds = [...routedRecipientIds].filter((id) => {
+    const participant = participantsById.get(id);
+    return participant !== undefined && participant.type !== "human";
+  });
+  const metadataToStore = {
+    ...incomingMeta,
+    ...(mergedMentions.length > 0 ? { mentions: mergedMentions } : {}),
+    ...(addressedAgentIds.length > 0 ? { addressedAgentIds } : {}),
+  };
 
   if (data.format === MESSAGE_FORMATS.REQUEST) {
     const targetId = mergedMentions[0];

@@ -14,7 +14,7 @@ vi.mock("../../../api/agent-status.js", () => ({
 }));
 
 // Imported after the mock is registered.
-import { ChatOfflineNotice, OfflineNotice } from "../chat-offline-notice.js";
+import { awaitedAgentsFromMessage, ChatOfflineNotice, OfflineNotice } from "../chat-offline-notice.js";
 
 let h: DomHarness;
 let queryClient: QueryClient;
@@ -59,6 +59,24 @@ const status = (agentId: string, reachable: boolean): AgentChatStatus =>
   buildAgentChatStatus({ agentId, reachable, errored: false, working: false, engagement: "active" });
 
 const ARIA = agent("a1", "Aria");
+
+describe("awaitedAgentsFromMessage", () => {
+  it("returns the routed non-human agents (addressedAgentIds intersect chat agents)", () => {
+    const bee = agent("b", "Bee");
+    expect(awaitedAgentsFromMessage({ addressedAgentIds: ["a1"] }, [ARIA, bee])).toEqual([ARIA]);
+  });
+  it("covers the onboarding bootstrap (systemSender + addressedAgentIds, no mentions)", () => {
+    const meta = { systemSender: "first_tree_onboarding", addressedAgentIds: ["a1"] };
+    expect(awaitedAgentsFromMessage(meta, [ARIA])).toEqual([ARIA]);
+  });
+  it("returns [] when no agent was routed (empty / missing metadata)", () => {
+    expect(awaitedAgentsFromMessage({}, [ARIA])).toEqual([]);
+    expect(awaitedAgentsFromMessage(undefined, [ARIA])).toEqual([]);
+  });
+  it("ignores addressed ids that are not chat agents", () => {
+    expect(awaitedAgentsFromMessage({ addressedAgentIds: ["ghost"] }, [ARIA])).toEqual([]);
+  });
+});
 
 beforeEach(() => {
   h = createDomHarness();

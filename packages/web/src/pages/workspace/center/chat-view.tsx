@@ -75,7 +75,7 @@ import { AddParticipantDropdown } from "../../../components/add-participant-drop
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AgentHovercard } from "../../../components/chat/agent-hovercard.js";
 import { AskTakeover } from "../../../components/chat/ask-takeover.js";
-import { ChatOfflineNotice } from "../../../components/chat/chat-offline-notice.js";
+import { awaitedAgentsFromMessage, ChatOfflineNotice } from "../../../components/chat/chat-offline-notice.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
   FIRST_TREE_SYSTEM_SENDER_NAME,
@@ -935,17 +935,15 @@ const ChatTimeline = memo(function ChatTimeline({
   pillCount,
   onPillClick,
 }: ChatTimelineProps) {
-  // Which non-human agents this turn awaits a reply from: the latest message's
-  // structured routing (metadata.mentions) intersected with the chat's agents.
-  // mentions is the canonical recipient set (the composer + addressedToAgentIds
-  // both write it, incl. the onboarding kickoff bootstrap), so we never flag an
-  // offline agent the latest turn didn't address; a 2-speaker direct chat carries
-  // the peer in mentions too, so no sender heuristic is needed.
+  // Which non-human agents this turn awaits a reply from — routing-derived from
+  // the latest message's persisted recipients (metadata.addressedAgentIds, which
+  // includes the system addressedToAgentIds routing the onboarding bootstrap uses
+  // but `mentions` omits). See awaitedAgentsFromMessage.
   const lastMessageItem = [...visibleItems].reverse().find((it) => it.kind === "message");
-  // `metadata` is an open record, so narrow `mentions` to string[] before use.
-  const rawMentions = lastMessageItem?.kind === "message" ? lastMessageItem.data.metadata?.mentions : undefined;
-  const lastMentions = Array.isArray(rawMentions) ? rawMentions.filter((m): m is string => typeof m === "string") : [];
-  const awaitedAgents = agents.filter((a) => lastMentions.includes(a.agentId));
+  const awaitedAgents = awaitedAgentsFromMessage(
+    lastMessageItem?.kind === "message" ? lastMessageItem.data.metadata : undefined,
+    agents,
+  );
   return (
     <div className="relative flex-1 flex flex-col min-h-0">
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>

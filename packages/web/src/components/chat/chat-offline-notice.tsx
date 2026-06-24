@@ -13,6 +13,25 @@ const STARTING_GRACE_MS = 8_000;
 export type OfflineNoticePhase = "starting" | "offline";
 
 /**
+ * The non-human agents a turn awaits a reply from: the latest message's persisted
+ * routed recipients (`metadata.addressedAgentIds` — the active non-human agents
+ * the server actually routed it to, including system `addressedToAgentIds` such
+ * as the onboarding kickoff bootstrap, which carries no `mentions`), intersected
+ * with the chat's non-human participants. Routing-derived, never a sender
+ * heuristic, so a group chat never flags an offline agent the latest turn did
+ * not address.
+ */
+export function awaitedAgentsFromMessage(
+  latestMessageMeta: Record<string, unknown> | null | undefined,
+  nonHumanAgents: ChatParticipantDetail[],
+): ChatParticipantDetail[] {
+  const raw = latestMessageMeta?.addressedAgentIds;
+  const ids = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+  if (ids.length === 0) return [];
+  return nonHumanAgents.filter((a) => ids.includes(a.agentId));
+}
+
+/**
  * Presentational inline notice (no data deps) — exported so the DEV preview and
  * tests render both phases directly. `starting` holds the hopeful framing during
  * the grace window; `offline` escalates to the reconnect action.
