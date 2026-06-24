@@ -10,9 +10,10 @@ import { Input } from "./ui/input.js";
  * Modal for creating a new team or joining one via an invite link.
  *
  * Replaces the dedicated `/setup` route. The action prop selects which
- * form to render — `null` keeps the modal closed. On success we adopt
- * the new tokens (which carry the new org context) and reload the
- * dashboard so all per-org queries refetch cleanly.
+ * form to render — `null` keeps the modal closed. On success we select the
+ * new org via `selectOrganization` — a client-side switch with no token swap
+ * and no reload; it clears the React-Query cache and refetches /me — then route
+ * into onboarding so the fresh team finishes setup.
  */
 export function TeamSetupModal({ action, onClose }: { action: "create" | "join" | null; onClose: () => void }) {
   const open = action !== null;

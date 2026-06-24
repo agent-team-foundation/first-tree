@@ -8,7 +8,7 @@ const REAL_ORGS: OrgBrief[] = [{ id: "real-org", name: "real", displayName: "Rea
 beforeEach(() => {
   vi.resetModules();
   localStorage.clear();
-  window.history.replaceState(null, "", "/preview/user-menu");
+  window.history.replaceState(null, "", "/preview/team-switcher");
   globalThis.fetch = vi.fn(async () => {
     return new Response(JSON.stringify(REAL_ORGS), {
       status: 200,
@@ -21,13 +21,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("does not intercept the organizations endpoint — the account menu no longer fetches orgs", async () => {
+it("scopes the mocked organizations endpoint to the team-switcher preview path", async () => {
   const { api } = await import("../../api/client.js");
-  await import("../user-menu-preview.js");
+  await import("../team-switcher-preview.js");
 
-  // The account preview must NOT patch api.get: team switching (and its org
-  // fetch) moved to /preview/team-switcher. /me/organizations falls straight
-  // through to the real client even while on the user-menu preview path.
+  const previewOrgs = await api.get<OrgBrief[]>("/me/organizations");
+  expect(previewOrgs.length).toBeGreaterThan(1);
+  expect(previewOrgs.map((org) => org.id)).toContain("org-1");
+  expect(globalThis.fetch).not.toHaveBeenCalled();
+
+  window.history.replaceState(null, "", "/");
+
   await expect(api.get<OrgBrief[]>("/me/organizations")).resolves.toEqual(REAL_ORGS);
   expect(globalThis.fetch).toHaveBeenCalledWith("/api/v1/me/organizations", expect.objectContaining({ method: "GET" }));
 });
