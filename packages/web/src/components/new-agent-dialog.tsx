@@ -67,7 +67,9 @@ function issuesToFieldErrors(issues: ValidationIssue[] | undefined): FieldErrors
  * Hidden defaults:
  *   - type = "agent"
  *   - manager = current user
- *   - delegateMention = not surfaced
+ *   - delegateMention = not surfaced here; the server auto-adopts a
+ *     member's FIRST agent as their delegate (createAgent in
+ *     services/agent.ts), so the common case needs no manual step.
  *
  * Surfaced choices: visibility (visible to your team / private to you), the
  * connected computer the agent will run on, and the runtime provider —

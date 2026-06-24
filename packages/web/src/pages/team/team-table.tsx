@@ -873,7 +873,7 @@ function DelegateSelector({
       />
       {candidates.length === 0 ? (
         <div className="text-caption" style={{ color: "var(--fg-4)", padding: "var(--sp-1_5) var(--sp-2)" }}>
-          Only team-visible agents can be a delegate.
+          Create an agent to set as your delegate.
         </div>
       ) : (
         candidates.map((agent) => (

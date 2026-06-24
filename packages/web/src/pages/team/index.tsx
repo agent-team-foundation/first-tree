@@ -536,15 +536,15 @@ export function buildTeamData(args: {
 }
 
 export function selectDelegateCandidates(agents: Agent[], managerId: string | null | undefined): Agent[] {
-  // Delegate candidates are the viewer's own team-visible assistants:
-  // type=agent + organization-visible + active + managed by the viewer.
-  // Private agents are excluded — a delegate acts on the human's behalf in
-  // team chats, so it must be mentionable by the team (visibility=organization).
-  // The managerId filter is the issue 669 candidate fix — the selector only
-  // lists the user's own agents, not the whole org's.
-  return agents.filter(
-    (a) => a.type === "agent" && a.visibility === "organization" && a.status === "active" && a.managerId === managerId,
-  );
+  // Delegate candidates are the viewer's own active agents: type=agent + active
+  // + managed by the viewer. Visibility is NOT a filter — a private agent (your
+  // personal assistant) is a first-class delegate, and the server accepts it
+  // (same-org check only; webhook routing checks same-org + active). This must
+  // stay in sync with the Agent Detail picker (profile-edit-dialog.tsx): both
+  // entry points set the same field and must offer the same candidates. The
+  // managerId filter is the issue 669 candidate fix — the selector only lists
+  // the user's own agents, not the whole org's.
+  return agents.filter((a) => a.type === "agent" && a.status === "active" && a.managerId === managerId);
 }
 
 const roleValues = Object.values(MEMBER_ROLES);

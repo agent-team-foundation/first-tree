@@ -269,7 +269,7 @@ describe("buildTeamData", () => {
 });
 
 describe("selectDelegateCandidates", () => {
-  it("returns only the given manager's active team-visible (organization) agents", () => {
+  it("returns the manager's own active agents, including private ones (visibility not filtered)", () => {
     const mineOrg = agent({
       uuid: "mine-org",
       type: "agent",
@@ -301,8 +301,10 @@ describe("selectDelegateCandidates", () => {
     });
     const human = agent({ uuid: "human-1", type: "human", displayName: "Ada", managerId: "member-1" });
 
+    // mine-private now qualifies; their-org (other manager), suspended, and the
+    // human are still excluded.
     expect(
       selectDelegateCandidates([mineOrg, theirOrg, minePrivate, suspended, human], "member-1").map((a) => a.uuid),
-    ).toEqual(["mine-org"]);
+    ).toEqual(["mine-org", "mine-private"]);
   });
 });
