@@ -431,7 +431,7 @@ function isCapacity(text: string, base: Classification, retryAfterMs: number | u
   return (
     retryAfterMs !== undefined ||
     base.reasonCode.includes("rate_limit") ||
-    /rate.?limit|usage limit|quota|insufficient_quota|overloaded|capacity/.test(text)
+    /rate.?limit|usage limit|session limit|quota|insufficient_quota|overloaded|capacity/.test(text)
   );
 }
 
@@ -443,7 +443,7 @@ function isTransportText(text: string): boolean {
 }
 
 function capacityReason(text: string, base: Classification): string {
-  if (/usage limit|quota|insufficient_quota/.test(text)) return "provider_usage_limit";
+  if (/usage limit|session limit|quota|insufficient_quota/.test(text)) return "provider_usage_limit";
   if (/overloaded|capacity/.test(text)) return "provider_overloaded";
   if (/rate.?limit/.test(text) || base.reasonCode.includes("rate_limit")) return "provider_rate_limited";
   return base.reasonCode === "unknown" ? "provider_capacity" : base.reasonCode;

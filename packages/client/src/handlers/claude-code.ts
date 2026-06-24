@@ -154,6 +154,24 @@ export function detectStreamApiError(text: string): { message: string } | null {
   return { message: firstLine };
 }
 
+const CLAUDE_SESSION_LIMIT_RESULT_RE =
+  /^You(?:'|\u2019)ve hit your session limit\b(?:\s*(?:\u00b7|\u2022|-)\s*resets\s+.+)?\.?$/i;
+
+/**
+ * Claude Code can report account/session exhaustion as a `result.success`
+ * payload instead of an SDK error. Treat only the exact runtime notice shape as
+ * a provider capacity failure; normal assistant answers must still flow through
+ * the retired final-text hook.
+ */
+export function detectClaudeSessionLimitResult(text: string): { message: string } | null {
+  if (typeof text !== "string") return null;
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length >= 500) return null;
+  const firstLine = trimmed.split("\n")[0]?.trim() ?? "";
+  if (firstLine.length === 0 || firstLine !== trimmed) return null;
+  return CLAUDE_SESSION_LIMIT_RESULT_RE.test(firstLine) ? { message: firstLine } : null;
+}
+
 const TOOL_RESULT_PREVIEW_LIMIT = 400;
 
 type ToolUseBlock = { type: "tool_use"; id: string; name: string; input: unknown };
@@ -1449,6 +1467,41 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 // live events.
                 if (message.result && sessionCtx.chatId) {
                   const resultText = message.result;
+                  const sessionLimit = detectClaudeSessionLimitResult(resultText);
+                  if (sessionLimit) {
+                    const classification = classifyProviderFailure(new Error(sessionLimit.message), {
+                      provider: runtimeProvider,
+                      scope: "provider_turn",
+                      source: "stream",
+                    });
+                    const decision = decideProviderRetry({
+                      classification,
+                      scope: "provider_turn",
+                      attempt: 1,
+                      replaySafety: "provider_entered",
+                    });
+                    sessionCtx.log(
+                      `Claude Code session limit detected (${classification.category}/${classification.reasonCode}): ${sessionLimit.message}`,
+                    );
+                    emitProviderTurnRetryEvent(
+                      sessionCtx,
+                      "provider_failure_terminal",
+                      classification,
+                      decision,
+                      sessionLimit.message,
+                    );
+                    sessionCtx.emitEvent({
+                      kind: "error",
+                      payload: {
+                        source: "sdk",
+                        message: `Claude Code session limit: ${sessionLimit.message}`,
+                      },
+                    });
+                    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                    retryCount = 0;
+                    await ackTurnClose("error", decision.reasonCode, providerEnteredPrefix);
+                    continue;
+                  }
                   // Bug 6: SDK sometimes packages its own catch'd API error
                   // as a `result.subtype === "success"` payload. Sniff it so
                   // we surface an error turn instead of silently closing the
