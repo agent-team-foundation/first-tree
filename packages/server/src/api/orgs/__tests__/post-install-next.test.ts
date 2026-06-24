@@ -11,10 +11,10 @@ describe("resolvePostInstallNext", () => {
     expect(resolvePostInstallNext("/onboarding")).toBe("/onboarding");
     expect(resolvePostInstallNext("/onboarding/connected")).toBe("/onboarding/connected");
     expect(resolvePostInstallNext("/settings/github")).toBe("/settings/github");
-    // The build-tree recovery surface passes itself as `next` when the install
-    // popup is blocked — rewriting it to Settings would strand the recovery
-    // admin outside the flow they were in.
-    expect(resolvePostInstallNext("/build-tree")).toBe("/build-tree");
+    // The Context tab build entry passes itself as `next` when the install popup
+    // is blocked — rewriting it to Settings would bounce the admin out of the
+    // inline build/repo-pick flow they were in.
+    expect(resolvePostInstallNext("/context")).toBe("/context");
   });
 
   it("falls back to Settings for an absent value", () => {
@@ -31,7 +31,7 @@ describe("resolvePostInstallNext", () => {
 
   it("only allows the known internal destinations", () => {
     expect([...ALLOWED_POST_INSTALL_NEXT].sort()).toEqual([
-      "/build-tree",
+      "/context",
       "/onboarding",
       "/onboarding/connected",
       "/settings/github",
