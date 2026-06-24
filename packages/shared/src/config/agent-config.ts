@@ -30,6 +30,13 @@ export const agentConfigSchema = defineConfig({
     // past the last activity the session is reclaimed (see evictIdle in
     // session-manager.ts and #418).
     working_grace_seconds: field(z.number().int().positive().default(3600)),
+    // When a session goes idle but its provider still has a live background
+    // subprocess (e.g. a `run_in_background` watcher polling CI), defer
+    // idle-suspend and deprioritize concurrency eviction so the subprocess's
+    // completion wake-up is not lost — still bounded by the
+    // `idle_timeout + working_grace_seconds` hard cap (see evictIdle in
+    // client `session-manager.ts`). Default on.
+    defer_suspend_on_subprocess: field(z.boolean().default(true)),
   },
 });
 
