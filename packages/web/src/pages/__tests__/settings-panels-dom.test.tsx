@@ -372,19 +372,21 @@ describe("settings panels", () => {
     await act(async () => failed.root.unmount());
   });
 
-  it("renders context tree tabs and keeps manual settings hidden by default", async () => {
+  it("renders configured context tree settings directly", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Manual Set");
+    await waitForText(container, "Repo URL");
 
     const tabs = container.querySelectorAll<HTMLButtonElement>('[role="tab"]');
     expect([...tabs].map((tab) => tab.textContent?.trim())).toEqual(["Initial", "Features"]);
     expect(tabs[0]?.getAttribute("aria-selected")).toBe("true");
     expect(tabs[1]?.getAttribute("aria-selected")).toBe("false");
-    expect(container.textContent).toContain("Connect your code & build your Context Tree");
-    expect(inputByLabel(container, "Manual Set")?.checked).toBe(false);
-    expect(container.textContent).not.toContain("Repo URL");
-    expect(container.textContent).not.toContain("Branch");
+    expect(tabs[1]?.disabled).toBe(false);
+    expect(tabs[1]?.getAttribute("aria-disabled")).toBeNull();
+    expect(container.textContent).not.toContain("Connect your code & build your Context Tree");
+    expect(container.textContent).not.toContain("Manual Set");
+    expect(inputByLabel(container, "Repo URL")?.value).toBe("https://github.com/acme/context");
+    expect(inputByLabel(container, "Branch")?.value).toBe("main");
 
     await act(async () => root.unmount());
   });
@@ -392,9 +394,6 @@ describe("settings panels", () => {
   it("shows and saves manual context tree settings with blank values normalized to null", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Manual Set");
-
-    await click(inputByLabel(container, "Manual Set"));
     await waitForText(container, "Repo URL");
 
     const repoInput = inputByLabel(container, "Repo URL");
@@ -430,6 +429,13 @@ describe("settings panels", () => {
     expect(container.textContent).toContain("Manual Set");
     expect(container.textContent).not.toContain("Repo URL");
     expect(container.textContent).not.toContain("Branch");
+    const featuresTab = buttonByText(container, "Features");
+    expect(featuresTab?.disabled).toBe(true);
+    expect(featuresTab?.getAttribute("aria-disabled")).toBe("true");
+    await click(featuresTab);
+    expect(buttonByText(container, "Initial")?.getAttribute("aria-selected")).toBe("true");
+    expect(buttonByText(container, "Features")?.getAttribute("aria-selected")).toBe("false");
+    expect(container.textContent).not.toContain("Context Reviewer");
     // No raw "create private repo" button, and the panel no longer initializes
     // the tree in place — that's the /build-tree flow's job now.
     expect(container.textContent).not.toContain("Create private GitHub repo");
@@ -446,14 +452,13 @@ describe("settings panels", () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Manual Set");
-    await click(inputByLabel(container, "Manual Set"));
     await waitForText(container, "Repo URL");
 
     expect(inputByLabel(container, "Repo URL")?.hasAttribute("readonly")).toBe(true);
     expect(inputByLabel(container, "Branch")?.hasAttribute("readonly")).toBe(true);
     // No Save affordance for members.
     expect(container.querySelector('button[type="submit"]')).toBeNull();
+    expect(container.textContent).not.toContain("Manual Set");
     await act(async () => root.unmount());
   });
 
@@ -464,15 +469,13 @@ describe("settings panels", () => {
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
     await waitForText(container, "Ask an admin to initialize");
     expect(container.textContent).not.toContain("Create private GitHub repo");
+    expect(container.textContent).toContain("Manual Set");
     await act(async () => root.unmount());
   });
 
   it("renders Context Reviewer settings without resetting manual draft values", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Manual Set");
-
-    await click(inputByLabel(container, "Manual Set"));
     await waitForText(container, "Repo URL");
     const repoInput = inputByLabel(container, "Repo URL");
     if (!repoInput) throw new Error("Expected repo input");
@@ -498,7 +501,7 @@ describe("settings panels", () => {
   it("saves disabled Context Reviewer as disabled/null", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Manual Set");
+    await waitForText(container, "Repo URL");
 
     await click(buttonByText(container, "Features"));
     await waitForText(container, "Context Reviewer is disabled.");
@@ -515,7 +518,7 @@ describe("settings panels", () => {
   it("enables Context Reviewer, filters eligible agents, and saves the selected agent", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Manual Set");
+    await waitForText(container, "Repo URL");
 
     await click(buttonByText(container, "Features"));
     await waitForText(container, "Context Reviewer");
@@ -543,7 +546,7 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Manual Set");
+    await waitForText(container, "Repo URL");
 
     await click(buttonByText(container, "Features"));
     await waitForText(container, "Beta Reviewer");
@@ -560,7 +563,7 @@ describe("settings panels", () => {
     ]);
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Manual Set");
+    await waitForText(container, "Repo URL");
 
     await click(buttonByText(container, "Features"));
     await click(inputByLabel(container, "Context Reviewer"));
@@ -576,7 +579,7 @@ describe("settings panels", () => {
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Manual Set");
+    await waitForText(container, "Repo URL");
 
     await click(buttonByText(container, "Features"));
     await waitForText(container, "Current reviewer is not your active agent.");
@@ -595,7 +598,7 @@ describe("settings panels", () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
-    await waitForText(container, "Manual Set");
+    await waitForText(container, "Repo URL");
 
     await click(buttonByText(container, "Features"));
     await waitForText(container, "Only admins can configure Context Reviewer.");
