@@ -288,6 +288,41 @@ export function ChatSummary({
     return () => el.removeEventListener("scroll", onScroll);
   }, [hasDescription, scrollContainerRef]);
 
+  // Wheel bridging: the expanded summary is a pinned sibling ABOVE the message
+  // scroll container, and its only ancestor is the `overflow-hidden` center
+  // column — so a wheel gesture over the summary has no scrollable target and
+  // the conversation reads as "locked" (the markdown body only scrolls when its
+  // own content overflows). Bridge it: when the body can still scroll in the
+  // wheel's direction let it; otherwise drive the message stream so scrolling
+  // stays continuous across the summary↔stream seam (and scrolling down folds
+  // the summary via the existing sticky-collapse, same as scrolling the stream).
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const innerScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!hasDescription) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    const onWheel = (e: WheelEvent) => {
+      const stream = scrollContainerRef.current;
+      if (!stream) return;
+      // Leave horizontal/trackpad-pan gestures to the browser.
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.deltaY === 0) return;
+      const inner = innerScrollRef.current;
+      if (inner) {
+        const atTop = inner.scrollTop <= 0;
+        const atBottom = inner.scrollTop + inner.clientHeight >= inner.scrollHeight - 1;
+        // The markdown body can absorb this delta itself — let native scroll run.
+        if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBottom)) return;
+      }
+      stream.scrollTop += e.deltaY;
+      e.preventDefault();
+    };
+    // Native, non-passive so preventDefault works (React routes onWheel through a
+    // passive root listener, where preventDefault is a no-op).
+    panel.addEventListener("wheel", onWheel, { passive: false });
+    return () => panel.removeEventListener("wheel", onWheel);
+  }, [hasDescription, scrollContainerRef]);
+
   if (!hasDescription) return null;
 
   const expanded = open && !scrollCollapsed;
@@ -298,6 +333,7 @@ export function ChatSummary({
 
   return (
     <div
+      ref={panelRef}
       className="shrink-0"
       style={{
         // The summary is conversation content, so it shares the message-stream
@@ -375,7 +411,11 @@ export function ChatSummary({
 
       {expanded ? (
         <div style={{ padding: "var(--sp-1) var(--sp-6) var(--sp-3)" }}>
-          <div className="text-body" style={{ color: "var(--fg)", maxHeight: "min(46vh, 30rem)", overflowY: "auto" }}>
+          <div
+            ref={innerScrollRef}
+            className="text-body"
+            style={{ color: "var(--fg)", maxHeight: "min(46vh, 30rem)", overflowY: "auto" }}
+          >
             {/* Faithful markdown render. Headings are flattened to body size so
                 hierarchy is carried by weight + spacing (mirrors the rail's old
                 Summary treatment) rather than shouting over the bar above. */}
