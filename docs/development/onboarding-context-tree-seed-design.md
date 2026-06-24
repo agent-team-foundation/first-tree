@@ -78,12 +78,25 @@ state — **not** wired into onboarding.
 > `Administration: write` + `Contents: write` + `Workflows: write` repository
 > permissions, and returns distinct status codes when those aren't met:
 > - `409 organization_installation_required` — installation is a personal/User
->   account (so **personal-account users cannot use one-click new-tree** — a
->   real constraint of the Cloud-provision choice);
+>   account (this org-only constraint was **later lifted — see the Update
+>   below**);
 > - `409 selected_repositories_unsupported` — installed on selected repos only;
 > - `403 installation_permissions_insufficient` — missing admin/contents/workflows write;
 > - `503 no_installation` — no installation connected;
 > - `409 ConflictError` — `org.context_tree` already set.
+
+> **Update — owner-agnostic provisioning (later change):** the **org-only** and
+> **all-repositories** constraints above were lifted. The initializer is now
+> owner-agnostic: a personal/**User** installation can one-click build the tree —
+> the repo is created with the acting admin's GitHub App **user token** and then
+> re-verified via the installation token — and a **selected-repositories** install
+> is handled by a live-capability check, not a hard refusal.
+> `organization_installation_required` and `selected_repositories_unsupported` no
+> longer exist; a personal-account access gap now surfaces as a **recoverable**
+> `context_tree_repo_access_required` (grant the App repo access, then retry),
+> `context_tree_repo_account_mismatch`, or `github_user_token_required`. The
+> Organization install path is unchanged. Durable decision:
+> `system/cloud/context-tree/binding.md` in the context tree.
 
 This resolves the architecture fork: **Cloud provisions the empty tree repo +
 org binding; the agent seeds content.** This task builds on #923; it does not
@@ -138,9 +151,9 @@ add agent-driven repo creation.
   succeeded → proceed; otherwise re-throw. This correctly handles BOTH the
   genuinely-already-provisioned case (detect→create race, or a retry after a
   later kickoff step failed — no confusing dead-end) AND the merged endpoint's
-  other 409s (`organization_installation_required` /
-  `selected_repositories_unsupported` mean *no tree was created* → re-throw the
-  actionable error). Every non-409 error (e.g. `403`) propagates unchanged;
+  other 409s (`context_tree_repo_access_required` /
+  `context_tree_repo_account_mismatch` / `repo_unavailable` mean *no tree was
+  created* → re-throw the actionable error). Every non-409 error (e.g. `403`) propagates unchanged;
   nothing is half-created on failure (no chat yet). `AdminKickoff` also
   auto-detects an existing `context_tree` at form time and switches to the bind
   path, so this only fires when no tree was detected. *(Review-evolved: the
@@ -242,23 +255,24 @@ per-chat runtime state already lets the UI show "working" on that chat.
 
 ## 8. Open items / risks
 
-- **O3 — GitHub App ORG-installation prerequisites (deployment-gated).** Because
-  the merged endpoint creates the repo with the **org installation token** (see
-  §3 correction), the prerequisites are on the installation, not a user OAuth
-  token:
+- **O3 — GitHub App installation prerequisites (deployment-gated).** Provisioning
+  is owner-agnostic (see the §3 update): the storage repo may live under a GitHub
+  **Organization** or a personal **User** account.
   - the App's repository permissions must include **`Administration: write`**
-    (governs repo creation), **`Contents: write`** (to write the root
-    `NODE.md`), and **`Workflows: write`** (to write the validation workflow);
-  - the team must install the App on a GitHub **Organization** with
-    **all repositories** (not a personal account, not selected repos);
+    (org repo creation), **`Contents: write`** (to write the root `NODE.md`), and
+    **`Workflows: write`** (to write the validation workflow); an Organization
+    repo is created with the installation token, a personal repo with the admin's
+    GitHub App **user token**, then verified via the installation token;
+  - **selected-repositories** installs are supported — a newly created personal
+    repo the App can't yet see returns a recoverable
+    `context_tree_repo_access_required` (grant the App access, then retry);
   - existing installations are re-prompted to accept new permissions; the change
     applies to future installs.
-  #923's unit tests inject a mock `fetcher`, so green CI does NOT prove the live
-  App can create repos — **smoke-test the real flow** (org install, all repos)
-  and confirm a 201 + real private repo before relying on it. **Known
-  constraint:** personal-account users get `409 organization_installation_required`
-  and cannot use one-click new-tree — the kickoff now surfaces that actionable
-  error (re-throw) instead of silently sending a broken seed message.
+  Unit tests inject a mock `fetcher`, so green CI does NOT prove the live App can
+  create repos — **smoke-test the real flow** (both an org install and a
+  personal-account install) and confirm a 201 + a real private repo before
+  relying on it. The old org-only constraint (personal-account users blocked with
+  `409 organization_installation_required`) no longer applies.
 - **O2 — provider:** `first-tree-seed` is a Claude-Code-shaped skill; onboarding
   picks `runtimeProvider` (claude-code preferred, else codex). This PR validates
   the claude-code path; codex seeding is out of scope / flagged, not assumed.
