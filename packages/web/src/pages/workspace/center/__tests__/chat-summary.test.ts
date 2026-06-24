@@ -249,6 +249,33 @@ describe("ChatSummary", () => {
     container.remove();
   });
 
+  it("does not auto-expand a sticky-collapsed summary when scrolling back to the top", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const { container, root } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')).not.toBeNull();
+
+    await act(async () => {
+      scrollEl.scrollTop = 120;
+      scrollEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(container.querySelector("strong")).toBeNull();
+
+    await act(async () => {
+      scrollEl.scrollTop = 0;
+      scrollEl.dispatchEvent(new Event("scroll"));
+    });
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+    expect(container.querySelector("strong")).toBeNull();
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
   it("expands on the first click from the sticky-collapsed bar", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
