@@ -544,6 +544,9 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain('mkdir -p "$(dirname <path>)"');
     // Read goes through a worktree, not the clone path; skills scan there too.
     expect(briefing).toContain("Read through a worktree, not the clone path.");
+    // The cross-ref carries the SAME per-source rule as the Worktrees block, so
+    // agents don't hit a stale "one worktree per task" before `## Worktrees`.
+    expect(briefing).toContain("one worktree per task, per touched source repo");
     expect(briefing).toContain("first-tree-seed");
     expect(briefing).not.toContain("first-tree-sync");
     expect(briefing).toContain("fetch origin");
