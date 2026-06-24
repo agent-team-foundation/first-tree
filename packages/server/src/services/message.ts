@@ -25,12 +25,13 @@ import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
 
 const log = createLogger("message");
+const ADDRESSED_AGENT_IDS_METADATA_KEY = "addressedAgentIds";
 
 /**
- * Metadata keys reserved for trusted-internal write paths. Stripped from
- * untrusted-caller input (any send that doesn't opt in) so an HTTP POST
- * cannot smuggle a UI-trust marker into a regular message — see the
- * `allowSystemSender` field on `SendMessageOptions` for the threat model.
+ * Metadata keys reserved for server-owned write paths. Stripped from caller
+ * input so an HTTP POST cannot smuggle a UI-trust marker into a regular
+ * message — see the `allowSystemSender` field on `SendMessageOptions` for the
+ * `systemSender` threat model.
  *
  * Returns the same reference when nothing is stripped, so the common case
  * (no reserved keys present) does not allocate.
@@ -39,9 +40,14 @@ function stripUntrustedMetadataKeys(
   meta: Record<string, unknown>,
   options: SendMessageOptions,
 ): Record<string, unknown> {
-  if (options.allowSystemSender || !("systemSender" in meta)) return meta;
-  const { systemSender: _drop, ...rest } = meta;
-  return rest;
+  const shouldStripSystemSender = !options.allowSystemSender && "systemSender" in meta;
+  const shouldStripAddressedAgentIds = ADDRESSED_AGENT_IDS_METADATA_KEY in meta;
+  if (!shouldStripSystemSender && !shouldStripAddressedAgentIds) return meta;
+  return Object.fromEntries(
+    Object.entries(meta).filter(
+      ([key]) => key !== ADDRESSED_AGENT_IDS_METADATA_KEY && (options.allowSystemSender || key !== "systemSender"),
+    ),
+  );
 }
 
 /**
@@ -269,20 +275,36 @@ export function preflightMessageSendIntent(input: {
     throw new BadRequestError(`Cannot route to "${label}" because the agent is ${participant.status}. ${recovery}`);
   }
 
-  // Persist the addressed live non-human agents — the real routed recipients.
-  // `mentions` only carries explicit @s / receiverNames, NOT the system
-  // `addressedToAgentIds` routing (e.g. the onboarding kickoff bootstrap), so a
-  // surface that needs to know who a turn actually awaits a reply from (the chat
-  // offline notice) can't rely on `mentions` alone. `routedRecipientIds` is the
-  // validated fan-out set; keep only its active non-human agents.
-  const addressedAgentIds = [...routedRecipientIds].filter((id) => {
-    const participant = participantsById.get(id);
-    return participant !== undefined && participant.type !== "human";
-  });
+  const isAgentFinalText = data.purpose === "agent-final-text";
+  const purposeProfile = isAgentFinalText
+    ? {
+        skipMentionEnforcement: true,
+        forceSilentFanOut: true,
+      }
+    : {
+        skipMentionEnforcement: false,
+        forceSilentFanOut: false,
+      };
+  const suppressNotifySet = new Set(options.suppressNotifyAgentIds ?? []);
+
+  // Persist the notify-worthy live non-human agents — the recipients whose
+  // sessions the send is expected to wake. `mentions` only carries explicit @s /
+  // receiverNames, NOT system `addressedToAgentIds` routing (e.g. onboarding
+  // kickoff bootstrap), so a surface that needs to know who a turn awaits a
+  // reply from can't rely on `mentions` alone. This projection is server-owned
+  // and mirrors fan-out notify semantics: final-text and suppressed recipients
+  // are silent context, not awaited agents.
+  const addressedAgentIds = !purposeProfile.forceSilentFanOut
+    ? [...routedRecipientIds].filter((id) => {
+        if (suppressNotifySet.has(id)) return false;
+        const participant = participantsById.get(id);
+        return participant !== undefined && participant.status === "active" && participant.type !== "human";
+      })
+    : [];
   const metadataToStore = {
     ...incomingMeta,
     ...(mergedMentions.length > 0 ? { mentions: mergedMentions } : {}),
-    ...(addressedAgentIds.length > 0 ? { addressedAgentIds } : {}),
+    ...(addressedAgentIds.length > 0 ? { [ADDRESSED_AGENT_IDS_METADATA_KEY]: addressedAgentIds } : {}),
   };
 
   if (data.format === MESSAGE_FORMATS.REQUEST) {
@@ -305,17 +327,6 @@ export function preflightMessageSendIntent(input: {
   // `chat update --description`, but neither is the only path to a human.
   // (Resolution stays human-only — enforced by the resolution authorization
   // below, independent of who may send.)
-
-  const isAgentFinalText = data.purpose === "agent-final-text";
-  const purposeProfile = isAgentFinalText
-    ? {
-        skipMentionEnforcement: true,
-        forceSilentFanOut: true,
-      }
-    : {
-        skipMentionEnforcement: false,
-        forceSilentFanOut: false,
-      };
 
   const skipRecipientEnforcement = purposeProfile.skipMentionEnforcement || options.allowRecipientlessSend === true;
   if (!skipRecipientEnforcement) {
