@@ -138,16 +138,22 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-async function renderProbe(element: ReactNode, route = "/onboarding"): Promise<HTMLElement> {
+function testQueryClient(): QueryClient {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
+
+async function renderProbe(
+  element: ReactNode,
+  route = "/onboarding",
+  queryClient: QueryClient = testQueryClient(),
+): Promise<HTMLElement> {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
   await act(async () => {
     root?.render(
       <MemoryRouter initialEntries={[route]}>
-        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-          {element}
-        </QueryClientProvider>
+        <QueryClientProvider client={queryClient}>{element}</QueryClientProvider>
       </MemoryRouter>,
     );
   });
@@ -226,6 +232,12 @@ describe("onboarding hooks and flow", () => {
   it("creates an agent, stores its uuid, reports onboarding, and reaches online", async () => {
     const latest = { current: null as ReturnType<typeof useAgentCreation> | null };
     const onOnline = vi.fn();
+    const queryClient = testQueryClient();
+    const rosterKey = ["agents", "org-list", { addressableOnly: true }] as const;
+    queryClient.setQueryData(rosterKey, {
+      items: [{ uuid: "human-agent-self", type: "human", delegateMention: null }],
+      nextCursor: null,
+    });
     clientMocks.api.post.mockResolvedValueOnce({ uuid: "agent-created" });
     agentConfigMocks.getAgentClientStatus
       .mockResolvedValueOnce({ online: false })
@@ -236,7 +248,7 @@ describe("onboarding hooks and flow", () => {
       return <div>{latest.current.phase}</div>;
     }
 
-    await renderProbe(<Probe />);
+    await renderProbe(<Probe />, "/onboarding", queryClient);
     await act(async () => {
       await expectHookValue(latest.current).create({
         displayName: "Deploy Bot",
@@ -258,6 +270,7 @@ describe("onboarding hooks and flow", () => {
     );
     expect(sessionStorage.getItem("onboarding:agentUuid")).toBe("agent-created");
     expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("agent_created", { runtimeProvider: "claude-code" });
+    expect(queryClient.getQueryState(rosterKey)?.isInvalidated).toBe(true);
     expect(onOnline).toHaveBeenCalledWith("agent-created");
     expect(expectHookValue(latest.current).phase).toBe("online");
   });
