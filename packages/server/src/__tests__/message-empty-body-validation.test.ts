@@ -2,7 +2,7 @@ import type { SendMessage } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
 import type { Database } from "../db/connection.js";
 import { BadRequestError } from "../errors.js";
-import { sendMessage } from "../services/message.js";
+import { preflightMessageSendIntent, type SendIntentParticipant, sendMessage } from "../services/message.js";
 
 // `validateMessageContent` fires at the very top of `sendMessage`, before the
 // transaction opens, so a doomed write never reaches the DB. The empty stub is
@@ -58,5 +58,50 @@ describe("sendMessage — empty / placeholder body is rejected fail-closed", () 
     await expect(
       sendMessage(stubDb, "chat-1", "sender-1", message("text", "Replace the PLACEHOLDER token in config.")),
     ).rejects.not.toThrow(BadRequestError);
+  });
+});
+
+// R4: an agent can double-encode its content (`JSON.stringify(body)`); the
+// server unwraps it AFTER the raw-content guard, so the empty / placeholder
+// body is only visible post-unwrap. `preflightMessageSendIntent` must re-check
+// the unwrapped `effectiveContent` before mention normalization / persistence.
+const AGENT_SENDER: SendIntentParticipant = {
+  agentId: "s1",
+  name: "asst",
+  displayName: "Asst",
+  status: "active",
+  type: "agent",
+};
+const HUMAN_TARGET: SendIntentParticipant = {
+  agentId: "p1",
+  name: "peer",
+  displayName: "Peer",
+  status: "active",
+  type: "human",
+};
+
+function preflightAgentBody(format: SendMessage["format"], content: unknown) {
+  return preflightMessageSendIntent({
+    chatId: "c1",
+    senderId: "s1",
+    senderType: "agent",
+    data: { source: "api", format, content, metadata: { mentions: ["p1"] } },
+    participants: [AGENT_SENDER, HUMAN_TARGET],
+  });
+}
+
+describe("preflightMessageSendIntent — double-encoded body re-validated after unwrap (R4)", () => {
+  it("rejects a JSON-encoded whitespace body that passes the raw guard", () => {
+    // Raw content is the 6-char literal `"\n\n"` (non-empty, so the raw guard
+    // lets it by); it unwraps to two newlines, which must then be rejected.
+    expect(() => preflightAgentBody("text", JSON.stringify("\n\n"))).toThrow(BadRequestError);
+  });
+
+  it("rejects a JSON-encoded placeholder ask body that passes the raw guard", () => {
+    expect(() => preflightAgentBody("request", JSON.stringify("TODO\n"))).toThrow(BadRequestError);
+  });
+
+  it("does NOT reject a JSON-encoded real body", () => {
+    expect(() => preflightAgentBody("text", JSON.stringify("Here is the real plan.\n"))).not.toThrow(BadRequestError);
   });
 });

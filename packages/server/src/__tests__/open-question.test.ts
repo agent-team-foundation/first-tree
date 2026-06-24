@@ -2,6 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { messages } from "../db/schema/messages.js";
+import { BadRequestError } from "../errors.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import { listMeChats } from "../services/me-chat.js";
@@ -762,6 +763,29 @@ describe("open-question (format=request) + open_request_count", () => {
     // A content-only edit of the request is still allowed.
     const edited = await editMessage(app.db, chat.id, question.id, asker.agent.uuid, { content: "ratio (clarified)?" });
     expect(edited.format).toBe("request");
+  });
+
+  it("editMessage rejects turning a live message into an empty / placeholder body (R5)", async () => {
+    // The format of an open `request` is frozen, but its body can still be
+    // edited — an edit must not be able to replace a live ask with an empty /
+    // whitespace / placeholder blocking card after creation.
+    const app = getApp();
+    const uid = crypto.randomUUID().slice(0, 6);
+    const { asker, human, chat } = await setup(app, uid);
+
+    const { message: question } = await sendMessage(app.db, chat.id, asker.agent.uuid, {
+      source: "api",
+      format: "request",
+      content: "ratio?",
+      metadata: { mentions: [human.uuid], request: { question: "5% or 20%?" } },
+    });
+
+    await expect(editMessage(app.db, chat.id, question.id, asker.agent.uuid, { content: "   " })).rejects.toThrow(
+      BadRequestError,
+    );
+    await expect(
+      editMessage(app.db, chat.id, question.id, asker.agent.uuid, { content: "PLACEHOLDER" }),
+    ).rejects.toThrow(BadRequestError);
   });
 });
 

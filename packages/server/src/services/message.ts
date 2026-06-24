@@ -105,7 +105,10 @@ function validateTextBody(content: string, isRequest: boolean): void {
   }
 }
 
-function validateMessageContent(data: SendMessage): void {
+// Structural param (not `SendMessage`) so the edit path can reuse it against
+// the effective post-edit `{ format, content }`, where `format` is a plain
+// string off the stored row.
+function validateMessageContent(data: { format: string; content: unknown }): void {
   if (data.format === "file") {
     validateFileContent(data.content);
     return;
@@ -247,6 +250,16 @@ export function preflightMessageSendIntent(input: {
       );
       effectiveContent = unwrapped;
     }
+  }
+
+  // Re-validate the UNWRAPPED body. `validateMessageContent(data)` above checked
+  // the raw `data.content`, but for a non-human sender a double-encoded string
+  // (e.g. `JSON.stringify("TODO\n")`) only reveals its empty / whitespace /
+  // placeholder body after `maybeUnwrapDoubleEncoded`. `effectiveContent` is
+  // what gets normalized and persisted, so guard it here too — before mention
+  // normalization can salvage an empty body into a bare "@name".
+  if (typeof effectiveContent === "string") {
+    validateTextBody(effectiveContent, data.format === "request");
   }
 
   const incomingMeta = stripUntrustedMetadataKeys((data.metadata ?? {}) as Record<string, unknown>, options);
@@ -840,7 +853,14 @@ export async function editMessage(
 
   const setClause: Record<string, unknown> = {};
   if (data.format !== undefined) setClause.format = data.format;
-  if (data.content !== undefined) setClause.content = data.content;
+  if (data.content !== undefined) {
+    // An edit can replace the body of any message — including an already-open
+    // `format=request` ask whose format is frozen above. Reuse the send-path
+    // guard against the effective post-edit `{ format, content }` so an edit
+    // can't turn a live message into an empty / placeholder blocking card.
+    validateMessageContent({ format: data.format ?? msg.format, content: data.content });
+    setClause.content = data.content;
+  }
 
   // Track edit in metadata
   const meta = (msg.metadata ?? {}) as Record<string, unknown>;
