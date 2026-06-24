@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
-import { authIdentities } from "../db/schema/auth-identities.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
@@ -108,22 +107,6 @@ async function enableReviewer(app: App, admin: Awaited<ReturnType<typeof createA
     { contextReviewer: { enabled: true, agentUuid: reviewerUuid } },
     { updatedBy: admin.userId, memberId: admin.memberId },
   );
-}
-
-async function seedGithubIdentity(
-  app: App,
-  admin: Awaited<ReturnType<typeof createAdminContext>>,
-  login: string,
-): Promise<void> {
-  await app.db.insert(authIdentities).values({
-    id: randomUUID(),
-    userId: admin.userId,
-    provider: "github",
-    identifier: `github-${randomUUID()}`,
-    email: null,
-    verifiedAt: new Date(),
-    metadata: { login },
-  });
 }
 
 describe("Context Reviewer PR prompt", () => {
@@ -513,11 +496,10 @@ describe("handleContextReviewerPrEvent", () => {
     expect(entry?.notify).toBe(true);
   });
 
-  it("suppresses a manager-authored PR comment echo after the initial opened task", async () => {
+  it("creates a follow-up for a manager-authored PR comment after the initial opened task", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewer(app, admin, { name: `context-reviewer-${randomUUID().slice(0, 8)}` });
-    await seedGithubIdentity(app, admin, "manager-login");
     await enableReviewer(app, admin, reviewer.uuid);
 
     const first = await handleContextReviewerPrEvent(app, {
@@ -540,20 +522,35 @@ describe("handleContextReviewerPrEvent", () => {
       organizationId: admin.organizationId,
     });
 
-    expect(second).toMatchObject({ handled: true, reused: true, suppressed: true, chatId: first.chatId });
+    expect(second).toMatchObject({ handled: true, reused: true, chatId: first.chatId });
     if (!second.handled) throw new Error("expected second event handled");
-    expect(second.messageId).toBe(first.messageId);
+    expect(second).not.toMatchObject({ suppressed: true });
+    expect(second.messageId).not.toBe(first.messageId);
 
     const messageRows = await app.db
       .select({ id: messages.id })
       .from(messages)
       .where(eq(messages.chatId, first.chatId));
-    expect(messageRows).toHaveLength(1);
-    const inboxRows = await app.db
-      .select({ messageId: inboxEntries.messageId, notify: inboxEntries.notify })
-      .from(inboxEntries)
-      .where(eq(inboxEntries.inboxId, reviewer.inboxId));
-    expect(inboxRows).toEqual([{ messageId: first.messageId, notify: true }]);
+    expect(messageRows).toHaveLength(2);
+    const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
+    expect(followUp?.content).toBe(
+      [
+        FOLLOW_UP_NOTICE,
+        "Comment author: MANAGER-LOGIN",
+        "Comment URL: https://github.com/owner/context-tree/pull/123#issuecomment-2",
+      ].join("\n"),
+    );
+    expect(followUp?.metadata).toMatchObject({
+      source: "github",
+      event: "issue_comment",
+      action: "created",
+      triggerEvent: "issue_comment.created",
+      entityKey: "owner/context-tree#123",
+      contextTreeReviewer: true,
+      commentAuthorLogin: "MANAGER-LOGIN",
+      commentUrl: "https://github.com/owner/context-tree/pull/123#issuecomment-2",
+      mentions: [reviewer.uuid],
+    });
   });
 
   it("suppresses the configured GitHub App bot PR comment echo after the initial opened task", async () => {
@@ -602,7 +599,6 @@ describe("handleContextReviewerPrEvent", () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewer(app, admin, { name: "unrelated-human" });
-    await seedGithubIdentity(app, admin, "manager-login");
     await enableReviewer(app, admin, reviewer.uuid);
 
     const first = await handleContextReviewerPrEvent(app, {

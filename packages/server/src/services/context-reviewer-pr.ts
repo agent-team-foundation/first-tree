@@ -8,7 +8,6 @@ import type { FastifyInstance } from "fastify";
 import { isRecord, readNumber, readString } from "../api/webhooks/github-entity.js";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { authIdentities } from "../db/schema/auth-identities.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
@@ -77,7 +76,6 @@ type ContextReviewerPrTrigger =
 
 type ReviewerAgent = {
   uuid: string;
-  managerUserId: string;
   managerHumanAgentId: string;
 };
 
@@ -489,7 +487,6 @@ async function loadValidReviewerAgent(
   const [agent] = await db
     .select({
       uuid: agents.uuid,
-      managerUserId: members.userId,
       managerHumanAgentId: members.agentId,
     })
     .from(agents)
@@ -540,21 +537,17 @@ async function findSuppressibleReviewerEchoMessageId(
   const appBotLogin = input.appSlug ? `${input.appSlug.toLowerCase()}[bot]` : null;
   const commentAuthorIsAppBot =
     appBotLogin !== null && commentAuthorLogin === appBotLogin && isCommentAuthorBot(input.info);
-  const managerGithubLogin = await loadManagerGithubLogin(db, input.reviewer.managerUserId);
-  const commentAuthorIsManager = managerGithubLogin !== null && commentAuthorLogin === managerGithubLogin;
-  if (!commentAuthorIsManager && !commentAuthorIsAppBot) {
+  if (!commentAuthorIsAppBot) {
     log.debug(
       {
         reviewerAgentUuid: input.reviewer.uuid,
-        managerUserId: input.reviewer.managerUserId,
         entityKey: input.info.entityKey,
         commentAuthorLogin: input.info.commentAuthorLogin,
-        managerGithubLoginAvailable: managerGithubLogin !== null,
         appBotLogin,
         commentAuthorType: input.info.commentAuthorType,
         senderType: input.info.senderType,
       },
-      "context reviewer echo comment not suppressed: comment author is not the manager or app bot",
+      "context reviewer echo comment not suppressed: comment author is not the configured app bot",
     );
     return null;
   }
@@ -582,21 +575,7 @@ async function findSuppressibleReviewerEchoMessageId(
 }
 
 function isCommentAuthorBot(info: PullRequestPayloadInfo): boolean {
-  if (info.commentAuthorType?.toLowerCase() === "bot") return true;
-  return (
-    info.senderType?.toLowerCase() === "bot" &&
-    info.commentAuthorLogin?.trim().toLowerCase() === info.senderLogin.trim().toLowerCase()
-  );
-}
-
-async function loadManagerGithubLogin(db: Database, userId: string): Promise<string | null> {
-  const [identity] = await db
-    .select({ metadata: authIdentities.metadata })
-    .from(authIdentities)
-    .where(and(eq(authIdentities.userId, userId), eq(authIdentities.provider, "github")))
-    .limit(1);
-  const login = identity?.metadata?.login;
-  return typeof login === "string" && login.trim() ? login.trim().toLowerCase() : null;
+  return info.commentAuthorType?.trim().toLowerCase() === "bot";
 }
 
 export const contextReviewerPrTestInternals = {
@@ -604,7 +583,6 @@ export const contextReviewerPrTestInternals = {
   extractPullRequestPayloadInfo,
   findExistingReviewerChat,
   isSupportedContextReviewerPrEvent,
-  loadManagerGithubLogin,
   loadValidReviewerAgent,
   parseBareRepo,
   parseScpLikeRepo,
