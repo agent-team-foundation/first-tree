@@ -6,6 +6,7 @@ import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
+import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
@@ -113,6 +114,26 @@ function contextPullRequestPayload(installationId: number, repoFullName = "owner
     },
     repository: { full_name: repoFullName },
     sender: { login: "context-writer", type: "User" },
+    installation: { id: installationId },
+  };
+}
+
+function contextIssueCommentPayload(installationId: number, repoFullName = "owner/context-tree") {
+  return {
+    action: "created",
+    issue: {
+      number: 42,
+      title: "Improve context review guidance",
+      html_url: `https://github.com/${repoFullName}/issues/42`,
+      pull_request: { html_url: `https://github.com/${repoFullName}/pull/42` },
+    },
+    comment: {
+      body: "Please take another pass.",
+      html_url: `https://github.com/${repoFullName}/pull/42#issuecomment-2`,
+      user: { login: "context-commenter" },
+    },
+    repository: { full_name: repoFullName },
+    sender: { login: "context-commenter", type: "User" },
     installation: { id: installationId },
   };
 }
@@ -1108,9 +1129,61 @@ describe("POST /webhooks/github-app", () => {
       source: "github",
       event: "pull_request",
       action: "opened",
+      triggerEvent: "pull_request.opened",
       contextTreeReviewer: true,
       mentions: [reviewer],
     });
+  });
+
+  it("follow-up activity on a bound context PR wakes the existing Context Reviewer chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100043;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+    const reviewer = await configureContextReviewer(app, admin);
+
+    const opened = await postWebhook(app, "pull_request", contextPullRequestPayload(installationId));
+    expect(opened.statusCode).toBe(200);
+    expect(opened.json()).toMatchObject({ contextReviewer: { handled: true, reused: false } });
+
+    const followUp = await postWebhook(app, "issue_comment", contextIssueCommentPayload(installationId));
+
+    expect(followUp.statusCode).toBe(200);
+    expect(followUp.json()).toMatchObject({
+      ok: true,
+      event: "issue_comment",
+      audience: 0,
+      contextReviewer: { handled: true, reused: true },
+    });
+
+    const chatRows = await app.db.select().from(chats);
+    expect(chatRows).toHaveLength(1);
+
+    const messageRows = await app.db
+      .select()
+      .from(messages)
+      .where(eq(messages.chatId, chatRows[0]?.id ?? ""));
+    expect(messageRows).toHaveLength(2);
+    const followUpMessage = messageRows.find((message) => message.metadata.triggerEvent === "issue_comment.created");
+    expect(followUpMessage?.content).toContain("Trigger event: issue_comment.created");
+    expect(followUpMessage?.content).toContain(
+      "Comment URL: https://github.com/owner/context-tree/pull/42#issuecomment-2",
+    );
+    expect(followUpMessage?.metadata).toMatchObject({
+      source: "github",
+      event: "issue_comment",
+      action: "created",
+      triggerEvent: "issue_comment.created",
+      contextTreeReviewer: true,
+      mentions: [reviewer],
+    });
+
+    const [entry] = await app.db
+      .select({ notify: inboxEntries.notify })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.messageId, followUpMessage?.id ?? ""), eq(inboxEntries.inboxId, `inbox_${reviewer}`)))
+      .limit(1);
+    expect(entry?.notify).toBe(true);
   });
 
   it("pull_request.opened on an ordinary code repo does not trigger Context Reviewer", async () => {

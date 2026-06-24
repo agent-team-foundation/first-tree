@@ -3,7 +3,7 @@ import { githubAppInstallationPermissionsSchema, type WebhookSource } from "@fir
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
-import { handleContextReviewerPullRequest } from "../../services/context-reviewer-pr.js";
+import { handleContextReviewerPrEvent } from "../../services/context-reviewer-pr.js";
 import { claimEvent, unclaimEvent } from "../../services/event-dedup.js";
 import type { AppInstallation } from "../../services/github-app.js";
 import {
@@ -84,6 +84,13 @@ function pullRequestStateFromIssuePayload(issue: Record<string, unknown>, action
     return readString(pr?.merged_at) ? "merged" : "closed";
   }
   return issue.draft === true ? "draft" : "open";
+}
+
+function isContextReviewerCandidateEvent(eventType: string, action: string | null): boolean {
+  if (eventType === "pull_request") return action === "opened" || action === "synchronize";
+  if (eventType === "issue_comment") return action === "created";
+  if (eventType === "pull_request_review_comment") return action === "created" || action === "edited";
+  return false;
 }
 
 /**
@@ -345,9 +352,11 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
       }
     }
 
+    const rawAction = isRecord(payload) ? readString(payload.action) : null;
     const event = normalizeGithubEvent(eventType, payload, source, deliveryId);
-    if (!event) {
-      log.debug({ eventType, action: isRecord(payload) ? payload.action : null }, "Stage 1 returned null");
+    const shouldRunContextReviewer = isContextReviewerCandidateEvent(eventType, rawAction);
+    if (!event && !shouldRunContextReviewer) {
+      log.debug({ eventType, action: rawAction }, "Stage 1 returned null");
       return reply.status(200).send({ ok: true, event: eventType, handled: false });
     }
 
@@ -360,11 +369,17 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     }
 
     try {
-      const contextReviewer = await handleContextReviewerPullRequest(app, {
-        eventType,
-        payload,
-        organizationId: installation.hubOrganizationId,
-      });
+      const contextReviewer = shouldRunContextReviewer
+        ? await handleContextReviewerPrEvent(app, {
+            eventType,
+            payload,
+            organizationId: installation.hubOrganizationId,
+          })
+        : ({ handled: false, reason: "unsupported_event" } as const);
+      if (!event) {
+        log.debug({ eventType, action: rawAction }, "Stage 1 returned null");
+        return reply.status(200).send({ ok: true, event: eventType, handled: false, contextReviewer });
+      }
 
       const audience = await resolveAudience(app.db, event, appSlug);
       if (audience.length === 0) {
