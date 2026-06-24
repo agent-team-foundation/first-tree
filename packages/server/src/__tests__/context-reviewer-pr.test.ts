@@ -19,6 +19,8 @@ import { createAdminContext, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
 
+const FOLLOW_UP_NOTICE = "A new GitHub event was received. I'll check the current PR state.";
+
 function pullRequestPayload(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     action: "opened",
@@ -76,9 +78,13 @@ function reviewCommentPayload(overrides: Partial<Record<string, unknown>> = {}) 
   };
 }
 
-async function createReviewer(app: App, admin: Awaited<ReturnType<typeof createAdminContext>>) {
+async function createReviewer(
+  app: App,
+  admin: Awaited<ReturnType<typeof createAdminContext>>,
+  options: { name?: string } = {},
+) {
   return createAgent(app.db, {
-    name: `reviewer-${randomUUID().slice(0, 8)}`,
+    name: options.name ?? `reviewer-${randomUUID().slice(0, 8)}`,
     type: "agent",
     displayName: "Context Reviewer",
     managerId: admin.memberId,
@@ -214,7 +220,7 @@ describe("handleContextReviewerPrEvent", () => {
     expect(rows).toHaveLength(0);
   });
 
-  it("skips when the feature is disabled, context repo is missing, reviewer is missing, or action is not opened", async () => {
+  it("skips when the feature is disabled, context repo is missing, reviewer is missing, or action is unsupported", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const reviewer = await createReviewer(app, admin);
@@ -327,11 +333,15 @@ describe("handleContextReviewerPrEvent", () => {
       organizationId: admin.organizationId,
     });
 
-    expect(first.handled && second.handled && second.chatId === first.chatId).toBe(true);
+    if (!first.handled || !second.handled) throw new Error("expected handled results");
+    expect(second.chatId).toBe(first.chatId);
     expect(second).toMatchObject({ handled: true, reused: true });
 
     const messageRows = await app.db.select({ id: messages.id }).from(messages);
     expect(messageRows).toHaveLength(2);
+    const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
+    expect(followUp?.content).toBe(FOLLOW_UP_NOTICE);
+    expect(followUp?.content).not.toContain("gh pr comment 123 --repo owner/context-tree --body");
     const chatRows = await app.db.select({ id: chats.id }).from(chats);
     expect(chatRows).toHaveLength(1);
   });
@@ -363,12 +373,15 @@ describe("handleContextReviewerPrEvent", () => {
     const followUp = messageRows.find((row) => row.id === second.messageId);
     expect(followUp?.source).toBe("github");
     expect(followUp?.format).toBe("markdown");
-    expect(followUp?.content).toContain("Trigger event: pull_request.synchronize");
+    expect(followUp?.content).toBe(FOLLOW_UP_NOTICE);
+    expect(followUp?.content).not.toContain("clear, accurate");
+    expect(followUp?.content).not.toContain("gh pr comment 123 --repo owner/context-tree --body");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "pull_request",
       action: "synchronize",
       triggerEvent: "pull_request.synchronize",
+      entityKey: "owner/context-tree#123",
       contextTreeReviewer: true,
       mentions: [reviewer.uuid],
     });
@@ -404,14 +417,15 @@ describe("handleContextReviewerPrEvent", () => {
     if (!second.handled) throw new Error("expected second event handled");
 
     const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
-    expect(followUp?.content).toContain("Trigger event: issue_comment.created");
-    expect(followUp?.content).toContain("Comment author: commenter");
-    expect(followUp?.content).toContain("Comment URL: https://github.com/owner/context-tree/pull/123#issuecomment-1");
+    expect(followUp?.content).toBe(FOLLOW_UP_NOTICE);
+    expect(followUp?.content).not.toContain("Trigger event: issue_comment.created");
+    expect(followUp?.content).not.toContain("gh pr comment 123 --repo owner/context-tree --body");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
       action: "created",
       triggerEvent: "issue_comment.created",
+      entityKey: "owner/context-tree#123",
       contextTreeReviewer: true,
       mentions: [reviewer.uuid],
     });
@@ -447,14 +461,15 @@ describe("handleContextReviewerPrEvent", () => {
     if (!second.handled) throw new Error("expected second event handled");
 
     const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
-    expect(followUp?.content).toContain("Trigger event: pull_request_review_comment.created");
-    expect(followUp?.content).toContain("Comment author: reviewer-user");
-    expect(followUp?.content).toContain("Comment URL: https://github.com/owner/context-tree/pull/123#discussion_r1");
+    expect(followUp?.content).toBe(FOLLOW_UP_NOTICE);
+    expect(followUp?.content).not.toContain("Trigger event: pull_request_review_comment.created");
+    expect(followUp?.content).not.toContain("gh pr comment 123 --repo owner/context-tree --body");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "pull_request_review_comment",
       action: "created",
       triggerEvent: "pull_request_review_comment.created",
+      entityKey: "owner/context-tree#123",
       contextTreeReviewer: true,
       mentions: [reviewer.uuid],
     });
@@ -465,6 +480,48 @@ describe("handleContextReviewerPrEvent", () => {
       .where(and(eq(inboxEntries.messageId, second.messageId), eq(inboxEntries.inboxId, reviewer.inboxId)))
       .limit(1);
     expect(entry?.notify).toBe(true);
+  });
+
+  it("suppresses a reviewer-authored PR comment echo after the initial opened task", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    const reviewer = await createReviewer(app, admin, { name: `context-reviewer-${randomUUID().slice(0, 8)}` });
+    await enableReviewer(app, admin, reviewer.uuid);
+
+    const first = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload(),
+      organizationId: admin.organizationId,
+    });
+    if (!first.handled) throw new Error("expected first event handled");
+
+    const second = await handleContextReviewerPrEvent(app, {
+      eventType: "issue_comment",
+      payload: issueCommentPayload({
+        comment: {
+          html_url: "https://github.com/owner/context-tree/pull/123#issuecomment-2",
+          user: { login: reviewer.name },
+          body: "Context Reviewer found no blocking gaps.",
+        },
+        sender: { login: reviewer.name, type: "User" },
+      }),
+      organizationId: admin.organizationId,
+    });
+
+    expect(second).toMatchObject({ handled: true, reused: true, suppressed: true, chatId: first.chatId });
+    if (!second.handled) throw new Error("expected second event handled");
+    expect(second.messageId).toBe(first.messageId);
+
+    const messageRows = await app.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(eq(messages.chatId, first.chatId));
+    expect(messageRows).toHaveLength(1);
+    const inboxRows = await app.db
+      .select({ messageId: inboxEntries.messageId, notify: inboxEntries.notify })
+      .from(inboxEntries)
+      .where(eq(inboxEntries.inboxId, reviewer.inboxId));
+    expect(inboxRows).toEqual([{ messageId: first.messageId, notify: true }]);
   });
 
   it("skips non-PR issue_comment.created without creating a reviewer chat", async () => {

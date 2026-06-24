@@ -13,6 +13,7 @@ import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 const APP_WEBHOOK_SECRET = "test-app-webhook-secret";
+const FOLLOW_UP_NOTICE = "A new GitHub event was received. I'll check the current PR state.";
 
 function signBody(secret: string, body: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
@@ -1165,15 +1166,15 @@ describe("POST /webhooks/github-app", () => {
       .where(eq(messages.chatId, chatRows[0]?.id ?? ""));
     expect(messageRows).toHaveLength(2);
     const followUpMessage = messageRows.find((message) => message.metadata.triggerEvent === "issue_comment.created");
-    expect(followUpMessage?.content).toContain("Trigger event: issue_comment.created");
-    expect(followUpMessage?.content).toContain(
-      "Comment URL: https://github.com/owner/context-tree/pull/42#issuecomment-2",
-    );
+    expect(followUpMessage?.content).toBe(FOLLOW_UP_NOTICE);
+    expect(followUpMessage?.content).not.toContain("Trigger event: issue_comment.created");
+    expect(followUpMessage?.content).not.toContain("gh pr comment 42 --repo owner/context-tree --body");
     expect(followUpMessage?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
       action: "created",
       triggerEvent: "issue_comment.created",
+      entityKey: "owner/context-tree#42",
       contextTreeReviewer: true,
       mentions: [reviewer],
     });

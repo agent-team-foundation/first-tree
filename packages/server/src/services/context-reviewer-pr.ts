@@ -2,7 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { chatMetadataSchema } from "@first-tree/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type * as ejs from "ejs";
 import type { FastifyInstance } from "fastify";
 import { isRecord, readNumber, readString } from "../api/webhooks/github-entity.js";
@@ -10,6 +10,7 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
+import { messages } from "../db/schema/messages.js";
 import { createLogger } from "../observability/index.js";
 import { createChat } from "./chat.js";
 import { sendMessage } from "./message.js";
@@ -19,6 +20,8 @@ import { applyMembershipWrite } from "./participant-mode.js";
 
 const log = createLogger("ContextReviewerPr");
 const require = createRequire(import.meta.url);
+const FOLLOW_UP_NOTICE = "A new GitHub event was received. I'll check the current PR state.";
+const REVIEWER_OPENED_ECHO_SUPPRESSION_WINDOW_SECONDS = 60 * 60;
 // EJS is published as CommonJS at runtime even though its types expose named
 // exports, so native ESM cannot import `render` directly.
 const ejsRuntime: typeof ejs = require("ejs");
@@ -47,7 +50,7 @@ export type ContextReviewerPrTemplateInput = {
 
 export type ContextReviewerPrResult =
   | { handled: false; reason: ContextReviewerPrSkipReason }
-  | { handled: true; chatId: string; messageId: string; reused: boolean };
+  | { handled: true; chatId: string; messageId: string; reused: boolean; suppressed?: boolean };
 
 export type ContextReviewerPrSkipReason =
   | "unsupported_event"
@@ -228,7 +231,6 @@ export async function handleContextReviewerPrEvent(
     return { handled: false, reason: "reviewer_agent_invalid" };
   }
 
-  const prompt = await renderContextReviewerPrPrompt(info);
   const metadata = chatMetadataSchema.parse({
     source: "github",
     entityType: "pull_request",
@@ -250,6 +252,30 @@ export async function handleContextReviewerPrEvent(
       [{ agentId: reviewer.managerHumanAgentId }, { agentId: reviewer.uuid }],
       { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
     );
+    const suppressedEchoMessageId = await findSuppressibleReviewerEchoMessageId(app.db, {
+      chatId: existingChatId,
+      info,
+      reviewer,
+    });
+    if (suppressedEchoMessageId) {
+      log.info(
+        {
+          organizationId: input.organizationId,
+          entityKey: info.entityKey,
+          chatId: existingChatId,
+          commentAuthorLogin: info.commentAuthorLogin,
+        },
+        "context reviewer echo comment suppressed",
+      );
+      return {
+        handled: true,
+        chatId: existingChatId,
+        messageId: suppressedEchoMessageId,
+        reused: true,
+        suppressed: true,
+      };
+    }
+
     const { message, recipients } = await sendMessage(
       app.db,
       existingChatId,
@@ -257,17 +283,8 @@ export async function handleContextReviewerPrEvent(
       {
         source: "github",
         format: "markdown",
-        content: prompt,
-        metadata: {
-          source: "github",
-          event: info.eventType,
-          action: info.action,
-          triggerEvent: info.triggerEvent,
-          entityType: "pull_request",
-          entityKey: info.entityKey,
-          contextTreeReviewer: true,
-          mentions: [reviewer.uuid],
-        },
+        content: FOLLOW_UP_NOTICE,
+        metadata: contextReviewerMessageMetadata(info, reviewer),
       },
       { normalizeMentionsInContent: false },
     );
@@ -279,6 +296,7 @@ export async function handleContextReviewerPrEvent(
     return { handled: true, chatId: existingChatId, messageId: message.id, reused: true };
   }
 
+  const prompt = await renderContextReviewerPrPrompt(info);
   const created = await createChat(app.db, {
     mode: "task",
     initiatorAgentId: reviewer.managerHumanAgentId,
@@ -290,15 +308,7 @@ export async function handleContextReviewerPrEvent(
       source: "github",
       format: "markdown",
       content: prompt,
-      metadata: {
-        source: "github",
-        event: info.eventType,
-        action: info.action,
-        triggerEvent: info.triggerEvent,
-        entityType: "pull_request",
-        entityKey: info.entityKey,
-        contextTreeReviewer: true,
-      },
+      metadata: contextReviewerMessageMetadata(info, reviewer),
     },
     source: "manual",
   });
@@ -431,6 +441,22 @@ function readCommentAuthorLogin(comment: Record<string, unknown> | null): string
   return readString(user?.login);
 }
 
+function contextReviewerMessageMetadata(
+  info: PullRequestPayloadInfo,
+  reviewer: ReviewerAgent,
+): Record<string, unknown> {
+  return {
+    source: "github",
+    event: info.eventType,
+    action: info.action,
+    triggerEvent: info.triggerEvent,
+    entityType: "pull_request",
+    entityKey: info.entityKey,
+    contextTreeReviewer: true,
+    mentions: [reviewer.uuid],
+  };
+}
+
 async function loadValidReviewerAgent(
   db: Database,
   input: { organizationId: string; reviewerAgentUuid: string },
@@ -477,6 +503,51 @@ async function findExistingReviewerChat(
   return row?.id ?? null;
 }
 
+async function findSuppressibleReviewerEchoMessageId(
+  db: Database,
+  input: { chatId: string; info: PullRequestPayloadInfo; reviewer: ReviewerAgent },
+): Promise<string | null> {
+  if (input.info.eventType !== "issue_comment" || input.info.action !== "created") return null;
+
+  const commentAuthorLogin = input.info.commentAuthorLogin?.trim().toLowerCase();
+  if (!commentAuthorLogin) return null;
+
+  const reviewerGithubLogin = input.reviewer.name?.trim().toLowerCase();
+  if (!reviewerGithubLogin) {
+    log.debug(
+      { reviewerAgentUuid: input.reviewer.uuid, entityKey: input.info.entityKey },
+      "context reviewer echo comment not suppressed: reviewer github login is unavailable",
+    );
+    return null;
+  }
+  if (commentAuthorLogin !== reviewerGithubLogin) return null;
+
+  const [latestReviewerTask] = await db
+    .select({
+      id: messages.id,
+      event: sql<string>`${messages.metadata}->>'event'`,
+      action: sql<string>`${messages.metadata}->>'action'`,
+      triggerEvent: sql<string>`${messages.metadata}->>'triggerEvent'`,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.chatId, input.chatId),
+        sql`${messages.metadata}->>'entityKey' = ${input.info.entityKey}`,
+        sql`${messages.metadata}->>'contextTreeReviewer' = 'true'`,
+        sql`${messages.createdAt} >= NOW() - make_interval(secs => ${REVIEWER_OPENED_ECHO_SUPPRESSION_WINDOW_SECONDS})`,
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(1);
+
+  const isInitialOpenedTask =
+    latestReviewerTask?.event === "pull_request" &&
+    latestReviewerTask.action === "opened" &&
+    latestReviewerTask.triggerEvent === "pull_request.opened";
+  return isInitialOpenedTask ? latestReviewerTask.id : null;
+}
+
 export const contextReviewerPrTestInternals = {
   extractPullRequestPayloadInfo,
   findExistingReviewerChat,
@@ -485,4 +556,5 @@ export const contextReviewerPrTestInternals = {
   parseBareRepo,
   parseScpLikeRepo,
   parseUrlRepo,
+  findSuppressibleReviewerEchoMessageId,
 };
