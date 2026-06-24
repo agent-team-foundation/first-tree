@@ -561,12 +561,12 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
 function worktreesBlock(agentHome: string, sourceRepos: ReadonlyArray<PredeclaredSourceRepo>): string {
   // LLMs sometimes literal-copy `<placeholder>` strings, so the source path
   // and worktree path are shell-quoted real values; only `<task-name>`,
-  // `<new-branch>`, and `origin/main` stay as placeholders.
+  // `<source-repo>`, `<new-branch>`, and `origin/main` stay as placeholders.
   const quotedHome = shellQuote(agentHome);
   const exampleSource = sourceRepos[0]
     ? shellQuote(sourceRepos[0].absolutePath)
     : `${quotedHome}/source-repos/<source-repo>`;
-  const taskWorktreePath = shellQuote(`${agentHome}/worktrees/<task-name>`);
+  const taskWorktreePath = shellQuote(`${agentHome}/worktrees/<task-name>-<source-repo>`);
   return `## Worktrees (how you read AND write a bare source repo)
 
 The source clones are **bare**, so every read and every write goes
@@ -575,8 +575,12 @@ through a worktree you create off the bare clone and remove when done.
 
 **One worktree per task — read AND write in it.** Whether the task is
 pure reading (answer a question, browse code) or will produce a PR,
-create a single worktree off fresh \`origin/main\` on a new branch and do
-ALL of that task's reading and writing inside it:
+create a worktree off fresh \`origin/main\` on a new branch and do ALL of
+that task's reading and writing inside it. A task usually touches a
+single source repo (one worktree); a task spanning **multiple** bound
+sources makes **one worktree per source repo** — each off its own bare
+clone, all on the task's branch, with source-qualified paths so they do
+not collide:
 
 \`\`\`bash
 # <source> is one of the bare clone paths listed under Source Repositories, e.g. ${exampleSource}
@@ -584,9 +588,11 @@ git -C <source> fetch origin
 git -C <source> worktree add ${taskWorktreePath} -b <new-branch> origin/main
 \`\`\`
 
-Replace \`<source>\`, \`<task-name>\`, \`<new-branch>\`, and \`origin/main\`
-to fit. A pinned \`ref\` (when listed in Source Repositories) is the base
-to branch from instead of \`origin/main\`. Branch even for read-only
+Replace \`<source>\`, \`<task-name>\`, \`<source-repo>\`, \`<new-branch>\`,
+and \`origin/main\` to fit — \`<source-repo>\` (the source repo's name)
+qualifies the worktree path per repo so a multi-source task's worktrees
+do not collide. A pinned \`ref\` (when listed in Source Repositories) is
+the base to branch from instead of \`origin/main\`. Branch even for read-only
 work — a never-pushed local branch costs nothing and leaves you ready the
 moment a read turns into a change.
 

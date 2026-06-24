@@ -477,8 +477,8 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // Bare-clone worktree commands run against the clone with `git -C <source>`.
     expect(briefing).toContain("worktree add");
     // Unified model: ONE worktree per task, used for read AND write. Only
-    // `<task-name>` / `<new-branch>` are literal placeholders; the home
-    // prefix is interpolated.
+    // `<task-name>` / `<source-repo>` / `<new-branch>` are literal
+    // placeholders; the home prefix is interpolated.
     expect(briefing).toContain("One worktree per task");
     expect(briefing).toContain(`${AGENT_HOME}/worktrees/<task-name>`);
     expect(briefing).toContain("worktree remove");
@@ -496,6 +496,9 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("If unsure whether a worktree is yours, leave it");
     expect(briefing).toContain("worktrees from already-finished tasks");
     expect(briefing).toContain("Never reuse a previous task's worktree");
+    // Multi-source tasks make one worktree per touched source repo, not one
+    // total — pins the collision-safe rule.
+    expect(briefing).toContain("one worktree per source repo");
   });
 
   it("renders predeclared source repos with source-repos/ paths and upstream coordinates", () => {
