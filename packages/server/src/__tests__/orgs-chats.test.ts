@@ -121,7 +121,10 @@ describe("POST /orgs/:orgId/chats — multi-org chat creation (regression #238)"
       format: "text",
       content: "start from web",
     });
-    expect(messageRow?.metadata).toEqual({ mentions: [target.uuid] });
+    expect(messageRow?.metadata).toEqual({
+      mentions: [target.uuid],
+      addressedAgentIds: [target.uuid],
+    });
   });
 
   it("rejects participants from a different org (404 — anti-enumeration, not 400)", async () => {

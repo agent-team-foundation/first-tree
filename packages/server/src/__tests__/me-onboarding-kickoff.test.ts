@@ -104,7 +104,10 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(msg?.source).toBe("api");
     expect(msg?.format).toBe("text");
     expect(msg?.content).toBe("First Tree is getting Bootstrap Agent up to speed on acme/web.");
-    expect(msg?.metadata).toEqual({ systemSender: "first_tree_onboarding" });
+    expect(msg?.metadata).toEqual({
+      systemSender: "first_tree_onboarding",
+      addressedAgentIds: [agent.uuid],
+    });
 
     const deliveries = await app.db
       .select()
