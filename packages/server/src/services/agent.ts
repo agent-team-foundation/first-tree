@@ -530,6 +530,55 @@ export async function createAgent(
         })
         .onConflictDoNothing();
 
+      // First-agent → delegate adoption. When a member creates their FIRST
+      // non-human agent and hasn't picked a delegate yet, adopt it as their
+      // delegate (`delegateMention` on their human agent) so it becomes the
+      // new-chat default recipient and the GitHub @mention forward target
+      // without a manual trip to the profile editor. Runs inside this
+      // transaction so the delegate is set atomically with the agent insert.
+      // Guards keep it safe and unsurprising:
+      //   - only `type=agent` created through a user path (`data.managerId`
+      //     supplied) — excludes the human-bootstrap insert and the
+      //     system/webhook agent path (branch 3 omits `managerId`);
+      //   - only when the member has no delegate yet — never overwrites a
+      //     deliberate choice (incl. a delegate pointing at someone else's
+      //     org-visible agent set before they had any agent of their own);
+      //   - only their FIRST agent — the just-inserted row makes the count 1,
+      //     so a 2nd agent never steals the delegate.
+      // The agent stays whatever visibility it was created with (private by
+      // default); the picker and webhook routing both accept a private
+      // delegate, so no visibility change is forced. Reversible: the member
+      // can re-point or clear it anytime.
+      if (data.managerId && data.type === AGENT_TYPES.AGENT) {
+        const [manager] = await tx
+          .select({ humanAgentId: members.agentId })
+          .from(members)
+          .where(eq(members.id, managerId))
+          .limit(1);
+        if (manager) {
+          const [human] = await tx
+            .select({ uuid: agents.uuid, delegateMention: agents.delegateMention, type: agents.type })
+            .from(agents)
+            .where(eq(agents.uuid, manager.humanAgentId))
+            .limit(1);
+          if (human && human.type === AGENT_TYPES.HUMAN && !human.delegateMention) {
+            const [tally] = await tx
+              .select({ value: count() })
+              .from(agents)
+              .where(
+                and(
+                  eq(agents.managerId, managerId),
+                  eq(agents.type, AGENT_TYPES.AGENT),
+                  ne(agents.status, AGENT_STATUSES.DELETED),
+                ),
+              );
+            if ((tally?.value ?? 0) === 1) {
+              await tx.update(agents).set({ delegateMention: row.uuid }).where(eq(agents.uuid, human.uuid));
+            }
+          }
+        }
+      }
+
       return row;
     });
 
