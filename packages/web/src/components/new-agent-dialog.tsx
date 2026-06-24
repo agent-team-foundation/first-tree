@@ -153,9 +153,14 @@ function asRuntimeProvider(provider: string): RuntimeProvider | null {
  */
 function pickPreferredRuntime(caps: ClientCapabilities): RuntimeProvider | null {
   if (caps["claude-code"]?.state === "ok") return "claude-code";
+  // Keep the documented Claude Code → Claude Code CLI → Codex priority, but guard
+  // the TUI branch on the central switch: disabled today (short-circuits, so a
+  // stale `ok` snapshot is skipped and Codex wins), yet removing it from
+  // DISABLED_RUNTIME_PROVIDERS restores its priority over Codex in one line.
+  if (isRuntimeProviderEnabled("claude-code-tui") && caps["claude-code-tui"]?.state === "ok") return "claude-code-tui";
   if (caps.codex?.state === "ok") return "codex";
-  // Disabled providers (e.g. claude-code-tui) are never auto-picked, even if a
-  // stale snapshot still reports them `ok`.
+  // Any other provider (incl. one still disabled in a stale snapshot) is only
+  // auto-picked when enabled.
   for (const [provider, entry] of Object.entries(caps)) {
     if (entry.state === "ok") {
       const rt = asRuntimeProvider(provider);
