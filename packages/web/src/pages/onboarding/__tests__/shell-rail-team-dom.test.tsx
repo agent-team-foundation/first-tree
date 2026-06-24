@@ -236,7 +236,7 @@ describe("onboarding shell and team step", () => {
     );
     expect(anchor).not.toBeNull();
     expect(anchor?.textContent).toContain("Globex");
-    expect(container.textContent).not.toContain("Sign out");
+    expect(container.textContent).toContain("Sign out");
 
     await click(anchor);
     const acmeRow = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Acme"));
@@ -244,6 +244,11 @@ describe("onboarding shell and team step", () => {
 
     await click(acmeRow ?? null);
     expect(authMock.selectOrganization).toHaveBeenCalledWith("org-1");
+
+    await click(
+      [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Sign out")) ?? null,
+    );
+    expect(authMock.logout).toHaveBeenCalled();
   });
 
   it("keeps the minimal sign-out chrome for first-run single-team users", async () => {

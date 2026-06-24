@@ -41,8 +41,8 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
   const copy = STEP_COPY[activeStep];
   const isHero = HERO_STEPS.has(activeStep);
 
-  // A multi-team user gets the real TeamSwitcher instead of the bare "Sign out"
-  // link. The account-only UserMenu is absent from onboarding chrome. The
+  // A multi-team user gets the real TeamSwitcher plus the bare "Sign out" link.
+  // The account-only UserMenu is absent from onboarding chrome. The
   // workspace gate routes a returning user into onboarding whenever the
   // SELECTED org has no usable agent, so a user who switches into a
   // not-yet-set-up team lands here with no agent in THIS org ("finish later"
@@ -88,11 +88,16 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
               {COPY.finishLater}
             </Button>
           )}
-          {/* Multi-team: the real team switcher escape hatch.
+          {/* Multi-team: the real team switcher escape hatch plus account exit.
               First-run: a bare Sign out link, always available so a user who
               can't finish right now isn't locked out. */}
           {isMultiTeam ? (
-            <TeamSwitcher />
+            <>
+              <TeamSwitcher />
+              <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={logout}>
+                Sign out
+              </Button>
+            </>
           ) : (
             <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={logout}>
               Sign out
