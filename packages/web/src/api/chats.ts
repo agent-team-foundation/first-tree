@@ -171,17 +171,29 @@ export function sendFileMessageBatch(
   chatId: string,
   content: SendFileMessageBatchBody,
   metadata?: SendFileMessageMetadata,
-  opts?: { inReplyTo?: string },
+  opts?: { inReplyTo?: string; resolves?: RequestResolution },
 ): Promise<Message> {
   // Project explicit fields rather than spreading `metadata` whole so future
   // additions to SendFileMessageMetadata don't ride out on the `mentions`
   // truthiness check by accident — each new field must be opted in here.
   const mentions = metadata?.mentions;
   const hasMentions = Array.isArray(mentions) && mentions.length > 0;
+  // `resolves` rides a file-format send only when the human answers a blocking
+  // ask WITH an attached image (the AskTakeover image path). The server's
+  // resolution gate is format-agnostic — it authorizes off `senderId === target`
+  // (services/message.ts), so a captioned image from the target resolves the
+  // question exactly like a text answer. Mirrors `sendChatMessage`.
+  const meta =
+    hasMentions || opts?.resolves
+      ? {
+          ...(hasMentions ? { mentions } : {}),
+          ...(opts?.resolves ? { resolves: opts.resolves } : {}),
+        }
+      : undefined;
   return api.post<Message>(`/chats/${encodeURIComponent(chatId)}/messages`, {
     format: "file",
     content,
-    ...(hasMentions ? { metadata: { mentions } } : {}),
+    ...(meta ? { metadata: meta } : {}),
     // `inReplyTo` is format-agnostic threading (`sendMessageSchema`) — a
     // captioned image answering a docked question threads under it just like
     // a text reply.

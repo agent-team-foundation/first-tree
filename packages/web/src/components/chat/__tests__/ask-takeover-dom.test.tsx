@@ -13,10 +13,17 @@ vi.mock("../../ui/markdown.js", () => ({
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+// usePendingImages stages a revocable object-URL per file; give the test a
+// deterministic, side-effect-free implementation regardless of happy-dom's.
+URL.createObjectURL = () => "blob:mock";
+URL.revokeObjectURL = () => {};
+
 const OPTS = [
   { label: "Ship", description: "ship now", preview: "ft deploy --to 20" },
   { label: "Hold", description: "wait 24h" },
 ];
+
+const CANDIDATES = [{ agentId: "agent-alice", name: "alice", displayName: "Alice", managedByMe: false }];
 
 const roots: Root[] = [];
 async function renderDom(element: ReactElement): Promise<HTMLElement> {
@@ -57,6 +64,20 @@ async function setValue(el: HTMLTextAreaElement, value: string): Promise<void> {
     el.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
   });
 }
+async function changeFiles(el: HTMLInputElement, files: File[]): Promise<void> {
+  await act(async () => {
+    Object.defineProperty(el, "files", { configurable: true, value: files });
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+function freeTextBox(c: ParentNode): HTMLTextAreaElement | null {
+  return c.querySelector<HTMLTextAreaElement>(
+    'textarea[placeholder^="Type your answer"], textarea[placeholder^="Other"]',
+  );
+}
+function thumbnails(c: ParentNode): HTMLImageElement[] {
+  return [...c.querySelectorAll<HTMLImageElement>("img")];
+}
 function option(c: ParentNode, text: string): HTMLButtonElement | null {
   return (
     [...c.querySelectorAll<HTMLButtonElement>('[role="radio"],[role="checkbox"]')].find((b) =>
@@ -94,7 +115,7 @@ describe("AskTakeover", () => {
     expect(option(c, "Hold")?.getAttribute("aria-checked")).toBe("true");
 
     await click(btn(c, "Reply"));
-    expect(onReply).toHaveBeenCalledWith("Hold");
+    expect(onReply).toHaveBeenCalledWith({ content: "Hold", mentions: [], images: [] });
   });
 
   it("multi-select: toggles several options; Reply joins the labels", async () => {
@@ -107,7 +128,7 @@ describe("AskTakeover", () => {
     expect(option(c, "Ship")?.getAttribute("aria-checked")).toBe("true");
     expect(option(c, "Hold")?.getAttribute("aria-checked")).toBe("true");
     await click(btn(c, "Reply"));
-    expect(onReply).toHaveBeenCalledWith("Ship, Hold");
+    expect(onReply).toHaveBeenCalledWith({ content: "Ship, Hold", mentions: [], images: [] });
   });
 
   it("options + Other free text merge into the answer", async () => {
@@ -120,7 +141,7 @@ describe("AskTakeover", () => {
     if (!other) throw new Error("Other input missing");
     await setValue(other, "but watch the canary");
     await click(btn(c, "Reply"));
-    expect(onReply).toHaveBeenCalledWith("Ship\nbut watch the canary");
+    expect(onReply).toHaveBeenCalledWith({ content: "Ship\nbut watch the canary", mentions: [], images: [] });
   });
 
   it("free-text ask (no options): Reply gated on text, sends the typed answer", async () => {
@@ -134,7 +155,7 @@ describe("AskTakeover", () => {
     await setValue(ta, "looks risky");
     expect(btn(c, "Reply")?.disabled).toBe(false);
     await click(btn(c, "Reply"));
-    expect(onReply).toHaveBeenCalledWith("looks risky");
+    expect(onReply).toHaveBeenCalledWith({ content: "looks risky", mentions: [], images: [] });
   });
 
   it("body + options scroll together while the Skip/Reply footer stays pinned", async () => {
@@ -212,7 +233,7 @@ describe("AskTakeover", () => {
 
     await setValue(ta, "looks risky");
     const entered = await keyDown(ta, "Enter");
-    expect(onReply).toHaveBeenCalledWith("looks risky");
+    expect(onReply).toHaveBeenCalledWith({ content: "looks risky", mentions: [], images: [] });
     expect(entered.defaultPrevented).toBe(true); // no newline gets inserted
 
     // Esc skips, regardless of focus / typed text.
@@ -291,7 +312,97 @@ describe("AskTakeover", () => {
     // Once the overlay closes (aria-hidden cleared), the shortcuts resume.
     c.removeAttribute("aria-hidden");
     await keyDown(ta, "Enter");
-    expect(onReply).toHaveBeenCalledWith("looks risky");
+    expect(onReply).toHaveBeenCalledWith({ content: "looks risky", mentions: [], images: [] });
+  });
+
+  it("resolves free-text `@<name>` tokens to agentIds against the candidates", async () => {
+    const onReply = vi.fn();
+    const c = await renderDom(
+      <AskTakeover
+        body="# Who?"
+        payload={{ multiSelect: false }}
+        mentionCandidates={CANDIDATES}
+        onReply={onReply}
+        onSkip={() => {}}
+      />,
+    );
+    const ta = freeTextBox(c);
+    if (!ta) throw new Error("free-text input missing");
+    await setValue(ta, "@alice please confirm");
+    await click(btn(c, "Reply"));
+    expect(onReply).toHaveBeenCalledWith({
+      content: "@alice please confirm",
+      mentions: ["agent-alice"],
+      images: [],
+    });
+  });
+
+  it("renders the `@` autocomplete popover when the caret sits in an `@` query", async () => {
+    const c = await renderDom(
+      <AskTakeover
+        body="# Who?"
+        payload={{ multiSelect: false }}
+        mentionCandidates={CANDIDATES}
+        onReply={() => {}}
+        onSkip={() => {}}
+      />,
+    );
+    const ta = freeTextBox(c);
+    if (!ta) throw new Error("free-text input missing");
+    await setValue(ta, "@al");
+    // The popover is a listbox of candidate rows anchored to the textarea.
+    const listbox = c.querySelector('[role="listbox"]');
+    expect(listbox?.textContent).toContain("Alice");
+  });
+
+  it("stages a pasted/attached image and lets an image-only answer resolve", async () => {
+    const onReply = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Evidence?" payload={{ multiSelect: false }} onReply={onReply} onSkip={() => {}} />,
+    );
+    // No text yet → Reply gated.
+    expect(btn(c, "Reply")?.disabled).toBe(true);
+
+    const file = new File(["x"], "shot.png", { type: "image/png" });
+    const fileInput = c.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("file input missing");
+    await changeFiles(fileInput, [file]);
+
+    // A thumbnail appears and an image alone now satisfies Reply.
+    expect(thumbnails(c).length).toBe(1);
+    expect(btn(c, "Reply")?.disabled).toBe(false);
+
+    await click(btn(c, "Reply"));
+    expect(onReply).toHaveBeenCalledWith({ content: "", mentions: [], images: [file] });
+  });
+
+  it("rejects an oversized image with an error and stages nothing", async () => {
+    const onReply = vi.fn();
+    const c = await renderDom(
+      <AskTakeover body="# Evidence?" payload={{ multiSelect: false }} onReply={onReply} onSkip={() => {}} />,
+    );
+    // 5MB + 1 byte — over the per-image cap usePendingImages enforces.
+    const big = new File([new ArrayBuffer(5 * 1024 * 1024 + 1)], "big.png", { type: "image/png" });
+    const fileInput = c.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("file input missing");
+    await changeFiles(fileInput, [big]);
+
+    expect(c.textContent).toContain("too large");
+    expect(thumbnails(c).length).toBe(0);
+    expect(btn(c, "Reply")?.disabled).toBe(true);
+  });
+
+  it("surfaces a host send error inside the card", async () => {
+    const c = await renderDom(
+      <AskTakeover
+        body="# Concerns?"
+        payload={{ multiSelect: false }}
+        error="Failed to send your answer"
+        onReply={() => {}}
+        onSkip={() => {}}
+      />,
+    );
+    expect(c.textContent).toContain("Failed to send your answer");
   });
 
   it("yields to a focused control that already consumed the keystroke (defaultPrevented)", async () => {

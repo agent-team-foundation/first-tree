@@ -73,7 +73,13 @@ function ModeBlock({ label, payload, height = 560 }: { label: string; payload: A
           body={BODY}
           payload={payload}
           askerName="deploy-agent"
-          onReply={(content) => setStatus(`Reply → ${content.replace(/\n/g, " · ")}`)}
+          onReply={(answer) =>
+            setStatus(
+              `Reply → ${answer.content.replace(/\n/g, " · ")}` +
+                (answer.mentions.length > 0 ? ` · @${answer.mentions.length}` : "") +
+                (answer.images.length > 0 ? ` · ${answer.images.length}🖼` : ""),
+            )
+          }
           onSkip={() => setStatus("Skipped → resolves the request with a skipped answer")}
         />
       </div>

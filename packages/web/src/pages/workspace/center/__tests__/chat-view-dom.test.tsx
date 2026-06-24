@@ -1278,9 +1278,10 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
-  it("resolves a blocking free-text question via a text reply; an attached image is not sent while blocked", async () => {
-    const { ChatView } = await import("../chat-view.js");
-    const dockMessages = messages([
+  // Shared free-text (legacy-shape → free-text fallback) blocking ask used by the
+  // text-resolve and image-resolve cases below.
+  const freeTextDockMessages = () =>
+    messages([
       message({
         id: "req-file",
         senderId: "agent-1",
@@ -1296,9 +1297,12 @@ describe("ChatView", () => {
         createdAt: "2026-05-28T12:00:00.000Z",
       }),
     ]);
+
+  it("resolves a blocking free-text question via a typed text answer", async () => {
+    const { ChatView } = await import("../chat-view.js");
     const { container, root } = await renderDom(
       <ChatView agentId="agent-1" chatId="chat-1" />,
-      (client) => seedChat(client, chatDetail(), dockMessages),
+      (client) => seedChat(client, chatDetail(), freeTextDockMessages()),
       "/",
     );
 
@@ -1306,12 +1310,6 @@ describe("ChatView", () => {
     const answerBox = askTextarea(container);
     if (!answerBox) throw new Error("Overlay free-text input missing");
     await setValue(answerBox, "Screenshot evidence attached");
-    // The (covered) composer's image attachment is NOT part of the answer — the
-    // overlay Reply sends a text resolve only.
-    const file = new File(["abc"], "evidence.png", { type: "image/png" });
-    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
-    if (!fileInput) throw new Error("File input missing");
-    await changeFiles(fileInput, [file]);
     await click(buttonByText(container, "Reply"));
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected text resolve send");
     expect(chatMocks.sendChatMessage).toHaveBeenCalledWith("chat-1", "Screenshot evidence attached", ["agent-1"], {
@@ -1319,6 +1317,46 @@ describe("ChatView", () => {
       resolves: { request: "req-file", kind: "answered" },
     });
     expect(chatMocks.sendFileMessageBatch).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+  });
+
+  it("resolves a blocking free-text question with an attached image via a file-batch resolve", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      (client) => seedChat(client, chatDetail(), freeTextDockMessages()),
+      "/",
+    );
+
+    await waitForText(container, "Reply");
+    const answerBox = askTextarea(container);
+    if (!answerBox) throw new Error("Overlay free-text input missing");
+    await setValue(answerBox, "Screenshot evidence attached");
+    // The ask card now owns image attachments — its file input is the first one
+    // in the DOM (the overlay renders above the covered composer). Attaching an
+    // image makes the resolving reply a `format="file"` batch that STILL carries
+    // `metadata.resolves`, so the question resolves exactly like a text answer.
+    const file = new File(["abc"], "evidence.png", { type: "image/png" });
+    const fileInput = container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!fileInput) throw new Error("File input missing");
+    await changeFiles(fileInput, [file]);
+    await click(buttonByText(container, "Reply"));
+    await waitForCondition(
+      () => chatMocks.sendFileMessageBatch.mock.calls.length > 0,
+      "Expected image file-batch resolve",
+    );
+    expect(attachmentMocks.uploadImageAttachment).toHaveBeenCalledWith(file);
+    expect(chatMocks.sendFileMessageBatch).toHaveBeenCalledWith(
+      "chat-1",
+      {
+        caption: "Screenshot evidence attached",
+        attachments: [{ imageId: "uploaded-image", mimeType: "image/png", filename: "evidence.png", size: 3 }],
+      },
+      { mentions: ["agent-1"] },
+      { inReplyTo: "req-file", resolves: { request: "req-file", kind: "answered" } },
+    );
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });
