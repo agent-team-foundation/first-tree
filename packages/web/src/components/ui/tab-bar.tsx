@@ -1,4 +1,4 @@
-import { forwardRef, type HTMLAttributes, type ReactNode } from "react";
+import { type ButtonHTMLAttributes, forwardRef, type HTMLAttributes, type ReactNode } from "react";
 import { cn } from "../../lib/utils.js";
 
 // Workspace-style underline tab bar.
@@ -43,13 +43,17 @@ type TabProps = {
   /** Shows a neutral "unsaved changes" dot after the label. */
   dirty?: boolean;
   className?: string;
-} & Pick<HTMLAttributes<HTMLButtonElement>, "role" | "aria-selected" | "aria-controls" | "id">;
+} & Pick<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "role" | "aria-selected" | "aria-controls" | "aria-disabled" | "disabled" | "id" | "title"
+>;
 
-export function Tab({ active, onClick, children, dirty, className, ...rest }: TabProps) {
+export function Tab({ active, onClick, children, dirty, className, disabled, ...rest }: TabProps) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       className={cn(
         // No border-radius: the active state is a straight bottom border, and a
         // corner radius would bow its ends upward into little hooks.
@@ -60,15 +64,15 @@ export function Tab({ active, onClick, children, dirty, className, ...rest }: Ta
         padding: "var(--sp-1_75) var(--sp-3)",
         marginBottom: -1,
         borderBottom: `var(--hairline-bold) solid ${active ? "var(--primary)" : "transparent"}`,
-        color: active ? "var(--fg)" : "var(--fg-3)",
-        cursor: "pointer",
+        color: disabled ? "var(--fg-4)" : active ? "var(--fg)" : "var(--fg-3)",
+        cursor: disabled ? "not-allowed" : "pointer",
         transition: "color 0.12s",
       }}
       onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.color = "var(--fg)";
+        if (!active && !disabled) e.currentTarget.style.color = "var(--fg)";
       }}
       onMouseLeave={(e) => {
-        if (!active) e.currentTarget.style.color = "var(--fg-3)";
+        if (!active && !disabled) e.currentTarget.style.color = "var(--fg-3)";
       }}
       {...rest}
     >

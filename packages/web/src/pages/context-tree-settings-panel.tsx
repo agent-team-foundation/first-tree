@@ -51,6 +51,8 @@ export function ContextTreeSettingsPanel() {
   const [branch, setBranch] = useState("");
   const [saved, setSaved] = useState(false);
   const hasConfiguredRepo = !!settingQuery.data?.repo;
+  const shouldShowManualForm = hasConfiguredRepo || manualEnabled;
+  const featuresTabDisabled = !hasConfiguredRepo;
 
   const featuresQuery = useQuery({
     queryKey: ["org-setting", organizationId, "context_tree_features"],
@@ -97,6 +99,11 @@ export function ContextTreeSettingsPanel() {
     setRepo(settingQuery.data.repo ?? "");
     setBranch(settingQuery.data.branch ?? "main");
   }, [settingQuery.data]);
+
+  useEffect(() => {
+    if (!settingQuery.data || hasConfiguredRepo || activeTab !== "features") return;
+    setActiveTab("initial");
+  }, [activeTab, hasConfiguredRepo, settingQuery.data]);
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -175,9 +182,14 @@ export function ContextTreeSettingsPanel() {
               id="context-tree-settings-features-tab"
               role="tab"
               aria-selected={activeTab === "features"}
+              aria-disabled={featuresTabDisabled ? "true" : undefined}
               aria-controls="context-tree-settings-features-panel"
               active={activeTab === "features"}
-              onClick={() => setActiveTab("features")}
+              disabled={featuresTabDisabled}
+              onClick={() => {
+                if (!featuresTabDisabled) setActiveTab("features");
+              }}
+              title={featuresTabDisabled ? "Initialize the Context Tree before configuring features." : undefined}
             >
               Features
             </Tab>
@@ -191,29 +203,33 @@ export function ContextTreeSettingsPanel() {
               style={{ paddingTop: "var(--sp-4)" }}
             >
               {isAdmin ? (
-                <div style={{ marginBottom: "var(--sp-4)" }}>
-                  {/* The team's tree is built via the /build-tree flow
-                      (connect code -> build -> seed). Manual settings below are
-                      only for pointing at an existing tree repo. */}
-                  <Button type="button" onClick={() => navigate("/build-tree")}>
-                    <span>{COPY.buildTree.buildCta}</span>
-                    <ArrowRight className="h-4 w-4" />
-                  </Button>
-                </div>
+                !hasConfiguredRepo ? (
+                  <div style={{ marginBottom: "var(--sp-4)" }}>
+                    {/* The team's tree is built via the /build-tree flow
+                        (connect code -> build -> seed). Manual settings below are
+                        only for pointing at an existing tree repo. */}
+                    <Button type="button" onClick={() => navigate("/build-tree")}>
+                      <span>{COPY.buildTree.buildCta}</span>
+                      <ArrowRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ) : null
               ) : null}
               {!isAdmin && !hasConfiguredRepo ? (
                 <div className="text-body" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-4)" }}>
                   Ask an admin to initialize this team's Context Tree.
                 </div>
               ) : null}
-              <label
-                className="text-body inline-flex items-center"
-                style={{ color: "var(--fg)", gap: "var(--sp-2)", marginBottom: "var(--sp-4)" }}
-              >
-                <input type="checkbox" checked={manualEnabled} onChange={(e) => setManualEnabled(e.target.checked)} />
-                <span>Manual Set</span>
-              </label>
-              {manualEnabled ? (
+              {!hasConfiguredRepo ? (
+                <label
+                  className="text-body inline-flex items-center"
+                  style={{ color: "var(--fg)", gap: "var(--sp-2)", marginBottom: "var(--sp-4)" }}
+                >
+                  <input type="checkbox" checked={manualEnabled} onChange={(e) => setManualEnabled(e.target.checked)} />
+                  <span>Manual Set</span>
+                </label>
+              ) : null}
+              {shouldShowManualForm ? (
                 <form onSubmit={handleSubmit}>
                   <SettingsField
                     label="Repo URL"
