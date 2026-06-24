@@ -1,0 +1,141 @@
+// @vitest-environment happy-dom
+
+import { type AgentChatStatus, buildAgentChatStatus, type ChatParticipantDetail } from "@first-tree/shared";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, type ReactElement } from "react";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
+
+vi.mock("../../../api/agent-status.js", () => ({
+  chatAgentStatusQueryKey: (chatId: string) => ["chat-agent-status", chatId],
+  fetchChatAgentStatuses: vi.fn(() => Promise.resolve([])),
+}));
+
+// Imported after the mock is registered.
+import { ChatOfflineNotice, OfflineNotice } from "../chat-offline-notice.js";
+
+let h: DomHarness;
+let queryClient: QueryClient;
+let latestPath = "";
+
+function LocationProbe(): null {
+  latestPath = useLocation().pathname;
+  return null;
+}
+
+function render(ui: ReactElement): void {
+  h.render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/start"]}>
+        <LocationProbe />
+        <Routes>
+          <Route path="*" element={ui} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+const flush = (): Promise<void> => h.flush();
+const notice = (): Element | null => h.container.querySelector('[role="status"]');
+
+function agent(agentId: string, displayName: string): ChatParticipantDetail {
+  return {
+    agentId,
+    role: "member",
+    mode: "auto",
+    joinedAt: "2026-01-01T00:00:00.000Z",
+    name: displayName,
+    displayName,
+    type: "agent",
+    avatarColorToken: null,
+    avatarImageUrl: null,
+  };
+}
+
+/** A reachable agent → derived `main` is anything but "offline". */
+function onlineStatus(agentId: string): AgentChatStatus {
+  return buildAgentChatStatus({ agentId, reachable: true, errored: false, working: false, engagement: "active" });
+}
+
+const ARIA = agent("a1", "Aria");
+
+beforeEach(() => {
+  h = createDomHarness();
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+  });
+  latestPath = "";
+});
+
+afterEach(() => {
+  h.cleanup();
+  vi.useRealTimers();
+});
+
+describe("OfflineNotice (presentational)", () => {
+  it("starting phase shows a coming-online line with no action", async () => {
+    let clicks = 0;
+    render(<OfflineNotice phase="starting" agentName="Aria" onReconnect={() => clicks++} />);
+    await flush();
+    expect(notice()?.textContent).toContain("Aria is coming online");
+    expect(h.container.querySelector("button")).toBeNull();
+    expect(clicks).toBe(0);
+  });
+
+  it("offline phase invites a queued task and exposes a working Reconnect", async () => {
+    let clicks = 0;
+    render(<OfflineNotice phase="offline" agentName="Aria" onReconnect={() => clicks++} />);
+    await flush();
+    expect(notice()?.textContent).toContain("anything you send will start once its computer reconnects");
+    const btn = h.container.querySelector<HTMLButtonElement>("button");
+    expect(btn?.textContent).toContain("Reconnect");
+    await act(async () => {
+      btn?.click();
+      await Promise.resolve();
+    });
+    expect(clicks).toBe(1);
+  });
+});
+
+describe("ChatOfflineNotice (container)", () => {
+  it("renders nothing when not awaiting a reply", async () => {
+    queryClient.setQueryData(["chat-agent-status", "c1"], []);
+    render(<ChatOfflineNotice chatId="c1" agents={[ARIA]} awaitingReply={false} />);
+    await flush();
+    expect(notice()).toBeNull();
+  });
+
+  it("renders nothing when the awaited agent is online", async () => {
+    queryClient.setQueryData(["chat-agent-status", "c1"], [onlineStatus("a1")]);
+    render(<ChatOfflineNotice chatId="c1" agents={[ARIA]} awaitingReply={true} />);
+    await flush();
+    expect(notice()).toBeNull();
+  });
+
+  it("holds 'coming online' during the grace window, then escalates to offline + reconnect", async () => {
+    vi.useFakeTimers();
+    // No status row for the agent → treated as offline (a freshly-created agent
+    // that hasn't reported in is exactly the case we surface).
+    queryClient.setQueryData(["chat-agent-status", "c1"], []);
+    render(<ChatOfflineNotice chatId="c1" agents={[ARIA]} awaitingReply={true} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(notice()?.textContent).toContain("Aria is coming online");
+
+    await act(async () => {
+      vi.advanceTimersByTime(8100);
+      await Promise.resolve();
+    });
+    expect(notice()?.textContent).toContain("anything you send will start");
+
+    const btn = h.container.querySelector<HTMLButtonElement>("button");
+    await act(async () => {
+      btn?.click();
+      await Promise.resolve();
+    });
+    expect(latestPath).toBe("/settings/computers");
+  });
+});

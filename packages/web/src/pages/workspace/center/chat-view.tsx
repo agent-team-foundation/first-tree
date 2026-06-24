@@ -75,6 +75,7 @@ import { AddParticipantDropdown } from "../../../components/add-participant-drop
 import { Avatar as RealAvatar } from "../../../components/avatar.js";
 import { AgentHovercard } from "../../../components/chat/agent-hovercard.js";
 import { AskTakeover } from "../../../components/chat/ask-takeover.js";
+import { ChatOfflineNotice } from "../../../components/chat/chat-offline-notice.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
   FIRST_TREE_SYSTEM_SENDER_NAME,
@@ -900,6 +901,9 @@ type ChatTimelineProps = {
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
   myAgentId: string | null;
+  chatId: string;
+  /** Non-human agent participants — drives the inline offline notice. */
+  agents: ChatParticipantDetail[];
   mentionParticipants: MentionParticipant[];
   dockRequestId: string | undefined;
   gapAfterMessageId: string | null;
@@ -921,6 +925,8 @@ const ChatTimeline = memo(function ChatTimeline({
   agentAvatarFn,
   agentColorTokenFn,
   myAgentId,
+  chatId,
+  agents,
   mentionParticipants,
   dockRequestId,
   gapAfterMessageId,
@@ -929,6 +935,12 @@ const ChatTimeline = memo(function ChatTimeline({
   pillCount,
   onPillClick,
 }: ChatTimelineProps) {
+  // Are we waiting on an agent's reply? True when the latest message isn't an
+  // agent's — so the inline offline notice only surfaces when a reply is due.
+  const agentIds = new Set(agents.map((a) => a.agentId));
+  const lastMessageItem = [...visibleItems].reverse().find((it) => it.kind === "message");
+  const awaitingReply =
+    !!lastMessageItem && lastMessageItem.kind === "message" && !agentIds.has(lastMessageItem.data.senderId);
   return (
     <div className="relative flex-1 flex flex-col min-h-0">
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
@@ -1021,6 +1033,7 @@ const ChatTimeline = memo(function ChatTimeline({
               </div>
             ) : null}
           </div>
+          <ChatOfflineNotice chatId={chatId} agents={agents} awaitingReply={awaitingReply} />
           <div ref={messagesEndRef} />
         </div>
       </div>
@@ -3329,6 +3342,8 @@ export function ChatView({
             agentAvatarFn={agentAvatar}
             agentColorTokenFn={agentColorToken}
             myAgentId={myAgentId}
+            chatId={chatId}
+            agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
             mentionParticipants={renderMentionParticipants}
             dockRequestId={dockRequestId}
             gapAfterMessageId={gapAfterMessageId}

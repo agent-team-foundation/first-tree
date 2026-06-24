@@ -66,6 +66,14 @@ const ComposeStatusBarPreviewPage = import.meta.env.DEV
     )
   : null;
 
+const ChatOfflineNoticePreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/chat-offline-notice-preview.js").then((module) => ({
+        default: module.ChatOfflineNoticePreviewPage,
+      })),
+    )
+  : null;
+
 const RequestDockPreviewPage = import.meta.env.DEV
   ? lazy(() =>
       import("./pages/request-dock-preview.js").then((module) => ({
@@ -163,6 +171,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <ComposeStatusBarPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {ChatOfflineNoticePreviewPage ? (
+                <Route
+                  path="/preview/chat-offline-notice"
+                  element={
+                    <Suspense fallback={null}>
+                      <ChatOfflineNoticePreviewPage />
                     </Suspense>
                   }
                 />
