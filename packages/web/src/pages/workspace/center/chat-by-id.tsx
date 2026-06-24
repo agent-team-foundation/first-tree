@@ -73,7 +73,7 @@ export function ChatByIdView({
   onClearChat?: (() => void) | null;
 }) {
   const queryClient = useQueryClient();
-  const { agentId: myAgentId, organizationId: currentOrgId, selectOrganization, memberships } = useAuth();
+  const { agentId: myAgentId, organizationId: currentOrgId, selectOrganization, memberships, switchingOrg } = useAuth();
 
   const { data: chatDetail, isError: chatDetailError } = useQuery({
     queryKey: ["chat-detail", chatId],
@@ -99,12 +99,13 @@ export function ChatByIdView({
   const switchedOrgRef = useRef<string | null>(null);
   useEffect(() => {
     const chatOrg = chatDetail?.organizationId;
+    if (switchingOrg) return;
     if (!chatOrg || !currentOrgId || chatOrg === currentOrgId) return;
     if (switchedOrgRef.current === chatOrg) return;
     if (!memberships.some((m) => m.organizationId === chatOrg)) return;
     switchedOrgRef.current = chatOrg;
     void selectOrganization(chatOrg);
-  }, [chatDetail?.organizationId, currentOrgId, memberships, selectOrganization]);
+  }, [chatDetail?.organizationId, currentOrgId, memberships, selectOrganization, switchingOrg]);
 
   const primaryAgent = useMemo(() => {
     if (!chatDetail) return null;
