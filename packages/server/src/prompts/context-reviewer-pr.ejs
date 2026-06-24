@@ -9,6 +9,13 @@ URL: <%= htmlUrl %>
 Base ref: <%= baseRef || "unknown" %>
 Head ref: <%= headRef || "unknown" %>
 Opened by: <%= senderLogin %>
+Trigger event: <%= triggerEvent %>
+<% if (commentAuthorLogin) { -%>
+Comment author: <%= commentAuthorLogin %>
+<% } -%>
+<% if (commentUrl) { -%>
+Comment URL: <%= commentUrl %>
+<% } -%>
 First Tree organization: <%= organizationId %>
 
 Review goals:

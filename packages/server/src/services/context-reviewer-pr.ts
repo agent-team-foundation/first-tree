@@ -39,6 +39,9 @@ export type ContextReviewerPrTemplateInput = {
   baseRef: string | null;
   headRef: string | null;
   senderLogin: string;
+  triggerEvent: string;
+  commentUrl: string | null;
+  commentAuthorLogin: string | null;
   organizationId: string;
 };
 
@@ -56,8 +59,15 @@ export type ContextReviewerPrSkipReason =
   | "reviewer_agent_invalid";
 
 type PullRequestPayloadInfo = ContextReviewerPrTemplateInput & {
+  eventType: "pull_request" | "issue_comment" | "pull_request_review_comment";
+  action: "opened" | "synchronize" | "created" | "edited";
   entityKey: string;
 };
+
+type ContextReviewerPrTrigger =
+  | { eventType: "pull_request"; action: "opened" | "synchronize"; triggerEvent: string }
+  | { eventType: "issue_comment"; action: "created"; triggerEvent: string }
+  | { eventType: "pull_request_review_comment"; action: "created" | "edited"; triggerEvent: string };
 
 type ReviewerAgent = {
   uuid: string;
@@ -163,7 +173,7 @@ function parseUrlRepo(value: string): string | null {
   return normalizeOwnerRepo(owner, repo);
 }
 
-export async function handleContextReviewerPullRequest(
+export async function handleContextReviewerPrEvent(
   app: FastifyInstance,
   input: {
     eventType: string;
@@ -171,14 +181,13 @@ export async function handleContextReviewerPullRequest(
     organizationId: string;
   },
 ): Promise<ContextReviewerPrResult> {
-  if (input.eventType !== "pull_request") {
-    return { handled: false, reason: "unsupported_event" };
-  }
-  if (isRecord(input.payload) && readString(input.payload.action) !== "opened") {
+  if (
+    !resolveContextReviewerPrTrigger(input.eventType, isRecord(input.payload) ? readString(input.payload.action) : null)
+  ) {
     return { handled: false, reason: "unsupported_event" };
   }
 
-  const info = extractPullRequestPayloadInfo(input.payload, input.organizationId);
+  const info = extractPullRequestPayloadInfo(input.eventType, input.payload, input.organizationId);
   if (!info) {
     return { handled: false, reason: "malformed_payload" };
   }
@@ -251,8 +260,9 @@ export async function handleContextReviewerPullRequest(
         content: prompt,
         metadata: {
           source: "github",
-          event: "pull_request",
-          action: "opened",
+          event: info.eventType,
+          action: info.action,
+          triggerEvent: info.triggerEvent,
           entityType: "pull_request",
           entityKey: info.entityKey,
           contextTreeReviewer: true,
@@ -282,8 +292,9 @@ export async function handleContextReviewerPullRequest(
       content: prompt,
       metadata: {
         source: "github",
-        event: "pull_request",
-        action: "opened",
+        event: info.eventType,
+        action: info.action,
+        triggerEvent: info.triggerEvent,
         entityType: "pull_request",
         entityKey: info.entityKey,
         contextTreeReviewer: true,
@@ -300,33 +311,124 @@ export async function handleContextReviewerPullRequest(
   return { handled: true, chatId: created.chat.id, messageId: created.message.id, reused: false };
 }
 
-function extractPullRequestPayloadInfo(payload: unknown, organizationId: string): PullRequestPayloadInfo | null {
+export async function handleContextReviewerPullRequest(
+  app: FastifyInstance,
+  input: {
+    eventType: string;
+    payload: unknown;
+    organizationId: string;
+  },
+): Promise<ContextReviewerPrResult> {
+  return handleContextReviewerPrEvent(app, input);
+}
+
+function isSupportedContextReviewerPrEvent(eventType: string, action: string | null): boolean {
+  return resolveContextReviewerPrTrigger(eventType, action) !== null;
+}
+
+function resolveContextReviewerPrTrigger(eventType: string, action: string | null): ContextReviewerPrTrigger | null {
+  if (eventType === "pull_request" && (action === "opened" || action === "synchronize")) {
+    return { eventType, action, triggerEvent: `${eventType}.${action}` };
+  }
+  if (eventType === "issue_comment" && action === "created") {
+    return { eventType, action, triggerEvent: `${eventType}.${action}` };
+  }
+  if (eventType === "pull_request_review_comment" && (action === "created" || action === "edited")) {
+    return { eventType, action, triggerEvent: `${eventType}.${action}` };
+  }
+  return null;
+}
+
+function extractPullRequestPayloadInfo(
+  eventType: string,
+  payload: unknown,
+  organizationId: string,
+): PullRequestPayloadInfo | null {
   if (!isRecord(payload)) return null;
   const action = readString(payload.action);
-  if (action !== "opened") return null;
+  const trigger = resolveContextReviewerPrTrigger(eventType, action);
+  if (!trigger) return null;
 
   const repo = isRecord(payload.repository) ? payload.repository : null;
   const repoFullName = readString(repo?.full_name);
-  const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
-  const prNumber = readNumber(pr?.number);
-  const title = readString(pr?.title);
-  const htmlUrl = readString(pr?.html_url);
   const sender = isRecord(payload.sender) ? payload.sender : null;
   const senderLogin = readString(sender?.login);
-  if (!repoFullName || prNumber === null || !title || !htmlUrl || !senderLogin) return null;
+  if (!repoFullName || !senderLogin) return null;
   const normalizedRepoFullName = normalizeGithubRepo(repoFullName) ?? repoFullName;
 
-  return {
+  const common = {
+    ...trigger,
     repoFullName,
-    prNumber,
-    title,
-    htmlUrl,
-    baseRef: readString(isRecord(pr?.base) ? pr.base.ref : null),
-    headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
     senderLogin,
     organizationId,
-    entityKey: `${normalizedRepoFullName}#${prNumber}`,
   };
+
+  if (trigger.eventType === "pull_request") {
+    const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+    const prNumber = readNumber(pr?.number);
+    const title = readString(pr?.title);
+    const htmlUrl = readString(pr?.html_url);
+    if (prNumber === null || !title || !htmlUrl) return null;
+    return {
+      ...common,
+      prNumber,
+      title,
+      htmlUrl,
+      baseRef: readString(isRecord(pr?.base) ? pr.base.ref : null),
+      headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
+      commentUrl: null,
+      commentAuthorLogin: null,
+      entityKey: `${normalizedRepoFullName}#${prNumber}`,
+    };
+  }
+
+  if (trigger.eventType === "issue_comment") {
+    const issue = isRecord(payload.issue) ? payload.issue : null;
+    const prInfo = isRecord(issue?.pull_request) ? issue.pull_request : null;
+    const prNumber = readNumber(issue?.number);
+    const title = readString(issue?.title);
+    const htmlUrl = readString(prInfo?.html_url) ?? readString(issue?.html_url);
+    const comment = isRecord(payload.comment) ? payload.comment : null;
+    if (!prInfo || prNumber === null || !title || !htmlUrl) return null;
+    return {
+      ...common,
+      prNumber,
+      title,
+      htmlUrl,
+      baseRef: null,
+      headRef: null,
+      commentUrl: readString(comment?.html_url),
+      commentAuthorLogin: readCommentAuthorLogin(comment) ?? senderLogin,
+      entityKey: `${normalizedRepoFullName}#${prNumber}`,
+    };
+  }
+
+  if (trigger.eventType === "pull_request_review_comment") {
+    const pr = isRecord(payload.pull_request) ? payload.pull_request : null;
+    const prNumber = readNumber(pr?.number);
+    const title = readString(pr?.title);
+    const htmlUrl = readString(pr?.html_url);
+    const comment = isRecord(payload.comment) ? payload.comment : null;
+    if (prNumber === null || !title || !htmlUrl) return null;
+    return {
+      ...common,
+      prNumber,
+      title,
+      htmlUrl,
+      baseRef: readString(isRecord(pr?.base) ? pr.base.ref : null),
+      headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
+      commentUrl: readString(comment?.html_url),
+      commentAuthorLogin: readCommentAuthorLogin(comment) ?? senderLogin,
+      entityKey: `${normalizedRepoFullName}#${prNumber}`,
+    };
+  }
+
+  return null;
+}
+
+function readCommentAuthorLogin(comment: Record<string, unknown> | null): string | null {
+  const user = isRecord(comment?.user) ? comment.user : null;
+  return readString(user?.login);
 }
 
 async function loadValidReviewerAgent(
@@ -378,6 +480,7 @@ async function findExistingReviewerChat(
 export const contextReviewerPrTestInternals = {
   extractPullRequestPayloadInfo,
   findExistingReviewerChat,
+  isSupportedContextReviewerPrEvent,
   loadValidReviewerAgent,
   parseBareRepo,
   parseScpLikeRepo,
