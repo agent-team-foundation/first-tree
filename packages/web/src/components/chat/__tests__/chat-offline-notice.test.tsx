@@ -7,9 +7,10 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDomHarness, type DomHarness } from "../../../test-utils/dom-harness.js";
 
+const mocks = vi.hoisted(() => ({ fetchChatAgentStatuses: vi.fn() }));
 vi.mock("../../../api/agent-status.js", () => ({
   chatAgentStatusQueryKey: (chatId: string) => ["chat-agent-status", chatId],
-  fetchChatAgentStatuses: vi.fn(() => Promise.resolve([])),
+  fetchChatAgentStatuses: mocks.fetchChatAgentStatuses,
 }));
 
 // Imported after the mock is registered.
@@ -54,10 +55,8 @@ function agent(agentId: string, displayName: string): ChatParticipantDetail {
   };
 }
 
-/** A reachable agent → derived `main` is anything but "offline". */
-function onlineStatus(agentId: string): AgentChatStatus {
-  return buildAgentChatStatus({ agentId, reachable: true, errored: false, working: false, engagement: "active" });
-}
+const status = (agentId: string, reachable: boolean): AgentChatStatus =>
+  buildAgentChatStatus({ agentId, reachable, errored: false, working: false, engagement: "active" });
 
 const ARIA = agent("a1", "Aria");
 
@@ -67,6 +66,7 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
   });
   latestPath = "";
+  mocks.fetchChatAgentStatuses.mockReset().mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -100,26 +100,33 @@ describe("OfflineNotice (presentational)", () => {
 });
 
 describe("ChatOfflineNotice (container)", () => {
-  it("renders nothing when not awaiting a reply", async () => {
-    queryClient.setQueryData(["chat-agent-status", "c1"], []);
-    render(<ChatOfflineNotice chatId="c1" agents={[ARIA]} awaitingReply={false} />);
+  it("renders nothing when no agent is awaited this turn", async () => {
+    queryClient.setQueryData(["chat-agent-status", "c1"], [status("a1", false)]);
+    render(<ChatOfflineNotice chatId="c1" agents={[]} />);
     await flush();
     expect(notice()).toBeNull();
   });
 
   it("renders nothing when the awaited agent is online", async () => {
-    queryClient.setQueryData(["chat-agent-status", "c1"], [onlineStatus("a1")]);
-    render(<ChatOfflineNotice chatId="c1" agents={[ARIA]} awaitingReply={true} />);
+    queryClient.setQueryData(["chat-agent-status", "c1"], [status("a1", true)]);
+    render(<ChatOfflineNotice chatId="c1" agents={[ARIA]} />);
+    await flush();
+    expect(notice()).toBeNull();
+  });
+
+  it("does not read a still-loading status query as offline (no premature notice)", async () => {
+    // queryFn pending → not isSuccess → must not flash "coming online" on a chat
+    // whose agent may well be online (R2).
+    mocks.fetchChatAgentStatuses.mockReturnValue(new Promise<AgentChatStatus[]>(() => {}));
+    render(<ChatOfflineNotice chatId="c-loading" agents={[ARIA]} />);
     await flush();
     expect(notice()).toBeNull();
   });
 
   it("holds 'coming online' during the grace window, then escalates to offline + reconnect", async () => {
     vi.useFakeTimers();
-    // No status row for the agent → treated as offline (a freshly-created agent
-    // that hasn't reported in is exactly the case we surface).
-    queryClient.setQueryData(["chat-agent-status", "c1"], []);
-    render(<ChatOfflineNotice chatId="c1" agents={[ARIA]} awaitingReply={true} />);
+    queryClient.setQueryData(["chat-agent-status", "c1"], [status("a1", false)]); // explicit offline row
+    render(<ChatOfflineNotice chatId="c1" agents={[ARIA]} />);
     await act(async () => {
       await Promise.resolve();
     });

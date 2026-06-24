@@ -935,12 +935,17 @@ const ChatTimeline = memo(function ChatTimeline({
   pillCount,
   onPillClick,
 }: ChatTimelineProps) {
-  // Are we waiting on an agent's reply? True when the latest message isn't an
-  // agent's — so the inline offline notice only surfaces when a reply is due.
-  const agentIds = new Set(agents.map((a) => a.agentId));
+  // Which non-human agents this turn awaits a reply from: the latest message's
+  // structured routing (metadata.mentions) intersected with the chat's agents.
+  // mentions is the canonical recipient set (the composer + addressedToAgentIds
+  // both write it, incl. the onboarding kickoff bootstrap), so we never flag an
+  // offline agent the latest turn didn't address; a 2-speaker direct chat carries
+  // the peer in mentions too, so no sender heuristic is needed.
   const lastMessageItem = [...visibleItems].reverse().find((it) => it.kind === "message");
-  const awaitingReply =
-    !!lastMessageItem && lastMessageItem.kind === "message" && !agentIds.has(lastMessageItem.data.senderId);
+  // `metadata` is an open record, so narrow `mentions` to string[] before use.
+  const rawMentions = lastMessageItem?.kind === "message" ? lastMessageItem.data.metadata?.mentions : undefined;
+  const lastMentions = Array.isArray(rawMentions) ? rawMentions.filter((m): m is string => typeof m === "string") : [];
+  const awaitedAgents = agents.filter((a) => lastMentions.includes(a.agentId));
   return (
     <div className="relative flex-1 flex flex-col min-h-0">
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
@@ -1033,7 +1038,7 @@ const ChatTimeline = memo(function ChatTimeline({
               </div>
             ) : null}
           </div>
-          <ChatOfflineNotice chatId={chatId} agents={agents} awaitingReply={awaitingReply} />
+          <ChatOfflineNotice chatId={chatId} agents={awaitedAgents} />
           <div ref={messagesEndRef} />
         </div>
       </div>

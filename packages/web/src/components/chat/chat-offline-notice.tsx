@@ -67,36 +67,35 @@ export function OfflineNotice({
  * happens). Rendered where the agent's reply would appear, it names the state
  * and routes to the one action that fixes it: reconnect the computer.
  *
- * Shown only when (a) a non-human agent in this chat is offline AND (b) the user
- * is awaiting its reply (the latest turn isn't the agent's) — so a finished chat
- * whose agent later sleeps stays quiet. General to any chat, not onboarding-only.
+ * `agents` are the non-human agents THIS turn awaits a reply from — the caller
+ * derives them from the latest message's structured routing (metadata.mentions),
+ * not a sender heuristic, so a group chat never flags an offline agent the latest
+ * message didn't address. General to any chat, not onboarding-only.
  */
 export function ChatOfflineNotice({
   chatId,
   agents,
-  awaitingReply,
 }: {
   chatId: string;
-  /** Non-human agent participants of this chat. */
+  /** Non-human agents this turn is awaiting a reply from (routing-derived). */
   agents: ChatParticipantDetail[];
-  /** True when the latest turn is not the agent's, i.e. a reply is expected. */
-  awaitingReply: boolean;
 }) {
   const navigate = useNavigate();
-  const enabled = awaitingReply && agents.length > 0;
-  const { data: statuses } = useQuery({
+  const enabled = agents.length > 0;
+  const { data: statuses, isSuccess } = useQuery({
     queryKey: chatAgentStatusQueryKey(chatId),
     queryFn: () => fetchChatAgentStatuses(chatId),
     refetchInterval: 30_000, // safety net; admin-WS invalidation is the live path
     enabled,
   });
 
+  // Only interpret status once the query has SUCCEEDED: a not-yet-loaded query
+  // must not read as "offline" (that would flash "coming online" → reconnect on a
+  // normal online-agent chat open). The /agent-status contract returns a row for
+  // every non-human speaker (an unbound agent is main:"offline"), so a real
+  // offline agent is an explicit "offline" row, not a missing one.
   const byAgent = new Map<string, AgentChatStatus>((statuses ?? []).map((s) => [s.agentId, s]));
-  // An agent with no status row yet is treated as offline: a freshly-created
-  // agent that hasn't reported in is exactly the case we want to surface.
-  const offlineAgent = enabled
-    ? agents.find((a) => (byAgent.get(a.agentId)?.main ?? "offline") === "offline")
-    : undefined;
+  const offlineAgent = isSuccess ? agents.find((a) => byAgent.get(a.agentId)?.main === "offline") : undefined;
   const offlineAgentId = offlineAgent?.agentId ?? null;
 
   // Local grace timer: hold "coming online" briefly, then escalate. Re-armed
