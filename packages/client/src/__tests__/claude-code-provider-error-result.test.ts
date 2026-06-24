@@ -208,7 +208,7 @@ describe("claude-code handler — structured provider error result", () => {
 
     expect(forwardResult).not.toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("`claude login`");
+    expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("`claude auth login`");
 
     const providerPayloads = emitted
       .filter((event) => event.kind === "error")
@@ -293,7 +293,7 @@ describe("claude-code handler — structured provider error result", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const notice = String(sendMessage.mock.calls[0]?.[1].content);
     expect(notice).toContain("insufficient account balance");
-    expect(notice).not.toContain("`claude login`");
+    expect(notice).not.toContain("`claude auth login`");
 
     const providerPayloads = emitted
       .filter((event) => event.kind === "error")

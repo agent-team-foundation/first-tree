@@ -229,7 +229,7 @@ function firstNonEmpty(...values: Array<string | undefined>): string {
 
 function noticeLead(category: ProviderFailureCategory, reasonCode: string): string {
   if (category === "credential") {
-    return "Claude Code could not run this turn: Anthropic rejected the local Claude authentication. Run `claude login` on this machine, then retry.";
+    return "Claude Code could not run this turn: Anthropic rejected the local Claude authentication. Run `claude auth login` on this machine, then retry.";
   }
   if (category === "provider_capacity") {
     if (reasonCode === "provider_billing_limit") {

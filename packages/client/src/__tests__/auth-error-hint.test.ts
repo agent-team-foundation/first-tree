@@ -106,10 +106,10 @@ describe("formatAuthHint", () => {
     expect(hint).toContain("refresh token was revoked");
   });
 
-  it("targets `claude login` for the claude-code runtime", () => {
+  it("targets `claude auth login` for the claude-code runtime", () => {
     const hint = formatAuthHint("claude-code", "authentication_failed");
     expect(hint).toContain("claude-code");
-    expect(hint).toContain("`claude login`");
+    expect(hint).toContain("`claude auth login`");
     expect(hint).toContain("Anthropic");
     expect(hint).toContain("not First Tree's");
     expect(hint).toContain("authentication_failed");

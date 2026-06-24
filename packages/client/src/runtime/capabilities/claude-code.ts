@@ -329,7 +329,7 @@ export async function probeClaudeCodeCapability(deps: ClaudeCodeProbeDeps = {}):
         return {
           ok: false,
           error:
-            "no Claude credentials found (ANTHROPIC_API_KEY unset and ~/.claude.json has no OAuth account); run `claude login` on this machine",
+            "no Claude credentials found (ANTHROPIC_API_KEY unset and ~/.claude.json has no OAuth account); run `claude auth login` on this machine",
         };
       }
       return { ok: true, method: auth.method };
