@@ -436,11 +436,10 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
     "   it), before creating any worktree run `git -C <path> fetch origin` so",
     "   `origin/<default>` is current.",
     "4. **Read through a worktree, not the clone path.** A bare clone has no",
-    "   files to read. Reads (`grep`, `cat`, `git log`, a `first-tree-seed`",
-    "   skill scan) and writes share **one worktree per task**: create it off",
-    "   `origin/<default>` (or the pinned `ref`) on a new branch, do the",
-    "   task's reading and writing in it, and remove it when the task ends.",
-    "   The flow is in `## Worktrees`.",
+    "   files to read. Reads (`grep`, `cat`, `git log`) and writes share **one",
+    "   worktree per task**: create it off `origin/<default>` (or the pinned",
+    "   `ref`) on a new branch, do the task's reading and writing in it, and",
+    "   remove it when the task ends. The flow is in `## Worktrees`.",
     "5. **Credential failures are reportable events** — if clone/fetch fails",
     "   with an auth error, tell a human in the chat what failed and continue",
     "   with what you have locally; do not retry silently.",
@@ -575,16 +574,14 @@ through a worktree you create off the bare clone and remove when done.
 **No worktrees are pre-created.**
 
 **One worktree per task — read AND write in it.** Whether the task is
-pure reading (answer a question, browse, a skill scan) or will produce a
-PR, create a single worktree off fresh \`origin/main\` on a new branch and
-do ALL of that task's reading and writing inside it:
+pure reading (answer a question, browse code) or will produce a PR,
+create a single worktree off fresh \`origin/main\` on a new branch and do
+ALL of that task's reading and writing inside it:
 
 \`\`\`bash
 # <source> is one of the bare clone paths listed under Source Repositories, e.g. ${exampleSource}
 git -C <source> fetch origin
 git -C <source> worktree add ${taskWorktreePath} -b <new-branch> origin/main
-# read AND write in it for the whole task; remove it when the task ends:
-git -C <source> worktree remove ${taskWorktreePath}
 \`\`\`
 
 Replace \`<source>\`, \`<task-name>\`, \`<new-branch>\`, and \`origin/main\`
@@ -599,15 +596,20 @@ moment a read turns into a change.
 - **Frozen for the task's life**: once created, stay on the branch point
   for the whole task/PR — do not rebase/merge \`origin/main\` into it
   mid-task unless a human asks.
-- **Clean up your own, and only your own**: remove the worktree when the
-  task ends — a PR task when the PR merges or is abandoned, a read-only
-  task once you've delivered the result. There is no reliable "task done"
+- **Clean up your own, and only your own**: remove the worktree
+  (\`git -C <source> worktree remove <path>\`) when the task ends — a PR
+  task when the PR merges or is abandoned, a read-only task once you've
+  delivered the result. There is no reliable "task done"
   event for non-PR work, so also sweep **your own** leftover worktrees
   whenever you start a new task. Leave **other chats'** worktrees alone:
   \`worktrees/\` is shared across all your chats, and one you did not create
   may be a sibling chat's live task (a read-only task shows no diff
   either), so removing it would yank its working directory out from under
-  it.`;
+  it.
+- **A task-specific skill may override this**: when a shipped skill
+  prescribes its own worktree flow (e.g. \`first-tree-seed\` materializes a
+  read worktree per bound source for its one-time scan), follow the skill
+  for that task.`;
 }
 
 function communicationBlock(bin: string): string {
