@@ -1,4 +1,4 @@
-import type { MeMembership } from "@first-tree/shared";
+import type { MeMembership, OrgBrief } from "@first-tree/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { trackEvent } from "../analytics.js";
@@ -136,6 +136,17 @@ type AuthContextValue = {
    * org (`ADMIN_WS_ORG_CHANGED_EVENT`).
    */
   selectOrganization: (organizationId: string) => Promise<void>;
+  /**
+   * The org a switch is transitioning to, or `null` when no switch is in
+   * flight. Set by the team switcher when a switch starts and cleared when it
+   * settles (or fails). It is the single signal that drives the optimistic
+   * anchor label, the in-row spinner + disabled list, and the global
+   * "Switching to {name}…" transition veil — consolidating the per-component
+   * blank flash into one intentional overlay. `selectOrganization` itself is
+   * unchanged; this is purely the in-flight UI state wrapped around it.
+   */
+  switchingOrg: OrgBrief | null;
+  setSwitchingOrg: (org: OrgBrief | null) => void;
   refreshMe: () => Promise<void>;
   logout: () => void;
 };
@@ -212,6 +223,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // below — RequireAuth only blocks the loading frame when the user IS
   // authenticated.
   const [meLoaded, setMeLoaded] = useState(false);
+  // In-flight org-switch target (drives the switcher's optimistic anchor, the
+  // row spinner, and the global transition veil). Lives here so the veil
+  // (mounted in the layout) and the switcher (in the header) read one source.
+  const [switchingOrg, setSwitchingOrg] = useState<OrgBrief | null>(null);
 
   const logout = useCallback(() => {
     clearStoredTokens();
@@ -236,6 +251,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOnboardingDismissedAt(null);
     setOnboardingCompletedAt(null);
     setMeLoaded(false);
+    setSwitchingOrg(null);
   }, [queryClient]);
 
   const fetchMe = useCallback(async () => {
@@ -498,6 +514,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         adoptTokens,
         selectOrganization,
+        switchingOrg,
+        setSwitchingOrg,
         refreshMe: fetchMe,
         logout,
       }}

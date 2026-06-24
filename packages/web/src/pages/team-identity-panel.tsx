@@ -39,8 +39,8 @@ export function TeamIdentityPanel() {
     },
     onSuccess: (next: Organization) => {
       queryClient.setQueryData(["organization", organizationId], next);
-      // /me/organizations cached in UserMenu — bust so the dropdown
-      // displayName updates without a reload.
+      // /me/organizations is cached by the header TeamSwitcher — bust it so the
+      // team anchor + switch list pick up the new displayName without a reload.
       queryClient.invalidateQueries({ queryKey: ["me-organizations"] });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);

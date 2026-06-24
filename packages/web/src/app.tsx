@@ -104,6 +104,12 @@ const ChatSummaryPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/chat-summary-preview.js").then((module) => ({ default: module.ChatSummaryPreviewPage })))
   : null;
 
+const TeamSwitcherPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/team-switcher-preview.js").then((module) => ({ default: module.TeamSwitcherPreviewPage })),
+    )
+  : null;
+
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
 // above this ships in prod too, so it can be opened on a deployed URL — it has
 // no auth-gated data, only tokens and `components/ui` primitives.
@@ -193,6 +199,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <UserMenuPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {TeamSwitcherPreviewPage ? (
+                <Route
+                  path="/preview/team-switcher"
+                  element={
+                    <Suspense fallback={null}>
+                      <TeamSwitcherPreviewPage />
                     </Suspense>
                   }
                 />

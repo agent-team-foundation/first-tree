@@ -127,6 +127,8 @@ const authMock = vi.hoisted(() => {
       login: vi.fn(async () => undefined),
       adoptTokens: vi.fn(async () => undefined),
       selectOrganization: vi.fn(async () => undefined),
+      switchingOrg: null,
+      setSwitchingOrg: vi.fn(),
       refreshMe: vi.fn(async () => undefined),
       logout: vi.fn(),
     },
@@ -1367,14 +1369,16 @@ describe("web DOM interaction coverage", () => {
     await waitForText("npm install -g first-tree", document.body);
   });
 
-  it("opens UserMenu, switches orgs, opens setup actions, and signs out", async () => {
+  it("switches orgs and opens setup actions from the TeamSwitcher, and signs out from the UserMenu", async () => {
     clientApiMocks.post.mockResolvedValue({});
+    const { TeamSwitcher } = await import("../../components/team-switcher.js");
     const { UserMenu } = await import("../../components/user-menu.js");
     const selectOrganization = vi.fn(async () => undefined);
     const logout = vi.fn();
     authMock.value = {
       ...authMock.value,
       organizationId: "org-1",
+      teamDisplayName: "Acme",
       selectOrganization,
       logout,
     };
@@ -1387,45 +1391,51 @@ describe("web DOM interaction coverage", () => {
     const originalGet = api.get;
     api.get = getMock;
 
-    const menu = await renderDom(<UserMenu />);
-    await waitForText("", menu.container);
-    await click(menu.container.querySelector('button[aria-haspopup="menu"]'));
-    await waitForText("Acme", menu.container);
+    // Team switching + management live in the header-left TeamSwitcher now.
+    const switcher = await renderDom(<TeamSwitcher redirectHomeOnSwitch={false} />);
+    await click(switcher.container.querySelector('button[aria-haspopup="menu"]'));
+    await waitForText("Beta", switcher.container);
     await click(
-      [...menu.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Beta")) ?? null,
+      [...switcher.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Beta")) ?? null,
     );
     expect(selectOrganization).toHaveBeenCalledWith("org-2");
 
-    await click(menu.container.querySelector('button[aria-haspopup="menu"]'));
+    await click(switcher.container.querySelector('button[aria-haspopup="menu"]'));
     await click(
-      [...menu.container.querySelectorAll("button")].find((button) =>
+      [...switcher.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Create new team"),
       ) ?? null,
     );
     await waitForText("Create", document.body);
 
-    await click(menu.container.querySelector('button[aria-haspopup="menu"]'));
+    await click(switcher.container.querySelector('button[aria-haspopup="menu"]'));
     await click(
-      [...menu.container.querySelectorAll("button")].find((button) =>
+      [...switcher.container.querySelectorAll("button")].find((button) =>
         button.textContent?.includes("Join with invite link"),
       ) ?? null,
     );
     await waitForText("Join", document.body);
 
-    await click(menu.container.querySelector('button[aria-haspopup="menu"]'));
+    // The avatar menu is account-only: no team rows, just Sign out.
+    const account = await renderDom(<UserMenu />);
+    await click(account.container.querySelector('button[aria-haspopup="menu"]'));
+    expect(account.container.textContent).not.toContain("Beta");
+    expect(account.container.textContent).not.toContain("Create new team");
     await click(
-      [...menu.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Sign out")) ?? null,
+      [...account.container.querySelectorAll("button")].find((button) => button.textContent?.includes("Sign out")) ??
+        null,
     );
     expect(logout).toHaveBeenCalled();
     api.get = originalGet;
   });
 
-  it("keeps the selected team first and collapses long team lists", async () => {
-    const { UserMenu } = await import("../../components/user-menu.js");
+  it("shows the current team in the header and lists the other teams without a collapse", async () => {
+    const { TeamSwitcher } = await import("../../components/team-switcher.js");
     authMock.value = {
       ...authMock.value,
       organizationId: "org-current",
       role: "admin",
+      teamDisplayName: "Current Team",
       selectOrganization: vi.fn(async () => undefined),
     };
     const getMock = async <T,>(): Promise<T> =>
@@ -1442,33 +1452,20 @@ describe("web DOM interaction coverage", () => {
     const originalGet = api.get;
     api.get = getMock;
 
-    const menu = await renderDom(<UserMenu />);
-    await click(menu.container.querySelector('button[aria-haspopup="menu"]'));
-    await waitForText("Current Team", menu.container);
+    const switcher = await renderDom(<TeamSwitcher redirectHomeOnSwitch={false} />);
+    await click(switcher.container.querySelector('button[aria-haspopup="menu"]'));
+    await waitForText("Current Team", switcher.container);
 
-    const visibleTeamButtons = [...menu.container.querySelectorAll("button[role='menuitem']")].filter((button) =>
-      ["Current Team", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"].some((name) =>
-        button.textContent?.includes(name),
-      ),
-    );
-    expect(
-      visibleTeamButtons.map(
-        (button) =>
-          ["Current Team", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"].find((name) =>
-            button.textContent?.includes(name),
-          ) ?? "",
-      ),
-    ).toEqual(["Current Team", "Alpha", "Beta", "Gamma", "Delta"]);
-    expect(menu.container.textContent).not.toContain("Epsilon");
-    expect(menu.container.textContent).toContain("View 2 more teams");
-
-    await click(
-      [...menu.container.querySelectorAll("button")].find((button) =>
-        button.textContent?.includes("View 2 more teams"),
-      ) ?? null,
-    );
-    await waitForText("Zeta", menu.container);
-    expect(menu.container.textContent).toContain("Show fewer teams");
+    // The current team is the menu header; the switch list is the OTHER teams,
+    // all shown (scroll, not a "View N more" collapse), with no duplicate row.
+    const teamNames = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Current Team"];
+    const switchRowNames = [...switcher.container.querySelectorAll("button[role='menuitem']")]
+      .map((button) => teamNames.find((name) => button.textContent?.includes(name)))
+      .filter((name): name is string => Boolean(name));
+    expect(switchRowNames).toEqual(["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"]);
+    expect(switcher.container.textContent).toContain("Epsilon");
+    expect(switcher.container.textContent).not.toContain("View 2 more teams");
+    expect(switcher.container.textContent).not.toContain("Show fewer teams");
     api.get = originalGet;
   });
 

@@ -1,6 +1,7 @@
 import { Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
+import { useAuth } from "../auth/auth-context.js";
 import { useNewVersionAvailable } from "../hooks/use-version-check.js";
 import { useWorkspaceViewport } from "../hooks/use-viewport.js";
 import { cn } from "../lib/utils.js";
@@ -8,6 +9,8 @@ import { CommandPalette } from "../pages/workspace/palette/command-palette.js";
 import { DisconnectChip } from "./disconnect-chip.js";
 import { FirstTreeLogo } from "./first-tree-logo.js";
 import { NewVersionChip } from "./new-version-chip.js";
+import { TeamSwitchOverlay } from "./team-switch-overlay.js";
+import { TeamSwitcher } from "./team-switcher.js";
 import { ThemeToggle } from "./ui/theme-toggle.js";
 import { UserMenu } from "./user-menu.js";
 
@@ -26,6 +29,7 @@ const PARENT_URL = "https://first-tree.ai";
 
 export function Layout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const { organizationId } = useAuth();
 
   // ⌘K / Ctrl+K to open the Jump-to palette from anywhere. Listens at
   // window-level so the shortcut survives inside textareas / editable
@@ -71,12 +75,18 @@ export function Layout() {
   const showJumpButton = viewport === "xl";
   const dropBrand = viewport === "narrow";
   const showThemeToggle = viewport !== "narrow";
+  // The team anchor is reachable at every breakpoint (like the avatar). It is
+  // absent only when no org is selected (mid-onboarding), where it would have
+  // nothing to anchor to and Create / Join is carried by the onboarding flow.
+  const showAnchor = !!organizationId;
   // Brand present → brand | tabs(center) | controls(end). Brand collapsed
-  // (narrow) → tabs(start) | controls(end). The narrow tabs track is
-  // `minmax(0, 1fr)` (not the default `minmax(auto, 1fr)`) so it can shrink
-  // below the tabs' intrinsic width and let them scroll, instead of pushing
-  // the avatar past the right edge.
-  const headerColumns = dropBrand ? "minmax(0, 1fr) auto" : "1fr auto 1fr";
+  // (narrow) → [team anchor] | tabs(start) | controls(end): the anchor moves to
+  // its own leading `auto` column so "which team am I in" stays reachable after
+  // the brand drops. With no selected org the anchor is absent and the row falls
+  // back to tabs | controls. The narrow tabs track is `minmax(0, 1fr)` (not the
+  // default `minmax(auto, 1fr)`) so it can shrink below the tabs' intrinsic
+  // width and let them scroll, instead of pushing the avatar past the right edge.
+  const headerColumns = dropBrand ? (showAnchor ? "auto minmax(0, 1fr) auto" : "minmax(0, 1fr) auto") : "1fr auto 1fr";
 
   return (
     <div
@@ -107,8 +117,16 @@ export function Layout() {
           background: "var(--bg-raised)",
         }}
       >
-        {/* Brand cluster: logo + name welded together, then the optional chip. */}
-        {dropBrand ? null : (
+        {/* Brand cluster: logo + name welded together, the team anchor, then the
+            optional chips. On narrow the cluster is dropped, but the anchor must
+            stay reachable — it surfaces icon-only in its own leading column. */}
+        {dropBrand ? (
+          showAnchor ? (
+            <div style={{ justifySelf: "start", minWidth: 0 }}>
+              <TeamSwitcher variant="compact" />
+            </div>
+          ) : null
+        ) : (
           <div className="flex items-center" style={{ gap: "var(--sp-3_5)", justifySelf: "start", minWidth: 0 }}>
             {/* Brand links out to the parent marketing site in a new tab. */}
             <a
@@ -125,6 +143,14 @@ export function Layout() {
                 First Tree
               </span>
             </a>
+            {/* Team anchor sits next to the brand (workspace identity, left side),
+                separated by a hairline rule; absent when no org is selected. */}
+            {showAnchor && (
+              <>
+                <span aria-hidden style={{ width: 1, height: 18, background: "var(--border)", flexShrink: 0 }} />
+                <TeamSwitcher variant="full" />
+              </>
+            )}
             <DisconnectChip />
             <NewVersionChip show={newVersionAvailable} />
           </div>
@@ -252,6 +278,9 @@ export function Layout() {
           <UserMenu />
         </div>
       </header>
+
+      {/* One intentional veil over the content while an org switch runs. */}
+      <TeamSwitchOverlay />
 
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
 

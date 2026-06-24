@@ -16,6 +16,8 @@ const authMock = vi.hoisted(() => ({
     memberships: [],
     currentMembership: null,
     teamDisplayName: "Acme",
+    switchingOrg: null,
+    setSwitchingOrg: vi.fn(),
     logout: vi.fn(),
     selectOrganization: vi.fn(),
   },
@@ -203,6 +205,8 @@ describe("Layout", () => {
     expect(container.textContent).toContain("Workspace");
     expect(container.textContent).toContain("Context child");
     expect(container.textContent).toContain("Jump to");
+    // Team anchor sits in the brand cluster at wide widths.
+    expect(container.querySelector('[data-testid="team-switcher"]')).not.toBeNull();
 
     const jump = container.querySelector<HTMLButtonElement>('button[aria-label="Open command palette"]');
     if (!jump) throw new Error("Jump button missing");
@@ -230,6 +234,9 @@ describe("Layout", () => {
     expect(container.textContent).not.toContain("Jump to");
     expect(container.textContent).toContain("Settings child");
     expect(container.querySelector('[data-testid="user-menu"]')).not.toBeNull();
+    // The brand drops on narrow, but the team anchor must NOT — it stays
+    // reachable in its own leading column (§7).
+    expect(container.querySelector('[data-testid="team-switcher"]')).not.toBeNull();
 
     const xlController = mediaControllers.find((controller) => controller.query.includes("80rem"));
     const mdController = mediaControllers.find((controller) => controller.query.includes("48rem"));
