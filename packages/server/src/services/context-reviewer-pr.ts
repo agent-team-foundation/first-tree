@@ -2,7 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { chatMetadataSchema } from "@first-tree/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type * as ejs from "ejs";
 import type { FastifyInstance } from "fastify";
 import { isRecord, readNumber, readString } from "../api/webhooks/github-entity.js";
@@ -10,6 +10,7 @@ import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
+import { messages } from "../db/schema/messages.js";
 import { createLogger } from "../observability/index.js";
 import { createChat } from "./chat.js";
 import { sendMessage } from "./message.js";
@@ -19,6 +20,8 @@ import { applyMembershipWrite } from "./participant-mode.js";
 
 const log = createLogger("ContextReviewerPr");
 const require = createRequire(import.meta.url);
+const FOLLOW_UP_NOTICE = "A new GitHub event was received. I'll check the current PR state.";
+const REVIEWER_OPENED_ECHO_SUPPRESSION_WINDOW_SECONDS = 60 * 60;
 // EJS is published as CommonJS at runtime even though its types expose named
 // exports, so native ESM cannot import `render` directly.
 const ejsRuntime: typeof ejs = require("ejs");
@@ -47,7 +50,7 @@ export type ContextReviewerPrTemplateInput = {
 
 export type ContextReviewerPrResult =
   | { handled: false; reason: ContextReviewerPrSkipReason }
-  | { handled: true; chatId: string; messageId: string; reused: boolean };
+  | { handled: true; chatId: string; messageId: string; reused: boolean; suppressed?: boolean };
 
 export type ContextReviewerPrSkipReason =
   | "unsupported_event"
@@ -62,6 +65,8 @@ type PullRequestPayloadInfo = ContextReviewerPrTemplateInput & {
   eventType: "pull_request" | "issue_comment" | "pull_request_review_comment";
   action: "opened" | "synchronize" | "created" | "edited";
   entityKey: string;
+  senderType: string | null;
+  commentAuthorType: string | null;
 };
 
 type ContextReviewerPrTrigger =
@@ -71,7 +76,6 @@ type ContextReviewerPrTrigger =
 
 type ReviewerAgent = {
   uuid: string;
-  name: string | null;
   managerHumanAgentId: string;
 };
 
@@ -228,7 +232,6 @@ export async function handleContextReviewerPrEvent(
     return { handled: false, reason: "reviewer_agent_invalid" };
   }
 
-  const prompt = await renderContextReviewerPrPrompt(info);
   const metadata = chatMetadataSchema.parse({
     source: "github",
     entityType: "pull_request",
@@ -250,6 +253,31 @@ export async function handleContextReviewerPrEvent(
       [{ agentId: reviewer.managerHumanAgentId }, { agentId: reviewer.uuid }],
       { onConflictDoNothing: true, upgradeWatcherToSpeaker: true },
     );
+    const suppressedEchoMessageId = await findSuppressibleReviewerEchoMessageId(app.db, {
+      chatId: existingChatId,
+      info,
+      reviewer,
+      appSlug: app.config.oauth?.githubApp?.slug ?? null,
+    });
+    if (suppressedEchoMessageId) {
+      log.info(
+        {
+          organizationId: input.organizationId,
+          entityKey: info.entityKey,
+          chatId: existingChatId,
+          commentAuthorLogin: info.commentAuthorLogin,
+        },
+        "context reviewer echo comment suppressed",
+      );
+      return {
+        handled: true,
+        chatId: existingChatId,
+        messageId: suppressedEchoMessageId,
+        reused: true,
+        suppressed: true,
+      };
+    }
+
     const { message, recipients } = await sendMessage(
       app.db,
       existingChatId,
@@ -257,17 +285,8 @@ export async function handleContextReviewerPrEvent(
       {
         source: "github",
         format: "markdown",
-        content: prompt,
-        metadata: {
-          source: "github",
-          event: info.eventType,
-          action: info.action,
-          triggerEvent: info.triggerEvent,
-          entityType: "pull_request",
-          entityKey: info.entityKey,
-          contextTreeReviewer: true,
-          mentions: [reviewer.uuid],
-        },
+        content: contextReviewerFollowUpContent(info),
+        metadata: contextReviewerMessageMetadata(info, reviewer),
       },
       { normalizeMentionsInContent: false },
     );
@@ -279,6 +298,7 @@ export async function handleContextReviewerPrEvent(
     return { handled: true, chatId: existingChatId, messageId: message.id, reused: true };
   }
 
+  const prompt = await renderContextReviewerPrPrompt(info);
   const created = await createChat(app.db, {
     mode: "task",
     initiatorAgentId: reviewer.managerHumanAgentId,
@@ -290,15 +310,7 @@ export async function handleContextReviewerPrEvent(
       source: "github",
       format: "markdown",
       content: prompt,
-      metadata: {
-        source: "github",
-        event: info.eventType,
-        action: info.action,
-        triggerEvent: info.triggerEvent,
-        entityType: "pull_request",
-        entityKey: info.entityKey,
-        contextTreeReviewer: true,
-      },
+      metadata: contextReviewerMessageMetadata(info, reviewer),
     },
     source: "manual",
   });
@@ -360,6 +372,7 @@ function extractPullRequestPayloadInfo(
     ...trigger,
     repoFullName,
     senderLogin,
+    senderType: readString(sender?.type),
     organizationId,
   };
 
@@ -378,6 +391,7 @@ function extractPullRequestPayloadInfo(
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
       commentUrl: null,
       commentAuthorLogin: null,
+      commentAuthorType: null,
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }
@@ -389,6 +403,7 @@ function extractPullRequestPayloadInfo(
     const title = readString(issue?.title);
     const htmlUrl = readString(prInfo?.html_url) ?? readString(issue?.html_url);
     const comment = isRecord(payload.comment) ? payload.comment : null;
+    const commentAuthor = readCommentAuthor(comment);
     if (!prInfo || prNumber === null || !title || !htmlUrl) return null;
     return {
       ...common,
@@ -398,7 +413,8 @@ function extractPullRequestPayloadInfo(
       baseRef: null,
       headRef: null,
       commentUrl: readString(comment?.html_url),
-      commentAuthorLogin: readCommentAuthorLogin(comment) ?? senderLogin,
+      commentAuthorLogin: commentAuthor.login ?? senderLogin,
+      commentAuthorType: commentAuthor.type ?? common.senderType,
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }
@@ -409,6 +425,7 @@ function extractPullRequestPayloadInfo(
     const title = readString(pr?.title);
     const htmlUrl = readString(pr?.html_url);
     const comment = isRecord(payload.comment) ? payload.comment : null;
+    const commentAuthor = readCommentAuthor(comment);
     if (prNumber === null || !title || !htmlUrl) return null;
     return {
       ...common,
@@ -418,7 +435,8 @@ function extractPullRequestPayloadInfo(
       baseRef: readString(isRecord(pr?.base) ? pr.base.ref : null),
       headRef: readString(isRecord(pr?.head) ? pr.head.ref : null),
       commentUrl: readString(comment?.html_url),
-      commentAuthorLogin: readCommentAuthorLogin(comment) ?? senderLogin,
+      commentAuthorLogin: commentAuthor.login ?? senderLogin,
+      commentAuthorType: commentAuthor.type ?? common.senderType,
       entityKey: `${normalizedRepoFullName}#${prNumber}`,
     };
   }
@@ -426,9 +444,40 @@ function extractPullRequestPayloadInfo(
   return null;
 }
 
-function readCommentAuthorLogin(comment: Record<string, unknown> | null): string | null {
+function readCommentAuthor(comment: Record<string, unknown> | null): { login: string | null; type: string | null } {
   const user = isRecord(comment?.user) ? comment.user : null;
-  return readString(user?.login);
+  return { login: readString(user?.login), type: readString(user?.type) };
+}
+
+function contextReviewerFollowUpContent(info: PullRequestPayloadInfo): string {
+  const details = [
+    info.commentAuthorLogin ? `Comment author: ${info.commentAuthorLogin}` : null,
+    info.commentUrl ? `Comment URL: ${info.commentUrl}` : null,
+  ].filter((line): line is string => line !== null);
+  return [FOLLOW_UP_NOTICE, ...details].join("\n");
+}
+
+function contextReviewerMessageMetadata(
+  info: PullRequestPayloadInfo,
+  reviewer: ReviewerAgent,
+): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {
+    source: "github",
+    event: info.eventType,
+    action: info.action,
+    triggerEvent: info.triggerEvent,
+    entityType: "pull_request",
+    entityKey: info.entityKey,
+    contextTreeReviewer: true,
+    mentions: [reviewer.uuid],
+  };
+  if (info.commentAuthorLogin) {
+    metadata.commentAuthorLogin = info.commentAuthorLogin;
+  }
+  if (info.commentUrl) {
+    metadata.commentUrl = info.commentUrl;
+  }
+  return metadata;
 }
 
 async function loadValidReviewerAgent(
@@ -438,7 +487,6 @@ async function loadValidReviewerAgent(
   const [agent] = await db
     .select({
       uuid: agents.uuid,
-      name: agents.name,
       managerHumanAgentId: members.agentId,
     })
     .from(agents)
@@ -477,7 +525,61 @@ async function findExistingReviewerChat(
   return row?.id ?? null;
 }
 
+async function findSuppressibleReviewerEchoMessageId(
+  db: Database,
+  input: { chatId: string; info: PullRequestPayloadInfo; reviewer: ReviewerAgent; appSlug: string | null },
+): Promise<string | null> {
+  if (input.info.eventType !== "issue_comment" || input.info.action !== "created") return null;
+
+  const commentAuthorLogin = input.info.commentAuthorLogin?.trim().toLowerCase();
+  if (!commentAuthorLogin) return null;
+
+  const appBotLogin = input.appSlug ? `${input.appSlug.toLowerCase()}[bot]` : null;
+  const commentAuthorIsAppBot =
+    appBotLogin !== null && commentAuthorLogin === appBotLogin && isCommentAuthorBot(input.info);
+  if (!commentAuthorIsAppBot) {
+    log.debug(
+      {
+        reviewerAgentUuid: input.reviewer.uuid,
+        entityKey: input.info.entityKey,
+        commentAuthorLogin: input.info.commentAuthorLogin,
+        appBotLogin,
+        commentAuthorType: input.info.commentAuthorType,
+        senderType: input.info.senderType,
+      },
+      "context reviewer echo comment not suppressed: comment author is not the configured app bot",
+    );
+    return null;
+  }
+
+  const [initialOpenedTask] = await db
+    .select({
+      id: messages.id,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.chatId, input.chatId),
+        sql`${messages.metadata}->>'entityKey' = ${input.info.entityKey}`,
+        sql`${messages.metadata}->>'contextTreeReviewer' = 'true'`,
+        sql`${messages.metadata}->>'event' = 'pull_request'`,
+        sql`${messages.metadata}->>'action' = 'opened'`,
+        sql`${messages.metadata}->>'triggerEvent' = 'pull_request.opened'`,
+        sql`${messages.createdAt} >= NOW() - make_interval(secs => ${REVIEWER_OPENED_ECHO_SUPPRESSION_WINDOW_SECONDS})`,
+      ),
+    )
+    .orderBy(desc(messages.createdAt), desc(messages.id))
+    .limit(1);
+
+  return initialOpenedTask?.id ?? null;
+}
+
+function isCommentAuthorBot(info: PullRequestPayloadInfo): boolean {
+  return info.commentAuthorType?.trim().toLowerCase() === "bot";
+}
+
 export const contextReviewerPrTestInternals = {
+  contextReviewerFollowUpContent,
   extractPullRequestPayloadInfo,
   findExistingReviewerChat,
   isSupportedContextReviewerPrEvent,
@@ -485,4 +587,5 @@ export const contextReviewerPrTestInternals = {
   parseBareRepo,
   parseScpLikeRepo,
   parseUrlRepo,
+  findSuppressibleReviewerEchoMessageId,
 };
