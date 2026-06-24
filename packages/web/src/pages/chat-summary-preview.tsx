@@ -58,6 +58,9 @@ function Demo({
 }) {
   // A dummy scroll container — the preview does not exercise sticky-collapse.
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The expanded summary is portaled into this `relative` wrapper and floated
+  // over the message area, mirroring the live layout.
+  const overlayRef = useRef<HTMLDivElement>(null);
   return (
     <div style={PANEL}>
       {/* Faux chat header (white chrome) so the summary's content-canvas tone
@@ -75,13 +78,19 @@ function Demo({
         lastReadAt={lastReadAt}
         freshnessReady
         scrollContainerRef={scrollRef}
+        overlayContainerRef={overlayRef}
       />
-      <div
-        ref={scrollRef}
-        className="text-caption"
-        style={{ padding: "var(--sp-3) var(--sp-6)", color: "var(--fg-4)" }}
-      >
-        (message stream)
+      {/* Faux message stream + the overlay positioning context. Min-height gives
+          the floating card room to render in the gallery (clipped by the panel,
+          as it is by the message area live). */}
+      <div ref={overlayRef} style={{ position: "relative" }}>
+        <div
+          ref={scrollRef}
+          className="text-caption"
+          style={{ padding: "var(--sp-3) var(--sp-6)", color: "var(--fg-4)", minHeight: 280 }}
+        >
+          (message stream)
+        </div>
       </div>
     </div>
   );
@@ -121,8 +130,8 @@ export function ChatSummaryPreviewPage() {
         </h1>
         <p className="text-body" style={{ color: "var(--fg-3)" }}>
           Each demo sits under a faux white header and over the grey content canvas, as it does live. Click to expand /
-          collapse. Read-only: no edit affordance; expanded uses a fixed Summary label above the markdown; the freshness
-          ("9 days ago") lives on the bar in both states.
+          collapse. Read-only: no edit affordance; expanded floats a card over the message area (it never pushes the
+          stream down); the freshness ("9 days ago") lives on the bar in both states.
         </p>
       </div>
 

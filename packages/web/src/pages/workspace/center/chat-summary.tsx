@@ -1,6 +1,7 @@
 import { ChevronDown } from "lucide-react";
 import type { RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Markdown } from "../../../components/ui/markdown.js";
 import { stripInlineMarkdown } from "../../../lib/strip-inline-markdown.js";
 import { formatRelative } from "../../../lib/utils.js";
@@ -14,28 +15,33 @@ import { formatRelative } from "../../../lib/utils.js";
  * agent in chat). The component renders the description's markdown faithfully —
  * it never invents sections, fields, or a "stage".
  *
- * It belongs to the conversation content, not the header chrome: it shares the
- * message-stream canvas (`--bg`) rather than a fill of its own, is separated
- * from the white header (`--bg-raised`) above by a single hairline + the
- * natural bg step, and lifts on a faint shadow only while the stream scrolls
- * under it.
+ * The persistent form is a one-line bar in flow between header and stream; the
+ * expanded form is a FLOATING CARD portaled over the top of the message area
+ * (`overlayContainerRef`), laid out `absolute; top:0` so it never occupies
+ * stream space. That is the whole reason this isn't a second in-flow scroll
+ * region: a wheel/touch over any visible pixel lands on a real scroll target
+ * (card scrolls the card, messages scroll the messages) — no "looks scrollable
+ * but isn't" dead zone — and opening/closing never reflows the conversation.
  *
  * Two forms:
- *   - Collapsed (default): one line — the description's first meaningful line
- *     (section headings skipped, markdown markers stripped, ellipsis-truncated),
- *     an "Updated" chip when there's an unread change, the freshness
- *     ("9 days ago"), and a quiet chevron. Freshness shows in BOTH states, so an
- *     auto-expanded summary still surfaces when it last changed.
- *   - Expanded: a fixed "Summary" control label plus the description rendered
- *     as markdown — no footer. Read-only is self-evident (no edit affordance
- *     anywhere); the updater name is not shown (single-agent maintenance makes
- *     it noise — the data stays on the chat detail).
+ *   - Collapsed bar (default): one line — the description's first meaningful
+ *     line (section headings skipped, markdown markers stripped,
+ *     ellipsis-truncated), an "Updated" chip when there's an unread change, the
+ *     freshness ("9 days ago"), and a quiet chevron. Freshness shows in BOTH
+ *     states, so an auto-expanded summary still surfaces when it last changed.
+ *   - Expanded card: the bar stays put (label flips to "Summary", chevron up)
+ *     while a non-modal overlay floats below it with the description rendered as
+ *     markdown — own scroll (`overscroll: contain`), `--shadow-md` + border for
+ *     separation, NO scrim (a summary surfacing is awareness, not a modal
+ *     interception). Read-only is self-evident (no edit affordance anywhere).
  *
  * Auto behavior: default collapsed; auto-expand once on entry when the update
  * is unread for this viewer, unless they already manually dismissed this exact
- * summary version; while expanded, scrolling the stream folds it to the bar;
- * expanding again is an explicit toggle. A manual toggle always wins and is
- * remembered per chat. Renders nothing when the chat has no description.
+ * summary version; while expanded, scrolling the stream folds it back to the bar
+ * — re-expanding is then an explicit toggle (scroll never re-opens it), and
+ * Escape / a pointer outside the card also dismiss it; a manual toggle always
+ * wins and is remembered per chat. Renders nothing when the chat has no
+ * description.
  */
 
 // Scroll sticky-collapse threshold (px from the stream top). Moving beyond this
@@ -156,6 +162,7 @@ export function ChatSummary({
   lastReadAt,
   freshnessReady,
   scrollContainerRef,
+  overlayContainerRef,
 }: {
   chatId: string;
   description: string | null;
@@ -166,6 +173,9 @@ export function ChatSummary({
    *  auto-expand decision waits for this so it reads true unread/last-read. */
   freshnessReady: boolean;
   scrollContainerRef: RefObject<HTMLDivElement | null>;
+  /** The message timeline's `relative` wrapper. The expanded summary is
+   *  portaled here and floated `absolute; top:0` over the message area. */
+  overlayContainerRef: RefObject<HTMLDivElement | null>;
 }) {
   const trimmed = description?.trim() ?? "";
   const hasDescription = trimmed.length > 0;
@@ -289,156 +299,191 @@ export function ChatSummary({
     return () => el.removeEventListener("scroll", onScroll);
   }, [hasDescription, scrollContainerRef]);
 
-  // Wheel bridging: the expanded summary is a pinned sibling ABOVE the message
-  // scroll container, and its only ancestor is the `overflow-hidden` center
-  // column — so a wheel gesture over the summary has no scrollable target and
-  // the conversation reads as "locked" (the markdown body only scrolls when its
-  // own content overflows). Bridge it from a single listener on the whole panel:
-  // while the markdown body still has room in the wheel's direction, scroll IT;
-  // otherwise drive the message stream so scrolling stays continuous across the
-  // summary↔stream seam (and scrolling down folds the summary via the existing
-  // sticky-collapse, same as scrolling the stream).
-  //
-  // The body is scrolled EXPLICITLY rather than by deferring to native scroll:
-  // the listener fires for the whole panel (header bar + padding + body), but a
-  // wheel over the header/padding sits OUTSIDE the body's own event path, so
-  // native scrolling there finds no scrollable ancestor and would re-create the
-  // dead zone for that strip. Driving `inner` ourselves makes a wheel anywhere
-  // on the panel scroll the body uniformly.
-  const panelRef = useRef<HTMLDivElement | null>(null);
-  const innerScrollRef = useRef<HTMLDivElement | null>(null);
+  // The bar stays in flow; the expanded body floats as an overlay (see render),
+  // so the only wheel dead zone left is the thin one-line bar itself (shrink-0 inside an
+  // overflow-hidden column, no scrollable ancestor). Forward a wheel over the
+  // bar to the message stream — trivial, no boundary math: the floating card
+  // scrolls itself natively (`overscroll: contain`) and the bar is never a
+  // scroll target. (Replaces the PR 1245 expanded-body wheel bridge, which the
+  // overlay makes unnecessary.)
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const cardRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!hasDescription) return;
-    const panel = panelRef.current;
-    if (!panel) return;
+    const bar = barRef.current;
+    if (!bar) return;
     const onWheel = (e: WheelEvent) => {
       const stream = scrollContainerRef.current;
       if (!stream) return;
       // Leave horizontal/trackpad-pan gestures to the browser.
       if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.deltaY === 0) return;
-      const inner = innerScrollRef.current;
-      if (inner) {
-        const atTop = inner.scrollTop <= 0;
-        const atBottom = inner.scrollTop + inner.clientHeight >= inner.scrollHeight - 1;
-        // The markdown body still has room — scroll it (and suppress native
-        // scroll so a wheel directly over the body isn't applied twice).
-        if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBottom)) {
-          inner.scrollTop += e.deltaY;
-          e.preventDefault();
-          return;
-        }
-      }
       stream.scrollTop += e.deltaY;
       e.preventDefault();
     };
     // Native, non-passive so preventDefault works (React routes onWheel through a
     // passive root listener, where preventDefault is a no-op).
-    panel.addEventListener("wheel", onWheel, { passive: false });
-    return () => panel.removeEventListener("wheel", onWheel);
+    bar.addEventListener("wheel", onWheel, { passive: false });
+    return () => bar.removeEventListener("wheel", onWheel);
   }, [hasDescription, scrollContainerRef]);
+
+  const expanded = open && !scrollCollapsed;
+
+  // Dismiss the floating card explicitly on Escape or a pointer outside it. It is
+  // a non-modal overlay (no scrim, no focus trap) so the page stays live; a
+  // dismiss collapses to the bar AND remembers the per-version dismissal so the
+  // same unread summary does not auto-float again on the next entry.
+  const dismiss = useCallback(() => {
+    setOpen(false);
+    if (descriptionUpdatedAt && unread) saveDismissedVersion(chatId, descriptionUpdatedAt);
+    saveManualPref(chatId, false);
+    setHighlighted(false);
+    setUnreadCleared(true);
+    setScrollCollapsed(false);
+  }, [chatId, descriptionUpdatedAt, unread]);
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") dismiss();
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (!t || cardRef.current?.contains(t) || barRef.current?.contains(t)) return;
+      dismiss();
+    };
+    document.addEventListener("keydown", onKey);
+    // Capture phase so the outside-press is seen before message-row handlers.
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [expanded, dismiss]);
 
   if (!hasDescription) return null;
 
-  const expanded = open && !scrollCollapsed;
   const firstLine = descriptionFirstLine(trimmed);
   const freshnessText = updatedAtMs !== null ? formatRelative(descriptionUpdatedAt) : null;
   const showAmberChip = unread && !unreadCleared && !expanded;
   const amberActive = highlighted && expanded;
 
+  const overlayEl = overlayContainerRef.current;
+
   return (
-    <div
-      ref={panelRef}
-      className="shrink-0"
-      style={{
-        // The summary is conversation content, so it shares the message-stream
-        // canvas (`--bg`) — the white header (`--bg-raised`) above gives a
-        // natural one-step contrast. Only the header↔summary seam carries a
-        // hairline (the header itself has no bottom border); nothing separates
-        // the summary from the stream below (same surface). A faint shadow
-        // appears only while the stream scrolls under it, reading as "pinned".
-        background: amberActive ? "var(--bg-warn-soft)" : "var(--bg)",
-        borderTop: `var(--hairline) solid ${amberActive ? "var(--state-blocked-border)" : "var(--border-faint)"}`,
-        boxShadow: scrolled ? "var(--shadow-sm)" : "none",
-        transition: "background 160ms ease, box-shadow 160ms ease",
-      }}
-    >
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        aria-label={expanded ? "Collapse summary" : "Expand summary"}
-        className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
+    <>
+      <div
+        ref={barRef}
+        className="shrink-0"
         style={{
-          gap: "var(--sp-2)",
-          padding: "var(--sp-2) var(--sp-6)",
-          border: 0,
-          background: "transparent",
-          cursor: "pointer",
+          // The bar shares the message-stream canvas (`--bg`); the white header
+          // (`--bg-raised`) above gives a one-step contrast and only the
+          // header↔bar seam carries a hairline. A faint shadow appears while the
+          // stream scrolls under it, reading as "pinned". The amber tint marks an
+          // unread summary that auto-floated (matched on the card below).
+          background: amberActive ? "var(--bg-warn-soft)" : "var(--bg)",
+          borderTop: `var(--hairline) solid ${amberActive ? "var(--state-blocked-border)" : "var(--border-faint)"}`,
+          boxShadow: scrolled ? "var(--shadow-sm)" : "none",
+          transition: "background 160ms ease, box-shadow 160ms ease",
         }}
       >
-        <span
-          className="text-body min-w-0 flex-1"
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          aria-label={expanded ? "Collapse summary" : "Expand summary"}
+          className="flex w-full items-center text-left transition-colors hover:bg-[var(--bg-hover)]"
           style={{
-            color: expanded || firstLine ? "var(--fg)" : "var(--fg-3)",
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            fontStyle: !expanded && !firstLine ? "italic" : undefined,
-            fontWeight: expanded ? 600 : undefined,
+            gap: "var(--sp-2)",
+            padding: "var(--sp-2) var(--sp-6)",
+            border: 0,
+            background: "transparent",
+            cursor: "pointer",
           }}
         >
-          {expanded ? "Summary" : firstLine || "No summary yet"}
-        </span>
-        {showAmberChip ? (
           <span
-            className="text-caption inline-flex shrink-0 items-center font-medium"
+            className="text-body min-w-0 flex-1"
             style={{
-              padding: "var(--sp-0_5) var(--sp-1_5)",
-              borderRadius: "var(--radius-full)",
-              color: "var(--warning)",
-              background: "var(--state-blocked-soft)",
-              border: "var(--hairline) solid var(--state-blocked-border)",
+              color: expanded || firstLine ? "var(--fg)" : "var(--fg-3)",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              fontStyle: !expanded && !firstLine ? "italic" : undefined,
+              fontWeight: expanded ? 600 : undefined,
             }}
           >
-            Updated
+            {expanded ? "Summary" : firstLine || "No summary yet"}
           </span>
-        ) : null}
-        {freshnessText ? (
-          <span className="text-caption shrink-0" style={{ color: "var(--fg-3)", whiteSpace: "nowrap" }}>
-            {freshnessText}
-          </span>
-        ) : null}
-        <ChevronDown
-          size={15}
-          strokeWidth={2}
-          className="shrink-0"
-          style={{
-            // Vertical axis matches the open/close motion: ▼ collapsed (opens
-            // downward) → ▲ expanded (collapses up). Kept quiet (muted grey) so
-            // the freshness stays the primary right-side signal.
-            color: "var(--fg-4)",
-            transform: expanded ? "rotate(180deg)" : "none",
-            transition: "transform 180ms ease",
-          }}
-        />
-      </button>
+          {showAmberChip ? (
+            <span
+              className="text-caption inline-flex shrink-0 items-center font-medium"
+              style={{
+                padding: "var(--sp-0_5) var(--sp-1_5)",
+                borderRadius: "var(--radius-full)",
+                color: "var(--warning)",
+                background: "var(--state-blocked-soft)",
+                border: "var(--hairline) solid var(--state-blocked-border)",
+              }}
+            >
+              Updated
+            </span>
+          ) : null}
+          {freshnessText ? (
+            <span className="text-caption shrink-0" style={{ color: "var(--fg-3)", whiteSpace: "nowrap" }}>
+              {freshnessText}
+            </span>
+          ) : null}
+          <ChevronDown
+            size={15}
+            strokeWidth={2}
+            className="shrink-0"
+            style={{
+              // ▼ collapsed (opens downward) → ▲ expanded (collapses up). Quiet
+              // (muted grey) so freshness stays the primary right-side signal.
+              color: "var(--fg-4)",
+              transform: expanded ? "rotate(180deg)" : "none",
+              transition: "transform 180ms ease",
+            }}
+          />
+        </button>
+      </div>
 
-      {expanded ? (
-        <div style={{ padding: "var(--sp-1) var(--sp-6) var(--sp-3)" }}>
-          <div
-            ref={innerScrollRef}
-            className="text-body"
-            style={{ color: "var(--fg)", maxHeight: "min(46vh, 30rem)", overflowY: "auto" }}
-          >
-            {/* Faithful markdown render. Headings are flattened to body size so
-                hierarchy is carried by weight + spacing (mirrors the rail's old
-                Summary treatment) rather than shouting over the bar above. */}
-            <Markdown className="[&_:is(h1,h2,h3,h4,h5,h6)]:text-[length:1em] [&_:is(h1,h2,h3,h4,h5,h6)]:font-semibold [&_:is(h1,h2,h3,h4,h5,h6)]:leading-snug [&_:is(h1,h2,h3,h4,h5,h6)]:mt-3.5 [&_:is(h1,h2,h3,h4,h5,h6)]:mb-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:pl-4 [&_ol]:pl-4">
-              {trimmed}
-            </Markdown>
-          </div>
-        </div>
-      ) : null}
-    </div>
+      {/* Expanded body: a non-modal floating card portaled over the top of the
+          message area, so it never occupies stream space (no reflow) and always
+          has a real scroll target under the cursor. `overscroll: contain` keeps
+          its scroll from chaining into the messages behind it; no scrim — the
+          shadow + border separate it, and a summary surfacing is awareness, not
+          a modal interception. */}
+      {expanded && overlayEl
+        ? createPortal(
+            <section
+              ref={cardRef}
+              aria-label="Chat summary"
+              className="chat-summary-card-in z-10"
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                background: amberActive ? "var(--bg-warn-soft)" : "var(--bg-raised)",
+                border: `var(--hairline) solid ${amberActive ? "var(--state-blocked-border)" : "var(--border)"}`,
+                borderRadius: "var(--radius-dialog)",
+                boxShadow: "var(--shadow-md)",
+                padding: "var(--sp-1) var(--sp-6) var(--sp-3)",
+                maxHeight: "min(46vh, 30rem)",
+                overflowY: "auto",
+                overscrollBehavior: "contain",
+              }}
+            >
+              <div className="text-body" style={{ color: "var(--fg)" }}>
+                {/* Faithful markdown render; headings flattened to body size so
+                    hierarchy is weight + spacing, not shouting over the bar. */}
+                <Markdown className="[&_:is(h1,h2,h3,h4,h5,h6)]:text-[length:1em] [&_:is(h1,h2,h3,h4,h5,h6)]:font-semibold [&_:is(h1,h2,h3,h4,h5,h6)]:leading-snug [&_:is(h1,h2,h3,h4,h5,h6)]:mt-3.5 [&_:is(h1,h2,h3,h4,h5,h6)]:mb-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_ul]:pl-4 [&_ol]:pl-4">
+                  {trimmed}
+                </Markdown>
+              </div>
+            </section>,
+            overlayEl,
+          )
+        : null}
+    </>
   );
 }

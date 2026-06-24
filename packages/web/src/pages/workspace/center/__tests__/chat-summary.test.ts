@@ -88,7 +88,11 @@ describe("ChatSummary", () => {
 
   type SummaryProps = Parameters<typeof ChatSummary>[0];
 
-  function summaryProps(scrollEl: HTMLDivElement, overrides: Partial<SummaryProps> = {}): SummaryProps {
+  function summaryProps(
+    scrollEl: HTMLDivElement,
+    overlayEl: HTMLDivElement,
+    overrides: Partial<SummaryProps> = {},
+  ): SummaryProps {
     return {
       chatId: "chat-1",
       description: "Status: shipping **DescBody** soon.",
@@ -96,6 +100,7 @@ describe("ChatSummary", () => {
       lastReadAt: null,
       freshnessReady: true,
       scrollContainerRef: { current: scrollEl },
+      overlayContainerRef: { current: overlayEl },
       ...overrides,
     };
   }
@@ -103,16 +108,26 @@ describe("ChatSummary", () => {
   async function renderSummary(
     scrollEl: HTMLDivElement,
     overrides: Partial<SummaryProps> = {},
-  ): Promise<{ container: HTMLDivElement; root: Root; rerender: (next: Partial<SummaryProps>) => Promise<void> }> {
+  ): Promise<{
+    container: HTMLDivElement;
+    overlayEl: HTMLDivElement;
+    root: Root;
+    rerender: (next: Partial<SummaryProps>) => Promise<void>;
+  }> {
     const container = document.createElement("div");
+    // The expanded summary is portaled into a SEPARATE "message area" node, as in
+    // the real layout — it is not a child of the bar's own container.
+    const overlayEl = document.createElement("div");
     document.body.appendChild(container);
+    document.body.appendChild(overlayEl);
     const root = createRoot(container);
-    let props = summaryProps(scrollEl, overrides);
+    let props = summaryProps(scrollEl, overlayEl, overrides);
     await act(async () => {
       root.render(createElement(ChatSummary, props));
     });
     return {
       container,
+      overlayEl,
       root,
       rerender: async (next: Partial<SummaryProps>) => {
         props = { ...props, ...next };
@@ -136,7 +151,7 @@ describe("ChatSummary", () => {
   it("auto-expands an unread summary version on entry even when the chat was read recently", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
-    const { container, root } = await renderSummary(scrollEl, {
+    const { container, overlayEl, root } = await renderSummary(scrollEl, {
       descriptionUpdatedAt: unreadVersionAt,
       lastReadAt: readRecentlyAt,
     });
@@ -144,10 +159,12 @@ describe("ChatSummary", () => {
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
       "Summary",
     );
-    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+    // Expanded body is the floating card, portaled into the message-area node.
+    expect(overlayEl.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => root.unmount());
     container.remove();
+    overlayEl.remove();
   });
 
   it("does not auto-expand the same unread summary version after the user manually collapses it", async () => {
@@ -165,20 +182,22 @@ describe("ChatSummary", () => {
     });
     await act(async () => first.root.unmount());
     first.container.remove();
+    first.overlayEl.remove();
 
     const second = await renderSummary(scrollEl, unreadProps);
     expect(second.container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
-    expect(second.container.querySelector("strong")).toBeNull();
+    expect(second.overlayEl.querySelector("strong")).toBeNull();
     expect(second.container.textContent).toContain("Updated");
 
     await act(async () => second.root.unmount());
     second.container.remove();
+    second.overlayEl.remove();
   });
 
   it("keeps the current mounted chat collapsed when a newer unread summary version arrives", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
-    const { container, root, rerender } = await renderSummary(scrollEl, {
+    const { container, overlayEl, root, rerender } = await renderSummary(scrollEl, {
       descriptionUpdatedAt: readRecentlyAt,
       lastReadAt: unreadVersionAt,
     });
@@ -190,18 +209,19 @@ describe("ChatSummary", () => {
     });
 
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
-    expect(container.querySelector("strong")).toBeNull();
+    expect(overlayEl.querySelector("strong")).toBeNull();
     expect(container.textContent).toContain("Updated");
 
     await act(async () => root.unmount());
     container.remove();
+    overlayEl.remove();
   });
 
   it("keeps a manual expand open when the stream was already scrolled", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
     scrollEl.scrollTop = 120;
-    const { container, root } = await renderSummary(scrollEl);
+    const { container, overlayEl, root } = await renderSummary(scrollEl);
     const button = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
     if (!button) throw new Error("summary button missing");
 
@@ -211,22 +231,23 @@ describe("ChatSummary", () => {
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
       "Summary",
     );
-    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+    expect(overlayEl.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {
       scrollEl.dispatchEvent(new Event("scroll"));
     });
-    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+    expect(overlayEl.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => root.unmount());
     container.remove();
+    overlayEl.remove();
   });
 
   it("still collapses after a fresh downward scroll from a manual expand point", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
     scrollEl.scrollTop = 120;
-    const { container, root } = await renderSummary(scrollEl);
+    const { container, overlayEl, root } = await renderSummary(scrollEl);
     const button = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
     if (!button) throw new Error("summary button missing");
 
@@ -236,50 +257,56 @@ describe("ChatSummary", () => {
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
       "Summary",
     );
-    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+    expect(overlayEl.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {
       scrollEl.scrollTop = 170;
       scrollEl.dispatchEvent(new Event("scroll"));
     });
-    expect(container.querySelector("strong")).toBeNull();
+    expect(overlayEl.querySelector("strong")).toBeNull();
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
 
     await act(async () => root.unmount());
     container.remove();
+    overlayEl.remove();
   });
 
   it("does not auto-expand a sticky-collapsed summary when scrolling back to the top", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
-    const { container, root } = await renderSummary(scrollEl, {
+    const { container, overlayEl, root } = await renderSummary(scrollEl, {
       descriptionUpdatedAt: unreadVersionAt,
       lastReadAt: readRecentlyAt,
     });
+    // Auto-expanded on entry (unread): the floating card is up.
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')).not.toBeNull();
+    expect(overlayEl.querySelector("strong")).not.toBeNull();
 
+    // Scroll down → sticky-collapse folds it to the bar.
     await act(async () => {
       scrollEl.scrollTop = 120;
       scrollEl.dispatchEvent(new Event("scroll"));
     });
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
-    expect(container.querySelector("strong")).toBeNull();
+    expect(overlayEl.querySelector("strong")).toBeNull();
 
+    // Scroll back to the top → must NOT re-expand (regression guard for PR 1252).
     await act(async () => {
       scrollEl.scrollTop = 0;
       scrollEl.dispatchEvent(new Event("scroll"));
     });
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
-    expect(container.querySelector("strong")).toBeNull();
+    expect(overlayEl.querySelector("strong")).toBeNull();
 
     await act(async () => root.unmount());
     container.remove();
+    overlayEl.remove();
   });
 
   it("expands on the first click from the sticky-collapsed bar", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
-    const { container, root } = await renderSummary(scrollEl);
+    const { container, overlayEl, root } = await renderSummary(scrollEl);
     const initialButton = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
     if (!initialButton) throw new Error("summary button missing");
 
@@ -289,137 +316,93 @@ describe("ChatSummary", () => {
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')?.textContent).toContain(
       "Summary",
     );
-    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+    expect(overlayEl.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => {
       scrollEl.scrollTop = 120;
       scrollEl.dispatchEvent(new Event("scroll"));
     });
-    expect(container.querySelector("strong")).toBeNull();
+    expect(overlayEl.querySelector("strong")).toBeNull();
 
     const stickyButton = container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]');
     if (!stickyButton) throw new Error("sticky summary button missing");
     await act(async () => {
       stickyButton.click();
     });
-    expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+    expect(overlayEl.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => root.unmount());
     container.remove();
+    overlayEl.remove();
   });
 
-  it("bridges a wheel gesture over the expanded summary to the message stream", async () => {
+  it("portals the expanded body as a floating card over the message area (no in-flow reflow)", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
-    scrollEl.scrollTop = 0;
-    // Unread version → auto-expanded on entry, so the panel owns the viewport.
-    const { container, root } = await renderSummary(scrollEl, {
+    const { container, overlayEl, root } = await renderSummary(scrollEl, {
       descriptionUpdatedAt: unreadVersionAt,
       lastReadAt: readRecentlyAt,
     });
-    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')).not.toBeNull();
-    const panel = container.firstElementChild as HTMLElement | null;
-    if (!panel) throw new Error("summary panel missing");
-
-    // The expanded body cannot absorb the scroll itself (no overflow), so a wheel
-    // over the summary must drive the message stream — without this it scrolls
-    // nothing and the conversation reads as "locked".
-    await act(async () => {
-      panel.dispatchEvent(wheelEvent(120));
-    });
-    expect(scrollEl.scrollTop).toBe(120);
+    // Bar stays in the component's own container; the body is NOT in flow there
+    // (so it never pushes the message stream down).
+    expect(container.querySelector("strong")).toBeNull();
+    // It lives in the message-area node as an absolute, self-scrolling card.
+    const card = overlayEl.querySelector<HTMLElement>('section[aria-label="Chat summary"]');
+    expect(card).not.toBeNull();
+    expect(card?.style.position).toBe("absolute");
+    expect(card?.querySelector("strong")?.textContent).toBe("DescBody");
 
     await act(async () => root.unmount());
     container.remove();
+    overlayEl.remove();
   });
 
-  it("scrolls the summary body itself before driving the stream", async () => {
+  it("forwards a wheel over the bar to the message stream, but leaves horizontal pans alone", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
     scrollEl.scrollTop = 0;
-    const { container, root } = await renderSummary(scrollEl, {
-      descriptionUpdatedAt: unreadVersionAt,
-      lastReadAt: readRecentlyAt,
-    });
-    const panel = container.firstElementChild as HTMLElement | null;
-    if (!panel) throw new Error("summary panel missing");
-    const inner = container.querySelector<HTMLElement>('[style*="46vh"]');
-    if (!inner) throw new Error("summary scroll body missing");
-    // Make the body itself scrollable and parked mid-content (not at top/bottom).
-    Object.defineProperty(inner, "scrollHeight", { value: 1000, configurable: true });
-    Object.defineProperty(inner, "clientHeight", { value: 200, configurable: true });
-    inner.scrollTop = 100;
+    const { container, overlayEl, root } = await renderSummary(scrollEl);
+    const bar = container.firstElementChild as HTMLElement | null;
+    if (!bar) throw new Error("summary bar missing");
 
-    // Wheel up: the body can still scroll up, so the body moves and the stream
-    // stays put.
+    // A vertical wheel over the thin bar (no scrollable ancestor) drives the stream.
     await act(async () => {
-      panel.dispatchEvent(wheelEvent(-40));
+      bar.dispatchEvent(wheelEvent(90));
     });
-    expect(inner.scrollTop).toBe(60);
-    expect(scrollEl.scrollTop).toBe(0);
+    expect(scrollEl.scrollTop).toBe(90);
 
-    await act(async () => root.unmount());
-    container.remove();
-  });
-
-  it("scrolls the body for a wheel over the summary header, not just the body", async () => {
-    localStorage.clear();
-    const scrollEl = document.createElement("div");
-    scrollEl.scrollTop = 0;
-    const { container, root } = await renderSummary(scrollEl, {
-      descriptionUpdatedAt: unreadVersionAt,
-      lastReadAt: readRecentlyAt,
-    });
-    // The header control sits OUTSIDE the markdown body's event path; a wheel
-    // there must still drive the body while it has room (regression: target-
-    // unaware deferral to native scroll left the header strip locked).
-    const header = container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]');
-    if (!header) throw new Error("summary header button missing");
-    const inner = container.querySelector<HTMLElement>('[style*="46vh"]');
-    if (!inner) throw new Error("summary scroll body missing");
-    Object.defineProperty(inner, "scrollHeight", { value: 1000, configurable: true });
-    Object.defineProperty(inner, "clientHeight", { value: 200, configurable: true });
-    inner.scrollTop = 0;
-
+    // A horizontal-dominant gesture is left to the browser: nothing scrolls and
+    // the event is not consumed.
+    const ev = wheelEvent(6, 120);
     await act(async () => {
-      header.dispatchEvent(wheelEvent(120));
+      bar.dispatchEvent(ev);
     });
-    expect(inner.scrollTop).toBe(120);
-    expect(scrollEl.scrollTop).toBe(0);
-
-    await act(async () => root.unmount());
-    container.remove();
-  });
-
-  it("leaves a horizontal-dominant wheel to the browser", async () => {
-    localStorage.clear();
-    const scrollEl = document.createElement("div");
-    scrollEl.scrollTop = 0;
-    const { container, root } = await renderSummary(scrollEl, {
-      descriptionUpdatedAt: unreadVersionAt,
-      lastReadAt: readRecentlyAt,
-    });
-    const panel = container.firstElementChild as HTMLElement | null;
-    if (!panel) throw new Error("summary panel missing");
-    const inner = container.querySelector<HTMLElement>('[style*="46vh"]');
-    if (!inner) throw new Error("summary scroll body missing");
-    // Body is scrollable, so a missing guard would let the small vertical
-    // component move it.
-    Object.defineProperty(inner, "scrollHeight", { value: 1000, configurable: true });
-    Object.defineProperty(inner, "clientHeight", { value: 200, configurable: true });
-    inner.scrollTop = 100;
-
-    // deltaX dominates deltaY (a trackpad horizontal pan): hands off to the
-    // browser — nothing is scrolled and the event is not consumed.
-    const ev = wheelEvent(8, 120);
-    await act(async () => {
-      panel.dispatchEvent(ev);
-    });
-    expect(inner.scrollTop).toBe(100);
-    expect(scrollEl.scrollTop).toBe(0);
+    expect(scrollEl.scrollTop).toBe(90);
     expect(ev.defaultPrevented).toBe(false);
 
     await act(async () => root.unmount());
     container.remove();
+    overlayEl.remove();
+  });
+
+  it("dismisses the floating card on Escape", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    const { container, overlayEl, root } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+    expect(overlayEl.querySelector("strong")).not.toBeNull();
+
+    // Non-modal overlay: Escape collapses it back to the bar (page stays live).
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(overlayEl.querySelector("strong")).toBeNull();
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Expand summary"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+    container.remove();
+    overlayEl.remove();
   });
 });

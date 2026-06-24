@@ -895,6 +895,9 @@ type ChatTimelineProps = {
   hiddenByBlock: number;
   readOnly: boolean;
   scrollContainerRef: RefObject<HTMLDivElement | null>;
+  /** The timeline's `relative` wrapper, used as the chat-summary overlay's
+   *  positioning context (the summary card is portaled into it). */
+  overlayContainerRef: RefObject<HTMLDivElement | null>;
   messagesEndRef: RefObject<HTMLDivElement | null>;
   defaultWorkgroupOpen: boolean;
   agentNameFn: (id: string) => string;
@@ -919,6 +922,7 @@ const ChatTimeline = memo(function ChatTimeline({
   hiddenByBlock,
   readOnly,
   scrollContainerRef,
+  overlayContainerRef,
   messagesEndRef,
   defaultWorkgroupOpen,
   agentNameFn,
@@ -945,7 +949,7 @@ const ChatTimeline = memo(function ChatTimeline({
     agents,
   );
   return (
-    <div className="relative flex-1 flex flex-col min-h-0">
+    <div ref={overlayContainerRef} className="relative flex-1 flex flex-col min-h-0">
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto" style={{ padding: "var(--sp-2_5) var(--sp-6)" }}>
         <div style={{ maxWidth: "clamp(55rem, 75%, 70rem)", margin: "0 auto", width: "100%" }}>
           {itemCount === 0 && (
@@ -1286,6 +1290,11 @@ export function ChatView({
   // ResizeObserver-stabilised scrolling) and useReadTracker (as the
   // IntersectionObserver root).
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // Positioning context for the chat-summary floating card: the expanded
+  // summary is portaled into the timeline's `relative` wrapper and laid out
+  // `absolute; top:0` over the message area, so it never occupies stream space
+  // (no reflow) and always has a real scroll target under the cursor.
+  const overlayContainerRef = useRef<HTMLDivElement>(null);
 
   // useChatScroll is declared up here (rather than alongside the M2
   // jump-to-position logic below) because `sendMut`'s onSuccess
@@ -3349,6 +3358,7 @@ export function ChatView({
             lastReadAt={chatDetail?.lastReadAt ?? null}
             freshnessReady={!chatDetailFetching && chatDetail?.id === chatId}
             scrollContainerRef={scrollContainerRef}
+            overlayContainerRef={overlayContainerRef}
           />
 
           {chatDetail?.engagementStatus === CHAT_ENGAGEMENT_STATUSES.DELETED && (
@@ -3404,6 +3414,7 @@ export function ChatView({
             hiddenByBlock={hiddenByBlock}
             readOnly={readOnly}
             scrollContainerRef={scrollContainerRef}
+            overlayContainerRef={overlayContainerRef}
             messagesEndRef={messagesEndRef}
             defaultWorkgroupOpen={chatDetail?.type === "direct"}
             agentNameFn={chatScopedAgentName}
