@@ -404,7 +404,7 @@ describe("onboarding hooks and flow", () => {
   });
 
   it("re-derives the step when the org changes on a still-mounted provider", async () => {
-    // The onboarding shell renders the full UserMenu for multi-team users, so a
+    // The onboarding shell renders the real TeamSwitcher for multi-team users, so a
     // user can create/join/switch teams from inside /onboarding. That calls
     // selectOrganization without leaving the route, so the provider does NOT
     // remount — the org changes underneath a mounted provider.

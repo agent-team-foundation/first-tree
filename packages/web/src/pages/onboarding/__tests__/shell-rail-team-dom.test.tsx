@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import type { OrgBrief } from "@first-tree/shared";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
@@ -19,14 +20,15 @@ const eventMock = vi.hoisted(() => ({
 
 const authMock = vi.hoisted(() => ({
   logout: vi.fn(),
+  organizationId: "org-1",
+  role: "admin" as "admin" | "member",
+  teamDisplayName: "Acme",
+  user: { id: "user-1", displayName: "Gandy", username: "gandy", avatarUrl: null },
+  selectOrganization: vi.fn(async () => undefined),
+  switchingOrg: null as OrgBrief | null,
+  setSwitchingOrg: vi.fn(),
   // Shell only reads memberships.length; keep the shape minimal.
   memberships: [] as Array<{ organizationId: string }>,
-}));
-
-const userMenuMock = vi.hoisted(() => ({
-  // The real UserMenu has its own DOM tests (layout-dom); here we only assert
-  // the shell's conditional mounting, so a marker stub keeps this test focused.
-  UserMenu: () => <div data-testid="user-menu-stub" />,
 }));
 
 const toastMock = vi.hoisted(() => ({
@@ -61,7 +63,17 @@ vi.mock("../../../components/ui/toast.js", () => ({
   useToast: () => toastMock,
 }));
 
-vi.mock("../../../components/user-menu.js", () => userMenuMock);
+vi.mock("../../../components/avatar.js", () => ({
+  Avatar: ({ name }: { name?: string }) => <span data-testid="avatar">{name ?? ""}</span>,
+}));
+
+vi.mock("../../../components/invite-dialog.js", () => ({
+  InviteDialog: () => null,
+}));
+
+vi.mock("../../../components/team-setup-modal.js", () => ({
+  TeamSetupModal: () => null,
+}));
 
 vi.mock("../onboarding-flow.js", () => ({
   useOnboardingFlow: () => flowMock.value,
@@ -90,8 +102,13 @@ async function renderDom(element: ReactElement): Promise<HTMLElement> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await act(async () => {
-    root?.render(<MemoryRouter>{element}</MemoryRouter>);
+    root?.render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>{element}</MemoryRouter>
+      </QueryClientProvider>,
+    );
   });
   await flush();
   return container;
@@ -125,6 +142,10 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
 beforeEach(() => {
   vi.clearAllMocks();
   authMock.memberships = [];
+  authMock.organizationId = "org-1";
+  authMock.role = "admin";
+  authMock.teamDisplayName = "Acme";
+  authMock.switchingOrg = null;
   document.body.innerHTML = "";
   flowMock.value = {
     activeStep: "team",
@@ -194,18 +215,35 @@ describe("onboarding shell and team step", () => {
     expect(container.textContent).toContain("Step 1 of 2");
   });
 
-  it("mounts the full UserMenu for multi-team users in place of the bare sign-out link", async () => {
+  it("mounts a real team switcher for multi-team users in place of the bare sign-out link", async () => {
     // The trapped-user scenario: routed into onboarding for a second org with
-    // no agent here (finish-later hidden) — the workspace UserMenu is the way
+    // no agent here (finish-later hidden) — the team switcher is the way
     // back to their other team.
     flowMock.value = { ...flowMock.value, activeStep: "connect-computer", hasAgent: false, organizationId: "org-2" };
+    authMock.organizationId = "org-2";
+    authMock.teamDisplayName = "Globex";
     authMock.memberships = [{ organizationId: "org-2" }, { organizationId: "org-1" }];
+    apiMock.get.mockResolvedValueOnce([
+      org({ id: "org-2", name: "globex", displayName: "Globex", role: "member" }),
+      org({ id: "org-1", name: "acme", displayName: "Acme", role: "admin" }),
+    ]);
     const { OnboardingShell } = await import("../onboarding-shell.js");
 
     const container = await renderDom(<OnboardingShell>Body</OnboardingShell>);
 
-    expect(container.querySelector("[data-testid='user-menu-stub']")).not.toBeNull();
+    const anchor = container.querySelector<HTMLButtonElement>(
+      "[data-testid='team-switcher'] button[aria-haspopup='menu']",
+    );
+    expect(anchor).not.toBeNull();
+    expect(anchor?.textContent).toContain("Globex");
     expect(container.textContent).not.toContain("Sign out");
+
+    await click(anchor);
+    const acmeRow = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Acme"));
+    expect(acmeRow).not.toBeNull();
+
+    await click(acmeRow ?? null);
+    expect(authMock.selectOrganization).toHaveBeenCalledWith("org-1");
   });
 
   it("keeps the minimal sign-out chrome for first-run single-team users", async () => {
@@ -215,7 +253,7 @@ describe("onboarding shell and team step", () => {
 
     const container = await renderDom(<OnboardingShell>Body</OnboardingShell>);
 
-    expect(container.querySelector("[data-testid='user-menu-stub']")).toBeNull();
+    expect(container.querySelector("[data-testid='team-switcher']")).toBeNull();
     expect(container.textContent).toContain("Sign out");
   });
 

@@ -2,9 +2,10 @@ import type { ReactNode } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { FirstTreeLogo } from "../../components/first-tree-logo.js";
+import { TeamSwitchOverlay } from "../../components/team-switch-overlay.js";
+import { TeamSwitcher } from "../../components/team-switcher.js";
 import { Button } from "../../components/ui/button.js";
 import { useToast } from "../../components/ui/toast.js";
-import { UserMenu } from "../../components/user-menu.js";
 import { COPY, STEP_COPY } from "./copy.js";
 import { useOnboardingFlow } from "./onboarding-flow.js";
 import { StepProgress } from "./step-progress.js";
@@ -40,12 +41,12 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
   const copy = STEP_COPY[activeStep];
   const isHero = HERO_STEPS.has(activeStep);
 
-  // A multi-team user gets the full workspace UserMenu (team switching,
-  // create/join, invite, sign out) instead of the bare "Sign out" link. The
+  // A multi-team user gets the real TeamSwitcher instead of the bare "Sign out"
+  // link. The account-only UserMenu is absent from onboarding chrome. The
   // workspace gate routes a returning user into onboarding whenever the
   // SELECTED org has no usable agent, so a user who switches into a
   // not-yet-set-up team lands here with no agent in THIS org ("finish later"
-  // hidden below) — without the menu they had no way back to the team they
+  // hidden below) — without the switcher they had no way back to the team they
   // came from short of signing out. Switching teams via the menu is the same
   // affordance they used to get here, and it carries no dismissal side effect
   // (the account-level dismissal would suppress onboarding for every org).
@@ -87,11 +88,11 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
               {COPY.finishLater}
             </Button>
           )}
-          {/* Multi-team: the full workspace UserMenu (sign out lives inside it).
+          {/* Multi-team: the real team switcher escape hatch.
               First-run: a bare Sign out link, always available so a user who
               can't finish right now isn't locked out. */}
           {isMultiTeam ? (
-            <UserMenu />
+            <TeamSwitcher />
           ) : (
             <Button type="button" variant="link" className="h-auto p-0 text-label" onClick={logout}>
               Sign out
@@ -165,6 +166,7 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
           </div>
         </main>
       </div>
+      <TeamSwitchOverlay />
     </div>
   );
 }

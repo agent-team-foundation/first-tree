@@ -176,7 +176,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
   const sequence = getStepSequence(path);
   const [activeIndex, setActiveIndex] = useState<number>(() => resolveLandingStep(path, orgStep, organizationId));
 
-  // The onboarding shell renders the full UserMenu for multi-team users, so the
+  // The onboarding shell renders the real TeamSwitcher for multi-team users, so the
   // selected org can change while this provider stays mounted (creating /
   // joining / switching teams calls selectOrganization without a route
   // remount). Re-derive the landing step for the new org rather than carry the
