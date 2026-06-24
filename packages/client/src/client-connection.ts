@@ -289,6 +289,8 @@ const WS_CONNECT_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const INBOX_ACK_CONFIRM_TIMEOUT_MS = 3_000;
 const INBOX_RECOVER_CONFIRM_TIMEOUT_MS = 3_000;
+const INBOX_RECOVER_TIMEOUT_CLOSE_CODE = 1011;
+const INBOX_RECOVER_TIMEOUT_CLOSE_REASON = "inbox recover timeout";
 /**
  * Silence watchdog: if no server frame (data message OR control-frame pong)
  * arrives within this many ms, the socket is presumed dead and terminated so
@@ -603,6 +605,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     pending.timer = setTimeout(() => {
       if (!this.pendingInboxRecovers.has(pending.ref)) return;
       this.rejectPendingInboxRecover(pending, "timeout");
+      this.forceReconnectAfterInboxRecoverTimeout(pending);
     }, INBOX_RECOVER_CONFIRM_TIMEOUT_MS);
     return pending.promise;
   }
@@ -802,6 +805,22 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       "inbox:recover rejected",
     );
     pending.reject(new Error(`inbox:recover rejected (${reason})`));
+  }
+
+  private forceReconnectAfterInboxRecoverTimeout(pending: PendingInboxRecover): void {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !this.registered || this.closing) return;
+    this.wsLogger.warn(
+      {
+        agentId: pending.agentId,
+        chatId: pending.chatId,
+        ref: pending.ref,
+        closeCode: INBOX_RECOVER_TIMEOUT_CLOSE_CODE,
+        recoverEvent: "inbox_recover_timeout_reconnect",
+      },
+      "inbox:recover confirmation timed out — closing socket to force bind recovery",
+    );
+    ws.close(INBOX_RECOVER_TIMEOUT_CLOSE_CODE, INBOX_RECOVER_TIMEOUT_CLOSE_REASON);
   }
 
   private clearPendingInboxRecoverTimer(pending: PendingInboxRecover): void {
