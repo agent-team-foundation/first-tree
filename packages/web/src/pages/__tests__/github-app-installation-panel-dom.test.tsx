@@ -110,7 +110,7 @@ afterEach(() => {
 });
 
 describe("GithubAppInstallationPanel", () => {
-  it("renders bound installation metadata including suspended state", async () => {
+  it("renders bound installation; connection details collapsed until expanded", async () => {
     githubMocks.getGithubAppInstallation.mockResolvedValueOnce(
       installation({ accountType: "User", accountLogin: "octocat", suspended: true }),
     );
@@ -120,14 +120,26 @@ describe("GithubAppInstallationPanel", () => {
     await waitForText(container, "Connected as");
     expect(container.textContent).toContain("octocat");
     expect(container.textContent).toContain("User");
-    expect(container.textContent).toContain("contents:");
-    expect(container.textContent).toContain("issues:");
-    expect(container.textContent).toContain("pull_request");
-    expect(container.textContent).toContain(`Installation ${"#"}123`);
     expect(container.textContent).toContain("suspended upstream");
     expect(container.querySelector<HTMLAnchorElement>("a")?.href).toBe(
       "https://github.com/organizations/acme/settings/installations/123",
     );
+
+    // The developer-facing metadata (scopes, events, installation id) lives
+    // behind a collapsed "Connection details" disclosure — not mounted until
+    // the admin opens it.
+    const detailsToggle = buttonByText(container, "Connection details");
+    expect(detailsToggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.textContent).not.toContain("contents:");
+    expect(container.textContent).not.toContain(`Installation ${"#"}123`);
+
+    await click(detailsToggle);
+
+    expect(detailsToggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain("contents:");
+    expect(container.textContent).toContain("issues:");
+    expect(container.textContent).toContain("pull_request");
+    expect(container.textContent).toContain(`Installation ${"#"}123`);
 
     await act(async () => root.unmount());
   });
