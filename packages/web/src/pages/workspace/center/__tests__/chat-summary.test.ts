@@ -363,4 +363,36 @@ describe("ChatSummary", () => {
     await act(async () => root.unmount());
     container.remove();
   });
+
+  it("leaves a horizontal-dominant wheel to the browser", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    scrollEl.scrollTop = 0;
+    const { container, root } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+    const panel = container.firstElementChild as HTMLElement | null;
+    if (!panel) throw new Error("summary panel missing");
+    const inner = container.querySelector<HTMLElement>('[style*="46vh"]');
+    if (!inner) throw new Error("summary scroll body missing");
+    // Body is scrollable, so a missing guard would let the small vertical
+    // component move it.
+    Object.defineProperty(inner, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(inner, "clientHeight", { value: 200, configurable: true });
+    inner.scrollTop = 100;
+
+    // deltaX dominates deltaY (a trackpad horizontal pan): hands off to the
+    // browser — nothing is scrolled and the event is not consumed.
+    const ev = wheelEvent(8, 120);
+    await act(async () => {
+      panel.dispatchEvent(ev);
+    });
+    expect(inner.scrollTop).toBe(100);
+    expect(scrollEl.scrollTop).toBe(0);
+    expect(ev.defaultPrevented).toBe(false);
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
 });
