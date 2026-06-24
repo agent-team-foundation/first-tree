@@ -71,17 +71,6 @@ function okCapability(sdkVersion = "0.2.84"): CapabilityEntry {
   };
 }
 
-function missingCapability(): CapabilityEntry {
-  return {
-    state: "missing",
-    available: false,
-    authenticated: false,
-    sdkVersion: null,
-    authMethod: "none",
-    detectedAt: NOW,
-  };
-}
-
 function unauthCapability(sdkVersion = "0.134.0"): CapabilityEntry {
   return {
     state: "unauthenticated",
@@ -143,9 +132,11 @@ const SETUP_INCOMPLETE = client({
   hostname: "fresh-linux",
   os: "linux",
   agentCount: 1,
+  // claude-code-tui is in DISABLED_RUNTIME_PROVIDERS, so it is filtered out of
+  // PROVIDER_ORDER and never shown on the card — the errored runtime that
+  // surfaces "probe failed" + a reinstall command is claude-code itself here.
   capabilities: {
-    "claude-code": missingCapability(),
-    "claude-code-tui": errorCapability(),
+    "claude-code": errorCapability(),
     codex: unauthCapability(),
   },
 });

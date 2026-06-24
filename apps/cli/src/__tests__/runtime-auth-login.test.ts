@@ -1,6 +1,6 @@
 import { BROWSER_LOGIN_TIMEOUT_MS, type CodexBrowserLoginOptions, type LoginOutcome } from "@first-tree/client";
 import type { CapabilityEntry } from "@first-tree/shared";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runRuntimeAuthLogin } from "../core/runtime-auth-login.js";
 
 const NOW = Date.parse("2026-06-22T12:00:00.000Z");
@@ -151,6 +151,10 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
   function claudeHarness(opts: { resolveOk?: boolean; outcome?: LoginOutcome; probeResult?: CapabilityEntry }) {
     const calls: Recorded[] = [];
     const logs: string[] = [];
+    // Spy so a test can assert the TUI probe is NOT spawned while claude-code-tui
+    // is disabled (it shares the Claude keychain, but "stop probing it" must hold
+    // on this login-reflection path too).
+    const probeClaudeTui = vi.fn(async (): Promise<CapabilityEntry> => opts.probeResult ?? unauthEntry());
     const deps = {
       currentEntry: (): CapabilityEntry | undefined => undefined,
       setProviderEntry: async (provider: string, entry: CapabilityEntry): Promise<void> => {
@@ -166,50 +170,53 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
           : ({ ok: true, command: "/usr/local/bin/claude", baseArgs: [] as string[] } as const),
       runClaudeBrowser: async (): Promise<LoginOutcome> => opts.outcome ?? ({ ok: true } as const),
       probeClaude: async (): Promise<CapabilityEntry> => opts.probeResult ?? unauthEntry(),
-      // Claude auth is shared with the TUI runtime — re-probe it too.
-      probeClaudeTui: async (): Promise<CapabilityEntry> => opts.probeResult ?? unauthEntry(),
+      probeClaudeTui,
     };
-    return { calls, logs, deps };
+    return { calls, logs, deps, probeClaudeTui };
   }
 
-  it("browser pending, then re-probes BOTH claude-code and claude-code-tui (shared auth)", async () => {
+  // claude-code-tui is in DISABLED_RUNTIME_PROVIDERS, so a claude-code login
+  // reflects claude-code ONLY — the shared-keychain TUI re-probe is suppressed
+  // here exactly as it is in the capability aggregator (no `claude` / tmux spawn,
+  // no tui entry written). If TUI is ever re-enabled, the both-providers path
+  // (Promise.all) takes over again.
+  it("browser pending, then re-probes claude-code only while TUI is disabled (no TUI spawn)", async () => {
     const h = claudeHarness({ outcome: { ok: true }, probeResult: okEntry() });
     await runRuntimeAuthLogin({ provider: "claude-code", ref: "c1" }, h.deps);
 
-    // pending(claude-code) → ok(claude-code) → ok(claude-code-tui)
-    expect(h.calls).toHaveLength(3);
-    expect(h.calls[0]?.provider).toBe("claude-code");
+    // pending(claude-code) → ok(claude-code); no claude-code-tui write.
+    expect(h.calls).toHaveLength(2);
+    expect(h.calls.map((c) => c.provider)).toEqual(["claude-code", "claude-code"]);
     expect(h.calls[0]?.entry.pendingAuth).toEqual({
       method: "browser",
       expiresAt: new Date(NOW + BROWSER_LOGIN_TIMEOUT_MS).toISOString(),
     });
-    const reprobed = h.calls.slice(1);
-    expect(reprobed.map((c) => c.provider).sort()).toEqual(["claude-code", "claude-code-tui"]);
-    for (const c of reprobed) {
-      expect(c.entry.state).toBe("ok");
-      expect(c.entry.pendingAuth).toBeUndefined();
-    }
+    expect(h.calls[1]?.entry.state).toBe("ok");
+    expect(h.calls[1]?.entry.pendingAuth).toBeUndefined();
+    expect(h.calls.some((c) => c.provider === "claude-code-tui")).toBe(false);
+    expect(h.probeClaudeTui).not.toHaveBeenCalled();
   });
 
-  it("on unresolved CLI, reflects real state for both and never logs in", async () => {
+  it("on unresolved CLI, reflects claude-code real state and never logs in (TUI untouched)", async () => {
     const h = claudeHarness({
       resolveOk: false,
       probeResult: { ...unauthEntry(), state: "missing", available: false },
     });
     await runRuntimeAuthLogin({ provider: "claude-code", ref: "c2" }, h.deps);
 
-    expect(h.calls.map((c) => c.provider).sort()).toEqual(["claude-code", "claude-code-tui"]);
+    expect(h.calls.map((c) => c.provider)).toEqual(["claude-code"]);
     expect(h.calls.every((c) => c.entry.state === "missing")).toBe(true);
+    expect(h.probeClaudeTui).not.toHaveBeenCalled();
     expect(h.logs.some((l) => l.includes("claude CLI unavailable"))).toBe(true);
   });
 
-  it("on login failure, stamps lastAuthError on claude-code only (not the shared-keychain tui)", async () => {
+  it("on login failure, stamps lastAuthError on claude-code (TUI not re-probed while disabled)", async () => {
     const h = claudeHarness({ outcome: { ok: false, reason: "timeout", error: "claude auth login timed out" } });
     await runRuntimeAuthLogin({ provider: "claude-code", ref: "c3" }, h.deps);
 
     const cc = h.calls.filter((c) => c.provider === "claude-code").at(-1)?.entry;
-    const tui = h.calls.filter((c) => c.provider === "claude-code-tui").at(-1)?.entry;
     expect(cc?.lastAuthError).toMatchObject({ reason: "timeout", message: "claude auth login timed out" });
-    expect(tui?.lastAuthError).toBeUndefined();
+    expect(h.calls.some((c) => c.provider === "claude-code-tui")).toBe(false);
+    expect(h.probeClaudeTui).not.toHaveBeenCalled();
   });
 });

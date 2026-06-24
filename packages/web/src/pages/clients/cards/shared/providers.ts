@@ -1,4 +1,4 @@
-import { RUNTIME_PROVIDERS, type RuntimeProvider } from "@first-tree/shared";
+import { isRuntimeProviderEnabled, RUNTIME_PROVIDERS, type RuntimeProvider } from "@first-tree/shared";
 
 /**
  * Shared provider constants for runtime-related UI. Previously lived
@@ -8,12 +8,18 @@ import { RUNTIME_PROVIDERS, type RuntimeProvider } from "@first-tree/shared";
  * Display order for runtime sections — Claude Code first because it
  * is the more common entry point, Codex second. Mirrors mockup §"Variant
  * B-2" ordering.
+ *
+ * Temporarily-disabled providers (`DISABLED_RUNTIME_PROVIDERS`) are filtered
+ * out so they are never offered or shown across the client cards (Ready /
+ * Offline / Setup-incomplete / Auth-expired) that drive their selection off
+ * this list. The label / install-command maps below intentionally keep every
+ * provider so an already-bound agent on a disabled runtime still renders.
  */
 export const PROVIDER_ORDER: RuntimeProvider[] = [
   RUNTIME_PROVIDERS.CLAUDE_CODE,
   RUNTIME_PROVIDERS.CLAUDE_CODE_TUI,
   RUNTIME_PROVIDERS.CODEX,
-];
+].filter((p) => isRuntimeProviderEnabled(p));
 
 export const PROVIDER_LABEL: Record<RuntimeProvider, string> = {
   "claude-code": "Claude Code",

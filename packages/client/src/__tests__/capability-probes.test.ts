@@ -1153,7 +1153,7 @@ describe("resolveCodexRuntimeBinary (handler-contract parity)", () => {
 });
 
 describe("probeCapabilities (aggregator)", () => {
-  it("returns one entry per built-in provider (probes mocked — no real launches)", async () => {
+  it("probes only the enabled providers (claude-code-tui is temporarily disabled, never invoked)", async () => {
     vi.resetModules();
     const fakeEntry = (state: "ok" | "missing") => ({
       state,
@@ -1165,11 +1165,12 @@ describe("probeCapabilities (aggregator)", () => {
       probeKind: "launch",
       latencyMs: 1,
     });
+    const tuiProbe = vi.fn().mockResolvedValue(fakeEntry("missing"));
     vi.doMock("../runtime/capabilities/claude-code.js", () => ({
       probeClaudeCodeCapability: vi.fn().mockResolvedValue(fakeEntry("ok")),
     }));
     vi.doMock("../runtime/capabilities/claude-code-tui.js", () => ({
-      probeClaudeCodeTuiCapability: vi.fn().mockResolvedValue(fakeEntry("missing")),
+      probeClaudeCodeTuiCapability: tuiProbe,
     }));
     vi.doMock("../runtime/capabilities/codex.js", () => ({
       probeCodexCapability: vi.fn().mockResolvedValue(fakeEntry("ok")),
@@ -1178,10 +1179,13 @@ describe("probeCapabilities (aggregator)", () => {
 
     const caps = await mod.probeCapabilities();
 
-    expect(Object.keys(caps).sort()).toEqual(["claude-code", "claude-code-tui", "codex"]);
+    // claude-code-tui is in DISABLED_RUNTIME_PROVIDERS — it is skipped, so it
+    // gets no capability entry AND its probe is never called (no binary spawn).
+    expect(Object.keys(caps).sort()).toEqual(["claude-code", "codex"]);
     expect(caps["claude-code"]?.state).toBe("ok");
-    expect(caps["claude-code-tui"]?.state).toBe("missing");
+    expect(caps["claude-code-tui"]).toBeUndefined();
     expect(caps.codex?.state).toBe("ok");
+    expect(tuiProbe).not.toHaveBeenCalled();
 
     vi.doUnmock("../runtime/capabilities/claude-code.js");
     vi.doUnmock("../runtime/capabilities/claude-code-tui.js");
@@ -1189,7 +1193,7 @@ describe("probeCapabilities (aggregator)", () => {
     vi.resetModules();
   });
 
-  it("converts provider probe rejections into error capability entries", async () => {
+  it("converts enabled-provider probe rejections into error capability entries", async () => {
     vi.resetModules();
     vi.doMock("../runtime/capabilities/claude-code.js", () => ({
       probeClaudeCodeCapability: vi.fn().mockRejectedValue(new Error("claude probe failed")),
@@ -1212,7 +1216,8 @@ describe("probeCapabilities (aggregator)", () => {
       error: "claude probe failed",
     });
     expect(caps.codex).toMatchObject({ state: "error", error: "codex probe failed" });
-    expect(caps["claude-code-tui"]).toMatchObject({ state: "error", error: "tui probe failed" });
+    // Disabled provider is never probed, so no entry (not even an error one).
+    expect(caps["claude-code-tui"]).toBeUndefined();
 
     vi.doUnmock("../runtime/capabilities/claude-code.js");
     vi.doUnmock("../runtime/capabilities/codex.js");
