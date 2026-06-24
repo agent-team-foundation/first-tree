@@ -8,7 +8,7 @@ import { COPY } from "./copy.js";
 /**
  * Turn a kickoff failure into a message worth showing the user. Context Tree
  * provisioning errors arrive as an `ApiError` carrying the server's machine
- * `code` (organization_installation_required, installation_permissions_insufficient,
+ * `code` (context_tree_repo_access_required, installation_permissions_insufficient,
  * …); map those to plain language with a way forward rather than leaking the raw
  * server string. Our own thrown Errors (e.g. `ensureSourceReposRegistered`)
  * already carry a friendly message, so surface those as-is; an unmapped ApiError
@@ -57,7 +57,7 @@ function repoKey(url: string): string {
  * A `409` from the initializer is ambiguous — it can mean the tree is **already
  * provisioned** (a detect→create race, or a retry after a later kickoff step
  * failed) OR that **no tree could be created** (the merged initializer also
- * returns 409 for `organization_installation_required` / `repo_unavailable`).
+ * returns 409 for `context_tree_repo_access_required` / `repo_unavailable`).
  * We distinguish by the **actual binding
  * state** rather than the status code (the "already configured" conflict
  * carries no discriminating `code`): if a tree now exists, provisioning

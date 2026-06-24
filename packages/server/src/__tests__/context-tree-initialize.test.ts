@@ -21,6 +21,9 @@ const ACCOUNT_LOGIN = "acme-github";
 const REPO_NAME = "acme-labs-context-tree";
 const CLONE_URL = `https://github.com/${ACCOUNT_LOGIN}/${REPO_NAME}.git`;
 const HTML_URL = `https://github.com/${ACCOUNT_LOGIN}/${REPO_NAME}`;
+const USER_LOGIN = "octocat";
+const USER_GITHUB_ID = 4242;
+const USER_REPO_CLONE_URL = `https://github.com/${USER_LOGIN}/${REPO_NAME}.git`;
 const ROOT_NODE_PATH = "NODE.md";
 const VALIDATE_TREE_WORKFLOW_PATH = ".github/workflows/validate-tree.yml";
 const VALIDATE_TREE_WORKFLOW_CONTENT = `name: Validate Context Tree
@@ -648,6 +651,213 @@ owners: [${ACCOUNT_LOGIN}]
     expect(repoCreateCalls).toBe(2);
     expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({ repo: CLONE_URL, branch: "main" });
   });
+
+  describe("personal GitHub account (User installation)", () => {
+    it("adopts an existing personal repo the installation can access, without needing a GitHub user token", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const installationId = await seedUserInstallation(app, admin.organizationId);
+      await renameOrg(app, admin.organizationId, "Acme Labs");
+      // No GitHub identity seeded on purpose: adopting an already-accessible repo
+      // uses only the installation token and must not require the user token.
+      let userReposCalls = 0;
+      const fetchSpy = mockFetch(async (url) => {
+        if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+        if (url === repoUrl(USER_LOGIN, REPO_NAME)) return githubRepoResponse(200, { owner: USER_LOGIN });
+        if (url === userReposUrl()) {
+          userReposCalls += 1;
+          return new Response("unexpected user repo create", { status: 500 });
+        }
+        if (url === contentsUrl(USER_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+          return jsonResponse({ message: "Not Found" }, 404);
+        }
+        if (url === contentsUrl(USER_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+          return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+        }
+        if (url === contentsUrl(USER_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+          return jsonResponse({ message: "Not Found" }, 404);
+        }
+        if (url === contentsUrl(USER_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+          return jsonResponse({ content: { path: VALIDATE_TREE_WORKFLOW_PATH } }, 201);
+        }
+        return new Response(`unexpected fetch ${url}`, { status: 500 });
+      });
+
+      const res = await initialize(app, admin);
+
+      expect(res.statusCode).toBe(201);
+      expect(userReposCalls).toBe(0);
+      expect(fetchSpy).toHaveBeenCalledTimes(6);
+      expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({
+        repo: USER_REPO_CLONE_URL,
+        branch: "main",
+      });
+    });
+
+    it("creates a personal repo with the GitHub user token when missing, verifies installation access, and persists", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const installationId = await seedUserInstallation(app, admin.organizationId);
+      await renameOrg(app, admin.organizationId, "Acme Labs");
+      await seedGithubIdentity(app, admin, {
+        login: USER_LOGIN,
+        accessToken: "ghu_user",
+        githubId: String(USER_GITHUB_ID),
+      });
+      let createUserRepoPayload: unknown;
+      let repoGetCalls = 0;
+      const fetchSpy = mockFetch(async (url, init) => {
+        if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+        if (url === repoUrl(USER_LOGIN, REPO_NAME)) {
+          repoGetCalls += 1;
+          // 1st GET: adopt probe → missing; 2nd GET: post-create access verify → found.
+          return repoGetCalls === 1
+            ? jsonResponse({ message: "Not Found" }, 404)
+            : githubRepoResponse(200, { owner: USER_LOGIN });
+        }
+        if (url === userReposUrl()) {
+          expectAuth(init, "Bearer ghu_user");
+          createUserRepoPayload = parseJsonBody(init);
+          return githubRepoResponse(201, { owner: USER_LOGIN });
+        }
+        if (url === contentsUrl(USER_LOGIN, REPO_NAME, ROOT_NODE_PATH, "main")) {
+          return jsonResponse({ message: "Not Found" }, 404);
+        }
+        if (url === contentsUrl(USER_LOGIN, REPO_NAME, ROOT_NODE_PATH)) {
+          return jsonResponse({ content: { path: ROOT_NODE_PATH } }, 201);
+        }
+        if (url === contentsUrl(USER_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH, "main")) {
+          return jsonResponse({ message: "Not Found" }, 404);
+        }
+        if (url === contentsUrl(USER_LOGIN, REPO_NAME, VALIDATE_TREE_WORKFLOW_PATH)) {
+          return jsonResponse({ content: { path: VALIDATE_TREE_WORKFLOW_PATH } }, 201);
+        }
+        return new Response(`unexpected fetch ${url}`, { status: 500 });
+      });
+
+      const res = await initialize(app, admin);
+
+      expect(res.statusCode).toBe(201);
+      expect(createUserRepoPayload).toMatchObject({
+        name: REPO_NAME,
+        private: true,
+        auto_init: false,
+        description: "Acme Labs Context Tree",
+      });
+      expect(repoGetCalls).toBe(2);
+      expect(fetchSpy).toHaveBeenCalledTimes(8);
+      expect(await getOrgContextTree(app.db, admin.organizationId)).toEqual({
+        repo: USER_REPO_CLONE_URL,
+        branch: "main",
+      });
+    });
+
+    it("returns context_tree_repo_access_required when the created personal repo is still not visible to the installation", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const installationId = await seedUserInstallation(app, admin.organizationId);
+      await renameOrg(app, admin.organizationId, "Acme Labs");
+      await seedGithubIdentity(app, admin, {
+        login: USER_LOGIN,
+        accessToken: "ghu_user",
+        githubId: String(USER_GITHUB_ID),
+      });
+      const fetchSpy = mockFetch(async (url) => {
+        if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+        if (url === repoUrl(USER_LOGIN, REPO_NAME)) return jsonResponse({ message: "Not Found" }, 404);
+        if (url === userReposUrl()) return githubRepoResponse(201, { owner: USER_LOGIN });
+        return new Response(`unexpected fetch ${url}`, { status: 500 });
+      });
+
+      const res = await initialize(app, admin);
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ code: "context_tree_repo_access_required" });
+      expect(fetchSpy).toHaveBeenCalledTimes(4);
+      expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    });
+
+    it("returns context_tree_repo_access_required when the personal repo already exists but the installation cannot see it", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const installationId = await seedUserInstallation(app, admin.organizationId);
+      await renameOrg(app, admin.organizationId, "Acme Labs");
+      await seedGithubIdentity(app, admin, {
+        login: USER_LOGIN,
+        accessToken: "ghu_user",
+        githubId: String(USER_GITHUB_ID),
+      });
+      const fetchSpy = mockFetch(async (url) => {
+        if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+        if (url === repoUrl(USER_LOGIN, REPO_NAME)) return jsonResponse({ message: "Not Found" }, 404);
+        if (url === userReposUrl()) return jsonResponse({ message: "name already exists on this account" }, 422);
+        return new Response(`unexpected fetch ${url}`, { status: 500 });
+      });
+
+      const res = await initialize(app, admin);
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ code: "context_tree_repo_access_required" });
+      expect(fetchSpy).toHaveBeenCalledTimes(3);
+      expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    });
+
+    it("returns 503 github_user_token_required without creating a repo when the admin has no GitHub token", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const installationId = await seedUserInstallation(app, admin.organizationId);
+      await renameOrg(app, admin.organizationId, "Acme Labs");
+      // No GitHub identity for this admin → no usable user token.
+      let userReposCalls = 0;
+      const fetchSpy = mockFetch(async (url) => {
+        if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+        if (url === repoUrl(USER_LOGIN, REPO_NAME)) return jsonResponse({ message: "Not Found" }, 404);
+        if (url === userReposUrl()) {
+          userReposCalls += 1;
+          return githubRepoResponse(201, { owner: USER_LOGIN });
+        }
+        return new Response(`unexpected fetch ${url}`, { status: 500 });
+      });
+
+      const res = await initialize(app, admin);
+
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ code: "github_user_token_required" });
+      expect(userReposCalls).toBe(0);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    });
+
+    it("returns context_tree_repo_account_mismatch when the admin's GitHub account differs from the installation account", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const installationId = await seedUserInstallation(app, admin.organizationId);
+      await renameOrg(app, admin.organizationId, "Acme Labs");
+      await seedGithubIdentity(app, admin, {
+        login: "someone-else",
+        accessToken: "ghu_other",
+        githubId: "9999", // does not match USER_GITHUB_ID
+      });
+      let userReposCalls = 0;
+      const fetchSpy = mockFetch(async (url) => {
+        if (url === installationTokenUrl(installationId)) return installationTokenResponse();
+        if (url === repoUrl(USER_LOGIN, REPO_NAME)) return jsonResponse({ message: "Not Found" }, 404);
+        if (url === userReposUrl()) {
+          userReposCalls += 1;
+          return githubRepoResponse(201, { owner: USER_LOGIN });
+        }
+        return new Response(`unexpected fetch ${url}`, { status: 500 });
+      });
+
+      const res = await initialize(app, admin);
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ code: "context_tree_repo_account_mismatch" });
+      expect(userReposCalls).toBe(0);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect((await getOrgContextTree(app.db, admin.organizationId)).repo).toBeUndefined();
+    });
+  });
 });
 
 async function initialize(app: FastifyInstance, admin: Pick<TestAdmin, "organizationId" | "accessToken">) {
@@ -675,6 +885,7 @@ async function seedInstallation(
   opts: {
     accountLogin?: string;
     accountType?: "User" | "Organization";
+    accountGithubId?: number;
     permissions?: Record<string, "read" | "write" | "admin">;
     repositoryEvents?: string[];
     suspendedAt?: string | null;
@@ -687,7 +898,7 @@ async function seedInstallation(
       id: installationId,
       accountType: opts.accountType ?? "Organization",
       accountLogin: opts.accountLogin ?? ACCOUNT_LOGIN,
-      accountGithubId: installationId + 1_000_000,
+      accountGithubId: opts.accountGithubId ?? installationId + 1_000_000,
       permissions: opts.permissions ?? { administration: "write", contents: "write", workflows: "write" },
       events: opts.repositoryEvents ?? ["push"],
       suspendedAt: opts.suspendedAt ?? null,
@@ -697,19 +908,28 @@ async function seedInstallation(
   return installationId;
 }
 
+async function seedUserInstallation(app: FastifyInstance, organizationId: string): Promise<number> {
+  return seedInstallation(app, organizationId, {
+    accountType: "User",
+    accountLogin: USER_LOGIN,
+    accountGithubId: USER_GITHUB_ID,
+  });
+}
+
 async function seedGithubIdentity(
   app: FastifyInstance,
   admin: TestAdmin,
   opts: {
     login: string;
     accessToken: string;
+    githubId?: string;
   },
 ): Promise<void> {
   await app.db.insert(authIdentities).values({
     id: uuidv7(),
     userId: admin.userId,
     provider: "github",
-    identifier: "123456",
+    identifier: opts.githubId ?? "123456",
     email: `${opts.login}@example.test`,
     verifiedAt: new Date(),
     metadata: {
@@ -778,6 +998,10 @@ function installationTokenUrl(installationId: number): string {
 
 function orgReposUrl(org: string): string {
   return `${GITHUB_API_BASE}/orgs/${encodeURIComponent(org)}/repos`;
+}
+
+function userReposUrl(): string {
+  return `${GITHUB_API_BASE}/user/repos`;
 }
 
 function repoUrl(owner: string, repo: string): string {
