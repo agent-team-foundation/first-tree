@@ -87,7 +87,7 @@ export function createExecuteUpdate({
     if (mode === "npx") {
       const installHint = PACKAGE_NAME ?? channelConfig.binName;
       print.line(
-        `  [update] Cannot self-update — not launched from a global npm install.\n  Run \`npm i -g ${installHint}\` manually.\n`,
+        `  [update] Cannot self-update — not launched from a global npm install.\n  Run \`npm i -g ${installHint}@latest\` manually.\n`,
       );
       return { installed: false };
     }

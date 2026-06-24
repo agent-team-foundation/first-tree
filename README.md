@@ -128,7 +128,7 @@ At the "connect a computer" step, setup gives you the command to install the
 CLI and link the machine:
 
 ```bash
-npm install -g first-tree
+npm install -g first-tree@latest
 first-tree login <connect-token>
 ```
 

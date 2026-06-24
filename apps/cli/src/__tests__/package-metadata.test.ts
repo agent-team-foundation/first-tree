@@ -32,7 +32,7 @@ describe("npm package metadata", () => {
   it("includes package-root documentation and license files in the tarball allow-list", () => {
     const files = packageFiles(readJson(join(CLI_ROOT, "package.json")));
 
-    expect(files).toEqual(expect.arrayContaining(["dist", "README.md", "LICENSE"]));
+    expect(files).toEqual(expect.arrayContaining(["bin", "dist", "README.md", "LICENSE"]));
   });
 
   it("keeps a package-local README for the npm registry page", () => {
@@ -42,7 +42,7 @@ describe("npm package metadata", () => {
 
     const readme = readText(readmePath);
 
-    expect(readme).toContain("npm install -g first-tree");
+    expect(readme).toContain("npm install -g first-tree@latest");
     expect(readme).toContain("first-tree login <connect-token>");
     expect(readme).toContain("https://github.com/agent-team-foundation/first-tree/blob/main/docs/cli-reference.md");
     expect(readme).toContain("Apache-2.0");

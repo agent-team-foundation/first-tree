@@ -128,8 +128,8 @@ jobs:
           const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
           pkg.name = "first-tree";
           pkg.bin = {
-            "first-tree": "./dist/cli/index.mjs",
-            "ft": "./dist/cli/index.mjs",
+            "first-tree": "./bin/first-tree.cjs",
+            "ft": "./bin/first-tree.cjs",
           };
           fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
           fs.writeFileSync(
@@ -285,8 +285,8 @@ jobs:
           pkg.name = "first-tree-staging";
           pkg.version = process.env.STAGING_VERSION;
           pkg.bin = {
-            "first-tree-staging": "./dist/cli/index.mjs",
-            "fts": "./dist/cli/index.mjs",
+            "first-tree-staging": "./bin/first-tree.cjs",
+            "fts": "./bin/first-tree.cjs",
           };
           fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);
           fs.writeFileSync(

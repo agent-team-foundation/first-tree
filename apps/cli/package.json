@@ -22,10 +22,11 @@
     }
   },
   "bin": {
-    "first-tree-dev": "./dist/cli/index.mjs",
-    "ftd": "./dist/cli/index.mjs"
+    "first-tree-dev": "./bin/first-tree.cjs",
+    "ftd": "./bin/first-tree.cjs"
   },
   "files": [
+    "bin",
     "dist",
     "skills",
     "README.md",
@@ -50,11 +51,11 @@
     "directory": "apps/cli"
   },
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=18.14.1"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.187",
-    "@inquirer/prompts": "^8.3.0",
+    "@inquirer/prompts": "^6.0.1",
     "@openai/codex-sdk": "^0.140.0",
     "commander": "^13.1.0",
     "gray-matter": "^4.0.3",

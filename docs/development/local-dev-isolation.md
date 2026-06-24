@@ -16,8 +16,8 @@ already have.
 | Channel | Install via | Bin | Default home | Service unit |
 |---|---|---|---|---|
 | dev | `scripts/dev-install.sh` (in-tree, symlinked) | `first-tree-dev` / `ftd` | `~/.first-tree-dev/` | `first-tree-dev.service` |
-| staging | `npm i -g first-tree-staging` | `first-tree-staging` / `fts` | `~/.first-tree-staging/` | `first-tree-staging.service` |
-| prod | `npm i -g first-tree` | `first-tree` / `ft` | `~/.first-tree/` | `first-tree.service` |
+| staging | `npm i -g first-tree-staging@latest` | `first-tree-staging` / `fts` | `~/.first-tree-staging/` | `first-tree-staging.service` |
+| prod | `npm i -g first-tree@latest` | `first-tree` / `ft` | `~/.first-tree/` | `first-tree.service` |
 
 Each install registers as a separate `clientId` on whichever server it
 connects to (dev → local server, staging → `dev.cloud.first-tree.ai`,
@@ -92,7 +92,7 @@ If you need to swap dev for staging without `git pull`, install staging
 side-by-side:
 
 ```bash
-npm i -g first-tree-staging
+npm i -g first-tree-staging@latest
 first-tree-staging login <staging-token>
 # now both `first-tree-dev daemon status` and `first-tree-staging daemon status` work
 ```
@@ -106,7 +106,7 @@ first-tree-staging login <staging-token>
 - **Direct `pnpm --filter ... dev`** — running parts of the system in
   isolation (server-only, web-only) where you don't need the full CLI
   surface. `tsx` runs against source.
-- **`npm i -g first-tree-staging`** — when you want to test against the
+- **`npm i -g first-tree-staging@latest`** — when you want to test against the
   exact bits that team members run. Coexists with dev install; data
   stays in `~/.first-tree-staging/`.
 
