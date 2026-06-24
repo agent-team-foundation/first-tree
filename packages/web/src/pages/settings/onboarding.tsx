@@ -19,11 +19,11 @@ export function SettingsOnboardingPage() {
   const navigate = useNavigate();
   const { onboardingStep, onboardingDismissedAt, onboardingCompletedAt, dismissOnboarding, restoreOnboarding } =
     useAuth();
-  // Terminal state — the wizard finished. It's one-shot; subsequent config edits
-  // go through Settings → Team and /agents/:uuid, and building a missing Context
-  // Tree lives on the Context tab. Nothing to surface here, so redirect away.
+  // Terminal state — the wizard finished. It's one-shot; subsequent team-name
+  // edits go through the header-left TeamSwitcher and agent edits go through
+  // /agents/:uuid. Nothing to surface here, so redirect away.
   if (onboardingCompletedAt) {
-    return <Navigate to="/settings/team" replace />;
+    return <Navigate to="/settings/computers" replace />;
   }
   const isDismissed = !!onboardingDismissedAt;
 

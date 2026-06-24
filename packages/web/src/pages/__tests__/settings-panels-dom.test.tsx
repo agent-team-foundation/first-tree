@@ -1,11 +1,6 @@
 // @vitest-environment happy-dom
 
-import type {
-  Organization,
-  OrgContextTreeFeaturesOutput,
-  OrgContextTreeOutput,
-  OrgSourceReposOutput,
-} from "@first-tree/shared";
+import type { OrgContextTreeFeaturesOutput, OrgContextTreeOutput, OrgSourceReposOutput } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -21,11 +16,6 @@ const authMock = vi.hoisted(() => ({
     onboardingCompletedAt: null as string | null,
     meLoaded: true,
   },
-}));
-
-const orgMocks = vi.hoisted(() => ({
-  getOrganization: vi.fn(),
-  updateOrganization: vi.fn(),
 }));
 
 const settingsMocks = vi.hoisted(() => ({
@@ -57,8 +47,6 @@ vi.mock("../../auth/auth-context.js", () => ({
   useAuth: () => authMock.value,
 }));
 
-vi.mock("../../api/organizations.js", () => orgMocks);
-
 vi.mock("../../api/org-settings.js", () => settingsMocks);
 
 vi.mock("../../api/agents.js", () => agentApiMocks);
@@ -72,19 +60,6 @@ vi.mock("../../hooks/use-viewport.js", () => ({
 }));
 
 const NOW = "2026-05-28T12:00:00.000Z";
-
-function organization(overrides: Partial<Organization> = {}): Organization {
-  return {
-    id: overrides.id ?? "org-1",
-    name: overrides.name ?? "acme",
-    displayName: overrides.displayName ?? "Acme",
-    maxAgents: overrides.maxAgents ?? 0,
-    maxMessagesPerMinute: overrides.maxMessagesPerMinute ?? 0,
-    features: overrides.features ?? {},
-    createdAt: overrides.createdAt ?? NOW,
-    updatedAt: overrides.updatedAt ?? NOW,
-  };
-}
 
 function contextTree(overrides: Partial<OrgContextTreeOutput> = {}): OrgContextTreeOutput {
   return {
@@ -153,7 +128,7 @@ async function flush(): Promise<void> {
 
 async function renderDom(
   element: ReactElement,
-  route = "/settings/team",
+  route = "/settings/context",
 ): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -164,7 +139,7 @@ async function renderDom(
         <QueryClientProvider client={createClient()}>
           <Routes>
             <Route path="/settings/*" element={element}>
-              <Route path="team" element={<div>Settings child</div>} />
+              <Route path="context" element={<div>Settings child</div>} />
               <Route path="github" element={<div>GitHub child</div>} />
             </Route>
           </Routes>
@@ -274,10 +249,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   authMock.value = { role: "admin", organizationId: "org-1", onboardingCompletedAt: null, meLoaded: true };
   viewportMock.value = "xl";
-  orgMocks.getOrganization.mockResolvedValue(organization());
-  orgMocks.updateOrganization.mockImplementation(async (_id: string, patch: Partial<Organization>) =>
-    organization({ ...patch, updatedAt: "2026-05-28T12:01:00.000Z" }),
-  );
   settingsMocks.getContextTreeSetting.mockResolvedValue(contextTree());
   settingsMocks.getContextTreeFeaturesSetting.mockResolvedValue(contextTreeFeatures());
   settingsMocks.putContextTreeSetting.mockImplementation(async (_id: string, body: Partial<OrgContextTreeOutput>) =>
@@ -339,37 +310,6 @@ describe("settings panels", () => {
     const unloaded = await renderDom(<SettingsLayout />);
     expect(unloaded.container.textContent).toBe("");
     await act(async () => unloaded.root.unmount());
-  });
-
-  it("loads and saves team identity, including unchanged and error paths", async () => {
-    const { TeamIdentityPanel } = await import("../team-identity-panel.js");
-    const { container, root } = await renderPanel(<TeamIdentityPanel />);
-    await waitForCondition(
-      () => container.querySelector<HTMLInputElement>("input")?.value === "Acme",
-      "Expected team identity input to load",
-    );
-
-    await submit(container.querySelector("form"));
-    expect(orgMocks.updateOrganization).not.toHaveBeenCalled();
-    expect(container.textContent).toContain("Saved");
-
-    const input = container.querySelector<HTMLInputElement>("input");
-    if (!input) throw new Error("Identity input missing");
-    await setInputValue(input, "  Acme Labs  ");
-    await submit(container.querySelector("form"));
-    expect(orgMocks.updateOrganization).toHaveBeenCalledWith("org-1", { displayName: "Acme Labs" });
-
-    orgMocks.updateOrganization.mockRejectedValueOnce(new Error("rename failed"));
-    await setInputValue(input, "Broken");
-    await submit(container.querySelector("form"));
-    await waitForText(container, "rename failed");
-
-    await act(async () => root.unmount());
-
-    orgMocks.getOrganization.mockRejectedValueOnce(new Error("load org failed"));
-    const failed = await renderPanel(<TeamIdentityPanel />);
-    await waitForText(failed.container, "load org failed");
-    await act(async () => failed.root.unmount());
   });
 
   it("renders Context Tree binding configuration and keeps manual editing hidden by default", async () => {

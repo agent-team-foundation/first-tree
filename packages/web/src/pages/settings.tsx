@@ -30,9 +30,6 @@ import { cn } from "../lib/utils.js";
  * Sub-routes:
  *   Computers     — user-scoped: machines connected to First Tree (most-frequent
  *                   entry point — placed first)
- *   Team profile  — org-scoped team identity (display name). Admin-only:
- *                   nothing here for a member to read, so the entry is hidden
- *                   and the page redirects members out.
  *   Context tree  — org-scoped Context Tree binding (repo / branch). Visible
  *                   to all members (read-only); only admins can edit.
  *   Resources     — org-scoped runtime resources (repo / prompt / skill / mcp).
@@ -50,7 +47,6 @@ type Item = {
 
 const ITEMS: Item[] = [
   { to: "/settings/computers", label: "Computers" },
-  { to: "/settings/team", label: "Team profile", adminOnly: true },
   { to: "/settings/context", label: "Context tree" },
   { to: "/settings/resources", label: "Resources" },
   { to: "/settings/github", label: "GitHub", adminOnly: true },

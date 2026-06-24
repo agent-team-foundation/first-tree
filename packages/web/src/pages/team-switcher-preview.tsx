@@ -1,4 +1,4 @@
-import type { OrgBrief } from "@first-tree/shared";
+import type { Organization, OrgBrief } from "@first-tree/shared";
 import { useMemo, useRef, useState } from "react";
 import { api } from "../api/client.js";
 import { AuthContext } from "../auth/auth-context.js";
@@ -40,10 +40,12 @@ const MOCK_ORGS: OrgBrief[] = [
 ];
 
 type ApiGet = typeof api.get;
+type ApiPatch = typeof api.patch;
 
 declare global {
   interface Window {
     __ftTeamSwitcherPreviewOriginalGet?: ApiGet;
+    __ftTeamSwitcherPreviewOriginalPatch?: ApiPatch;
   }
 }
 
@@ -57,6 +59,8 @@ let previewSingle = false;
 // Path-gated and HMR-safe — matches the user-menu / onboarding preview shims.
 window.__ftTeamSwitcherPreviewOriginalGet ??= api.get;
 const originalGet = window.__ftTeamSwitcherPreviewOriginalGet;
+window.__ftTeamSwitcherPreviewOriginalPatch ??= api.patch;
+const originalPatch = window.__ftTeamSwitcherPreviewOriginalPatch;
 api.get = (<T,>(path: string): Promise<T> => {
   if (window.location.pathname.startsWith("/preview/team-switcher") && path === "/me/organizations") {
     // The generic API client cannot infer this string path maps to OrgBrief[].
@@ -65,6 +69,30 @@ api.get = (<T,>(path: string): Promise<T> => {
   }
   return originalGet<T>(path);
 }) as ApiGet;
+api.patch = (<T,>(path: string, body?: unknown): Promise<T> => {
+  const orgMatch = path.match(/^\/orgs\/([^/]+)$/);
+  if (window.location.pathname.startsWith("/preview/team-switcher") && orgMatch) {
+    const id = decodeURIComponent(orgMatch[1] ?? "");
+    const patch = body && typeof body === "object" && "displayName" in body ? body : null;
+    const displayName = patch && typeof patch.displayName === "string" ? patch.displayName.trim() : "";
+    const org = MOCK_ORGS.find((o) => o.id === id);
+    if (org && displayName) {
+      org.displayName = displayName;
+      const next: Organization = {
+        id: org.id,
+        name: org.name,
+        displayName: org.displayName,
+        maxAgents: 0,
+        maxMessagesPerMinute: 0,
+        features: {},
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: new Date().toISOString(),
+      };
+      return Promise.resolve(next as T);
+    }
+  }
+  return originalPatch<T>(path, body);
+}) as ApiPatch;
 
 export function TeamSwitcherPreviewPage() {
   const [organizationId, setOrganizationId] = useState("org-1");
@@ -100,6 +128,7 @@ export function TeamSwitcherPreviewPage() {
           if (forceFailRef.current) throw new Error("preview: forced switch failure");
           setOrganizationId(id);
         },
+        refreshMe: async () => undefined,
         logout: () => undefined,
         // The remaining auth fields are irrelevant to the switcher — same
         // unavoidable-cast pattern as /preview/user-menu.
@@ -163,9 +192,10 @@ export function TeamSwitcherPreviewPage() {
             <PreviewToggle on={false} label="Theme" onClick={() => document.documentElement.classList.toggle("dark")} />
           </div>
           <p className="text-caption" style={{ color: "var(--fg-3)", marginTop: "var(--sp-3)" }}>
-            Open the anchor and pick a team — watch the row spinner, disabled list, optimistic anchor, and the
-            "Switching to…" veil (~0.7s here). "Force switch failure" rolls back with an inline retry hint; "Single
-            team" drops the switch list but keeps the anchor.
+            Open the anchor to switch teams or use the pencil in the current-team header to rename it inline. Picking a
+            team shows the row spinner, disabled list, optimistic anchor, and the "Switching to…" veil (~0.7s here).
+            "Force switch failure" rolls back with an inline retry hint; "Single team" drops the switch list but keeps
+            the anchor.
           </p>
         </div>
       </div>

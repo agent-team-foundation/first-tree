@@ -923,14 +923,12 @@ describe("page SSR smoke coverage", () => {
     const { SettingsGithubPage } = await import("../settings/github.js");
     const { SettingsResourcesPage } = await import("../settings/resources.js");
     const { TeamPage } = await import("../team/index.js");
-    const { TeamSettingsPage } = await import("../team/settings.js");
 
     expect(renderPage(<LandingPage />)).toContain("AI-native teams");
     expect(renderPage(<ClientsPage />)).toContain("Computers");
     expect(renderPage(<TeamPage />)).toContain("Team");
     expect(renderPage(<SettingsComputersPage />)).toContain("Computers");
     expect(renderPage(<SettingsGithubPage />)).toContain("GitHub");
-    expect(renderPage(<TeamSettingsPage />)).toContain("Team profile");
     expect(renderPage(<SettingsContextTreePage />)).toContain("Context tree");
     expect(renderPage(<SettingsResourcesPage />)).toContain("Resources");
 
@@ -938,13 +936,11 @@ describe("page SSR smoke coverage", () => {
     // Admin-only surfaces redirect members out (empty render); Context tree
     // and Resources stay visible (read-only) for members.
     expect(renderPage(<SettingsGithubPage />)).toBe("");
-    expect(renderPage(<TeamSettingsPage />)).toBe("");
     expect(renderPage(<SettingsContextTreePage />)).toContain("Context tree");
     expect(renderPage(<SettingsResourcesPage />)).toContain("Resources");
 
     authMock.value = { ...authMock.value, role: null };
     expect(renderPage(<SettingsGithubPage />)).toContain("Loading");
-    expect(renderPage(<TeamSettingsPage />)).toContain("Loading");
   });
 
   it("renders the agent detail layout with configuration data", async () => {
