@@ -96,9 +96,10 @@ type AuthContextValue = {
   /**
    * ISO timestamp when the user finished the kickoff (Context Tree) step. Once
    * non-null, the Settings → Onboarding sidebar entry and Resume button
-   * disappear permanently — subsequent config edits go through Settings → Team
-   * and the per-agent settings pages. `null` while setup is still incomplete
-   * OR while the user has only dismissed (not finished) onboarding.
+   * disappear permanently — subsequent team-name edits go through the
+   * header-left TeamSwitcher and per-agent edits go through agent settings
+   * pages. `null` while setup is still incomplete OR while the user has only
+   * dismissed (not finished) onboarding.
    */
   onboardingCompletedAt: string | null;
   /**

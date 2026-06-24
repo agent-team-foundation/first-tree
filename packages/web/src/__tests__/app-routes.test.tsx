@@ -56,7 +56,6 @@ vi.mock("../pages/settings.js", async () => {
 vi.mock("../pages/settings/computers.js", () => ({ SettingsComputersPage: () => <div>settings computers</div> }));
 vi.mock("../pages/settings/github.js", () => ({ SettingsGithubPage: () => <div>settings github</div> }));
 vi.mock("../pages/settings/onboarding.js", () => ({ SettingsOnboardingPage: () => <div>settings onboarding</div> }));
-vi.mock("../pages/team/settings.js", () => ({ TeamSettingsPage: () => <div>team settings</div> }));
 vi.mock("../pages/agent-detail.js", async () => {
   const { Outlet } = await import("react-router");
   return {
@@ -134,6 +133,10 @@ describe("App routes", () => {
     document.body.innerHTML = "";
 
     expect(await renderAppAt("/settings/setup")).toContain("settings onboarding");
+    await act(async () => root?.unmount());
+    document.body.innerHTML = "";
+
+    expect(await renderAppAt("/settings/team")).toContain("settings computers");
     await act(async () => root?.unmount());
     document.body.innerHTML = "";
 

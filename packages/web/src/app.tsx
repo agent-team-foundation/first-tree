@@ -27,7 +27,6 @@ import { SettingsOnboardingPage } from "./pages/settings/onboarding.js";
 import { SettingsResourcesPage } from "./pages/settings/resources.js";
 import { SettingsLayout } from "./pages/settings.js";
 import { TeamPage } from "./pages/team/index.js";
-import { TeamSettingsPage } from "./pages/team/settings.js";
 import { WorkspacePage } from "./pages/workspace/index.js";
 
 const queryClient = new QueryClient({
@@ -339,13 +338,12 @@ export function App() {
                       people-and-agents view. */}
                   <Route path="team" element={<TeamPage />} />
 
-                  {/* Settings master-detail. The org-scoped surfaces are each
-                      a single cohesive page: `team` (Team profile / identity),
-                      `context` (Context Tree binding), `resources` (runtime
-                      resources). The rest are user-scoped. */}
+                  {/* Settings master-detail. Team name editing lives in the
+                      header-left TeamSwitcher, so settings only hosts setup
+                      and integration/resource surfaces. */}
                   <Route path="settings" element={<SettingsLayout />}>
                     <Route index element={<Navigate to="computers" replace />} />
-                    <Route path="team" element={<TeamSettingsPage />} />
+                    <Route path="team" element={<Navigate to="/settings/computers" replace />} />
                     <Route path="context" element={<SettingsContextTreePage />} />
                     <Route path="resources" element={<SettingsResourcesPage />} />
                     <Route path="computers" element={<SettingsComputersPage />} />
@@ -364,7 +362,7 @@ export function App() {
                   <Route path="team/members" element={<Navigate to="/team" replace />} />
                   <Route path="team/agents" element={<Navigate to="/team" replace />} />
                   <Route path="team/invite" element={<Navigate to="/team" replace />} />
-                  <Route path="team/settings" element={<Navigate to="/settings/team" replace />} />
+                  <Route path="team/settings" element={<Navigate to="/settings/computers" replace />} />
                   <Route path="admin" element={<AdminRedirect />} />
                 </Route>
               </Route>

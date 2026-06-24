@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { OrgBrief } from "@first-tree/shared";
+import type { Organization, OrgBrief } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, useMemo, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -18,6 +18,7 @@ const ORGS: OrgBrief[] = [
 ];
 
 const clientMocks = vi.hoisted(() => ({ get: vi.fn() }));
+const orgMocks = vi.hoisted(() => ({ updateOrganization: vi.fn() }));
 
 // Mock api so the org list is deterministic, and stub the avatar + the two
 // dialogs so assertions key off real text, not identicon SVGs or portal chrome.
@@ -25,9 +26,23 @@ vi.mock("../../api/client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/client.js")>();
   return { ...actual, api: { ...actual.api, get: clientMocks.get } };
 });
+vi.mock("../../api/organizations.js", () => orgMocks);
 vi.mock("../avatar.js", () => ({ Avatar: () => <span data-testid="avatar" /> }));
 vi.mock("../invite-dialog.js", () => ({ InviteDialog: () => null }));
 vi.mock("../team-setup-modal.js", () => ({ TeamSetupModal: () => null }));
+
+function organization(overrides: Partial<Organization> = {}): Organization {
+  return {
+    id: overrides.id ?? "org-1",
+    name: overrides.name ?? "acme",
+    displayName: overrides.displayName ?? "Acme Robotics",
+    maxAgents: overrides.maxAgents ?? 0,
+    maxMessagesPerMinute: overrides.maxMessagesPerMinute ?? 0,
+    features: overrides.features ?? {},
+    createdAt: overrides.createdAt ?? "2026-05-28T12:00:00.000Z",
+    updatedAt: overrides.updatedAt ?? "2026-05-28T12:01:00.000Z",
+  };
+}
 
 function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
   let resolve!: (v: T) => void;
@@ -59,13 +74,52 @@ function buttonByText(scope: ParentNode, text: string): HTMLButtonElement | null
   return [...scope.querySelectorAll("button")].find((b) => b.textContent?.includes(text)) ?? null;
 }
 
+function buttonByLabel(scope: ParentNode, label: string): HTMLButtonElement | null {
+  return scope.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+}
+
 function anchorOf(container: ParentNode): HTMLButtonElement {
   const anchor = container.querySelector<HTMLButtonElement>('button[aria-haspopup="menu"]');
   if (!anchor) throw new Error("anchor missing");
   return anchor;
 }
 
-function Harness({ select }: { select: (id: string) => Promise<void> }) {
+async function setInputValue(element: HTMLInputElement, value: string): Promise<void> {
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    setter?.call(element, value);
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, data: value, inputType: "insertText" }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await flush();
+}
+
+async function submit(form: HTMLFormElement | null): Promise<void> {
+  if (!form) throw new Error("Expected form");
+  await act(async () => {
+    form.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+  });
+  await flush();
+}
+
+async function waitForText(container: ParentNode, text: string, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (container.textContent?.includes(text)) return;
+    await flush();
+  }
+  throw new Error(`Expected text "${text}"`);
+}
+
+function Harness({
+  select,
+  role = "admin",
+  refreshMe = async () => {},
+}: {
+  select: (id: string) => Promise<void>;
+  role?: "admin" | "member";
+  refreshMe?: () => Promise<void>;
+}) {
   // Fresh client per mount so the ['me-organizations'] cache never leaks across
   // tests (the single-team case swaps the mock and must not read a stale list).
   const queryClient = useMemo(() => new QueryClient({ defaultOptions: { queries: { retry: false } } }), []);
@@ -77,7 +131,7 @@ function Harness({ select }: { select: (id: string) => Promise<void> }) {
         isAuthenticated: true,
         meLoaded: true,
         organizationId,
-        role: "admin",
+        role,
         teamDisplayName: "Acme Robotics",
         user: { id: "u", displayName: "Gandy", username: "gandy", avatarUrl: null },
         switchingOrg,
@@ -86,9 +140,10 @@ function Harness({ select }: { select: (id: string) => Promise<void> }) {
           await select(id);
           setOrganizationId(id);
         },
+        refreshMe,
         logout: () => undefined,
       }) as unknown as Parameters<typeof AuthContext.Provider>[0]["value"],
-    [organizationId, switchingOrg, select],
+    [organizationId, switchingOrg, select, role, refreshMe],
   );
   return (
     <QueryClientProvider client={queryClient}>
@@ -101,12 +156,15 @@ function Harness({ select }: { select: (id: string) => Promise<void> }) {
   );
 }
 
-async function renderHarness(select: (id: string) => Promise<void>): Promise<{ container: HTMLElement; root: Root }> {
+async function renderHarness(
+  select: (id: string) => Promise<void>,
+  options: { role?: "admin" | "member"; refreshMe?: () => Promise<void> } = {},
+): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
   await act(async () => {
-    root.render(<Harness select={select} />);
+    root.render(<Harness select={select} {...options} />);
   });
   await flush();
   return { container, root };
@@ -115,6 +173,9 @@ async function renderHarness(select: (id: string) => Promise<void>): Promise<{ c
 beforeEach(() => {
   document.body.innerHTML = "";
   clientMocks.get.mockResolvedValue(ORGS);
+  orgMocks.updateOrganization.mockImplementation(async (_id: string, patch: Partial<Organization>) =>
+    organization({ ...patch }),
+  );
 });
 
 afterEach(() => {
@@ -130,6 +191,7 @@ describe("TeamSwitcher", () => {
 
     await click(anchorOf(container));
     expect(container.textContent).toContain("current team");
+    expect(buttonByLabel(container, "Edit team name")).not.toBeNull();
     expect(container.textContent).toContain("Switch team");
     expect(buttonByText(container, "Globex")).not.toBeNull();
     expect(buttonByText(container, "Initech")).not.toBeNull();
@@ -138,6 +200,63 @@ describe("TeamSwitcher", () => {
     expect(buttonByText(container, "Create new team")).not.toBeNull();
     expect(buttonByText(container, "Join with invite link")).not.toBeNull();
     expect(buttonByText(container, "Invite teammates")).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("lets admins rename the current team inline and refreshes auth state", async () => {
+    const refreshMe = vi.fn(async () => {});
+    const { container, root } = await renderHarness(
+      vi.fn(async () => {}),
+      { refreshMe },
+    );
+
+    await click(anchorOf(container));
+    await click(buttonByLabel(container, "Edit team name"));
+
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Team name"]');
+    if (!input) throw new Error("Team name input missing");
+    expect(input.value).toBe("Acme Robotics");
+
+    await setInputValue(input, "  Acme Labs  ");
+    await submit(container.querySelector("form"));
+
+    expect(orgMocks.updateOrganization).toHaveBeenCalledWith("org-1", { displayName: "Acme Labs" });
+    await waitForText(container, "Saved");
+    expect(anchorOf(container).textContent).toContain("Acme Labs");
+    expect(refreshMe).toHaveBeenCalledTimes(1);
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the rename form open and shows the server error when rename fails", async () => {
+    orgMocks.updateOrganization.mockRejectedValueOnce(new Error("rename failed"));
+    const { container, root } = await renderHarness(vi.fn(async () => {}));
+
+    await click(anchorOf(container));
+    await click(buttonByLabel(container, "Edit team name"));
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Team name"]');
+    if (!input) throw new Error("Team name input missing");
+
+    await setInputValue(input, "Broken");
+    await submit(container.querySelector("form"));
+
+    await waitForText(container, "rename failed");
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Team name"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not expose the team rename affordance to non-admin members", async () => {
+    const { container, root } = await renderHarness(
+      vi.fn(async () => {}),
+      { role: "member" },
+    );
+
+    await click(anchorOf(container));
+
+    expect(buttonByLabel(container, "Edit team name")).toBeNull();
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Team name"]')).toBeNull();
 
     await act(async () => root.unmount());
   });
