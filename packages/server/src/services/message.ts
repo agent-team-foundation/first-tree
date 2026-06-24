@@ -69,9 +69,51 @@ function validateFileContent(content: unknown): void {
   );
 }
 
+/**
+ * Placeholder sentinels that are never a legitimate whole message body. They
+ * are the residue of a half-built send — e.g. `chat send "$(cat plan.md
+ * 2>/dev/null || echo PLACEHOLDER)"` run before `plan.md` was written, which
+ * fires a real, irreversible message (and for `request`, a blocking human ask)
+ * carrying only the scaffold token. Matched case-insensitively against the
+ * ENTIRE trimmed body, so a message that merely mentions the word is untouched.
+ */
+const PLACEHOLDER_BODY_SENTINELS = new Set(["placeholder", "todo", "fixme", "tbd", "xxx"]);
+
+/**
+ * Guard a string message body before it is persisted and fanned out. A text
+ * body (text / markdown / request — the human-readable formats carry their
+ * content as a string) must be real content: not empty, not whitespace-only,
+ * and not a lone placeholder sentinel. This fails closed at the write boundary
+ * so a half-built send (an empty command substitution, a `|| echo PLACEHOLDER`
+ * fallback) surfaces as an error the caller must fix instead of a meaningless
+ * message — for a `request`, a blocking ask card the target human must skip.
+ */
+function validateTextBody(content: string, isRequest: boolean): void {
+  const trimmed = content.trim();
+  if (trimmed.length === 0) {
+    throw new BadRequestError(
+      isRequest
+        ? "An ask ('request') needs a non-empty body — the question/background IS the message content."
+        : "Message content cannot be empty or whitespace-only.",
+    );
+  }
+  if (PLACEHOLDER_BODY_SENTINELS.has(trimmed.toLowerCase())) {
+    throw new BadRequestError(
+      `Message content is just a placeholder ("${trimmed}") — this is almost always a half-built send ` +
+        "(e.g. a file read that ran before the file was written). Compose the real body, then send.",
+    );
+  }
+}
+
 function validateMessageContent(data: SendMessage): void {
   if (data.format === "file") {
     validateFileContent(data.content);
+    return;
+  }
+  // Non-string content (card / reference object shapes) is out of scope here;
+  // only string-bearing bodies are guarded against empty / placeholder sends.
+  if (typeof data.content === "string") {
+    validateTextBody(data.content, data.format === "request");
   }
 }
 

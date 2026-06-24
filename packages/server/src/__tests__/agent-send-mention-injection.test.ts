@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { messages } from "../db/schema/messages.js";
+import { BadRequestError } from "../errors.js";
 import { createChat } from "../services/chat.js";
 import { sendMessage } from "../services/message.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
@@ -373,18 +374,25 @@ describe("mention enforcement + content normalisation", () => {
       expect(result.message.content).toBe(`@${peerA.name} report`);
     });
 
-    it("emits just the prefix when content is the empty string", async () => {
+    it("rejects an empty-string body before mention normalization (fail-closed)", async () => {
+      // An empty body is rejected at the write boundary, so it never reaches
+      // mention normalization to be salvaged into a bare "@name". This is the
+      // degenerate-send class behind the PLACEHOLDER incident: `chat ask`/`send`
+      // always carry a target mention, so an empty `$(cat missing-file)` body
+      // would otherwise fan out a content-less "@name" card. See
+      // message-empty-body-validation.test.ts.
       const app = getApp();
       const uid = crypto.randomUUID().slice(0, 6);
       const { sender, peerA, chat } = await setupGroup(uid);
-      const result = await sendMessage(
-        app.db,
-        chat.id,
-        sender.agent.uuid,
-        { source: "api", format: "text", content: "", metadata: { mentions: [peerA.uuid] } },
-        { normalizeMentionsInContent: true },
-      );
-      expect(result.message.content).toBe(`@${peerA.name}`);
+      await expect(
+        sendMessage(
+          app.db,
+          chat.id,
+          sender.agent.uuid,
+          { source: "api", format: "text", content: "", metadata: { mentions: [peerA.uuid] } },
+          { normalizeMentionsInContent: true },
+        ),
+      ).rejects.toThrow(BadRequestError);
     });
 
     it("leaves non-string content untouched (cards, files, structured payloads)", async () => {
