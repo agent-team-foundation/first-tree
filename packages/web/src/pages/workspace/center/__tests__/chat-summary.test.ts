@@ -306,7 +306,7 @@ describe("ChatSummary", () => {
     container.remove();
   });
 
-  it("lets the summary body consume the wheel before driving the stream", async () => {
+  it("scrolls the summary body itself before driving the stream", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
     scrollEl.scrollTop = 0;
@@ -323,10 +323,41 @@ describe("ChatSummary", () => {
     Object.defineProperty(inner, "clientHeight", { value: 200, configurable: true });
     inner.scrollTop = 100;
 
-    // Wheel up: the body can still scroll up, so the stream must stay put.
+    // Wheel up: the body can still scroll up, so the body moves and the stream
+    // stays put.
     await act(async () => {
       panel.dispatchEvent(wheelEvent(-40));
     });
+    expect(inner.scrollTop).toBe(60);
+    expect(scrollEl.scrollTop).toBe(0);
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("scrolls the body for a wheel over the summary header, not just the body", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    scrollEl.scrollTop = 0;
+    const { container, root } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+    // The header control sits OUTSIDE the markdown body's event path; a wheel
+    // there must still drive the body while it has room (regression: target-
+    // unaware deferral to native scroll left the header strip locked).
+    const header = container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]');
+    if (!header) throw new Error("summary header button missing");
+    const inner = container.querySelector<HTMLElement>('[style*="46vh"]');
+    if (!inner) throw new Error("summary scroll body missing");
+    Object.defineProperty(inner, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(inner, "clientHeight", { value: 200, configurable: true });
+    inner.scrollTop = 0;
+
+    await act(async () => {
+      header.dispatchEvent(wheelEvent(120));
+    });
+    expect(inner.scrollTop).toBe(120);
     expect(scrollEl.scrollTop).toBe(0);
 
     await act(async () => root.unmount());

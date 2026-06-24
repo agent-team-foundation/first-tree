@@ -292,10 +292,18 @@ export function ChatSummary({
   // scroll container, and its only ancestor is the `overflow-hidden` center
   // column — so a wheel gesture over the summary has no scrollable target and
   // the conversation reads as "locked" (the markdown body only scrolls when its
-  // own content overflows). Bridge it: when the body can still scroll in the
-  // wheel's direction let it; otherwise drive the message stream so scrolling
-  // stays continuous across the summary↔stream seam (and scrolling down folds
-  // the summary via the existing sticky-collapse, same as scrolling the stream).
+  // own content overflows). Bridge it from a single listener on the whole panel:
+  // while the markdown body still has room in the wheel's direction, scroll IT;
+  // otherwise drive the message stream so scrolling stays continuous across the
+  // summary↔stream seam (and scrolling down folds the summary via the existing
+  // sticky-collapse, same as scrolling the stream).
+  //
+  // The body is scrolled EXPLICITLY rather than by deferring to native scroll:
+  // the listener fires for the whole panel (header bar + padding + body), but a
+  // wheel over the header/padding sits OUTSIDE the body's own event path, so
+  // native scrolling there finds no scrollable ancestor and would re-create the
+  // dead zone for that strip. Driving `inner` ourselves makes a wheel anywhere
+  // on the panel scroll the body uniformly.
   const panelRef = useRef<HTMLDivElement | null>(null);
   const innerScrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -311,8 +319,13 @@ export function ChatSummary({
       if (inner) {
         const atTop = inner.scrollTop <= 0;
         const atBottom = inner.scrollTop + inner.clientHeight >= inner.scrollHeight - 1;
-        // The markdown body can absorb this delta itself — let native scroll run.
-        if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBottom)) return;
+        // The markdown body still has room — scroll it (and suppress native
+        // scroll so a wheel directly over the body isn't applied twice).
+        if ((e.deltaY < 0 && !atTop) || (e.deltaY > 0 && !atBottom)) {
+          inner.scrollTop += e.deltaY;
+          e.preventDefault();
+          return;
+        }
       }
       stream.scrollTop += e.deltaY;
       e.preventDefault();
