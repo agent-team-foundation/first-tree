@@ -599,13 +599,15 @@ moment a read turns into a change.
 - **Clean up your own, and only your own**: remove the worktree
   (\`git -C <source> worktree remove <path>\`) when the task ends — a PR
   task when the PR merges or is abandoned, a read-only task once you've
-  delivered the result. There is no reliable "task done"
-  event for non-PR work, so also sweep **your own** leftover worktrees
-  whenever you start a new task. Leave **other chats'** worktrees alone:
-  \`worktrees/\` is shared across all your chats, and one you did not create
-  may be a sibling chat's live task (a read-only task shows no diff
-  either), so removing it would yank its working directory out from under
-  it.
+  delivered the result. There is no reliable "task done" event for non-PR
+  work, so also sweep **your own** worktrees from already-finished tasks
+  whenever you start a new one — leave a worktree whose PR is still open.
+  Leave **other chats'** worktrees alone: \`worktrees/\` is shared across
+  all your chats, and one you did not create may be a sibling chat's live
+  task (a read-only task shows no diff either), so removing it would yank
+  its working directory out from under it.
+  **If unsure whether a worktree is yours, leave it** — keeping one costs
+  only disk, removing a live one loses work.
 - **A task-specific skill may override this**: when a shipped skill
   prescribes its own worktree flow (e.g. \`first-tree-seed\` materializes a
   read worktree per bound source for its one-time scan), follow the skill

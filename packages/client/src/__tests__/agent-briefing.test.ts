@@ -489,6 +489,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // No literal `<placeholder>` for the home prefix — LLMs sometimes copy
     // those verbatim.
     expect(briefing).not.toContain("<agent-home>/worktrees/");
+    // Pin the behavior-load-bearing safety wording: weakening any of these
+    // must turn the test red (the most consequential text in the block).
+    expect(briefing).toContain("Clean up your own, and only your own");
+    expect(briefing).toContain("Leave **other chats'** worktrees alone");
+    expect(briefing).toContain("If unsure whether a worktree is yours, leave it");
+    expect(briefing).toContain("worktrees from already-finished tasks");
+    expect(briefing).toContain("Never reuse a previous task's worktree");
   });
 
   it("renders predeclared source repos with source-repos/ paths and upstream coordinates", () => {
