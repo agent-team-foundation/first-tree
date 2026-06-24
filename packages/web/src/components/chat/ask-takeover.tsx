@@ -240,12 +240,24 @@ export function AskTakeover({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [sending, canReply, onSkip, reply]);
 
-  const ftStyle = {
-    width: "100%",
+  // Visible chrome (border + fill + radius) lives on the WRAPPER, not the
+  // textarea: the textarea is painted transparent so the mention overlay
+  // behind it can draw the actual glyphs (PR 1256). An opaque textarea
+  // background sits *above* that overlay and hides the typed text — the
+  // white-on-white regression this restores. Mirrors chat-view's composer.
+  const fieldChrome = {
+    position: "relative" as const,
     border: "var(--hairline) solid var(--border-strong)",
     borderRadius: "var(--radius-input)",
     background: "var(--bg)",
-    color: "var(--fg)",
+  };
+
+  const ftStyle = {
+    width: "100%",
+    display: "block" as const,
+    boxSizing: "border-box" as const,
+    border: "none",
+    background: "transparent",
     fontFamily: "inherit",
     lineHeight: 1.5,
     padding: "var(--sp-2_5) var(--sp-3)",
@@ -266,7 +278,7 @@ export function AskTakeover({
    *  as the sole box on a free-text ask): mention autocomplete + highlight +
    *  image paste, with the text drawn by the mirror overlay. */
   const renderAnswerInput = (placeholder: string, minHeight: number) => (
-    <div style={{ position: "relative" }}>
+    <div style={fieldChrome}>
       <MentionAutocompletePopover
         trigger={mention.trigger}
         results={mention.results}

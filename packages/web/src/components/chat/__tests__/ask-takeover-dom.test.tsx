@@ -425,4 +425,23 @@ describe("AskTakeover", () => {
     expect(onSkip).not.toHaveBeenCalled();
     ta.removeEventListener("keydown", consume);
   });
+
+  it("free-text answer surface stays transparent so the mention overlay shows the typed text", async () => {
+    // Regression guard (PR 1256): the answer textarea is painted transparent and
+    // a mirror overlay behind it draws the glyphs. If the textarea keeps an
+    // opaque background it sits on top of the overlay and the typed text turns
+    // invisible — the white-on-white bug on the light theme. The visible chrome
+    // (border + fill) must live on the wrapper, not the textarea.
+    const c = await renderDom(
+      <AskTakeover body="# Concerns?" payload={{ multiSelect: false }} onReply={() => {}} onSkip={() => {}} />,
+    );
+    const ta = freeTextBox(c);
+    if (!ta) throw new Error("free-text input missing");
+    expect(ta.style.background).toBe("transparent");
+    expect(ta.style.color).toBe("transparent");
+    // The mirror overlay that actually paints the glyphs is a sibling.
+    expect(ta.parentElement?.querySelector("[aria-hidden]")).not.toBeNull();
+    // The opaque fill now lives on the wrapper so the field still reads as a box.
+    expect(ta.parentElement?.style.background).toBe("var(--bg)");
+  });
 });
