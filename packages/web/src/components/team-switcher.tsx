@@ -136,13 +136,16 @@ export function TeamSwitcher({
           aria-label={`Switch team, current: ${currentOrg.displayName}`}
           onClick={() => setOpen((v) => !v)}
           className={cn(
-            "inline-flex items-center transition-colors",
-            open ? "bg-[var(--bg-hover)]" : "bg-[var(--bg)] hover:bg-[var(--bg-hover)]",
+            "inline-flex items-center border transition-colors",
+            open
+              ? "border-[var(--border-strong)] bg-[var(--bg-hover)]"
+              : isCompact
+                ? "border-[var(--border)] bg-[var(--bg)] hover:bg-[var(--bg-hover)]"
+                : "border-transparent bg-[var(--bg)] hover:border-[var(--border)] hover:bg-[var(--bg-hover)]",
           )}
           style={{
             gap: "var(--sp-1_75)",
             padding: isCompact ? "var(--sp-1) var(--sp-1_25)" : "var(--sp-1) var(--sp-2) var(--sp-1) var(--sp-1_25)",
-            border: `var(--hairline) solid ${open ? "var(--border-strong)" : "var(--border)"}`,
             borderRadius: "var(--radius-input)",
             maxWidth: isCompact ? undefined : 185,
             cursor: "pointer",
