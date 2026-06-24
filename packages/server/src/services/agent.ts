@@ -17,7 +17,7 @@ import {
   runtimeProviderSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, count, desc, eq, getTableColumns, ilike, lt, ne, or } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
@@ -371,7 +371,7 @@ async function resolveFallbackManagerId(db: Database, orgId: string): Promise<st
 export async function createAgent(
   db: Database,
   data: CreateAgent & { managerId?: string },
-  options: { force?: boolean } = {},
+  options: { force?: boolean; adoptAsDelegateIfFirst?: boolean } = {},
 ) {
   const uuid = uuidv7();
   const name = data.name ?? null;
@@ -537,19 +537,28 @@ export async function createAgent(
       // without a manual trip to the profile editor. Runs inside this
       // transaction so the delegate is set atomically with the agent insert.
       // Guards keep it safe and unsurprising:
-      //   - only `type=agent` created through a user path (`data.managerId`
-      //     supplied) — excludes the human-bootstrap insert and the
-      //     system/webhook agent path (branch 3 omits `managerId`);
-      //   - only when the member has no delegate yet — never overwrites a
-      //     deliberate choice (incl. a delegate pointing at someone else's
-      //     org-visible agent set before they had any agent of their own);
-      //   - only their FIRST agent — the just-inserted row makes the count 1,
-      //     so a 2nd agent never steals the delegate.
+      //   - SELF-CREATED ONLY. `delegateMention` is a personal choice the
+      //     self-only API guard reserves to the member (an admin PATCHing
+      //     another member's delegate is rejected). The org agent route lets an
+      //     admin create an agent FOR another member, so gating on a resolved
+      //     managerId alone would let create-for-Bob silently set Bob's
+      //     delegate — the same write the PATCH guard forbids. The caller is
+      //     the only one who knows "this is my own create", so the route passes
+      //     `adoptAsDelegateIfFirst` true only when `managerId === scope.memberId`.
+      //     Every non-self path (admin-for-other, member bootstrap, system /
+      //     webhook) omits it and never triggers adoption.
+      //   - FIRST agent only — the just-inserted row makes the count 1, so a
+      //     2nd agent never steals the delegate.
+      //   - ONLY-IF-UNSET, atomically — the final UPDATE carries
+      //     `delegateMention IS NULL` in its WHERE, so two concurrent
+      //     first-creates can't both win on a stale read; the second's write
+      //     no-ops instead of clobbering the first. Never overwrites a
+      //     deliberate choice either.
       // The agent stays whatever visibility it was created with (private by
       // default); the picker and webhook routing both accept a private
       // delegate, so no visibility change is forced. Reversible: the member
       // can re-point or clear it anytime.
-      if (data.managerId && data.type === AGENT_TYPES.AGENT) {
+      if (options.adoptAsDelegateIfFirst && data.type === AGENT_TYPES.AGENT) {
         const [manager] = await tx
           .select({ humanAgentId: members.agentId })
           .from(members)
@@ -573,7 +582,10 @@ export async function createAgent(
                 ),
               );
             if ((tally?.value ?? 0) === 1) {
-              await tx.update(agents).set({ delegateMention: row.uuid }).where(eq(agents.uuid, human.uuid));
+              await tx
+                .update(agents)
+                .set({ delegateMention: row.uuid })
+                .where(and(eq(agents.uuid, human.uuid), isNull(agents.delegateMention)));
             }
           }
         }
