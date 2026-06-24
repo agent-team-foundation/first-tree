@@ -5,6 +5,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CapabilityEntry } from "@first-tree/shared";
 import { type ClaudeExecutableResolution, resolveClaudeCodeExecutable } from "../../handlers/claude-executable.js";
+import {
+  type ClaudeProviderFailure,
+  claudeFailureFromAssistantMessage,
+  claudeFailureFromSdkResult,
+} from "../../handlers/claude-provider-error.js";
+import { classifyProviderFailure } from "../provider-retry-policy.js";
 import { detectClaudeAuth } from "./claude-shared.js";
 import {
   type AuthPrecheckOutcome,
@@ -178,6 +184,21 @@ export function classifyClaudeSmokeFailure(message: string): SmokeOutcome {
   return { state: "error", error: text.length > 0 ? text : "smoke failed without output" };
 }
 
+export function classifyClaudeSmokeProviderFailure(failure: ClaudeProviderFailure): SmokeOutcome {
+  const classification = classifyProviderFailure(failure.signal.error, {
+    provider: "claude-code",
+    scope: "session_start",
+    source: "sdk",
+  });
+  if (classification.category === "credential") {
+    return { state: "unauthenticated", error: failure.messagePreview };
+  }
+  return {
+    state: "error",
+    error: failure.messagePreview.trim().length > 0 ? failure.messagePreview : "smoke failed without output",
+  };
+}
+
 /**
  * Real launch smoke through the exact code path the runtime uses: the SDK's
  * `query()` (which spawns the resolved binary, or its bundled native binary
@@ -211,17 +232,17 @@ export async function defaultClaudeSdkSmoke(binary: string | undefined): Promise
         ...(binary ? { pathToClaudeCodeExecutable: binary } : {}),
       },
     });
+    let pendingAssistantProviderFailure: ClaudeProviderFailure | null = null;
     for await (const message of q) {
+      const assistantFailure = claudeFailureFromAssistantMessage(message);
+      if (assistantFailure) pendingAssistantProviderFailure = assistantFailure;
       if (message.type !== "result") continue;
+      const providerFailure = claudeFailureFromSdkResult(message) ?? pendingAssistantProviderFailure;
+      pendingAssistantProviderFailure = null;
+      if (providerFailure) return classifyClaudeSmokeProviderFailure(providerFailure);
       if (message.subtype === "success" && !message.is_error) {
         return { state: "ok" };
       }
-      if (message.subtype === "success") {
-        // is_error=true: the CLI forwarded an API error string as the result.
-        return classifyClaudeSmokeFailure(message.result);
-      }
-      const detail = message.errors.length > 0 ? message.errors.join("; ") : message.subtype;
-      return classifyClaudeSmokeFailure(detail);
     }
     return { state: "error", error: "SDK smoke ended without a result message" };
   } catch (err) {

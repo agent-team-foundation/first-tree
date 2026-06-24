@@ -7,9 +7,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 /**
  * Regression test for the `claude_socket_closed` transient retry path.
  *
- * Reported bug: a Claude SDK "wrapped" stream-API error (subtype=`success`
- * payload whose `result` text is `"API Error: The socket connection was
- * closed unexpectedly..."`) was correctly classified `transient/
+ * Reported bug: a Claude SDK stream-API error (subtype=`success`,
+ * `is_error: true`, payload whose `result` text is `"API Error: The socket
+ * connection was closed unexpectedly..."`) was correctly classified `transient/
  * claude_socket_closed` and triggered the auto-resume branch — but the
  * old `respawnQuery()` only rebuilt the SDK query and left the new
  * `InputController` empty. With no user prompt in the iterable the SDK
@@ -90,14 +90,14 @@ function makeWrappedStreamErrorQuery(
           await waitForObservedInputs(attempt, requiredInputsForAttempt(attempt));
           await resultReleaseGates.get(attempt);
           yielded = true;
-          // Yield a "success" subtype with the wrapped API-error text —
-          // the handler's `detectStreamApiError` sniff will classify
-          // this as transient/claude_socket_closed and throw to drive
-          // the auto-resume path.
+          // Yield latest-SDK structured "success but error" result. The
+          // handler classifies it from `is_error` / provider fields, not from
+          // final-text regex sniffing.
           return {
             value: {
               type: "result",
               subtype: "success",
+              is_error: true,
               result: FAKE_API_ERROR_TEXT,
             },
             done: false,

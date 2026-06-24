@@ -71,7 +71,17 @@ describe("isClaudeAuthError", () => {
   });
 
   it("does NOT match other SDKAssistantMessageError codes", () => {
-    const nonAuth = ["billing_error", "rate_limit", "invalid_request", "server_error", "unknown", "max_output_tokens"];
+    const nonAuth = [
+      "oauth_org_not_allowed",
+      "billing_error",
+      "rate_limit",
+      "overloaded",
+      "invalid_request",
+      "model_not_found",
+      "server_error",
+      "unknown",
+      "max_output_tokens",
+    ];
     for (const code of nonAuth) {
       expect(isClaudeAuthError(code), `expected NOT auth-error: ${code}`).toBe(false);
     }

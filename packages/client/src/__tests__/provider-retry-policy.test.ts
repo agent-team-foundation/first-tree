@@ -70,6 +70,35 @@ describe("classifyProviderFailure", () => {
     });
   });
 
+  it("maps billing and account-balance errors to provider billing capacity before generic 403 credential", () => {
+    const cases = [
+      Object.assign(new Error("Failed to authenticate. API Error: 403 Insufficient account balance."), { status: 403 }),
+      Object.assign(new Error("Credit balance is too low"), { statusCode: 403 }),
+      Object.assign(new Error("billing_error"), { status: 403 }),
+    ];
+
+    for (const err of cases) {
+      const c = classifyProviderFailure(err, {
+        provider: "claude-code",
+        scope: "provider_turn",
+        source: "sdk",
+      });
+      expect(c).toMatchObject({ category: "provider_capacity", reasonCode: "provider_billing_limit" });
+      expect(
+        decideProviderRetry({
+          classification: c,
+          scope: "provider_turn",
+          attempt: 1,
+          replaySafety: "provider_entered",
+        }),
+      ).toMatchObject({
+        action: "stop",
+        reasonCode: "provider_billing_limit",
+        terminalKind: "capacity_wait_required",
+      });
+    }
+  });
+
   it("maps network and 5xx failures to transient_transport", () => {
     for (const err of [new Error("fetch failed"), Object.assign(new Error("upstream 503"), { status: 503 })]) {
       expect(classifyProviderFailure(err, { provider: "codex", scope: "provider_turn", source: "sdk" }).category).toBe(
@@ -86,6 +115,7 @@ describe("classifyProviderFailure", () => {
       [new Error("Codex runtime binary is missing"), "capability"],
       [new Error("sandbox approval rejected"), "configuration"],
       [new Error("context length exceeded"), "deterministic_input"],
+      [new Error("error_max_turns: exceeded max turns"), "deterministic_input"],
     ];
     for (const [err, category] of cases) {
       expect(classifyProviderFailure(err, { provider: "codex", scope: "provider_turn", source: "sdk" }).category).toBe(

@@ -318,6 +318,55 @@ describe("Claude smoke ↔ handler settings-source parity", () => {
     vi.doUnmock("@anthropic-ai/claude-agent-sdk");
     vi.resetModules();
   });
+
+  it("defaultClaudeSdkSmoke maps structured auth error results to unauthenticated", async () => {
+    vi.resetModules();
+    vi.doMock("@anthropic-ai/claude-agent-sdk", () => ({
+      query: () =>
+        (async function* () {
+          yield {
+            type: "result",
+            subtype: "success",
+            is_error: true,
+            api_error_status: 401,
+            result: "authentication_failed",
+          };
+        })(),
+    }));
+    const mod = await import("../runtime/capabilities/claude-code.js");
+
+    const out = await mod.defaultClaudeSdkSmoke(undefined);
+
+    expect(out).toEqual({ state: "unauthenticated", error: "authentication_failed" });
+    vi.doUnmock("@anthropic-ai/claude-agent-sdk");
+    vi.resetModules();
+  });
+
+  it("defaultClaudeSdkSmoke keeps structured billing errors as provider errors, not unauthenticated", async () => {
+    vi.resetModules();
+    vi.doMock("@anthropic-ai/claude-agent-sdk", () => ({
+      query: () =>
+        (async function* () {
+          yield {
+            type: "result",
+            subtype: "success",
+            is_error: true,
+            api_error_status: 403,
+            result: "Failed to authenticate. API Error: 403 Insufficient account balance.",
+          };
+        })(),
+    }));
+    const mod = await import("../runtime/capabilities/claude-code.js");
+
+    const out = await mod.defaultClaudeSdkSmoke(undefined);
+
+    expect(out).toEqual({
+      state: "error",
+      error: "Failed to authenticate. API Error: 403 Insufficient account balance.",
+    });
+    vi.doUnmock("@anthropic-ai/claude-agent-sdk");
+    vi.resetModules();
+  });
 });
 
 describe("probeClaudeCodeCapability", () => {

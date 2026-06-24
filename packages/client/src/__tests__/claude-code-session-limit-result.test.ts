@@ -19,6 +19,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => {
               value: {
                 type: "result",
                 subtype: "success",
+                is_error: true,
                 result: SESSION_LIMIT_RESULT,
               },
             };
@@ -112,8 +113,10 @@ describe("claude-code handler — session-limit success result", () => {
     await new Promise((r) => setImmediate(r));
 
     expect(forwardResult).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(logs.some((line) => line.includes("Claude Code session limit detected"))).toBe(true);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1].purpose).toBe("agent-final-text");
+    expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("capacity or usage limit");
+    expect(logs.some((line) => line.includes("Claude SDK provider failure"))).toBe(true);
 
     const providerPayloads = emitted
       .filter((event) => event.kind === "error")
@@ -134,7 +137,7 @@ describe("claude-code handler — session-limit success result", () => {
         (event) =>
           event.kind === "error" &&
           event.payload.source === "sdk" &&
-          event.payload.message.includes("Claude Code session limit"),
+          event.payload.message.includes("Claude SDK provider failure"),
       ),
     ).toBe(true);
     expect(emitted.some((event) => event.kind === "turn_end" && event.payload.status === "error")).toBe(true);

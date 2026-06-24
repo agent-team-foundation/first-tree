@@ -13,6 +13,7 @@ import type {
 import { query as claudeQuery } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentRuntimeConfigPayload,
+  ReplaySafety,
   RuntimeProvider,
   SessionEvent,
   SupportedImageMime,
@@ -46,6 +47,7 @@ import {
 } from "../runtime/handler.js";
 import { findImagePath } from "../runtime/image-store.js";
 import { InputController } from "../runtime/input-controller.js";
+import { ProviderAttempt, type ProviderAttemptSettlement } from "../runtime/provider-attempt.js";
 import {
   buildProviderRetryEvent,
   classifyProviderFailure,
@@ -66,6 +68,13 @@ import { acquireAgentHome, markWorkspaceInitComplete } from "../runtime/workspac
 import { chunkAssistantText } from "./assistant-text.js";
 import { formatAuthHint, isClaudeAuthError } from "./auth-error-hint.js";
 import { resolveClaudeCodeExecutable } from "./claude-executable.js";
+import {
+  type ClaudeProviderFailure,
+  claudeFailureFromAssistantMessage,
+  claudeFailureFromSdkResult,
+  formatClaudeProviderFailureNotice,
+  mergeClaudeProviderFailures,
+} from "./claude-provider-error.js";
 import { consumedErrorOutcome } from "./turn-settlement.js";
 
 type PendingAckMessage = {
@@ -262,6 +271,10 @@ function isThinkingBlock(block: unknown): block is ThinkingBlock {
   if (!block || typeof block !== "object") return false;
   const b = block as Record<string, unknown>;
   return b.type === "thinking";
+}
+
+function eventMakesReplayUnsafe(event: SessionEvent): boolean {
+  return event.kind === "assistant_text" || event.kind === "thinking" || event.kind === "tool_call";
 }
 
 type ResultMessage = {
@@ -844,6 +857,58 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     });
   }
 
+  function emitProviderTurnSettlementEvent(sessionCtx: SessionContext, settlement: ProviderAttemptSettlement): void {
+    sessionCtx.emitEvent({
+      kind: "error",
+      payload: {
+        source: "runtime",
+        message: encodeProviderRetryEventMessage(settlement.eventPayload),
+      },
+    });
+  }
+
+  async function sendClaudeProviderFailureNotice(
+    sessionCtx: SessionContext,
+    settlement: ProviderAttemptSettlement,
+  ): Promise<boolean> {
+    try {
+      await sessionCtx.sdk.sendMessage(sessionCtx.chatId, {
+        source: "api",
+        format: "text",
+        content: formatClaudeProviderFailureNotice(settlement.classification, settlement.messagePreview),
+        purpose: "agent-final-text",
+      });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      sessionCtx.emitEvent({
+        kind: "error",
+        payload: { source: "runtime", message: `claude provider failure notice delivery failed: ${msg}` },
+      });
+      return false;
+    }
+  }
+
+  function consumedReasonForProviderSettlement(
+    settlement: ProviderAttemptSettlement,
+  ): Parameters<typeof consumedErrorOutcome>[0] {
+    const decision = settlement.decision;
+    if (decision.action !== "stop") return settlement.classification.reasonCode;
+    if (decision.terminalKind === "exhausted") return "provider_retry_exhausted";
+    return decision.reasonCode;
+  }
+
+  function settleClaudeProviderFailure(failure: ClaudeProviderFailure): ProviderAttemptSettlement | null {
+    const attempt = new ProviderAttempt({
+      provider: runtimeProvider,
+      scope: "provider_turn",
+      source: "sdk",
+      ...(failure.signal.replaySafety ? { replaySafety: failure.signal.replaySafety } : {}),
+    });
+    attempt.recordSignal(failure.signal);
+    return attempt.settle({ attempt: retryCount + 1 });
+  }
+
   async function toSDKUserMessage(
     message: SessionMessage,
     sessionCtx: SessionContext,
@@ -1400,8 +1465,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
   }
 
   async function consumeOutput(sessionCtx: SessionContext): Promise<void> {
+    let turnHadUserVisibleOutput = false;
     const toolCallProcessor = createToolCallProcessor(
-      (event) => sessionCtx.emitEvent(event),
+      (event) => {
+        if (eventMakesReplayUnsafe(event)) turnHadUserVisibleOutput = true;
+        sessionCtx.emitEvent(event);
+      },
       {
         path: contextTreePath,
         repoUrl: contextTreeRepoUrl,
@@ -1432,8 +1501,13 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // Hoisted out of the try block so the outer catch's reentry preserves it
     // across the resume boundary.
     let authHintEmitted = false;
+    let pendingAssistantProviderFailure: ClaudeProviderFailure | null = null;
+    const currentTurnReplaySafety = (): ReplaySafety => (turnHadUserVisibleOutput ? "user_visible" : "pre_visible");
+    const resetTurnReplaySafety = (): void => {
+      turnHadUserVisibleOutput = false;
+    };
     try {
-      while (true) {
+      queryLoop: while (true) {
         if (!currentQuery) return;
 
         try {
@@ -1455,10 +1529,74 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 payload: { source: "sdk", message: formatAuthHint("claude-code", authFailure.rawMessage) },
               });
             }
+            const assistantProviderFailure = claudeFailureFromAssistantMessage(message);
+            if (assistantProviderFailure) pendingAssistantProviderFailure = assistantProviderFailure;
 
             if (isResultMessage(message)) {
               const providerEnteredPrefix = pendingProviderEnteredPrefix();
               emitTokenUsageFromResult(message, sessionCtx);
+              const providerFailure = mergeClaudeProviderFailures({
+                resultFailure: claudeFailureFromSdkResult(message),
+                assistantFailure: pendingAssistantProviderFailure,
+                ...(turnHadUserVisibleOutput ? { replaySafety: "user_visible" as const } : {}),
+              });
+              pendingAssistantProviderFailure = null;
+              if (providerFailure) {
+                const settlement = settleClaudeProviderFailure(providerFailure);
+                if (settlement) {
+                  sessionCtx.log(
+                    `Claude SDK provider failure (${settlement.classification.category}/${settlement.classification.reasonCode}): ${settlement.messagePreview}`,
+                  );
+                  if (settlement.decision.action === "retry") {
+                    if (!claudeSessionId) {
+                      throw new StreamApiTransientError(settlement.messagePreview);
+                    }
+                    retryCount = settlement.decision.attempt;
+                    emitProviderTurnSettlementEvent(sessionCtx, settlement);
+                    sessionCtx.log(`Attempting auto-resume (retry ${retryCount}/${providerTurnMaxRetries})`);
+                    toolCallProcessor.flush();
+                    try {
+                      respawnQuery(claudeSessionId, sessionCtx);
+                    } catch (resumeErr) {
+                      const resumeMsg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr);
+                      sessionCtx.log(`Auto-resume failed after Claude SDK provider failure: ${resumeMsg}`);
+                      sessionCtx.emitEvent({
+                        kind: "error",
+                        payload: { source: "runtime", message: `Auto-resume failed: ${resumeMsg.slice(0, 800)}` },
+                      });
+                      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                      await ackTurnClose("error", "auto_resume_failed_notice_posted", providerEnteredPrefix);
+                      retryBufferedMessages("claude_auto_resume_failed_tail_recovery");
+                      failFatalSessionForRecovery(sessionCtx, "claude_auto_resume_failed");
+                      return;
+                    }
+                    continue queryLoop;
+                  }
+
+                  emitProviderTurnSettlementEvent(sessionCtx, settlement);
+                  if (!(authHintEmitted && settlement.classification.category === "credential")) {
+                    sessionCtx.emitEvent({
+                      kind: "error",
+                      payload: {
+                        source: "sdk",
+                        message: `Claude SDK provider failure (${settlement.classification.reasonCode}): ${settlement.messagePreview}`,
+                      },
+                    });
+                  }
+                  sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                  retryCount = 0;
+                  const noticePosted = await sendClaudeProviderFailureNotice(sessionCtx, settlement);
+                  if (!noticePosted) {
+                    retryBufferedMessages("claude_provider_failure_notice_delivery_failed");
+                    failFatalSessionForRecovery(sessionCtx, "claude_provider_failure_notice_delivery_failed");
+                    return;
+                  }
+                  await ackTurnClose("error", consumedReasonForProviderSettlement(settlement), providerEnteredPrefix);
+                  resetTurnReplaySafety();
+                  continue;
+                }
+              }
+
               if (message.subtype === "success") {
                 // Close out the turn. The result text is already captured as
                 // `assistant_text` events; `forwardResult` no longer delivers
@@ -1473,154 +1611,46 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                 // live events.
                 if (message.result && sessionCtx.chatId) {
                   const resultText = message.result;
-                  const sessionLimit = detectClaudeSessionLimitResult(resultText);
-                  if (sessionLimit) {
-                    const classification = classifyProviderFailure(new Error(sessionLimit.message), {
-                      provider: runtimeProvider,
-                      scope: "provider_turn",
-                      source: "stream",
-                    });
-                    const decision = decideProviderRetry({
-                      classification,
-                      scope: "provider_turn",
-                      attempt: 1,
-                      replaySafety: "provider_entered",
-                    });
-                    sessionCtx.log(
-                      `Claude Code session limit detected (${classification.category}/${classification.reasonCode}): ${sessionLimit.message}`,
-                    );
-                    emitProviderTurnRetryEvent(
-                      sessionCtx,
-                      "provider_failure_terminal",
-                      classification,
-                      decision,
-                      sessionLimit.message,
-                    );
+                  // Genuine success — reset retry budget for the next turn.
+                  retryCount = 0;
+                  try {
+                    // Turn-completion hook. The agent's text is already
+                    // captured as `assistant_text` events above; `forwardResult`
+                    // no longer delivers it to chat (the per-turn final-text
+                    // mirror is retired — see runtime/result-sink.ts), it just
+                    // closes out the turn trigger.
+                    await sessionCtx.forwardResult(resultText);
+                    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
+                    // Turn closed cleanly — drain in-flight inbox entries.
+                    await ackTurnClose("success", "provider_clean_error", providerEnteredPrefix);
+                    resetTurnReplaySafety();
+                  } catch (err) {
+                    const reason = err instanceof Error ? err.message : String(err);
+                    sessionCtx.log(`Failed to forward result: ${reason}`);
+                    const preview = resultText.slice(0, 1500);
+                    const forwardErrMessage = `Result forward failed: ${reason}\n---\n${preview}`.slice(0, 2000);
                     sessionCtx.emitEvent({
                       kind: "error",
-                      payload: {
-                        source: "sdk",
-                        message: `Claude Code session limit: ${sessionLimit.message}`,
-                      },
+                      payload: { source: "runtime", message: forwardErrMessage },
                     });
                     sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
+                    // A failure in the completion hook is treated as terminal
+                    // for this turn — ack so we don't loop on redelivery. The
+                    // hook only closes the turn trigger now (the final-text
+                    // mirror is retired, so there is no chat-delivery step to
+                    // fail); a throw here is unexpected, but we still degrade
+                    // gracefully. If recovery is needed the user can retry by
+                    // sending a new message.
+                    //
+                    // Reset retryCount along with the success branch above:
+                    // the SDK actually returned a clean `result` here (any
+                    // failure is in our own turn-completion plumbing, not the
+                    // model), so the next turn should not inherit the prior
+                    // turn's transient-retry counter when an unrelated future
+                    // stream error fires.
                     retryCount = 0;
-                    await ackTurnClose("error", decision.reasonCode, providerEnteredPrefix);
-                    continue;
-                  }
-                  // Bug 6: SDK sometimes packages its own catch'd API error
-                  // as a `result.subtype === "success"` payload. Sniff it so
-                  // we surface an error turn instead of silently closing the
-                  // turn as a clean success.
-                  const sniff = detectStreamApiError(resultText);
-                  if (sniff) {
-                    const classification = classifyProviderFailure(new Error(sniff.message), {
-                      provider: runtimeProvider,
-                      scope: "provider_turn",
-                      source: "stream",
-                    });
-                    const decision = decideProviderRetry({
-                      classification,
-                      scope: "provider_turn",
-                      attempt: retryCount + 1,
-                      replaySafety: "pre_visible",
-                    });
-                    sessionCtx.log(
-                      `Stream API error detected (${classification.category}/${classification.reasonCode}): ${sniff.message}`,
-                    );
-                    // Design §6.1: emit `resilience.stream.api_error_detected`
-                    // on BOTH transient and permanent paths via the closed-kind
-                    // bridge (encoded into the `error` event message).
-                    sessionCtx.emitEvent({
-                      kind: "error",
-                      payload: {
-                        source: "runtime",
-                        message: `resilience.stream.api_error_detected: ${JSON.stringify({
-                          reasonCode: classification.reasonCode,
-                          category: classification.category,
-                          messagePreview: sniff.message.slice(0, 200),
-                        })}`,
-                      },
-                    });
-                    if (decision.action === "retry") {
-                      emitProviderTurnRetryEvent(
-                        sessionCtx,
-                        "provider_retry_scheduled",
-                        classification,
-                        decision,
-                        sniff.message,
-                      );
-                      // Re-throw to drive the outer catch's auto-resume path
-                      // (retry counter + self-resume via handler.resume).
-                      throw new StreamApiTransientError(sniff.message);
-                    }
-                    // Permanent (401/403) OR retries exhausted: surface the
-                    // failure as an error event + error turn, and do NOT run
-                    // the success/completion path for this turn.
-                    emitProviderTurnRetryEvent(
-                      sessionCtx,
-                      decision.terminalKind === "exhausted" ? "provider_retry_exhausted" : "provider_failure_terminal",
-                      classification,
-                      decision,
-                      sniff.message,
-                    );
-                    sessionCtx.emitEvent({
-                      kind: "error",
-                      payload: {
-                        source: "sdk",
-                        message: `Claude API error (${classification.reasonCode}): ${sniff.message}`,
-                      },
-                    });
-                    sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
-                    // Permanent stream API failure — ack so the server
-                    // doesn't redeliver a message that would just produce
-                    // the same error. Retry was exhausted upstream.
-                    await ackTurnClose("error", "stream_api_error_posted", providerEnteredPrefix);
-                  } else {
-                    // Genuine success — reset retry budget for the next turn.
-                    // Do NOT reset on the sniff-hit branches above: a wrapped
-                    // transient API error masquerades as `subtype: "success"`
-                    // and we MUST let `retryCount` accumulate so MAX_RETRIES
-                    // can fire and break us out of an unhealing transient
-                    // loop (rate limit / socket closed / etc.).
-                    retryCount = 0;
-                    try {
-                      // Turn-completion hook. The agent's text is already
-                      // captured as `assistant_text` events above; `forwardResult`
-                      // no longer delivers it to chat (the per-turn final-text
-                      // mirror is retired — see runtime/result-sink.ts), it just
-                      // closes out the turn trigger.
-                      await sessionCtx.forwardResult(resultText);
-                      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
-                      // Turn closed cleanly — drain in-flight inbox entries.
-                      await ackTurnClose("success", "provider_clean_error", providerEnteredPrefix);
-                    } catch (err) {
-                      const reason = err instanceof Error ? err.message : String(err);
-                      sessionCtx.log(`Failed to forward result: ${reason}`);
-                      const preview = resultText.slice(0, 1500);
-                      const forwardErrMessage = `Result forward failed: ${reason}\n---\n${preview}`.slice(0, 2000);
-                      sessionCtx.emitEvent({
-                        kind: "error",
-                        payload: { source: "runtime", message: forwardErrMessage },
-                      });
-                      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
-                      // A failure in the completion hook is treated as terminal
-                      // for this turn — ack so we don't loop on redelivery. The
-                      // hook only closes the turn trigger now (the final-text
-                      // mirror is retired, so there is no chat-delivery step to
-                      // fail); a throw here is unexpected, but we still degrade
-                      // gracefully. If recovery is needed the user can retry by
-                      // sending a new message.
-                      //
-                      // Reset retryCount along with the success branch above:
-                      // the SDK actually returned a clean `result` here (any
-                      // failure is in our own turn-completion plumbing, not the
-                      // model), so the next turn should not inherit the prior
-                      // turn's transient-retry counter when an unrelated future
-                      // stream error fires.
-                      retryCount = 0;
-                      await ackTurnClose("error", "forward_failed", providerEnteredPrefix);
-                    }
+                    await ackTurnClose("error", "forward_failed", providerEnteredPrefix);
+                    resetTurnReplaySafety();
                   }
                 } else {
                   // No result text to forward (edge case) — still close the turn.
@@ -1628,23 +1658,8 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                   retryCount = 0;
                   sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "success" } });
                   await ackTurnClose("success", "provider_clean_error", providerEnteredPrefix);
+                  resetTurnReplaySafety();
                 }
-              } else {
-                const errors = message.errors ? message.errors.join("; ") : message.subtype;
-                const errorLog = `Query result error: ${errors} (subtype=${message.subtype}, turns=${message.num_turns ?? "?"}, duration=${message.duration_ms ?? "?"}ms)`;
-                sessionCtx.log(errorLog);
-                // If we already emitted an auth-failure hint earlier in this
-                // turn (typed `authentication_failed` on an assistant /
-                // api_retry / auth_status message), skip the raw SDK error
-                // emit so the timeline shows the actionable hint instead of
-                // a redundant opaque second line.
-                if (!authHintEmitted) {
-                  sessionCtx.emitEvent({ kind: "error", payload: { source: "sdk", message: errors } });
-                }
-                sessionCtx.emitEvent({ kind: "turn_end", payload: { status: "error" } });
-                // SDK reported a turn-level error (non-success subtype):
-                // redelivery would just hit the same error — ack.
-                await ackTurnClose("error", "provider_clean_error", providerEnteredPrefix);
               }
               // Reset the auth-hint flag only on a SUCCESSFUL result. This
               // gives a clean slate for the next turn once auth is clearly
@@ -1682,7 +1697,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
             classification,
             scope: "provider_turn",
             attempt: retryCount + 1,
-            replaySafety: "pre_visible",
+            replaySafety: currentTurnReplaySafety(),
           });
 
           if (decision.action !== "retry" || !claudeSessionId) {
