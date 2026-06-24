@@ -31,7 +31,7 @@ export type CreateAgentArgs = {
  * `visibility`) and waits for it to come online on the connected computer.
  *
  * Same two-phase shape the legacy Step2Body used: POST `/agents`, then poll
- * `client-status` until the runtime reports online (or a 30s timeout). The
+ * `client-status` until the runtime reports online (or a 60s timeout). The
  * agent is created without any project binding — the kickoff step attaches
  * the source repo later, so a slow GitHub call can never block teammate
  * creation. On success, `onOnline(uuid)` fires once.
