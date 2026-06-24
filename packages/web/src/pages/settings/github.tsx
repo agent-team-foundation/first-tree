@@ -23,7 +23,7 @@ export function SettingsGithubPage() {
 
   return (
     <>
-      <PageHeader title="GitHub" subtitle="Connected GitHub App and granted permissions" />
+      <PageHeader title="GitHub" subtitle="Connected GitHub App" />
       <div style={{ padding: "var(--sp-2) var(--sp-5) var(--sp-7)" }}>
         <GithubAppInstallationPanel />
       </div>

@@ -121,6 +121,12 @@ const TeamSwitcherPreviewPage = import.meta.env.DEV
     )
   : null;
 
+const SettingsGithubPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/settings-github-preview.js").then((module) => ({ default: module.SettingsGithubPreviewPage })),
+    )
+  : null;
+
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
 // above this ships in prod too, so it can be opened on a deployed URL — it has
 // no auth-gated data, only tokens and `components/ui` primitives.
@@ -250,6 +256,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <ChatSummaryPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {SettingsGithubPreviewPage ? (
+                <Route
+                  path="/preview/settings-github"
+                  element={
+                    <Suspense fallback={null}>
+                      <SettingsGithubPreviewPage />
                     </Suspense>
                   }
                 />

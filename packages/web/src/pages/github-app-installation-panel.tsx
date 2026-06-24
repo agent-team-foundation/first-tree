@@ -1,13 +1,15 @@
 import type { GithubAppInstallationOutput } from "@first-tree/shared";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Building2, ExternalLink, PauseCircle, User } from "lucide-react";
+import { Building2, ChevronRight, ExternalLink, PauseCircle, User } from "lucide-react";
+import { useState } from "react";
 import { ApiError } from "../api/client.js";
 import { getGithubAppInstallation, getGithubAppInstallUrl } from "../api/github-app.js";
 import { useAuth } from "../auth/auth-context.js";
-import { Section } from "../components/ui/section.js";
 
 /**
- * Settings → Integrations panel for the GitHub App installation.
+ * Settings → GitHub panel for the GitHub App installation. The page header
+ * (`settings/github.tsx`) already titles the surface "GitHub", so this panel
+ * stays untitled — a single hairline rule under the header opens it.
  *
  * Three visible states:
  *
@@ -15,9 +17,12 @@ import { Section } from "../components/ui/section.js";
  *   - **Not bound**   — 404 from the admin API. Renders an "Install on
  *                       GitHub" CTA that triggers the OAuth + install
  *                       redirect via `/auth/github/start`.
- *   - **Bound**       — shows account login + type + permissions block +
- *                       subscribed events + a "Manage on GitHub" link
- *                       that opens the right per-account-type URL.
+ *   - **Bound**       — account login + type and a "Manage on GitHub" link.
+ *                       The granted permissions, subscribed events, and
+ *                       installation id are tucked behind a collapsed
+ *                       "Connection details" disclosure — present for the
+ *                       admin who wants to audit scope, out of the way by
+ *                       default.
  *
  * Suspended installations get a prominent "suspended upstream" banner —
  * webhook delivery is paused on GitHub's side and the binding is
@@ -32,29 +37,30 @@ export function GithubAppInstallationPanel() {
     enabled: !!organizationId,
   });
 
-  return (
-    <Section
-      title="GitHub App"
-      description="One installation unlocks user sign-in, webhook ingestion, and (later) server-side write access."
-    >
-      {installationQuery.isLoading ? (
-        <div className="text-body" style={{ color: "var(--fg-3)" }}>
-          Loading…
-        </div>
-      ) : installationQuery.error ? (
-        <div className="text-body" style={{ color: "var(--state-error)" }}>
-          {installationQuery.error instanceof Error ? installationQuery.error.message : "Failed to load installation"}
-        </div>
-      ) : installationQuery.data == null ? (
-        // `null` (404 — no install bound) and `undefined` (query disabled
-        // because organizationId hasn't loaded) both render the empty
-        // state; the loading branch above already caught the in-flight case.
-        <NotInstalledState organizationId={organizationId} />
-      ) : (
-        <InstalledState data={installationQuery.data} />
-      )}
-    </Section>
-  );
+  // Only the bound card draws a top hairline (it anchors "Connected as"); the
+  // loading / error / not-installed states sit flush under the page header so
+  // the rule never floats above an unheadinged CTA or spinner.
+  if (installationQuery.isLoading) {
+    return (
+      <div className="text-body" style={{ color: "var(--fg-3)" }}>
+        Loading…
+      </div>
+    );
+  }
+  if (installationQuery.error) {
+    return (
+      <div className="text-body" style={{ color: "var(--state-error)" }}>
+        {installationQuery.error instanceof Error ? installationQuery.error.message : "Failed to load installation"}
+      </div>
+    );
+  }
+  // `null` (404 — no install bound) and `undefined` (query disabled because
+  // organizationId hasn't loaded) both render the empty state; the loading
+  // branch above already caught the in-flight case.
+  if (installationQuery.data == null) {
+    return <NotInstalledState organizationId={organizationId} />;
+  }
+  return <InstalledState data={installationQuery.data} />;
 }
 
 function NotInstalledState({ organizationId }: { organizationId: string | null }) {
@@ -137,9 +143,16 @@ function NotInstalledState({ organizationId }: { organizationId: string | null }
 
 function InstalledState({ data }: { data: GithubAppInstallationOutput }) {
   const AccountIcon = data.accountType === "Organization" ? Building2 : User;
-  const permissionEntries = Object.entries(data.permissions);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--sp-4)" }}>
+    <div
+      style={{
+        borderTop: "var(--hairline) solid var(--border)",
+        paddingTop: "var(--sp-4)",
+        display: "flex",
+        flexDirection: "column",
+        gap: "var(--sp-4)",
+      }}
+    >
       {data.suspended && <SuspendedBanner />}
 
       <div>
@@ -165,44 +178,7 @@ function InstalledState({ data }: { data: GithubAppInstallationOutput }) {
         </div>
       </div>
 
-      {permissionEntries.length > 0 && (
-        <div>
-          <div className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
-            Permissions granted
-          </div>
-          <ul
-            className="text-body"
-            style={{
-              listStyle: "none",
-              padding: 0,
-              margin: 0,
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: "var(--sp-1)",
-              color: "var(--fg-2)",
-            }}
-          >
-            {permissionEntries.map(([key, value]) => (
-              <li key={key} className="mono">
-                {key}: <strong style={{ color: "var(--fg)" }}>{value}</strong>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {data.events.length > 0 && (
-        <div>
-          <div className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
-            Subscribed events
-          </div>
-          <div className="text-body mono" style={{ color: "var(--fg-2)" }}>
-            {data.events.join(", ")}
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center" style={{ gap: "var(--sp-2)" }}>
+      <div>
         <a
           href={data.manageUrl}
           target="_blank"
@@ -220,10 +196,99 @@ function InstalledState({ data }: { data: GithubAppInstallationOutput }) {
           Manage on GitHub
           <ExternalLink className="h-3 w-3" />
         </a>
-        <span className="text-label" style={{ color: "var(--fg-3)" }}>
-          Installation #{data.installationId}
-        </span>
       </div>
+
+      <ConnectionDetails data={data} />
+    </div>
+  );
+}
+
+/**
+ * Collapsed-by-default disclosure for the developer-facing connection
+ * metadata: the granted permission scopes, the subscribed webhook events,
+ * and the installation id. Kept off the default view (most admins only need
+ * "who's connected" + Manage) but one click away for scope auditing. A plain
+ * `aria-expanded` button — there's no shared collapsible primitive in this app,
+ * and the controlled toggle keeps the chevron and the mounted content in
+ * lockstep.
+ */
+function ConnectionDetails({ data }: { data: GithubAppInstallationOutput }) {
+  const [open, setOpen] = useState(false);
+  const permissionEntries = Object.entries(data.permissions);
+  const regionId = "github-connection-details";
+
+  return (
+    <div style={{ borderTop: "var(--hairline) solid var(--border)", paddingTop: "var(--sp-3)" }}>
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-controls={open ? regionId : undefined}
+        className="inline-flex items-center text-label"
+        style={{
+          gap: "var(--sp-1)",
+          color: "var(--fg-3)",
+          background: "transparent",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+        }}
+      >
+        <ChevronRight
+          aria-hidden
+          className="h-3 w-3 transition-transform"
+          style={{ transform: open ? "rotate(90deg)" : "none" }}
+        />
+        Connection details
+      </button>
+
+      {open && (
+        <div
+          id={regionId}
+          style={{ display: "flex", flexDirection: "column", gap: "var(--sp-3)", marginTop: "var(--sp-3)" }}
+        >
+          {permissionEntries.length > 0 && (
+            <div>
+              <div className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
+                Permissions granted
+              </div>
+              <ul
+                className="text-body"
+                style={{
+                  listStyle: "none",
+                  padding: 0,
+                  margin: 0,
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "var(--sp-1)",
+                  color: "var(--fg-2)",
+                }}
+              >
+                {permissionEntries.map(([key, value]) => (
+                  <li key={key} className="mono">
+                    {key}: <strong style={{ color: "var(--fg)" }}>{value}</strong>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {data.events.length > 0 && (
+            <div>
+              <div className="text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
+                Subscribed events
+              </div>
+              <div className="text-body mono" style={{ color: "var(--fg-2)" }}>
+                {data.events.join(", ")}
+              </div>
+            </div>
+          )}
+
+          <span className="text-label" style={{ color: "var(--fg-3)" }}>
+            Installation #{data.installationId}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
