@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type {
+  AgentRuntimeConfig,
   InboxDeliverFrame,
   InboxEntryWithMessage,
   RuntimeState,
@@ -14,8 +15,40 @@ import type { RegisterResult } from "../sdk.js";
 import { type AgentConfigCache, createAgentConfigCache } from "./agent-config-cache.js";
 import { resolveAgentContextTreeBinding } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
+import { clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./error-taxonomy.js";
 import type { HandlerFactory } from "./handler.js";
 import { SessionManager } from "./session-manager.js";
+
+/**
+ * Max attempts to fetch the agent's runtime config during bring-up before a
+ * sustained transient failure aborts the bind. With the taxonomy's transient
+ * backoff (1s base, exponential) this spans ~2 minutes of patient retry —
+ * far beyond the SDK transport layer's ~1.5s budget, so a brief server blip
+ * self-heals without a daemon restart, while a genuinely-down server still
+ * gives up in bounded time instead of blocking bring-up forever.
+ */
+const MAX_CONFIG_FETCH_ATTEMPTS = 8;
+
+/**
+ * Sleep `ms`, resolving early if `signal` aborts. Lets a stop()/unbind during
+ * the bring-up retry window interrupt the backoff immediately instead of
+ * waiting out the full delay. Resolves (never rejects); callers re-check
+ * `signal.aborted` after awaiting.
+ */
+function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0 || signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 export type AgentSlotConfig = {
   name: string;
@@ -56,6 +89,12 @@ export class AgentSlot {
   private listeners: ConnectionListener[] = [];
   private stopping: Promise<void> | null = null;
   /**
+   * Aborts an in-flight bring-up config-fetch retry (see
+   * {@link loadAgentConfigWithRetry}) so a stop()/unbind during the backoff
+   * window doesn't have to wait out the current delay. Created in `start()`.
+   */
+  private bringupAbort: AbortController | null = null;
+  /**
    * The inbox this slot's agent owns — used to filter `inbox:deliver`
    * frames addressed to other agents on the same client. Captured at
    * `start()` from `sdk.register()`.
@@ -89,6 +128,7 @@ export class AgentSlot {
   }
 
   async start(): Promise<RegisterResult> {
+    this.bringupAbort = new AbortController();
     // Attach listeners BEFORE `bindAgent` so the server's bind-time
     // reset+drain push (which fires within ~1ms of the `agent:bound`
     // response on the server side) never lands on a listener-less
@@ -180,14 +220,8 @@ export class AgentSlot {
       }
 
       this.agentConfigCache = createAgentConfigCache({ sdk, log: this.logger });
-      try {
-        const cfg = await this.agentConfigCache.refresh(agent.agentId);
-        this.logger.info({ version: cfg.version }, "runtime config loaded");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        this.logger.error({ err }, "failed to fetch agent config — bind aborted");
-        throw new Error(`First Tree server unreachable while loading agent config: ${msg}`);
-      }
+      const cfg = await this.loadAgentConfigWithRetry(agent.agentId);
+      this.logger.info({ version: cfg.version }, "runtime config loaded");
 
       this.inboxId = agent.inboxId;
       // Per-agent home — also the parent of the agent-managed Context Tree
@@ -302,6 +336,68 @@ export class AgentSlot {
     }
   }
 
+  /**
+   * Fetch the agent's runtime config during bring-up, retrying transient
+   * failures with capped exponential backoff instead of killing the slot on
+   * the first error. This fetch runs only after the WebSocket has connected
+   * and the agent has bound, so a failure here is almost always a brief server
+   * blip (5xx, a slow PG query, a network stutter) — the same class of failure
+   * {@link ClientConnection.connect} already rides out with an in-process retry
+   * loop. Pre-fix, one blip threw, aborted the bind, and left the agent offline
+   * until a daemon restart — a root cause of onboarding's "unanswered first
+   * chat".
+   *
+   * Transient failures retry up to {@link MAX_CONFIG_FETCH_ATTEMPTS}; permanent
+   * or degraded failures (4xx auth / not-found, classified by the shared error
+   * taxonomy) abort immediately with a clear reason rather than retrying a
+   * request that cannot succeed.
+   */
+  private async loadAgentConfigWithRetry(agentId: string): Promise<AgentRuntimeConfig> {
+    const cache = this.agentConfigCache;
+    if (!cache) throw new Error("agent config cache not initialised");
+    const signal = this.bringupAbort?.signal;
+    let attempt = 0;
+    while (true) {
+      try {
+        const cfg = await cache.refresh(agentId);
+        // A stop()/unbind may have fired while the fetch was in flight (the
+        // retry window is up to ~2 min); don't build a live session for a slot
+        // that is already tearing down.
+        if (signal?.aborted) throw new Error("agent config fetch aborted — slot stopping");
+        return cfg;
+      } catch (err) {
+        if (signal?.aborted) throw new Error("agent config fetch aborted — slot stopping");
+        attempt++;
+        const classification = classify(err, { source: "config" });
+        if (classification.kind !== ERROR_KINDS.TRANSIENT) {
+          this.logger.error(
+            { err, reasonCode: classification.reasonCode },
+            "agent config fetch rejected — bind aborted",
+          );
+          throw new Error(
+            `First Tree server rejected agent config (${classification.reasonCode}): ${classification.message}`,
+          );
+        }
+        if (attempt >= MAX_CONFIG_FETCH_ATTEMPTS) {
+          this.logger.error(
+            { err, attempts: attempt, reasonCode: classification.reasonCode },
+            "agent config fetch exhausted retries — bind aborted",
+          );
+          throw new Error(
+            `First Tree server unreachable while loading agent config after ${attempt} attempts: ${classification.message}`,
+          );
+        }
+        const delayMs = nextRetryDelayMs(classification.strategy, clampRetryAttempt(attempt));
+        this.logger.warn(
+          { err, attempt, delayMs, reasonCode: classification.reasonCode },
+          "agent config fetch failed — retrying with backoff",
+        );
+        await sleepWithAbort(delayMs, signal);
+        if (signal?.aborted) throw new Error("agent config fetch aborted — slot stopping");
+      }
+    }
+  }
+
   async stop(): Promise<void> {
     if (this.stopping) return this.stopping;
     this.stopping = this.stopOnce();
@@ -313,6 +409,7 @@ export class AgentSlot {
   }
 
   private async stopOnce(): Promise<void> {
+    this.bringupAbort?.abort();
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
@@ -334,6 +431,7 @@ export class AgentSlot {
   }
 
   private async cleanupFailedStart(opts: { unbind: boolean }): Promise<void> {
+    this.bringupAbort?.abort();
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;

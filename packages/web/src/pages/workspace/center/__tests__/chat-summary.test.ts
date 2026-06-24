@@ -123,6 +123,16 @@ describe("ChatSummary", () => {
     };
   }
 
+  // A wheel event the summary's native (non-passive) listener can read. Built
+  // from a plain cancelable Event so the test does not depend on happy-dom's
+  // WheelEvent constructor; deltaX/deltaY are the only fields the handler reads.
+  function wheelEvent(deltaY: number, deltaX = 0): Event {
+    const e = new Event("wheel", { bubbles: true, cancelable: true });
+    Object.defineProperty(e, "deltaY", { value: deltaY });
+    Object.defineProperty(e, "deltaX", { value: deltaX });
+    return e;
+  }
+
   it("auto-expands an unread summary version on entry even when the chat was read recently", async () => {
     localStorage.clear();
     const scrollEl = document.createElement("div");
@@ -266,6 +276,121 @@ describe("ChatSummary", () => {
       stickyButton.click();
     });
     expect(container.querySelector("strong")?.textContent).toBe("DescBody");
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("bridges a wheel gesture over the expanded summary to the message stream", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    scrollEl.scrollTop = 0;
+    // Unread version → auto-expanded on entry, so the panel owns the viewport.
+    const { container, root } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]')).not.toBeNull();
+    const panel = container.firstElementChild as HTMLElement | null;
+    if (!panel) throw new Error("summary panel missing");
+
+    // The expanded body cannot absorb the scroll itself (no overflow), so a wheel
+    // over the summary must drive the message stream — without this it scrolls
+    // nothing and the conversation reads as "locked".
+    await act(async () => {
+      panel.dispatchEvent(wheelEvent(120));
+    });
+    expect(scrollEl.scrollTop).toBe(120);
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("scrolls the summary body itself before driving the stream", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    scrollEl.scrollTop = 0;
+    const { container, root } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+    const panel = container.firstElementChild as HTMLElement | null;
+    if (!panel) throw new Error("summary panel missing");
+    const inner = container.querySelector<HTMLElement>('[style*="46vh"]');
+    if (!inner) throw new Error("summary scroll body missing");
+    // Make the body itself scrollable and parked mid-content (not at top/bottom).
+    Object.defineProperty(inner, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(inner, "clientHeight", { value: 200, configurable: true });
+    inner.scrollTop = 100;
+
+    // Wheel up: the body can still scroll up, so the body moves and the stream
+    // stays put.
+    await act(async () => {
+      panel.dispatchEvent(wheelEvent(-40));
+    });
+    expect(inner.scrollTop).toBe(60);
+    expect(scrollEl.scrollTop).toBe(0);
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("scrolls the body for a wheel over the summary header, not just the body", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    scrollEl.scrollTop = 0;
+    const { container, root } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+    // The header control sits OUTSIDE the markdown body's event path; a wheel
+    // there must still drive the body while it has room (regression: target-
+    // unaware deferral to native scroll left the header strip locked).
+    const header = container.querySelector<HTMLButtonElement>('button[aria-label="Collapse summary"]');
+    if (!header) throw new Error("summary header button missing");
+    const inner = container.querySelector<HTMLElement>('[style*="46vh"]');
+    if (!inner) throw new Error("summary scroll body missing");
+    Object.defineProperty(inner, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(inner, "clientHeight", { value: 200, configurable: true });
+    inner.scrollTop = 0;
+
+    await act(async () => {
+      header.dispatchEvent(wheelEvent(120));
+    });
+    expect(inner.scrollTop).toBe(120);
+    expect(scrollEl.scrollTop).toBe(0);
+
+    await act(async () => root.unmount());
+    container.remove();
+  });
+
+  it("leaves a horizontal-dominant wheel to the browser", async () => {
+    localStorage.clear();
+    const scrollEl = document.createElement("div");
+    scrollEl.scrollTop = 0;
+    const { container, root } = await renderSummary(scrollEl, {
+      descriptionUpdatedAt: unreadVersionAt,
+      lastReadAt: readRecentlyAt,
+    });
+    const panel = container.firstElementChild as HTMLElement | null;
+    if (!panel) throw new Error("summary panel missing");
+    const inner = container.querySelector<HTMLElement>('[style*="46vh"]');
+    if (!inner) throw new Error("summary scroll body missing");
+    // Body is scrollable, so a missing guard would let the small vertical
+    // component move it.
+    Object.defineProperty(inner, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(inner, "clientHeight", { value: 200, configurable: true });
+    inner.scrollTop = 100;
+
+    // deltaX dominates deltaY (a trackpad horizontal pan): hands off to the
+    // browser — nothing is scrolled and the event is not consumed.
+    const ev = wheelEvent(8, 120);
+    await act(async () => {
+      panel.dispatchEvent(ev);
+    });
+    expect(inner.scrollTop).toBe(100);
+    expect(scrollEl.scrollTop).toBe(0);
+    expect(ev.defaultPrevented).toBe(false);
 
     await act(async () => root.unmount());
     container.remove();

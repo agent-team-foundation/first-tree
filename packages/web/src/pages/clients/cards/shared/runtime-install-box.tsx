@@ -62,7 +62,7 @@ export function RuntimeInstallBox({ provider, entry, hostname, os }: RuntimeInst
 
 /**
  * Render a headline string with `inline-code` segments wrapped in `<code>`.
- * The view-model emits literal backticks (e.g. "Run `claude login` on
+ * The view-model emits literal backticks (e.g. "Run `claude auth login` on
  * host") for the diagnostic copy; without this helper the user sees raw
  * backticks rendered as text.
  */

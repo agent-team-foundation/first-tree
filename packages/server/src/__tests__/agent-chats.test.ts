@@ -89,7 +89,10 @@ describe("Agent Chats API", () => {
       format: "text",
       content: `@${target.agent.name} please review`,
     });
-    expect(messageRow?.metadata).toEqual({ mentions: [target.agent.uuid] });
+    expect(messageRow?.metadata).toEqual({
+      mentions: [target.agent.uuid],
+      addressedAgentIds: [target.agent.uuid],
+    });
 
     const targetInbox = await app.db
       .select({ notify: inboxEntries.notify, messageId: inboxEntries.messageId })
@@ -133,7 +136,10 @@ describe("Agent Chats API", () => {
 
     const [messageRow] = await app.db.select().from(messages).where(eq(messages.id, body.messageId)).limit(1);
     expect(messageRow?.content).toBe(`@${target.agent.name} please review by name`);
-    expect(messageRow?.metadata).toEqual({ mentions: [target.agent.uuid] });
+    expect(messageRow?.metadata).toEqual({
+      mentions: [target.agent.uuid],
+      addressedAgentIds: [target.agent.uuid],
+    });
 
     const targetInbox = await app.db
       .select({ notify: inboxEntries.notify, messageId: inboxEntries.messageId })
@@ -183,6 +189,7 @@ describe("Agent Chats API", () => {
     expect(messageRow?.senderId).toBe(manager?.agentId);
     expect(messageRow?.metadata).toEqual({
       mentions: [sender.agent.uuid],
+      addressedAgentIds: [sender.agent.uuid],
       initiatedByAgentId: sender.agent.uuid,
       effectiveSenderReason: "self_target_manager_human",
     });

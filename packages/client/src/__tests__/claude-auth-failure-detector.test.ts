@@ -83,9 +83,12 @@ describe("SDKAssistantMessageError union — exhaustive classification", () => {
     // is an auth signal or not, and add it here AND update isClaudeAuthError.
     const KNOWN_CODES: Record<SDKAssistantMessageError, boolean> = {
       authentication_failed: true,
+      oauth_org_not_allowed: false,
       billing_error: false,
       rate_limit: false,
+      overloaded: false,
       invalid_request: false,
+      model_not_found: false,
       server_error: false,
       unknown: false,
       max_output_tokens: false,
@@ -115,9 +118,12 @@ describe("detectClaudeAuthFailure — negative cases (drift counter-examples)", 
     // code lands, the exhaustiveness test forces a triage; this loop just
     // proves the current classification is wired through detect→isAuthError.
     const nonAuthCodes: readonly SDKAssistantMessageError[] = [
+      "oauth_org_not_allowed",
       "billing_error",
       "rate_limit",
+      "overloaded",
       "invalid_request",
+      "model_not_found",
       "server_error",
       "unknown",
       "max_output_tokens",

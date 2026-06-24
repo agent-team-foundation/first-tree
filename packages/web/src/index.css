@@ -878,6 +878,40 @@
   animation: subtle-fade 180ms ease-out;
 }
 
+/* Team-switch transition veil — a single intentional overlay shown while an
+   org switch runs, replacing the old "every per-org component blanks to its
+   own skeleton" flash (the cache clear in `selectOrganization` is kept; only
+   the visual is consolidated). Covers the content region below the 48-tall
+   header, including content-area overlays (conversation list / right rail
+   z-30, doc-preview drawer z-40). z-index 45 keeps it above those but below
+   the switch menu (z-[46], so its in-flight spinner stays visible) and any
+   dialog (z-50). Opacity-only fade so reduced-motion can drop it. */
+@keyframes team-switch-veil-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.team-switch-veil {
+  position: fixed;
+  inset: 48px 0 0 0;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in oklch, var(--bg) 76%, transparent);
+  backdrop-filter: blur(1px);
+  animation: team-switch-veil-in 140ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .team-switch-veil {
+    animation: none;
+    backdrop-filter: none;
+  }
+}
+
 /* Left-aligned content column that fills the shared 960 canvas, matching the
    Team / Agent Detail tabs (same `--sp-2 --sp-5 --sp-7` content padding under a
    PageHeader). No min-height / centering — the page used to render as a

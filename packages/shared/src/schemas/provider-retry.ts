@@ -116,7 +116,9 @@ function statusReasonLabel(kind: AgentStatusReason["kind"], payload: ProviderRet
     return "Waiting to retry provider";
   }
   if (kind === "retrying") return "Retrying provider";
-  if (payload.reasonCode === "capacity_wait_required") return "Provider capacity limit";
+  if (payload.reasonCode === "capacity_wait_required" || payload.category === "provider_capacity") {
+    return "Provider capacity limit";
+  }
   if (payload.event === "provider_retry_exhausted") return "Provider retry exhausted";
   return "Provider failure";
 }

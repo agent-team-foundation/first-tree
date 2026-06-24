@@ -6,7 +6,14 @@ import { reportOnboardingEvent } from "../../api/onboarding-events.js";
 import { slugify } from "../../utils/agent-naming.js";
 import { writeOnboardingAgentUuid } from "../../utils/onboarding-flags.js";
 
-const RUNTIME_READY_TIMEOUT_MS = 30_000;
+// Wait the full server-side offline window before surfacing the "still starting"
+// state: a cold runtime (first claude-code/codex spawn, proxy-slow TLS) can take
+// well past 30s to publish its first heartbeat, and the server itself doesn't
+// consider an agent offline until 60s without one (presence reaper). Timing out
+// at 30s told healthy-but-slow users their agent had failed; 60s matches the
+// server's own liveness threshold so we only surface "taking longer" once the
+// agent is genuinely late, not merely cold-starting.
+const RUNTIME_READY_TIMEOUT_MS = 60_000;
 const RUNTIME_READY_POLL_MS = 1_000;
 
 export type AgentCreationPhase = "idle" | "creating" | "online" | "timeout";
@@ -24,7 +31,7 @@ export type CreateAgentArgs = {
  * `visibility`) and waits for it to come online on the connected computer.
  *
  * Same two-phase shape the legacy Step2Body used: POST `/agents`, then poll
- * `client-status` until the runtime reports online (or a 30s timeout). The
+ * `client-status` until the runtime reports online (or a 60s timeout). The
  * agent is created without any project binding — the kickoff step attaches
  * the source repo later, so a slow GitHub call can never block teammate
  * creation. On success, `onOnline(uuid)` fires once.

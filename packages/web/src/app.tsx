@@ -69,6 +69,14 @@ const ComposeStatusBarPreviewPage = import.meta.env.DEV
     )
   : null;
 
+const ChatOfflineNoticePreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/chat-offline-notice-preview.js").then((module) => ({
+        default: module.ChatOfflineNoticePreviewPage,
+      })),
+    )
+  : null;
+
 const RequestDockPreviewPage = import.meta.env.DEV
   ? lazy(() =>
       import("./pages/request-dock-preview.js").then((module) => ({
@@ -105,6 +113,12 @@ const UserMenuPreviewPage = import.meta.env.DEV
 
 const ChatSummaryPreviewPage = import.meta.env.DEV
   ? lazy(() => import("./pages/chat-summary-preview.js").then((module) => ({ default: module.ChatSummaryPreviewPage })))
+  : null;
+
+const TeamSwitcherPreviewPage = import.meta.env.DEV
+  ? lazy(() =>
+      import("./pages/team-switcher-preview.js").then((module) => ({ default: module.TeamSwitcherPreviewPage })),
+    )
   : null;
 
 // Living design-system reference (companion to DESIGN.md). Unlike the previews
@@ -180,6 +194,16 @@ export function App() {
                   }
                 />
               ) : null}
+              {ChatOfflineNoticePreviewPage ? (
+                <Route
+                  path="/preview/chat-offline-notice"
+                  element={
+                    <Suspense fallback={null}>
+                      <ChatOfflineNoticePreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
               {RequestDockPreviewPage ? (
                 <Route
                   path="/preview/request-dock"
@@ -206,6 +230,16 @@ export function App() {
                   element={
                     <Suspense fallback={null}>
                       <UserMenuPreviewPage />
+                    </Suspense>
+                  }
+                />
+              ) : null}
+              {TeamSwitcherPreviewPage ? (
+                <Route
+                  path="/preview/team-switcher"
+                  element={
+                    <Suspense fallback={null}>
+                      <TeamSwitcherPreviewPage />
                     </Suspense>
                   }
                 />

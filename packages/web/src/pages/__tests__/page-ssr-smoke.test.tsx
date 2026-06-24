@@ -1277,7 +1277,7 @@ describe("page SSR smoke coverage", () => {
     ).toContain("Bringing your agent online");
     expect(
       await renderOnboardingStep(<StepCreateAgent />, { activeStep: "create-agent", agentPhase: "timeout" }),
-    ).toContain("online yet");
+    ).toContain("taking longer");
     expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain(
       "Loading your repos",
     );

@@ -128,12 +128,21 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     // member role: managerId forced to caller's member; admin role may
     // specify any managerId in the same org.
     const managerId = scope.role === "admin" ? (body.managerId ?? scope.memberId) : scope.memberId;
-    const agent = await agentService.createAgent(app.db, {
-      ...body,
-      organizationId: scope.organizationId,
-      source: body.source ?? "admin-api",
-      managerId,
-    });
+    // First-agent → delegate adoption fires ONLY for a self-create. Delegate is
+    // a personal choice (the PATCH path rejects an admin setting another
+    // member's delegate), so an admin creating an agent FOR another member must
+    // not implicitly set that member's delegate. Only the caller acting on
+    // their own member can adopt.
+    const agent = await agentService.createAgent(
+      app.db,
+      {
+        ...body,
+        organizationId: scope.organizationId,
+        source: body.source ?? "admin-api",
+        managerId,
+      },
+      { adoptAsDelegateIfFirst: managerId === scope.memberId },
+    );
     notifyClientAgentPinned(agent);
     return reply.status(201).send({
       ...agent,

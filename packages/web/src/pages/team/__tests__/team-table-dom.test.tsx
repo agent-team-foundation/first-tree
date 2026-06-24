@@ -292,7 +292,7 @@ describe("TeamTable", () => {
     expect(props.onHumanDetails).toHaveBeenCalledWith(props.humans[0]);
 
     await click(container.querySelector('button[title="Set delegate"]'));
-    expect(document.body.textContent).toContain("Only team-visible agents can be a delegate.");
+    expect(document.body.textContent).toContain("Create an agent to set as your delegate.");
     await click(buttonByText(document.body, "Remove delegate"));
     expect(props.onSetDelegate).toHaveBeenCalledWith("human-self", null);
 

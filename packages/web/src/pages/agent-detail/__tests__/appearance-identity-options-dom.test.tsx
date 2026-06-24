@@ -554,6 +554,36 @@ describe("ProfileEditDialog (merged identity + appearance)", () => {
     expect(document.body.textContent).toContain("Only the owner or an admin can change this agent's visibility.");
     await act(async () => nonOwner.root.unmount());
   });
+
+  it("offers your own private agent as a delegate (visibility no longer filtered)", async () => {
+    const { ProfileEditDialog } = await import("../profile-edit-dialog.js");
+    // A private agent you own is a valid delegate: the picker no longer filters
+    // on visibility, mirroring the server (which accepts a private delegate).
+    // Only `managerId === you` + active + type=agent gate the options now.
+    agentApiMocks.listAgents.mockResolvedValue({
+      items: [
+        agent({ uuid: "private-pa", name: "pa", displayName: "Private PA", type: "agent", visibility: "private" }),
+      ],
+      nextCursor: null,
+    });
+    const human = agent({
+      uuid: "human-1",
+      name: "bestony",
+      displayName: "Bestony",
+      type: "human",
+      visibility: "private",
+    });
+    const onSave = vi.fn().mockResolvedValue(undefined);
+
+    const owner = await renderDom(
+      <ProfileEditDialog agent={human} open onOpenChange={vi.fn()} onSave={onSave} onSaved={vi.fn()} />,
+    );
+    const delegateSelect = document.body.querySelector<HTMLButtonElement>("#profile-delegate");
+    if (!delegateSelect) throw new Error("Expected delegate field");
+    await chooseSelectOption(delegateSelect, "Private PA");
+    expect(onSave).toHaveBeenCalledWith({ delegateMention: "private-pa" });
+    await act(async () => owner.root.unmount());
+  });
 });
 
 describe("Select", () => {

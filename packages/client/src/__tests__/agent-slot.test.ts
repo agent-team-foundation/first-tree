@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
 import type { AgentSlotConfig } from "../runtime/agent-slot.js";
 import type { HandlerConfig } from "../runtime/handler.js";
-import type { FirstTreeHubSDK, RegisterResult } from "../sdk.js";
+import { type FirstTreeHubSDK, type RegisterResult, SdkError } from "../sdk.js";
 
 type FakeLogger = {
   info: ReturnType<typeof vi.fn>;
@@ -76,11 +76,20 @@ function makeAgent(overrides: Partial<RegisterResult> = {}): RegisterResult {
   };
 }
 
-function makeSdk(options?: { agent?: RegisterResult; configError?: unknown }): FirstTreeHubSDK {
+function makeSdk(options?: {
+  agent?: RegisterResult;
+  configError?: unknown;
+  /** Throw `error` on the first `times` config fetches, then succeed — models a transient blip. */
+  configErrorsThenSucceed?: { error: unknown; times: number };
+}): FirstTreeHubSDK {
   const agent = options?.agent ?? makeAgent();
+  let configCalls = 0;
   const sdk = {
     register: vi.fn(async () => agent),
     fetchAgentConfig: vi.fn(async () => {
+      configCalls++;
+      const blip = options?.configErrorsThenSucceed;
+      if (blip && configCalls <= blip.times) throw blip.error;
       if (options?.configError) throw options.configError;
       return {
         agentId: agent.agentId,
@@ -223,6 +232,7 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
 async function makeSlot(options?: {
   agent?: RegisterResult;
   configError?: unknown;
+  configErrorsThenSucceed?: { error: unknown; times: number };
   runtimeType?: string;
   syncResult?: MockState["syncResult"];
   syncDelayMs?: number;
@@ -234,7 +244,11 @@ async function makeSlot(options?: {
   state: MockState;
 }> {
   const state = installMocks({ syncResult: options?.syncResult, syncDelayMs: options?.syncDelayMs });
-  const sdk = makeSdk({ agent: options?.agent, configError: options?.configError });
+  const sdk = makeSdk({
+    agent: options?.agent,
+    configError: options?.configError,
+    configErrorsThenSucceed: options?.configErrorsThenSucceed,
+  });
   const connection = new FakeClientConnection(sdk);
   const { AgentSlot } = await import("../runtime/agent-slot.js");
   const handlerFactory = vi.fn((config: HandlerConfig) => ({
@@ -309,17 +323,17 @@ describe("AgentSlot", () => {
     expect(state.logger.info).toHaveBeenCalledWith("server reports type=human — message processing disabled");
   });
 
-  it("wraps runtime config fetch failures with a bind-aborted error", async () => {
-    const { slot, connection, state } = await makeSlot({ configError: new Error("server offline") });
+  it("aborts the bind immediately on a permanent (4xx) config rejection — no retry", async () => {
+    const { slot, connection, sdk, state } = await makeSlot({ configError: new SdkError(403, "forbidden") });
 
-    await expect(slot.start()).rejects.toThrow(
-      "First Tree server unreachable while loading agent config: server offline",
-    );
+    await expect(slot.start()).rejects.toThrow(/rejected agent config \(config_unauthorized\)/);
 
+    // A deterministic 4xx must not be retried — exactly one fetch, then abort.
+    expect(vi.mocked(sdk.fetchAgentConfig)).toHaveBeenCalledTimes(1);
     expect(connection.unbindAgent).toHaveBeenCalledWith("agent-1");
     expect(state.logger.error).toHaveBeenCalledWith(
-      { err: new Error("server offline") },
-      "failed to fetch agent config — bind aborted",
+      expect.objectContaining({ reasonCode: "config_unauthorized" }),
+      "agent config fetch rejected — bind aborted",
     );
   });
 
@@ -344,17 +358,71 @@ describe("AgentSlot", () => {
     expect(connection.listenerCount("session:reconcile:result")).toBe(1);
   });
 
-  it("stringifies non-Error runtime config fetch failures", async () => {
-    const { slot, state } = await makeSlot({ configError: "server string offline" });
+  it("self-heals a transient config fetch failure: retries with backoff, then binds", async () => {
+    vi.useFakeTimers();
+    const { slot, connection, sdk, state } = await makeSlot({
+      configErrorsThenSucceed: { error: new SdkError(503, "boom"), times: 1 },
+    });
 
-    await expect(slot.start()).rejects.toThrow(
-      "First Tree server unreachable while loading agent config: server string offline",
-    );
+    const startPromise = slot.start();
+    // Advance past the first backoff (~1s base + jitter) so the retry runs.
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expect(startPromise).resolves.toMatchObject({ agentId: "agent-1" });
 
-    expect(state.logger.error).toHaveBeenCalledWith(
-      { err: "server string offline" },
-      "failed to fetch agent config — bind aborted",
+    expect(vi.mocked(sdk.fetchAgentConfig)).toHaveBeenCalledTimes(2);
+    expect(connection.unbindAgent).not.toHaveBeenCalled();
+    // SessionManager built → the agent is genuinely online, not a dead slot.
+    expect(state.sessions).toHaveLength(1);
+  });
+
+  it("aborts the bind after exhausting retries on a sustained transient failure", async () => {
+    vi.useFakeTimers();
+    const { slot, connection, sdk } = await makeSlot({ configError: new SdkError(503, "down") });
+
+    const outcome = slot.start().then(
+      () => ({ ok: true }) as const,
+      (err: unknown) => ({ ok: false, err }) as const,
     );
+    // Drain every backoff sleep; each is scheduled after the prior fetch rejects.
+    await vi.advanceTimersByTimeAsync(200_000);
+    await vi.advanceTimersByTimeAsync(200_000);
+    const settled = await outcome;
+
+    expect(settled.ok).toBe(false);
+    if (!settled.ok) {
+      expect((settled.err as Error).message).toMatch(/after \d+ attempts/);
+    }
+    // Bounded retry: far more than the SDK's ~1.5s transport budget, then give up.
+    expect(vi.mocked(sdk.fetchAgentConfig)).toHaveBeenCalledTimes(8);
+    expect(connection.unbindAgent).toHaveBeenCalledWith("agent-1");
+  });
+
+  it("does not build a session if stop() aborts while the config fetch is in flight", async () => {
+    const { slot, sdk, state } = await makeSlot();
+    // The server unbinds us (→ stop()) while the config fetch is in flight, and
+    // the fetch then resolves successfully — the slot must NOT come online.
+    vi.mocked(sdk.fetchAgentConfig).mockImplementationOnce(async () => {
+      void slot.stop();
+      return {
+        agentId: "agent-1",
+        version: 7,
+        payload: {
+          kind: "claude-code",
+          prompt: { append: "" },
+          model: "claude-sonnet",
+          mcpServers: [],
+          env: [],
+          gitRepos: [],
+          resourceSkills: [],
+          reasoningEffort: "",
+        },
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        updatedBy: "user-1",
+      };
+    });
+
+    await expect(slot.start()).rejects.toThrow(/aborted — slot stopping/);
+    expect(state.sessions).toHaveLength(0);
   });
 
   it("starts processing, dispatches pushed frames, reconciles state, and stops cleanly", async () => {

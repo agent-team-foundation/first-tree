@@ -186,10 +186,14 @@ export function ProfileEditDialog({ agent, open, onOpenChange, onSave, onRefresh
     queryKey: ["agents-for-delegate", memberId],
     queryFn: async () => {
       const res = await listAgents({ limit: 100 });
-      return res.items.filter(
-        (a) =>
-          a.type === "agent" && a.visibility === "organization" && a.status === "active" && a.managerId === memberId,
-      );
+      // Eligible delegates = your own active agents. Visibility is NOT a
+      // filter: a private agent (your personal assistant) is the most natural
+      // delegate, and the server already accepts it (validateDelegateMention
+      // checks same-org only; webhook routing checks same-org + active). The
+      // list endpoint returns your own private agents (agentVisibilityCondition
+      // = org-visible OR managerId = you), so `managerId === memberId` is what
+      // scopes this to agents you own.
+      return res.items.filter((a) => a.type === "agent" && a.status === "active" && a.managerId === memberId);
     },
     enabled: open && canEditDelegate,
   });

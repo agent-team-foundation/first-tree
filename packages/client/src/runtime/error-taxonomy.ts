@@ -29,7 +29,7 @@ export const ERROR_KINDS = {
 
 export type ErrorKind = (typeof ERROR_KINDS)[keyof typeof ERROR_KINDS];
 
-export type ErrorSource = "session" | "auth" | "bind" | "update" | "stream";
+export type ErrorSource = "session" | "auth" | "bind" | "update" | "stream" | "config";
 
 export type RetryStrategy =
   | { kind: "exponentialBackoff"; baseMs: number; capMs: number; jitter: boolean }
@@ -212,6 +212,26 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
       reasonCode: "npm_unknown",
       message: shape.message ?? "npm install failed",
     };
+  }
+
+  // -- Config fetch (agent bring-up) ----------------------------------------
+  // A deterministic 4xx from `/agent/config` does not self-heal: the agent row
+  // and its config row are created in the same DB transaction, so a 404 means
+  // the agent is gone, and 401/403 mean the member JWT is rejected — a human
+  // must act. 408 (timeout) and 429 (rate limit) are the retryable 4xx and
+  // fall through to the transient handlers below, as do 5xx / network /
+  // unknown failures.
+  if (source === "config") {
+    const status = statusOf(shape);
+    if (status !== null && status >= 400 && status < 500 && status !== 408 && status !== 429) {
+      const unauthorized = status === 401 || status === 403;
+      return {
+        kind: ERROR_KINDS.PERMANENT,
+        strategy: NONE,
+        reasonCode: unauthorized ? "config_unauthorized" : "config_rejected",
+        message: shape.message ?? `Agent config request rejected (${status})`,
+      };
+    }
   }
 
   // -- Permanent shapes by error class --------------------------------------

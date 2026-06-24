@@ -282,12 +282,14 @@ export const COPY = {
     // yet".
     creating: "Bringing your agent online…",
     creatingHint: "This usually takes a few seconds.",
-    // Timeout: added but didn't report online within 30s. One short line — the
-    // shell already renders the step h1, so no second title. Situation + the
-    // condensed likely cause (the three separate causes — sleep / lost
-    // connection / agent didn't start — collapse to "asleep or offline") + fix.
-    timeoutBody: "Your agent isn't online yet — its computer may be asleep or offline. Check it, then try again.",
-    retry: "Try again",
+    // Slow-start, NOT a failure: reached only after the full 60s server-liveness
+    // window, so the agent is genuinely late — but a cold runtime or a waking
+    // computer can still arrive, so the framing stays hopeful (keep waiting) with
+    // a graceful, resumable exit (finish later) instead of an error. No second
+    // title — the shell renders the step h1.
+    timeoutBody:
+      "Your agent is taking longer than usual to come online — its computer may be waking up. Keep waiting, or finish setup and start once it's ready.",
+    keepWaiting: "Keep waiting",
     /** Shown on the form when the computer isn't connected (Create is disabled).
         One line with an inline "reconnect it" link (→ connect-computer). The old
         "to add your agent to the team" tail was dropped: the disabled "Create

@@ -294,7 +294,7 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
       summary:
         "Mixed setup: Claude Code installed-not-logged-in, Codex not installed. Each install box adapts its command.",
       whatToCheck: [
-        "Claude Code box: 'installed (v0.2.141) but not logged in' — command is ONLY `claude login` (no npm install)",
+        "Claude Code box: 'installed (v0.2.141) but not logged in' — command is ONLY `claude auth login` (no npm install)",
         "Codex box: full install + login two-liner",
         "Backticks in headlines render as <code> elements, not literal backticks",
       ],
