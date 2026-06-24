@@ -5,6 +5,7 @@ import {
   type AgentVisibility,
   type ClientCapabilities,
   isReservedAgentName,
+  isRuntimeProviderEnabled,
   type RuntimeProvider,
 } from "@first-tree/shared";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -152,12 +153,13 @@ function asRuntimeProvider(provider: string): RuntimeProvider | null {
  */
 function pickPreferredRuntime(caps: ClientCapabilities): RuntimeProvider | null {
   if (caps["claude-code"]?.state === "ok") return "claude-code";
-  if (caps["claude-code-tui"]?.state === "ok") return "claude-code-tui";
   if (caps.codex?.state === "ok") return "codex";
+  // Disabled providers (e.g. claude-code-tui) are never auto-picked, even if a
+  // stale snapshot still reports them `ok`.
   for (const [provider, entry] of Object.entries(caps)) {
     if (entry.state === "ok") {
       const rt = asRuntimeProvider(provider);
-      if (rt) return rt;
+      if (rt && isRuntimeProviderEnabled(rt)) return rt;
     }
   }
   return null;
@@ -483,7 +485,9 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     for (const [provider, entry] of Object.entries(activeCapabilities)) {
       if (entry.state !== "ok") continue;
       const rt = asRuntimeProvider(provider);
-      if (rt) out.push(rt);
+      // Skip temporarily-disabled providers so they never appear as a
+      // selectable runtime, even if a stale snapshot still reports them `ok`.
+      if (rt && isRuntimeProviderEnabled(rt)) out.push(rt);
     }
     return out;
   }, [activeCapabilities]);

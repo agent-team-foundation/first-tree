@@ -1,4 +1,9 @@
-import type { CapabilityEntry, ClientCapabilities, RuntimeProvider } from "@first-tree/shared";
+import {
+  type CapabilityEntry,
+  type ClientCapabilities,
+  isRuntimeProviderEnabled,
+  type RuntimeProvider,
+} from "@first-tree/shared";
 import { probeClaudeCodeCapability } from "./claude-code.js";
 import { probeClaudeCodeTuiCapability } from "./claude-code-tui.js";
 import { probeCodexCapability } from "./codex.js";
@@ -8,10 +13,14 @@ import type { SmokeOutcome } from "./launch-probe.js";
  * real smoke at most this often on reconnect, to catch silent drift. */
 export const REPROBE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
-/** The runtime providers a built-in probe exists for. Used by
- * {@link hasNonOkProvider} to decide whether a daemon's advertised capability
- * snapshot still has a provider worth re-probing for. */
-export const PROBED_RUNTIME_PROVIDERS: readonly RuntimeProvider[] = ["claude-code", "claude-code-tui", "codex"];
+/** The runtime providers a built-in probe exists for AND that are not
+ * temporarily disabled. Used by {@link hasNonOkProvider} to decide whether a
+ * daemon's advertised capability snapshot still has a provider worth re-probing
+ * for. A disabled provider (see `DISABLED_RUNTIME_PROVIDERS`) is dropped here so
+ * the degraded-capability re-probe loop never schedules itself just for it. */
+export const PROBED_RUNTIME_PROVIDERS: readonly RuntimeProvider[] = (
+  ["claude-code", "claude-code-tui", "codex"] as const
+).filter((p) => isRuntimeProviderEnabled(p));
 
 /** First delay before the daemon-side degraded-capability re-probe fires. Short
  * enough that a freshly-installed provider is noticed quickly during setup. */
@@ -89,11 +98,14 @@ async function aggregate(
  * whether a runtime is usable before spawning anything).
  */
 export async function probeCapabilities(): Promise<ClientCapabilities> {
-  return aggregate([
-    ["claude-code", probeClaudeCodeCapability()],
-    ["claude-code-tui", probeClaudeCodeTuiCapability()],
-    ["codex", probeCodexCapability()],
-  ]);
+  // Guard BEFORE invoking each probe — calling the fn eagerly would spawn the
+  // provider's binary, so a disabled provider must be skipped here, not filtered
+  // out of the results afterwards.
+  const probes: Array<readonly [RuntimeProvider, Promise<CapabilityEntry>]> = [];
+  if (isRuntimeProviderEnabled("claude-code")) probes.push(["claude-code", probeClaudeCodeCapability()]);
+  if (isRuntimeProviderEnabled("claude-code-tui")) probes.push(["claude-code-tui", probeClaudeCodeTuiCapability()]);
+  if (isRuntimeProviderEnabled("codex")) probes.push(["codex", probeCodexCapability()]);
+  return aggregate(probes);
 }
 
 /**
@@ -152,11 +164,23 @@ export async function revalidateCapabilities(previous: ClientCapabilities): Prom
   const claude = previous["claude-code"];
   const tui = previous["claude-code-tui"];
   const codex = previous.codex;
-  const revalidated = await aggregate([
-    ["claude-code", probeClaudeCodeCapability(claude?.state === "ok" ? { runSmoke: cachedOkSmoke() } : {})],
-    ["claude-code-tui", probeClaudeCodeTuiCapability(tui?.state === "ok" ? { runSmoke: cachedOkSmoke() } : {})],
-    ["codex", probeCodexCapability(codex?.state === "ok" ? { runSmoke: cachedOkSmoke() } : {})],
-  ]);
+  // Same guard as `probeCapabilities`: a disabled provider must not have its
+  // probe invoked (it would re-run resolve/auth against the binary), so skip it
+  // rather than filter the result.
+  const probes: Array<readonly [RuntimeProvider, Promise<CapabilityEntry>]> = [];
+  if (isRuntimeProviderEnabled("claude-code"))
+    probes.push([
+      "claude-code",
+      probeClaudeCodeCapability(claude?.state === "ok" ? { runSmoke: cachedOkSmoke() } : {}),
+    ]);
+  if (isRuntimeProviderEnabled("claude-code-tui"))
+    probes.push([
+      "claude-code-tui",
+      probeClaudeCodeTuiCapability(tui?.state === "ok" ? { runSmoke: cachedOkSmoke() } : {}),
+    ]);
+  if (isRuntimeProviderEnabled("codex"))
+    probes.push(["codex", probeCodexCapability(codex?.state === "ok" ? { runSmoke: cachedOkSmoke() } : {})]);
+  const revalidated = await aggregate(probes);
 
   // Preserve the prior real launch-verified entry wherever the provider stayed
   // `ok` (resolve+auth still pass, smoke skipped); only regressions keep the

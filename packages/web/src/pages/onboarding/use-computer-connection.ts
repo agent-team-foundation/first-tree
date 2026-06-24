@@ -1,4 +1,4 @@
-import type { ClientCapabilities } from "@first-tree/shared";
+import { type ClientCapabilities, isRuntimeProviderEnabled } from "@first-tree/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type ConnectTokenResponse, getClientCapabilities, type HubClient, listClients } from "../../api/activity.js";
 import { api } from "../../api/client.js";
@@ -43,7 +43,11 @@ function pickPreferredRuntime(caps: ClientCapabilities): string | null {
   const ok = (provider: string) => caps[provider]?.state === "ok";
   if (ok("claude-code")) return "claude-code";
   if (ok("codex")) return "codex";
-  const first = Object.entries(caps).find(([, entry]) => entry.state === "ok");
+  // Never fall back to a temporarily-disabled provider, even if a stale snapshot
+  // still reports it `ok`.
+  const first = Object.entries(caps).find(
+    ([provider, entry]) => entry.state === "ok" && isRuntimeProviderEnabled(provider),
+  );
   return first ? first[0] : null;
 }
 
@@ -182,7 +186,7 @@ export function useComputerConnection(enabled: boolean): ComputerConnection {
 
   const okRuntimes = activeCapabilities
     ? Object.entries(activeCapabilities)
-        .filter(([, entry]) => entry.state === "ok")
+        .filter(([provider, entry]) => entry.state === "ok" && isRuntimeProviderEnabled(provider))
         .map(([provider]) => provider)
     : [];
 
