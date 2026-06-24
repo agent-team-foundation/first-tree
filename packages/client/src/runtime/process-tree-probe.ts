@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import type { pino } from "../observability/logger.js";
 
@@ -72,9 +73,15 @@ export function hasDescendant(pid: number, childrenByParent: ReadonlyMap<number,
   return (childrenByParent.get(pid)?.length ?? 0) > 0;
 }
 
-/** Extract the `FIRST_TREE_CHAT_ID` value from a process's env-annotated `ps -E` line. */
+/**
+ * Extract the `FIRST_TREE_CHAT_ID` value from a process's environment dump.
+ * Handles both forms produced by {@link defaultEnvForPid}: space-separated
+ * (Darwin `ps -Eww`) and NUL-separated (Linux `/proc/<pid>/environ`). The value
+ * therefore stops at the next whitespace OR NUL, so it never bleeds into the
+ * following env entry.
+ */
 export function extractChatId(envText: string): string | null {
-  const match = envText.match(/\bFIRST_TREE_CHAT_ID=(\S+)/);
+  const match = envText.match(/\bFIRST_TREE_CHAT_ID=([^\s\0]+)/);
   return match ? (match[1] ?? null) : null;
 }
 
@@ -96,6 +103,13 @@ async function defaultProcessSnapshot(): Promise<string> {
 }
 
 async function defaultEnvForPid(pid: number): Promise<string> {
+  // Platform-aware: Linux/procps rejects the BSD `-E` flag, so read the env
+  // directly from procfs there (NUL-separated KEY=VALUE entries). Darwin/BSD
+  // `ps` has no procfs, so use its `-E` form. Either output is understood by
+  // `extractChatId`.
+  if (process.platform === "linux") {
+    return readFile(`/proc/${pid}/environ`, "utf8");
+  }
   const { stdout } = await execFileAsync("ps", ["-Eww", "-p", String(pid), "-o", "command="]);
   return stdout;
 }

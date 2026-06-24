@@ -40,10 +40,18 @@ describe("process-tree-probe pure helpers", () => {
     expect(hasDescendant(999, idx)).toBe(false);
   });
 
-  it("extracts FIRST_TREE_CHAT_ID from a ps -E command line", () => {
+  it("extracts FIRST_TREE_CHAT_ID from a Darwin `ps -E` (space-separated) line", () => {
     const line = "FIRST_TREE_HOME=/x FIRST_TREE_CHAT_ID=f93566d9-00c8 FIRST_TREE_AGENT_ID=019e /bin/claude";
     expect(extractChatId(line)).toBe("f93566d9-00c8");
     expect(extractChatId("no marker here")).toBeNull();
+  });
+
+  it("extracts FIRST_TREE_CHAT_ID from Linux `/proc/<pid>/environ` (NUL-separated), stopping at the NUL", () => {
+    const environ = ["FIRST_TREE_HOME=/x", "FIRST_TREE_CHAT_ID=f93566d9-00c8", "FIRST_TREE_AGENT_ID=019e", ""].join(
+      "\0",
+    );
+    // The value must not bleed into the next NUL-separated entry.
+    expect(extractChatId(environ)).toBe("f93566d9-00c8");
   });
 });
 
@@ -71,6 +79,21 @@ describe("PsSubprocessProbe", () => {
     expect(probe.hasLiveSubprocess("chat-A")).toBe(true);
     expect(probe.hasLiveSubprocess("chat-B")).toBe(false);
     expect(probe.hasLiveSubprocess("chat-unknown")).toBe(false);
+    probe.stop();
+  });
+
+  it("attributes providers from NUL-separated env (Linux /proc form)", async () => {
+    const probe = new PsSubprocessProbe({
+      log: silentLogger(),
+      daemonPid,
+      intervalMs: 1_000_000,
+      runProcessSnapshot: async () => snapshot,
+      runEnvForPid: async (pid) =>
+        ["FIRST_TREE_HOME=/x", `FIRST_TREE_CHAT_ID=${pid === 100 ? "chat-A" : "chat-B"}`, ""].join("\0"),
+    });
+    await probe.refresh();
+    expect(probe.hasLiveSubprocess("chat-A")).toBe(true);
+    expect(probe.hasLiveSubprocess("chat-B")).toBe(false);
     probe.stop();
   });
 
