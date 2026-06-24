@@ -31,6 +31,10 @@ export const githubChatMetadataSchema = z.object({
   entityKey: z.string().min(1),
   /** Optional canonical URL back to the GitHub entity (for UI deep-link). */
   entityUrl: z.string().url().optional(),
+  /** True for Context Tree PR reviewer task chats created by GitHub App webhooks. */
+  contextTreeReviewer: z.literal(true).optional(),
+  /** Reviewer agent assigned when a Context Tree PR reviewer chat was created. */
+  reviewerAgentUuid: z.string().min(1).optional(),
 });
 export type GithubChatMetadata = z.infer<typeof githubChatMetadataSchema>;
 

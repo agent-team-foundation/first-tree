@@ -1,4 +1,6 @@
 import type {
+  OrgContextTreeFeaturesInput,
+  OrgContextTreeFeaturesOutput,
   OrgContextTreeInput,
   OrgContextTreeOutput,
   OrgSourceReposInput,
@@ -20,6 +22,17 @@ export function putContextTreeSetting(orgId: string, body: OrgContextTreeInput):
 
 export function deleteContextTreeSetting(orgId: string): Promise<void> {
   return api.delete<void>(path(orgId, "context_tree"));
+}
+
+export function getContextTreeFeaturesSetting(orgId: string): Promise<OrgContextTreeFeaturesOutput> {
+  return api.get<OrgContextTreeFeaturesOutput>(path(orgId, "context_tree_features"));
+}
+
+export function putContextTreeFeaturesSetting(
+  orgId: string,
+  body: OrgContextTreeFeaturesInput,
+): Promise<OrgContextTreeFeaturesOutput> {
+  return api.put<OrgContextTreeFeaturesOutput>(path(orgId, "context_tree_features"), body);
 }
 
 // `getGithubIntegrationSetting` / `putGithubIntegrationSetting` /

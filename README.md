@@ -175,6 +175,10 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 
 ## Development
 
+For the full local setup, including `.env`, migrations, service URLs,
+troubleshooting, and optional GitHub App configuration, see
+[DEVELOPMENT.md](DEVELOPMENT.md).
+
 ```bash
 pnpm install                                # Install dependencies
 docker compose up -d                        # Dev PostgreSQL

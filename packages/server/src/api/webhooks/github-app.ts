@@ -3,6 +3,7 @@ import { githubAppInstallationPermissionsSchema, type WebhookSource } from "@fir
 import type { FastifyInstance } from "fastify";
 import { BadRequestError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
+import { handleContextReviewerPullRequest } from "../../services/context-reviewer-pr.js";
 import { claimEvent, unclaimEvent } from "../../services/event-dedup.js";
 import type { AppInstallation } from "../../services/github-app.js";
 import {
@@ -359,6 +360,12 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     }
 
     try {
+      const contextReviewer = await handleContextReviewerPullRequest(app, {
+        eventType,
+        payload,
+        organizationId: installation.hubOrganizationId,
+      });
+
       const audience = await resolveAudience(app.db, event, appSlug);
       if (audience.length === 0) {
         // Distinguish "expected nobody" (no involves, no subscription)
@@ -379,10 +386,10 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
           },
           "audience empty, skipping",
         );
-        return reply.status(200).send({ ok: true, event: eventType, audience: 0, reason });
+        return reply.status(200).send({ ok: true, event: eventType, audience: 0, reason, contextReviewer });
       }
       const stats = await deliverNormalizedEvent(app, event, audience, { entityStateSeed });
-      return reply.status(200).send({ ok: true, event: eventType, ...stats });
+      return reply.status(200).send({ ok: true, event: eventType, ...stats, contextReviewer });
     } catch (err) {
       if (deliveryId) {
         await unclaimEvent(app.db, deliveryId, "github").catch((unclaimErr) => {

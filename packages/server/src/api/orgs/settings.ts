@@ -39,6 +39,7 @@ export async function orgSettingsRoutes(app: FastifyInstance): Promise<void> {
         throw new GoneError("source_repos is read-only; use Team Resources instead");
       }
       return orgSettingsService.putOrgSetting(app.db, scope.organizationId, namespace, request.body, {
+        memberId: scope.memberId,
         updatedBy: scope.userId,
       });
     },

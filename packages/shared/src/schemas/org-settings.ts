@@ -174,6 +174,44 @@ export const orgSourceReposOutputSchema = z.object({
   ),
 });
 
+// -- context_tree_features --
+
+const orgContextReviewerSchema = z.object({
+  enabled: z.boolean().default(false),
+  agentUuid: z.string().min(1).nullable().default(null),
+});
+
+export const orgContextTreeFeaturesStorageSchema = z.object({
+  contextReviewer: orgContextReviewerSchema
+    .default({
+      enabled: false,
+      agentUuid: null,
+    })
+    .superRefine((value, ctx) => {
+      if (value.enabled && !value.agentUuid) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["agentUuid"],
+          message: "agentUuid is required when Context Reviewer is enabled.",
+        });
+      }
+    }),
+});
+
+export const orgContextTreeFeaturesInputSchema = z.object({
+  contextReviewer: orgContextReviewerSchema.superRefine((value, ctx) => {
+    if (value.enabled && !value.agentUuid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["agentUuid"],
+        message: "agentUuid is required when Context Reviewer is enabled.",
+      });
+    }
+  }),
+});
+
+export const orgContextTreeFeaturesOutputSchema = orgContextTreeFeaturesStorageSchema;
+
 // -- registry --
 
 /**
@@ -204,6 +242,12 @@ export const ORG_SETTINGS_NAMESPACES = {
     output: orgSourceReposOutputSchema,
     readPolicy: "member",
   },
+  context_tree_features: {
+    storage: orgContextTreeFeaturesStorageSchema,
+    input: orgContextTreeFeaturesInputSchema,
+    output: orgContextTreeFeaturesOutputSchema,
+    readPolicy: "admin",
+  },
 } as const satisfies Record<
   string,
   {
@@ -231,6 +275,10 @@ export type OrgContextTreeOutput = OrgSettingOutput<"context_tree">;
 export type OrgSourceReposStorage = OrgSettingStorage<"source_repos">;
 export type OrgSourceReposInput = OrgSettingInput<"source_repos">;
 export type OrgSourceReposOutput = OrgSettingOutput<"source_repos">;
+
+export type OrgContextTreeFeaturesStorage = OrgSettingStorage<"context_tree_features">;
+export type OrgContextTreeFeaturesInput = OrgSettingInput<"context_tree_features">;
+export type OrgContextTreeFeaturesOutput = OrgSettingOutput<"context_tree_features">;
 
 export const orgSettingNamespaceSchema = z.enum(
   ORG_SETTINGS_NAMESPACE_KEYS as [OrgSettingNamespace, ...OrgSettingNamespace[]],

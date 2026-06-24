@@ -21,6 +21,10 @@ architecture rules. Quick map:
 - pnpm 10+
 - Docker (for local PostgreSQL via `docker-compose`)
 
+Use [DEVELOPMENT.md](DEVELOPMENT.md) as the full local development entrypoint,
+including `.env`, migrations, service URLs, and GitHub App setup links. The
+minimal loop is:
+
 ```bash
 pnpm install
 docker compose up -d
