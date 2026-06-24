@@ -25,6 +25,7 @@ const authMock = vi.hoisted(() => ({
     organizationId: "org-1" as string | null,
     memberships: [{ organizationId: "org-1" }, { organizationId: "org-2" }] as Array<{ organizationId: string }>,
     selectOrganization: vi.fn(),
+    switchingOrg: null as { id: string; displayName: string } | null,
   },
 }));
 
@@ -252,6 +253,7 @@ beforeEach(() => {
     organizationId: "org-1",
     memberships: [{ organizationId: "org-1" }, { organizationId: "org-2" }],
     selectOrganization: vi.fn(),
+    switchingOrg: null,
   };
   chatMocks.getChat.mockResolvedValue(chatDetail());
   meChatMocks.markMeChatRead.mockResolvedValue({
@@ -455,6 +457,22 @@ describe("ChatByIdView and CenterPanel", () => {
     await waitForText(container, "ChatView agent-1 chat-xorg");
     expect(authMock.value.selectOrganization).toHaveBeenCalledTimes(1);
     expect(authMock.value.selectOrganization).toHaveBeenCalledWith("org-2");
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not auto-switch back to the open chat's org while a team switch is in flight", async () => {
+    authMock.value.organizationId = "org-2";
+    authMock.value.switchingOrg = { id: "org-2", displayName: "Globex" };
+    authMock.value.memberships = [{ organizationId: "org-1" }, { organizationId: "org-2" }];
+    chatMocks.getChat.mockResolvedValueOnce(chatDetail({ organizationId: "org-1" }));
+    const { ChatByIdView } = await import("../chat-by-id.js");
+    const { container, root } = await renderDom(
+      <ChatByIdView chatId="chat-old-org" narrow={false} onShowConversations={null} />,
+    );
+
+    await waitForText(container, "ChatView agent-1 chat-old-org");
+    expect(authMock.value.selectOrganization).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });
