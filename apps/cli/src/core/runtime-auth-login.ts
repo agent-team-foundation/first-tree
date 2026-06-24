@@ -12,7 +12,12 @@ import {
   runClaudeBrowserLogin,
   runCodexBrowserLogin,
 } from "@first-tree/client";
-import type { CapabilityEntry, PendingAuth, RuntimeAuthFailureReason } from "@first-tree/shared";
+import {
+  type CapabilityEntry,
+  isRuntimeProviderEnabled,
+  type PendingAuth,
+  type RuntimeAuthFailureReason,
+} from "@first-tree/shared";
 
 /**
  * Daemon-side orchestrator for an in-product runtime-auth login.
@@ -179,11 +184,20 @@ async function runClaudeRuntimeAuth(command: RuntimeAuthCommand, deps: RuntimeAu
   // Claude login the user must do — it isn't.
   // A failure stamps `lastAuthError` on the claude-code entry only (the login
   // target); the shared-keychain tui entry just reflects the re-probed state.
+  // While claude-code-tui is disabled (DISABLED_RUNTIME_PROVIDERS), this path
+  // honours the same central switch as the capability aggregator: it must not
+  // spawn the TUI probe (`claude` / tmux) or write a tui entry — a claude-code
+  // login then reflects claude-code only.
   const reflect = async (label: string, failure: AuthFailure | null): Promise<void> => {
     try {
-      const [cc, tui] = await Promise.all([probeClaude(), probeClaudeTui()]);
-      await deps.setProviderEntry("claude-code", attachAuthError(cc, failure, now()));
-      await deps.setProviderEntry("claude-code-tui", tui);
+      if (isRuntimeProviderEnabled("claude-code-tui")) {
+        const [cc, tui] = await Promise.all([probeClaude(), probeClaudeTui()]);
+        await deps.setProviderEntry("claude-code", attachAuthError(cc, failure, now()));
+        await deps.setProviderEntry("claude-code-tui", tui);
+      } else {
+        const cc = await probeClaude();
+        await deps.setProviderEntry("claude-code", attachAuthError(cc, failure, now()));
+      }
     } catch (err) {
       deps.log("⚠️", `runtime-auth: claude re-probe ${label} failed: ${message(err)}`);
     }
