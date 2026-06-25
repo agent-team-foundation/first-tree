@@ -8,7 +8,13 @@ describe("token usage helpers", () => {
     expect(activeTokenCount(usage)).toBe(150);
     expect(processedTokenCount(usage)).toBe(400);
     expect(formatTokenUsageTitle(usage, { turns: 2 })).toBe(
-      "Processed 400 · Active 150 · Input 100 · Cached 250 · Output 50 · 2 usage events",
+      "Processed 400 = Input 100 + Cached 250 + Output 50 · Active 150 (input + output, excludes cached) · 2 usage events",
+    );
+  });
+
+  it("defines processed as an equation even without a turn count", () => {
+    expect(formatTokenUsageTitle({ inputTokens: 100, cachedInputTokens: 250, outputTokens: 50 })).toBe(
+      "Processed 400 = Input 100 + Cached 250 + Output 50 · Active 150 (input + output, excludes cached)",
     );
   });
 
