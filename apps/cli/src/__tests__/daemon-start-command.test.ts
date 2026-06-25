@@ -22,12 +22,14 @@ const coreMocks = vi.hoisted(() => ({
   getClientServiceStatus: vi.fn(),
   handleClientOrgMismatch: vi.fn(),
   isServiceSupported: vi.fn(),
+  isServiceUnitDriftDetected: vi.fn(),
   listPinnedAgents: vi.fn(),
   loadCredentials: vi.fn(),
   migrateLocalAgentDirs: vi.fn(),
   promptMissingFields: vi.fn(),
   promptUpdate: vi.fn(),
   reconcileLocalRuntimeProviders: vi.fn(),
+  refreshClientServiceUnitForUpdate: vi.fn(),
   refreshServerUpdateTarget: vi.fn(),
   startClientService: vi.fn(),
   uploadAgentSkills: vi.fn(),
@@ -115,6 +117,14 @@ beforeEach(() => {
   clientMocks.discoverClaudeCodeSkills.mockResolvedValue([{ name: "review", description: "Review code." }]);
   coreMocks.loadCredentials.mockReturnValue({ refreshToken: "refresh" });
   coreMocks.isServiceSupported.mockReturnValue(false);
+  coreMocks.isServiceUnitDriftDetected.mockReturnValue(false);
+  coreMocks.refreshClientServiceUnitForUpdate.mockReturnValue({
+    platform: "systemd",
+    state: "active",
+    label: "first-tree-dev.service",
+    unitPath: join(home, "unit.service"),
+    logDir: join(home, "logs"),
+  });
   coreMocks.getClientServiceStatus.mockReturnValue({
     platform: "launchd",
     state: "not-installed",
@@ -347,6 +357,17 @@ describe("daemon start command", () => {
         update: expect.objectContaining({ prompt: coreMocks.declineUpdate }),
       }),
     );
+  });
+
+  it("refreshes a drifted service unit when a supervisor child starts", async () => {
+    process.env.FIRST_TREE_SERVICE_MODE = "1";
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.isServiceUnitDriftDetected.mockReturnValue(true);
+
+    await expect(runStart(["--no-interactive"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(coreMocks.refreshClientServiceUnitForUpdate).toHaveBeenCalledTimes(1);
+    expect(output()).toContain("service unit refreshed");
   });
 
   it("does not treat non-supervisor --no-interactive inline runs as managed updates", async () => {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -124,6 +124,72 @@ describe("service install helpers", () => {
       program: "/opt/node/bin/node",
       args: ["/repo/dist/cli/index.mjs"],
     });
+  });
+
+  it("keeps the npm bin shim path instead of resolving it to package-internal dist", () => {
+    const prefix = join(home, "npm-prefix");
+    const binDir = join(prefix, "bin");
+    const pkgDist = join(
+      prefix,
+      "lib",
+      "node_modules",
+      channelConfig.packageName ?? channelConfig.binName,
+      "dist",
+      "cli",
+    );
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(pkgDist, { recursive: true });
+    const target = join(pkgDist, "index.mjs");
+    writeFileSync(target, "#!/usr/bin/env node\n");
+    const binLink = join(binDir, channelConfig.binName);
+    symlinkSync(target, binLink);
+    execFileSyncMock.mockReturnValueOnce(`${binLink}\n`);
+
+    const invocation = resolveCliInvocation();
+    expect(invocation).toEqual({ kind: "bin", program: binLink });
+
+    const unit = renderSystemdUnit(invocation, {});
+    expect(unit).toContain(`ExecStart=${binLink} daemon start --no-interactive`);
+    const pathLine = unit.split("\n").find((line) => line.startsWith("Environment=PATH="));
+    expect(pathLine?.replace("Environment=PATH=", "").split(":")).toContain(binDir);
+  });
+
+  it("infers the npm bin shim from a package-internal argv path when PATH lacks the shim dir", () => {
+    const prefix = join(home, "npm-prefix");
+    const binDir = join(prefix, "bin");
+    const pkgDist = join(
+      prefix,
+      "lib",
+      "node_modules",
+      channelConfig.packageName ?? channelConfig.binName,
+      "dist",
+      "cli",
+    );
+    mkdirSync(binDir, { recursive: true });
+    mkdirSync(pkgDist, { recursive: true });
+    const target = join(pkgDist, "index.mjs");
+    writeFileSync(target, "#!/usr/bin/env node\n");
+    const binLink = join(binDir, channelConfig.binName);
+    symlinkSync(target, binLink);
+    execFileSyncMock.mockImplementationOnce(() => {
+      throw new Error("not found");
+    });
+    process.argv = ["node", target];
+
+    expect(resolveCliInvocation()).toEqual({ kind: "bin", program: binLink });
+  });
+
+  it("keeps an absolute bin argv as the service invocation when PATH lacks the shim dir", () => {
+    const binDir = join(home, "npm-prefix", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const binPath = join(binDir, channelConfig.binName);
+    writeFileSync(binPath, "#!/usr/bin/env node\n");
+    execFileSyncMock.mockImplementationOnce(() => {
+      throw new Error("not found");
+    });
+    process.argv = ["node", binPath];
+
+    expect(resolveCliInvocation()).toEqual({ kind: "bin", program: binPath });
   });
 
   it("renders service templates with escaped values and quoted shell arguments", () => {
@@ -273,6 +339,7 @@ describe("service install helpers", () => {
     setPlatform("linux");
     spawnSyncMock
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "no\n", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
@@ -296,6 +363,7 @@ describe("service install helpers", () => {
     expect(unit).toContain(`Environment=FIRST_TREE_HOME=${process.env.FIRST_TREE_HOME}`);
     expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
       ["systemctl", ["--user", "daemon-reload"]],
+      ["systemctl", ["--user", "reset-failed", channelConfig.serviceUnitFile]],
       ["loginctl", ["show-user", "gandy", "-p", "Linger", "--value"]],
       ["loginctl", ["enable-linger", "gandy"]],
       ["systemctl", ["--user", "enable", "--now", channelConfig.serviceUnitFile]],
@@ -312,10 +380,12 @@ describe("service install helpers", () => {
     spawnSyncMock.mockReset();
     spawnSyncMock
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "start-limit still busy" })
       .mockReturnValueOnce({ status: 0, stdout: "no\n", stderr: "" })
       .mockReturnValueOnce({ status: 1, stdout: "", stderr: "linger denied" })
       .mockReturnValueOnce({ status: 1, stdout: "", stderr: "enable failed" });
     expect(() => installClientService()).toThrow("systemctl --user enable --now");
+    expect(printMocks.line).toHaveBeenCalledWith(expect.stringContaining("systemctl reset-failed"));
     expect(printMocks.line).toHaveBeenCalledWith(
       expect.stringContaining("loginctl enable-linger failed: linger denied"),
     );
@@ -336,6 +406,7 @@ describe("service install helpers", () => {
     setPlatform("linux");
     spawnSyncMock
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "yes\n", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
       .mockReturnValueOnce({ status: 0, stdout: "inactive\n", stderr: "" });
@@ -343,6 +414,7 @@ describe("service install helpers", () => {
     expect(installClientService()).toMatchObject({ platform: "systemd", state: "inactive" });
     expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
       ["systemctl", ["--user", "daemon-reload"]],
+      ["systemctl", ["--user", "reset-failed", channelConfig.serviceUnitFile]],
       ["loginctl", ["show-user", "gandy", "-p", "Linger", "--value"]],
       ["systemctl", ["--user", "enable", "--now", channelConfig.serviceUnitFile]],
       ["systemctl", ["--user", "is-active", channelConfig.serviceUnitFile]],

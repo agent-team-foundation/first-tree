@@ -26,6 +26,7 @@
     "ftd": "./dist/cli/index.mjs"
   },
   "files": [
+    "bin",
     "dist",
     "skills",
     "README.md",

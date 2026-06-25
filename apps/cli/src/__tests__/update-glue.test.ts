@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { channelConfig } from "../core/channel.js";
 
 const updateMocks = vi.hoisted(() => ({
   detectInstallMode: vi.fn(),
@@ -10,6 +9,10 @@ const updateMocks = vi.hoisted(() => ({
 const updateStateMocks = vi.hoisted(() => ({
   isLoopGuarded: vi.fn(),
   recordUpdateAttempt: vi.fn(),
+}));
+
+const serviceInstallMocks = vi.hoisted(() => ({
+  resolveCliInvocation: vi.fn(),
 }));
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
@@ -24,6 +27,7 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("../core/update.js", () => updateMocks);
 vi.mock("../core/update-state.js", () => updateStateMocks);
+vi.mock("../core/service-install.js", () => serviceInstallMocks);
 vi.mock("../core/output.js", () => ({
   print: { line: printLineMock },
 }));
@@ -38,6 +42,7 @@ describe("update glue", () => {
     updateMocks.installGlobalSpec.mockReset();
     updateStateMocks.isLoopGuarded.mockReset();
     updateStateMocks.recordUpdateAttempt.mockReset();
+    serviceInstallMocks.resolveCliInvocation.mockReset();
     spawnSyncMock.mockReset();
     printLineMock.mockClear();
     exitMock.mockClear();
@@ -49,6 +54,10 @@ describe("update glue", () => {
       installedVersion: "0.6.0",
     });
     updateStateMocks.isLoopGuarded.mockReturnValue(false);
+    serviceInstallMocks.resolveCliInvocation.mockReturnValue({
+      kind: "bin",
+      program: "/home/alice/.npm/bin/first-tree",
+    });
     spawnSyncMock.mockReturnValue({ status: 0, signal: null });
   });
 
@@ -146,7 +155,7 @@ describe("update glue", () => {
       createExecuteUpdate({ managed: true })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
     ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
     expect(spawnSyncMock).toHaveBeenCalledWith(
-      channelConfig.binName,
+      "/home/alice/.npm/bin/first-tree",
       ["daemon", "refresh-unit"],
       expect.objectContaining({ timeout: 45_000 }),
     );

@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, userInfo } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { defaultHome } from "@first-tree/shared/config";
 import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
@@ -106,9 +106,9 @@ function launchdWrapperPath(): string {
   return join(defaultHome(), "service", LAUNCHD_DISPLAY_NAME);
 }
 
-function servicePathEnv(basePaths: readonly string[]): string {
+function servicePathEnv(basePaths: readonly string[], extraPaths: readonly string[] = []): string {
   const seen = new Set<string>();
-  const paths = [dirname(process.execPath), ...basePaths].filter((value) => {
+  const paths = [dirname(process.execPath), ...extraPaths, ...basePaths].filter((value) => {
     if (seen.has(value)) return false;
     seen.add(value);
     return true;
@@ -116,12 +116,16 @@ function servicePathEnv(basePaths: readonly string[]): string {
   return paths.join(":");
 }
 
-function systemdPathEnv(): string {
-  return servicePathEnv(SYSTEMD_BASE_PATH);
+function invocationPathEntries(invocation?: ResolvedBinary): string[] {
+  return invocation?.kind === "bin" ? [dirname(invocation.program)] : [];
 }
 
-function launchdPathEnv(): string {
-  return servicePathEnv(LAUNCHD_BASE_PATH);
+function systemdPathEnv(invocation?: ResolvedBinary): string {
+  return servicePathEnv(SYSTEMD_BASE_PATH, invocationPathEntries(invocation));
+}
+
+function launchdPathEnv(invocation?: ResolvedBinary): string {
+  return servicePathEnv(LAUNCHD_BASE_PATH, invocationPathEntries(invocation));
 }
 
 const PROXY_ENV_KEYS = [
@@ -196,12 +200,13 @@ function whichBin(name: string): string | null {
  * `first-tree-staging` / `first-tree-dev`), so a PATH lookup against
  * `channelConfig.binName` cannot collide with another channel's install.
  *
- *   ① bin found on PATH — use the installed shim. For npm-installed
+ *   ① bin found on PATH — use the installed shim path. For npm-installed
  *      packages (prod, staging) the shim is usually under /usr/local/bin
  *      or ~/.npm-global/bin; for dev it's typically a symlink under
- *      ~/.local/bin pointing at the in-tree dist. Either way, using the
- *      shim means a re-install / re-link atomically swaps the binary
- *      without rewriting the unit file.
+ *      ~/.local/bin pointing at the in-tree dist. Keep the shim path in
+ *      service files: npm re-install / re-link atomically swaps it, while
+ *      resolving it to the package-internal dist path can leave systemd
+ *      executing a file removed by the next package version.
  *
  *   ② bin NOT on PATH — pin to the running interpreter + script. Common
  *      for dev when `~/.local/bin` is not in the install-time shell's
@@ -212,12 +217,7 @@ function whichBin(name: string): string | null {
 export function resolveCliInvocation(): ResolvedBinary {
   const bin = whichBin(channelConfig.binName);
   if (bin && isAbsolute(bin)) {
-    try {
-      // Resolve symlinks so launchd records a stable path.
-      return { kind: "bin", program: realpathSync(bin) };
-    } catch {
-      return { kind: "bin", program: bin };
-    }
+    return { kind: "bin", program: bin };
   }
 
   const script = process.argv[1];
@@ -225,7 +225,23 @@ export function resolveCliInvocation(): ResolvedBinary {
     throw new Error("Cannot resolve CLI entry point (process.argv[1] is empty).");
   }
   const scriptAbs = isAbsolute(script) ? script : join(process.cwd(), script);
+  if (basename(scriptAbs) === channelConfig.binName && existsSync(scriptAbs)) {
+    return { kind: "bin", program: scriptAbs };
+  }
+  const inferredShim = inferNpmGlobalShimFromScript(scriptAbs);
+  if (inferredShim) return { kind: "bin", program: inferredShim };
   return { kind: "node", program: process.execPath, args: [scriptAbs] };
+}
+
+function inferNpmGlobalShimFromScript(scriptAbs: string): string | null {
+  const packageName = channelConfig.packageName ?? channelConfig.binName;
+  const marker = `/lib/node_modules/${packageName}/`;
+  const markerIndex = scriptAbs.indexOf(marker);
+  if (markerIndex <= 0) return null;
+
+  const prefix = scriptAbs.slice(0, markerIndex);
+  const shim = join(prefix, "bin", channelConfig.binName);
+  return existsSync(shim) ? shim : null;
 }
 
 function ensureLogDir(): void {
@@ -245,7 +261,11 @@ function launchdPlistPath(): string {
  * itself `exec`s the resolved CLI invocation with the daemon args (see
  * `renderLaunchdWrapper`), so nothing else needs to be on the command line.
  */
-export function renderPlist(wrapperPath: string, proxyEnv: Record<string, string> = collectProxyEnv()): string {
+export function renderPlist(
+  wrapperPath: string,
+  proxyEnv: Record<string, string> = collectProxyEnv(),
+  invocation?: ResolvedBinary,
+): string {
   const programArgs: string[] = [wrapperPath];
 
   const argsXml = programArgs.map((a) => `    <string>${escapeXml(a)}</string>`).join("\n");
@@ -273,7 +293,9 @@ export function renderPlist(wrapperPath: string, proxyEnv: Record<string, string
   // launchd does not inherit the operator's interactive shell PATH. Put the
   // current Node directory first so npm-installed CLI shims and self-update
   // run under the same Node toolchain that installed/refreshed the service.
-  const pathEnvXml = escapeXml(launchdPathEnv());
+  // If the CLI shim lives outside the Node directory (custom npm prefix),
+  // include that directory too so in-daemon refresh-unit can find it.
+  const pathEnvXml = escapeXml(launchdPathEnv(invocation));
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTD/PropertyList-1.0.dtd">
@@ -398,7 +420,7 @@ function writeLaunchdServiceFiles(): { plistPath: string; wrapperPath: string } 
 
   const plistPath = launchdPlistPath();
   mkdirSync(dirname(plistPath), { recursive: true });
-  writeFileSync(plistPath, renderPlist(wrapperPath), { mode: 0o644 });
+  writeFileSync(plistPath, renderPlist(wrapperPath, collectProxyEnv(), invocation), { mode: 0o644 });
 
   return { plistPath, wrapperPath };
 }
@@ -541,8 +563,10 @@ export function renderSystemdUnit(
   const homeEnv = `Environment=FIRST_TREE_HOME=${shellQuote(defaultHome())}\n`;
   // `systemd --user` does not inherit the operator's interactive shell PATH.
   // Put this CLI's Node directory first so npm/nvm-installed shebangs and
-  // self-update use the same Node toolchain when supervised.
-  const pathEnv = `Environment=PATH=${shellQuote(systemdPathEnv())}\n`;
+  // self-update use the same Node toolchain when supervised. If the CLI shim
+  // lives outside the Node directory (custom npm prefix), include that
+  // directory too so in-daemon refresh-unit can find it before exiting 75.
+  const pathEnv = `Environment=PATH=${shellQuote(systemdPathEnv(invocation))}\n`;
 
   // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
   const proxyEnvLines = Object.entries(proxyEnv)
@@ -645,6 +669,15 @@ function tryEnableLinger(): { ok: true; alreadyOn: boolean } | { ok: false; reas
   return { ok: false, reason: res.stderr || `exit ${res.code ?? "unknown"}` };
 }
 
+function resetSystemdFailedState(): void {
+  const res = runCapture("systemctl", ["--user", "reset-failed", SYSTEMD_UNIT], 5_000);
+  if (!res.ok) {
+    print.line(
+      `    warning: systemctl reset-failed ${SYSTEMD_UNIT} failed: ${res.stderr || `exit ${res.code ?? "unknown"}`}\n`,
+    );
+  }
+}
+
 function installSystemd(): ServiceInfo {
   // Legacy unit auto-cleanup deliberately not done here — same reason
   // as `installLaunchd` above. A blanket `disable --now` + `rm` of
@@ -665,6 +698,11 @@ function installSystemd(): ServiceInfo {
     );
   }
 
+  // A broken ExecStart can trip StartLimitBurst before the refreshed unit is
+  // written. Clear that hold-back before enable --now so install/refresh can
+  // recover immediately instead of waiting for StartLimitIntervalSec.
+  resetSystemdFailedState();
+
   // Enable linger BEFORE enable --now so the unit can survive logout from
   // the very first session. Best-effort: if polkit denies it, surface a
   // warning with the manual recovery command rather than failing install.
@@ -680,7 +718,7 @@ function installSystemd(): ServiceInfo {
   if (!enableRes.ok) {
     throw new Error(
       `systemctl --user enable --now ${SYSTEMD_UNIT} failed: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n` +
-        `    Recovery: \`systemctl --user stop ${SYSTEMD_UNIT}\` then \`${channelConfig.binName} login <token>\`.`,
+        `    Recovery: \`systemctl --user reset-failed ${SYSTEMD_UNIT}\` then \`${channelConfig.binName} login <token>\`.`,
     );
   }
 
@@ -795,7 +833,7 @@ function launchdUnitDriftDetected(): boolean {
   // upgrade or install-path move — check both or auto-update would skip a
   // reinstall and keep launching a stale binary.
   const wrapperDrift = readFileOrFlagDrift(wrapperPath, renderLaunchdWrapper(invocation));
-  const plistDrift = readFileOrFlagDrift(launchdPlistPath(), renderPlist(wrapperPath));
+  const plistDrift = readFileOrFlagDrift(launchdPlistPath(), renderPlist(wrapperPath, collectProxyEnv(), invocation));
   return wrapperDrift || plistDrift;
 }
 

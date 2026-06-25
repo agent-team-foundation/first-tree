@@ -31,12 +31,14 @@ import {
   getClientServiceStatus,
   handleClientOrgMismatch,
   isServiceSupported,
+  isServiceUnitDriftDetected,
   listPinnedAgents,
   loadCredentials,
   migrateLocalAgentDirs,
   promptMissingFields,
   promptUpdate,
   reconcileLocalRuntimeProviders,
+  refreshClientServiceUnitForUpdate,
   refreshServerUpdateTarget,
   runRuntimeAuthLogin,
   startClientService,
@@ -166,6 +168,18 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // capture stays empty under normal operation.
         if (process.env.FIRST_TREE_SERVICE_MODE === "1") {
           configureClientLoggerForService(join(defaultHome(), "logs"));
+        }
+
+        if (isSupervisorChild && isServiceSupported()) {
+          try {
+            if (isServiceUnitDriftDetected()) {
+              const info = refreshClientServiceUnitForUpdate();
+              print.status("•", `service unit refreshed at ${info.unitPath}`);
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            print.status("⚠️", `service unit refresh skipped: ${msg}`);
+          }
         }
 
         // Load agents (may be empty — daemon can start without agents).

@@ -4,6 +4,7 @@ import { confirm } from "@inquirer/prompts";
 import * as semver from "semver";
 import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
+import { resolveCliInvocation } from "./service-install.js";
 import { detectInstallMode, fetchServerCommandVersion, installGlobalSpec, PACKAGE_NAME } from "./update.js";
 import { isLoopGuarded, recordUpdateAttempt } from "./update-state.js";
 
@@ -257,8 +258,11 @@ function refreshServiceUnit(): void {
   // templates.
   const bin = channelConfig.binName;
   const recovery = `\`${bin} logout && ${bin} login <token>\``;
+  const invocation = resolveCliInvocation();
+  const program = invocation.program;
+  const args = invocation.kind === "bin" ? ["daemon", "refresh-unit"] : [...invocation.args, "daemon", "refresh-unit"];
   try {
-    const res = spawnSync(bin, ["daemon", "refresh-unit"], {
+    const res = spawnSync(program, args, {
       stdio: ["ignore", "inherit", "inherit"],
       timeout: 45_000,
       // Sanitize FIRST_TREE_SERVICE_MODE so the child doesn't think it's
