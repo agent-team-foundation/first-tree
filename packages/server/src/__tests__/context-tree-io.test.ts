@@ -731,6 +731,20 @@ describe("context-tree IO service", () => {
     expect(timings.find((timing) => timing.name === "io_skipped_rows")?.fields).toMatchObject({ rowCount: 1 });
   });
 
+  it("prefilters skipped diagnostics by organization agents before scanning session events", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: Array<{ name: string; fields?: Record<string, unknown> }> = [];
+
+    await summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7, {
+      timing: (name, _ms, fields) => timings.push({ name, fields }),
+    });
+
+    const agentRows = timings.find((timing) => timing.name === "io_skipped_agents_rows")?.fields;
+    expect(agentRows).toBeDefined();
+    expect(Number(agentRows?.agentCount)).toBeGreaterThanOrEqual(1);
+  });
+
   it("records git status delta refs as synthetic writes for unsupported shell commands", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();

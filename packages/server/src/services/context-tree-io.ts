@@ -86,6 +86,11 @@ type NormalizedFileRefRecord = {
   derivation: EventIoDerivation;
 };
 
+type ContextTreeIoCandidateAgent = {
+  agentId: string;
+  runtimeProvider: string;
+};
+
 export type ContextTreeIoDecision =
   | {
       recordable: true;
@@ -285,6 +290,29 @@ function incrementCount(map: Map<string, number>, key: string): void {
   map.set(key, (map.get(key) ?? 0) + 1);
 }
 
+async function listContextTreeIoCandidateAgents(
+  db: Database,
+  organizationId: string,
+  timing: TimingSink | undefined,
+  stage: string,
+): Promise<ContextTreeIoCandidateAgent[]> {
+  const rows = await timeWithSink(
+    timing,
+    `${stage}_agents`,
+    () =>
+      db
+        .select({
+          agentId: agents.uuid,
+          runtimeProvider: agents.runtimeProvider,
+        })
+        .from(agents)
+        .where(eq(agents.organizationId, organizationId)),
+    { organizationId },
+  );
+  timing?.(`${stage}_agents_rows`, 0, { agentCount: rows.length });
+  return rows;
+}
+
 function sortedCountEntries(
   map: Map<string, number>,
   keyName: "runtimeProvider" | "toolName",
@@ -322,6 +350,12 @@ export async function summarizeContextTreeIoSkippedEvents(
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const binding = await getOrgContextTree(db, organizationId);
   const bindingBranch = binding.branch ?? "main";
+  const candidateAgents = await listContextTreeIoCandidateAgents(db, organizationId, options.timing, "io_skipped");
+  const runtimeProviderByAgent = new Map(candidateAgents.map((agent) => [agent.agentId, agent.runtimeProvider]));
+  if (candidateAgents.length === 0) {
+    options.timing?.("io_skipped_rows", 0, { rowCount: 0 });
+    return { windowDays, totalEventCount: 0, reasons: [] };
+  }
   const rows = await timeWithSink(options.timing, "io_skipped_scan", () =>
     db
       .select({
@@ -330,15 +364,16 @@ export async function summarizeContextTreeIoSkippedEvents(
         chatId: sessionEvents.chatId,
         kind: sessionEvents.kind,
         payload: sessionEvents.payload,
-        runtimeProvider: agents.runtimeProvider,
         chatOrganizationId: chats.organizationId,
       })
       .from(sessionEvents)
-      .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
       .leftJoin(chats, eq(chats.id, sessionEvents.chatId))
       .where(
         and(
-          eq(agents.organizationId, organizationId),
+          inArray(
+            sessionEvents.agentId,
+            candidateAgents.map((agent) => agent.agentId),
+          ),
           gte(sessionEvents.createdAt, since),
           or(eq(sessionEvents.kind, "context_tree_usage"), eq(sessionEvents.kind, "tool_call")),
           sql`NOT EXISTS (
@@ -367,7 +402,7 @@ export async function summarizeContextTreeIoSkippedEvents(
     const decision = event
       ? buildContextTreeIoDecision({
           event,
-          runtimeProvider: row.runtimeProvider,
+          runtimeProvider: runtimeProviderByAgent.get(row.agentId) ?? "unknown",
           bindingRepo: binding.repo,
           bindingBranch,
           chatInOrg: row.chatOrganizationId === organizationId,
@@ -383,7 +418,7 @@ export async function summarizeContextTreeIoSkippedEvents(
     };
     bucket.eventCount += 1;
     bucket.agentIds.add(row.agentId);
-    incrementCount(bucket.runtimeProviders, row.runtimeProvider);
+    incrementCount(bucket.runtimeProviders, runtimeProviderByAgent.get(row.agentId) ?? "unknown");
     const toolName = event ? toolNameOf(event) : null;
     if (toolName) incrementCount(bucket.toolNames, toolName);
     byReason.set(decision.reason, bucket);
@@ -501,6 +536,12 @@ async function backfillContextTreeIoSessionEvents(
   since: Date,
   options: ContextTreeIoSummaryOptions = {},
 ): Promise<void> {
+  const candidateAgents = await listContextTreeIoCandidateAgents(db, organizationId, options.timing, "io_backfill");
+  const runtimeProviderByAgent = new Map(candidateAgents.map((agent) => [agent.agentId, agent.runtimeProvider]));
+  if (candidateAgents.length === 0) {
+    options.timing?.("io_backfill_rows", 0, { rowCount: 0 });
+    return;
+  }
   const rows = await timeWithSink(options.timing, "io_backfill_scan", () =>
     db
       .select({
@@ -510,13 +551,14 @@ async function backfillContextTreeIoSessionEvents(
         kind: sessionEvents.kind,
         payload: sessionEvents.payload,
         createdAt: sessionEvents.createdAt,
-        runtimeProvider: agents.runtimeProvider,
       })
       .from(sessionEvents)
-      .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
       .where(
         and(
-          eq(agents.organizationId, organizationId),
+          inArray(
+            sessionEvents.agentId,
+            candidateAgents.map((agent) => agent.agentId),
+          ),
           or(
             eq(sessionEvents.kind, "context_tree_usage"),
             and(
@@ -555,7 +597,7 @@ async function backfillContextTreeIoSessionEvents(
           organizationId,
           agentId: row.agentId,
           chatId: row.chatId,
-          runtimeProvider: row.runtimeProvider,
+          runtimeProvider: runtimeProviderByAgent.get(row.agentId) ?? "unknown",
           sessionEvent: {
             id: row.id,
             kind: row.kind,
