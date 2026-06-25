@@ -26,6 +26,7 @@ import { chats } from "../db/schema/chats.js";
 import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import { createLogger } from "../observability/index.js";
+import { type TimingSink, timeWithSink } from "../observability/timing.js";
 import { getOrgContextTree } from "./org-settings.js";
 
 const CONTEXT_TREE_IO_FEED_LIMIT = 50;
@@ -41,6 +42,10 @@ const GIT_STATUS_DELTA_DERIVATION: EventIoDerivation = { action: "write", source
 export type ContextTreeIoViewer = {
   humanAgentId: string;
   memberId: string;
+};
+
+export type ContextTreeIoSummaryOptions = {
+  timing?: TimingSink;
 };
 
 export type RecordContextTreeIoInput = {
@@ -311,30 +316,34 @@ export async function summarizeContextTreeIoSkippedEvents(
   db: Database,
   organizationId: string,
   windowDays: number,
+  options: ContextTreeIoSummaryOptions = {},
 ): Promise<ContextTreeIoSkipSummary> {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const binding = await getOrgContextTree(db, organizationId);
   const bindingBranch = binding.branch ?? "main";
-  const rows = await db
-    .select({
-      id: sessionEvents.id,
-      agentId: sessionEvents.agentId,
-      chatId: sessionEvents.chatId,
-      kind: sessionEvents.kind,
-      payload: sessionEvents.payload,
-      runtimeProvider: agents.runtimeProvider,
-      chatOrganizationId: chats.organizationId,
-    })
-    .from(sessionEvents)
-    .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
-    .leftJoin(chats, eq(chats.id, sessionEvents.chatId))
-    .where(
-      and(
-        eq(agents.organizationId, organizationId),
-        gte(sessionEvents.createdAt, since),
-        or(eq(sessionEvents.kind, "context_tree_usage"), eq(sessionEvents.kind, "tool_call")),
+  const rows = await timeWithSink(options.timing, "io_skipped_scan", () =>
+    db
+      .select({
+        id: sessionEvents.id,
+        agentId: sessionEvents.agentId,
+        chatId: sessionEvents.chatId,
+        kind: sessionEvents.kind,
+        payload: sessionEvents.payload,
+        runtimeProvider: agents.runtimeProvider,
+        chatOrganizationId: chats.organizationId,
+      })
+      .from(sessionEvents)
+      .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
+      .leftJoin(chats, eq(chats.id, sessionEvents.chatId))
+      .where(
+        and(
+          eq(agents.organizationId, organizationId),
+          gte(sessionEvents.createdAt, since),
+          or(eq(sessionEvents.kind, "context_tree_usage"), eq(sessionEvents.kind, "tool_call")),
+        ),
       ),
-    );
+  );
+  options.timing?.("io_skipped_rows", 0, { rowCount: rows.length });
 
   const byReason = new Map<
     ContextTreeIoSkipReason,
@@ -480,63 +489,78 @@ export async function recordFromSessionEvent(db: Database, input: RecordContextT
     });
 }
 
-async function backfillContextTreeIoSessionEvents(db: Database, organizationId: string, since: Date): Promise<void> {
-  const rows = await db
-    .select({
-      id: sessionEvents.id,
-      agentId: sessionEvents.agentId,
-      chatId: sessionEvents.chatId,
-      kind: sessionEvents.kind,
-      payload: sessionEvents.payload,
-      createdAt: sessionEvents.createdAt,
-      runtimeProvider: agents.runtimeProvider,
-    })
-    .from(sessionEvents)
-    .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
-    .where(
-      and(
-        eq(agents.organizationId, organizationId),
-        or(
-          eq(sessionEvents.kind, "context_tree_usage"),
-          and(
-            eq(sessionEvents.kind, "tool_call"),
-            sql`${sessionEvents.payload}->>'status' = 'ok'`,
-            sql`EXISTS (
-              SELECT 1
-              FROM jsonb_array_elements(
-                CASE
-                  WHEN jsonb_typeof(${sessionEvents.payload}->'toolFileRefs') = 'array'
-                  THEN ${sessionEvents.payload}->'toolFileRefs'
-                  ELSE '[]'::jsonb
-                END
-              ) AS ref
-              WHERE ref ? 'repoUrl' AND ref ? 'repoRelativePath'
-            )`,
+async function backfillContextTreeIoSessionEvents(
+  db: Database,
+  organizationId: string,
+  since: Date,
+  options: ContextTreeIoSummaryOptions = {},
+): Promise<void> {
+  const rows = await timeWithSink(options.timing, "io_backfill_scan", () =>
+    db
+      .select({
+        id: sessionEvents.id,
+        agentId: sessionEvents.agentId,
+        chatId: sessionEvents.chatId,
+        kind: sessionEvents.kind,
+        payload: sessionEvents.payload,
+        createdAt: sessionEvents.createdAt,
+        runtimeProvider: agents.runtimeProvider,
+      })
+      .from(sessionEvents)
+      .innerJoin(agents, eq(agents.uuid, sessionEvents.agentId))
+      .where(
+        and(
+          eq(agents.organizationId, organizationId),
+          or(
+            eq(sessionEvents.kind, "context_tree_usage"),
+            and(
+              eq(sessionEvents.kind, "tool_call"),
+              sql`${sessionEvents.payload}->>'status' = 'ok'`,
+              sql`EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(
+                  CASE
+                    WHEN jsonb_typeof(${sessionEvents.payload}->'toolFileRefs') = 'array'
+                    THEN ${sessionEvents.payload}->'toolFileRefs'
+                    ELSE '[]'::jsonb
+                  END
+                ) AS ref
+                WHERE ref ? 'repoUrl' AND ref ? 'repoRelativePath'
+              )`,
+            ),
           ),
+          gte(sessionEvents.createdAt, since),
+          sql`NOT EXISTS (
+            SELECT 1
+            FROM context_tree_io_events existing
+            WHERE existing.source_session_event_id = ${sessionEvents.id}
+          )`,
         ),
-        gte(sessionEvents.createdAt, since),
-        sql`NOT EXISTS (
-          SELECT 1
-          FROM context_tree_io_events existing
-          WHERE existing.source_session_event_id = ${sessionEvents.id}
-        )`,
       ),
-    );
+  );
+  options.timing?.("io_backfill_rows", 0, { rowCount: rows.length });
 
-  for (const row of rows) {
-    await recordFromSessionEvent(db, {
-      organizationId,
-      agentId: row.agentId,
-      chatId: row.chatId,
-      runtimeProvider: row.runtimeProvider,
-      sessionEvent: {
-        id: row.id,
-        kind: row.kind,
-        payload: row.payload,
-        createdAt: isoOrNull(row.createdAt) ?? new Date().toISOString(),
-      },
-    });
-  }
+  await timeWithSink(
+    options.timing,
+    "io_backfill_record",
+    async () => {
+      for (const row of rows) {
+        await recordFromSessionEvent(db, {
+          organizationId,
+          agentId: row.agentId,
+          chatId: row.chatId,
+          runtimeProvider: row.runtimeProvider,
+          sessionEvent: {
+            id: row.id,
+            kind: row.kind,
+            payload: row.payload,
+            createdAt: isoOrNull(row.createdAt) ?? new Date().toISOString(),
+          },
+        });
+      }
+    },
+    { rowCount: rows.length },
+  );
 }
 
 function allEventsSql(organizationId: string, sinceIso: string) {
@@ -671,29 +695,35 @@ export async function reconcileContextTreeWrites(
   organizationId: string,
   windowDays: number,
   gitWrites: ContextTreeWriteEvent[],
+  options: ContextTreeIoSummaryOptions = {},
 ): Promise<ContextTreeWriteEvent[]> {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const sinceIso = since.toISOString();
-  await backfillContextTreeIoSessionEvents(db, organizationId, since);
+  await timeWithSink(options.timing, "write_reconcile_backfill", () =>
+    backfillContextTreeIoSessionEvents(db, organizationId, since, options),
+  );
 
-  const writeRows = await db.execute<{
-    agent_id: string;
-    agent_name: string;
-    agent_avatar_color_token: string | null;
-    target_path: string;
-    created_at: Date | string;
-  }>(sql`
-    ${allEventsSql(organizationId, sinceIso)}
-    SELECT
-      all_events.agent_id,
-      all_events.agent_name,
-      all_events.agent_avatar_color_token,
-      all_events.target_path,
-      all_events.created_at
-    FROM all_events
-    WHERE all_events.action = 'write'
-    ORDER BY all_events.created_at ASC
-  `);
+  const writeRows = await timeWithSink(options.timing, "write_reconcile_query", () =>
+    db.execute<{
+      agent_id: string;
+      agent_name: string;
+      agent_avatar_color_token: string | null;
+      target_path: string;
+      created_at: Date | string;
+    }>(sql`
+      ${allEventsSql(organizationId, sinceIso)}
+      SELECT
+        all_events.agent_id,
+        all_events.agent_name,
+        all_events.agent_avatar_color_token,
+        all_events.target_path,
+        all_events.created_at
+      FROM all_events
+      WHERE all_events.action = 'write'
+      ORDER BY all_events.created_at ASC
+    `),
+  );
+  options.timing?.("write_reconcile_rows", 0, { rowCount: writeRows.length, gitWriteCount: gitWrites.length });
 
   const telemetryByKey = new Map<string, ReconcileTelemetryWrite[]>();
   for (const row of writeRows) {
@@ -775,26 +805,31 @@ export async function summarizeContextTreeIo(
   organizationId: string,
   windowDays: number,
   viewer?: ContextTreeIoViewer,
+  options: ContextTreeIoSummaryOptions = {},
 ): Promise<ContextTreeIoSummary> {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const sinceIso = since.toISOString();
-  await backfillContextTreeIoSessionEvents(db, organizationId, since);
+  await timeWithSink(options.timing, "io_backfill", () =>
+    backfillContextTreeIoSessionEvents(db, organizationId, since, options),
+  );
 
-  const countRows = await db.execute<{
-    action: string;
-    agent_count: number;
-    event_count: number;
-    target_count: number;
-  }>(sql`
-    ${allEventsSql(organizationId, sinceIso)}
-    SELECT
-      action,
-      count(DISTINCT agent_id)::int AS agent_count,
-      count(*)::int AS event_count,
-      count(DISTINCT target_path)::int AS target_count
-    FROM all_events
-    GROUP BY action
-  `);
+  const countRows = await timeWithSink(options.timing, "io_counts", () =>
+    db.execute<{
+      action: string;
+      agent_count: number;
+      event_count: number;
+      target_count: number;
+    }>(sql`
+      ${allEventsSql(organizationId, sinceIso)}
+      SELECT
+        action,
+        count(DISTINCT agent_id)::int AS agent_count,
+        count(*)::int AS event_count,
+        count(DISTINCT target_path)::int AS target_count
+      FROM all_events
+      GROUP BY action
+    `),
+  );
 
   const summary = {
     read: emptyBucket(),
@@ -809,74 +844,82 @@ export async function summarizeContextTreeIo(
     };
   }
 
-  const agentRows = await db.execute<{
-    agent_id: string;
-    agent_name: string;
-    agent_avatar_color_token: string | null;
-    runtime_provider: string;
-    read_count: number;
-    write_count: number;
-    last_read_at: Date | string | null;
-    last_write_at: Date | string | null;
-    last_event_at: Date | string;
-  }>(sql`
-    ${allEventsSql(organizationId, sinceIso)}
-    SELECT
-      agent_id,
-      agent_name,
-      agent_avatar_color_token,
-      runtime_provider,
-      count(*) FILTER (WHERE action = 'read')::int AS read_count,
-      count(*) FILTER (WHERE action = 'write')::int AS write_count,
-      max(created_at) FILTER (WHERE action = 'read') AS last_read_at,
-      max(created_at) FILTER (WHERE action = 'write') AS last_write_at,
-      max(created_at) AS last_event_at
-    FROM all_events
-    GROUP BY agent_id, agent_name, agent_avatar_color_token, runtime_provider
-    ORDER BY last_event_at DESC
-  `);
+  const agentRows = await timeWithSink(options.timing, "io_agents", () =>
+    db.execute<{
+      agent_id: string;
+      agent_name: string;
+      agent_avatar_color_token: string | null;
+      runtime_provider: string;
+      read_count: number;
+      write_count: number;
+      last_read_at: Date | string | null;
+      last_write_at: Date | string | null;
+      last_event_at: Date | string;
+    }>(sql`
+      ${allEventsSql(organizationId, sinceIso)}
+      SELECT
+        agent_id,
+        agent_name,
+        agent_avatar_color_token,
+        runtime_provider,
+        count(*) FILTER (WHERE action = 'read')::int AS read_count,
+        count(*) FILTER (WHERE action = 'write')::int AS write_count,
+        max(created_at) FILTER (WHERE action = 'read') AS last_read_at,
+        max(created_at) FILTER (WHERE action = 'write') AS last_write_at,
+        max(created_at) AS last_event_at
+      FROM all_events
+      GROUP BY agent_id, agent_name, agent_avatar_color_token, runtime_provider
+      ORDER BY last_event_at DESC
+    `),
+  );
 
-  const recentRows = await db.execute<{
-    id: string;
-    agent_id: string;
-    agent_name: string;
-    agent_avatar_color_token: string | null;
-    runtime_provider: string;
-    action: string;
-    source: string;
-    target_kind: string;
-    target_path: string;
-    raw_chat_id: string;
-    joined_chat_id: string | null;
-    chat_topic: string | null;
-    created_at: Date | string;
-  }>(sql`
-    ${allEventsSql(organizationId, sinceIso)}
-    SELECT
-      all_events.id,
-      all_events.agent_id,
-      all_events.agent_name,
-      all_events.agent_avatar_color_token,
-      all_events.runtime_provider,
-      all_events.action,
-      all_events.source,
-      all_events.target_kind,
-      all_events.target_path,
-      all_events.chat_id AS raw_chat_id,
-      c.id AS joined_chat_id,
-      c.topic AS chat_topic,
-      all_events.created_at
-    FROM all_events
-    LEFT JOIN chats c ON c.id = all_events.chat_id AND c.organization_id = ${organizationId}
-    WHERE all_events.action = 'read'
-    ORDER BY all_events.created_at DESC
-    LIMIT ${CONTEXT_TREE_IO_FEED_LIMIT}
-  `);
+  const recentRows = await timeWithSink(options.timing, "io_recent_reads", () =>
+    db.execute<{
+      id: string;
+      agent_id: string;
+      agent_name: string;
+      agent_avatar_color_token: string | null;
+      runtime_provider: string;
+      action: string;
+      source: string;
+      target_kind: string;
+      target_path: string;
+      raw_chat_id: string;
+      joined_chat_id: string | null;
+      chat_topic: string | null;
+      created_at: Date | string;
+    }>(sql`
+      ${allEventsSql(organizationId, sinceIso)}
+      SELECT
+        all_events.id,
+        all_events.agent_id,
+        all_events.agent_name,
+        all_events.agent_avatar_color_token,
+        all_events.runtime_provider,
+        all_events.action,
+        all_events.source,
+        all_events.target_kind,
+        all_events.target_path,
+        all_events.chat_id AS raw_chat_id,
+        c.id AS joined_chat_id,
+        c.topic AS chat_topic,
+        all_events.created_at
+      FROM all_events
+      LEFT JOIN chats c ON c.id = all_events.chat_id AND c.organization_id = ${organizationId}
+      WHERE all_events.action = 'read'
+      ORDER BY all_events.created_at DESC
+      LIMIT ${CONTEXT_TREE_IO_FEED_LIMIT}
+    `),
+  );
 
   const inOrgChatIds = [
     ...new Set(recentRows.filter((row) => row.joined_chat_id !== null).map((row) => row.raw_chat_id)),
   ];
-  const accessibleChatIds = viewer ? await accessibleChatIdSet(db, viewer, inOrgChatIds) : new Set<string>();
+  const accessibleChatIds = viewer
+    ? await timeWithSink(options.timing, "io_accessible_chats", () => accessibleChatIdSet(db, viewer, inOrgChatIds), {
+        chatCount: inOrgChatIds.length,
+      })
+    : new Set<string>();
 
   const recentEvents: ContextTreeIoEvent[] = recentRows.map((row) => {
     const sameOrgChat = row.joined_chat_id !== null;
@@ -896,7 +939,9 @@ export async function summarizeContextTreeIo(
       createdAt: isoOrNull(row.created_at) ?? new Date().toISOString(),
     };
   });
-  const skipped = await summarizeContextTreeIoSkippedEvents(db, organizationId, windowDays);
+  const skipped = await timeWithSink(options.timing, "io_skipped", () =>
+    summarizeContextTreeIoSkippedEvents(db, organizationId, windowDays, options),
+  );
 
   return {
     windowDays,
@@ -934,8 +979,11 @@ export async function buildContextTreeIoSummary(
   windowDays: number,
   gitWrites: ContextTreeWriteEvent[],
   viewer?: ContextTreeIoViewer,
+  options: ContextTreeIoSummaryOptions = {},
 ): Promise<ContextTreeIoSummary> {
-  const io = await summarizeContextTreeIo(db, organizationId, windowDays, viewer);
-  const writes = await reconcileContextTreeWrites(db, organizationId, windowDays, gitWrites);
+  const io = await summarizeContextTreeIo(db, organizationId, windowDays, viewer, options);
+  const writes = await timeWithSink(options.timing, "write_reconcile", () =>
+    reconcileContextTreeWrites(db, organizationId, windowDays, gitWrites, options),
+  );
   return { ...io, writes, writesTotal: writes.length };
 }

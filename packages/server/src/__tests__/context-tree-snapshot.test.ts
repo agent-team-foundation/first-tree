@@ -221,8 +221,11 @@ Body`);
     await initRepoAt(remoteDir);
     await writeFile(join(remoteDir, "NODE.md"), "---\ntitle: Remote Context\nowners: [alice]\n---\nGuidance\n");
     await commitAllAt(remoteDir, "docs: add remote context");
+    const timings: string[] = [];
 
-    const snapshot = await getContextTreeSnapshot({ repo: `file://${remoteDir}`, branch: "main" }, "7d");
+    const snapshot = await getContextTreeSnapshot({ repo: `file://${remoteDir}`, branch: "main" }, "7d", {
+      timing: (name) => timings.push(name),
+    });
 
     expect(snapshot.snapshotStatus).toBe("active");
     expect(snapshot.repo).toBe(`file://${remoteDir}`);
@@ -234,6 +237,9 @@ Body`);
           owners: ["alice"],
         }),
       ]),
+    );
+    expect(timings).toEqual(
+      expect.arrayContaining(["resolve_root", "git_head", "comparison_base", "read_markdown_files", "build_tree"]),
     );
   });
 

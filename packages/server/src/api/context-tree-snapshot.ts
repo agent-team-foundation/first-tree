@@ -1,6 +1,7 @@
 import { contextTreeSnapshotSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { createTimingCollector } from "../observability/timing.js";
 import { resolveOrgViewer } from "../scope/require-resource.js";
 import { requireUser } from "../scope/require-user.js";
 import { buildContextTreeIoSummary } from "../services/context-tree-io.js";
@@ -26,37 +27,65 @@ const querySchema = z
   .strict();
 
 export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/snapshot", async (request) => {
-    const query = querySchema.parse(request.query);
-    const { userId } = requireUser(request);
-    const orgId = await resolveUserPrimaryOrgId(app.db, userId);
-    const binding: ContextTreeBinding = orgId ? await getOrgContextTree(app.db, orgId) : {};
+  app.get("/snapshot", async (request, reply) => {
+    const timing = createTimingCollector();
+    const query = timing.timeSync("parse_query", () => querySchema.parse(request.query));
+    const { userId } = timing.timeSync("auth", () => requireUser(request));
+    const orgId = await timing.time("resolve_primary_org", () => resolveUserPrimaryOrgId(app.db, userId));
+    const binding: ContextTreeBinding = orgId
+      ? await timing.time("binding", () => getOrgContextTree(app.db, orgId))
+      : {};
     let mintResult: ContextTreeInstallationTokenResult | null = null;
     if (orgId && isGithubRemoteBinding(binding)) {
-      const installation = await findInstallationByOrg(app.db, orgId);
-      mintResult = await mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
+      mintResult = await timing.time("github_token", async () => {
+        const installation = await findInstallationByOrg(app.db, orgId);
+        return mintContextTreeInstallationToken(installation, app.config.oauth?.githubApp);
+      });
     }
     const githubToken = mintResult?.ok ? mintResult.token : undefined;
     const window = query.window ?? "7d";
-    const rawSnapshot = await getContextTreeSnapshot({ ...binding, githubToken }, window);
+    const rawSnapshot = await timing.time("snapshot_build", () =>
+      getContextTreeSnapshot({ ...binding, githubToken }, window, { timing: timing.add }),
+    );
     const snapshot = mintResult ? decorateSnapshotWithMintGuidance(rawSnapshot, binding, mintResult) : rawSnapshot;
-    const viewer = orgId ? await resolveOrgViewer(app.db, userId, orgId) : null;
+    const viewer = orgId ? await timing.time("resolve_viewer", () => resolveOrgViewer(app.db, userId, orgId)) : null;
     const usage = orgId
-      ? await summarizeContextTreeUsage(app.db, orgId, contextTreeSnapshotWindowDays(window), viewer ?? undefined)
+      ? await timing.time("usage_summary", () =>
+          summarizeContextTreeUsage(app.db, orgId, contextTreeSnapshotWindowDays(window), viewer ?? undefined),
+        )
       : snapshot.usage;
     // With an org: telemetry reads + git-derived writes reconciled for agent
     // attribution. Without one: keep the snapshot's git-derived io.writes as-is
     // (no telemetry to reconcile against). Same path as the org-scoped route so
     // writes never silently empty here. See buildContextTreeIoSummary.
     const io = orgId
-      ? await buildContextTreeIoSummary(
-          app.db,
-          orgId,
-          contextTreeSnapshotWindowDays(window),
-          snapshot.io.writes,
-          viewer ?? undefined,
+      ? await timing.time("io_summary", () =>
+          buildContextTreeIoSummary(
+            app.db,
+            orgId,
+            contextTreeSnapshotWindowDays(window),
+            snapshot.io.writes,
+            viewer ?? undefined,
+            { timing: timing.add },
+          ),
         )
       : snapshot.io;
-    return contextTreeSnapshotSchema.parse({ ...snapshot, usage, io });
+    const response = timing.timeSync("schema_parse", () => contextTreeSnapshotSchema.parse({ ...snapshot, usage, io }));
+    const totalMs = timing.elapsedMs();
+    reply.header("Server-Timing", timing.serverTimingHeader());
+    request.log[totalMs > 1500 || timing.records.some((record) => record.ms > 500) ? "warn" : "info"](
+      {
+        event: "context_tree_snapshot_timing",
+        orgId,
+        window,
+        snapshotStatus: response.snapshotStatus,
+        nodeCount: response.nodes.length,
+        updateCount: response.updates.length,
+        totalMs,
+        timings: timing.records,
+      },
+      "context tree snapshot timing",
+    );
+    return response;
   });
 }

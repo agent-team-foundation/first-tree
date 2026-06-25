@@ -19,6 +19,7 @@ import type {
 } from "@first-tree/shared";
 import { defaultDataDir } from "@first-tree/shared/config";
 import matter from "gray-matter";
+import { type TimingSink, timeSyncWithSink, timeWithSink } from "../observability/timing.js";
 
 const execFileAsync = promisify(execFile);
 const ROOT_NODE_ID = "root";
@@ -133,13 +134,21 @@ export type ContextTreeBinding = {
   githubToken?: string;
 };
 
+export type ContextTreeSnapshotOptions = {
+  timing?: TimingSink;
+};
+
 export async function getContextTreeSnapshot(
   binding: ContextTreeBinding,
   window: ContextTreeSnapshotWindow = CONTEXT_TREE_SNAPSHOT_WINDOWS.SEVEN_DAYS,
+  options: ContextTreeSnapshotOptions = {},
 ): Promise<ContextTreeSnapshot> {
   const repo = binding.repo ?? null;
   const branch = binding.branch ?? null;
-  const resolved = await resolveContextTreeRoot(repo, binding.localPath, branch, binding.githubToken);
+  const timing = options.timing;
+  const resolved = await timeWithSink(timing, "resolve_root", () =>
+    resolveContextTreeRoot(repo, binding.localPath, branch, binding.githubToken, timing),
+  );
 
   if (!resolved.root) {
     return unavailableSnapshot(repo, branch, resolved.reason);
@@ -147,8 +156,10 @@ export async function getContextTreeSnapshot(
 
   const now = new Date().toISOString();
   try {
-    const headCommit = await gitOutput(resolved.root, ["rev-parse", "HEAD"]);
-    const actualBranch = await safeGitOutput(resolved.root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    const { headCommit, actualBranch } = await timeWithSink(timing, "git_head", async () => ({
+      headCommit: await gitOutput(resolved.root ?? "", ["rev-parse", "HEAD"]),
+      actualBranch: await safeGitOutput(resolved.root ?? "", ["rev-parse", "--abbrev-ref", "HEAD"]),
+    }));
     if (branch && actualBranch && actualBranch !== branch) {
       return unavailableSnapshot(
         repo,
@@ -157,9 +168,12 @@ export async function getContextTreeSnapshot(
       );
     }
 
-    const comparisonBaseCommit = await comparisonBaseForWindow(resolved.root, window);
+    const comparisonBaseCommit = await timeWithSink(timing, "comparison_base", () =>
+      comparisonBaseForWindow(resolved.root ?? "", window),
+    );
     const cacheKey = snapshotCacheKey(resolved.root, actualBranch ?? branch, headCommit, comparisonBaseCommit, window);
     const cached = snapshotCache.get(cacheKey);
+    timing?.("snapshot_cache_lookup", 0, { hit: !!cached });
     if (cached && cached.expiresAt > Date.now()) {
       const staleCacheRecovered = cached.snapshot.snapshotStatus === "stale" && !resolved.staleReason;
       if (!staleCacheRecovered) {
@@ -167,38 +181,45 @@ export async function getContextTreeSnapshot(
       }
     }
 
-    const files = await readMarkdownFiles(resolved.root);
-    const tree = buildTree(files);
+    const files = await timeWithSink(timing, "read_markdown_files", () => readMarkdownFiles(resolved.root ?? ""));
+    timing?.("read_markdown_files_count", 0, { fileCount: files.length });
+    const tree = timeSyncWithSink(timing, "build_tree", () => buildTree(files), { fileCount: files.length });
+    timing?.("build_tree_count", 0, { nodeCount: tree.nodes.length, edgeCount: tree.edges.length });
     const diffResult = comparisonBaseCommit
-      ? await readDiffEntries(resolved.root, comparisonBaseCommit, headCommit)
+      ? await timeWithSink(timing, "read_diff_entries", () =>
+          readDiffEntries(resolved.root ?? "", comparisonBaseCommit, headCommit),
+        )
       : { entries: [], truncated: false };
-    const changes = buildChanges(diffResult.entries, tree);
-    const nodes = applyChangesToNodes(tree.nodes, changes);
-    const nodesWithGhosts = addRemovedGhostNodes(nodes, changes);
-    const summary = summarizeChanges(changes);
-    const updates = buildUpdates(changes, nodesWithGhosts);
-    // Git-derived writes are cacheable with the rest of the snapshot — they
-    // depend only on the repo's git history, not on the viewer or any DB
-    // state. The route enriches them with session-telemetry agent attribution
-    // (which is viewer-dependent) after this cached snapshot is read.
-    const writes = buildWriteEvents(changes, nodesWithGhosts);
-    const statusWarning = statusWarningFromResolved(resolved.staleReason, diffResult.truncated);
+    timing?.("read_diff_entries_count", 0, { changeCount: diffResult.entries.length, truncated: diffResult.truncated });
+    const snapshot = timeSyncWithSink(timing, "build_snapshot", () => {
+      const changes = buildChanges(diffResult.entries, tree);
+      const nodes = applyChangesToNodes(tree.nodes, changes);
+      const nodesWithGhosts = addRemovedGhostNodes(nodes, changes);
+      const summary = summarizeChanges(changes);
+      const updates = buildUpdates(changes, nodesWithGhosts);
+      // Git-derived writes are cacheable with the rest of the snapshot — they
+      // depend only on the repo's git history, not on the viewer or any DB
+      // state. The route enriches them with session-telemetry agent attribution
+      // (which is viewer-dependent) after this cached snapshot is read.
+      const writes = buildWriteEvents(changes, nodesWithGhosts);
+      const statusWarning = statusWarningFromResolved(resolved.staleReason, diffResult.truncated);
 
-    const snapshot: ContextTreeSnapshot = {
-      repo,
-      branch: actualBranch ?? branch,
-      headCommit,
-      syncedAt: now,
-      snapshotStatus: statusWarning?.stale ? "stale" : "active",
-      contextStatus: contextStatus(statusWarning),
-      summary,
-      usage: emptyUsageSummary(window),
-      io: { ...emptyIoSummary(window), writes, writesTotal: writes.length },
-      updates,
-      nodes: nodesWithGhosts,
-      edges: tree.edges,
-      changes,
-    };
+      return {
+        repo,
+        branch: actualBranch ?? branch,
+        headCommit,
+        syncedAt: now,
+        snapshotStatus: statusWarning?.stale ? "stale" : "active",
+        contextStatus: contextStatus(statusWarning),
+        summary,
+        usage: emptyUsageSummary(window),
+        io: { ...emptyIoSummary(window), writes, writesTotal: writes.length },
+        updates,
+        nodes: nodesWithGhosts,
+        edges: tree.edges,
+        changes,
+      } satisfies ContextTreeSnapshot;
+    });
     snapshotCache.set(cacheKey, { expiresAt: Date.now() + SNAPSHOT_CACHE_TTL_MS, snapshot });
     return snapshot;
   } catch (error) {
@@ -234,6 +255,7 @@ async function resolveContextTreeRoot(
   localPath: string | null | undefined,
   branch: string | null,
   githubToken?: string | null,
+  timing?: TimingSink,
 ): Promise<ResolvedContextTreeRoot> {
   if (localPath && localPath.trim().length > 0) {
     const root = resolveLocalPath(localPath);
@@ -255,7 +277,7 @@ async function resolveContextTreeRoot(
       };
     }
     try {
-      const materialized = await materializeRemoteContextTree(repo, resolvedBranch, undefined, githubToken);
+      const materialized = await materializeRemoteContextTree(repo, resolvedBranch, undefined, githubToken, timing);
       return { root: materialized.root, reason: "ok", staleReason: materialized.staleReason };
     } catch (error) {
       return {
@@ -327,11 +349,13 @@ async function materializeRemoteContextTree(
   branch: string,
   cacheRoot = managedContextTreeCacheRoot(),
   githubToken?: string | null,
+  timing?: TimingSink,
 ): Promise<{ root: string; staleReason: string | null }> {
   const repoUrl = normalizeRemoteRepoUrl(repo);
   const root = managedContextTreePath(repoUrl, branch, cacheRoot);
   const lastSyncedAt = remoteLastSyncedAt.get(root);
   if (lastSyncedAt && Date.now() - lastSyncedAt < REMOTE_SYNC_TTL_MS && existsSync(join(root, ".git"))) {
+    timing?.("remote_sync_skip_ttl", 0, { stale: remoteLastSyncWarnings.has(root) });
     return { root, staleReason: remoteLastSyncWarnings.get(root) ?? null };
   }
   const lastFailure = remoteLastFailures.get(root);
@@ -341,11 +365,11 @@ async function materializeRemoteContextTree(
 
   const existing = remoteSyncPromises.get(root);
   if (existing) {
-    const result = await existing;
+    const result = await timeWithSink(timing, "remote_sync_wait_existing", () => existing);
     return { root, staleReason: result.staleReason };
   }
 
-  const syncPromise = syncRemoteContextTree(repoUrl, branch, root, cacheRoot, githubToken);
+  const syncPromise = syncRemoteContextTree(repoUrl, branch, root, cacheRoot, githubToken, timing);
   remoteSyncPromises.set(root, syncPromise);
   try {
     const syncResult = await syncPromise;
@@ -376,16 +400,23 @@ async function syncRemoteContextTree(
   root: string,
   cacheRoot: string,
   githubToken?: string | null,
+  timing?: TimingSink,
 ): Promise<RemoteSyncResult> {
   await mkdir(cacheRoot, { recursive: true });
   const env = await gitAuthEnv(repoUrl, cacheRoot, githubToken);
   if (!existsSync(join(root, ".git"))) {
     await rm(root, { recursive: true, force: true });
-    await gitOutput(cacheRoot, ["clone", "--branch", branch, "--single-branch", repoUrl, root], {
-      timeout: GIT_SYNC_TIMEOUT_MS,
-      env,
-      disableHooks: true,
-    });
+    await timeWithSink(
+      timing,
+      "remote_clone",
+      () =>
+        gitOutput(cacheRoot, ["clone", "--branch", branch, "--single-branch", repoUrl, root], {
+          timeout: GIT_SYNC_TIMEOUT_MS,
+          env,
+          disableHooks: true,
+        }),
+      { branch },
+    );
     return { staleReason: null };
   }
 
@@ -394,18 +425,26 @@ async function syncRemoteContextTree(
       timeout: GIT_TIMEOUT_MS,
       disableHooks: true,
     });
-    await gitOutput(root, ["fetch", "origin", branch, "--prune"], {
-      timeout: GIT_SYNC_TIMEOUT_MS,
-      env,
-      disableHooks: true,
-    });
-    await gitOutput(root, ["checkout", "-B", branch, `origin/${branch}`], {
-      timeout: GIT_TIMEOUT_MS,
-      disableHooks: true,
-    });
+    await timeWithSink(
+      timing,
+      "remote_fetch_checkout",
+      async () => {
+        await gitOutput(root, ["fetch", "origin", branch, "--prune"], {
+          timeout: GIT_SYNC_TIMEOUT_MS,
+          env,
+          disableHooks: true,
+        });
+        await gitOutput(root, ["checkout", "-B", branch, `origin/${branch}`], {
+          timeout: GIT_TIMEOUT_MS,
+          disableHooks: true,
+        });
+      },
+      { branch },
+    );
     return { staleReason: null };
   } catch (error) {
     if (existsSync(join(root, ".git"))) {
+      timing?.("remote_sync_stale_fallback", 0);
       return {
         staleReason: `Showing the last synced Context Tree snapshot because First Tree could not refresh the configured repo. ${errorMessage(error)}`,
       };
