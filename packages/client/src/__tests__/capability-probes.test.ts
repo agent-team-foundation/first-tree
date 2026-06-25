@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeExecutableResolution } from "../handlers/claude-executable.js";
 import {
   classifyClaudeSmokeFailure,
+  formatClaudeBinaryMissingMessage,
   probeClaudeCodeCapability,
   resolveBundledClaudeBinary,
   verifyBundledClaudeArtifact,
@@ -392,6 +393,9 @@ describe("probeClaudeCodeCapability", () => {
       authMethod: "oauth",
       sdkVersion: "1.0.42",
       probeKind: "launch",
+      // Provenance (mirrors codex): a resolved on-disk binary is a system claude.
+      runtimeSource: "path",
+      runtimePath: "/usr/local/bin/claude",
     });
     // The smoke must target the binary the runtime would spawn.
     expect(runSmoke).toHaveBeenCalledWith("/usr/local/bin/claude");
@@ -408,6 +412,10 @@ describe("probeClaudeCodeCapability", () => {
     expect(entry.state).toBe("ok");
     // Version is the real CLI version from the bundled artifact's `--version`.
     expect(entry.sdkVersion).toBe("2.1.84");
+    // Provenance: no on-disk binary resolved → the runtime falls back to the
+    // SDK-bundled engine, reported as `bundled` with no path.
+    expect(entry.runtimeSource).toBe("bundled");
+    expect(entry.runtimePath).toBeNull();
     // undefined binary → the SDK spawns its own bundled Claude binary.
     expect(runSmoke).toHaveBeenCalledWith(undefined);
   });
@@ -501,6 +509,18 @@ describe("verifyBundledClaudeArtifact (real node_modules)", () => {
     const res = await verifyBundledClaudeArtifact();
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.version === null || /^\d+\.\d+(\.\d+)?$/.test(res.version)).toBe(true);
+  });
+});
+
+describe("formatClaudeBinaryMissingMessage", () => {
+  it("names the repo-canonical `claude auth login`, not `claude /login`, and points at the one-click install", () => {
+    const msg = formatClaudeBinaryMissingMessage("Native CLI binary for darwin-arm64 not found");
+    // Guard against the login-command drift codex-assistant caught: the
+    // remediation must match the command the runtime-auth orchestrator runs.
+    expect(msg).toContain("claude auth login");
+    expect(msg).not.toContain("claude /login");
+    expect(msg).toContain("daemon install-claude");
+    expect(msg).toContain("Native CLI binary for darwin-arm64 not found");
   });
 });
 

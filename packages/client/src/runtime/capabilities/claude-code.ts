@@ -130,6 +130,22 @@ export function resolveBundledClaudeBinary(deps: ResolveBundledClaudeDeps = {}):
 }
 
 /**
+ * Remediation message shown when no `claude` resolves and the SDK-bundled
+ * native binary is also absent (the externalized-engine `missing` case). The
+ * login command MUST stay `claude auth login` — the repo-canonical command the
+ * runtime-auth orchestrator actually runs and every other user-facing hint
+ * names (see `runClaudeBrowserLogin` and the auth-precheck messages) — so a
+ * user who installs the engine then logs in follows one consistent command.
+ */
+export function formatClaudeBinaryMissingMessage(originalError: string): string {
+  return (
+    "Claude runtime binary is missing on this machine. First Tree does not bundle the native Claude engine by default — it resolves a system `claude` (env override / PATH / well-known install dirs). " +
+    "Install it with the daemon's one-click `daemon install-claude` (or `npm install -g @anthropic-ai/claude-code`), then run `claude auth login` and retry. " +
+    `Original error: ${originalError}`
+  );
+}
+
+/**
  * Launch-verify the SDK's bundled Claude CLI via `<artifact> --version`.
  *
  * This is the resolve-stage proof for the no-on-disk-binary path: when no
@@ -149,7 +165,7 @@ export async function verifyBundledClaudeArtifact(): Promise<
   } catch (err) {
     return {
       ok: false,
-      error: `@anthropic-ai/claude-agent-sdk bundled Claude binary could not be located: ${err instanceof Error ? err.message : String(err)}`,
+      error: formatClaudeBinaryMissingMessage(err instanceof Error ? err.message : String(err)),
     };
   }
   const [command, args, label] =
@@ -312,7 +328,17 @@ export async function probeClaudeCodeCapability(deps: ClaudeCodeProbeDeps = {}):
         const verified = await verifyBinary(resolution.path);
         if (!verified.ok) return { ok: false, error: verified.error };
         resolvedBinary = resolution.path;
-        return { ok: true, binary: resolution.path, version: verified.version };
+        // Provenance for the capability snapshot (mirrors codex): an on-disk
+        // `claude` the runtime resolved itself — env override, PATH, or a
+        // well-known install dir — all surface as `runtimeSource: "path"` with
+        // the resolved absolute path, so a consumer can assert "this host runs
+        // a system claude" directly instead of inferring it from the version.
+        return {
+          ok: true,
+          binary: resolution.path,
+          version: verified.version,
+          meta: { runtimeSource: "path", runtimePath: resolution.path },
+        };
       }
       // No on-disk binary — the SDK will spawn its bundled Claude binary
       // (legacy cli.js, or a modern per-platform native binary). Launch-verify
@@ -321,7 +347,7 @@ export async function probeClaudeCodeCapability(deps: ClaudeCodeProbeDeps = {}):
       // it only runs after a passing auth precheck).
       const verified = await verifyBundledArtifact();
       if (!verified.ok) return { ok: false, error: verified.error };
-      return { ok: true, version: verified.version };
+      return { ok: true, version: verified.version, meta: { runtimeSource: "bundled", runtimePath: null } };
     },
     authPrecheck: async (): Promise<AuthPrecheckOutcome> => {
       const auth = detectAuth();

@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { registerDaemonDoctorCommand } from "./doctor.js";
 import { registerDaemonHomeInfoCommand } from "./home-info.js";
+import { registerDaemonInstallClaudeCommand } from "./install-claude.js";
 import { registerDaemonInstallCodexCommand } from "./install-codex.js";
 import { registerDaemonProbeCommand } from "./probe.js";
 import { registerDaemonRefreshUnitCommand } from "./refresh-unit.js";
@@ -20,6 +21,7 @@ export function registerDaemonCommands(program: Command): void {
   registerDaemonDoctorCommand(daemon);
   registerDaemonProbeCommand(daemon);
   registerDaemonInstallCodexCommand(daemon);
+  registerDaemonInstallClaudeCommand(daemon);
   // Hidden — supervisor-cooperation interface invoked by `createExecuteUpdate`
   // after a self-install to refresh the unit file with the new binary's
   // templates before exit(75).
