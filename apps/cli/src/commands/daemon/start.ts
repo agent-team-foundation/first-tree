@@ -208,12 +208,12 @@ export function registerDaemonStartCommand(daemon: Command): void {
 
         print.line(`\n  Connecting to ${config.server.url} (client id: ${config.client.id})...\n`);
 
-        // `--no-interactive` is the signal the service units (launchd /
-        // systemd) set — we piggy-back on it for two things: (1) suppress
-        // the update-confirm prompt so policy=prompt doesn't block a
-        // supervised run, (2) enable exit-for-restart since the supervisor
-        // will relaunch us on the new binary.
-        const managed = options.interactive === false;
+        // `--no-interactive` suppresses update prompts, but it does not by
+        // itself prove a supervisor will relaunch us after exit(75). Only the
+        // service-unit child has FIRST_TREE_SERVICE_MODE=1, so keep the
+        // exit-for-restart path scoped to that case.
+        const noInteractive = options.interactive === false;
+        const managed = isSupervisorChild;
         // The `executeUpdate` closure needs access to the ClientRuntime's
         // connection to emit `resilience.update.failed`, but the runtime
         // doesn't exist yet at construction time. Use a deferred reference
@@ -231,7 +231,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           currentVersion: COMMAND_VERSION,
           update: {
             updateConfig: config.update,
-            prompt: managed ? declineUpdate : promptUpdate,
+            prompt: noInteractive ? declineUpdate : promptUpdate,
             executeUpdate,
             refreshServerTarget: refreshServerUpdateTarget,
           },
@@ -381,7 +381,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         }
         if (error instanceof ClientOrgMismatchError) {
           await handleClientOrgMismatch(error, {
-            managed: options.interactive === false,
+            managed: isSupervisorChild,
             configDir: defaultConfigDir(),
             rerunCommand: `${binName} daemon start`,
           });

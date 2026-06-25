@@ -85,6 +85,7 @@ export {
   installClientService,
   isServiceSupported,
   isServiceUnitDriftDetected,
+  refreshClientServiceUnitForUpdate,
   resolveCliInvocation,
   restartClientService,
   startClientService,

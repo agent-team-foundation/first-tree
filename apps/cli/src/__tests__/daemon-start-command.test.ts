@@ -338,7 +338,23 @@ describe("daemon start command", () => {
     await expect(runStart(["--no-interactive"])).rejects.toMatchObject({ exitCode: 1 });
 
     expect(coreMocks.promptMissingFields).toHaveBeenCalledWith(expect.objectContaining({ noInteractive: true }));
+    expect(coreMocks.createExecuteUpdate).toHaveBeenCalledWith(expect.objectContaining({ managed: true }));
     expect(clientMocks.configureClientLoggerForService).toHaveBeenCalledWith(join(home, "logs"));
+    expect(coreMocks.ClientRuntime).toHaveBeenCalledWith(
+      "https://first-tree.example",
+      "client_1234abcd",
+      expect.objectContaining({
+        update: expect.objectContaining({ prompt: coreMocks.declineUpdate }),
+      }),
+    );
+  });
+
+  it("does not treat non-supervisor --no-interactive inline runs as managed updates", async () => {
+    await expect(runStart(["--no-interactive", "--foreground"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(coreMocks.promptMissingFields).toHaveBeenCalledWith(expect.objectContaining({ noInteractive: true }));
+    expect(coreMocks.createExecuteUpdate).toHaveBeenCalledWith(expect.objectContaining({ managed: false }));
+    expect(clientMocks.configureClientLoggerForService).not.toHaveBeenCalled();
     expect(coreMocks.ClientRuntime).toHaveBeenCalledWith(
       "https://first-tree.example",
       "client_1234abcd",
