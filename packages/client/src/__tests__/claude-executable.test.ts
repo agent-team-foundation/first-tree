@@ -161,6 +161,9 @@ describe("resolveClaudeCodeExecutable", () => {
     const resolution = resolveClaudeCodeExecutable({
       env: { PATH: "", HOME: emptyHome },
       loginShellPathDirs: () => [join(tmpdir(), "missing-xyz"), binDir],
+      // isolate from any real host claude in an absolute well-known dir, which is
+      // now searched before the login-shell PATH.
+      wellKnownDirs: () => [],
     });
     expect(resolution).toEqual({ path: fakeClaude, source: "path" });
   });
@@ -169,6 +172,22 @@ describe("resolveClaudeCodeExecutable", () => {
     const loginShellPathDirs = vi.fn(() => []);
     const resolution = resolveClaudeCodeExecutable({ env: { PATH: binDir }, loginShellPathDirs });
     expect(resolution).toEqual({ path: fakeClaude, source: "path" });
+    expect(loginShellPathDirs).not.toHaveBeenCalled();
+  });
+
+  it("skips the login-shell probe entirely on the pre-connect path (includeLoginShell: false)", () => {
+    // The daemon's handler-registration path must never block on a login shell.
+    // With includeLoginShell:false, a `claude` that lives ONLY on the login-shell
+    // PATH is NOT resolved (falls through to the SDK bundle) and the probe fn is
+    // never called — the handler re-resolves it lazily at session start instead.
+    const loginShellPathDirs = vi.fn(() => [binDir]);
+    const resolution = resolveClaudeCodeExecutable({
+      env: { PATH: "", HOME: emptyHome },
+      loginShellPathDirs,
+      wellKnownDirs: () => [],
+      includeLoginShell: false,
+    });
+    expect(resolution).toEqual({ path: undefined, source: "default" });
     expect(loginShellPathDirs).not.toHaveBeenCalled();
   });
 

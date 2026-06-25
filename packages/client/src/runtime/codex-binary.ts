@@ -114,10 +114,12 @@ export function verifyCodexExecutable(
   return { ok: true, output };
 }
 
-/** Injectable seam so probe tests stay hermetic (no real shell spawn). */
+/** Injectable seams so probe tests stay hermetic (no real shell spawn / no host install dirs). */
 export type FindCodexExecutableDeps = {
   /** Returns the user's interactive-login-shell PATH dirs; defaults to the memoized probe. */
   loginShellPathDirs?: () => string[];
+  /** Returns the curated well-known bin dirs; defaults to the real host list. */
+  wellKnownDirs?: () => string[];
 };
 
 export function findCodexExecutableOnPath(
@@ -126,6 +128,7 @@ export function findCodexExecutableOnPath(
 ): string | null {
   const loginShellPathDirs = deps.loginShellPathDirs ?? getLoginShellPathDirs;
   const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+  const wellKnownDirs = deps.wellKnownDirs ?? (() => wellKnownBinDirs(home));
   const names = codexExecutableNames(env);
   const seen = new Set<string>();
 
@@ -143,18 +146,19 @@ export function findCodexExecutableOnPath(
     return null;
   };
 
-  // Priority: daemon PATH → login-shell PATH → curated well-known dirs. The
-  // login-shell PATH catches binaries that live only on the user's interactive
-  // PATH (nvm / fnm / volta / mise / asdf, ~/.npm-global/bin, pnpm / bun, custom
-  // exports); the well-known dirs are a cheap, no-spawn safety net. The
-  // login-shell probe is consulted lazily — only when the daemon PATH misses —
-  // so a daemon-PATH hit never triggers a shell spawn.
+  // Priority — cheap (no-spawn) checks first, the login-shell probe last:
+  // daemon PATH → curated well-known dirs → login-shell PATH. The well-known
+  // dirs are pure existence checks; the login-shell PATH (which may `spawnSync`
+  // a shell) is consulted last, only when daemon PATH + well-known miss, so a
+  // hit in either never triggers a shell spawn. It catches binaries that live
+  // only on the user's interactive PATH (nvm / fnm / volta / mise / asdf, custom
+  // exports). Codex resolution is never on the daemon's pre-connect path.
   const pathValue = readPathValue(env);
   const fromDaemon = search(pathValue ? pathValue.split(delimiter) : []);
   if (fromDaemon) return fromDaemon;
-  const fromLogin = search(loginShellPathDirs());
-  if (fromLogin) return fromLogin;
-  return search(wellKnownBinDirs(home));
+  const fromWellKnown = search(wellKnownDirs());
+  if (fromWellKnown) return fromWellKnown;
+  return search(loginShellPathDirs());
 }
 
 function errorText(input: unknown): string {

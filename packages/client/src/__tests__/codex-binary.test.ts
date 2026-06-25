@@ -122,7 +122,9 @@ describe("codex binary resolution", () => {
 
     const found = findCodexExecutableOnPath(
       { PATH: "", HOME: mkdtempSync(join(tmpdir(), "ft-codex-home-")) },
-      { loginShellPathDirs: () => [dir] },
+      // wellKnownDirs:[] isolates from a real host codex (e.g. /opt/homebrew/bin)
+      // which is now searched before the login-shell PATH.
+      { loginShellPathDirs: () => [dir], wellKnownDirs: () => [] },
     );
     expect(found).toBe(executable);
   });

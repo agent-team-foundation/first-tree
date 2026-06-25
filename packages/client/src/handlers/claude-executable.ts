@@ -11,10 +11,20 @@ export type ClaudeExecutableResolution = {
   source: ClaudeExecutableSource;
 };
 
-/** Injectable seam so probe tests stay hermetic (no real shell spawn). */
+/** Injectable seams so probe tests stay hermetic (no real shell spawn / no host install dirs). */
 export type ResolveClaudeExecutableDeps = {
   /** Returns the user's interactive-login-shell PATH dirs; defaults to the memoized probe. */
   loginShellPathDirs?: () => string[];
+  /** Returns the curated well-known bin dirs; defaults to the real host list. */
+  wellKnownDirs?: () => string[];
+  /**
+   * Whether to consult the login-shell PATH (which may `spawnSync` a shell).
+   * Default `true`. Set `false` on the daemon's pre-connect handler-registration
+   * path so startup never blocks on a login shell — the capability probe and the
+   * session-start handler resolution still pass `true`, finding a shell-only
+   * `claude` lazily, after the WS is connected.
+   */
+  includeLoginShell?: boolean;
 };
 
 /**
@@ -29,23 +39,24 @@ export type ResolveClaudeExecutableDeps = {
  * negative). Checking the known install dirs directly removes the PATH
  * dependency.
  */
-function wellKnownClaudeCandidates(env: NodeJS.ProcessEnv): string[] {
-  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+function wellKnownClaudeCandidates(dirs: readonly string[]): string[] {
   const name = process.platform === "win32" ? "claude.exe" : "claude";
-  return wellKnownBinDirs(home).map((dir) => join(dir, name));
+  return dirs.map((dir) => join(dir, name));
 }
 
 /**
  * Resolve which Claude Code binary the SDK should spawn.
  *
- * Priority:
+ * Priority — cheap (no-spawn) checks first, the login-shell probe last:
  *   1. `CLAUDE_CODE_EXECUTABLE` env var — explicit operator override
  *   2. `claude` on the daemon PATH — reuses whatever the user has installed
- *   3. `claude` on the user's interactive **login-shell** PATH — catches bins
+ *   3. well-known install dirs (`~/.local/bin`, Homebrew, npm-global, …) —
+ *      covers binaries the daemon's service PATH cannot see, with no shell spawn
+ *   4. `claude` on the user's interactive **login-shell** PATH — catches bins
  *      the daemon's frozen service PATH never sees (nvm / fnm / volta / mise /
- *      asdf, `~/.npm-global/bin`, pnpm / bun global, custom `export PATH=`)
- *   4. well-known install dirs (`~/.local/bin`, Homebrew, …) — covers binaries
- *      the daemon's service PATH cannot see, with no shell spawn
+ *      asdf, custom `export PATH=`). This step may `spawnSync` a shell, so it is
+ *      consulted last (only when 2–3 miss) and is skipped entirely when
+ *      `includeLoginShell: false` (the pre-connect handler-registration path).
  *   5. undefined — fall back to the SDK's bundled native binary
  *
  * The SDK's bundled binary ships as a per-platform **optional** npm dep
@@ -59,26 +70,33 @@ export function resolveClaudeCodeExecutable(
   opts: { env?: NodeJS.ProcessEnv } & ResolveClaudeExecutableDeps = {},
 ): ClaudeExecutableResolution {
   const env = opts.env ?? process.env;
+  const includeLoginShell = opts.includeLoginShell ?? true;
   const loginShellPathDirs = opts.loginShellPathDirs ?? getLoginShellPathDirs;
+  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+  const wellKnownDirs = opts.wellKnownDirs ?? (() => wellKnownBinDirs(home));
 
   const override = env.CLAUDE_CODE_EXECUTABLE;
   if (override && override.length > 0 && existsSync(override)) {
     return { path: override, source: "env" };
   }
 
-  // Priority: daemon PATH → login-shell PATH → well-known dirs. The login-shell
-  // PATH catches binaries that live only on the user's interactive PATH (nvm /
-  // fnm / volta / mise / asdf, ~/.npm-global/bin, pnpm / bun, custom exports).
-  // The login-shell probe is consulted lazily — only when the daemon PATH misses
-  // — so a daemon-PATH hit never triggers a shell spawn.
+  // Daemon PATH first, then cheap well-known dirs — both pure existence checks,
+  // no subprocess. Only if those miss do we consult the login-shell PATH, which
+  // may spawn a shell.
   const seen = new Set<string>();
   const fromDaemon = findInDirs("claude", env, pathDirs(env), seen);
   if (fromDaemon) return { path: fromDaemon, source: "path" };
-  const fromLogin = findInDirs("claude", env, loginShellPathDirs(), seen);
-  if (fromLogin) return { path: fromLogin, source: "path" };
 
-  for (const candidate of wellKnownClaudeCandidates(env)) {
+  for (const candidate of wellKnownClaudeCandidates(wellKnownDirs())) {
     if (existsSync(candidate)) return { path: candidate, source: "well-known" };
+  }
+
+  // Login-shell PATH last — catches binaries on the user's interactive PATH
+  // only (nvm / fnm / volta / mise / asdf, custom exports). Skipped on the
+  // pre-connect registration path so daemon startup never blocks on a shell.
+  if (includeLoginShell) {
+    const fromLogin = findInDirs("claude", env, loginShellPathDirs(), seen);
+    if (fromLogin) return { path: fromLogin, source: "path" };
   }
 
   return { path: undefined, source: "default" };
