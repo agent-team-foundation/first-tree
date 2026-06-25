@@ -11,7 +11,6 @@ import { AlertTriangle, Network, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { getContextTreeSnapshot } from "../api/context-tree.js";
-import { getTreeSetupStatus } from "../api/onboarding-events.js";
 import { useAuth } from "../auth/auth-context.js";
 import { resolveAvatarHue } from "../components/chat/chat-row-avatar.js";
 import { Identicon } from "../components/identicon.js";
@@ -43,18 +42,7 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
     refetchIntervalInBackground: false,
   });
 
-  const treeSetupQuery = useQuery({
-    queryKey: ["me", "onboarding", "tree-setup-status", organizationId],
-    queryFn: () => {
-      if (!organizationId) throw new Error("No organization selected");
-      return getTreeSetupStatus(organizationId);
-    },
-    enabled: !preview && !!organizationId && isAdmin,
-  });
-
   const snapshot = previewSnapshot ?? query.data;
-  const treeSetupStatus = treeSetupQuery.data;
-  const needsTreeSetup = !preview && isAdmin && (treeSetupStatus?.needsTreeSetup ?? false);
   const selectedUpdate = useMemo(() => {
     if (!snapshot) return null;
     return snapshot.updates.find((update) => update.id === selectedUpdateId) ?? snapshot.updates[0] ?? null;
@@ -86,13 +74,10 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
             <UnavailableState
               snapshot={snapshot}
               isAdmin={isAdmin}
-              canInitialize={!preview && isAdmin && (needsTreeSetup || !snapshot.repo)}
+              canInitialize={!preview && isAdmin && !snapshot.repo}
             />
           ) : (
             <>
-              {needsTreeSetup ? (
-                <ContextTreeSetupRecovery repo={snapshot.repo} hasTreeBinding={!!treeSetupStatus?.hasTreeBinding} />
-              ) : null}
               <ContextStatusNote snapshot={snapshot} />
               <ChangeMap
                 snapshot={snapshot}
@@ -109,27 +94,6 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
         ) : null}
       </div>
     </>
-  );
-}
-
-function ContextTreeSetupRecovery({ repo, hasTreeBinding }: { repo: string | null; hasTreeBinding: boolean }) {
-  return (
-    <Panel>
-      <PanelBody className="flex flex-col" style={{ gap: "var(--sp-3)" }}>
-        <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
-          <span className="text-subtitle" style={{ color: "var(--fg)" }}>
-            Finish Context Tree setup
-          </span>
-          <span className="text-body" style={{ color: "var(--fg-3)" }}>
-            Your team has a Context Tree binding, but the setup chat still needs to start.
-          </span>
-        </div>
-        <ContextTreeBuildEntry
-          treeBindingPlan={hasTreeBinding ? "useBoundTree" : "createBinding"}
-          detectedTreeUrl={repo}
-        />
-      </PanelBody>
-    </Panel>
   );
 }
 
