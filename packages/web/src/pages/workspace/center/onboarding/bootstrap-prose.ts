@@ -54,6 +54,26 @@ export function buildNoRepoBootstrap(agentDisplayName: string): string {
   ].join("\n");
 }
 
+export function buildRepoWorkBootstrap(opts: { repoUrl: string; agentDisplayName: string }): string {
+  return [
+    `This is a repo work thread with ${opts.agentDisplayName}.`,
+    "",
+    `GitHub repo: ${opts.repoUrl}`,
+    "",
+    "The user came from the repo-work growth path. Help them evaluate real work in this repository, not generic setup.",
+    "",
+    "Operational note: use the first-tree-repo-work skill. Prefer local-first repo access through the user's connected computer, existing gh auth, git credentials, or local clone. Do not require GitHub App installation before reading the repo.",
+    "",
+    "First response requirements:",
+    "- Find work worth continuing in this repo.",
+    "- Suggest 2-3 continuable task candidates, each grounded in files or commands you inspected.",
+    "- For each candidate, explain why it matters, the likely scope, key files, first verification step, and how it could become a PR or team handoff.",
+    "- Ask the user to choose one candidate before doing broad implementation work.",
+    "",
+    "After the user chooses, create and pin a Task Brief in the chat summary/description with goal, scope, key files, plan, current status, and next step.",
+  ].join("\n");
+}
+
 export function buildTreeSetupBootstrap(
   sourceUrls: readonly string[],
   opts: { treeBindingPlan: TreeSetupBootstrapPlan; treeUrl: string | null },

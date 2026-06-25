@@ -20,6 +20,8 @@ import { LoginPage } from "./pages/login.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
+import { RepoWorkLandingPage } from "./pages/repo-work/repo-work-landing.js";
+import { RepoWorkStartPage } from "./pages/repo-work/repo-work-start.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsContextTreePage } from "./pages/settings/context-tree.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
@@ -146,6 +148,7 @@ export function App() {
               {/* /signup retired — Continue with GitHub on /login covers signup. */}
               <Route path="/signup" element={<Navigate to="/login" replace />} />
               <Route path="/auth/github/complete" element={<OAuthCompletePage />} />
+              <Route path="/repo-work" element={<RepoWorkLandingPage />} />
               {/* Public: the connect-code install popup lands here to auto-close. */}
               <Route path="/onboarding/connected" element={<GithubConnectedPage />} />
               <Route path="/invite/:token" element={<InviteAcceptPage />} />
@@ -324,6 +327,7 @@ export function App() {
                 {/* Standalone onboarding — full-screen, outside the workspace
                     chrome. The workspace root redirects incomplete users
                     here; this route redirects back once setup is complete. */}
+                <Route path="/repo-work/start" element={<RepoWorkStartPage />} />
                 <Route path="/onboarding" element={<OnboardingPage />} />
                 <Route
                   element={

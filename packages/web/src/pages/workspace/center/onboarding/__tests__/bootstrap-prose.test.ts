@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildInviteeReadyBootstrap,
   buildNoRepoBootstrap,
+  buildRepoWorkBootstrap,
   buildTreeSetupBootstrap,
   buildValueFirstBootstrap,
 } from "../bootstrap-prose.js";
@@ -112,5 +113,25 @@ describe("kickoff bootstrap prose", () => {
     expect(message).not.toContain("first-tree-seed");
     expect(message).not.toContain("reflect them into the tree");
     expect(message).not.toContain("are now connected");
+  });
+
+  it("builds a repo-work kickoff around local-first access and continuable tasks", () => {
+    const message = buildRepoWorkBootstrap({
+      repoUrl: "https://github.com/acme/backend",
+      agentDisplayName: "Backend Agent",
+    });
+
+    expect(message).toContain("This is a repo work thread with Backend Agent.");
+    expect(message).toContain("GitHub repo: https://github.com/acme/backend");
+    expect(message).toContain("Operational note: use the first-tree-repo-work skill");
+    expect(message).toContain("local-first repo access");
+    expect(message).toContain("Do not require GitHub App installation before reading the repo");
+    expect(message).toContain("2-3 continuable task candidates");
+    expect(message).toContain("Find work worth continuing");
+    expect(message).toContain("Task Brief");
+    expect(message).toContain("goal, scope, key files, plan, current status, and next step");
+    expect(message).not.toContain("install GitHub App");
+    expect(message).not.toContain("Only select repositories");
+    expect(message).not.toContain("repository access");
   });
 });
