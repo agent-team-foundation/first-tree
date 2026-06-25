@@ -406,6 +406,62 @@ describe("GET /me/onboarding/tree-setup-status", () => {
     });
   });
 
+  it("returns the same org-level recovery status for admins with different completion times", async () => {
+    const app = getApp();
+    const firstAdmin = await createTestAdmin(app);
+    const laterAdmin = await createTestAdmin(app);
+    expect(laterAdmin.organizationId).toBe(firstAdmin.organizationId);
+
+    await stampCompleted(app, firstAdmin, new Date("2026-06-23T10:00:00Z"));
+    await stampCompleted(app, laterAdmin, new Date("2026-06-23T11:00:00Z"));
+    await putTreeBinding(app, firstAdmin, new Date("2026-06-23T10:30:00Z"));
+
+    const first = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${firstAdmin.organizationId}`,
+      headers: { authorization: `Bearer ${firstAdmin.accessToken}` },
+    });
+    const later = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${firstAdmin.organizationId}`,
+      headers: { authorization: `Bearer ${laterAdmin.accessToken}` },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(later.statusCode).toBe(200);
+    expect(first.json()).toEqual({
+      needsTreeSetup: true,
+      hasTreeBinding: true,
+      hasTreeSetupKickoff: false,
+    });
+    expect(later.json()).toEqual(first.json());
+  });
+
+  it("keeps org-level recovery stable when the earliest completed admin is no longer active admin", async () => {
+    const app = getApp();
+    const firstAdmin = await createTestAdmin(app);
+    const laterAdmin = await createTestAdmin(app);
+    expect(laterAdmin.organizationId).toBe(firstAdmin.organizationId);
+
+    await stampCompleted(app, firstAdmin, new Date("2026-06-23T10:00:00Z"));
+    await stampCompleted(app, laterAdmin, new Date("2026-06-23T11:00:00Z"));
+    await putTreeBinding(app, firstAdmin, new Date("2026-06-23T10:30:00Z"));
+    await app.db.update(members).set({ role: "member", status: "left" }).where(eq(members.id, firstAdmin.memberId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${firstAdmin.organizationId}`,
+      headers: { authorization: `Bearer ${laterAdmin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      needsTreeSetup: true,
+      hasTreeBinding: true,
+      hasTreeSetupKickoff: false,
+    });
+  });
+
   it("does not offer recovery for an older adopted binding with no onboarding tree chat", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
