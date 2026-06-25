@@ -46,7 +46,7 @@ import { readManagedState, updateManagedState } from "../managed-state.js";
  * binding. Welcome is core because onboarding can start before a team has a
  * Context Tree, especially in the no-repo path.
  */
-export const CORE_SKILL_NAMES = ["first-tree-welcome", "first-tree-repo-work"] as const;
+export const CORE_SKILL_NAMES = ["first-tree-welcome"] as const;
 
 const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as const;
 

@@ -62,7 +62,7 @@ export function buildRepoWorkBootstrap(opts: { repoUrl: string; agentDisplayName
     "",
     "The user came from the repo-work growth path. Help them evaluate real work in this repository, not generic setup.",
     "",
-    "Operational note: use the first-tree-repo-work skill. Prefer local-first repo access through the user's connected computer, existing gh auth, git credentials, or local clone. Do not require GitHub App installation before reading the repo.",
+    "Operational note: use the first-tree-welcome skill's repo_work lane. Prefer local-first repo access through the user's connected computer, existing gh auth, git credentials, or local clone. Do not require GitHub App installation before reading the repo.",
     "",
     "First response requirements:",
     "- Find work worth continuing in this repo.",

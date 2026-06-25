@@ -123,13 +123,15 @@ describe("kickoff bootstrap prose", () => {
 
     expect(message).toContain("This is a repo work thread with Backend Agent.");
     expect(message).toContain("GitHub repo: https://github.com/acme/backend");
-    expect(message).toContain("Operational note: use the first-tree-repo-work skill");
+    expect(message).toContain("Operational note: use the first-tree-welcome skill");
+    expect(message).toContain("repo_work lane");
     expect(message).toContain("local-first repo access");
     expect(message).toContain("Do not require GitHub App installation before reading the repo");
     expect(message).toContain("2-3 continuable task candidates");
     expect(message).toContain("Find work worth continuing");
     expect(message).toContain("Task Brief");
     expect(message).toContain("goal, scope, key files, plan, current status, and next step");
+    expect(message).not.toContain("first-tree-repo-work");
     expect(message).not.toContain("install GitHub App");
     expect(message).not.toContain("Only select repositories");
     expect(message).not.toContain("repository access");
