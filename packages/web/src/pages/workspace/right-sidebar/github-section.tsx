@@ -1,6 +1,6 @@
 import type { ChatGithubEntity, GithubEntityLiveState, GithubEntityType } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { CircleDot, ExternalLink, GitCommit, GitMerge, GitPullRequest, MessageCircle } from "lucide-react";
+import { CircleDot, ExternalLink, GitMerge, GitPullRequest, MessageCircle } from "lucide-react";
 import { listChatGithubEntities } from "../../../api/chats.js";
 import { DenseBadge, type DenseBadgeTone } from "../../../components/ui/dense-badge.js";
 
@@ -23,7 +23,7 @@ export function useChatGithubEntities(chatId: string): { items: ChatGithubEntity
 }
 
 /**
- * GitHub section — lists every PR / Issue / Discussion / Commit bound to
+ * GitHub section — lists every PR / Issue / Discussion bound to
  * the current chat via `github_entity_chat_mappings`. State comes from the
  * server's webhook-synced projection; title may be null because the mapping
  * table does not persist titles, so rows degrade gracefully to link-only.
@@ -42,7 +42,7 @@ export function GitHubSection({ chatId }: { chatId: string }) {
   }
 
   // Group by type so same-kind entities cluster — PRs (the primary work
-  // artifact) first, then issues, discussions, commits. Type is conveyed by
+  // artifact) first, then issues and discussions. Type is conveyed by
   // the per-row icon alone (no subheaders).
   const sorted = sortEntitiesByType(items);
 
@@ -65,12 +65,11 @@ export function GitHubSection({ chatId }: { chatId: string }) {
   );
 }
 
-/** Group order for the GitHub list: PR → Issue → Discussion → Commit. */
+/** Group order for the GitHub list: PR → Issue → Discussion. */
 const TYPE_ORDER: Record<string, number> = {
   pull_request: 0,
   issue: 1,
   discussion: 2,
-  commit: 3,
 };
 
 function typeRank(type: GithubEntityType): number {
@@ -78,7 +77,7 @@ function typeRank(type: GithubEntityType): number {
 }
 
 /**
- * Cluster entities by type (PR → Issue → Discussion → Commit) without
+ * Cluster entities by type (PR → Issue → Discussion) without
  * subheaders — the per-row icon carries the type. `Array.prototype.sort` is
  * stable, so server order is preserved within each type group. Pure + exported
  * for unit testing (the panel itself needs live bindings to render).
@@ -177,8 +176,7 @@ function GitHubRow({ entity }: { entity: ChatGithubEntity }) {
 function iconForType(type: GithubEntityType, state: GithubEntityLiveState | null) {
   if (type === "pull_request") return state === "merged" ? GitMerge : GitPullRequest;
   if (type === "issue") return CircleDot;
-  if (type === "discussion") return MessageCircle;
-  return GitCommit;
+  return MessageCircle;
 }
 
 function iconColor(state: GithubEntityLiveState | null): string {

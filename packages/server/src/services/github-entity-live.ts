@@ -19,28 +19,14 @@ const GITHUB_FETCH_TIMEOUT_MS = 4_000;
 const GITHUB_ENTITY_TYPE_SET = new Set<string>(GITHUB_ENTITY_TYPES);
 
 /**
- * Parsed `entityKey`. Two shapes:
- *
- *   - `owner/repo#42`      — issue / pull_request / discussion
- *   - `owner/repo@<sha>`   — commit
+ * Parsed `entityKey`: `owner/repo#42` for issue / pull_request / discussion.
  */
-type ParsedEntityKey =
-  | { kind: "numeric"; owner: string; repo: string; number: number }
-  | { kind: "sha"; owner: string; repo: string; sha: string }
-  | null;
+type ParsedEntityKey = { kind: "numeric"; owner: string; repo: string; number: number } | null;
 
 const NUMERIC_ENTITY_KEY = /^([^/\s]+)\/([^/\s#@]+)#(\d+)$/;
 const LEGACY_DISCUSSION_ENTITY_KEY = /^([^/\s]+)\/([^/\s#@]+)#discussion-(\d+)$/;
-const SHA_ENTITY_KEY = /^([^/\s]+)\/([^/\s#@]+)@([0-9a-f]{6,40})$/;
 
 function parseEntityKey(entityType: GithubEntityType, entityKey: string): ParsedEntityKey {
-  if (entityType === "commit") {
-    const m = SHA_ENTITY_KEY.exec(entityKey);
-    if (!m) return null;
-    const [, owner, repo, sha] = m;
-    if (!owner || !repo || !sha) return null;
-    return { kind: "sha", owner, repo, sha };
-  }
   if (entityType === "discussion") {
     const legacy = LEGACY_DISCUSSION_ENTITY_KEY.exec(entityKey);
     if (legacy) {
@@ -63,7 +49,6 @@ function parseEntityKey(entityType: GithubEntityType, entityKey: string): Parsed
  */
 function buildHtmlUrl(entityType: GithubEntityType, parsed: NonNullable<ParsedEntityKey>): string {
   const repoBase = `https://github.com/${parsed.owner}/${parsed.repo}`;
-  if (parsed.kind === "sha") return `${repoBase}/commit/${parsed.sha}`;
   switch (entityType) {
     case "pull_request":
       return `${repoBase}/pull/${parsed.number}`;
@@ -138,17 +123,6 @@ async function fetchEntityLiveFields(
       const state: GithubEntityLiveState | null = body.state === "open" || body.state === "closed" ? body.state : null;
       return { title: body.title ?? null, state };
     }
-    if (entityType === "commit" && parsed.kind === "sha") {
-      const res = await fetcher(
-        `${GITHUB_API_BASE}/repos/${parsed.owner}/${parsed.repo}/commits/${parsed.sha}`,
-        fetchOpts,
-      );
-      if (!res.ok) return { title: null, state: null };
-      const body = (await res.json()) as { commit?: { message?: string } };
-      // First line of the commit message is its de-facto title.
-      const title = body.commit?.message?.split("\n", 1)[0]?.trim() ?? null;
-      return { title, state: null };
-    }
     return { title: null, state: null };
   } catch {
     // Network errors, AbortController timeouts, and JSON parse errors all
@@ -188,7 +162,7 @@ function stateFromPersistedEntityState(
  * Materialise the wire-shape `ChatGithubEntity` for a single mapping row.
  *
  * `parsed` may be null when `entityKey` doesn't match the expected
- * `owner/repo#N` or `owner/repo@<sha>` shape; in that case the row is
+ * `owner/repo#N` shape; in that case the row is
  * dropped because the right rail cannot build a trustworthy GitHub link.
  * Title and lifecycle state come straight from the persisted projection
  * (`title` / `entity_state`), both webhook-synced; an empty title degrades

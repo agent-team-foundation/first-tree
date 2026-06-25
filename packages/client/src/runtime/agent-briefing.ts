@@ -833,7 +833,7 @@ everyone (reading a description to self-locate needs no ownership).
    description that no longer matches what the thread has actually done.
 
 **Exception: GitHub-sourced topics — leave them alone.** Topics like
-\`PR repo#307: title\`, \`Issue repo#42\`, \`Commit repo@sha\` are
+\`PR repo#307: title\`, \`Issue repo#42\`, \`Discussion repo#9\` are
 auto-set and kept in sync by First Tree from the upstream entity;
 overriding the topic loses the repo / entity-id anchor. This applies to
 the **topic only** — the owner still maintains the description.`;

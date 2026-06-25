@@ -15,19 +15,9 @@ function entity(entityType: GithubEntityType, key: string): ChatGithubEntity {
 }
 
 describe("sortEntitiesByType", () => {
-  it("clusters by type in PR → issue → discussion → commit order", () => {
-    const items = [
-      entity("issue", "i1"),
-      entity("commit", "c1"),
-      entity("pull_request", "p1"),
-      entity("discussion", "d1"),
-    ];
-    expect(sortEntitiesByType(items).map((e) => e.entityType)).toEqual([
-      "pull_request",
-      "issue",
-      "discussion",
-      "commit",
-    ]);
+  it("clusters by type in PR → issue → discussion order", () => {
+    const items = [entity("issue", "i1"), entity("pull_request", "p1"), entity("discussion", "d1")];
+    expect(sortEntitiesByType(items).map((e) => e.entityType)).toEqual(["pull_request", "issue", "discussion"]);
   });
 
   it("preserves server order within a type group (stable)", () => {

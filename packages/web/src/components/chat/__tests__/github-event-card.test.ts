@@ -162,7 +162,7 @@ describe("isTrustedGithubDispatcherMessage", () => {
 /**
  * Server-side `entitySurfaceTitle` (services/github-normalize.ts) prefixes
  * the raw entity title with `"PR #N: "` / `"Issue #N: "` /
- * `"Discussion #N: "` / `"Commit: "`. The L1 chip already renders that
+ * `"Discussion #N: "`. The L1 chip already renders that
  * prefix as a badge, so the card strips it before showing the title. Pin
  * the stripping contract so a regression silently re-introduces the
  * "PR-NN: PR-NN: ..." visual duplication that motivated this change.
@@ -180,11 +180,6 @@ describe("stripEntityPrefix", () => {
     // entitySurfaceTitle returns just `"PR #N"` (no colon) when entity.title is empty.
     // The chip already shows it, so render-side returns "" to hide the title element.
     expect(stripEntityPrefix("PR #42", "pull_request", "#42")).toBe("");
-    expect(stripEntityPrefix("Commit", "commit", "@x")).toBe("");
-  });
-
-  it("strips Commit prefix (no number in surface title) for commits", () => {
-    expect(stripEntityPrefix("Commit: Fix typo in README", "commit", "@x")).toBe("Fix typo in README");
   });
 
   it("returns the title as-is when the prefix does not match (older messages / schema drift)", () => {
@@ -215,10 +210,6 @@ describe("shortEntityNumber", () => {
 
   it("collapses the legacy discussion-N infix so chip and surface title agree on #N", () => {
     expect(shortEntityNumber("owner/repo#discussion-9", "owner/repo")).toBe("#9");
-  });
-
-  it("keeps the full sha for commit keys (server commit title has no number)", () => {
-    expect(shortEntityNumber("owner/repo@abc", "owner/repo")).toBe("@abc");
   });
 });
 
@@ -251,7 +242,6 @@ describe("entity-key → strip integration (mirrors GithubEventCardMessage)", ()
       title: "Discussion #9: Legacy RFC draft",
       expected: "Legacy RFC draft",
     },
-    { type: "commit" as const, key: "owner/repo@abc", title: "Commit: Fix typo", expected: "Fix typo" },
   ];
 
   for (const c of cases) {

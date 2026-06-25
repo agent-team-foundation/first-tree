@@ -14,8 +14,8 @@ export function registerGithubFollowCommand(github: Command): void {
   github
     .command("follow <entity>")
     .description(
-      "Follow a GitHub entity (PR / Issue / Discussion / Commit): route its webhook events into the current " +
-        "chat. <entity> is a GitHub URL, owner/repo#42, or owner/repo@<sha>. Creating a PR or issue never " +
+      "Follow a GitHub entity (PR / Issue / Discussion): route its webhook events into the current " +
+        "chat. <entity> is a GitHub URL or owner/repo#42. Creating a PR or issue never " +
         "follows it for you — declare the dependency yourself, immediately after creation.",
     )
     .option("--chat <chatId>", "Target chat (default: the session's FIRST_TREE_CHAT_ID)")

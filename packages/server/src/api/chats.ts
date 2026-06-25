@@ -292,7 +292,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       const { chat } = await requireChatAccess(request, app.db);
       const entity = request.query.entity;
       if (!entity) {
-        throw new BadRequestError("Pass ?entity=<GitHub URL | owner/repo#N | owner/repo@sha> to unfollow.");
+        throw new BadRequestError("Pass ?entity=<GitHub PR/Issue/Discussion URL | owner/repo#N> to unfollow.");
       }
       return removeEntityFollow(app.db, { chatId: chat.id, entity });
     },

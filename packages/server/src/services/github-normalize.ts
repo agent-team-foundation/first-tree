@@ -66,8 +66,6 @@ function entitySurfacePrefix(entity: GithubEntity): string {
       return "Issue";
     case "discussion":
       return "Discussion";
-    case "commit":
-      return "Commit";
   }
 }
 
@@ -156,8 +154,6 @@ function buildRule(
       return buildDiscussionRule(action, payload);
     case "discussion_comment":
       return buildDiscussionCommentRule(action, payload);
-    case "commit_comment":
-      return buildCommitCommentRule(action, payload);
     default:
       return null;
   }
@@ -512,26 +508,6 @@ function buildDiscussionCommentRule(action: string | null, payload: Record<strin
     involves: buildInvolves([{ logins: extractMentions(body), reason: "mentioned" }]),
     surface: {
       title: entitySurfaceTitle(entity, number),
-      body,
-      url: readString(comment.html_url) ?? "",
-    },
-    relatedRefs: [],
-  };
-}
-
-function buildCommitCommentRule(action: string | null, payload: Record<string, unknown>): RuleOutcome | null {
-  if (action !== "created") return null;
-  const comment = isRecord(payload.comment) ? payload.comment : null;
-  if (!comment) return null;
-  const entity = extractEventEntity("commit_comment", payload);
-  if (!entity) return null;
-  const body = readString(comment.body) ?? "";
-  return {
-    entity,
-    kind: "commit_commented",
-    involves: buildInvolves([{ logins: extractMentions(body), reason: "mentioned" }]),
-    surface: {
-      title: entitySurfaceTitle(entity, null),
       body,
       url: readString(comment.html_url) ?? "",
     },

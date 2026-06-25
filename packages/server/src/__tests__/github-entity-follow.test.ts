@@ -68,7 +68,7 @@ describe("github-entity-follow", () => {
         accountType: "Organization",
         accountLogin: "acme",
         accountGithubId: 1001,
-        permissions: { contents: "read" },
+        permissions: { issues: "read", pull_requests: "read" },
         events: ["pull_request", "issues"],
         suspendedAt: null,
       },
@@ -88,7 +88,7 @@ describe("github-entity-follow", () => {
           JSON.stringify({
             token: "ghs_test_token",
             expires_at: "2099-01-01T00:00:00Z",
-            permissions: { contents: "read" },
+            permissions: { issues: "read", pull_requests: "read" },
             repository_selection: "selected",
           }),
           { status: 201, headers: { "content-type": "application/json" } },
@@ -176,14 +176,12 @@ describe("github-entity-follow", () => {
       expect(parseEntityReference("https://github.com/o/r/discussions/9")).toMatchObject({
         explicitType: "discussion",
       });
-      expect(parseEntityReference("https://github.com/o/r/commit/3F2A91C0")).toEqual({
-        kind: "commit",
-        owner: "o",
-        repo: "r",
-        sha: "3f2a91c0",
-      });
       expect(parseEntityReference("o/r#42")).toMatchObject({ kind: "numeric", explicitType: null, number: 42 });
-      expect(parseEntityReference("o/r@abcdef1")).toMatchObject({ kind: "commit", sha: "abcdef1" });
+    });
+
+    it("does not parse commit URL or owner/repo@sha references as followable entities", () => {
+      expect(parseEntityReference("https://github.com/o/r/commit/3F2A91C0")).toBeNull();
+      expect(parseEntityReference("o/r@abcdef1")).toBeNull();
     });
 
     it("rejects garbage", () => {
@@ -494,6 +492,21 @@ describe("github-entity-follow", () => {
     );
   });
 
+  it("rejects commit references as unsupported before GitHub resolution", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const failFetcher = (() => {
+      throw new Error("unexpected GitHub fetch");
+    }) as typeof fetch;
+
+    await expect(
+      declareEntityFollow(app.db, deps(failFetcher), followParams(s, "https://github.com/acme/api/commit/3f2a91c")),
+    ).rejects.toThrow(/Commit references are no longer supported/);
+    await expect(removeEntityFollow(app.db, { chatId: s.chatId, entity: "acme/api@3f2a91c" })).rejects.toThrow(
+      /Commit references are no longer supported/,
+    );
+  });
+
   it("R4: unfollow is idempotent — removed: 0 on a non-followed entity, repeatable", async () => {
     const app = getApp();
     const s = await setup(app);
@@ -606,31 +619,21 @@ describe("github-entity-follow", () => {
     ).resolves.toEqual({ removed: 1 });
   });
 
-  it("commit unfollow escapes LIKE metacharacters — an underscore repo cannot sweep a sibling", async () => {
+  it("following filters legacy commit mappings because commit is no longer a valid entity type", async () => {
     const app = getApp();
     const s = await setup(app);
-    const base = {
+    await app.db.insert(githubEntityChatMappings).values({
       organizationId: s.admin.organizationId,
       humanAgentId: s.human,
       delegateAgentId: s.delegate,
       entityType: "commit",
+      entityKey: "Acme/Api@3f2a91c0aaaabbbbccccddddeeeeffff00001111",
       chatId: s.chatId,
       boundVia: "agent_declared",
-    };
-    await app.db.insert(githubEntityChatMappings).values([
-      { ...base, entityKey: "acme/my_app@3f2a91c0aaaabbbbccccddddeeeeffff00001111" },
-      // `_` as LIKE-any-char would also match this sibling repo's row.
-      { ...base, entityKey: "acme/myxapp@3f2a91c0aaaabbbbccccddddeeeeffff00001111" },
-    ]);
-
-    await expect(removeEntityFollow(app.db, { chatId: s.chatId, entity: "acme/my_app@3f2a91c0" })).resolves.toEqual({
-      removed: 1,
     });
-    const remaining = await app.db
-      .select({ entityKey: githubEntityChatMappings.entityKey })
-      .from(githubEntityChatMappings)
-      .where(eq(githubEntityChatMappings.chatId, s.chatId));
-    expect(remaining).toEqual([{ entityKey: "acme/myxapp@3f2a91c0aaaabbbbccccddddeeeeffff00001111" }]);
+
+    const list = await listChatGithubEntities(app.db, { chatId: s.chatId });
+    expect(list.items).toEqual([]);
   });
 
   it("rebind whose conflicting row vanished concurrently falls back to a real insert (no ghost success)", async () => {
@@ -771,23 +774,6 @@ describe("github-entity-follow", () => {
       entityKey: "Acme/Api#42",
       htmlUrl: "https://github.com/Acme/Api/discussions/42",
       number: 42,
-    });
-  });
-
-  it("unfollow by short commit sha prefix removes the full-sha row", async () => {
-    const app = getApp();
-    const s = await setup(app);
-    await app.db.insert(githubEntityChatMappings).values({
-      organizationId: s.admin.organizationId,
-      humanAgentId: s.human,
-      delegateAgentId: s.delegate,
-      entityType: "commit",
-      entityKey: "Acme/Api@3f2a91c0aaaabbbbccccddddeeeeffff00001111",
-      chatId: s.chatId,
-      boundVia: "agent_declared",
-    });
-    await expect(removeEntityFollow(app.db, { chatId: s.chatId, entity: "acme/api@3f2a91c0" })).resolves.toEqual({
-      removed: 1,
     });
   });
 });

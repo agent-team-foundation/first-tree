@@ -1,7 +1,6 @@
 import type { ChatSource, GithubEntityType } from "@first-tree/shared";
 import {
   CircleDot,
-  GitCommit,
   Github,
   GitPullRequest,
   type LucideIcon,
@@ -41,7 +40,6 @@ const GITHUB_ENTITY_ICON_MAP: Record<GithubEntityType, LucideIcon> = {
   pull_request: GitPullRequest,
   issue: CircleDot,
   discussion: MessageCircle,
-  commit: GitCommit,
 };
 
 const SOURCE_LABEL_MAP: Record<ChatSource, string> = {
@@ -54,7 +52,6 @@ const GITHUB_ENTITY_LABEL_MAP: Record<GithubEntityType, string> = {
   pull_request: "Pull request",
   issue: "Issue",
   discussion: "Discussion",
-  commit: "Commit",
 };
 
 export function SourceIcon({

@@ -77,12 +77,11 @@ const ENTITY_TAG_LABEL: Record<GithubEntityType, string> = {
   issue: "Issue",
   pull_request: "PR",
   discussion: "Discussion",
-  commit: "Commit",
 };
 
 /**
  * `entity.key` arrives canonically as `owner/repo#N` (issue / PR /
- * discussion) or `owner/repo@<sha>` (commit). Older persisted discussion
+ * discussion). Older persisted discussion
  * cards may still carry `owner/repo#discussion-N`; collapse that legacy
  * infix so the chip and the surface-title-strip both reference the same
  * `#N` form that appears in the server-rendered title.
@@ -91,7 +90,7 @@ const ENTITY_TAG_LABEL: Record<GithubEntityType, string> = {
  */
 export function shortEntityNumber(key: string, repository: string): string {
   let tail: string;
-  if (repository && (key.startsWith(`${repository}#`) || key.startsWith(`${repository}@`))) {
+  if (repository && key.startsWith(`${repository}#`)) {
     tail = key.slice(repository.length);
   } else {
     const lastSlash = key.lastIndexOf("/");
@@ -109,7 +108,7 @@ function shortRepoName(repository: string): string {
 /**
  * Server-side `entitySurfaceTitle` (services/github-normalize.ts) wraps the
  * raw entity title as `"PR #N: <title>"` / `"Issue #N: <title>"` /
- * `"Discussion #N: <title>"` / `"Commit: <title>"`. The L1 chip already
+ * `"Discussion #N: <title>"`. The L1 chip already
  * renders that prefix as a colored badge, so leaving it inside the title
  * string duplicates information. Strip the exact prefix we expect from the
  * server formatter; if the title doesn't match (older messages, schema
@@ -117,11 +116,6 @@ function shortRepoName(repository: string): string {
  */
 export function stripEntityPrefix(title: string, entityType: GithubEntityType, entityNumber: string): string {
   const prefix = ENTITY_TAG_LABEL[entityType];
-  if (entityType === "commit") {
-    if (title.startsWith(`${prefix}: `)) return title.slice(prefix.length + 2);
-    if (title === prefix) return "";
-    return title;
-  }
   const head = `${prefix} ${entityNumber}`;
   if (title.startsWith(`${head}: `)) return title.slice(head.length + 2);
   if (title === head) return "";
@@ -148,8 +142,6 @@ function subscribedVerb(kind: GithubEventCard["kind"]): string {
       return "requested a review";
     case "synchronized":
       return "pushed new commits";
-    case "commit_commented":
-      return "commented on a commit";
     case "assigned":
       // Passive voice on the subscribed track avoids a semantic clash
       // with `actionVerb`'s "assigned this to you" (reason=assigned),

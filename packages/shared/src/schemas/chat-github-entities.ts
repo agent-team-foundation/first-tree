@@ -56,7 +56,7 @@ export type GithubEntityLiveState = z.infer<typeof githubEntityLiveStateSchema>;
 
 export const chatGithubEntitySchema = z.object({
   entityType: githubEntityTypeSchema,
-  /** Stable cluster key, e.g. "owner/repo#42" or "owner/repo@<sha>". */
+  /** Stable cluster key, e.g. "owner/repo#42". */
   entityKey: z.string().min(1),
   /** How the binding was first created — audit-only, surfaced by the UI as a small caption. */
   boundVia: githubEntityBoundViaSchema,
@@ -68,7 +68,7 @@ export const chatGithubEntitySchema = z.object({
   htmlUrl: z.string().url(),
   /** Persisted title projection when available; currently null for mapping-only rows. */
   title: z.string().nullable(),
-  /** Webhook-synced state projection. `null` for commits/discussions. */
+  /** Webhook-synced state projection. `null` for discussions. */
   state: githubEntityLiveStateSchema.nullable(),
   /** Issue / PR / Discussion number when applicable. */
   number: z.number().int().nullable(),
@@ -85,7 +85,7 @@ export type ChatGithubEntityListResponse = z.infer<typeof chatGithubEntityListRe
  *
  * `entity` accepts a full GitHub URL (`https://github.com/o/r/pull/42`),
  * the short numeric form (`owner/repo#42` — issue vs PR resolved against
- * the GitHub API), or the commit form (`owner/repo@<sha>`).
+ * the GitHub API, with discussion fallback).
  *
  * `rebind: true` MOVES the binding into the target chat when the same
  * (human, delegate) line already lives in another chat — the 409 outcome's

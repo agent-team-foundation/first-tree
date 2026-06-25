@@ -83,16 +83,13 @@ describe("extractEventEntity", () => {
     });
   });
 
-  it("derives commit entity from commit_comment with commit_id", () => {
-    const entity = extractEventEntity("commit_comment", {
-      comment: { commit_id: "abc1234", html_url: "https://github.com/owner/repo/commit/abc1234" },
-      repository: { full_name: "owner/repo" },
-    });
-    expect(entity).toEqual({
-      type: "commit",
-      key: "owner/repo@abc1234",
-      url: "https://github.com/owner/repo/commit/abc1234",
-    });
+  it("returns null for commit_comment events because commit entities are unsupported", () => {
+    expect(
+      extractEventEntity("commit_comment", {
+        comment: { commit_id: "abc1234", html_url: "https://github.com/owner/repo/commit/abc1234" },
+        repository: { full_name: "owner/repo" },
+      }),
+    ).toBeNull();
   });
 
   it("returns null for unknown event types", () => {
@@ -221,12 +218,6 @@ describe("formatEntityTitle", () => {
   it("renders Discussion title", () => {
     expect(formatEntityTitle({ type: "discussion", key: "owner/repo#9", title: "RFC" }, "discussion", "created")).toBe(
       "Discussion repo#9: RFC",
-    );
-  });
-
-  it("renders Commit title (no entity title)", () => {
-    expect(formatEntityTitle({ type: "commit", key: "owner/repo@abc1234" }, "commit_comment", "created")).toBe(
-      "Commit repo@abc1234",
     );
   });
 

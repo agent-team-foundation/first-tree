@@ -35,7 +35,6 @@ export const NORMALIZED_EVENT_KINDS = [
   "reviewed",
   "review_comment",
   "synchronized",
-  "commit_commented",
   "assigned",
   "other",
 ] as const;

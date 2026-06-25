@@ -7,7 +7,7 @@ import type { GithubEntityType } from "@first-tree/shared";
  */
 export type GithubEntity = {
   type: GithubEntityType;
-  /** Stable string id, e.g. `"owner/repo#42"` or `"owner/repo@<sha>"`. */
+  /** Stable string id, e.g. `"owner/repo#42"`. */
   key: string;
   /** Human label, e.g. `"Refactor inbox dispatcher"`. Optional — falls back to key. */
   title?: string;
@@ -40,12 +40,6 @@ export function readString(value: unknown): string | null {
  * Returns `null` when the event isn't a clustering candidate (event type
  * outside the §4.1 "core" list, malformed payload). Caller is expected to
  * skip such events.
- *
- * Notes
- * - `commit_comment` falls back to a `commit` entity keyed on `<repo>@<sha>`
- *   when no associated PR is in the payload — the design hedges on "optionally
- *   resolve to a PR", but doing so requires an extra GitHub API call which we
- *   defer to Phase 1+.
  */
 export function extractEventEntity(eventType: string, payload: unknown): GithubEntity | null {
   if (!isRecord(payload)) return null;
@@ -111,16 +105,6 @@ export function extractEventEntity(eventType: string, payload: unknown): GithubE
         key: `${repo}#${number}`,
         title: readString(disc?.title) ?? undefined,
         url: readString(disc?.html_url) ?? undefined,
-      };
-    }
-    case "commit_comment": {
-      const comment = isRecord(payload.comment) ? payload.comment : null;
-      const sha = readString(comment?.commit_id);
-      if (!sha) return null;
-      return {
-        type: "commit",
-        key: `${repo}@${sha}`,
-        url: readString(comment?.html_url) ?? undefined,
       };
     }
     default:
@@ -193,15 +177,12 @@ function baseTypePrefix(type: GithubEntity["type"]): string {
       return "PR";
     case "discussion":
       return "Discussion";
-    case "commit":
-      return "Commit";
   }
 }
 
 /**
  * Strip the leading `owner/` segment from an entity key so the chat title
- * stays compact. `owner/repo#42` → `repo#42`; `owner/repo@abc1234` →
- * `repo@abc1234`. The full `owner/repo#N` form is still used as the
+ * stays compact. `owner/repo#42` → `repo#42`. The full `owner/repo#N` form is still used as the
  * clustering primary key (`github_entity_chat_mappings.entity_key`); only the
  * display string is shortened.
  */

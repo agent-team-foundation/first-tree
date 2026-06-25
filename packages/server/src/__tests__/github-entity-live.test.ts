@@ -7,7 +7,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 describe("github entity live helpers", () => {
-  it("parses numeric and sha entity keys", () => {
+  it("parses numeric entity keys", () => {
     expect(__testing.parseEntityKey("pull_request", "owner/repo#42")).toEqual({
       kind: "numeric",
       owner: "owner",
@@ -26,13 +26,6 @@ describe("github entity live helpers", () => {
       repo: "repo",
       number: 9,
     });
-    expect(__testing.parseEntityKey("commit", "owner/repo@abcdef1")).toEqual({
-      kind: "sha",
-      owner: "owner",
-      repo: "repo",
-      sha: "abcdef1",
-    });
-    expect(__testing.parseEntityKey("commit", "owner/repo#42")).toBeNull();
     expect(__testing.parseEntityKey("issue", "owner/repo@abcdef1")).toBeNull();
     expect(__testing.parseEntityKey("pull_request", "owner/repo#not-a-number")).toBeNull();
   });
@@ -46,9 +39,6 @@ describe("github entity live helpers", () => {
     );
     expect(__testing.buildHtmlUrl("discussion", { kind: "numeric", owner: "o", repo: "r", number: 3 })).toBe(
       "https://github.com/o/r/discussions/3",
-    );
-    expect(__testing.buildHtmlUrl("commit", { kind: "sha", owner: "o", repo: "r", sha: "abcdef1" })).toBe(
-      "https://github.com/o/r/commit/abcdef1",
     );
   });
 });
@@ -83,7 +73,7 @@ describe("fetchEntityLiveFields", () => {
     );
   });
 
-  it("fetches issue state and commit title", async () => {
+  it("fetches issue state", async () => {
     const issueFetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse({ title: "Bug", state: "closed" }));
     await expect(
       __testing.fetchEntityLiveFields(
@@ -93,18 +83,6 @@ describe("fetchEntityLiveFields", () => {
         issueFetcher,
       ),
     ).resolves.toEqual({ title: "Bug", state: "closed" });
-
-    const commitFetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse({ commit: { message: "Fix startup\n\nBody" } }));
-    await expect(
-      __testing.fetchEntityLiveFields(
-        "commit",
-        { kind: "sha", owner: "owner", repo: "repo", sha: "abcdef1" },
-        "token",
-        commitFetcher,
-      ),
-    ).resolves.toEqual({ title: "Fix startup", state: null });
   });
 
   it("returns empty live fields when fetch fails or entity type has no live endpoint", async () => {
@@ -192,7 +170,7 @@ describe("resolveChatGithubEntity", () => {
     });
   });
 
-  it("does not fetch live fields without a token", async () => {
+  it("filters legacy commit rows because commit is no longer a valid entity type", async () => {
     const fetcher = vi.fn<typeof fetch>();
 
     await expect(
@@ -201,15 +179,7 @@ describe("resolveChatGithubEntity", () => {
         null,
         fetcher,
       ),
-    ).resolves.toEqual({
-      entityType: "commit",
-      entityKey: "owner/repo@abcdef1",
-      boundVia: "agent_declared",
-      htmlUrl: "https://github.com/owner/repo/commit/abcdef1",
-      title: null,
-      state: null,
-      number: null,
-    });
+    ).resolves.toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
   });
 
