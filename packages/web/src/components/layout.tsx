@@ -57,24 +57,24 @@ export function Layout() {
   // Top-bar progressive collapse, tuned so the user menu (sign-out, org-switch)
   // is reachable at EVERY width — dropping it below `xl` previously stranded
   // every phone / tablet / sub-1280 desktop window with no way to log out.
-  //   - `xl`     : brand | tabs | [Jump to…] [theme] [avatar]
-  //   - `md`     : brand | tabs | [theme] [avatar]   (Jump to… too wide)
-  //   - `narrow` : tabs | [avatar]                   (also drops brand)
-  // On `narrow` the theme toggle drops too: four full tabs + theme + avatar
-  // overflow a phone-width row and would clip the avatar off the right edge.
-  // Phones
-  // fall back to the OS `prefers-color-scheme` (honoured at boot in index.html);
-  // the toggle returns at `md`. The avatar is the one control that never drops.
+  //   - `xl`     : brand | tabs | [status chips] [⌘K] [theme] [avatar]
+  //   - `md`     : brand | tabs | [status icons] [⌘K] [theme] [avatar]
+  //   - `narrow` : tabs | [status icons] [avatar]       (also drops brand)
+  // On `narrow` the theme toggle and full status chips drop too: four full tabs
+  // plus text chips + theme + avatar overflow a phone-width row and would clip
+  // the avatar off the right edge. Phones fall back to the OS
+  // `prefers-color-scheme` (honoured at boot in index.html); the toggle returns
+  // at `md`. The avatar is the one control that never drops.
   const viewport = useWorkspaceViewport();
   // Lifted out of NewVersionChip so the `/version.json` poll runs at EVERY
-  // breakpoint — the brand cluster (and its chip) is dropped on `narrow`, but
-  // version detection must not be. The chip is rendered in two places below:
-  // the full pill in the brand cluster, and a compact icon-only fallback in the
-  // right controls when the brand is dropped.
+  // breakpoint — the full chip is dropped on `narrow`, but version detection
+  // must not be. The chip is rendered in two places below: the full pill in the
+  // right controls, and a compact icon-only fallback when the brand is dropped.
   const newVersionAvailable = useNewVersionAvailable();
-  const showJumpButton = viewport === "xl";
+  const showJumpButton = viewport !== "narrow";
   const dropBrand = viewport === "narrow";
   const showThemeToggle = viewport !== "narrow";
+  const showFullStatusChips = viewport === "xl";
   // The team anchor is reachable at every breakpoint (like the avatar). It is
   // absent only when no org is selected (mid-onboarding), where it would have
   // nothing to anchor to and Create / Join is carried by the onboarding flow.
@@ -117,9 +117,9 @@ export function Layout() {
           background: "var(--bg-raised)",
         }}
       >
-        {/* Brand cluster: logo + name welded together, the team anchor, then the
-            optional chips. On narrow the cluster is dropped, but the anchor must
-            stay reachable — it surfaces icon-only in its own leading column. */}
+        {/* Brand cluster: logo + name welded together, then the team anchor. On
+            narrow the cluster is dropped, but the anchor must stay reachable —
+            it surfaces icon-only in its own leading column. */}
         {dropBrand ? (
           showAnchor ? (
             <div style={{ justifySelf: "start", minWidth: 0 }}>
@@ -151,8 +151,6 @@ export function Layout() {
                 <TeamSwitcher variant="full" />
               </>
             )}
-            <DisconnectChip />
-            <NewVersionChip show={newVersionAvailable} />
           </div>
         )}
 
@@ -172,7 +170,7 @@ export function Layout() {
             // Narrow track is `minmax(0, 1fr)`: let the row scroll horizontally
             // if the tabs can't all fit (tiny phones / long i18n labels) rather
             // than overflow and clip the avatar. No-op when the tabs fit.
-            ...(dropBrand ? { minWidth: 0, overflowX: "auto" } : null),
+            ...(dropBrand ? { minWidth: 0, width: "100%", overflowX: "auto" } : null),
           }}
         >
           {navTabs.map((tab) => (
@@ -207,20 +205,34 @@ export function Layout() {
 
         {/* Right controls. The user menu (avatar) renders at every breakpoint
             so sign-out / org-switch stay reachable on phones and tablets; the
-            theme toggle drops on `narrow` and the wide "Jump to…" button is
-            xl-only (see the collapse comment above). */}
+            theme toggle and command-palette entry drop on `narrow`. Status
+            stays visible at every width: full text on `xl`, compact icons
+            below it so the right track cannot crowd the centred tabs. */}
         <div className="flex items-center shrink-0" style={{ gap: 6, justifySelf: "end" }}>
+          {showFullStatusChips ? (
+            <>
+              <DisconnectChip />
+              <NewVersionChip show={newVersionAvailable} />
+            </>
+          ) : (
+            <>
+              <DisconnectChip compact />
+              <NewVersionChip show={newVersionAvailable} compact />
+            </>
+          )}
           {showJumpButton ? (
             <>
               <button
                 type="button"
                 onClick={() => setPaletteOpen(true)}
-                aria-label="Open command palette"
+                aria-label="Jump to… (⌘K)"
+                aria-keyshortcuts="Meta+K Control+K"
+                title="Jump to… (⌘K / Ctrl+K)"
                 className="inline-flex items-center transition-colors text-body"
                 style={{
-                  gap: 8,
-                  padding: "var(--sp-1) var(--sp-3)",
-                  minWidth: 200,
+                  gap: 7,
+                  height: 30,
+                  padding: "0 var(--sp-2)",
                   color: "var(--fg-3)",
                   border: "var(--hairline) solid var(--border)",
                   borderRadius: "var(--radius-input)",
@@ -233,15 +245,14 @@ export function Layout() {
                   e.currentTarget.style.color = "var(--fg-3)";
                 }}
               >
-                <Search className="h-4 w-4" />
-                <span className="flex-1 text-left">Jump to…</span>
+                <Search aria-hidden="true" size={14} style={{ flexShrink: 0 }} />
                 <span
                   aria-hidden
                   className="text-caption font-mono"
                   style={{
-                    padding: "var(--sp-0_5) var(--sp-1_5)",
+                    padding: "var(--sp-0_5) var(--sp-1_25)",
                     border: "var(--hairline) solid var(--border)",
-                    borderRadius: "var(--sp-1)",
+                    borderRadius: "var(--radius-chip)",
                     color: "var(--fg-3)",
                     background: "var(--bg-raised)",
                   }}
@@ -272,9 +283,6 @@ export function Layout() {
               />
             </>
           ) : null}
-          {/* On `narrow` the brand cluster (with the full chip) is dropped, so
-              surface a compact icon-only refresh entry here instead. */}
-          {dropBrand ? <NewVersionChip show={newVersionAvailable} compact /> : null}
           <UserMenu />
         </div>
       </header>

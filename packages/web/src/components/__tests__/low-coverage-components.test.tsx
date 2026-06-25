@@ -159,7 +159,8 @@ describe("low coverage UI components", () => {
       rows: [{ clientId: "client-1" }],
     });
     const single = await renderDom(<DisconnectChip />);
-    expect(single.container.textContent).toContain("gandy-macbook");
+    expect(single.container.textContent).toContain("Computer disconnected");
+    expect(single.container.textContent).not.toContain("gandy-macbook");
     expect(single.container.querySelector("button")?.getAttribute("aria-label")).toContain("gandy-macbook");
     await act(async () => single.root.unmount());
 

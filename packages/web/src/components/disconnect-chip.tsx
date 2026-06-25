@@ -1,7 +1,10 @@
 import { useNavigate } from "react-router";
 import { useDisconnectedComputers } from "../hooks/use-disconnected-computers.js";
 
-const HOSTNAME_MAX_PX = 160;
+type DisconnectChipProps = {
+  /** Icon-only rendering for md/narrow topbars where full text would crowd nav. */
+  compact?: boolean;
+};
 
 /**
  * Topbar warning chip — surfaces in `Layout` whenever any of the caller's
@@ -9,7 +12,7 @@ const HOSTNAME_MAX_PX = 160;
  * the Computers settings page. Renders nothing in the healthy case so the
  * topbar stays clean.
  */
-export function DisconnectChip() {
+export function DisconnectChip({ compact = false }: DisconnectChipProps) {
   const navigate = useNavigate();
   const { rows, firstHostname } = useDisconnectedComputers();
   if (rows.length === 0) return null;
@@ -18,6 +21,32 @@ export function DisconnectChip() {
   const tooltip = isMulti
     ? `${rows.length} computers disconnected. Click to manage.`
     : `${firstHostname ?? "Your computer"} is disconnected. Click to manage.`;
+
+  if (compact) {
+    return (
+      <button
+        type="button"
+        onClick={() => navigate("/settings/computers")}
+        title={tooltip}
+        aria-label={tooltip}
+        className="inline-flex items-center justify-center cursor-pointer"
+        style={{
+          height: 26,
+          width: 26,
+          padding: 0,
+          borderRadius: 999,
+          border: 0,
+          outline: "var(--hairline) solid color-mix(in oklch, var(--state-error) 38%, transparent)",
+          outlineOffset: -1,
+          background: "var(--state-error-soft)",
+          color: "color-mix(in oklch, var(--state-error) 80%, var(--fg))",
+          flexShrink: 0,
+        }}
+      >
+        <PulseDot />
+      </button>
+    );
+  }
 
   return (
     <button
@@ -37,6 +66,7 @@ export function DisconnectChip() {
         background: "var(--state-error-soft)",
         color: "color-mix(in oklch, var(--state-error) 80%, var(--fg))",
         minWidth: 0,
+        whiteSpace: "nowrap",
       }}
     >
       <PulseDot />
@@ -45,21 +75,7 @@ export function DisconnectChip() {
           <span className="font-semibold">{rows.length}</span> computers disconnected
         </span>
       ) : (
-        <span className="inline-flex items-center" style={{ gap: 5, minWidth: 0 }}>
-          <span
-            className="mono text-label font-medium"
-            style={{
-              maxWidth: HOSTNAME_MAX_PX,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              color: "color-mix(in oklch, var(--state-error) 60%, var(--fg))",
-            }}
-          >
-            {firstHostname ?? "computer"}
-          </span>
-          <span style={{ flexShrink: 0 }}>disconnected</span>
-        </span>
+        <span>Computer disconnected</span>
       )}
     </button>
   );
