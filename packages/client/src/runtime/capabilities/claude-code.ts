@@ -328,7 +328,17 @@ export async function probeClaudeCodeCapability(deps: ClaudeCodeProbeDeps = {}):
         const verified = await verifyBinary(resolution.path);
         if (!verified.ok) return { ok: false, error: verified.error };
         resolvedBinary = resolution.path;
-        return { ok: true, binary: resolution.path, version: verified.version };
+        // Provenance for the capability snapshot (mirrors codex): an on-disk
+        // `claude` the runtime resolved itself — env override, PATH, or a
+        // well-known install dir — all surface as `runtimeSource: "path"` with
+        // the resolved absolute path, so a consumer can assert "this host runs
+        // a system claude" directly instead of inferring it from the version.
+        return {
+          ok: true,
+          binary: resolution.path,
+          version: verified.version,
+          meta: { runtimeSource: "path", runtimePath: resolution.path },
+        };
       }
       // No on-disk binary — the SDK will spawn its bundled Claude binary
       // (legacy cli.js, or a modern per-platform native binary). Launch-verify
@@ -337,7 +347,7 @@ export async function probeClaudeCodeCapability(deps: ClaudeCodeProbeDeps = {}):
       // it only runs after a passing auth precheck).
       const verified = await verifyBundledArtifact();
       if (!verified.ok) return { ok: false, error: verified.error };
-      return { ok: true, version: verified.version };
+      return { ok: true, version: verified.version, meta: { runtimeSource: "bundled", runtimePath: null } };
     },
     authPrecheck: async (): Promise<AuthPrecheckOutcome> => {
       const auth = detectAuth();
