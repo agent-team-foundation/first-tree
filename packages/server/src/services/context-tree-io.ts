@@ -141,6 +141,16 @@ type InternalContextTreeIoDecision =
       reason: ContextTreeIoSkipReason;
     };
 
+type SkippedDecisionFastPath =
+  | {
+      handled: true;
+      decision: ContextTreeIoDecision;
+      toolName: string | null;
+    }
+  | {
+      handled: false;
+    };
+
 function normalizeTargetPath(rawPath: string, targetKind: ContextTreeIoTargetKind): string | null {
   const trimmed = rawPath.trim().replaceAll("\\", "/");
   if (trimmed.length === 0 || trimmed.includes("\0")) return null;
@@ -176,6 +186,49 @@ function isShellTool(runtimeProvider: string, toolName: string): boolean {
   return (
     (runtimeProvider === "codex" && toolName === "command") || (isClaudeRuntime(runtimeProvider) && toolName === "Bash")
   );
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function skippedDecisionFastPathForNoRefs(
+  kind: string,
+  payload: unknown,
+  runtimeProvider: string,
+  bindingRepo: string | null | undefined,
+): SkippedDecisionFastPath {
+  if (!bindingRepo) return { handled: false };
+  if (kind !== "tool_call") return { handled: false };
+
+  const record = recordFromUnknown(payload);
+  if (!record) return { handled: false };
+  const toolName = typeof record.name === "string" ? record.name : null;
+  if (typeof record.toolUseId !== "string" || !toolName) return { handled: false };
+  if (record.status !== "ok") {
+    return { handled: true, decision: { recordable: false, reason: "status_not_ok" }, toolName };
+  }
+  if ("toolFileRefs" in record) {
+    if (!Array.isArray(record.toolFileRefs)) return { handled: false };
+    if (record.toolFileRefs.length > 0) return { handled: false };
+  }
+
+  if (runtimeProvider === "codex" && toolName === "file_change") {
+    return { handled: true, decision: { recordable: false, reason: "no_tool_file_refs" }, toolName };
+  }
+  if (isClaudeRuntime(runtimeProvider) && (CLAUDE_READ_TOOLS.has(toolName) || CLAUDE_WRITE_TOOLS.has(toolName))) {
+    return { handled: true, decision: { recordable: false, reason: "no_tool_file_refs" }, toolName };
+  }
+  if (isShellTool(runtimeProvider, toolName)) {
+    const args = recordFromUnknown(record.args);
+    const command = typeof args?.command === "string" ? args.command : null;
+    const classification = command ? classifyShellCommandIo(command) : null;
+    const reason =
+      classification?.supported && classification.action === "read" ? "no_tool_file_refs" : "unsupported_shell_command";
+    return { handled: true, decision: { recordable: false, reason }, toolName };
+  }
+
+  return { handled: true, decision: { recordable: false, reason: "unsupported_tool" }, toolName };
 }
 
 function deriveEventIo(event: SessionEvent, runtimeProvider: string): EventIoDerivation | ContextTreeIoSkipReason {
@@ -433,40 +486,59 @@ export async function summarizeContextTreeIoSkippedEvents(
     }
   >();
 
+  const recordSkippedDecision = (
+    decision: ContextTreeIoDecision,
+    row: (typeof rows)[number],
+    toolName: string | null,
+  ): void => {
+    if (decision.recordable) return;
+
+    const bucket = byReason.get(decision.reason) ?? {
+      eventCount: 0,
+      agentIds: new Set<string>(),
+      runtimeProviders: new Map<string, number>(),
+      toolNames: new Map<string, number>(),
+    };
+    bucket.eventCount += 1;
+    bucket.agentIds.add(row.agentId);
+    incrementCount(bucket.runtimeProviders, runtimeProviderByAgent.get(row.agentId) ?? "unknown");
+    if (toolName) incrementCount(bucket.toolNames, toolName);
+    byReason.set(decision.reason, bucket);
+  };
+
+  let fastPathRows = 0;
+  let slowPathRows = 0;
   timeSyncWithSink(
     options.timing,
     "io_skipped_decide",
     () => {
       for (const row of rows) {
+        const runtimeProvider = runtimeProviderByAgent.get(row.agentId) ?? "unknown";
+        const fastPath = skippedDecisionFastPathForNoRefs(row.kind, row.payload, runtimeProvider, binding.repo);
+        if (fastPath.handled) {
+          fastPathRows += 1;
+          recordSkippedDecision(fastPath.decision, row, fastPath.toolName);
+          continue;
+        }
+        slowPathRows += 1;
         const parsed = sessionEventSchema.safeParse({ kind: row.kind, payload: row.payload });
         const event = parsed.success ? parsed.data : null;
         const decision = event
           ? buildContextTreeIoDecision({
               event,
-              runtimeProvider: runtimeProviderByAgent.get(row.agentId) ?? "unknown",
+              runtimeProvider,
               bindingRepo: binding.repo,
               bindingBranch,
               chatInOrg: row.chatOrganizationId === organizationId,
             })
           : ({ recordable: false, reason: "event_kind_not_io" } as const);
-        if (decision.recordable) continue;
-
-        const bucket = byReason.get(decision.reason) ?? {
-          eventCount: 0,
-          agentIds: new Set<string>(),
-          runtimeProviders: new Map<string, number>(),
-          toolNames: new Map<string, number>(),
-        };
-        bucket.eventCount += 1;
-        bucket.agentIds.add(row.agentId);
-        incrementCount(bucket.runtimeProviders, runtimeProviderByAgent.get(row.agentId) ?? "unknown");
-        const toolName = event ? toolNameOf(event) : null;
-        if (toolName) incrementCount(bucket.toolNames, toolName);
-        byReason.set(decision.reason, bucket);
+        recordSkippedDecision(decision, row, event ? toolNameOf(event) : null);
       }
     },
     { rowCount: rows.length },
   );
+  options.timing?.("io_skipped_decide_fast_rows", 0, { rowCount: fastPathRows });
+  options.timing?.("io_skipped_decide_slow_rows", 0, { rowCount: slowPathRows });
 
   const reasons = [...byReason.entries()]
     .sort(

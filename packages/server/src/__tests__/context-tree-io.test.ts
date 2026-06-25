@@ -788,6 +788,87 @@ describe("context-tree IO service", () => {
     expect(timings.find((timing) => timing.name === "io_skipped_rows")?.fields).toMatchObject({ rowCount: 1 });
   });
 
+  it("fast-paths skipped diagnostics decisions for no-ref candidates", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: Array<{ name: string; fields?: Record<string, unknown> }> = [];
+
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-read-no-refs",
+        name: "Read",
+        args: {},
+        status: "ok",
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-shell-read-no-refs",
+        name: "Bash",
+        args: { command: "cat /tmp/context-tree/NODE.md" },
+        status: "ok",
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-shell-write-no-refs",
+        name: "Bash",
+        args: { command: "echo x > /tmp/context-tree/NODE.md" },
+        status: "ok",
+      },
+    });
+
+    const skipped = await summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7, {
+      timing: (name, _ms, fields) => timings.push({ name, fields }),
+    });
+
+    expect(skipped.totalEventCount).toBe(3);
+    expect(skipped.reasons.map((row) => ({ reason: row.reason, eventCount: row.eventCount }))).toEqual([
+      { reason: "no_tool_file_refs", eventCount: 2 },
+      { reason: "unsupported_shell_command", eventCount: 1 },
+    ]);
+    expect(timings.find((timing) => timing.name === "io_skipped_decide_fast_rows")?.fields).toMatchObject({
+      rowCount: 3,
+    });
+    expect(timings.find((timing) => timing.name === "io_skipped_decide_slow_rows")?.fields).toMatchObject({
+      rowCount: 0,
+    });
+  });
+
+  it("keeps no-binding skipped diagnostics off the no-ref fast path", async () => {
+    const app = getApp();
+    const seed = await createTestAgent(app);
+    const chatId = `chat-${crypto.randomUUID()}`;
+    const timings: Array<{ name: string; fields?: Record<string, unknown> }> = [];
+    await app.db.insert(chats).values({ id: chatId, organizationId: seed.organizationId, type: "direct", topic: "io" });
+    await appendEvent(app.db, seed.agent.uuid, chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-read-no-binding",
+        name: "Read",
+        args: {},
+        status: "ok",
+      },
+    });
+
+    const skipped = await summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7, {
+      timing: (name, _ms, fields) => timings.push({ name, fields }),
+    });
+
+    expect(skipped.reasons.map((row) => ({ reason: row.reason, eventCount: row.eventCount }))).toEqual([
+      { reason: "no_org_context_tree_binding", eventCount: 1 },
+    ]);
+    expect(timings.find((timing) => timing.name === "io_skipped_decide_fast_rows")?.fields).toMatchObject({
+      rowCount: 0,
+    });
+    expect(timings.find((timing) => timing.name === "io_skipped_decide_slow_rows")?.fields).toMatchObject({
+      rowCount: 1,
+    });
+  });
+
   it("ignores malformed toolFileRefs while filtering skipped diagnostics candidates", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();
