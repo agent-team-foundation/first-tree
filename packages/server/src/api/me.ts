@@ -8,7 +8,7 @@ import {
   patchOnboardingSchema,
   updateMyProfileSchema,
 } from "@first-tree/shared";
-import { getChannelConfig, inferChannelFromVersion } from "@first-tree/shared/channel";
+import { getChannelConfig } from "@first-tree/shared/channel";
 import { and, eq, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -388,25 +388,8 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * The token now carries only `sub = userId`; the CLI rejoins via
    * `exchangeConnectToken` which probes `members` realtime.
    */
-  app.post("/me/connect-tokens", async (request, reply) => {
+  app.post("/me/connect-tokens", async (request) => {
     const { userId } = requireUser(request);
-    const ch = getChannelConfig(app.config.channel);
-    const advertisedCommandVersion = app.commandVersion();
-    if (ch.packageName !== null && inferChannelFromVersion(advertisedCommandVersion) !== app.config.channel) {
-      app.log.warn(
-        {
-          channel: app.config.channel,
-          packageName: ch.packageName,
-          commandVersion: advertisedCommandVersion,
-        },
-        "Refusing to generate onboarding npm spec for channel-mismatched command version",
-      );
-      return reply.status(503).send({
-        error: "First Tree CLI install version is not ready for this deployment channel. Try again shortly.",
-        code: "command_version_unavailable",
-      });
-    }
-
     const issuer = resolvePublicUrl(app, request);
     const { token, expiresIn } = await authService.generateConnectToken(
       userId,
@@ -419,11 +402,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     // install lands on the right package without web needing to know
     // about channels.
     //
-    // Multi-env: each published channel is its own npm package, and
-    // onboarding pins the server-advertised command version so npm cannot
-    // resolve an older CLI for users on lower Node versions. dev servers
-    // have `packageName=null`: the bootstrap line skips the `npm install
-    // -g` step entirely because the operator builds from source.
+    // Multi-env: each channel is its own npm package, so the spec is
+    // always the bare package name (no `@<dist-tag>` suffix — each
+    // package has exactly one `latest`). dev servers have
+    // `packageName=null`: the bootstrap line skips the `npm install -g`
+    // step entirely because the operator builds from source.
+    const ch = getChannelConfig(app.config.channel);
     const command = `${ch.binName} login ${token}`;
     if (ch.packageName === null) {
       return {
@@ -435,7 +419,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         binName: ch.binName,
       };
     }
-    const npmSpec = `${ch.packageName}@${advertisedCommandVersion}`;
+    const npmSpec = ch.packageName;
     const bootstrapCommand = `npm install -g ${npmSpec}\n${command}`;
     return { token, expiresIn, command, bootstrapCommand, npmSpec, binName: ch.binName };
   });

@@ -17,7 +17,7 @@ page mirrors that flow.
 ## Before you start
 
 - A **GitHub account** to sign in with.
-- **Node.js ≥ 18.14.1** (24 recommended) on the computer your agent will run
+- **Node.js ≥ 22.13** (24 recommended) on the computer your agent will run
   on. Setup installs the CLI for you, but Node must already be present.
 
 ## 1. Sign in and name your team
@@ -32,7 +32,7 @@ Your agent runs on a real machine, so the next step links one to your team.
 Copy the command the page shows and run it in a terminal on that machine:
 
 ```bash
-npm install -g first-tree@latest
+npm install -g first-tree
 first-tree login <connect-token>
 ```
 

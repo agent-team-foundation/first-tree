@@ -17,7 +17,7 @@ architecture rules. Quick map:
 
 ## Local setup
 
-- Node.js 22.13+ for repository development (24 recommended)
+- Node.js 22+ (24 recommended)
 - pnpm 10+
 - Docker (for local PostgreSQL via `docker-compose`)
 

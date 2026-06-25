@@ -51,7 +51,7 @@ export function registerUpgradeCommand(program: Command): void {
         // pkg) short-circuits to mode==="source" above. Defend anyway so
         // the message stays readable if that contract ever changes.
         const installHint = PACKAGE_NAME ?? binName;
-        print.line(`  Install globally first:  npm i -g ${installHint}@latest\n\n`);
+        print.line(`  Install globally first:  npm i -g ${installHint}\n\n`);
         return;
       }
 

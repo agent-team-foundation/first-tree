@@ -77,10 +77,10 @@ export function LastStepModal({ agent, open, onClose, onBound }: Props) {
 
   // Assemble the Last-step one-liner from the channel-aware fields the
   // server returns. The three segments, in order:
-  //   1. `npm install -g <pkg>@<version>` — bootstrap the CLI for users
-  //                                who've never run it. SKIPPED for dev
-  //                                servers (npmSpec=null) since dev installs
-  //                                from source via scripts/dev-install.sh.
+  //   1. `npm install -g <pkg>` — bootstrap the CLI for users who've
+  //                                never run it. SKIPPED for dev servers
+  //                                (npmSpec=null) since dev installs from
+  //                                source via scripts/dev-install.sh.
   //   2. `<bin> agent add`      — pure local file write, no auth/network;
   //                                the resulting `agent.yaml` is what the
   //                                runtime picks up on first load.

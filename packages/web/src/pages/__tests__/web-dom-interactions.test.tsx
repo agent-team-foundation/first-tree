@@ -1354,8 +1354,8 @@ describe("web DOM interaction coverage", () => {
       token: "prod-token",
       expiresIn: 600,
       command: "first-tree login prod-token",
-      bootstrapCommand: "npm install -g first-tree@0.6.0\nfirst-tree login prod-token",
-      npmSpec: "first-tree@0.6.0",
+      bootstrapCommand: "npm install -g first-tree\nfirst-tree login prod-token",
+      npmSpec: "first-tree",
       binName: "first-tree",
     });
     await renderDom(
@@ -1366,7 +1366,7 @@ describe("web DOM interaction coverage", () => {
         onBound={() => undefined}
       />,
     );
-    await waitForText("npm install -g first-tree@0.6.0", document.body);
+    await waitForText("npm install -g first-tree", document.body);
   });
 
   it("switches orgs and opens setup actions from the TeamSwitcher, and signs out from the UserMenu", async () => {

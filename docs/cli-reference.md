@@ -15,12 +15,12 @@ human-friendly index over them.
 ## Install
 
 ```bash
-npm install -g first-tree@latest
+npm install -g first-tree
 first-tree --version
 ```
 
 The binary lives at `first-tree`; the short alias `ft` is also installed.
-Requirements: Node.js ≥ 18.14.1 (24 recommended).
+Requirements: Node.js ≥ 22.13 (24 recommended).
 
 ## Global flags
 

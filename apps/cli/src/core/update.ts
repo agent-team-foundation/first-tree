@@ -58,7 +58,7 @@ export function detectInstallMode(
   if (packageName === null) return "source";
   if (!argv1) return "npx";
   // Resolve symlinks first. Standard `npm i -g` lays the binary out as
-  // `<prefix>/bin/<name> -> ../lib/node_modules/<pkg>/bin/first-tree.cjs`,
+  // `<prefix>/bin/<name> -> ../lib/node_modules/<pkg>/dist/cli/index.mjs`,
   // and `process.argv[1]` keeps the symlink path. Walking from the link
   // dir (`<prefix>/bin/`) never hits an ancestor `package.json` matching
   // our name, so the function falls through to "npx" and `update` refuses
