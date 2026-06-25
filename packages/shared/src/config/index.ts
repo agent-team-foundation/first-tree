@@ -1,7 +1,12 @@
 // Schema declaration utilities
 
 export type { AgentConfig } from "./agent-config.js";
-export { agentConfigSchema, DEFAULT_AGENT_CONCURRENCY, DEFAULT_AGENT_MAX_SESSIONS } from "./agent-config.js";
+export {
+  agentConfigSchema,
+  DEFAULT_AGENT_CONCURRENCY,
+  DEFAULT_AGENT_MAX_SESSIONS,
+  DEFAULT_WORKING_GRACE_SECONDS,
+} from "./agent-config.js";
 export type { ClientConfig } from "./client-config.js";
 export { clientConfigSchema, getClientConfig, updatePolicySchema } from "./client-config.js";
 // Agent loader
