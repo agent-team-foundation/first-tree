@@ -64,6 +64,7 @@ describe("POST /me/onboarding/kickoff", () => {
     // Chat carries the kind-scoped kickoff key.
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(chat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:tree`);
+    expect(chat?.topic).toBe("Team memory setup");
 
     // Bootstrap message landed.
     const msgs = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
@@ -98,6 +99,7 @@ describe("POST /me/onboarding/kickoff", () => {
 
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(chat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work`);
+    expect(chat?.topic).toBe("First task");
 
     const [msg] = await app.db.select().from(messages).where(eq(messages.chatId, chatId)).limit(1);
     expect(msg?.senderId).toBe(admin.humanAgentUuid);
@@ -186,6 +188,7 @@ describe("POST /me/onboarding/kickoff", () => {
       payload,
     });
     const firstChatId = first.json<{ chatId: string }>().chatId;
+    await app.db.update(chats).set({ topic: "Custom kickoff title" }).where(eq(chats.id, firstChatId));
     const [firstMember] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
     const firstStamp = firstMember?.onboardingCompletedAt;
 
@@ -207,6 +210,7 @@ describe("POST /me/onboarding/kickoff", () => {
       .from(chats)
       .where(eq(chats.onboardingKickoffKey, `${admin.humanAgentUuid}:${agent.uuid}:tree`));
     expect(kickoffChats).toHaveLength(1);
+    expect(kickoffChats[0]?.topic).toBe("Custom kickoff title");
 
     // No duplicate bootstrap.
     const msgs = await app.db.select().from(messages).where(eq(messages.chatId, firstChatId));
@@ -266,6 +270,8 @@ describe("POST /me/onboarding/kickoff", () => {
       payload: { ...base, bootstrap: "Meet your agent.", kind: "intro" },
     });
     const introChatId = intro.json<{ chatId: string }>().chatId;
+    const [introChat] = await app.db.select().from(chats).where(eq(chats.id, introChatId)).limit(1);
+    expect(introChat?.topic).toBe("Meet your agent");
 
     // 2) Later, /build-tree with the SAME agent → tree kickoff. Must be a NEW
     //    chat carrying the tree-seeding bootstrap, not the intro chat (regression
@@ -277,6 +283,8 @@ describe("POST /me/onboarding/kickoff", () => {
       payload: { ...base, bootstrap: "Seed the team tree.", kind: "tree" },
     });
     const treeChatId = tree.json<{ chatId: string }>().chatId;
+    const [treeChat] = await app.db.select().from(chats).where(eq(chats.id, treeChatId)).limit(1);
+    expect(treeChat?.topic).toBe("Team memory setup");
 
     expect(treeChatId).not.toBe(introChatId);
     const treeMsgs = await app.db.select().from(messages).where(eq(messages.chatId, treeChatId));

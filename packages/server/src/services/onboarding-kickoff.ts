@@ -36,6 +36,17 @@ export type KickoffOnboardingResult = {
   sent?: { recipients: string[]; messageId: string };
 };
 
+function topicForKickoffKind(kind: KickoffKind): string {
+  switch (kind) {
+    case "intro":
+      return "Meet your agent";
+    case "work":
+      return "First task";
+    case "tree":
+      return "Team memory setup";
+  }
+}
+
 /**
  * True only after a tree setup kickoff has a bootstrap message. A chat row by
  * itself is not enough: `kickoffOnboarding` creates the chat before sending the
@@ -90,6 +101,7 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
       mode: "legacy-empty-agent",
       creatorAgentId: args.humanAgentId,
       participantAgentIds: [args.targetAgentId],
+      topic: topicForKickoffKind(args.kind),
       onboardingKickoffKey: kickoffKey,
     });
     chatId = created.id;
