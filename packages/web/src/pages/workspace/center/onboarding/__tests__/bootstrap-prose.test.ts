@@ -18,7 +18,8 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("Use the first-tree-welcome skill");
     expect(message).toContain("evidence-backed");
     expect(message).toContain("2–3");
-    expect(message).toContain("format=request");
+    expect(message).toContain("tracked request primitive");
+    expect(message).toContain("chat ask");
     expect(message).not.toContain("Skip for now");
     expect(message).toContain("free-text accepted");
     expect(message).toContain("separate Context Tree setup chat");
@@ -33,7 +34,8 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("Use the first-tree-welcome skill");
     expect(message).toContain("local clone path or a GitHub URL");
     expect(message).toContain("before any long-term team setup");
-    expect(message).toContain("format=request");
+    expect(message).toContain("tracked request primitive");
+    expect(message).toContain("chat ask");
     expect(message).not.toContain("Skip for now");
     expect(message).toContain("free-text");
     expect(message).toContain("broad GitHub authorization before the user has seen repo-specific value");
