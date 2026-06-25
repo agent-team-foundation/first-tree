@@ -217,10 +217,10 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
 
   // admin grouped view: split the single org-scoped list into the viewer's
   // own machines vs everyone else's. Each group sorts by status pill priority
-  // (auth_expired → setup_incomplete → offline → ready) with lastSeenAt as
-  // tie-break — surfaces problem rows at the top without forcing the viewer
-  // to scan the full list. `userId === null` (legacy clients that pre-date
-  // user binding) lands in the team block.
+  // (auth_expired → setup_incomplete → offline → ready), then stable
+  // hostname/id order — surfaces problem rows without letting heartbeat-time
+  // churn reshuffle same-state computers. `userId === null` (legacy clients
+  // that pre-date user binding) lands in the team block.
   const mineList = useMemo<HubClient[]>(() => {
     if (!grouped || !orgClientsData || !viewerUserId) return [];
     return [...orgClientsData].filter((c) => c.userId === viewerUserId).sort(compareByPillPriority);

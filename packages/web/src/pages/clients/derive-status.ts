@@ -60,16 +60,33 @@ export const PILL_PRIORITY: Record<ComputerStatusPill, number> = {
   ready: 3,
 };
 
+const HOSTNAME_COLLATOR = new Intl.Collator("en", { numeric: true, sensitivity: "base" });
+
+function normalizedHostname(client: HubClient): string | null {
+  const hostname = client.hostname?.trim();
+  return hostname ? hostname : null;
+}
+
 /**
  * Sort comparator: pill priority ascending (problems first), then
- * `lastSeenAt` descending (most recently active wins the tie). Stable
- * w.r.t. the underlying `Array.prototype.sort`.
+ * stable computer identity: hostname natural-sort ascending (unnamed
+ * computers last), then client id.
  */
 export function compareByPillPriority(a: HubClient, b: HubClient): number {
   const pa = PILL_PRIORITY[deriveComputerStatus(a).pill];
   const pb = PILL_PRIORITY[deriveComputerStatus(b).pill];
   if (pa !== pb) return pa - pb;
-  if (a.lastSeenAt > b.lastSeenAt) return -1;
-  if (a.lastSeenAt < b.lastSeenAt) return 1;
-  return 0;
+
+  const ah = normalizedHostname(a);
+  const bh = normalizedHostname(b);
+  if (ah && !bh) return -1;
+  if (!ah && bh) return 1;
+  if (ah && bh) {
+    const byHostname = HOSTNAME_COLLATOR.compare(ah, bh);
+    if (byHostname !== 0) return byHostname;
+    const byRawHostname = ah.localeCompare(bh);
+    if (byRawHostname !== 0) return byRawHostname;
+  }
+
+  return a.id.localeCompare(b.id);
 }

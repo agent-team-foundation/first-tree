@@ -128,18 +128,28 @@ describe("compareByPillPriority", () => {
     expect(sorted[1]?.id).toBe("rdy");
   });
 
-  it("ties on pill priority break by lastSeenAt descending (most recent first)", () => {
-    const newer = client({ id: "new", lastSeenAt: "2026-05-01T10:00:00Z" });
-    const older = client({ id: "old", lastSeenAt: "2026-05-01T05:00:00Z" });
-    // Both are setup_incomplete (no caps); the more recently-seen one wins.
-    const sorted = [older, newer].sort(compareByPillPriority);
-    expect(sorted[0]?.id).toBe("new");
-    expect(sorted[1]?.id).toBe("old");
+  it("ties on pill priority break by hostname natural sort, not lastSeenAt", () => {
+    const newer = client({ id: "newer", hostname: "box-10", lastSeenAt: "2026-05-01T10:00:00Z" });
+    const older = client({ id: "older", hostname: "box-2", lastSeenAt: "2026-05-01T05:00:00Z" });
+    // Both are setup_incomplete (no caps); stable identity order wins over recency.
+    const sorted = [newer, older].sort(compareByPillPriority);
+    expect(sorted[0]?.id).toBe("older");
+    expect(sorted[1]?.id).toBe("newer");
   });
 
-  it("is stable when both pill and lastSeenAt match (returns 0)", () => {
+  it("puts unnamed computers after named computers within the same pill", () => {
+    const unnamed = client({ id: "unnamed", hostname: null });
+    const named = client({ id: "named", hostname: "alpha" });
+    const sorted = [unnamed, named].sort(compareByPillPriority);
+    expect(sorted[0]?.id).toBe("named");
+    expect(sorted[1]?.id).toBe("unnamed");
+  });
+
+  it("falls back to client id when pill and hostname match", () => {
     const a = client({ id: "a" });
     const b = client({ id: "b" });
-    expect(compareByPillPriority(a, b)).toBe(0);
+    const sorted = [b, a].sort(compareByPillPriority);
+    expect(sorted[0]?.id).toBe("a");
+    expect(sorted[1]?.id).toBe("b");
   });
 });
