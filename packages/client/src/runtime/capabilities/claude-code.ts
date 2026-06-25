@@ -149,7 +149,10 @@ export async function verifyBundledClaudeArtifact(): Promise<
   } catch (err) {
     return {
       ok: false,
-      error: `@anthropic-ai/claude-agent-sdk bundled Claude binary could not be located: ${err instanceof Error ? err.message : String(err)}`,
+      error:
+        "Claude runtime binary is missing on this machine. First Tree does not bundle the native Claude engine by default — it resolves a system `claude` (env override / PATH / well-known install dirs). " +
+        "Install it with the daemon's one-click `daemon install-claude` (or `npm install -g @anthropic-ai/claude-code`), then run `claude /login` and retry. " +
+        `Original error: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
   const [command, args, label] =

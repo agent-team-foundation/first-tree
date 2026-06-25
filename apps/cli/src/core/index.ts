@@ -37,6 +37,8 @@ export {
   runtimeProviderCheck,
   runtimeProviderChecks,
 } from "./doctor.js";
+export type { InstallClaudeResult } from "./install-claude-runtime.js";
+export { installClaudeRuntime } from "./install-claude-runtime.js";
 export type { InstallCodexResult } from "./install-codex-runtime.js";
 export { installCodexRuntime } from "./install-codex-runtime.js";
 // Phase 3 of the agent-naming refactor — renames local agent dirs whose
