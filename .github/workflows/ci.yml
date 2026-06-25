@@ -160,6 +160,55 @@ jobs:
       - run: pnpm build
       - run: pnpm test
 
+  cli-node18-smoke:
+    name: CLI Node 18 Smoke
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      # The CLI bundle imports workspace packages through their package
+      # exports. Build them first so the packed smoke test matches the
+      # publish workflow, where `pnpm build` has already produced dist
+      # outputs before `npm publish`.
+      - run: pnpm --filter @first-tree/shared build
+      - run: pnpm --filter @first-tree/client build
+      - run: pnpm --filter first-tree-dev build
+      - name: Pack CLI tarball
+        id: pack
+        working-directory: apps/cli
+        run: |
+          TARBALL=$(npm pack --json --silent | node -e "let s=''; process.stdin.on('data', c => s += c); process.stdin.on('end', () => { const p = JSON.parse(s)[0]; console.log(p.filename); });")
+          echo "tarball=apps/cli/$TARBALL" >> "$GITHUB_OUTPUT"
+          tar -tzf "$TARBALL" | grep -qx "package/bin/first-tree.cjs"
+          tar -tzf "$TARBALL" | grep -qx "package/dist/cli/index.mjs"
+          tar -xOf "$TARBALL" package/package.json | node -e '
+            let s = "";
+            process.stdin.on("data", (chunk) => s += chunk);
+            process.stdin.on("end", () => {
+              const pkg = JSON.parse(s);
+              if (pkg.engines?.node !== ">=18.14.1") throw new Error(`unexpected engines.node ${pkg.engines?.node}`);
+              if (pkg.bin?.["first-tree-dev"] !== "./bin/first-tree.cjs") throw new Error("first-tree-dev bin must point to wrapper");
+              if (pkg.bin?.ftd !== "./bin/first-tree.cjs") throw new Error("ftd bin must point to wrapper");
+            });
+          '
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18.14.1"
+      - name: Run packed CLI on Node 18
+        run: |
+          PREFIX="$RUNNER_TEMP/first-tree-node18"
+          npm install --engine-strict --prefix "$PREFIX" "${{ steps.pack.outputs.tarball }}"
+          FIRST_TREE_HOME="$RUNNER_TEMP/first-tree-home" node "$PREFIX/node_modules/.bin/first-tree-dev" --version
+          FIRST_TREE_HOME="$RUNNER_TEMP/first-tree-home" node "$PREFIX/node_modules/.bin/first-tree-dev" --help > "$RUNNER_TEMP/first-tree-help.txt"
+          grep -q "Usage: first-tree-dev" "$RUNNER_TEMP/first-tree-help.txt"
+
   check-migrations:
     name: Migrations
     runs-on: ubuntu-latest

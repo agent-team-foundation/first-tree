@@ -82,7 +82,7 @@ First Tree 围绕 Context Tree 连接五个部分：
 走到“连接一台电脑”这步时，引导流程会给你安装 CLI、把这台机器登入的命令：
 
 ```bash
-npm install -g first-tree
+npm install -g first-tree@latest
 first-tree login <connect-token>
 ```
 
