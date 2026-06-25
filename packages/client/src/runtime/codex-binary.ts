@@ -41,8 +41,8 @@ export function formatCodexBinaryMissingMessage(input: unknown): string {
   const suffix = original ? ` Original error: ${original}` : "";
   return (
     "Codex runtime binary is missing on this machine. " +
-    "First Tree could not find a usable SDK-bundled @openai/codex binary or usable `codex` executable on PATH. " +
-    "Install or repair the local Codex CLI with `npm install -g @openai/codex`, then run `codex login` and retry." +
+    "First Tree does not bundle the native Codex engine by default — it resolves a system `codex` on PATH. " +
+    "Install it with the daemon's one-click `daemon install-codex` (or `npm install -g @openai/codex`), then run `codex login` and retry." +
     suffix
   );
 }

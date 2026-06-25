@@ -28,6 +28,7 @@
   "files": [
     "dist",
     "skills",
+    "scripts/prune-codex-runtime-binary.mjs",
     "README.md",
     "LICENSE"
   ],
@@ -41,7 +42,8 @@
     "test": "vitest run --passWithNoTests",
     "coverage": "pnpm run build && vitest run --coverage --passWithNoTests",
     "prepack": "rm -rf skills && cp -R ../../skills .",
-    "postpack": "rm -rf skills"
+    "postpack": "rm -rf skills",
+    "postinstall": "node scripts/prune-codex-runtime-binary.mjs"
   },
   "license": "Apache-2.0",
   "repository": {
