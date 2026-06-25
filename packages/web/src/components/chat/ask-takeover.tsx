@@ -271,10 +271,10 @@ export function AskTakeover({
     padding: "var(--sp-2_5) var(--sp-3)",
     lineHeight: 1.5,
     fontFamily: "inherit",
-    // The textarea inherits the 13px body size at rest, but the mobile zoom
-    // guard (index.css) lifts form controls to 16px on phone widths. The mirror
-    // is a <div>, so it isn't caught by that rule — read the same var so its
-    // glyphs stay aligned with the textarea at both sizes.
+    // The textarea inherits the resting body size, but the mobile zoom guard
+    // (index.css) raises form controls to the iOS no-zoom floor on phone
+    // widths. The mirror is a <div>, so it isn't caught by that rule — read the
+    // same var so its glyphs stay aligned with the textarea at both sizes.
     fontSize: "var(--composer-font-size)",
     boxSizing: "border-box" as const,
   };
