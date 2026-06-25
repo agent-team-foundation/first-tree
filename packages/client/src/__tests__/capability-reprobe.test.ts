@@ -10,21 +10,18 @@ import {
 } from "../runtime/capabilities/index.js";
 
 /**
- * Reconnect re-probe policy (PR-2b): on a WS reconnect the daemon either runs
- * a full real re-probe of all providers (spends a smoke each) or a per-provider
- * re-validate.
- *   - full       ⟸ empty snapshot OR any entry older than the TTL
- *   - re-validate ⟸ otherwise (incl. a snapshot that merely has a non-ok
- *     provider): each fresh-ok provider re-runs resolve+auth for real but the
- *     smoke is short-circuited to the cached `ok` and its prior entry is kept;
- *     a non-ok provider is fully re-probed so it can recover.
+ * Reconnect re-probe policy (install-only): detection is cheap (no launch / no
+ * token spend), so a reconnect ALWAYS re-detects.
+ *   - `revalidateCapabilities` / `reprobeOnReconnect` just run a fresh detection
+ *     sweep; `reprobeOnReconnect` always reports `mode: "full"`.
+ *   - `shouldFullReprobe` is retained for log parity: empty snapshot OR any
+ *     entry older than the TTL.
+ *   - `hasNonOkProvider` is true when any enabled built-in provider is not `ok`.
  */
 
 const okEntry = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
   state: "ok",
   available: true,
-  authenticated: true,
-  authMethod: "oauth",
   sdkVersion: "1.2.3",
   detectedAt: new Date().toISOString(),
   ...over,
@@ -37,11 +34,11 @@ describe("shouldFullReprobe", () => {
     expect(shouldFullReprobe({}, now)).toBe(true);
   });
 
-  it("a non-ok-but-fresh provider does NOT force a full sweep (revalidate handles it per-provider)", () => {
+  it("a non-ok-but-fresh provider does NOT force a full sweep (age, not state, decides)", () => {
     const fresh = new Date(now - 60_000).toISOString();
     const caps: ClientCapabilities = {
       "claude-code": okEntry({ detectedAt: fresh }),
-      codex: okEntry({ state: "missing", available: false, authenticated: false, detectedAt: fresh }),
+      codex: okEntry({ state: "missing", available: false, detectedAt: fresh }),
     };
     expect(shouldFullReprobe(caps, now)).toBe(false);
   });
@@ -51,7 +48,7 @@ describe("shouldFullReprobe", () => {
     expect(shouldFullReprobe({ codex: okEntry({ detectedAt: stale }) }, now)).toBe(true);
   });
 
-  it("all-ok and fresh → re-validate (not full)", () => {
+  it("all-ok and fresh → not full", () => {
     const fresh = new Date(now - 60_000).toISOString();
     const caps: ClientCapabilities = {
       "claude-code": okEntry({ detectedAt: fresh }),
@@ -70,27 +67,35 @@ describe("hasNonOkProvider", () => {
     expect(hasNonOkProvider({})).toBe(true);
   });
 
-  it("a partial snapshot missing a built-in provider is degraded", () => {
-    // claude-code-tui + codex are absent → still degraded.
+  it("a partial snapshot missing an enabled provider is degraded", () => {
+    // codex is absent → still degraded (claude-code-tui is disabled, so ignored).
     expect(hasNonOkProvider({ "claude-code": okEntry() })).toBe(true);
   });
 
-  it("all built-in providers ok → not degraded (stops the poll)", () => {
+  it("all enabled built-in providers ok → not degraded (stops the poll)", () => {
+    // claude-code-tui is disabled, so only claude-code + codex must be ok.
     expect(
       hasNonOkProvider({
         "claude-code": okEntry(),
-        "claude-code-tui": okEntry(),
         codex: okEntry(),
       }),
     ).toBe(false);
   });
 
-  it("any non-ok built-in provider keeps it degraded", () => {
+  it("any non-ok enabled provider keeps it degraded", () => {
     expect(
       hasNonOkProvider({
         "claude-code": okEntry(),
-        "claude-code-tui": okEntry(),
-        codex: okEntry({ state: "unauthenticated", authenticated: false }),
+        codex: okEntry({ state: "missing", available: false }),
+      }),
+    ).toBe(true);
+  });
+
+  it("an `error` enabled provider keeps it degraded", () => {
+    expect(
+      hasNonOkProvider({
+        "claude-code": okEntry(),
+        codex: okEntry({ state: "error", available: false, error: "boom" }),
       }),
     ).toBe(true);
   });
@@ -131,15 +136,16 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
   });
 
   /**
-   * Mock each provider probe to record the `deps` it was called with and return
-   * a configurable entry (default: a generic `ok`). Lets us assert both the
-   * injected-smoke wiring and the preserve-vs-downgrade substitution.
+   * Mock each provider probe to RECORD that it was invoked and return a
+   * configurable entry (default: a generic `ok`). Install-only detection re-runs
+   * every probe unconditionally — there is no deps injection or preserve logic
+   * to assert anymore, so the tests just verify a fresh sweep ran.
    */
   async function loadWithMocks(results: Record<string, CapabilityEntry> = {}) {
-    const calls: Record<string, { deps: { runSmoke?: (b?: string) => Promise<unknown> } | undefined }> = {};
+    const calls: Record<string, number> = {};
     const mk = (provider: string) =>
-      vi.fn((deps?: { runSmoke?: (b?: string) => Promise<unknown> }) => {
-        calls[provider] = { deps };
+      vi.fn(() => {
+        calls[provider] = (calls[provider] ?? 0) + 1;
         return Promise.resolve(results[provider] ?? okEntry());
       });
     vi.resetModules();
@@ -152,97 +158,53 @@ describe("revalidateCapabilities / reprobeOnReconnect (probe modules mocked)", (
     return { mod, calls };
   }
 
-  it("injects a no-launch cached smoke for ok providers and fully re-probes non-ok ones", async () => {
+  it("revalidateCapabilities re-detects every enabled provider", async () => {
     const { mod, calls } = await loadWithMocks();
-    const previous: ClientCapabilities = {
-      "claude-code": okEntry({ sdkVersion: "2.1.0", authMethod: "oauth" }),
-      codex: okEntry({ state: "unauthenticated", available: true, authenticated: false, authMethod: "none" }),
-      // claude-code-tui absent from previous → treated as non-ok → full probe.
-    };
 
-    await mod.revalidateCapabilities(previous);
+    const out = await mod.revalidateCapabilities({
+      "claude-code": okEntry({ sdkVersion: "2.1.0" }),
+      codex: okEntry({ state: "missing", available: false }),
+    });
 
-    // ok provider → injected runSmoke; it reports ok WITHOUT launching a session
-    const claudeSmoke = calls["claude-code"]?.deps?.runSmoke;
-    expect(typeof claudeSmoke).toBe("function");
-    await expect(claudeSmoke?.()).resolves.toEqual({ state: "ok" });
-
-    // non-ok / absent providers → full probe, no injected smoke
-    expect(calls.codex?.deps?.runSmoke).toBeUndefined();
-    expect(calls["claude-code-tui"]?.deps?.runSmoke).toBeUndefined();
+    // Fresh detection sweep ran for both enabled providers; result reflects the
+    // fresh probe output, not the previous snapshot.
+    expect(calls["claude-code"]).toBe(1);
+    expect(calls.codex).toBe(1);
+    expect(out["claude-code"]?.state).toBe("ok");
+    expect(out.codex?.state).toBe("ok");
+    // claude-code-tui is disabled → never probed, no entry.
+    expect(calls["claude-code-tui"]).toBeUndefined();
+    expect(out["claude-code-tui"]).toBeUndefined();
   });
 
-  it("preserves the prior entry verbatim when an ok provider stays ok (no fabricated fresh launch)", async () => {
-    const prevClaude = okEntry({
-      sdkVersion: "2.1.0",
-      authMethod: "oauth",
-      detectedAt: "2026-06-01T00:00:00.000Z",
-      probeKind: "launch",
-    });
-    // The mock returns a DIFFERENT, would-be-fresh ok; the result must still be
-    // the PRIOR entry (original detectedAt / version), never the fresh one.
-    const { mod } = await loadWithMocks({
-      "claude-code": okEntry({ sdkVersion: "9.9.9", detectedAt: new Date().toISOString() }),
-    });
-    const out = await mod.revalidateCapabilities({ "claude-code": prevClaude });
-    expect(out["claude-code"]).toEqual(prevClaude);
-  });
-
-  it("downgrades (does NOT preserve) when an ok provider regresses", async () => {
-    const prevCodex = okEntry({ detectedAt: "2026-06-01T00:00:00.000Z" });
+  it("revalidateCapabilities returns the fresh entry even when a provider regresses", async () => {
     const missing: CapabilityEntry = {
       state: "missing",
       available: false,
-      authenticated: false,
-      authMethod: "none",
       error: "codex binary not found",
       detectedAt: new Date().toISOString(),
     };
     const { mod } = await loadWithMocks({ codex: missing });
-    const out = await mod.revalidateCapabilities({ codex: prevCodex });
+    const out = await mod.revalidateCapabilities({ codex: okEntry() });
     expect(out.codex).toEqual(missing);
   });
 
-  it("reprobeOnReconnect dispatches re-validate when fresh, full only when empty/stale", async () => {
+  it("reprobeOnReconnect always re-detects and reports mode=full", async () => {
     const fresh = new Date().toISOString();
     const allOkFresh: ClientCapabilities = {
       "claude-code": okEntry({ detectedAt: fresh }),
-      "claude-code-tui": okEntry({ detectedAt: fresh }),
       codex: okEntry({ detectedAt: fresh }),
     };
 
     const reval = await loadWithMocks();
-    expect((await reval.mod.reprobeOnReconnect(allOkFresh)).mode).toBe("revalidate");
-    expect(reval.calls.codex?.deps?.runSmoke).toBeTypeOf("function"); // cached smoke injected
+    const res = await reval.mod.reprobeOnReconnect(allOkFresh);
+    expect(res.mode).toBe("full");
+    expect(reval.calls["claude-code"]).toBe(1);
+    expect(reval.calls.codex).toBe(1);
 
-    // Empty snapshot → full.
-    const full = await loadWithMocks();
-    expect((await full.mod.reprobeOnReconnect({})).mode).toBe("full");
-
-    // Stale (past TTL) → full.
-    const stale = await loadWithMocks();
-    const old = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
-    expect((await stale.mod.reprobeOnReconnect({ codex: okEntry({ detectedAt: old }) })).mode).toBe("full");
-    expect(stale.calls.codex?.deps?.runSmoke).toBeUndefined(); // full probe, no injection
-  });
-
-  it("cost control: an optional provider missing does NOT full-smoke the fresh-ok providers on reconnect", async () => {
-    const fresh = new Date().toISOString();
-    // Common no-tmux box: TUI permanently missing, claude-code + codex ok & fresh.
-    const previous: ClientCapabilities = {
-      "claude-code": okEntry({ detectedAt: fresh }),
-      codex: okEntry({ detectedAt: fresh }),
-      "claude-code-tui": okEntry({ state: "missing", available: false, authenticated: false, detectedAt: fresh }),
-    };
-
-    const { mod, calls } = await loadWithMocks();
-    const { mode } = await mod.reprobeOnReconnect(previous);
-
-    expect(mode).toBe("revalidate");
-    // fresh-ok providers re-validated for free (cached smoke injected, no real smoke)
-    expect(calls["claude-code"]?.deps?.runSmoke).toBeTypeOf("function");
-    expect(calls.codex?.deps?.runSmoke).toBeTypeOf("function");
-    // the missing optional provider IS fully re-probed (to catch recovery), no cached smoke
-    expect(calls["claude-code-tui"]?.deps?.runSmoke).toBeUndefined();
+    // Empty snapshot → still re-detects, mode=full.
+    const empty = await loadWithMocks();
+    expect((await empty.mod.reprobeOnReconnect({})).mode).toBe("full");
+    expect(empty.calls.codex).toBe(1);
   });
 });

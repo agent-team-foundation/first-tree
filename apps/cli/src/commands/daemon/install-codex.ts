@@ -44,14 +44,17 @@ export function registerDaemonInstallCodexCommand(daemon: Command): void {
         print.line("\n  Re-probing codex capability...\n\n");
       }
 
-      // Re-probe so the new PATH binary is launch-verified and the codex row
-      // flips from `missing` toward `ok`/`unauthenticated`.
+      // Re-probe (install-only) so the new PATH binary flips the codex row from
+      // `missing` to `ok` (installed).
       const capabilities = await probeCapabilities();
       if (wantJson) {
         print.result(capabilities);
         return;
       }
       printResults(runtimeProviderChecks(capabilities));
-      print.line("  If codex now reports `unauthenticated`, run runtime auth (codex login) to finish.\n\n");
+      print.line(
+        "  codex now reports `ok` (installed). Authentication is no longer probed — if a session\n" +
+          "  fails needing login, sign in from that chat (or run `codex login` on this machine).\n\n",
+      );
     });
 }

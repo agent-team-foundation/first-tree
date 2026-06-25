@@ -61,16 +61,18 @@ type AuthFailure = { reason: RuntimeAuthFailureReason; message?: string };
 
 /**
  * Stamp a terminal `lastAuthError` onto a freshly re-probed entry so the web can
- * tell "sign-in failed — retry" from "never attempted". Only attached when the
- * re-probe still shows `unauthenticated` — the one state where the web renders a
- * Connect affordance (and thus the error). A re-probe that lands `ok` (the login
- * succeeded), `missing`, or `error` already renders the right thing on its own,
- * so an error record there would be redundant. The probe never sets
- * `lastAuthError`, so omitting it here also clears any prior failure on a
- * successful retry.
+ * tell "sign-in failed — retry" from "never attempted".
+ *
+ * Capability detection is now install-only — it no longer reports an auth state
+ * (an installed provider is always `ok` regardless of login). So login
+ * progress/outcome rides the entry's `pendingAuth` / `lastAuthError` markers,
+ * decoupled from `state`: a failure stamps `lastAuthError` whenever present
+ * (success passes `null`, which leaves the re-probed entry marker-free and thus
+ * clears any prior failure). The in-chat "needs login" entry point reads these
+ * markers, the same way the prior card-side Connect control did.
  */
 function attachAuthError(entry: CapabilityEntry, failure: AuthFailure | null, nowMs: number): CapabilityEntry {
-  if (!failure || entry.state !== "unauthenticated") return entry;
+  if (!failure) return entry;
   return {
     ...entry,
     lastAuthError: {
@@ -81,17 +83,29 @@ function attachAuthError(entry: CapabilityEntry, failure: AuthFailure | null, no
   };
 }
 
-/** A minimal `unauthenticated` entry carrying an in-flight pending-auth marker. */
+/**
+ * The provider's install entry (which login only runs for, so it is `ok`) with
+ * an in-flight `pendingAuth` marker layered on. Detection no longer carries an
+ * auth state, so we preserve the install entry's fields and only add the marker;
+ * if no prior entry exists, fall back to a minimal installed entry.
+ */
 function pendingEntry(base: CapabilityEntry | undefined, pending: PendingAuth, nowMs: number): CapabilityEntry {
-  return {
-    state: "unauthenticated",
+  const baseEntry: CapabilityEntry = base ?? {
+    state: "ok",
     available: true,
-    authenticated: false,
-    authMethod: "none",
-    sdkVersion: base?.sdkVersion ?? null,
-    ...(base?.runtimeSource ? { runtimeSource: base.runtimeSource } : {}),
-    ...(base?.runtimePath ? { runtimePath: base.runtimePath } : {}),
     detectedAt: new Date(nowMs).toISOString(),
+  };
+  // A login only starts after the provider binary resolved, so the provider IS
+  // installed: force the install fields rather than inheriting a possibly-stale
+  // non-`ok` base (which would yield a contradictory `missing` + pendingAuth
+  // entry). `authenticated`/`authMethod` are deprecated wire-compat for older
+  // servers (see the client-capabilities schema).
+  return {
+    ...baseEntry,
+    state: "ok",
+    available: true,
+    authenticated: true,
+    authMethod: "none",
     pendingAuth: pending,
   };
 }

@@ -64,20 +64,18 @@ function okCapability(sdkVersion = "0.2.84"): CapabilityEntry {
   return {
     state: "ok",
     available: true,
-    authenticated: true,
     sdkVersion,
-    authMethod: "oauth",
     detectedAt: NOW,
   };
 }
 
-function unauthCapability(sdkVersion = "0.134.0"): CapabilityEntry {
+// "installed but logged out" is no longer a distinct capability state — detection
+// is install-only, so a present-but-unauthenticated binary is simply `ok`.
+function installedCapability(sdkVersion = "0.134.0"): CapabilityEntry {
   return {
-    state: "unauthenticated",
+    state: "ok",
     available: true,
-    authenticated: false,
     sdkVersion,
-    authMethod: "none",
     detectedAt: NOW,
   };
 }
@@ -86,11 +84,18 @@ function errorCapability(): CapabilityEntry {
   return {
     state: "error",
     available: false,
-    authenticated: false,
     sdkVersion: null,
-    authMethod: "none",
     detectedAt: NOW,
     error: "probe failed",
+  };
+}
+
+function missingCapability(): CapabilityEntry {
+  return {
+    state: "missing",
+    available: false,
+    sdkVersion: null,
+    detectedAt: NOW,
   };
 }
 
@@ -112,7 +117,7 @@ function client(overrides: Partial<HubClient> = {}): HubClient {
       overrides.capabilities ??
       ({
         "claude-code": okCapability(),
-        codex: unauthCapability(),
+        codex: installedCapability(),
       } satisfies HubClient["capabilities"]),
   };
 }
@@ -135,9 +140,11 @@ const SETUP_INCOMPLETE = client({
   // claude-code-tui is in DISABLED_RUNTIME_PROVIDERS, so it is filtered out of
   // PROVIDER_ORDER and never shown on the card — the errored runtime that
   // surfaces "probe failed" + a reinstall command is claude-code itself here.
+  // No runtime is `ok`, so the pill stays Setup incomplete (detection is
+  // install-only; codex `missing` shows its own install command).
   capabilities: {
     "claude-code": errorCapability(),
-    codex: unauthCapability(),
+    codex: missingCapability(),
   },
 });
 const OFFLINE = client({
@@ -361,12 +368,12 @@ describe("ClientsPage computer cards", () => {
     await waitForText(container, "Auth expired");
     await waitForText(container, "Setup incomplete");
     await waitForText(container, "Offline");
-    // Setup-incomplete now uses the unified "Runtimes" heading (matching Ready)
-    // with single-column rows: an install box for the missing/errored runtimes
-    // and an in-product Connect for the unauthenticated one.
+    // Setup-incomplete uses the unified "Runtimes" heading (matching Ready) with
+    // single-column rows: install boxes for the missing/errored runtimes. The
+    // per-card "Connect <provider>" control was removed (detection is
+    // install-only — there is no logged-out state to drive a card Connect from).
     await waitForText(container, "npm install -g @anthropic-ai/claude-code");
     await waitForText(container, "probe failed");
-    await waitForText(container, "Connect Codex");
 
     await click(buttonByText(container, "Daemon not running?"));
     await waitForText(container, "first-tree-dev daemon start");

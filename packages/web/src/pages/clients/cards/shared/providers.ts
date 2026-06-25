@@ -145,18 +145,6 @@ export function osDeviceName(os: string | null | undefined): string {
 }
 
 /**
- * Shortest hint for "this runtime is installed but the user isn't
- * authed". Used by Ready card's runtime line when one provider is
- * `unauthenticated`. The env-variable fallback (`ANTHROPIC_API_KEY` /
- * `CODEX_API_KEY`) is intentionally dropped — most users discover the
- * OAuth flow first, and the env var path is a footgun for newcomers
- * who'd commit the key.
- */
-export function providerUnauthHint(provider: RuntimeProvider, os: string | null | undefined): string {
-  return `Run \`${PROVIDER_LOGIN_COMMAND[provider]}\` on this ${osDeviceName(os)}.`;
-}
-
-/**
  * Hint for `state="missing"`. Distinct from `entry === null` ("not
  * reported") — that case is suppressed in the Ready card entirely, so
  * the hint only shows when the SDK explicitly probed and confirmed the

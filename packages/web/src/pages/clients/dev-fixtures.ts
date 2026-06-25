@@ -31,11 +31,13 @@ function isoDaysAgo(days: number): string {
 function cap(state: CapabilityEntry["state"], overrides: Partial<CapabilityEntry> = {}): CapabilityEntry {
   return {
     state,
-    available: state !== "missing",
-    authenticated: state === "ok",
-    authMethod: overrides.authMethod ?? "none",
+    // Install-only detection: `available` mirrors `state === "ok"` (the binary
+    // is installed/resolvable), independent of whether it's logged in.
+    available: state === "ok",
     detectedAt: overrides.detectedAt ?? isoMinutesAgo(1),
     sdkVersion: overrides.sdkVersion,
+    runtimeSource: overrides.runtimeSource,
+    runtimePath: overrides.runtimePath,
     error: overrides.error,
   };
 }
@@ -113,8 +115,8 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     id: "demo-ready-both",
     hostname: "GandydeMacBook-Pro.local",
     capabilities: {
-      "claude-code": cap("ok", { sdkVersion: "0.2.141", authMethod: "oauth" }),
-      codex: cap("ok", { sdkVersion: "0.125.0", authMethod: "auth_json" }),
+      "claude-code": cap("ok", { sdkVersion: "0.2.141" }),
+      codex: cap("ok", { sdkVersion: "0.125.0" }),
     },
   });
 
@@ -122,7 +124,7 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     id: "demo-ready-cc-only",
     hostname: "Linux-box.lan",
     capabilities: {
-      "claude-code": cap("ok", { sdkVersion: "0.2.141", authMethod: "oauth" }),
+      "claude-code": cap("ok", { sdkVersion: "0.2.141" }),
     },
   });
 
@@ -130,8 +132,10 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     id: "demo-ready-mixed",
     hostname: "MacBook-Pro.local",
     capabilities: {
-      "claude-code": cap("ok", { sdkVersion: "0.2.141", authMethod: "oauth" }),
-      codex: cap("unauthenticated", { sdkVersion: "0.125.0" }),
+      // Both installed — install-only detection no longer distinguishes
+      // logged-in vs logged-out; "ok" just means the binary is present.
+      "claude-code": cap("ok", { sdkVersion: "0.2.141" }),
+      codex: cap("ok", { sdkVersion: "0.125.0" }),
     },
   });
 
@@ -143,7 +147,7 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     lastSeenAt: isoDaysAgo(8),
     sdkVersion: "0.5.1",
     capabilities: {
-      "claude-code": cap("ok", { sdkVersion: "0.2.130", authMethod: "oauth" }),
+      "claude-code": cap("ok", { sdkVersion: "0.2.130" }),
     },
   });
 
@@ -157,7 +161,10 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     id: "demo-setup-mixed",
     hostname: "MacBook-Pro.local",
     capabilities: {
-      "claude-code": cap("unauthenticated", { sdkVersion: "0.2.141" }),
+      // Installed (Codex absent from the map → "missing"). With install-only
+      // detection "installed" is just `ok`; the card no longer renders a
+      // logged-out state here.
+      "claude-code": cap("ok", { sdkVersion: "0.2.141" }),
     },
   });
 
@@ -175,7 +182,7 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     status: "disconnected",
     lastSeenAt: isoMinutesAgo(120),
     capabilities: {
-      "claude-code": cap("ok", { sdkVersion: "0.2.141", authMethod: "oauth" }),
+      "claude-code": cap("ok", { sdkVersion: "0.2.141" }),
     },
   });
 
@@ -185,7 +192,7 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     status: "disconnected",
     lastSeenAt: isoDaysAgo(4),
     capabilities: {
-      "claude-code": cap("ok", { sdkVersion: "0.2.130", authMethod: "oauth" }),
+      "claude-code": cap("ok", { sdkVersion: "0.2.130" }),
     },
   });
 
@@ -194,7 +201,7 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     userId: "other-user",
     hostname: "alice-MBP.lan",
     capabilities: {
-      "claude-code": cap("ok", { sdkVersion: "0.2.141", authMethod: "oauth" }),
+      "claude-code": cap("ok", { sdkVersion: "0.2.141" }),
     },
   });
 
@@ -242,12 +249,13 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     {
       key: "ready-mixed",
       group: "Ready",
-      title: "Ready · Codex unauthenticated",
-      summary: "One runtime ok, one installed-but-unauthed. Card stays Ready; the unauth runtime gets a yellow ⚠ hint.",
+      title: "Ready · both runtimes installed",
+      summary:
+        "Both runtimes installed (install-only detection). Card is Ready; each row shows a green ✓ installed line.",
       whatToCheck: [
-        "Pill stays Ready (Claude Code is ok)",
-        "Codex line shows ⚠ + 'installed v0.125.0, not authenticated' + login hint",
-        "Warning yellow on the unauth line, idle green on the ok line",
+        "Pill stays Ready (≥1 runtime installed)",
+        "Codex line shows ✓ + 'Codex installed v0.125.0'",
+        "Green ✓ on both rows — no login/Connect affordance on the card",
       ],
       clients: [READY_MIXED],
       agents: [agent({ agentId: "a-dev", clientId: READY_MIXED.id, runtimeState: "running" })],
@@ -290,11 +298,10 @@ function buildDemoData(): { scenarios: DemoScenario[]; agentNames: Record<string
     {
       key: "setup-mixed",
       group: "Setup incomplete",
-      title: "Setup incomplete · one unauth, one missing",
-      summary:
-        "Mixed setup: Claude Code installed-not-logged-in, Codex not installed. Each install box adapts its command.",
+      title: "Setup incomplete · one installed, one missing",
+      summary: "Mixed setup: Claude Code installed (✓), Codex not installed (install box). Install-only detection.",
       whatToCheck: [
-        "Claude Code box: 'installed (v0.2.141) but not logged in' — command is ONLY `claude auth login` (no npm install)",
+        "Claude Code row: ✓ installed v0.2.141 status line (no Connect/login affordance)",
         "Codex box: full install + login two-liner",
         "Backticks in headlines render as <code> elements, not literal backticks",
       ],

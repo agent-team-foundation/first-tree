@@ -28,9 +28,11 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     await clientService.assertClientOwner(app.db, clientId, { userId });
     const client = await clientService.getClient(app.db, clientId);
     if (!client) throw new Error("unreachable: client missing after owner check");
-    const metadata = (client.metadata ?? {}) as Record<string, unknown>;
-    const capabilities =
-      metadata.capabilities && typeof metadata.capabilities === "object" ? metadata.capabilities : {};
+    // Normalize through the capability schema (same as /me/clients) so a legacy
+    // snapshot is coerced to the canonical install-only shape rather than served
+    // raw — the chat login button polls this endpoint and must not receive a
+    // legacy `unauthenticated` state the web no longer handles.
+    const capabilities = clientService.extractCapabilities(client.metadata);
     const refreshExpirySeconds = expiryToSeconds(app.config.auth.refreshTokenExpiry);
     const binName = getChannelConfig(app.config.channel).binName;
     return {

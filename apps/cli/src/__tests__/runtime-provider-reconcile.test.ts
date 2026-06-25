@@ -203,9 +203,7 @@ describe("uploadClientCapabilities", () => {
         "claude-code": {
           state: "ok",
           available: true,
-          authenticated: true,
           sdkVersion: "0.2.84",
-          authMethod: "oauth",
           detectedAt: "2026-04-29T00:00:00Z",
         },
       },

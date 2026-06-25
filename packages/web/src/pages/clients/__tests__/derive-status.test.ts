@@ -30,13 +30,11 @@ function client(overrides: Partial<HubClient>): HubClient {
   };
 }
 
-function capability(state: "ok" | "missing" | "unauthenticated" | "error") {
+function capability(state: "ok" | "missing" | "error") {
   return {
     state,
     available: state === "ok",
-    authenticated: state === "ok",
     sdkVersion: state === "ok" ? "0.8.1" : null,
-    authMethod: state === "ok" ? ("oauth" as const) : ("none" as const),
     detectedAt: T,
   };
 }
@@ -93,9 +91,9 @@ describe("deriveComputerStatus", () => {
     expect(deriveComputerStatus(c).pill).toBe("setup_incomplete");
   });
 
-  it("treats unauthenticated or error capabilities as not-ok (still Setup incomplete)", () => {
+  it("treats error capabilities as not-ok (still Setup incomplete)", () => {
     const c = client({
-      capabilities: { "claude-code": capability("unauthenticated"), codex: capability("error") },
+      capabilities: { "claude-code": capability("error"), codex: capability("error") },
     });
     expect(deriveComputerStatus(c).pill).toBe("setup_incomplete");
   });

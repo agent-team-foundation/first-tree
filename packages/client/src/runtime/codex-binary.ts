@@ -1,6 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { accessSync, constants } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
+import { wellKnownBinDirs } from "./install-locations.js";
+import { getLoginShellPathDirs } from "./login-shell-path.js";
 
 export type CodexRuntimeSource = "bundled" | "path";
 
@@ -111,19 +114,51 @@ export function verifyCodexExecutable(
   return { ok: true, output };
 }
 
-export function findCodexExecutableOnPath(env: Record<string, string | undefined> = process.env): string | null {
-  const pathValue = readPathValue(env);
-  if (!pathValue) return null;
+/** Injectable seams so probe tests stay hermetic (no real shell spawn / no host install dirs). */
+export type FindCodexExecutableDeps = {
+  /** Returns the user's interactive-login-shell PATH dirs; defaults to the memoized probe. */
+  loginShellPathDirs?: () => string[];
+  /** Returns the curated well-known bin dirs; defaults to the real host list. */
+  wellKnownDirs?: () => string[];
+};
 
-  for (const dir of pathValue.split(delimiter)) {
-    if (!dir) continue;
-    const base = isAbsolute(dir) ? dir : resolve(dir);
-    for (const name of codexExecutableNames(env)) {
-      const candidate = join(base, name);
-      if (isExecutable(candidate)) return candidate;
+export function findCodexExecutableOnPath(
+  env: Record<string, string | undefined> = process.env,
+  deps: FindCodexExecutableDeps = {},
+): string | null {
+  const loginShellPathDirs = deps.loginShellPathDirs ?? getLoginShellPathDirs;
+  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+  const wellKnownDirs = deps.wellKnownDirs ?? (() => wellKnownBinDirs(home));
+  const names = codexExecutableNames(env);
+  const seen = new Set<string>();
+
+  const search = (dirs: readonly string[]): string | null => {
+    for (const dir of dirs) {
+      if (!dir) continue;
+      const base = isAbsolute(dir) ? dir : resolve(dir);
+      if (seen.has(base)) continue;
+      seen.add(base);
+      for (const name of names) {
+        const candidate = join(base, name);
+        if (isExecutable(candidate)) return candidate;
+      }
     }
-  }
-  return null;
+    return null;
+  };
+
+  // Priority — cheap (no-spawn) checks first, the login-shell probe last:
+  // daemon PATH → curated well-known dirs → login-shell PATH. The well-known
+  // dirs are pure existence checks; the login-shell PATH (which may `spawnSync`
+  // a shell) is consulted last, only when daemon PATH + well-known miss, so a
+  // hit in either never triggers a shell spawn. It catches binaries that live
+  // only on the user's interactive PATH (nvm / fnm / volta / mise / asdf, custom
+  // exports). Codex resolution is never on the daemon's pre-connect path.
+  const pathValue = readPathValue(env);
+  const fromDaemon = search(pathValue ? pathValue.split(delimiter) : []);
+  if (fromDaemon) return fromDaemon;
+  const fromWellKnown = search(wellKnownDirs());
+  if (fromWellKnown) return fromWellKnown;
+  return search(loginShellPathDirs());
 }
 
 function errorText(input: unknown): string {

@@ -1,6 +1,7 @@
 import {
   type AttachmentRef,
   attachmentRefsFromMetadata,
+  type CapabilityEntry,
   CHAT_ENGAGEMENT_STATUSES,
   type ChatDetail,
   type ChatParticipantDetail,
@@ -12,6 +13,7 @@ import {
   type MentionParticipant,
   parseProviderRetryEventMessage,
   type RequestResolution,
+  type RuntimeProvider,
   statusReasonFromProviderRetryEvent,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -42,6 +44,7 @@ import {
 } from "react";
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
+import { getClient } from "../../../api/activity.js";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import { getAgentSkills } from "../../../api/agents.js";
 import { fetchAttachmentBase64, uploadImageAttachment } from "../../../api/attachments.js";
@@ -125,6 +128,7 @@ import { formatTokenUsageTitle, processedTokenCount } from "../../../lib/token-u
 import { useAgentIdentityMap, useAgentNameMap } from "../../../lib/use-agent-name-map.js";
 import { useAutoResizeTextarea } from "../../../lib/use-autoresize-textarea.js";
 import { useChatDraftText } from "../../../lib/use-chat-draft-text.js";
+import { useClientMap } from "../../../lib/use-client-map.js";
 import { useOrgAgents } from "../../../lib/use-org-agents.js";
 import { usePendingImages } from "../../../lib/use-pending-images.js";
 import { cn } from "../../../lib/utils.js";
@@ -132,6 +136,9 @@ import { selectVisibleMessages } from "../../../utils/agent-final-text-filter.js
 import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
 import { computeRequiresMention, shouldPrimeMentionOnFocus } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
+import { PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
+import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-controls.js";
+import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 import { ChatSummary } from "./chat-summary.js";
 
@@ -237,10 +244,199 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
   );
 }
 
-function ErrorRow({ event, agentNameFn }: { event: SessionEventRow; agentNameFn?: (id: string) => string }) {
+/** Single-client poll cadence while an in-product login is in flight. */
+const CHAT_LOGIN_POLL_MS = 3000;
+
+/** Grace window after a click for the daemon to publish `pendingAuth` before
+ *  the poll disarms on its own. Mirrors RuntimeAuthControls' starting latch. */
+const STARTING_LATCH_MS = 30_000;
+
+/**
+ * In-chat "needs login" entry point. Rendered under a credential-category
+ * error row so the user can start the in-product login for the failing agent's
+ * client + provider directly from the chat — without leaving for the Computers
+ * page. Reuses the daemon login flow + markers via `RuntimeAuthControls`:
+ *
+ *   - `forceConnectable` makes the shared control render the "Connect <label>"
+ *     button even though install-only detection no longer keys a logged-out
+ *     "Connect" affordance off capability `state` — the credential failure that
+ *     produced this error row IS the trigger.
+ *   - The control reads the live capability entry (this client's `pendingAuth` /
+ *     `lastAuthError` for the provider) to show "finishing in browser" /
+ *     terminal-failure-retry, so we fetch the client and poll while a login is
+ *     in flight, mirroring `RuntimeAuthControls`' own cadence.
+ *
+ * `provider` is the already-normalized login target (see `loginTargetProvider`):
+ * a `claude-code-tui` failure arrives here as `claude-code`, so the capability
+ * lookup + `startRuntimeAuth` both key off the provider the daemon can drive.
+ */
+function ChatRuntimeLoginButton({ clientId, provider }: { clientId: string; provider: RuntimeProvider }) {
+  // A login attempt began at this wall-clock instant. Only an in-flight attempt
+  // arms the poll; it disarms the moment the attempt resolves (see below).
+  const [startedAt, setStartedAt] = useState<number | null>(null);
+  // Re-derive on every poll tick so the `expiresAt` / lastAuthError windows are
+  // evaluated against the current clock, not a value frozen at mount.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  // True once a login STARTED from this button resolved successfully. The error
+  // row is a persistent timeline event, so without a local terminal latch the
+  // control would keep rendering "Connect" and re-invite a now-pointless login
+  // after the user already signed in (the capability entry alone cannot tell
+  // "credential failure, please log in" from "already logged in" — both are
+  // `state: "ok"` with no markers). Renders a terminal "Signed in" affordance.
+  const [succeeded, setSucceeded] = useState(false);
+  // Whether the CURRENT attempt has observed a live `pendingAuth` (the daemon
+  // actually launched the browser login). Resolving from a state that saw
+  // pending — with no failure and an `ok` entry — is the success signal; a
+  // resolution that never saw pending is the backstop timeout, not a success.
+  const sawPendingRef = useRef(false);
+
+  const clientQuery = useQuery({
+    queryKey: ["clients", "single", clientId],
+    queryFn: () => getClient(clientId),
+    // Derived poll: only while a started attempt is still unresolved — a fixed
+    // boolean that nothing clears would poll forever (review Fix 3). Otherwise
+    // rely on the one mount fetch (the entry is otherwise static).
+    refetchInterval: (query) => {
+      if (startedAt === null) return false;
+      const live = chatLoginAttemptLive(query.state.data?.capabilities[provider] ?? null, startedAt, nowMs);
+      return live ? CHAT_LOGIN_POLL_MS : false;
+    },
+    staleTime: 30_000,
+  });
+  const entry = clientQuery.data?.capabilities[provider] ?? null;
+
+  // Track whether THIS attempt ever saw a live `pendingAuth`. The daemon
+  // publishes it once it launches the browser login; its later disappearance
+  // (with no failure) is the success transition.
+  useEffect(() => {
+    if (startedAt === null) return;
+    if (entry?.pendingAuth) sawPendingRef.current = true;
+  }, [entry?.pendingAuth, startedAt]);
+
+  // Resolve the armed attempt. Two ways it ends:
+  //
+  //   1. SUCCESS: a `pendingAuth` we observed has now cleared with NO failure at/
+  //      after the click and the runtime still installed (`state: "ok"`). This is
+  //      the daemon completing the login and re-probing — detected directly (not
+  //      via `chatLoginAttemptLive`, whose post-pending backstop would otherwise
+  //      hold the attempt "live" for the full 30s window). Latch a terminal
+  //      signed-in affordance so the persistent ErrorRow stops re-inviting login.
+  //   2. OTHERWISE resolved (a terminal failure at/after the click, or the
+  //      pending window / never-launched backstop elapsing): just disarm and let
+  //      `RuntimeAuthControls` render its retry copy or the Connect button.
+  //
+  // Either way, clearing `startedAt` collapses `refetchInterval` back to `false`.
+  useEffect(() => {
+    if (startedAt === null) return;
+    const failureAt = entry?.lastAuthError ? Date.parse(entry.lastAuthError.at) : null;
+    const failedSinceStart = failureAt !== null && !Number.isNaN(failureAt) && failureAt >= startedAt;
+    const okState = entry == null || entry.state === "ok";
+    const succeededNow = sawPendingRef.current && !failedSinceStart && !entry?.pendingAuth && okState;
+    if (succeededNow) {
+      sawPendingRef.current = false;
+      setSucceeded(true);
+      setStartedAt(null);
+      return;
+    }
+    if (chatLoginAttemptLive(entry, startedAt, nowMs)) return;
+    sawPendingRef.current = false;
+    setStartedAt(null);
+  }, [entry, startedAt, nowMs]);
+
+  // Advance the clock on each poll tick so a time-only resolution (the pending
+  // window simply elapsing, with no fresh capabilities push) still disarms.
+  useEffect(() => {
+    if (startedAt === null) return;
+    const id = setInterval(() => setNowMs(Date.now()), CHAT_LOGIN_POLL_MS);
+    return () => clearInterval(id);
+  }, [startedAt]);
+
+  // Terminal success: stop offering Connect. The login this row prompted is done.
+  if (succeeded) {
+    return (
+      <p className="text-caption font-medium" style={{ color: "var(--success)", margin: 0 }}>
+        Signed in to {PROVIDER_LABEL[provider]} — try sending again.
+      </p>
+    );
+  }
+
+  return (
+    <RuntimeAuthControls
+      clientId={clientId}
+      provider={provider}
+      entry={entry}
+      forceConnectable
+      // The shared control invalidates `["clients"]`; mirror that into the
+      // single-row query this button reads from, and arm the in-flight poll.
+      onStarted={() => {
+        sawPendingRef.current = false;
+        setStartedAt(Date.now());
+        setNowMs(Date.now());
+        void clientQuery.refetch();
+      }}
+    />
+  );
+}
+
+/**
+ * Whether the in-chat login attempt that began at `startedAt` is still
+ * unresolved for `entry` — the predicate that arms/disarms the single-client
+ * poll. The attempt is DONE (returns false) once any terminal signal lands:
+ *
+ *   - a `lastAuthError` recorded at/after the click (terminal failure), or
+ *   - the `pendingAuth.expiresAt` window has elapsed,
+ *
+ * and is otherwise considered in flight (a live `pendingAuth`, or the brief gap
+ * between the click and the daemon publishing one). The first poll that observes
+ * a resolution clears the latch in the effect above.
+ */
+function chatLoginAttemptLive(entry: CapabilityEntry | null, startedAt: number, nowMs: number): boolean {
+  const failureAt = entry?.lastAuthError ? Date.parse(entry.lastAuthError.at) : null;
+  if (failureAt !== null && !Number.isNaN(failureAt) && failureAt >= startedAt) return false;
+  const pending = entry?.pendingAuth ?? null;
+  if (pending) {
+    const expiresMs = Date.parse(pending.expiresAt);
+    // A live, non-expired pending marker means the attempt is still running.
+    if (Number.isNaN(expiresMs) || expiresMs > nowMs) return true;
+    // Pending exists but its window elapsed → resolved (timed out).
+    return false;
+  }
+  // No pending marker yet: keep polling only briefly after the click so the
+  // daemon has a window to publish one; past that, treat it as resolved.
+  return nowMs - startedAt < STARTING_LATCH_MS;
+}
+
+function ErrorRow({
+  event,
+  agentNameFn,
+  clientIdForAgent,
+  ownsClient,
+}: {
+  event: SessionEventRow;
+  agentNameFn?: (id: string) => string;
+  /** Resolve the emitting agent's pinned client id, for the in-chat login entry
+   *  point. Null when the agent is not on a client (no login button is shown). */
+  clientIdForAgent?: (agentId: string) => string | null;
+  /** True only when the caller OWNS the given client (it is in their
+   *  `GET /me/clients` set). The login button is gated on this, mirroring the
+   *  server's `assertClientOwner`: a teammate's agent runs on a computer the
+   *  caller does not own, so the Connect click would only 4xx. Required so the
+   *  gate fails CLOSED — an absent predicate must withhold the button, not
+   *  default it open. */
+  ownsClient: (clientId: string) => boolean;
+}) {
   const payload = asErrorPayload(event.payload);
   const retryPayload = payload ? parseProviderRetryEventMessage(payload.message) : null;
   const retryReason = retryPayload ? statusReasonFromProviderRetryEvent(retryPayload) : null;
+  // A credential failure means the provider is installed but logged out; offer
+  // an inline login when we can resolve the failing agent's client AND the
+  // caller owns that client (only then can the server-side login actually run).
+  const resolvedClientId =
+    retryReason?.category === "credential" && clientIdForAgent ? clientIdForAgent(event.agentId) : null;
+  const loginClientId = resolvedClientId && ownsClient(resolvedClientId) ? resolvedClientId : null;
+  // `claude-code-tui` shares the Claude Code keychain and is not a distinct
+  // Connect target — normalize it to the `claude-code` login target.
+  const loginProvider = retryReason ? loginTargetProvider(retryReason.provider) : null;
   const ts = formatClockTime(event.createdAt);
   // Resolve the emitting agent so the header reads "error · <agent> · runtime · …".
   // Falls back gracefully if the lookup function isn't provided (legacy callers).
@@ -298,6 +494,11 @@ function ErrorRow({ event, agentNameFn }: { event: SessionEventRow; agentNameFn?
       >
         {message}
       </div>
+      {loginClientId && loginProvider && (
+        <div style={{ marginTop: "var(--sp-1_5)" }}>
+          <ChatRuntimeLoginButton clientId={loginClientId} provider={loginProvider} />
+        </div>
+      )}
     </div>
   );
 }
@@ -901,6 +1102,10 @@ type ChatTimelineProps = {
   messagesEndRef: RefObject<HTMLDivElement | null>;
   defaultWorkgroupOpen: boolean;
   agentNameFn: (id: string) => string;
+  /** Resolve an agent's pinned client id for the in-chat login entry point. */
+  clientIdForAgent: (id: string) => string | null;
+  /** True only when the caller owns the given client (in `GET /me/clients`). */
+  ownsClient: (clientId: string) => boolean;
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
   myAgentId: string | null;
@@ -926,6 +1131,8 @@ const ChatTimeline = memo(function ChatTimeline({
   messagesEndRef,
   defaultWorkgroupOpen,
   agentNameFn,
+  clientIdForAgent,
+  ownsClient,
   agentAvatarFn,
   agentColorTokenFn,
   myAgentId,
@@ -983,7 +1190,15 @@ const ChatTimeline = memo(function ChatTimeline({
                 const ev = item.data;
                 switch (ev.kind) {
                   case "error":
-                    node = <ErrorRow key={item.key} event={ev} agentNameFn={agentNameFn} />;
+                    node = (
+                      <ErrorRow
+                        key={item.key}
+                        event={ev}
+                        agentNameFn={agentNameFn}
+                        clientIdForAgent={clientIdForAgent}
+                        ownsClient={ownsClient}
+                      />
+                    );
                     break;
                   default:
                     // assistant_text / tool_call / thinking are folded into
@@ -2666,6 +2881,34 @@ export function ChatView({
   );
 
   /**
+   * Resolve an agentId to the client it is pinned to, for the in-chat "needs
+   * login" entry point. Sourced from the org agent roster (`useOrgAgents`),
+   * which carries each agent's `clientId`. Null when the agent isn't on a
+   * client (e.g. a human, or an unbound agent) — the error row then renders
+   * without a login button.
+   */
+  const clientIdByAgent = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const a of orgAgentsPage?.items ?? []) map.set(a.uuid, a.clientId);
+    return map;
+  }, [orgAgentsPage?.items]);
+  const clientIdForAgent = useCallback(
+    (id: string): string | null => clientIdByAgent.get(id) ?? null,
+    [clientIdByAgent],
+  );
+
+  /**
+   * Client-ownership predicate for the in-chat login button. The authoritative
+   * "clients I own" set is `GET /me/clients` (the caller's own computers only),
+   * already cached + polled by `useClientMap`. Gating the Connect button on this
+   * mirrors the server's `assertClientOwner`: a credential failure on a
+   * teammate's agent (running on a computer the caller does not own) renders the
+   * error without a button instead of a Connect click that only 4xx's.
+   */
+  const { resolve: resolveClient } = useClientMap();
+  const ownsClient = useCallback((clientId: string): boolean => resolveClient(clientId) !== null, [resolveClient]);
+
+  /**
    * Identity-pair variant used by the participant chip row and the
    * mention picker. Same precedence rule as `chatScopedAgentName`.
    */
@@ -3418,6 +3661,8 @@ export function ChatView({
             messagesEndRef={messagesEndRef}
             defaultWorkgroupOpen={chatDetail?.type === "direct"}
             agentNameFn={chatScopedAgentName}
+            clientIdForAgent={clientIdForAgent}
+            ownsClient={ownsClient}
             agentAvatarFn={agentAvatar}
             agentColorTokenFn={agentColorToken}
             myAgentId={myAgentId}

@@ -48,20 +48,17 @@ export function SetupIncompleteCardBody({ client, boundAgents, agentName }: Setu
       )}
       <CardSection>
         {/* Same heading as Ready ("Runtimes") — the yellow "Setup incomplete"
-            pill already conveys the state, and these rows now mix Connect
-            (unauthenticated) with install boxes (missing), so the old
-            "Install a runtime to start" label was no longer always accurate. */}
+            pill already conveys the state, and these rows surface install
+            boxes for what's missing, so the old "Install a runtime to start"
+            label was no longer always accurate. */}
         <CardSectionLabel>Runtimes</CardSectionLabel>
         {/* Single-column provider list, identical rhythm to Ready: each row is a
-            status line + its in-place action (Connect for unauthenticated,
-            install box for missing). Replaces the side-by-side grid so the
-            Connect affordance looks the same whether or not another runtime is
-            already `ok`. */}
+            status line or an install box (for missing/error). Detection is
+            install-only, so there is no in-product Connect affordance here. */}
         <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
           {installableProviders.map((provider) => (
             <RuntimeProviderRow
               key={provider}
-              clientId={client.id}
               provider={provider}
               entry={client.capabilities[provider] ?? null}
               os={client.os}

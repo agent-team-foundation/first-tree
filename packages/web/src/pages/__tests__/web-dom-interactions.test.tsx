@@ -252,17 +252,13 @@ const CLIENTS: HubClient[] = [
       "claude-code": {
         state: "ok",
         available: true,
-        authenticated: true,
         sdkVersion: "0.2.84",
-        authMethod: "oauth",
         detectedAt: NOW,
       },
       codex: {
-        state: "unauthenticated",
+        state: "ok",
         available: true,
-        authenticated: false,
         sdkVersion: "0.134.0",
-        authMethod: "none",
         detectedAt: NOW,
       },
     },

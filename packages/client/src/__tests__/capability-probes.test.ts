@@ -1,202 +1,55 @@
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { CapabilityEntry } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeExecutableResolution } from "../handlers/claude-executable.js";
 import {
-  classifyClaudeSmokeFailure,
+  type BundledClaudeBinary,
   formatClaudeBinaryMissingMessage,
   probeClaudeCodeCapability,
   resolveBundledClaudeBinary,
-  verifyBundledClaudeArtifact,
 } from "../runtime/capabilities/claude-code.js";
+import { probeClaudeCodeTuiCapability } from "../runtime/capabilities/claude-code-tui.js";
 import {
-  defaultTuiSmoke,
-  parseTmuxVersion,
-  probeClaudeCodeTuiCapability,
-  TUI_SMOKE_ARGS,
-} from "../runtime/capabilities/claude-code-tui.js";
-import {
-  type CodexBinaryResolution,
-  classifyDoctorReport,
-  parseDoctorReport,
   probeCodexCapability,
   resolveBundledBinaryInPackageRoot,
   resolveBundledCodexBinary,
   resolveCodexRuntimeBinary,
 } from "../runtime/capabilities/codex.js";
-import type { RunCommandResult } from "../runtime/capabilities/launch-probe.js";
-import {
-  type AuthPrecheckOutcome,
-  commandFailureDigest,
-  MAX_ERROR_LENGTH,
-  type ResolveOutcome,
-  runCommand,
-  runLaunchProbe,
-  type SmokeOutcome,
-  truncateError,
-  verifyLaunchable,
-} from "../runtime/capabilities/launch-probe.js";
+import { MAX_ERROR_LENGTH, truncateError } from "../runtime/capabilities/detect.js";
+import { commandFailureDigest, runCommand, verifyLaunchable } from "../runtime/capabilities/launch-probe.js";
 import type { CodexExecutableVerification } from "../runtime/codex-binary.js";
 
 /**
- * Launch-verified capability probes — the contract under test:
+ * Install-only capability probes — the contract under test:
  *
- *   - `ok` is reachable ONLY through the smoke stage (a real provider
- *     launch); resolve/auth-precheck failures short-circuit to
- *     `missing`/`unauthenticated` respectively.
- *   - every non-ok entry carries the provider's own error text verbatim
- *     (truncated to MAX_ERROR_LENGTH).
- *   - every launch-probe entry carries `probeKind: "launch"` + `latencyMs`
- *     so the server/web side can distinguish them from legacy static rows.
+ *   - `ok` means the binary the runtime would spawn EXISTS on disk; no launch,
+ *     no auth check, no smoke.
+ *   - `missing` means no spawnable artifact was found (the error lists what was
+ *     checked).
+ *   - `error` means detection itself threw (reported verbatim, truncated to
+ *     MAX_ERROR_LENGTH).
+ *   - every entry carries `detectedAt` + `latencyMs`. Removed: `authenticated`,
+ *     `authMethod`, `degraded`, `probeKind`, and the `unauthenticated` state.
  *
- * All provider-probe tests inject the full dependency seam (resolve /
- * verify / precheck / smoke) so nothing here spawns a real provider,
- * touches the network, or spends tokens. The few real-spawn tests at the
- * bottom of the framework block use `node` itself (always present in the
- * test environment).
+ * Provider-probe tests inject the existence/resolve seams
+ * (`exists` / `resolveBundled` / `findOnPath` / `hasTmux`) so nothing here
+ * spawns a real provider or touches the real PATH. The few real-spawn tests use
+ * `node` itself (always present in the test environment) to cover the low-level
+ * runCommand/verifyLaunchable helpers the codex runtime resolver still relies
+ * on.
  */
-
-const okResolve: ResolveOutcome & { ok: true } = { ok: true, binary: "/fake/bin", version: "1.2.3" };
-const okAuth: AuthPrecheckOutcome & { ok: true } = { ok: true, method: "oauth" };
-
-describe("runLaunchProbe (framework)", () => {
-  it("resolve failure → missing, error verbatim, smoke never runs", async () => {
-    const smoke = vi.fn<() => Promise<SmokeOutcome>>();
-    const entry = await runLaunchProbe({
-      resolve: async () => ({ ok: false, error: "`claude` at /x could not be executed (exit 126)" }),
-      authPrecheck: async () => okAuth,
-      smoke,
-    });
-    expect(entry).toMatchObject({
-      state: "missing",
-      available: false,
-      authenticated: false,
-      sdkVersion: null,
-      authMethod: "none",
-      error: "`claude` at /x could not be executed (exit 126)",
-      probeKind: "launch",
-    });
-    expect(typeof entry.latencyMs).toBe("number");
-    expect(smoke).not.toHaveBeenCalled();
-  });
-
-  it("auth precheck failure → unauthenticated with resolve-stage version, smoke never runs", async () => {
-    const smoke = vi.fn<() => Promise<SmokeOutcome>>();
-    const entry = await runLaunchProbe({
-      resolve: async () => okResolve,
-      authPrecheck: async () => ({ ok: false, error: "Not logged in" }),
-      smoke,
-    });
-    expect(entry).toMatchObject({
-      state: "unauthenticated",
-      available: true,
-      authenticated: false,
-      sdkVersion: "1.2.3",
-      authMethod: "none",
-      error: "Not logged in",
-    });
-    expect(smoke).not.toHaveBeenCalled();
-  });
-
-  it("smoke ok → ok; method comes from the precheck, version from resolve", async () => {
-    const entry = await runLaunchProbe({
-      resolve: async () => okResolve,
-      authPrecheck: async () => okAuth,
-      smoke: async () => ({ state: "ok" }),
-    });
-    expect(entry).toMatchObject({
-      state: "ok",
-      available: true,
-      authenticated: true,
-      sdkVersion: "1.2.3",
-      authMethod: "oauth",
-      probeKind: "launch",
-    });
-    expect(entry.degraded).toBeUndefined();
-    expect(entry.error).toBeUndefined();
-  });
-
-  it("smoke may override version/method and flag degraded", async () => {
-    const entry = await runLaunchProbe({
-      resolve: async () => okResolve,
-      authPrecheck: async () => okAuth,
-      smoke: async () => ({ state: "ok", version: "9.9.9", method: "api_key", degraded: true }),
-    });
-    expect(entry.sdkVersion).toBe("9.9.9");
-    expect(entry.authMethod).toBe("api_key");
-    expect(entry.degraded).toBe(true);
-  });
-
-  it("smoke unauthenticated → unauthenticated with the provider's verbatim error", async () => {
-    const entry = await runLaunchProbe({
-      resolve: async () => okResolve,
-      authPrecheck: async () => okAuth,
-      smoke: async () => ({ state: "unauthenticated", error: "Invalid API key · Please run /login" }),
-    });
-    expect(entry).toMatchObject({
-      state: "unauthenticated",
-      available: true,
-      authenticated: false,
-      authMethod: "none",
-      error: "Invalid API key · Please run /login",
-    });
-  });
-
-  it("smoke missing → missing (e.g. the SDK's bundled binary is absent)", async () => {
-    const entry = await runLaunchProbe({
-      resolve: async () => ({ ok: true, version: null }),
-      authPrecheck: async () => okAuth,
-      smoke: async () => ({ state: "missing", error: "Native CLI binary for darwin-arm64 not found" }),
-    });
-    expect(entry).toMatchObject({ state: "missing", available: false, error: expect.stringContaining("not found") });
-  });
-
-  it("smoke error → error", async () => {
-    const entry = await runLaunchProbe({
-      resolve: async () => okResolve,
-      authPrecheck: async () => okAuth,
-      smoke: async () => ({ state: "error", error: "boom" }),
-    });
-    expect(entry).toMatchObject({ state: "error", available: false, error: "boom" });
-  });
-
-  it("a thrown stage becomes state=error (never throws)", async () => {
-    const entry = await runLaunchProbe({
-      resolve: async () => {
-        throw new Error("resolve blew up");
-      },
-      authPrecheck: async () => okAuth,
-      smoke: async () => ({ state: "ok" }),
-    });
-    expect(entry).toMatchObject({ state: "error", available: false, error: "resolve blew up" });
-  });
-
-  it("a non-Error throw is stringified", async () => {
-    const entry = await runLaunchProbe({
-      resolve: async () => {
-        throw "string failure";
-      },
-      authPrecheck: async () => okAuth,
-      smoke: async () => ({ state: "ok" }),
-    });
-    expect(entry.error).toBe("string failure");
-  });
-
-  it("caps stored error text at MAX_ERROR_LENGTH", async () => {
-    const entry = await runLaunchProbe({
-      resolve: async () => ({ ok: false, error: "x".repeat(2000) }),
-      authPrecheck: async () => okAuth,
-      smoke: async () => ({ state: "ok" }),
-    });
-    expect(entry.error).toHaveLength(MAX_ERROR_LENGTH + 1); // 500 chars + ellipsis
-    expect(entry.error?.endsWith("…")).toBe(true);
-  });
-});
 
 describe("truncateError / commandFailureDigest", () => {
   it("truncateError trims whitespace and keeps short text intact", () => {
     expect(truncateError("  hello \n")).toBe("hello");
+  });
+
+  it("truncateError caps long text at MAX_ERROR_LENGTH with an ellipsis", () => {
+    const out = truncateError("x".repeat(2000));
+    expect(out).toHaveLength(MAX_ERROR_LENGTH + 1); // 500 chars + ellipsis
+    expect(out.endsWith("…")).toBe(true);
   });
 
   it("digest prefers spawnError, then timeout, then stderr|stdout, then exit code", () => {
@@ -245,270 +98,94 @@ describe("runCommand / verifyLaunchable (real node spawns)", () => {
   });
 });
 
-describe("classifyClaudeSmokeFailure", () => {
-  it("maps the verified invalid-API-key signature to unauthenticated", () => {
-    const out = classifyClaudeSmokeFailure("Invalid API key · Please run /login");
-    expect(out.state).toBe("unauthenticated");
-    expect(out.error).toBe("Invalid API key · Please run /login");
-  });
-
-  it("maps the SDK's typed auth failure code to unauthenticated", () => {
-    expect(classifyClaudeSmokeFailure("authentication_failed").state).toBe("unauthenticated");
-    expect(classifyClaudeSmokeFailure("OAuth token expired").state).toBe("unauthenticated");
-  });
-
-  it("maps the SDK's missing-bundle throw to missing", () => {
-    expect(classifyClaudeSmokeFailure("Native CLI binary for darwin-arm64 not found").state).toBe("missing");
-    expect(classifyClaudeSmokeFailure("spawn claude ENOENT").state).toBe("missing");
-  });
-
-  it("anything else is an error carrying the verbatim text", () => {
-    const out = classifyClaudeSmokeFailure("upstream 503");
-    expect(out).toEqual({ state: "error", error: "upstream 503" });
-  });
-
-  it("empty text gets a placeholder instead of an empty error", () => {
-    expect(classifyClaudeSmokeFailure("  ").error).toBe("smoke failed without output");
-  });
-});
-
-/**
- * Regression for PR #996 review (codex-assistant): the Claude smokes must load
- * the SAME settings sources as the real handlers (`settingSources: ["user",
- * "project"]` / `--setting-sources user,project`), or the capability row would
- * be probed under a different config than the runtime actually launches with.
- */
-describe("Claude smoke ↔ handler settings-source parity", () => {
-  it("TUI_SMOKE_ARGS carry `--setting-sources user,project` (+ the haiku model)", () => {
-    const i = TUI_SMOKE_ARGS.indexOf("--setting-sources");
-    expect(i).toBeGreaterThanOrEqual(0);
-    expect(TUI_SMOKE_ARGS[i + 1]).toBe("user,project");
-    expect(TUI_SMOKE_ARGS).toContain("haiku");
-  });
-
-  it("defaultTuiSmoke launches the resolved binary with the setting-sources args", async () => {
-    let capturedArgs: string[] | undefined;
-    const fakeRun = async (_binary: string, args: string[]): Promise<RunCommandResult> => {
-      capturedArgs = args;
-      return { ok: true, exitCode: 0, stdout: "OK", stderr: "", timedOut: false, durationMs: 5 };
-    };
-    const out = await defaultTuiSmoke("/usr/local/bin/claude", fakeRun);
-    expect(out.state).toBe("ok");
-    expect(capturedArgs).toEqual([...TUI_SMOKE_ARGS]);
-  });
-
-  it("defaultClaudeSdkSmoke passes settingSources [user, project] to the SDK query", async () => {
-    vi.resetModules();
-    let capturedOptions: Record<string, unknown> | undefined;
-    vi.doMock("@anthropic-ai/claude-agent-sdk", () => ({
-      query: (input: { options: Record<string, unknown> }) => {
-        capturedOptions = input.options;
-        return (async function* () {
-          yield { type: "result", subtype: "success", is_error: false };
-        })();
-      },
-    }));
-    const mod = await import("../runtime/capabilities/claude-code.js");
-
-    const out = await mod.defaultClaudeSdkSmoke(undefined);
-
-    expect(out.state).toBe("ok");
-    expect(capturedOptions?.settingSources).toEqual(["user", "project"]);
-    expect(capturedOptions?.model).toBe("haiku");
-
-    vi.doUnmock("@anthropic-ai/claude-agent-sdk");
-    vi.resetModules();
-  });
-
-  it("defaultClaudeSdkSmoke maps structured auth error results to unauthenticated", async () => {
-    vi.resetModules();
-    vi.doMock("@anthropic-ai/claude-agent-sdk", () => ({
-      query: () =>
-        (async function* () {
-          yield {
-            type: "result",
-            subtype: "success",
-            is_error: true,
-            api_error_status: 401,
-            result: "authentication_failed",
-          };
-        })(),
-    }));
-    const mod = await import("../runtime/capabilities/claude-code.js");
-
-    const out = await mod.defaultClaudeSdkSmoke(undefined);
-
-    expect(out).toEqual({ state: "unauthenticated", error: "authentication_failed" });
-    vi.doUnmock("@anthropic-ai/claude-agent-sdk");
-    vi.resetModules();
-  });
-
-  it("defaultClaudeSdkSmoke keeps structured billing errors as provider errors, not unauthenticated", async () => {
-    vi.resetModules();
-    vi.doMock("@anthropic-ai/claude-agent-sdk", () => ({
-      query: () =>
-        (async function* () {
-          yield {
-            type: "result",
-            subtype: "success",
-            is_error: true,
-            api_error_status: 403,
-            result: "Failed to authenticate. API Error: 403 Insufficient account balance.",
-          };
-        })(),
-    }));
-    const mod = await import("../runtime/capabilities/claude-code.js");
-
-    const out = await mod.defaultClaudeSdkSmoke(undefined);
-
-    expect(out).toEqual({
-      state: "error",
-      error: "Failed to authenticate. API Error: 403 Insufficient account balance.",
-    });
-    vi.doUnmock("@anthropic-ai/claude-agent-sdk");
-    vi.resetModules();
-  });
-});
-
-describe("probeClaudeCodeCapability", () => {
+describe("probeClaudeCodeCapability (install-only)", () => {
   const onPath = (): ClaudeExecutableResolution => ({ path: "/usr/local/bin/claude", source: "path" });
   const bundledOnly = (): ClaudeExecutableResolution => ({ path: undefined, source: "default" });
-  const verifyOk = async (): Promise<{ ok: true; version: string | null }> => ({ ok: true, version: "1.0.42" });
-  const authed = () => ({ authenticated: true, method: "oauth" as const });
-  const noAuth = () => ({ authenticated: false, method: "none" as const });
-  const smokeOk = async (): Promise<SmokeOutcome> => ({ state: "ok" });
+  const nativeBundle = (): BundledClaudeBinary => ({ kind: "native", path: "/sdk/native/claude" });
 
-  it("`ok` only after a successful smoke; sdkVersion is the resolved CLI's real version", async () => {
-    const runSmoke = vi.fn(smokeOk);
+  it("`ok` (runtimeSource path) when a real on-disk `claude` resolves and exists", async () => {
+    const resolveBundled = vi.fn(nativeBundle);
     const entry = await probeClaudeCodeCapability({
       resolveExecutable: onPath,
-      verifyBinary: verifyOk,
-      detectAuth: authed,
-      runSmoke,
+      resolveBundled,
+      exists: (p) => p === "/usr/local/bin/claude",
     });
     expect(entry).toMatchObject({
       state: "ok",
       available: true,
-      authenticated: true,
-      authMethod: "oauth",
-      sdkVersion: "1.0.42",
-      probeKind: "launch",
-      // Provenance (mirrors codex): a resolved on-disk binary is a system claude.
       runtimeSource: "path",
       runtimePath: "/usr/local/bin/claude",
     });
-    // The smoke must target the binary the runtime would spawn.
-    expect(runSmoke).toHaveBeenCalledWith("/usr/local/bin/claude");
+    expect(typeof entry.latencyMs).toBe("number");
+    expect(typeof entry.detectedAt).toBe("string");
+    // Deprecated wire-compat fields are emitted (older servers require them).
+    expect(entry.authenticated).toBe(true);
+    expect(entry.authMethod).toBe("none");
+    // No on-disk binary resolved means we never consult the bundle.
+    expect(resolveBundled).not.toHaveBeenCalled();
   });
 
-  it("no on-disk binary is NOT missing when the bundled artifact launch-verifies", async () => {
-    const runSmoke = vi.fn(smokeOk);
+  it("`ok` (runtimeSource bundled) when no on-disk binary but the bundled binary exists", async () => {
     const entry = await probeClaudeCodeCapability({
       resolveExecutable: bundledOnly,
-      verifyBundledArtifact: async () => ({ ok: true, version: "2.1.84" }),
-      detectAuth: authed,
-      runSmoke,
+      resolveBundled: nativeBundle,
+      exists: (p) => p === "/sdk/native/claude",
     });
-    expect(entry.state).toBe("ok");
-    // Version is the real CLI version from the bundled artifact's `--version`.
-    expect(entry.sdkVersion).toBe("2.1.84");
-    // Provenance: no on-disk binary resolved → the runtime falls back to the
-    // SDK-bundled engine, reported as `bundled` with no path.
-    expect(entry.runtimeSource).toBe("bundled");
-    expect(entry.runtimePath).toBeNull();
-    // undefined binary → the SDK spawns its own bundled Claude binary.
-    expect(runSmoke).toHaveBeenCalledWith(undefined);
+    expect(entry).toMatchObject({
+      state: "ok",
+      available: true,
+      runtimeSource: "bundled",
+      runtimePath: null,
+    });
   });
 
-  it("`missing` when no on-disk binary AND the bundled artifact fails to launch — even while unauthenticated", async () => {
-    // Regression for the bind-gate false positive (PR #996 review): a broken
-    // SDK bundle must resolve to `missing` regardless of auth state. Before
-    // the fix a failing auth precheck short-circuited to
-    // `unauthenticated`/`available: true`, telling the server gate the
-    // provider was installed when its launch artifact was absent.
-    const runSmoke = vi.fn(smokeOk);
+  it("a resolved binary whose path does NOT exist falls back to the bundle", async () => {
+    const entry = await probeClaudeCodeCapability({
+      resolveExecutable: onPath, // resolves a path…
+      resolveBundled: nativeBundle,
+      exists: (p) => p === "/sdk/native/claude", // …but the resolved path is absent
+    });
+    expect(entry).toMatchObject({ state: "ok", runtimeSource: "bundled" });
+  });
+
+  it("`missing` when neither a resolved binary nor the bundled binary exists on disk", async () => {
     const entry = await probeClaudeCodeCapability({
       resolveExecutable: bundledOnly,
-      verifyBundledArtifact: async () => ({ ok: false, error: "bundled Claude binary could not be located" }),
-      detectAuth: noAuth,
-      runSmoke,
+      resolveBundled: nativeBundle,
+      exists: () => false,
     });
     expect(entry.state).toBe("missing");
     expect(entry.available).toBe(false);
-    expect(entry.error).toContain("bundled Claude binary could not be located");
-    // The launch artifact failed in resolve — neither auth precheck nor smoke run.
-    expect(runSmoke).not.toHaveBeenCalled();
+    expect(entry.error).toContain("/sdk/native/claude");
+    expect(entry.error).toContain("does not exist");
   });
 
-  it("`missing` when the SDK package fails to import", async () => {
+  it("`missing` when there is no on-disk binary and the bundle cannot be resolved", async () => {
     const entry = await probeClaudeCodeCapability({
-      importSdk: async () => {
-        throw new Error("Cannot find module '@anthropic-ai/claude-agent-sdk'");
+      resolveExecutable: bundledOnly,
+      resolveBundled: () => {
+        throw new Error("@anthropic-ai/claude-agent-sdk not found in any parent node_modules");
       },
-      detectAuth: authed,
-      runSmoke: smokeOk,
-    });
-    expect(entry).toMatchObject({ state: "missing", available: false, authenticated: false });
-    expect(entry.error).toContain("Cannot find module");
-  });
-
-  it("`missing` when a resolved binary fails its real `--version` launch", async () => {
-    const entry = await probeClaudeCodeCapability({
-      resolveExecutable: onPath,
-      verifyBinary: async () => ({ ok: false, error: "claude --version: spawn EACCES" }),
-      detectAuth: authed,
-      runSmoke: smokeOk,
+      exists: () => false,
     });
     expect(entry.state).toBe("missing");
-    expect(entry.error).toBe("claude --version: spawn EACCES");
+    expect(entry.available).toBe(false);
+    // The externalized-engine missing message points at the one-click install
+    // (`formatClaudeBinaryMissingMessage`) and wraps the original resolver error.
+    expect(entry.error).toContain("Claude runtime binary is missing");
+    expect(entry.error).toContain("daemon install-claude");
+    expect(entry.error).toContain("not found in any parent node_modules");
   });
 
-  it("`unauthenticated` from the free precheck — no smoke is spent", async () => {
-    const runSmoke = vi.fn(smokeOk);
+  it("a thrown resolveExecutable becomes state=error (never throws)", async () => {
     const entry = await probeClaudeCodeCapability({
-      resolveExecutable: onPath,
-      verifyBinary: verifyOk,
-      detectAuth: noAuth,
-      runSmoke,
+      resolveExecutable: () => {
+        throw new Error("resolve blew up");
+      },
     });
-    expect(entry.state).toBe("unauthenticated");
-    expect(entry.error).toContain("no Claude credentials found");
-    expect(runSmoke).not.toHaveBeenCalled();
-  });
-
-  it("a passing precheck does NOT yield ok — a failing smoke still wins", async () => {
-    const entry = await probeClaudeCodeCapability({
-      resolveExecutable: onPath,
-      verifyBinary: verifyOk,
-      detectAuth: () => ({ authenticated: true, method: "api_key" as const }),
-      runSmoke: async () => ({ state: "unauthenticated", error: "Invalid API key · Please run /login" }),
-    });
-    expect(entry.state).toBe("unauthenticated");
-    expect(entry.error).toBe("Invalid API key · Please run /login");
-  });
-
-  it("smoke error text is truncated", async () => {
-    const entry = await probeClaudeCodeCapability({
-      resolveExecutable: onPath,
-      verifyBinary: verifyOk,
-      detectAuth: authed,
-      runSmoke: async () => ({ state: "error", error: "y".repeat(5000) }),
-    });
-    expect(entry.error).toHaveLength(MAX_ERROR_LENGTH + 1);
-  });
-});
-
-describe("verifyBundledClaudeArtifact (real node_modules)", () => {
-  it("launch-verifies the SDK's bundled Claude binary via `<artifact> --version`", async () => {
-    // The repo depends on @anthropic-ai/claude-agent-sdk, so on any dev/CI
-    // machine the bundled artifact resolves — a legacy `cli.js` or a modern
-    // per-platform native binary — and its `--version` runs. This guards the
-    // import.meta.resolve / pnpm-symlink fragility (the same class of bug that
-    // bit the codex anchor under vitest SSR) and the SDK's cli.js → native-binary
-    // layout change.
-    const res = await verifyBundledClaudeArtifact();
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.version === null || /^\d+\.\d+(\.\d+)?$/.test(res.version)).toBe(true);
+    expect(entry.state).toBe("error");
+    expect(entry.available).toBe(false);
+    expect(entry.error).toBe("resolve blew up");
   });
 });
 
@@ -525,11 +202,9 @@ describe("formatClaudeBinaryMissingMessage", () => {
 });
 
 describe("resolveBundledClaudeBinary (hermetic — covers the SDK layout change)", () => {
-  // The real-node_modules test above runs against whatever the lockfile pins,
-  // which may still ship `cli.js` — so it does NOT exercise the native-package
-  // branch the bug fix added. These fixture tests pin that branch directly: a
+  // Pins the native-package branch the SDK 0.2.x+ layout change introduced: a
   // no-`cli.js` SDK dir + a per-platform package whose root holds the `claude`
-  // binary is exactly the modern SDK 0.2.x+ layout that broke detection.
+  // binary.
   const binaryName = process.platform === "win32" ? "claude.exe" : "claude";
 
   it("resolves the per-platform native binary when the SDK ships no cli.js", () => {
@@ -584,145 +259,64 @@ describe("resolveBundledClaudeBinary (hermetic — covers the SDK layout change)
   });
 });
 
-describe("probeClaudeCodeTuiCapability", () => {
+describe("probeClaudeCodeTuiCapability (install-only)", () => {
   const onPath = (): ClaudeExecutableResolution => ({ path: "/usr/local/bin/claude", source: "path" });
   const notOnPath = (): ClaudeExecutableResolution => ({ path: undefined, source: "default" });
-  const tmux34 = () => ({ raw: "tmux 3.4", major: 3, minor: 4 });
-  const verifyOk = async (): Promise<{ ok: true; version: string | null }> => ({ ok: true, version: "1.0.42" });
-  const authed = () => ({ authenticated: true, method: "oauth" as const });
-  const noAuth = () => ({ authenticated: false, method: "none" as const });
-  const smokeOk = async (): Promise<SmokeOutcome> => ({ state: "ok" });
 
-  it("`ok` when claude launches, tmux >= 3.0, and the headless smoke passes", async () => {
-    const runSmoke = vi.fn(smokeOk);
+  it("`ok` when a real on-disk `claude` exists AND tmux is present", async () => {
     const entry = await probeClaudeCodeTuiCapability({
       resolveExecutable: onPath,
-      probeTmux: tmux34,
-      verifyBinary: verifyOk,
-      detectAuth: authed,
-      runSmoke,
+      hasTmux: () => true,
+      exists: (p) => p === "/usr/local/bin/claude",
     });
     expect(entry).toMatchObject({
       state: "ok",
       available: true,
-      authenticated: true,
-      authMethod: "oauth",
-      // sdkVersion carries the claude CLI version (the runtime engine), not tmux.
-      sdkVersion: "1.0.42",
-      probeKind: "launch",
+      runtimeSource: "path",
+      runtimePath: "/usr/local/bin/claude",
     });
-    expect(runSmoke).toHaveBeenCalledWith("/usr/local/bin/claude");
-  });
-
-  it("`unauthenticated` when claude + tmux are present but not logged in (no smoke spent)", async () => {
-    const runSmoke = vi.fn(smokeOk);
-    const entry = await probeClaudeCodeTuiCapability({
-      resolveExecutable: onPath,
-      probeTmux: tmux34,
-      verifyBinary: verifyOk,
-      detectAuth: noAuth,
-      runSmoke,
-    });
-    expect(entry).toMatchObject({ state: "unauthenticated", available: true, authenticated: false });
-    expect(runSmoke).not.toHaveBeenCalled();
   });
 
   it("`missing` when claude resolves only to the SDK bundle (source=default)", async () => {
     const entry = await probeClaudeCodeTuiCapability({
       resolveExecutable: notOnPath,
-      probeTmux: tmux34,
-      detectAuth: authed,
-      runSmoke: smokeOk,
+      hasTmux: () => true,
+      exists: () => true,
     });
     expect(entry.state).toBe("missing");
     expect(entry.available).toBe(false);
     expect(entry.error).toContain("`claude` not found");
   });
 
-  it("`missing` when claude resolves but its real `--version` launch fails", async () => {
+  it("`missing` when the resolved claude path does not exist on disk", async () => {
     const entry = await probeClaudeCodeTuiCapability({
       resolveExecutable: onPath,
-      probeTmux: tmux34,
-      verifyBinary: async () => ({ ok: false, error: "claude --version: exited with code 126" }),
-      detectAuth: authed,
-      runSmoke: smokeOk,
+      hasTmux: () => true,
+      exists: () => false,
     });
     expect(entry.state).toBe("missing");
-    expect(entry.error).toContain("could not be executed");
-    expect(entry.sdkVersion).toBeNull();
+    expect(entry.error).toContain("`claude` not found");
   });
 
   it("`missing` when tmux is absent", async () => {
     const entry = await probeClaudeCodeTuiCapability({
       resolveExecutable: onPath,
-      probeTmux: () => null,
-      verifyBinary: verifyOk,
-      detectAuth: authed,
-      runSmoke: smokeOk,
+      hasTmux: () => false,
+      exists: () => true,
     });
     expect(entry.state).toBe("missing");
     expect(entry.error).toContain("tmux not found");
   });
 
-  it("`missing` when tmux is older than 3.0", async () => {
-    const entry = await probeClaudeCodeTuiCapability({
-      resolveExecutable: onPath,
-      probeTmux: () => ({ raw: "tmux 2.9", major: 2, minor: 9 }),
-      verifyBinary: verifyOk,
-      detectAuth: authed,
-      runSmoke: smokeOk,
-    });
-    expect(entry.state).toBe("missing");
-    expect(entry.error).toContain("older than 3.0");
-  });
-
-  it("accepts tmux 3.0 exactly (boundary)", async () => {
-    const entry = await probeClaudeCodeTuiCapability({
-      resolveExecutable: onPath,
-      probeTmux: () => ({ raw: "tmux 3.0", major: 3, minor: 0 }),
-      verifyBinary: verifyOk,
-      detectAuth: authed,
-      runSmoke: smokeOk,
-    });
-    expect(entry.state).toBe("ok");
-  });
-
-  it("accepts a future major (e.g. tmux 4.0)", async () => {
-    const entry = await probeClaudeCodeTuiCapability({
-      resolveExecutable: onPath,
-      probeTmux: () => ({ raw: "tmux 4.0", major: 4, minor: 0 }),
-      verifyBinary: verifyOk,
-      detectAuth: authed,
-      runSmoke: smokeOk,
-    });
-    expect(entry.state).toBe("ok");
-  });
-
-  it("reports both missing reasons when claude and tmux are absent", async () => {
+  it("reports BOTH missing reasons when claude and tmux are absent", async () => {
     const entry = await probeClaudeCodeTuiCapability({
       resolveExecutable: notOnPath,
-      probeTmux: () => null,
-      detectAuth: authed,
-      runSmoke: smokeOk,
+      hasTmux: () => false,
+      exists: () => false,
     });
     expect(entry.state).toBe("missing");
     expect(entry.error).toContain("`claude` not found");
     expect(entry.error).toContain("tmux not found");
-  });
-
-  it("a failing headless smoke classifies like the SDK smoke (auth signature → unauthenticated)", async () => {
-    const entry = await probeClaudeCodeTuiCapability({
-      resolveExecutable: onPath,
-      probeTmux: tmux34,
-      verifyBinary: verifyOk,
-      detectAuth: authed,
-      runSmoke: async () => ({
-        state: "unauthenticated",
-        error: "`claude -p` smoke: Invalid API key · Please run /login",
-      }),
-    });
-    expect(entry.state).toBe("unauthenticated");
-    expect(entry.error).toContain("Invalid API key");
   });
 
   it("surfaces a thrown dependency as state=error", async () => {
@@ -737,209 +331,48 @@ describe("probeClaudeCodeTuiCapability", () => {
   });
 });
 
-describe("parseTmuxVersion", () => {
-  it("parses plain `tmux 3.4`", () => {
-    expect(parseTmuxVersion("tmux 3.4")).toMatchObject({ major: 3, minor: 4 });
+describe("probeCodexCapability (install-only)", () => {
+  const bundledOk = async (): Promise<{ ok: true; binary: string }> => ({ ok: true, binary: "/vendor/bin/codex" });
+  const bundledMissing = async (): Promise<{ ok: false; error: string }> => ({
+    ok: false,
+    error: "codex binary not found under /vendor/x86_64-apple-darwin",
   });
 
-  it("parses a letter-suffixed patch release `tmux 3.2a`", () => {
-    expect(parseTmuxVersion("tmux 3.2a")).toMatchObject({ major: 3, minor: 2 });
-  });
-
-  it("parses a pre-release build `tmux next-3.5`", () => {
-    expect(parseTmuxVersion("tmux next-3.5")).toMatchObject({ major: 3, minor: 5 });
-  });
-
-  it("trims trailing whitespace/newline into `raw`", () => {
-    expect(parseTmuxVersion("tmux 3.4\n")?.raw).toBe("tmux 3.4");
-  });
-
-  it("returns null when no version is present", () => {
-    expect(parseTmuxVersion("tmux: command not found")).toBeNull();
-  });
-});
-
-/**
- * Fixtures mirror real `codex doctor --json` (schemaVersion 1) captures from
- * a live binary in all three auth states; only fields the classifier reads
- * are kept. The 401 text lives in `details["handshake transport error"]` of
- * the websocket check — auth.credentials stays `ok` because the (invalid)
- * key file exists.
- */
-const DOCTOR_LOGGED_IN = JSON.stringify({
-  schemaVersion: 1,
-  codexVersion: "0.134.0",
-  overallStatus: "warning", // unrelated warning (update check) — must be ignored
-  checks: {
-    "auth.credentials": { status: "ok", summary: "found ChatGPT credentials", remediation: null, details: {} },
-    "network.websocket_reachability": {
-      status: "ok",
-      summary: "Responses WebSocket handshake succeeded",
-      remediation: null,
-      details: {},
-    },
-  },
-});
-
-const DOCTOR_NO_CREDS = JSON.stringify({
-  schemaVersion: 1,
-  codexVersion: "0.134.0",
-  overallStatus: "fail",
-  checks: {
-    "auth.credentials": {
-      status: "fail",
-      summary: "no Codex credentials were found",
-      remediation: "run `codex login`",
-      details: {},
-    },
-  },
-});
-
-const DOCTOR_BAD_KEY = JSON.stringify({
-  schemaVersion: 1,
-  codexVersion: "0.134.0",
-  overallStatus: "warning",
-  checks: {
-    "auth.credentials": { status: "ok", summary: "found API key credentials", remediation: null, details: {} },
-    "network.websocket_reachability": {
-      status: "warning",
-      summary: "Responses WebSocket handshake failed",
-      remediation: "check your credentials",
-      details: { "handshake transport error": 'http 401 Unauthorized: Some("")' },
-    },
-  },
-});
-
-describe("parseDoctorReport / classifyDoctorReport", () => {
-  it("parses a real-shaped report", () => {
-    const report = parseDoctorReport(DOCTOR_LOGGED_IN);
-    expect(report?.codexVersion).toBe("0.134.0");
-    expect(report?.checks["auth.credentials"]?.status).toBe("ok");
-  });
-
-  it("returns null for non-JSON / wrong-shape payloads", () => {
-    expect(parseDoctorReport("not json")).toBeNull();
-    expect(parseDoctorReport('"just a string"')).toBeNull();
-    expect(parseDoctorReport('{"noChecks": true}')).toBeNull();
-  });
-
-  it("logged-in report → ok (overallStatus warnings are ignored)", () => {
-    const report = parseDoctorReport(DOCTOR_LOGGED_IN);
-    if (!report) throw new Error("fixture failed to parse");
-    expect(classifyDoctorReport(report)).toEqual({ state: "ok", version: "0.134.0" });
-  });
-
-  it("no-credentials report → unauthenticated with summary + remediation", () => {
-    const report = parseDoctorReport(DOCTOR_NO_CREDS);
-    if (!report) throw new Error("fixture failed to parse");
-    const out = classifyDoctorReport(report);
-    expect(out.state).toBe("unauthenticated");
-    expect(out.error).toBe("no Codex credentials were found (run `codex login`)");
-  });
-
-  it("invalid-key report → unauthenticated carrying the verbatim 401 transport error", () => {
-    const report = parseDoctorReport(DOCTOR_BAD_KEY);
-    if (!report) throw new Error("fixture failed to parse");
-    const out = classifyDoctorReport(report);
-    expect(out.state).toBe("unauthenticated");
-    expect(out.error).toContain('http 401 Unauthorized: Some("")');
-  });
-
-  it("non-auth handshake failure → error with the verbatim detail", () => {
-    const report = parseDoctorReport(
-      JSON.stringify({
-        codexVersion: "0.134.0",
-        checks: {
-          "auth.credentials": { status: "ok", summary: "found", remediation: null, details: {} },
-          "network.websocket_reachability": {
-            status: "warning",
-            summary: "Responses WebSocket handshake failed",
-            remediation: null,
-            details: { "handshake transport error": "connection refused" },
-          },
-        },
-      }),
-    );
-    if (!report) throw new Error("fixture failed to parse");
-    const out = classifyDoctorReport(report);
-    expect(out.state).toBe("error");
-    expect(out.error).toBe("Responses WebSocket handshake failed: connection refused");
-  });
-
-  it("a future doctor without the websocket check degrades instead of failing", () => {
-    const report = parseDoctorReport(
-      JSON.stringify({
-        codexVersion: "1.0.0",
-        checks: { "auth.credentials": { status: "ok", summary: "found", remediation: null, details: {} } },
-      }),
-    );
-    if (!report) throw new Error("fixture failed to parse");
-    expect(classifyDoctorReport(report)).toEqual({ state: "ok", degraded: true, version: "1.0.0" });
-  });
-});
-
-describe("probeCodexCapability", () => {
-  const bundled = async (): Promise<CodexBinaryResolution> => ({
-    ok: true,
-    binary: "/vendor/bin/codex",
-    runtimeSource: "bundled",
-    runtimePath: null,
-    version: "0.134.0",
-  });
-  const onPath = async (): Promise<CodexBinaryResolution> => ({
-    ok: true,
-    binary: "/usr/local/bin/codex",
-    runtimeSource: "path",
-    runtimePath: "/usr/local/bin/codex",
-    version: "0.134.0",
-  });
-  const loggedIn = async (): Promise<AuthPrecheckOutcome> => ({ ok: true, method: "auth_json" });
-  const smokeOk = async (): Promise<SmokeOutcome> => ({ state: "ok", version: "0.134.0" });
-
-  it("`ok` only after the doctor smoke; reports the bundled runtime source", async () => {
-    const runSmoke = vi.fn(smokeOk);
+  it("`ok` (runtimeSource bundled) when the bundled vendor binary resolves", async () => {
+    const findOnPath = vi.fn(() => "/usr/local/bin/codex");
     const entry = await probeCodexCapability({
-      resolveRuntimeBinary: bundled,
-      loginStatus: loggedIn,
-      runSmoke,
+      resolveBundled: bundledOk,
+      findOnPath,
       env: {},
     });
     expect(entry).toMatchObject({
       state: "ok",
       available: true,
-      authenticated: true,
-      authMethod: "auth_json",
-      sdkVersion: "0.134.0",
-      probeKind: "launch",
       runtimeSource: "bundled",
       runtimePath: null,
     });
-    // The smoke must target the binary the runtime would spawn.
-    expect(runSmoke).toHaveBeenCalledWith("/vendor/bin/codex");
+    // Bundle resolves → PATH is never consulted.
+    expect(findOnPath).not.toHaveBeenCalled();
   });
 
-  it("reports the system-PATH fallback source + path when the bundle is missing", async () => {
-    const runSmoke = vi.fn(smokeOk);
+  it("`ok` (runtimeSource path) when the bundle is missing but a system codex is on PATH", async () => {
     const entry = await probeCodexCapability({
-      resolveRuntimeBinary: onPath,
-      loginStatus: loggedIn,
-      runSmoke,
+      resolveBundled: bundledMissing,
+      findOnPath: () => "/usr/local/bin/codex",
       env: {},
     });
     expect(entry).toMatchObject({
       state: "ok",
+      available: true,
       runtimeSource: "path",
       runtimePath: "/usr/local/bin/codex",
     });
-    expect(runSmoke).toHaveBeenCalledWith("/usr/local/bin/codex");
   });
 
-  it("`missing` when neither bundled nor PATH codex resolves, with the binary-missing message", async () => {
+  it("`missing` when neither the bundle nor a PATH codex resolves, with the binary-missing message", async () => {
     const entry = await probeCodexCapability({
-      resolveRuntimeBinary: async () => ({
-        ok: false,
-        error: "Codex runtime binary is missing on this machine. Original error: unable to locate codex CLI binaries.",
-      }),
+      resolveBundled: bundledMissing,
+      findOnPath: () => null,
       env: {},
     });
     expect(entry.state).toBe("missing");
@@ -947,142 +380,17 @@ describe("probeCodexCapability", () => {
     expect(entry.error).toContain("Codex runtime binary is missing");
   });
 
-  it("nonlaunchable bundled binary → capability `missing` (NOT unauthenticated); precheck + smoke skipped", async () => {
-    // Regression for PR #996 review (codex-assistant): a present-but-nonlaunchable
-    // bundled binary must classify as non-available in resolve. Otherwise, with
-    // no CODEX_API_KEY, `codex login status` runs on the same bad binary, fails
-    // (e.g. spawn EACCES), and runLaunchProbe would map that to
-    // `unauthenticated`/`available: true` — masking the launch failure. Wire the
-    // real resolver so the launch-verify gate is exercised end-to-end.
-    const loginStatus = vi.fn(loggedIn);
-    const runSmoke = vi.fn(smokeOk);
+  it("a thrown resolveBundled becomes state=error", async () => {
     const entry = await probeCodexCapability({
-      resolveRuntimeBinary: (env) =>
-        resolveCodexRuntimeBinary(env, {
-          resolveBundled: async () => ({ ok: true, binary: "/vendor/bin/codex" }),
-          verifyBundled: async () => ({ ok: false, error: "codex --version: spawn EACCES" }),
-          findOnPath: () => "/usr/local/bin/codex", // present, but must NOT be consulted
-        }),
-      loginStatus,
-      runSmoke,
-      env: {}, // no CODEX_API_KEY → precheck would otherwise hit the bad binary
+      resolveBundled: async () => {
+        throw new Error("vendor resolution blew up");
+      },
+      findOnPath: () => null,
+      env: {},
     });
-    expect(entry.state).toBe("missing");
+    expect(entry.state).toBe("error");
     expect(entry.available).toBe(false);
-    expect(entry.error).toContain("could not be launched");
-    expect(loginStatus).not.toHaveBeenCalled();
-    expect(runSmoke).not.toHaveBeenCalled();
-  });
-
-  it("runtime source is reported even on the unauthenticated path (no smoke spent)", async () => {
-    const runSmoke = vi.fn(smokeOk);
-    const entry = await probeCodexCapability({
-      resolveRuntimeBinary: bundled,
-      loginStatus: async () => ({ ok: false, error: "`codex login status`: Not logged in" }),
-      runSmoke,
-      env: {},
-    });
-    expect(entry).toMatchObject({ state: "unauthenticated", runtimeSource: "bundled" });
-    expect(entry.error).toContain("Not logged in");
-    expect(runSmoke).not.toHaveBeenCalled();
-  });
-
-  it("CODEX_API_KEY short-circuits the login-status precheck (api_key method)", async () => {
-    const loginStatus = vi.fn(loggedIn);
-    const entry = await probeCodexCapability({
-      resolveRuntimeBinary: bundled,
-      loginStatus,
-      runSmoke: smokeOk,
-      env: { CODEX_API_KEY: "ck-test" },
-    });
-    expect(entry.state).toBe("ok");
-    expect(entry.authMethod).toBe("api_key");
-    expect(loginStatus).not.toHaveBeenCalled();
-  });
-
-  it("a logged-in precheck does NOT yield ok — the doctor's 401 still wins", async () => {
-    const entry = await probeCodexCapability({
-      resolveRuntimeBinary: bundled,
-      loginStatus: loggedIn,
-      runSmoke: async () => ({
-        state: "unauthenticated",
-        error: 'Responses WebSocket handshake failed: http 401 Unauthorized: Some("")',
-      }),
-      env: {},
-    });
-    expect(entry.state).toBe("unauthenticated");
-    expect(entry.error).toContain("401 Unauthorized");
-  });
-
-  it("an old codex without `doctor` degrades to a weaker ok instead of failing", async () => {
-    const entry = await probeCodexCapability({
-      resolveRuntimeBinary: bundled,
-      loginStatus: loggedIn,
-      runSmoke: async () => ({ state: "ok", degraded: true }),
-      env: {},
-    });
-    expect(entry.state).toBe("ok");
-    expect(entry.degraded).toBe(true);
-    expect(entry.sdkVersion).toBe("0.134.0"); // falls back to the resolve-stage version
-  });
-
-  it("FIRST_TREE_CODEX_HANDLER_ENGINE=sdk skips app-server smoke and uses the SDK doctor path", async () => {
-    const appServerSmoke = vi.fn(async () => {
-      throw new Error("app-server unavailable");
-    });
-    const doctorSmoke = vi.fn(smokeOk);
-    const entry = await probeCodexCapability({
-      resolveRuntimeBinary: bundled,
-      loginStatus: loggedIn,
-      appServerSmoke,
-      doctorSmoke,
-      env: { FIRST_TREE_CODEX_HANDLER_ENGINE: "sdk" },
-    });
-    expect(entry).toMatchObject({ state: "ok", available: true });
-    expect(entry.degraded).toBeUndefined();
-    expect(appServerSmoke).not.toHaveBeenCalled();
-    expect(doctorSmoke).toHaveBeenCalledWith("/vendor/bin/codex");
-  });
-
-  it("auto keeps codex available through SDK fallback when app-server smoke fails", async () => {
-    const appServerSmoke = vi.fn(async () => {
-      throw new Error("bad experimental protocol");
-    });
-    const doctorSmoke = vi.fn(smokeOk);
-    const entry = await probeCodexCapability({
-      resolveRuntimeBinary: bundled,
-      loginStatus: loggedIn,
-      appServerSmoke,
-      doctorSmoke,
-      env: { FIRST_TREE_CODEX_HANDLER_ENGINE: "auto" },
-    });
-    expect(entry).toMatchObject({
-      state: "ok",
-      available: true,
-      authenticated: true,
-      degraded: true,
-    });
-    expect(entry.error).toContain("bad experimental protocol");
-    expect(entry.error).toContain("@openai/codex-sdk fallback");
-    expect(appServerSmoke).toHaveBeenCalledWith("/vendor/bin/codex", { FIRST_TREE_CODEX_HANDLER_ENGINE: "auto" });
-    expect(doctorSmoke).toHaveBeenCalledWith("/vendor/bin/codex");
-  });
-
-  it("forced app-server engine reports unavailable when app-server smoke fails", async () => {
-    const appServerSmoke = vi.fn(async () => {
-      throw new Error("initialize rejected");
-    });
-    const doctorSmoke = vi.fn(smokeOk);
-    const entry = await probeCodexCapability({
-      resolveRuntimeBinary: bundled,
-      loginStatus: loggedIn,
-      appServerSmoke,
-      doctorSmoke,
-      env: { FIRST_TREE_CODEX_HANDLER_ENGINE: "app-server" },
-    });
-    expect(entry).toMatchObject({ state: "error", available: false, authenticated: false });
-    expect(entry.error).toContain("initialize rejected");
-    expect(doctorSmoke).not.toHaveBeenCalled();
+    expect(entry.error).toBe("vendor resolution blew up");
   });
 });
 
@@ -1109,9 +417,9 @@ describe("resolveBundledCodexBinary / resolveCodexRuntimeBinary (real node_modul
 });
 
 /**
- * Regression for PR #996 review (codex-assistant): the probe's binary
- * resolution must match the codex-sdk's own `resolveNativePackage` so the
- * probe and the runtime never disagree on which binary backs codex.
+ * The probe's binary resolution must match the codex-sdk's own
+ * `resolveNativePackage` so the probe and the runtime never disagree on which
+ * binary backs codex.
  */
 describe("resolveBundledBinaryInPackageRoot (SDK resolveNativePackage parity)", () => {
   let root: string;
@@ -1163,10 +471,8 @@ describe("resolveCodexRuntimeBinary (handler-contract parity)", () => {
 
   it("bundled present but NONLAUNCHABLE → resolve failure (not available) — no PATH fallback", async () => {
     // The runtime resolves to this same bundled binary and would fail spawning
-    // it. The probe must report non-available HERE (→ `missing`), NOT (a) fall
-    // back to PATH — the handler never does once the bundle resolves — and NOT
-    // (b) leave it for the auth precheck, which would mask the launch failure
-    // as `unauthenticated`/`available: true`.
+    // it. The resolver must report failure HERE, NOT fall back to PATH — the
+    // handler never does once the bundle resolves.
     const findOnPath = vi.fn(() => "/usr/local/bin/codex");
     const res = await resolveCodexRuntimeBinary(
       {},
@@ -1222,18 +528,16 @@ describe("resolveCodexRuntimeBinary (handler-contract parity)", () => {
 });
 
 describe("probeCapabilities (aggregator)", () => {
+  const fakeEntry = (state: "ok" | "missing"): CapabilityEntry => ({
+    state,
+    available: state === "ok",
+    sdkVersion: null,
+    detectedAt: new Date().toISOString(),
+    latencyMs: 1,
+  });
+
   it("probes only the enabled providers (claude-code-tui is temporarily disabled, never invoked)", async () => {
     vi.resetModules();
-    const fakeEntry = (state: "ok" | "missing") => ({
-      state,
-      available: state === "ok",
-      authenticated: state === "ok",
-      sdkVersion: null,
-      authMethod: "none",
-      detectedAt: new Date().toISOString(),
-      probeKind: "launch",
-      latencyMs: 1,
-    });
     const tuiProbe = vi.fn().mockResolvedValue(fakeEntry("missing"));
     vi.doMock("../runtime/capabilities/claude-code.js", () => ({
       probeClaudeCodeCapability: vi.fn().mockResolvedValue(fakeEntry("ok")),
@@ -1280,8 +584,6 @@ describe("probeCapabilities (aggregator)", () => {
     expect(caps["claude-code"]).toMatchObject({
       state: "error",
       available: false,
-      authenticated: false,
-      authMethod: "none",
       error: "claude probe failed",
     });
     expect(caps.codex).toMatchObject({ state: "error", error: "codex probe failed" });
