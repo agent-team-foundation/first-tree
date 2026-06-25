@@ -16,6 +16,7 @@ import { Select } from "../components/ui/select.js";
 import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
 import { Switch } from "../components/ui/switch.js";
 import { titleWithSemantics, useJustSaved } from "./agent-detail/save-semantics.js";
+import { fetchAllAgents } from "./team/index.js";
 
 /**
  * Settings → Context tree. Per-org Context Tree **configuration**: which repo /
@@ -278,12 +279,12 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
 
   const managedAgentsQuery = useQuery({
     queryKey: ["context-reviewer", "org-agents", organizationId],
-    queryFn: () => listAllAgents({ limit: 100 }),
+    queryFn: () => fetchAllAgents((params) => listAllAgents(params)),
     enabled: isAdmin && !!organizationId && switchOn,
   });
 
   const reviewerCandidates = useMemo(() => {
-    return (managedAgentsQuery.data?.items ?? [])
+    return (managedAgentsQuery.data ?? [])
       .filter((agent) => agent.organizationId === organizationId && agent.type !== "human" && agent.status === "active")
       .sort((a, b) => {
         const byLabel = agentLabel(a).localeCompare(agentLabel(b), undefined, { sensitivity: "base" });
@@ -405,7 +406,8 @@ function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; 
                 ) : null}
                 {reviewerMissing ? (
                   <div className="text-label" style={{ color: "var(--fg-3)" }}>
-                    Current reviewer is not your active agent. Choose one of your agents, or turn Context Reviewer off.
+                    Current reviewer is not an active organization agent. Choose another agent, or turn Context Reviewer
+                    off.
                   </div>
                 ) : null}
                 {managedAgentsQuery.error ? (
@@ -447,7 +449,7 @@ function ContextReviewerReadOnly({
     ? contextReviewer.reviewerAgent.displayName.trim() ||
       contextReviewer.reviewerAgent.name?.trim() ||
       contextReviewer.reviewerAgent.uuid
-    : contextReviewer.agentUuid;
+    : null;
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>

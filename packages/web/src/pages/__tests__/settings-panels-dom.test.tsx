@@ -110,8 +110,8 @@ function managedAgent(overrides: {
   };
 }
 
-function paginatedAgents(items: ReturnType<typeof managedAgent>[]) {
-  return { items, nextCursor: null };
+function paginatedAgents(items: ReturnType<typeof managedAgent>[], nextCursor: string | null = null) {
+  return { items, nextCursor };
 }
 
 function createClient(): QueryClient {
@@ -523,6 +523,39 @@ describe("settings panels", () => {
     await act(async () => root.unmount());
   });
 
+  it("loads all admin agent pages before deciding whether the saved reviewer is available", async () => {
+    settingsMocks.getContextTreeFeaturesSetting.mockResolvedValueOnce(
+      contextTreeFeatures({ enabled: true, agentUuid: "agent-late-page" }),
+    );
+    agentApiMocks.listAllAgents
+      .mockResolvedValueOnce(
+        paginatedAgents(
+          [
+            managedAgent({ uuid: "human-page-one", displayName: "Human Page One", type: "human" }),
+            managedAgent({ uuid: "suspended-page-one", displayName: "Suspended Page One", status: "suspended" }),
+          ],
+          "older",
+        ),
+      )
+      .mockResolvedValueOnce(
+        paginatedAgents([
+          managedAgent({ uuid: "agent-late-page", displayName: "Late Page Reviewer", name: "late-reviewer" }),
+        ]),
+      );
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+    await waitForText(container, "Context Reviewer");
+
+    await waitForText(container, "Late Page Reviewer");
+    expect(agentApiMocks.listAllAgents).toHaveBeenNthCalledWith(1, { limit: 100 });
+    expect(agentApiMocks.listAllAgents).toHaveBeenNthCalledWith(2, { limit: 100, cursor: "older" });
+    expect(container.textContent).not.toContain("No active non-human agents are available.");
+    expect(container.textContent).not.toContain("Current reviewer is not an active organization agent.");
+    expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
+
+    await act(async () => root.unmount());
+  });
+
   it("shows the empty state and saves nothing when no eligible agents exist", async () => {
     agentApiMocks.listAllAgents.mockResolvedValueOnce(
       paginatedAgents([
@@ -584,6 +617,25 @@ describe("settings panels", () => {
     expect(container.textContent).toContain("On");
     expect(settingsMocks.getContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1");
     expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
+    expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
+    expect(reviewerSwitch(container)).toBeNull();
+    expect(container.querySelector('[aria-label="Context Reviewer agent"]')).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not expose raw reviewer UUID to members when the reviewer summary is unavailable", async () => {
+    const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
+    authMock.value = { ...authMock.value, role: "member" };
+    settingsMocks.getContextTreeFeaturesSetting.mockResolvedValueOnce(
+      contextTreeFeatures({ enabled: true, agentUuid: "agent-deleted", reviewerAgent: null }),
+    );
+    const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
+
+    await waitForText(container, "Configured reviewer is no longer available.");
+    expect(container.textContent).toContain("Automatic PR review");
+    expect(container.textContent).toContain("On");
+    expect(container.textContent).not.toContain("agent-deleted");
     expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
     expect(reviewerSwitch(container)).toBeNull();
     expect(container.querySelector('[aria-label="Context Reviewer agent"]')).toBeNull();
