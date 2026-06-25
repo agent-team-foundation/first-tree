@@ -1832,7 +1832,7 @@ describe("web DOM interaction coverage", () => {
       expect.objectContaining({
         organizationId: "org-1",
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("getting Nova up to speed"),
+        bootstrap: expect.stringContaining("This is your first task chat with Nova."),
         kind: "work",
         complete: true,
       }),
@@ -1846,7 +1846,7 @@ describe("web DOM interaction coverage", () => {
       expect.objectContaining({
         organizationId: "org-1",
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("Read the bound Context Tree first"),
+        bootstrap: expect.stringContaining("This chat sets up team context for future agent work."),
         kind: "tree",
         complete: false,
       }),
@@ -1914,7 +1914,7 @@ describe("web DOM interaction coverage", () => {
     expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("welcoming Nova"),
+        bootstrap: expect.stringContaining("This is your first task chat with Nova."),
         kind: "work",
       }),
     );
@@ -1984,7 +1984,7 @@ describe("web DOM interaction coverage", () => {
     expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("Read the bound Context Tree first"),
+        bootstrap: expect.stringContaining("This chat sets up team context for future agent work."),
         kind: "tree",
         complete: true,
       }),
