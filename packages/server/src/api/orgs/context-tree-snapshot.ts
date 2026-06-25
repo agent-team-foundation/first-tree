@@ -66,7 +66,7 @@ export async function orgContextTreeSnapshotRoutes(app: FastifyInstance): Promis
           humanAgentId: scope.humanAgentId,
           memberId: scope.memberId,
         },
-        { timing: timing.add },
+        { contextTreeBinding: binding, timing: timing.add },
       ),
     );
     const response = timing.timeSync("schema_parse", () => contextTreeSnapshotSchema.parse({ ...snapshot, usage, io }));

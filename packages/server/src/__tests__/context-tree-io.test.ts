@@ -17,6 +17,7 @@ import { createTestAgent, useTestApp } from "./helpers.js";
 
 const TREE_REPO = "https://github.com/acme/first-tree-context.git";
 const TREE_REPO_SSH = "git@github.com:acme/first-tree-context.git";
+const ALT_TREE_REPO = "https://github.com/acme/alternate-context.git";
 
 const getApp = useTestApp();
 
@@ -859,6 +860,40 @@ describe("context-tree IO service", () => {
       { reason: "unsupported_shell_command", eventCount: 1 },
     ]);
     expect(timings).toContain("io_skipped_scan");
+  });
+
+  it("reuses snapshot binding for skipped diagnostics in the aggregate path", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: string[] = [];
+
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-reused-binding",
+        name: "Read",
+        args: {},
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: ALT_TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+
+    const summary = await buildContextTreeIoSummary(app.db, seed.organizationId, 7, [], undefined, {
+      contextTreeBinding: { repo: ALT_TREE_REPO, branch: "main" },
+      timing: (name) => timings.push(name),
+    });
+
+    expect(summary.skipped.totalEventCount).toBe(0);
+    expect(timings).toContain("io_skipped_scan");
+    expect(timings).not.toContain("io_skipped_binding");
   });
 
   it("reconciles git writes with telemetry: attributes the agent, keeps unmatched git authors, surfaces telemetry-only writes", async () => {

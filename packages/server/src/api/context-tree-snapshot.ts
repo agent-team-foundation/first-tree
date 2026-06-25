@@ -66,7 +66,7 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
             contextTreeSnapshotWindowDays(window),
             snapshot.io.writes,
             viewer ?? undefined,
-            { timing: timing.add },
+            { contextTreeBinding: binding, timing: timing.add },
           ),
         )
       : snapshot.io;

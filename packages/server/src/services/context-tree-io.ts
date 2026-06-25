@@ -44,9 +44,15 @@ export type ContextTreeIoViewer = {
   memberId: string;
 };
 
+type ContextTreeIoBinding = {
+  repo?: string | null;
+  branch?: string | null;
+};
+
 export type ContextTreeIoSummaryOptions = {
   timing?: TimingSink;
   backfillSessionEvents?: boolean;
+  contextTreeBinding?: ContextTreeIoBinding;
 };
 
 export type RecordContextTreeIoInput = {
@@ -348,7 +354,11 @@ export async function summarizeContextTreeIoSkippedEvents(
   options: ContextTreeIoSummaryOptions = {},
 ): Promise<ContextTreeIoSkipSummary> {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
-  const binding = await getOrgContextTree(db, organizationId);
+  const binding =
+    options.contextTreeBinding ??
+    (await timeWithSink(options.timing, "io_skipped_binding", () => getOrgContextTree(db, organizationId), {
+      organizationId,
+    }));
   const bindingBranch = binding.branch ?? "main";
   const candidateAgents = await listContextTreeIoCandidateAgents(db, organizationId, options.timing, "io_skipped");
   const runtimeProviderByAgent = new Map(candidateAgents.map((agent) => [agent.agentId, agent.runtimeProvider]));
@@ -396,33 +406,40 @@ export async function summarizeContextTreeIoSkippedEvents(
     }
   >();
 
-  for (const row of rows) {
-    const parsed = sessionEventSchema.safeParse({ kind: row.kind, payload: row.payload });
-    const event = parsed.success ? parsed.data : null;
-    const decision = event
-      ? buildContextTreeIoDecision({
-          event,
-          runtimeProvider: runtimeProviderByAgent.get(row.agentId) ?? "unknown",
-          bindingRepo: binding.repo,
-          bindingBranch,
-          chatInOrg: row.chatOrganizationId === organizationId,
-        })
-      : ({ recordable: false, reason: "event_kind_not_io" } as const);
-    if (decision.recordable) continue;
+  await timeWithSink(
+    options.timing,
+    "io_skipped_decide",
+    async () => {
+      for (const row of rows) {
+        const parsed = sessionEventSchema.safeParse({ kind: row.kind, payload: row.payload });
+        const event = parsed.success ? parsed.data : null;
+        const decision = event
+          ? buildContextTreeIoDecision({
+              event,
+              runtimeProvider: runtimeProviderByAgent.get(row.agentId) ?? "unknown",
+              bindingRepo: binding.repo,
+              bindingBranch,
+              chatInOrg: row.chatOrganizationId === organizationId,
+            })
+          : ({ recordable: false, reason: "event_kind_not_io" } as const);
+        if (decision.recordable) continue;
 
-    const bucket = byReason.get(decision.reason) ?? {
-      eventCount: 0,
-      agentIds: new Set<string>(),
-      runtimeProviders: new Map<string, number>(),
-      toolNames: new Map<string, number>(),
-    };
-    bucket.eventCount += 1;
-    bucket.agentIds.add(row.agentId);
-    incrementCount(bucket.runtimeProviders, runtimeProviderByAgent.get(row.agentId) ?? "unknown");
-    const toolName = event ? toolNameOf(event) : null;
-    if (toolName) incrementCount(bucket.toolNames, toolName);
-    byReason.set(decision.reason, bucket);
-  }
+        const bucket = byReason.get(decision.reason) ?? {
+          eventCount: 0,
+          agentIds: new Set<string>(),
+          runtimeProviders: new Map<string, number>(),
+          toolNames: new Map<string, number>(),
+        };
+        bucket.eventCount += 1;
+        bucket.agentIds.add(row.agentId);
+        incrementCount(bucket.runtimeProviders, runtimeProviderByAgent.get(row.agentId) ?? "unknown");
+        const toolName = event ? toolNameOf(event) : null;
+        if (toolName) incrementCount(bucket.toolNames, toolName);
+        byReason.set(decision.reason, bucket);
+      }
+    },
+    { rowCount: rows.length },
+  );
 
   const reasons = [...byReason.entries()]
     .sort(
