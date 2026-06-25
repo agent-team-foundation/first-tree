@@ -26,7 +26,7 @@ import { chats } from "../db/schema/chats.js";
 import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import { createLogger } from "../observability/index.js";
-import { type TimingSink, timeWithSink } from "../observability/timing.js";
+import { type TimingSink, timeSyncWithSink, timeWithSink } from "../observability/timing.js";
 import { getOrgContextTree } from "./org-settings.js";
 
 const CONTEXT_TREE_IO_FEED_LIMIT = 50;
@@ -406,10 +406,10 @@ export async function summarizeContextTreeIoSkippedEvents(
     }
   >();
 
-  await timeWithSink(
+  timeSyncWithSink(
     options.timing,
     "io_skipped_decide",
-    async () => {
+    () => {
       for (const row of rows) {
         const parsed = sessionEventSchema.safeParse({ kind: row.kind, payload: row.payload });
         const event = parsed.success ? parsed.data : null;
