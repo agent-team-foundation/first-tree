@@ -55,7 +55,7 @@ mv ~/.first-tree/hub ~/.first-tree-staging
 
 # 3. Switch CLI package
 npm uninstall -g first-tree 2>/dev/null || true
-npm install -g first-tree-staging@latest
+npm install -g first-tree-staging
 
 # 4. Re-login — rewrites first-tree-staging.service and starts the daemon
 first-tree-staging login "$TOKEN"
@@ -83,14 +83,14 @@ first-tree-staging status
 
 ### Rollback
 
-If `npm install -g first-tree-staging@latest` or `first-tree-staging login`
+If `npm install -g first-tree-staging` or `first-tree-staging login`
 fails after step 2 has already moved your home dir, the original layout
 is one `mv` away (everything is preserved bit-for-bit since the migration
 never copies):
 
 ```bash
 mv ~/.first-tree-staging ~/.first-tree/hub
-npm install -g first-tree@latest  # restore the old package
+npm install -g first-tree         # restore the old package
 first-tree login "$TOKEN"          # rewrites the original service unit
 ```
 
@@ -107,7 +107,7 @@ Once you have a prod connect-token, install the prod package alongside
 staging — they share zero state:
 
 ```bash
-npm install -g first-tree@latest
+npm install -g first-tree
 first-tree login <prod-token>
 # → ~/.first-tree/, first-tree.service, prod cloud
 ```

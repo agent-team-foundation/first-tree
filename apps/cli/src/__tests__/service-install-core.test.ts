@@ -9,6 +9,7 @@ import {
   installClientService,
   isServiceSupported,
   isServiceUnitDriftDetected,
+  refreshClientServiceUnitForUpdate,
   renderLaunchdWrapper,
   renderPlist,
   renderSystemdUnit,
@@ -405,6 +406,30 @@ describe("service install helpers", () => {
       ["launchctl", ["print", `gui/501/${channelConfig.launchdLabel}`]],
       ["launchctl", ["bootstrap", "gui/501", plistPath]],
       ["launchctl", ["enable", `gui/501/${channelConfig.launchdLabel}`]],
+      ["launchctl", ["print", `gui/501/${channelConfig.launchdLabel}`]],
+    ]);
+  });
+
+  it("refreshes launchd unit files for auto-update without unloading the current label", () => {
+    setPlatform("darwin");
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: "state = running\npid = 654\n", stderr: "" });
+
+    const info = refreshClientServiceUnitForUpdate();
+    const plistPath = join(home, "Library", "LaunchAgents", `${channelConfig.launchdLabel}.plist`);
+    const wrapperPath = join(process.env.FIRST_TREE_HOME ?? "", "service", channelConfig.displayName);
+
+    expect(info).toMatchObject({
+      platform: "launchd",
+      label: channelConfig.launchdLabel,
+      state: "active",
+      pid: 654,
+      unitPath: plistPath,
+    });
+    expect(readFileSync(wrapperPath, "utf-8")).toContain(
+      `exec ${process.execPath} ${process.argv[1]} daemon start --no-interactive`,
+    );
+    expect(readFileSync(plistPath, "utf-8")).toContain(`<string>${wrapperPath}</string>`);
+    expect(spawnSyncMock.mock.calls.map((call) => [call[0], call[1]])).toEqual([
       ["launchctl", ["print", `gui/501/${channelConfig.launchdLabel}`]],
     ]);
   });

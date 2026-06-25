@@ -126,15 +126,14 @@ export type ConnectTokenResponse = {
   /** `<binName> login <token>` — channel-aware bin name. */
   command: string;
   /**
-   * Full bootstrap line: `npm install -g <pkg>@<version>\n<binName> login <token>`
+   * Full bootstrap line: `npm install -g <pkg>\n<binName> login <token>`
    * for prod/staging; just `<binName> login <token>` for dev (no
    * published package).
    */
   bootstrapCommand: string;
   /**
-   * npm install spec for the CLI package. Published channels include the
-   * exact server-advertised version; `null` for dev where the UI suppresses
-   * the `npm install -g` step.
+   * Bare npm package name. `null` for dev (no published package — UI
+   * suppresses the `npm install -g` step).
    */
   npmSpec: string | null;
   /**

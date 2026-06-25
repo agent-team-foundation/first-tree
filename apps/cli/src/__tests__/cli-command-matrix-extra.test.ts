@@ -41,6 +41,7 @@ const coreMocks = vi.hoisted(() => ({
   installClientService: vi.fn(),
   isServiceSupported: vi.fn(),
   isServiceUnitDriftDetected: vi.fn(),
+  refreshClientServiceUnitForUpdate: vi.fn(),
   removeLocalAgent: vi.fn(),
   restartClientService: vi.fn(),
   stopClientService: vi.fn(),
@@ -128,6 +129,7 @@ beforeEach(() => {
   coreMocks.restartClientService.mockReturnValue({ ok: true });
   coreMocks.isServiceUnitDriftDetected.mockReturnValue(true);
   coreMocks.installClientService.mockReturnValue({ platform: "launchd", unitPath: "/tmp/unit.plist" });
+  coreMocks.refreshClientServiceUnitForUpdate.mockReturnValue({ platform: "launchd", unitPath: "/tmp/unit.plist" });
   clientMocks.SessionRegistry.mockImplementation(() => ({ load: vi.fn(() => new Map()) }));
   clientMocks.cleanWorkspaces.mockReturnValue([]);
   localAgentMocks.createSdk.mockReturnValue({
@@ -229,11 +231,14 @@ describe("daemon utility commands", () => {
     coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(false);
     await runDaemon(["refresh-unit"]);
     coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(true);
-    coreMocks.installClientService.mockImplementationOnce(() => {
+    coreMocks.refreshClientServiceUnitForUpdate.mockImplementationOnce(() => {
       throw new Error("write failed");
     });
     await expect(runDaemon(["refresh-unit"])).rejects.toMatchObject({ code: 1 });
-    coreMocks.installClientService.mockReturnValueOnce({ platform: "systemd", unitPath: "/tmp/unit.service" });
+    coreMocks.refreshClientServiceUnitForUpdate.mockReturnValueOnce({
+      platform: "systemd",
+      unitPath: "/tmp/unit.service",
+    });
     await runDaemon(["refresh-unit"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("unit rewritten");
 

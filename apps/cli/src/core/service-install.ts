@@ -388,6 +388,21 @@ function waitForLabelEvicted(target: string, label: string, timeoutMs: number): 
   return false;
 }
 
+function writeLaunchdServiceFiles(): { plistPath: string; wrapperPath: string } {
+  const invocation = resolveCliInvocation();
+  ensureLogDir();
+
+  const wrapperPath = launchdWrapperPath();
+  mkdirSync(dirname(wrapperPath), { recursive: true, mode: 0o700 });
+  writeFileSync(wrapperPath, renderLaunchdWrapper(invocation), { mode: 0o755 });
+
+  const plistPath = launchdPlistPath();
+  mkdirSync(dirname(plistPath), { recursive: true });
+  writeFileSync(plistPath, renderPlist(wrapperPath), { mode: 0o644 });
+
+  return { plistPath, wrapperPath };
+}
+
 function installLaunchd(): ServiceInfo {
   // Legacy unit auto-cleanup deliberately not done here. Pre-multi-env,
   // every channel's "legacy" was the prod-era `dev.first-tree.client`
@@ -397,19 +412,7 @@ function installLaunchd(): ServiceInfo {
   // mid-migration to multi-env). MIGRATION.md Phase 2 documents the
   // operator-driven `launchctl bootout` step instead; safer to make
   // the user type it once than to wipe a peer install silently.
-  const invocation = resolveCliInvocation();
-  ensureLogDir();
-
-  // Lay down the launcher script first; the plist's ProgramArguments points
-  // at it. mode 0o755 so launchd can exec it.
-  const wrapperPath = launchdWrapperPath();
-  mkdirSync(dirname(wrapperPath), { recursive: true, mode: 0o700 });
-  writeFileSync(wrapperPath, renderLaunchdWrapper(invocation), { mode: 0o755 });
-
-  const plistPath = launchdPlistPath();
-  mkdirSync(dirname(plistPath), { recursive: true });
-  writeFileSync(plistPath, renderPlist(wrapperPath), { mode: 0o644 });
-
+  const { plistPath } = writeLaunchdServiceFiles();
   const target = launchctlDomainTarget();
 
   // Step 1: bootout any existing registration. Generous timeout because
@@ -462,6 +465,26 @@ function installLaunchd(): ServiceInfo {
     print.line(`    warning: launchctl enable: ${enableRes.stderr || `exit ${enableRes.code ?? "unknown"}`}\n`);
   }
 
+  const { state, pid, detail } = launchdState();
+  return {
+    platform: "launchd",
+    label: LAUNCHD_LABEL,
+    unitPath: plistPath,
+    logDir: logDir(),
+    state,
+    pid,
+    detail,
+  };
+}
+
+function refreshLaunchdUnitForUpdate(): ServiceInfo {
+  // Auto-update calls this from inside the currently supervised launchd job.
+  // Calling installLaunchd() here would bootout the very label that owns this
+  // process, killing the parent daemon before it can exit with the self-restart
+  // code. The loaded plist already points at a stable wrapper path, so rewriting
+  // the wrapper + plist on disk is enough for the next launchd restart to pick
+  // up the new binary.
+  const { plistPath } = writeLaunchdServiceFiles();
   const { state, pid, detail } = launchdState();
   return {
     platform: "launchd",
@@ -714,6 +737,26 @@ export function installClientService(): ServiceInfo {
   if (process.platform === "linux") return installSystemd();
   throw new Error(
     `Background service install is not supported on ${process.platform}. ` +
+      `Run \`${channelConfig.binName} daemon start\` manually to keep the computer online.`,
+  );
+}
+
+/**
+ * Rewrite the supervised unit for an in-daemon auto-update handoff.
+ *
+ * On launchd this deliberately avoids bootout/bootstrap: refresh-unit runs as
+ * a child of the current daemon job, and unloading that label can terminate the
+ * update handoff before the parent daemon exits with the restart signal.
+ *
+ * On systemd we keep the install path because the unit explicitly treats exit
+ * 75 as restart-forced, and `enable --now` does not unload the running parent
+ * process out from under the update callback.
+ */
+export function refreshClientServiceUnitForUpdate(): ServiceInfo {
+  if (process.platform === "darwin") return refreshLaunchdUnitForUpdate();
+  if (process.platform === "linux") return installSystemd();
+  throw new Error(
+    `Background service refresh is not supported on ${process.platform}. ` +
       `Run \`${channelConfig.binName} daemon start\` manually to keep the computer online.`,
   );
 }

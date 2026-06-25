@@ -29,15 +29,15 @@ export const connectTokenResponseSchema = z.object({
   command: z.string(),
   /**
    * Full bootstrap line shown by web onboarding / connect-computer dialogs.
-   * For prod/staging: `npm install -g <pkg>@<version>\n<binName> login <token>`.
+   * For prod/staging: `npm install -g <pkg>\n<binName> login <token>`.
    * For dev (server has no published package): just the `<binName> login
    * <token>` line.
    */
   bootstrapCommand: z.string(),
   /**
-   * npm install spec for the CLI package. Published channels include the
-   * exact server-advertised version; `null` for dev servers where the web
-   * UI suppresses the `npm install -g` step.
+   * Bare npm package name (no `@<dist-tag>` suffix; multi-env each
+   * channel has its own `latest`). `null` for dev servers — the web UI
+   * suppresses the `npm install -g` step.
    */
   npmSpec: z.string().nullable(),
   /**

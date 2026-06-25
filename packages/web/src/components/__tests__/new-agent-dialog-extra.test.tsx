@@ -392,7 +392,7 @@ describe("NewAgentDialog extra branches", () => {
       token: "old-token",
       expiresIn: 600,
       command: "first-tree-dev login old-token",
-      bootstrapCommand: "first-tree-dev login old-token",
+      bootstrapCommand: "npm install -g first-tree-dev\nfirst-tree-dev login old-token",
     });
 
     const container = await renderDom(
@@ -400,9 +400,12 @@ describe("NewAgentDialog extra branches", () => {
     );
 
     await waitForText(container, "No computer connected yet.");
+    await waitForText(container, "npm install -g first-tree-dev");
     await waitForText(container, "first-tree-dev login old-token");
     await click(buttonByText(document.body, "Copy"));
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("first-tree-dev login old-token");
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      "npm install -g first-tree-dev\nfirst-tree-dev login old-token",
+    );
     expect(document.body.textContent).toContain("Copied");
   });
 

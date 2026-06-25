@@ -59,17 +59,17 @@ describe("detectInstallMode", () => {
     expect(detectInstallMode(argv1, "first-tree")).toBe("npx");
   });
 
-  it("classifies a global install as 'global' when invoked through a symlinked wrapper bin/", () => {
+  it("classifies a global install as 'global' when invoked through a symlinked bin/", () => {
     // Regression: standard `npm i -g` lays the binary out as
-    // `<prefix>/bin/<name> -> ../lib/node_modules/<pkg>/bin/first-tree.cjs`.
+    // `<prefix>/bin/<name> -> ../lib/node_modules/<pkg>/dist/cli/index.mjs`.
     // process.argv[1] keeps the symlink path, so without realpath the walk
     // starts in `<prefix>/bin/` and never reaches the package.json — the
     // command falls through to "npx" and `update` refuses to run.
     const prefix = join(root, "usr", "local");
     const pkgDir = join(prefix, "lib", "node_modules", "@agent-team-foundation", "first-tree");
-    mkdirSync(join(pkgDir, "bin"), { recursive: true });
+    mkdirSync(join(pkgDir, "dist", "cli"), { recursive: true });
     writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name: "first-tree", version: "0.10.12" }));
-    const target = join(pkgDir, "bin", "first-tree.cjs");
+    const target = join(pkgDir, "dist", "cli", "index.mjs");
     writeFileSync(target, "// stub");
 
     const binDir = join(prefix, "bin");
@@ -78,16 +78,6 @@ describe("detectInstallMode", () => {
     symlinkSync(target, binLink);
 
     expect(detectInstallMode(binLink, "first-tree")).toBe("global");
-  });
-
-  it("classifies a global install as 'global' when argv1 is the package wrapper", () => {
-    const pkgDir = join(root, ".nvm/versions/node/v22/lib/node_modules/first-tree");
-    mkdirSync(join(pkgDir, "bin"), { recursive: true });
-    writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name: "first-tree", version: "0.10.12" }));
-    const argv1 = join(pkgDir, "bin", "first-tree.cjs");
-    writeFileSync(argv1, "// stub");
-
-    expect(detectInstallMode(argv1, "first-tree")).toBe("global");
   });
 
   it("classifies a global install as 'global' even when an ancestor of the npm prefix has a .git dir", () => {

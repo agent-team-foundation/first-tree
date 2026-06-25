@@ -5,7 +5,7 @@ First Tree is the unified CLI for Context Tree onboarding, agent management, and
 Install the CLI globally:
 
 ```bash
-npm install -g first-tree@latest
+npm install -g first-tree
 ```
 
 Then connect this computer with a token from the First Tree web console:

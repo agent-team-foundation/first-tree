@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { installClientService, isServiceSupported, isServiceUnitDriftDetected } from "../../core/index.js";
+import { isServiceSupported, isServiceUnitDriftDetected, refreshClientServiceUnitForUpdate } from "../../core/index.js";
 import { print } from "../../core/output.js";
 
 /**
@@ -16,6 +16,12 @@ import { print } from "../../core/output.js";
  * the supervisor's restart spins on `unknown command` until StartLimit gives
  * up. The fix is to spawn the freshly-installed binary in a one-shot mode
  * that rewrites the unit using its own templates, then let supervisor restart.
+ *
+ * launchd caveat: this command is called from the currently-running daemon
+ * during auto-update. On macOS it must not `bootout` the current launchd
+ * label, or launchd can terminate the parent daemon and this child before the
+ * handoff reaches `exit(75)`. The core refresh helper therefore uses a
+ * launchd-safe file rewrite on macOS; it is not a plist hot-reload mechanism.
  *
  * Why the drift check: every alpha bump (10+ a day in dev) triggers
  * `createExecuteUpdate`, but the unit template only changes on a real
@@ -49,7 +55,7 @@ export function registerDaemonRefreshUnitCommand(daemon: Command): void {
         return;
       }
       try {
-        const info = installClientService();
+        const info = refreshClientServiceUnitForUpdate();
         print.line(`  refresh-unit: ${info.platform} unit rewritten at ${info.unitPath}\n`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

@@ -51,7 +51,7 @@ const DEFAULT_AGENT_NAME = "gandy assistant";
 // package + bin name — `first-tree` on prod; see api/me.ts) so the gallery
 // reads true for design review instead of showing literal <package>/<binName>
 // placeholders a real user never sees.
-const SAMPLE_CLI = "npm install -g first-tree@0.5.8\nfirst-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
+const SAMPLE_CLI = "npm install -g first-tree\nfirst-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
 
 const NOW_ISO = new Date().toISOString();
 

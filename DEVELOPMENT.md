@@ -7,7 +7,7 @@ using [AGENTS.md](AGENTS.md). For the PR workflow, see
 
 ## Prerequisites
 
-- Node.js 22.13 or newer for repository development. Node.js 24 is recommended.
+- Node.js 22.13 or newer. Node.js 24 is recommended.
 - pnpm 10.x.
 - Docker, for the local PostgreSQL service in [docker-compose.yml](docker-compose.yml).
 - Optional: an HTTPS tunnel tool such as `ngrok`, `cloudflared`, or a similar
