@@ -1,12 +1,17 @@
 import { registerHandler } from "../runtime/handler.js";
 import { createClaudeCodeHandler } from "./claude-code.js";
 import { createClaudeCodeTuiHandler } from "./claude-code-tui/index.js";
-import { resolveClaudeCodeExecutable } from "./claude-executable.js";
+import { type ClaudeExecutableResolution, resolveClaudeCodeExecutable } from "./claude-executable.js";
 import { createCodexHandler } from "./codex/index.js";
 
+/** Injectable seam so tests can force a Claude-executable resolution (no real PATH / shell spawn). */
+export type RegisterBuiltinHandlersDeps = {
+  resolveExecutable?: () => ClaudeExecutableResolution;
+};
+
 /** Register all built-in handlers. Call once at startup. */
-export function registerBuiltinHandlers(): void {
-  const resolution = resolveClaudeCodeExecutable();
+export function registerBuiltinHandlers(deps: RegisterBuiltinHandlersDeps = {}): void {
+  const resolution = (deps.resolveExecutable ?? resolveClaudeCodeExecutable)();
   if (resolution.path) {
     process.stderr.write(`[handlers] Claude Code executable: ${resolution.path} (source=${resolution.source})\n`);
   } else {

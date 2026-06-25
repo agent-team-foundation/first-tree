@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -108,7 +108,55 @@ describe("codex binary resolution", () => {
     writeFileSync(executable, "#!/bin/sh\nexit 0\n");
     chmodSync(executable, 0o755);
 
-    expect(findCodexExecutableOnPath({ PATH: `${tmp}${delimiter}/bin` })).toBe(executable);
+    expect(findCodexExecutableOnPath({ PATH: `${tmp}${delimiter}/bin` }, { loginShellPathDirs: () => [] })).toBe(
+      executable,
+    );
+  });
+
+  it("finds an executable codex via a login-shell-only PATH dir", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ft-codex-login-"));
+    tmp = dir;
+    const executable = join(dir, "codex");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    chmodSync(executable, 0o755);
+
+    const found = findCodexExecutableOnPath(
+      { PATH: "", HOME: mkdtempSync(join(tmpdir(), "ft-codex-home-")) },
+      { loginShellPathDirs: () => [dir] },
+    );
+    expect(found).toBe(executable);
+  });
+
+  it("finds an executable codex via a Part-A well-known dir (~/.bun/bin)", () => {
+    const home = mkdtempSync(join(tmpdir(), "ft-codex-bun-"));
+    tmp = home;
+    const bunBin = join(home, ".bun", "bin");
+    mkdirSync(bunBin, { recursive: true });
+    const executable = join(bunBin, "codex");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    chmodSync(executable, 0o755);
+
+    expect(findCodexExecutableOnPath({ PATH: "", HOME: home }, { loginShellPathDirs: () => [] })).toBe(executable);
+  });
+
+  it("does not throw when the login-shell probe yields nothing (graceful fallback)", () => {
+    const home = mkdtempSync(join(tmpdir(), "ft-codex-none-"));
+    tmp = home;
+    // Empty PATH + login-shell []; resolution then falls through to the curated
+    // well-known dirs without throwing (the dev machine may or may not have a
+    // codex in an absolute well-known dir, so only assert no-throw here).
+    expect(() => findCodexExecutableOnPath({ PATH: "", HOME: home }, { loginShellPathDirs: () => [] })).not.toThrow();
+  });
+
+  it("does not consult the login-shell probe when the daemon PATH already resolves codex", () => {
+    tmp = mkdtempSync(join(tmpdir(), "ft-codex-daemon-"));
+    const executable = join(tmp, "codex");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    chmodSync(executable, 0o755);
+    const loginShellPathDirs = vi.fn(() => []);
+
+    expect(findCodexExecutableOnPath({ PATH: tmp }, { loginShellPathDirs })).toBe(executable);
+    expect(loginShellPathDirs).not.toHaveBeenCalled();
   });
 
   it("verifies a candidate codex executable by launching --version", () => {
