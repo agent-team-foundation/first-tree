@@ -1,4 +1,4 @@
 ---
 name: first-tree-welcome
-description: First Tree onboarding welcome guide: orient from setup state, guide GitHub/repo/Context Tree setup, and start a bounded first value task.
+description: Use only when a First Tree onboarding system kickoff explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup kickoffs, ordinary chats, PR reviews, tree writes, or maintenance.
 ---
