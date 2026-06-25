@@ -46,6 +46,7 @@ export type ContextTreeIoViewer = {
 
 export type ContextTreeIoSummaryOptions = {
   timing?: TimingSink;
+  backfillSessionEvents?: boolean;
 };
 
 export type RecordContextTreeIoInput = {
@@ -340,6 +341,11 @@ export async function summarizeContextTreeIoSkippedEvents(
           eq(agents.organizationId, organizationId),
           gte(sessionEvents.createdAt, since),
           or(eq(sessionEvents.kind, "context_tree_usage"), eq(sessionEvents.kind, "tool_call")),
+          sql`NOT EXISTS (
+            SELECT 1
+            FROM context_tree_io_events existing
+            WHERE existing.source_session_event_id = ${sessionEvents.id}
+          )`,
         ),
       ),
   );
@@ -699,9 +705,11 @@ export async function reconcileContextTreeWrites(
 ): Promise<ContextTreeWriteEvent[]> {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const sinceIso = since.toISOString();
-  await timeWithSink(options.timing, "write_reconcile_backfill", () =>
-    backfillContextTreeIoSessionEvents(db, organizationId, since, options),
-  );
+  if (options.backfillSessionEvents !== false) {
+    await timeWithSink(options.timing, "write_reconcile_backfill", () =>
+      backfillContextTreeIoSessionEvents(db, organizationId, since, options),
+    );
+  }
 
   const writeRows = await timeWithSink(options.timing, "write_reconcile_query", () =>
     db.execute<{
@@ -809,9 +817,11 @@ export async function summarizeContextTreeIo(
 ): Promise<ContextTreeIoSummary> {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
   const sinceIso = since.toISOString();
-  await timeWithSink(options.timing, "io_backfill", () =>
-    backfillContextTreeIoSessionEvents(db, organizationId, since, options),
-  );
+  if (options.backfillSessionEvents !== false) {
+    await timeWithSink(options.timing, "io_backfill", () =>
+      backfillContextTreeIoSessionEvents(db, organizationId, since, options),
+    );
+  }
 
   const countRows = await timeWithSink(options.timing, "io_counts", () =>
     db.execute<{
@@ -981,9 +991,14 @@ export async function buildContextTreeIoSummary(
   viewer?: ContextTreeIoViewer,
   options: ContextTreeIoSummaryOptions = {},
 ): Promise<ContextTreeIoSummary> {
-  const io = await summarizeContextTreeIo(db, organizationId, windowDays, viewer, options);
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+  await timeWithSink(options.timing, "io_backfill", () =>
+    backfillContextTreeIoSessionEvents(db, organizationId, since, options),
+  );
+  const downstreamOptions = { ...options, backfillSessionEvents: false };
+  const io = await summarizeContextTreeIo(db, organizationId, windowDays, viewer, downstreamOptions);
   const writes = await timeWithSink(options.timing, "write_reconcile", () =>
-    reconcileContextTreeWrites(db, organizationId, windowDays, gitWrites, options),
+    reconcileContextTreeWrites(db, organizationId, windowDays, gitWrites, downstreamOptions),
   );
   return { ...io, writes, writesTotal: writes.length };
 }
