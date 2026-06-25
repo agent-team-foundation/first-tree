@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
-import { DEFAULT_AGENT_CONCURRENCY, DEFAULT_AGENT_MAX_SESSIONS } from "@first-tree/shared/config";
+import {
+  DEFAULT_AGENT_CONCURRENCY,
+  DEFAULT_AGENT_MAX_SESSIONS,
+  DEFAULT_WORKING_GRACE_SECONDS,
+} from "@first-tree/shared/config";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 
@@ -23,9 +27,10 @@ const sessionConfigSchema = z
     /**
      * Upper bound on how long `working` / `blocked` may keep a session
      * alive past `idle_timeout` before force-suspend. See `evictIdle` in
-     * `session-manager.ts`.
+     * `session-manager.ts`. Default kept in lock-step with
+     * `@first-tree/shared` `DEFAULT_WORKING_GRACE_SECONDS` (12h).
      */
-    working_grace_seconds: z.number().int().positive().default(3600),
+    working_grace_seconds: z.number().int().positive().default(DEFAULT_WORKING_GRACE_SECONDS),
     /**
      * Defer idle-suspend (and deprioritize concurrency eviction) for a session
      * whose provider still has a live background subprocess, up to the

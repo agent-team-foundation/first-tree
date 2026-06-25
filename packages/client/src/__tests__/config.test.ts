@@ -1,7 +1,11 @@
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_AGENT_CONCURRENCY, DEFAULT_AGENT_MAX_SESSIONS } from "@first-tree/shared/config";
+import {
+  DEFAULT_AGENT_CONCURRENCY,
+  DEFAULT_AGENT_MAX_SESSIONS,
+  DEFAULT_WORKING_GRACE_SECONDS,
+} from "@first-tree/shared/config";
 import { describe, expect, it } from "vitest";
 import { loadRuntimeConfig } from "../runtime/config.js";
 
@@ -33,7 +37,7 @@ agents:
     expect(nova?.concurrency).toBe(DEFAULT_AGENT_CONCURRENCY);
     expect(nova?.session.idle_timeout).toBe(300);
     expect(nova?.session.max_sessions).toBe(DEFAULT_AGENT_MAX_SESSIONS);
-    expect(nova?.session.working_grace_seconds).toBe(3600);
+    expect(nova?.session.working_grace_seconds).toBe(DEFAULT_WORKING_GRACE_SECONDS);
   });
 
   it("loads config with custom session and concurrency settings", () => {

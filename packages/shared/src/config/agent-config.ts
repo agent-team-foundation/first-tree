@@ -4,6 +4,20 @@ import type { InferConfig } from "./types.js";
 
 export const DEFAULT_AGENT_CONCURRENCY = 99;
 export const DEFAULT_AGENT_MAX_SESSIONS = 99;
+/**
+ * Grace past `idle_timeout` before a session with in-flight work (a processing
+ * turn or a live background subprocess) is force-suspended. 12h: long enough to
+ * cover hours-long / overnight background tasks (a `run_in_background` watcher
+ * polling CI, a self-paced explore run) that go quiet between bursts of provider
+ * output, instead of force-suspending them mid-flight at the old ~65min cap. It
+ * is NOT a per-task budget — a healthy active turn refreshes `lastActivity` on
+ * every provider message and never approaches it; the cap only bites a session
+ * that has produced no provider activity for this long while still claiming
+ * work, i.e. a genuinely stuck handler or a forgotten subprocess. Slot pressure
+ * (`evictIfNeeded`, max_sessions) is the primary bound; this just keeps a stuck
+ * slot from leaking forever.
+ */
+export const DEFAULT_WORKING_GRACE_SECONDS = 43_200;
 
 /**
  * Agent config layout on disk: `$FIRST_TREE_HOME/config/agents/<name>/agent.yaml`.
@@ -25,11 +39,12 @@ export const agentConfigSchema = defineConfig({
     max_sessions: field(z.number().int().positive().default(DEFAULT_AGENT_MAX_SESSIONS)),
     // Upper bound on how long a session may stay `working`/`blocked` past
     // `idle_timeout` before the runtime force-suspends it. Protects long
-    // thinking / large message generation from idle eviction while still
-    // bounding stuck-state slot leaks: at `idle_timeout + working_grace_seconds`
-    // past the last activity the session is reclaimed (see evictIdle in
-    // session-manager.ts and #418).
-    working_grace_seconds: field(z.number().int().positive().default(3600)),
+    // thinking / large message generation AND hours-long / overnight background
+    // tasks from idle eviction while still bounding stuck-state slot leaks: at
+    // `idle_timeout + working_grace_seconds` past the last activity the session
+    // is reclaimed (see evictIdle in session-manager.ts and #418). See
+    // DEFAULT_WORKING_GRACE_SECONDS for why the default is 12h.
+    working_grace_seconds: field(z.number().int().positive().default(DEFAULT_WORKING_GRACE_SECONDS)),
     // When a session goes idle but its provider still has a live background
     // subprocess (e.g. a `run_in_background` watcher polling CI), defer
     // idle-suspend and deprioritize concurrency eviction so the subprocess's
