@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { type FormEvent, useEffect, useId, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import { listManagedAgents, type ManagedAgent } from "../api/agents.js";
+import { listAllAgents, type ManagedAgent } from "../api/agents.js";
 import {
   getContextTreeFeaturesSetting,
   getContextTreeSetting,
@@ -16,6 +16,7 @@ import { Select } from "../components/ui/select.js";
 import { SettingsField, SettingsSaveButton } from "../components/ui/settings-field.js";
 import { Switch } from "../components/ui/switch.js";
 import { titleWithSemantics, useJustSaved } from "./agent-detail/save-semantics.js";
+import { fetchAllAgents } from "./team/index.js";
 
 /**
  * Settings → Context tree. Per-org Context Tree **configuration**: which repo /
@@ -144,7 +145,7 @@ export function ContextTreeSettingsPanel() {
         </div>
       </Section>
 
-      {isAdmin ? <ContextReviewerSection hasBinding={hasBinding} /> : null}
+      <ContextReviewerSection hasBinding={hasBinding} isAdmin={isAdmin} />
     </div>
   );
 }
@@ -253,7 +254,7 @@ function NoTree({
  *  persists only once an agent is chosen. State is driven from the server query,
  *  not a local mirror, and every save passes an explicit payload so an instant
  *  handler never reads stale local state. */
-function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
+function ContextReviewerSection({ hasBinding, isAdmin }: { hasBinding: boolean; isAdmin: boolean }) {
   const { organizationId } = useAuth();
   const queryClient = useQueryClient();
   const { justSaved, markSaved } = useJustSaved();
@@ -277,9 +278,9 @@ function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
   const switchOn = serverEnabled || setupOpen;
 
   const managedAgentsQuery = useQuery({
-    queryKey: ["context-reviewer", "managed-agents", organizationId],
-    queryFn: listManagedAgents,
-    enabled: !!organizationId && switchOn,
+    queryKey: ["context-reviewer", "org-agents", organizationId],
+    queryFn: () => fetchAllAgents((params) => listAllAgents(params)),
+    enabled: isAdmin && !!organizationId && switchOn,
   });
 
   const reviewerCandidates = useMemo(() => {
@@ -347,21 +348,27 @@ function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
           </div>
         ) : (
           <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
-            {/* Config row: the feature's on/off control, mirroring the agent-detail
-                Switch rows (label left, Switch right, instant save). */}
-            <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
-              <span id={toggleLabelId} className="text-body font-medium" style={{ color: "var(--fg)" }}>
-                Automatic PR review
-              </span>
-              <Switch
-                checked={switchOn}
-                onCheckedChange={handleToggle}
-                disabled={saving}
-                aria-labelledby={toggleLabelId}
+            {isAdmin ? (
+              <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+                <span id={toggleLabelId} className="text-body font-medium" style={{ color: "var(--fg)" }}>
+                  Automatic PR review
+                </span>
+                <Switch
+                  checked={switchOn}
+                  onCheckedChange={handleToggle}
+                  disabled={saving}
+                  aria-labelledby={toggleLabelId}
+                />
+              </div>
+            ) : (
+              <ContextReviewerReadOnly
+                contextReviewer={
+                  featuresQuery.data?.contextReviewer ?? { enabled: false, agentUuid: null, reviewerAgent: null }
+                }
               />
-            </div>
+            )}
 
-            {switchOn ? (
+            {isAdmin && switchOn ? (
               <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
                 <span className="text-label font-medium" style={{ color: "var(--fg)" }}>
                   Reviewer agent
@@ -399,7 +406,8 @@ function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
                 ) : null}
                 {reviewerMissing ? (
                   <div className="text-label" style={{ color: "var(--fg-3)" }}>
-                    Current reviewer is not your active agent. Choose one of your agents, or turn Context Reviewer off.
+                    Current reviewer is not an active organization agent. Choose another agent, or turn Context Reviewer
+                    off.
                   </div>
                 ) : null}
                 {managedAgentsQuery.error ? (
@@ -426,4 +434,43 @@ function ContextReviewerSection({ hasBinding }: { hasBinding: boolean }) {
 
 function agentLabel(agent: ManagedAgent): string {
   return agent.displayName.trim() || agent.name?.trim() || agent.uuid;
+}
+
+function ContextReviewerReadOnly({
+  contextReviewer,
+}: {
+  contextReviewer: {
+    enabled: boolean;
+    agentUuid: string | null;
+    reviewerAgent?: { uuid: string; name: string | null; displayName: string } | null;
+  };
+}) {
+  const reviewerLabel = contextReviewer.reviewerAgent
+    ? contextReviewer.reviewerAgent.displayName.trim() ||
+      contextReviewer.reviewerAgent.name?.trim() ||
+      contextReviewer.reviewerAgent.uuid
+    : null;
+
+  return (
+    <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+      <div className="flex items-center justify-between" style={{ gap: "var(--sp-3)" }}>
+        <span className="text-body font-medium" style={{ color: "var(--fg)" }}>
+          Automatic PR review
+        </span>
+        <span className="text-label" style={{ color: contextReviewer.enabled ? "var(--success)" : "var(--fg-3)" }}>
+          {contextReviewer.enabled ? "On" : "Off"}
+        </span>
+      </div>
+      {contextReviewer.enabled ? (
+        <div className="flex flex-col" style={{ gap: "var(--sp-1)" }}>
+          <span className="text-label font-medium" style={{ color: "var(--fg)" }}>
+            Reviewer agent
+          </span>
+          <span className="text-body" style={{ color: reviewerLabel ? "var(--fg)" : "var(--fg-3)" }}>
+            {reviewerLabel ?? "Configured reviewer is no longer available."}
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
 }

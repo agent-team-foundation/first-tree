@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isOrgSettingNamespace,
   orgContextTreeFeaturesInputSchema,
+  orgContextTreeFeaturesOutputSchema,
   orgContextTreeFeaturesStorageSchema,
   orgContextTreeInputSchema,
   orgSettingNamespaceSchema,
@@ -71,6 +72,24 @@ describe("org settings schemas", () => {
   it("validates context tree feature settings", () => {
     expect(orgContextTreeFeaturesStorageSchema.parse({})).toEqual({
       contextReviewer: { enabled: false, agentUuid: null },
+    });
+    expect(orgContextTreeFeaturesOutputSchema.parse({})).toEqual({
+      contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null },
+    });
+    expect(
+      orgContextTreeFeaturesOutputSchema.parse({
+        contextReviewer: {
+          enabled: true,
+          agentUuid: "agent-1",
+          reviewerAgent: { uuid: "agent-1", name: "reviewer", displayName: "Context Reviewer" },
+        },
+      }),
+    ).toEqual({
+      contextReviewer: {
+        enabled: true,
+        agentUuid: "agent-1",
+        reviewerAgent: { uuid: "agent-1", name: "reviewer", displayName: "Context Reviewer" },
+      },
     });
     expect(
       orgContextTreeFeaturesInputSchema.parse({

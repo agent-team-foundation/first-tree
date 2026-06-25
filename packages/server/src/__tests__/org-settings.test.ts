@@ -354,16 +354,14 @@ describe("org-settings service", () => {
     const admin = await createTestAdmin(app);
 
     const out = await orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree_features");
-    expect(out).toEqual({ contextReviewer: { enabled: false, agentUuid: null } });
+    expect(out).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
   });
 
-  it("context_tree_features stores a caller-owned active non-human reviewer and round-trips", async () => {
+  it("context_tree_features stores an active non-human reviewer in the organization and round-trips", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
-    const reviewer = await createReviewerAgent(app, {
-      clientId: admin.clientId,
-      managerId: admin.memberId,
-    });
+    const otherManager = await createAdminContext(app);
+    const reviewer = await createReviewerAgent(app, { managerId: otherManager.memberId });
 
     const out = await orgSettingsService.putOrgSetting(
       app.db,
@@ -372,7 +370,13 @@ describe("org-settings service", () => {
       { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
       { updatedBy: admin.userId, memberId: admin.memberId },
     );
-    expect(out).toEqual({ contextReviewer: { enabled: true, agentUuid: reviewer.uuid } });
+    expect(out).toEqual({
+      contextReviewer: {
+        enabled: true,
+        agentUuid: reviewer.uuid,
+        reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: reviewer.displayName },
+      },
+    });
 
     const re = await orgSettingsService.getOrgSetting(app.db, admin.organizationId, "context_tree_features");
     expect(re).toEqual(out);
@@ -401,7 +405,7 @@ describe("org-settings service", () => {
       { updatedBy: admin.userId, memberId: admin.memberId },
     );
 
-    expect(disabled).toEqual({ contextReviewer: { enabled: false, agentUuid: null } });
+    expect(disabled).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
   });
 
   it("context_tree_features rejects enabled reviewer input without agentUuid", async () => {
@@ -419,7 +423,7 @@ describe("org-settings service", () => {
     ).rejects.toThrow(/agentUuid is required/);
   });
 
-  it("context_tree_features rejects human, suspended, side-org, and other-manager reviewers", async () => {
+  it("context_tree_features rejects human, suspended, and side-org reviewers", async () => {
     const app = getApp();
     const admin = await createAdminContext(app);
     const suspended = await createReviewerAgent(app, {
@@ -427,12 +431,6 @@ describe("org-settings service", () => {
       managerId: admin.memberId,
       status: "suspended",
     });
-    const otherManager = await createAdminContext(app);
-    const otherManagerAgent = await createReviewerAgent(app, {
-      clientId: otherManager.clientId,
-      managerId: otherManager.memberId,
-    });
-
     const sideOrgId = `org-reviewer-${crypto.randomUUID().slice(0, 8)}`;
     const sideMemberId = uuidv7();
     await app.db.transaction(async (tx) => {
@@ -470,10 +468,9 @@ describe("org-settings service", () => {
         { updatedBy: admin.userId, memberId: admin.memberId },
       );
 
-    await expect(putReviewer(admin.humanAgentUuid)).rejects.toThrow(/active non-human agent managed by the caller/);
-    await expect(putReviewer(suspended.uuid)).rejects.toThrow(/active non-human agent managed by the caller/);
-    await expect(putReviewer(sideOrgAgent.uuid)).rejects.toThrow(/active non-human agent managed by the caller/);
-    await expect(putReviewer(otherManagerAgent.uuid)).rejects.toThrow(/active non-human agent managed by the caller/);
+    await expect(putReviewer(admin.humanAgentUuid)).rejects.toThrow(/active non-human agent in this organization/);
+    await expect(putReviewer(suspended.uuid)).rejects.toThrow(/active non-human agent in this organization/);
+    await expect(putReviewer(sideOrgAgent.uuid)).rejects.toThrow(/active non-human agent in this organization/);
   });
 
   it("rejects unknown namespace with BadRequestError", async () => {
@@ -800,7 +797,7 @@ describe("org-settings API (admin gating + masking)", () => {
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(get1.statusCode).toBe(200);
-    expect(get1.json()).toEqual({ contextReviewer: { enabled: false, agentUuid: null } });
+    expect(get1.json()).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
 
     const put = await app.inject({
       method: "PUT",
@@ -809,7 +806,13 @@ describe("org-settings API (admin gating + masking)", () => {
       payload: { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
     });
     expect(put.statusCode).toBe(200);
-    expect(put.json()).toEqual({ contextReviewer: { enabled: true, agentUuid: reviewer.uuid } });
+    expect(put.json()).toEqual({
+      contextReviewer: {
+        enabled: true,
+        agentUuid: reviewer.uuid,
+        reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: reviewer.displayName },
+      },
+    });
 
     const disabled = await app.inject({
       method: "PUT",
@@ -818,7 +821,7 @@ describe("org-settings API (admin gating + masking)", () => {
       payload: { contextReviewer: { enabled: false, agentUuid: reviewer.uuid } },
     });
     expect(disabled.statusCode).toBe(200);
-    expect(disabled.json()).toEqual({ contextReviewer: { enabled: false, agentUuid: null } });
+    expect(disabled.json()).toEqual({ contextReviewer: { enabled: false, agentUuid: null, reviewerAgent: null } });
   });
 
   it("member can GET source_repos and context_tree (readPolicy: member) but cannot PUT / DELETE", async () => {
@@ -852,12 +855,39 @@ describe("org-settings API (admin gating + masking)", () => {
     }
   });
 
-  it("member cannot GET, PUT, or DELETE context_tree_features", async () => {
+  it("member can GET context_tree_features but cannot PUT or DELETE", async () => {
     const app = getApp();
     const { admin, member } = await adminAndMember(app);
+    const reviewer = await createReviewerAgent(app, {
+      managerId: admin.memberId,
+      displayName: "Team Reviewer",
+      name: `team-reviewer-${crypto.randomUUID().slice(0, 8)}`,
+    });
     const url = `/api/v1/orgs/${admin.organizationId}/settings/context_tree_features`;
 
-    for (const method of ["GET", "PUT", "DELETE"] as const) {
+    await orgSettingsService.putOrgSetting(
+      app.db,
+      admin.organizationId,
+      "context_tree_features",
+      { contextReviewer: { enabled: true, agentUuid: reviewer.uuid } },
+      { updatedBy: admin.userId, memberId: admin.memberId },
+    );
+
+    const get = await app.inject({
+      method: "GET",
+      url,
+      headers: { authorization: `Bearer ${member.accessToken}` },
+    });
+    expect(get.statusCode).toBe(200);
+    expect(get.json()).toEqual({
+      contextReviewer: {
+        enabled: true,
+        agentUuid: reviewer.uuid,
+        reviewerAgent: { uuid: reviewer.uuid, name: reviewer.name, displayName: "Team Reviewer" },
+      },
+    });
+
+    for (const method of ["PUT", "DELETE"] as const) {
       const res = await app.inject({
         method,
         url,
