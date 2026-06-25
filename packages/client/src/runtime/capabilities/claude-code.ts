@@ -130,6 +130,22 @@ export function resolveBundledClaudeBinary(deps: ResolveBundledClaudeDeps = {}):
 }
 
 /**
+ * Remediation message shown when no `claude` resolves and the SDK-bundled
+ * native binary is also absent (the externalized-engine `missing` case). The
+ * login command MUST stay `claude auth login` — the repo-canonical command the
+ * runtime-auth orchestrator actually runs and every other user-facing hint
+ * names (see `runClaudeBrowserLogin` and the auth-precheck messages) — so a
+ * user who installs the engine then logs in follows one consistent command.
+ */
+export function formatClaudeBinaryMissingMessage(originalError: string): string {
+  return (
+    "Claude runtime binary is missing on this machine. First Tree does not bundle the native Claude engine by default — it resolves a system `claude` (env override / PATH / well-known install dirs). " +
+    "Install it with the daemon's one-click `daemon install-claude` (or `npm install -g @anthropic-ai/claude-code`), then run `claude auth login` and retry. " +
+    `Original error: ${originalError}`
+  );
+}
+
+/**
  * Launch-verify the SDK's bundled Claude CLI via `<artifact> --version`.
  *
  * This is the resolve-stage proof for the no-on-disk-binary path: when no
@@ -149,10 +165,7 @@ export async function verifyBundledClaudeArtifact(): Promise<
   } catch (err) {
     return {
       ok: false,
-      error:
-        "Claude runtime binary is missing on this machine. First Tree does not bundle the native Claude engine by default — it resolves a system `claude` (env override / PATH / well-known install dirs). " +
-        "Install it with the daemon's one-click `daemon install-claude` (or `npm install -g @anthropic-ai/claude-code`), then run `claude /login` and retry. " +
-        `Original error: ${err instanceof Error ? err.message : String(err)}`,
+      error: formatClaudeBinaryMissingMessage(err instanceof Error ? err.message : String(err)),
     };
   }
   const [command, args, label] =

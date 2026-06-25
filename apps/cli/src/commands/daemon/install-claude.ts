@@ -58,6 +58,6 @@ export function registerDaemonInstallClaudeCommand(daemon: Command): void {
         return;
       }
       printResults(runtimeProviderChecks(capabilities));
-      print.line("  If claude-code now reports `unauthenticated`, run runtime auth (claude /login) to finish.\n\n");
+      print.line("  If claude-code now reports `unauthenticated`, run runtime auth (claude auth login) to finish.\n\n");
     });
 }

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeExecutableResolution } from "../handlers/claude-executable.js";
 import {
   classifyClaudeSmokeFailure,
+  formatClaudeBinaryMissingMessage,
   probeClaudeCodeCapability,
   resolveBundledClaudeBinary,
   verifyBundledClaudeArtifact,
@@ -501,6 +502,18 @@ describe("verifyBundledClaudeArtifact (real node_modules)", () => {
     const res = await verifyBundledClaudeArtifact();
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.version === null || /^\d+\.\d+(\.\d+)?$/.test(res.version)).toBe(true);
+  });
+});
+
+describe("formatClaudeBinaryMissingMessage", () => {
+  it("names the repo-canonical `claude auth login`, not `claude /login`, and points at the one-click install", () => {
+    const msg = formatClaudeBinaryMissingMessage("Native CLI binary for darwin-arm64 not found");
+    // Guard against the login-command drift codex-assistant caught: the
+    // remediation must match the command the runtime-auth orchestrator runs.
+    expect(msg).toContain("claude auth login");
+    expect(msg).not.toContain("claude /login");
+    expect(msg).toContain("daemon install-claude");
+    expect(msg).toContain("Native CLI binary for darwin-arm64 not found");
   });
 });
 
