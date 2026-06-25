@@ -33,7 +33,7 @@ describe("daemon namespace — refresh-unit hidden subcommand", () => {
       .filter((c) => !(c as unknown as { _hidden?: boolean })._hidden)
       .map((c) => c.name())
       .sort();
-    expect(visibleNames).toEqual(["doctor", "probe", "restart", "start", "status", "stop"]);
+    expect(visibleNames).toEqual(["doctor", "install-codex", "probe", "restart", "start", "status", "stop"]);
   });
 });
 
