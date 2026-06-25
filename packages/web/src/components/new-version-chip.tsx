@@ -14,6 +14,7 @@ const CHIP_STYLE: CSSProperties = {
   color: "var(--fg-needs-you-strong)",
   borderRadius: 999,
   minWidth: 0,
+  whiteSpace: "nowrap",
 };
 
 type NewVersionChipProps = {
@@ -67,7 +68,7 @@ export function NewVersionChip({ show, compact = false }: NewVersionChipProps) {
       style={{ ...CHIP_STYLE, gap: 7, padding: "0 var(--sp-2_5) 0 var(--sp-2_25)" }}
     >
       <RefreshCw aria-hidden="true" size={13} style={{ flexShrink: 0 }} />
-      <span>New version — refresh</span>
+      <span>Update available</span>
     </button>
   );
 }

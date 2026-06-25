@@ -25,9 +25,13 @@ const authMock = vi.hoisted(() => ({
 
 const disconnectMock = vi.hoisted(() => ({
   value: {
-    rows: [],
-    firstHostname: null,
+    rows: [] as Array<{ clientId: string }>,
+    firstHostname: null as string | null,
   },
+}));
+
+const versionMock = vi.hoisted(() => ({
+  value: false,
 }));
 
 const clientMocks = vi.hoisted(() => ({
@@ -40,6 +44,10 @@ vi.mock("../../auth/auth-context.js", () => ({
 
 vi.mock("../../hooks/use-disconnected-computers.js", () => ({
   useDisconnectedComputers: () => disconnectMock.value,
+}));
+
+vi.mock("../../hooks/use-version-check.js", () => ({
+  useNewVersionAvailable: () => versionMock.value,
 }));
 
 vi.mock("../../api/client.js", async (importOriginal) => {
@@ -188,6 +196,8 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: storage });
   installMatchMedia((query) => query.includes("80rem") || query.includes("48rem"));
   clientMocks.get.mockResolvedValue([{ id: "org-1", name: "acme", displayName: "Acme", role: "admin" }]);
+  disconnectMock.value = { rows: [], firstHostname: null };
+  versionMock.value = false;
   authMock.value.logout.mockClear();
   authMock.value.selectOrganization.mockClear();
 });
@@ -204,12 +214,15 @@ describe("Layout", () => {
     expect(container.textContent).toContain("First Tree");
     expect(container.textContent).toContain("Workspace");
     expect(container.textContent).toContain("Context child");
-    expect(container.textContent).toContain("Jump to");
+    expect(container.textContent).not.toContain("Jump to…");
     // Team anchor sits in the brand cluster at wide widths.
     expect(container.querySelector('[data-testid="team-switcher"]')).not.toBeNull();
 
-    const jump = container.querySelector<HTMLButtonElement>('button[aria-label="Open command palette"]');
+    const jump = container.querySelector<HTMLButtonElement>('button[aria-label="Jump to… (⌘K)"]');
     if (!jump) throw new Error("Jump button missing");
+    expect(jump.getAttribute("aria-keyshortcuts")).toBe("Meta+K Control+K");
+    expect(jump.getAttribute("title")).toBe("Jump to… (⌘K / Ctrl+K)");
+    expect(jump.textContent).toContain("⌘K");
     await act(async () => {
       jump.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
       jump.dispatchEvent(new MouseEvent("mouseleave", { bubbles: true }));
@@ -222,6 +235,28 @@ describe("Layout", () => {
     expect(container.textContent).toContain("Mock command palette");
     await keyDown("k", { ctrlKey: true });
     expect(container.textContent).not.toContain("Mock command palette");
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps status chips in the right controls before the compact command palette entry", async () => {
+    disconnectMock.value = {
+      firstHostname: "Yue-MacPro.local",
+      rows: [{ clientId: "client-1" }],
+    };
+    versionMock.value = true;
+    const { container, root } = await renderLayout("/context");
+
+    const commandButton = container.querySelector<HTMLButtonElement>('button[aria-label="Jump to… (⌘K)"]');
+    if (!commandButton?.parentElement) throw new Error("Command palette button missing");
+
+    const controlsText = commandButton.parentElement.textContent ?? "";
+    expect(controlsText).toContain("Computer disconnected");
+    expect(controlsText).toContain("Update available");
+    expect(controlsText).not.toContain("Yue-MacPro");
+    expect(controlsText).not.toContain("Jump to…");
+    expect(controlsText.indexOf("Computer disconnected")).toBeLessThan(controlsText.indexOf("⌘K"));
+    expect(controlsText.indexOf("Update available")).toBeLessThan(controlsText.indexOf("⌘K"));
 
     await act(async () => root.unmount());
   });
@@ -246,7 +281,54 @@ describe("Layout", () => {
     });
     await flush();
     expect(container.textContent).toContain("First Tree");
-    expect(container.textContent).not.toContain("Jump to");
+    expect(container.querySelector('button[aria-label="Jump to… (⌘K)"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("uses compact status controls at md so text chips do not crowd the centered nav", async () => {
+    installMatchMedia((query) => query.includes("48rem"));
+    disconnectMock.value = {
+      firstHostname: "Yue-MacPro.local",
+      rows: [{ clientId: "client-1" }],
+    };
+    versionMock.value = true;
+    const { container, root } = await renderLayout("/context");
+
+    expect(container.textContent).toContain("First Tree");
+    expect(container.textContent).not.toContain("Computer disconnected");
+    expect(container.textContent).not.toContain("Update available");
+    expect(
+      container.querySelector('button[aria-label="Yue-MacPro.local is disconnected. Click to manage."]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('button[aria-label="A new version is available. Click to refresh."]'),
+    ).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Jump to… (⌘K)"]')).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps compact status affordances on narrow viewports without showing full chip copy", async () => {
+    installMatchMedia(() => false);
+    disconnectMock.value = {
+      firstHostname: "Yue-MacPro.local",
+      rows: [{ clientId: "client-1" }],
+    };
+    versionMock.value = true;
+    const { container, root } = await renderLayout("/context");
+
+    expect(container.textContent).not.toContain("First Tree");
+    expect(container.textContent).not.toContain("Computer disconnected");
+    expect(container.textContent).not.toContain("Update available");
+    expect(
+      container.querySelector('button[aria-label="Yue-MacPro.local is disconnected. Click to manage."]'),
+    ).not.toBeNull();
+    expect(
+      container.querySelector('button[aria-label="A new version is available. Click to refresh."]'),
+    ).not.toBeNull();
+    expect(container.querySelector('button[aria-label="Jump to… (⌘K)"]')).toBeNull();
+    expect(container.querySelector('[data-testid="user-menu"]')).not.toBeNull();
 
     await act(async () => root.unmount());
   });

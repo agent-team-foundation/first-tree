@@ -26,7 +26,7 @@ describe("NewVersionChip", () => {
     h.render(<NewVersionChip show={true} />);
     const btn = h.container.querySelector("button");
     expect(btn).not.toBeNull();
-    expect(btn?.textContent).toContain("New version");
+    expect(btn?.textContent).toContain("Update available");
     expect(btn?.getAttribute("aria-label")?.toLowerCase()).toContain("refresh");
   });
 
