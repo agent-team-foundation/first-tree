@@ -643,7 +643,7 @@ describe("ContextPage DOM behavior", () => {
     expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("First Tree Cloud found an existing org Context Tree binding"),
+        bootstrap: expect.stringContaining("This chat sets up team context for future agent work."),
         kind: "tree",
         complete: true,
       }),
