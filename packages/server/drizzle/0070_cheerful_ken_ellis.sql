@@ -1,0 +1,1 @@
+CREATE INDEX "idx_session_events_context_tree_io_agent_recent" ON "session_events" USING btree ("agent_id","created_at" DESC NULLS LAST) WHERE "session_events"."kind" IN ('context_tree_usage', 'tool_call');

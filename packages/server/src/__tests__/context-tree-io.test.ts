@@ -812,6 +812,41 @@ describe("context-tree IO service", () => {
     expect(timings.filter((name) => name === "io_backfill_scan")).toHaveLength(1);
   });
 
+  it("includes skipped diagnostics in the snapshot aggregate path", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: string[] = [];
+
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-skipped",
+        name: "Bash",
+        args: { command: "echo x > /tmp/context-tree/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+
+    const summary = await buildContextTreeIoSummary(app.db, seed.organizationId, 7, [], undefined, {
+      timing: (name) => timings.push(name),
+    });
+
+    expect(summary.skipped.totalEventCount).toBe(1);
+    expect(summary.skipped.reasons.map((row) => ({ reason: row.reason, eventCount: row.eventCount }))).toEqual([
+      { reason: "unsupported_shell_command", eventCount: 1 },
+    ]);
+    expect(timings).toContain("io_skipped_scan");
+  });
+
   it("reconciles git writes with telemetry: attributes the agent, keeps unmatched git authors, surfaces telemetry-only writes", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();
