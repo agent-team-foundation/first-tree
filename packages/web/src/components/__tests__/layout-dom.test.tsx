@@ -222,6 +222,7 @@ describe("Layout", () => {
     if (!jump) throw new Error("Jump button missing");
     expect(jump.getAttribute("aria-keyshortcuts")).toBe("Meta+K Control+K");
     expect(jump.getAttribute("title")).toBe("Jump to… (⌘K / Ctrl+K)");
+    expect(jump.textContent).toContain("Search");
     expect(jump.textContent).toContain("⌘K");
     await act(async () => {
       jump.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
@@ -282,6 +283,7 @@ describe("Layout", () => {
     await flush();
     expect(container.textContent).toContain("First Tree");
     expect(container.querySelector('button[aria-label="Jump to… (⌘K)"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Search");
 
     await act(async () => root.unmount());
   });
@@ -305,6 +307,7 @@ describe("Layout", () => {
       container.querySelector('button[aria-label="A new version is available. Click to refresh."]'),
     ).not.toBeNull();
     expect(container.querySelector('button[aria-label="Jump to… (⌘K)"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Search");
 
     await act(async () => root.unmount());
   });

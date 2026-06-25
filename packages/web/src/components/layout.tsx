@@ -72,6 +72,7 @@ export function Layout() {
   // right controls, and a compact icon-only fallback when the brand is dropped.
   const newVersionAvailable = useNewVersionAvailable();
   const showJumpButton = viewport !== "narrow";
+  const showJumpLabel = viewport === "xl";
   const dropBrand = viewport === "narrow";
   const showThemeToggle = viewport !== "narrow";
   const showFullStatusChips = viewport === "xl";
@@ -232,6 +233,7 @@ export function Layout() {
                 style={{
                   gap: 7,
                   height: 30,
+                  minWidth: showJumpLabel ? 112 : undefined,
                   padding: "0 var(--sp-2)",
                   color: "var(--fg-3)",
                   border: "var(--hairline) solid var(--border)",
@@ -246,6 +248,7 @@ export function Layout() {
                 }}
               >
                 <Search aria-hidden="true" size={14} style={{ flexShrink: 0 }} />
+                {showJumpLabel ? <span>Search</span> : null}
                 <span
                   aria-hidden
                   className="text-caption font-mono"
