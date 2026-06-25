@@ -35,6 +35,19 @@ const CONTEXT_TREE_IO_FEED_LIMIT = 50;
 // per matched file (see the client's TREE_SEARCH_TOOL_NAMES).
 const CLAUDE_READ_TOOLS = new Set(["Read", "NotebookRead", "Grep", "Glob"]);
 const CLAUDE_WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+const CONTEXT_TREE_IO_TOOL_NAMES = [
+  "Bash",
+  "Edit",
+  "Glob",
+  "Grep",
+  "MultiEdit",
+  "NotebookEdit",
+  "NotebookRead",
+  "Read",
+  "Write",
+  "command",
+  "file_change",
+];
 const log = createLogger("ContextTreeIo");
 const GIT_STATUS_DELTA_REF_ORIGIN = "git_status_delta";
 const GIT_STATUS_DELTA_DERIVATION: EventIoDerivation = { action: "write", source: "git_status_delta" };
@@ -385,7 +398,21 @@ export async function summarizeContextTreeIoSkippedEvents(
             candidateAgents.map((agent) => agent.agentId),
           ),
           gte(sessionEvents.createdAt, since),
-          or(eq(sessionEvents.kind, "context_tree_usage"), eq(sessionEvents.kind, "tool_call")),
+          or(
+            eq(sessionEvents.kind, "context_tree_usage"),
+            and(
+              eq(sessionEvents.kind, "tool_call"),
+              sql`${sessionEvents.payload}->>'status' = 'ok'`,
+              or(
+                inArray(sql<string>`${sessionEvents.payload}->>'name'`, CONTEXT_TREE_IO_TOOL_NAMES),
+                sql`CASE
+                  WHEN jsonb_typeof(${sessionEvents.payload}->'toolFileRefs') = 'array'
+                  THEN jsonb_array_length(${sessionEvents.payload}->'toolFileRefs')
+                  ELSE 0
+                END > 0`,
+              ),
+            ),
+          ),
           sql`NOT EXISTS (
             SELECT 1
             FROM context_tree_io_events existing
