@@ -142,9 +142,7 @@ describe("computerCardViewModel", () => {
         "claude-code": {
           state: "ok",
           available: true,
-          authenticated: true,
           sdkVersion: "0.8.1",
-          authMethod: "oauth",
           detectedAt: T0.toISOString(),
         },
       },
@@ -171,9 +169,7 @@ describe("computerCardViewModel", () => {
         "claude-code": {
           state: "missing",
           available: false,
-          authenticated: false,
           sdkVersion: null,
-          authMethod: "none",
           detectedAt: T0.toISOString(),
         },
       },

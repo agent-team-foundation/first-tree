@@ -240,15 +240,11 @@ export {
 } from "./schemas/client.js";
 export {
   CAPABILITY_STATES,
-  type CapabilityAuthMethod,
   type CapabilityEntry,
-  type CapabilityProbeKind,
   type CapabilityRuntimeSource,
   type CapabilityState,
   type ClientCapabilities,
-  capabilityAuthMethodSchema,
   capabilityEntrySchema,
-  capabilityProbeKindSchema,
   capabilityRuntimeSourceSchema,
   capabilityStateSchema,
   clientCapabilitiesSchema,

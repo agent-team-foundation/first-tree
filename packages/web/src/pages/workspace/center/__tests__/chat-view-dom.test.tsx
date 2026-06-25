@@ -21,6 +21,8 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const activityMocks = vi.hoisted(() => ({
   listClients: vi.fn(),
+  getClient: vi.fn(),
+  startRuntimeAuth: vi.fn(),
 }));
 
 const markdownMocks = vi.hoisted(() => ({
@@ -82,6 +84,8 @@ const authMock = vi.hoisted(() => ({
 vi.mock("../../../../api/activity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/activity.js")>()),
   listClients: activityMocks.listClients,
+  getClient: activityMocks.getClient,
+  startRuntimeAuth: activityMocks.startRuntimeAuth,
 }));
 
 vi.mock("../../../../api/agent-status.js", () => ({
@@ -639,6 +643,21 @@ beforeEach(() => {
       capabilities: {},
     } satisfies HubClient,
   ]);
+  activityMocks.getClient.mockResolvedValue({
+    id: "client-1",
+    userId: "user-self",
+    status: "connected",
+    authState: "ok",
+    binName: "first-tree-dev",
+    sdkVersion: "0.5.0",
+    hostname: "gandy-macbook",
+    os: "darwin",
+    agentCount: 1,
+    connectedAt: NOW,
+    lastSeenAt: NOW,
+    capabilities: {},
+  } satisfies HubClient);
+  activityMocks.startRuntimeAuth.mockResolvedValue({ ref: "auth-ref", started: true });
   agentStatusMocks.fetchChatAgentStatuses.mockResolvedValue([
     {
       agentId: "agent-1",
@@ -832,6 +851,121 @@ describe("ChatView", () => {
     expect(container.textContent).toContain("fetch failed");
     expect(container.querySelector("[data-error-agent]")).toBeNull();
     await act(async () => root.unmount());
+  });
+
+  // The in-chat "needs login" entry point: a terminal credential failure means
+  // the provider is installed but logged out, so the error row offers an inline
+  // "Connect <provider>" that starts the in-product login for the failing
+  // agent's client. Keyed strictly on `category === "credential"` + a resolvable
+  // client id.
+  describe("in-chat login entry point", () => {
+    function credentialErrorEvents(agentId: string): { items: SessionEventRow[]; nextCursor: number | null } {
+      return {
+        items: [
+          {
+            id: "cred-fail",
+            agentId,
+            chatId: "chat-1",
+            seq: 1,
+            kind: "error",
+            payload: {
+              source: "runtime",
+              message: encodeProviderRetryEventMessage({
+                event: "provider_failure_terminal",
+                provider: "claude-code",
+                scope: "session_start",
+                category: "credential",
+                reasonCode: "provider_credential_invalid",
+                userSeverity: "error",
+                messagePreview: "not logged in",
+              }),
+            },
+            createdAt: "2026-05-28T11:56:30.000Z",
+          },
+        ] satisfies SessionEventRow[],
+        nextCursor: null,
+      };
+    }
+
+    function capacityErrorEvents(agentId: string): { items: SessionEventRow[]; nextCursor: number | null } {
+      return {
+        items: [
+          {
+            id: "capacity-wait",
+            agentId,
+            chatId: "chat-1",
+            seq: 1,
+            kind: "error",
+            payload: {
+              source: "runtime",
+              message: encodeProviderRetryEventMessage({
+                event: "provider_retry_scheduled",
+                provider: "claude-code",
+                scope: "provider_turn",
+                category: "provider_capacity",
+                reasonCode: "capacity_wait_required",
+                retryMode: "background",
+                userSeverity: "warning",
+                messagePreview: "at capacity",
+              }),
+            },
+            createdAt: "2026-05-28T11:56:30.000Z",
+          },
+        ] satisfies SessionEventRow[],
+        nextCursor: null,
+      };
+    }
+
+    it("renders a Connect button on a credential failure when the agent's client resolves", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        // agent-1 has clientId "client-1" in ORG_AGENTS.
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+      });
+
+      await waitForText(container, "not logged in");
+      await waitForCondition(
+        () => buttonByText(container, "Connect Claude Code") !== null,
+        "Expected the in-chat login button for a credential failure",
+      );
+
+      // Clicking starts the in-product login for the resolved client + provider.
+      await click(buttonByText(container, "Connect Claude Code"));
+      await waitForCondition(
+        () => activityMocks.startRuntimeAuth.mock.calls.length > 0,
+        "Expected the login click to start runtime auth",
+      );
+      expect(activityMocks.startRuntimeAuth).toHaveBeenCalledWith("client-1", { provider: "claude-code" });
+
+      await act(async () => root.unmount());
+    });
+
+    it("does NOT render a Connect button for a non-credential failure (provider capacity)", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], capacityErrorEvents("agent-1"));
+      });
+
+      await waitForText(container, "at capacity");
+      await flush();
+      expect(buttonByText(container, "Connect Claude Code")).toBeNull();
+
+      await act(async () => root.unmount());
+    });
+
+    it("does NOT render a Connect button when the failing agent has no client (clientId null)", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        // The failing agent is not in the org roster, so clientIdForAgent → null.
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-unbound"));
+      });
+
+      await waitForText(container, "not logged in");
+      await flush();
+      expect(buttonByText(container, "Connect Claude Code")).toBeNull();
+
+      await act(async () => root.unmount());
+    });
   });
 
   it("does not re-render old message markdown when the composer draft changes", async () => {

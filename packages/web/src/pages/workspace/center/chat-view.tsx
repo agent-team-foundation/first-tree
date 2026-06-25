@@ -12,6 +12,7 @@ import {
   type MentionParticipant,
   parseProviderRetryEventMessage,
   type RequestResolution,
+  type RuntimeProvider,
   statusReasonFromProviderRetryEvent,
 } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -42,6 +43,7 @@ import {
 } from "react";
 import type { Components } from "react-markdown";
 import { useSearchParams } from "react-router";
+import { getClient } from "../../../api/activity.js";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../../api/agent-status.js";
 import { getAgentSkills } from "../../../api/agents.js";
 import { fetchAttachmentBase64, uploadImageAttachment } from "../../../api/attachments.js";
@@ -132,6 +134,7 @@ import { selectVisibleMessages } from "../../../utils/agent-final-text-filter.js
 import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
 import { computeRequiresMention, shouldPrimeMentionOnFocus } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
+import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-controls.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
 import { ChatSummary } from "./chat-summary.js";
 
@@ -237,10 +240,66 @@ function ReadReceipt({ msg, myAgentId }: { msg: MessageWithDelivery; myAgentId: 
   );
 }
 
-function ErrorRow({ event, agentNameFn }: { event: SessionEventRow; agentNameFn?: (id: string) => string }) {
+/**
+ * In-chat "needs login" entry point. Rendered under a credential-category
+ * error row so the user can start the in-product login for the failing agent's
+ * client + provider directly from the chat — without leaving for the Computers
+ * page. Reuses the daemon login flow + markers via `RuntimeAuthControls`:
+ *
+ *   - `forceConnectable` makes the shared control render the "Connect <label>"
+ *     button even though install-only detection no longer keys a logged-out
+ *     "Connect" affordance off capability `state` — the credential failure that
+ *     produced this error row IS the trigger.
+ *   - The control reads the live capability entry (this client's `pendingAuth` /
+ *     `lastAuthError` for the provider) to show "finishing in browser" /
+ *     terminal-failure-retry, so we fetch the client and poll while a login is
+ *     in flight, mirroring `RuntimeAuthControls`' own cadence.
+ */
+function ChatRuntimeLoginButton({ clientId, provider }: { clientId: string; provider: RuntimeProvider }) {
+  const [polling, setPolling] = useState(false);
+  const clientQuery = useQuery({
+    queryKey: ["clients", "single", clientId],
+    queryFn: () => getClient(clientId),
+    // Poll while a login is in flight so the pending / failure markers update;
+    // otherwise rely on the one mount fetch (the entry is otherwise static).
+    refetchInterval: polling ? 3000 : false,
+    staleTime: 30_000,
+  });
+  const entry = clientQuery.data?.capabilities[provider] ?? null;
+  return (
+    <RuntimeAuthControls
+      clientId={clientId}
+      provider={provider}
+      entry={entry}
+      forceConnectable
+      // The shared control invalidates `["clients"]`; mirror that into the
+      // single-row query this button reads from, and arm the in-flight poll.
+      onStarted={() => {
+        setPolling(true);
+        void clientQuery.refetch();
+      }}
+    />
+  );
+}
+
+function ErrorRow({
+  event,
+  agentNameFn,
+  clientIdForAgent,
+}: {
+  event: SessionEventRow;
+  agentNameFn?: (id: string) => string;
+  /** Resolve the emitting agent's pinned client id, for the in-chat login entry
+   *  point. Null when the agent is not on a client (no login button is shown). */
+  clientIdForAgent?: (agentId: string) => string | null;
+}) {
   const payload = asErrorPayload(event.payload);
   const retryPayload = payload ? parseProviderRetryEventMessage(payload.message) : null;
   const retryReason = retryPayload ? statusReasonFromProviderRetryEvent(retryPayload) : null;
+  // A credential failure means the provider is installed but logged out; offer
+  // an inline login when we can resolve the failing agent's client.
+  const loginClientId =
+    retryReason?.category === "credential" && clientIdForAgent ? clientIdForAgent(event.agentId) : null;
   const ts = formatClockTime(event.createdAt);
   // Resolve the emitting agent so the header reads "error · <agent> · runtime · …".
   // Falls back gracefully if the lookup function isn't provided (legacy callers).
@@ -298,6 +357,11 @@ function ErrorRow({ event, agentNameFn }: { event: SessionEventRow; agentNameFn?
       >
         {message}
       </div>
+      {loginClientId && retryReason && (
+        <div style={{ marginTop: "var(--sp-1_5)" }}>
+          <ChatRuntimeLoginButton clientId={loginClientId} provider={retryReason.provider} />
+        </div>
+      )}
     </div>
   );
 }
@@ -901,6 +965,8 @@ type ChatTimelineProps = {
   messagesEndRef: RefObject<HTMLDivElement | null>;
   defaultWorkgroupOpen: boolean;
   agentNameFn: (id: string) => string;
+  /** Resolve an agent's pinned client id for the in-chat login entry point. */
+  clientIdForAgent: (id: string) => string | null;
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
   myAgentId: string | null;
@@ -926,6 +992,7 @@ const ChatTimeline = memo(function ChatTimeline({
   messagesEndRef,
   defaultWorkgroupOpen,
   agentNameFn,
+  clientIdForAgent,
   agentAvatarFn,
   agentColorTokenFn,
   myAgentId,
@@ -983,7 +1050,14 @@ const ChatTimeline = memo(function ChatTimeline({
                 const ev = item.data;
                 switch (ev.kind) {
                   case "error":
-                    node = <ErrorRow key={item.key} event={ev} agentNameFn={agentNameFn} />;
+                    node = (
+                      <ErrorRow
+                        key={item.key}
+                        event={ev}
+                        agentNameFn={agentNameFn}
+                        clientIdForAgent={clientIdForAgent}
+                      />
+                    );
                     break;
                   default:
                     // assistant_text / tool_call / thinking are folded into
@@ -2666,6 +2740,23 @@ export function ChatView({
   );
 
   /**
+   * Resolve an agentId to the client it is pinned to, for the in-chat "needs
+   * login" entry point. Sourced from the org agent roster (`useOrgAgents`),
+   * which carries each agent's `clientId`. Null when the agent isn't on a
+   * client (e.g. a human, or an unbound agent) — the error row then renders
+   * without a login button.
+   */
+  const clientIdByAgent = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const a of orgAgentsPage?.items ?? []) map.set(a.uuid, a.clientId);
+    return map;
+  }, [orgAgentsPage?.items]);
+  const clientIdForAgent = useCallback(
+    (id: string): string | null => clientIdByAgent.get(id) ?? null,
+    [clientIdByAgent],
+  );
+
+  /**
    * Identity-pair variant used by the participant chip row and the
    * mention picker. Same precedence rule as `chatScopedAgentName`.
    */
@@ -3418,6 +3509,7 @@ export function ChatView({
             messagesEndRef={messagesEndRef}
             defaultWorkgroupOpen={chatDetail?.type === "direct"}
             agentNameFn={chatScopedAgentName}
+            clientIdForAgent={clientIdForAgent}
             agentAvatarFn={agentAvatar}
             agentColorTokenFn={agentColorToken}
             myAgentId={myAgentId}

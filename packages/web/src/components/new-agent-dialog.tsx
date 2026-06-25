@@ -16,8 +16,6 @@ import { ApiError, api, type ValidationIssue } from "../api/client.js";
 import { useAuth } from "../auth/auth-context.js";
 import { useCopyFeedback } from "../lib/use-copy-feedback.js";
 import { runVisibilityAwareInterval } from "../lib/visibility-interval.js";
-import { RuntimeAuthControls } from "../pages/clients/cards/shared/runtime-auth-controls.js";
-import { deriveRuntimeAuthView } from "../pages/clients/cards/shared/runtime-auth-view.js";
 import { slugify } from "../utils/agent-naming.js";
 import { Button } from "./ui/button.js";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
@@ -499,20 +497,6 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
     return out;
   }, [activeCapabilities]);
 
-  // Providers the daemon can sign in right here (unauthenticated + in-product
-  // Connect). When no runtime is `ok` yet, these let the user authenticate
-  // without leaving the dialog — the 5s caps poll (plus the Connect control's
-  // own refresh) flips the runtime to `ok` and unblocks Create in place.
-  const connectableProviders = useMemo<RuntimeProvider[]>(() => {
-    if (!activeCapabilities) return [];
-    const out: RuntimeProvider[] = [];
-    for (const [provider, entry] of Object.entries(activeCapabilities)) {
-      const rt = asRuntimeProvider(provider);
-      if (rt && deriveRuntimeAuthView(rt, entry, Date.now()).kind !== "none") out.push(rt);
-    }
-    return out;
-  }, [activeCapabilities]);
-
   // Realign the runtime selection whenever the picked client's capabilities
   // change — if the previous selection isn't `ok` on the new machine, fall
   // back to whatever the new machine prefers. Same pattern as onboarding.
@@ -822,12 +806,7 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
                 {!pickedClientId || activeCapabilities === null ? (
                   <RuntimeChipsSkeleton />
                 ) : okRuntimes.length === 0 ? (
-                  <NoOkRuntimeBlock
-                    clientId={pickedClientId}
-                    capabilities={activeCapabilities}
-                    connectableProviders={connectableProviders}
-                    onConnectRefresh={refreshCapabilities}
-                  />
+                  <NoOkRuntimeBlock />
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {okRuntimes.map((provider) => (
@@ -867,47 +846,18 @@ export function NewAgentDialog({ open, onOpenChange, onCreated }: Props) {
 }
 
 /**
- * "Computer is connected but no runtime is signed in" block. When a provider
- * can be driven in-product (browser OAuth), offer Connect right here so the user
- * authenticates without leaving the dialog — the parent's 5s caps poll plus the
- * control's own refresh flip the runtime to `ok` and unblock Create in place.
- * Falls back to the install hint only when nothing is connectable (e.g. nothing
- * installed on that machine yet).
+ * "Computer is connected but no runtime is installed" block. Detection is
+ * install-only, so the dialog no longer offers an in-product Connect here —
+ * it points the user at the computer's setup card to install a runtime. Once
+ * a runtime reports `ok` (installed), the parent's 5s caps poll swaps this for
+ * the runtime picker and unblocks Create.
  */
-function NoOkRuntimeBlock({
-  clientId,
-  capabilities,
-  connectableProviders,
-  onConnectRefresh,
-}: {
-  clientId: string;
-  capabilities: ClientCapabilities;
-  connectableProviders: RuntimeProvider[];
-  onConnectRefresh: () => void;
-}) {
-  if (connectableProviders.length === 0) {
-    return (
-      <p className="text-caption text-destructive">
-        No runtime ready on this computer. Install Claude Code or Codex on it (and sign in), then come back.
-      </p>
-    );
-  }
+function NoOkRuntimeBlock() {
   return (
-    <div className="space-y-3">
-      <p className="text-caption text-muted-foreground">
-        No runtime is signed in yet. Connect one here — the sign-in opens in your browser on that computer, and this
-        unblocks as soon as it finishes.
-      </p>
-      {connectableProviders.map((provider) => (
-        <RuntimeAuthControls
-          key={provider}
-          clientId={clientId}
-          provider={provider}
-          entry={capabilities[provider] ?? null}
-          onStarted={onConnectRefresh}
-        />
-      ))}
-    </div>
+    <p className="text-caption text-destructive">
+      No runtime installed on this computer. Install Claude Code or Codex on it — open this computer&apos;s setup card
+      in Settings → Computers for the install command — then come back.
+    </p>
   );
 }
 

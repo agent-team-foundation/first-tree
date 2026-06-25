@@ -84,13 +84,11 @@ function agent(overrides: Partial<Agent> = {}): Agent {
   };
 }
 
-function capability(state: "ok" | "missing" | "unauthenticated" | "error" = "ok") {
+function capability(state: "ok" | "missing" | "error" = "ok") {
   return {
     state,
-    available: state !== "missing",
-    authenticated: state === "ok",
-    sdkVersion: state === "missing" ? null : "1.0.0",
-    authMethod: state === "ok" ? ("oauth" as const) : ("none" as const),
+    available: state === "ok",
+    sdkVersion: state === "ok" ? "1.0.0" : null,
     detectedAt: NOW,
   };
 }
@@ -299,26 +297,10 @@ describe("NewAgentDialog extra branches", () => {
     expect(onCreated).toHaveBeenCalledWith(expect.objectContaining({ uuid: "agent-created" }), "codex");
   });
 
-  it("offers in-product Connect when the picked computer has an unauthenticated runtime but none ok", async () => {
-    const { NewAgentDialog } = await import("../new-agent-dialog.js");
-    const caps = { codex: capability("unauthenticated") };
-    activityMocks.listClients.mockResolvedValue([client({ capabilities: caps })]);
-    activityMocks.getClientCapabilities.mockResolvedValue(client({ capabilities: caps }));
-    const container = await renderDom(
-      <NewAgentDialog open onOpenChange={() => undefined} onCreated={() => undefined} />,
-    );
-
-    // Connectable runtime → Connect in place, not the "install and come back"
-    // dead-end. Create stays disabled until a runtime actually flips to ok.
-    await waitForText(container, "Connect Codex");
-    expect(document.body.textContent ?? "").not.toContain("No runtime ready");
-    expect(buttonByText(document.body, "Create").disabled).toBe(true);
-
-    await click(buttonByText(document.body, "Connect Codex"));
-    await waitForCondition(() => activityMocks.startRuntimeAuth.mock.calls.length > 0, "Expected startRuntimeAuth");
-    expect(activityMocks.startRuntimeAuth.mock.calls[0]?.[0]).toBe("client-1");
-    expect(activityMocks.startRuntimeAuth.mock.calls[0]?.[1]).toEqual({ provider: "codex" });
-  });
+  // Dropped "offers in-product Connect when the picked computer has an
+  // unauthenticated runtime but none ok": detection is install-only now — there
+  // is no logged-out state and no per-dialog Connect. A computer with no `ok`
+  // runtime shows the install-guidance block (covered below), not a Connect.
 
   it("surfaces client validation, server issues, root errors, and no-runtime states", async () => {
     const { NewAgentDialog } = await import("../new-agent-dialog.js");
@@ -328,7 +310,7 @@ describe("NewAgentDialog extra branches", () => {
       <NewAgentDialog open onOpenChange={() => undefined} onCreated={() => undefined} />,
     );
 
-    await waitForText(container, "No runtime ready");
+    await waitForText(container, "No runtime installed on this computer");
     await setValue(inputById("new-agent-display-name"), "只会中文");
     expect(buttonByText(document.body, "Create").disabled).toBe(true);
 

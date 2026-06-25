@@ -11,7 +11,7 @@ import { createAdminContext, useTestApp } from "./helpers.js";
  *   - `clientCapabilitiesReported` distinguishes "never probed" (allow,
  *     unknown) from "probed but missing this provider" (block).
  *   - `clientSupportsRuntimeProvider` requires `entry.available === true` —
- *     i.e. `state` ∈ {ok, unauthenticated}. `missing` / `error` blocks
+ *     i.e. `state === "ok"` (installed). `missing` / `error` blocks
  *     unless `force: true`.
  *
  * The gate is invoked from `createAgent` (creation pre-flight) and from the
@@ -21,15 +21,13 @@ import { createAdminContext, useTestApp } from "./helpers.js";
  */
 
 function entry(state: CapabilityEntry["state"]): CapabilityEntry {
-  // The `available` field follows `state` — `ok`/`unauthenticated` keep the
-  // SDK reachable; `missing`/`error` mark it unusable. Mirrors the probes.
-  const available = state === "ok" || state === "unauthenticated";
+  // The `available` field follows `state` — `ok` means the binary is
+  // installed/resolvable; `missing`/`error` mark it unusable. Mirrors the probes.
+  const available = state === "ok";
   return {
     state,
     available,
-    authenticated: state === "ok",
     sdkVersion: available ? "1.0.0-test" : null,
-    authMethod: state === "ok" ? "api_key" : "none",
     detectedAt: new Date().toISOString(),
   };
 }
@@ -77,10 +75,10 @@ describe("Agent capability gate (services/agent.ts)", () => {
     expect(created.runtimeProvider).toBe("claude-code");
   });
 
-  it("allows creation when reported state is `unauthenticated` (available SDK, user fixes login)", async () => {
+  it("allows creation when reported state is `ok` (installed SDK, auth resolved at run time)", async () => {
     const app = getApp();
     const ctx = await createAdminContext(app);
-    await setCapabilities(app, ctx.clientId, { codex: entry("unauthenticated") });
+    await setCapabilities(app, ctx.clientId, { codex: entry("ok") });
 
     const created = await createAgent(app.db, {
       name: `cap-gate-unauth-${crypto.randomUUID().slice(0, 6)}`,
@@ -186,7 +184,7 @@ describe("Agent capability gate (services/agent.ts)", () => {
     );
 
     // Once the client reports codex available, the same first bind succeeds.
-    await setCapabilities(app, ctx.clientId, { "claude-code": entry("ok"), codex: entry("unauthenticated") });
+    await setCapabilities(app, ctx.clientId, { "claude-code": entry("ok"), codex: entry("ok") });
     const bound = await updateAgent(app.db, agent.uuid, { clientId: ctx.clientId });
     expect(bound.clientId).toBe(ctx.clientId);
     expect(bound.runtimeProvider).toBe("codex");

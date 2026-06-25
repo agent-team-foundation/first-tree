@@ -10,10 +10,8 @@ import {
 const NOW = Date.parse("2026-06-22T12:00:00.000Z");
 
 const entry = (over: Partial<CapabilityEntry>): CapabilityEntry => ({
-  state: "unauthenticated",
+  state: "ok",
   available: true,
-  authenticated: false,
-  authMethod: "none",
   detectedAt: "2026-06-22T12:00:00.000Z",
   ...over,
 });
@@ -40,21 +38,16 @@ describe("deriveRuntimeAuthView", () => {
     expect(view).toEqual({ kind: "browser-pending", authUrl: "https://x/auth" });
   });
 
-  it("offers Connect for an unauthenticated codex with no pending login", () => {
-    expect(deriveRuntimeAuthView("codex", entry({}), NOW)).toEqual({ kind: "connectable" });
+  it("offers nothing for an installed codex with no pending login (detection is install-only)", () => {
+    // The connectable-by-logged-out path was removed with the Connect button:
+    // detection no longer carries an "unauthenticated" state, so an ok entry
+    // with no live pending login derives `none`.
+    expect(deriveRuntimeAuthView("codex", entry({}), NOW)).toEqual({ kind: "none" });
   });
 
-  it("surfaces a prior login failure on the connectable view (so the card can say 'retry')", () => {
-    const lastAuthError = {
-      reason: "exit-nonzero",
-      message: "account not authorized",
-      at: "2026-06-22T11:59:00.000Z",
-    } as const;
-    expect(deriveRuntimeAuthView("codex", entry({ lastAuthError }), NOW)).toEqual({
-      kind: "connectable",
-      lastError: lastAuthError,
-    });
-  });
+  // Dropped "surfaces a prior login failure on the connectable view": the
+  // connectable-by-state branch is gone, so `lastAuthError` no longer surfaces
+  // here (it returns `none`). Revived with the future in-chat auth entry point.
 
   it("a live pending login wins over a recorded failure (a fresh attempt is running)", () => {
     const view = deriveRuntimeAuthView(
@@ -68,14 +61,14 @@ describe("deriveRuntimeAuthView", () => {
     expect(view.kind).toBe("browser-pending");
   });
 
-  it("falls back to connectable once a pending login has expired", () => {
+  it("falls back to none once a pending login has expired (no connectable-by-state path)", () => {
     expect(
       deriveRuntimeAuthView("codex", entry({ pendingAuth: browserPending("2026-06-22T11:50:00.000Z") }), NOW),
-    ).toEqual({ kind: "connectable" });
+    ).toEqual({ kind: "none" });
   });
 
-  it("offers Connect for an unauthenticated claude-code (cc/codex parity)", () => {
-    expect(deriveRuntimeAuthView("claude-code", entry({}), NOW)).toEqual({ kind: "connectable" });
+  it("offers nothing for an installed claude-code with no pending login (cc/codex parity)", () => {
+    expect(deriveRuntimeAuthView("claude-code", entry({}), NOW)).toEqual({ kind: "none" });
   });
 
   it("offers nothing for a provider without in-product auth (claude-code-tui)", () => {
@@ -83,7 +76,7 @@ describe("deriveRuntimeAuthView", () => {
   });
 
   it("offers nothing when ok / missing / null", () => {
-    expect(deriveRuntimeAuthView("codex", entry({ state: "ok", authenticated: true }), NOW)).toEqual({ kind: "none" });
+    expect(deriveRuntimeAuthView("codex", entry({ state: "ok" }), NOW)).toEqual({ kind: "none" });
     expect(deriveRuntimeAuthView("codex", entry({ state: "missing", available: false }), NOW)).toEqual({
       kind: "none",
     });

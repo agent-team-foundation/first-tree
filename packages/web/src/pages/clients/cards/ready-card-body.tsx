@@ -40,20 +40,10 @@ export function ReadyCardBody({ client, boundAgents, agentName }: ReadyCardBodyP
             {reportedProviders.map((provider) => {
               const entry = client.capabilities[provider];
               if (entry == null) return null;
-              // A reported-but-unauthenticated provider (e.g. Codex while Claude
-              // is ok) gets the in-product Connect panel beneath its status
-              // line — same row component Setup-incomplete uses, so the Connect
-              // affordance is identical across both. Install boxes stay off here:
-              // a Ready card means at least one runtime is already `ok`.
-              return (
-                <RuntimeProviderRow
-                  key={provider}
-                  clientId={client.id}
-                  provider={provider}
-                  entry={entry}
-                  os={client.os}
-                />
-              );
+              // Detection is install-only: each reported provider shows just its
+              // status line (installed / missing / error). Install boxes stay
+              // off here — a Ready card means at least one runtime is `ok`.
+              return <RuntimeProviderRow key={provider} provider={provider} entry={entry} os={client.os} />;
             })}
           </div>
         </CardSection>

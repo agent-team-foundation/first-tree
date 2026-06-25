@@ -42,17 +42,15 @@ describe("runtimeProviderSchema", () => {
 });
 
 describe("capabilityEntrySchema", () => {
-  it("CAPABILITY_STATES enumerates the four documented states", () => {
-    expect(Object.values(CAPABILITY_STATES).sort()).toEqual(["error", "missing", "ok", "unauthenticated"].sort());
+  it("CAPABILITY_STATES enumerates the three documented states", () => {
+    expect(Object.values(CAPABILITY_STATES).sort()).toEqual(["error", "missing", "ok"].sort());
   });
 
   it("accepts a fully-formed `ok` entry", () => {
     const parsed = capabilityEntrySchema.parse({
       state: "ok",
       available: true,
-      authenticated: true,
       sdkVersion: "0.2.84",
-      authMethod: "oauth",
       runtimeSource: "path",
       runtimePath: "/usr/local/bin/codex",
       detectedAt: new Date().toISOString(),
@@ -63,13 +61,11 @@ describe("capabilityEntrySchema", () => {
     expect(parsed.runtimePath).toBe("/usr/local/bin/codex");
   });
 
-  it("accepts `missing` with null sdkVersion + auth_method=none", () => {
+  it("accepts `missing` with null sdkVersion", () => {
     const parsed = capabilityEntrySchema.parse({
       state: "missing",
       available: false,
-      authenticated: false,
       sdkVersion: null,
-      authMethod: "none",
       detectedAt: new Date().toISOString(),
     });
     expect(parsed.state).toBe("missing");
@@ -81,24 +77,12 @@ describe("capabilityEntrySchema", () => {
       capabilityEntrySchema.parse({
         state: "pending",
         available: true,
-        authenticated: false,
-        authMethod: "none",
         detectedAt: new Date().toISOString(),
       }),
     ).toThrow();
   });
-
-  it("rejects an invalid authMethod value", () => {
-    expect(() =>
-      capabilityEntrySchema.parse({
-        state: "ok",
-        available: true,
-        authenticated: true,
-        authMethod: "magic-link", // <- not in the enum
-        detectedAt: new Date().toISOString(),
-      }),
-    ).toThrow();
-  });
+  // Dropped "rejects an invalid authMethod value": authMethod was removed from
+  // the capability schema (detection is install-only, no auth probe).
 });
 
 describe("clientCapabilitiesSchema + updateClientCapabilitiesSchema", () => {
@@ -110,17 +94,13 @@ describe("clientCapabilitiesSchema + updateClientCapabilitiesSchema", () => {
       "claude-code": {
         state: "ok",
         available: true,
-        authenticated: true,
         sdkVersion: "0.2.84",
-        authMethod: "oauth",
         detectedAt: new Date().toISOString(),
       },
       "future-provider": {
         state: "missing",
         available: false,
-        authenticated: false,
         sdkVersion: null,
-        authMethod: "none",
         detectedAt: new Date().toISOString(),
       },
     });

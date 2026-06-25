@@ -166,8 +166,8 @@ describe("FirstTreeHubSDK public surface", () => {
         codex: {
           state: "ok",
           available: true,
-          authenticated: true,
-          authMethod: "api_key",
+          runtimeSource: "bundled",
+          runtimePath: null,
           detectedAt: "2026-01-01T00:00:00.000Z",
         },
       }),
