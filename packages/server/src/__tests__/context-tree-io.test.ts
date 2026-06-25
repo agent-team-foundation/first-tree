@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { chats } from "../db/schema/chats.js";
 import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
 import {
+  buildContextTreeIoSummary,
   explainContextTreeIoDecision,
   reconcileContextTreeWrites,
   recordFromSessionEvent,
@@ -673,6 +674,63 @@ describe("context-tree IO service", () => {
     expect(io.skipped).toEqual(skipped);
   });
 
+  it("skips diagnostics scan for already-recorded IO events", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: Array<{ name: string; fields?: Record<string, unknown> }> = [];
+
+    const recorded = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-recorded",
+        name: "Read",
+        args: {},
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-skipped",
+        name: "Bash",
+        args: { command: "echo x > /tmp/context-tree/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    await recordFromSessionEvent(app.db, {
+      organizationId: seed.organizationId,
+      agentId: seed.agent.uuid,
+      chatId: seed.chatId,
+      runtimeProvider: "claude-code",
+      sessionEvent: recorded,
+    });
+
+    const skipped = await summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7, {
+      timing: (name, _ms, fields) => timings.push({ name, fields }),
+    });
+
+    expect(skipped.totalEventCount).toBe(1);
+    expect(timings.find((timing) => timing.name === "io_skipped_rows")?.fields).toMatchObject({ rowCount: 1 });
+  });
+
   it("records git status delta refs as synthetic writes for unsupported shell commands", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();
@@ -739,6 +797,19 @@ describe("context-tree IO service", () => {
     expect(summary.recentEvents.some((event) => event.source === "git_status_delta")).toBe(false);
     expect(summary.recentEvents.every((event) => event.action === "read")).toBe(true);
     expect(summary.summary.write.eventCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("builds full IO summary with a single session-event backfill pass", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: string[] = [];
+
+    const summary = await buildContextTreeIoSummary(app.db, seed.organizationId, 7, [], undefined, {
+      timing: (name) => timings.push(name),
+    });
+
+    expect(summary.writes).toEqual([]);
+    expect(timings.filter((name) => name === "io_backfill_scan")).toHaveLength(1);
   });
 
   it("reconciles git writes with telemetry: attributes the agent, keeps unmatched git authors, surfaces telemetry-only writes", async () => {
