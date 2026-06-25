@@ -1,15 +1,18 @@
 import type { Organization, OrgBrief } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, Link2, Loader2, Pencil, Plus, UserPlus, X } from "lucide-react";
+import { Check, ChevronDown, Link2, Loader2, LogOut, Pencil, Plus, UserPlus, X } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api/client.js";
+import { leaveMembership } from "../api/members.js";
 import { updateOrganization } from "../api/organizations.js";
 import { useAuth } from "../auth/auth-context.js";
 import { cn } from "../lib/utils.js";
 import { Avatar } from "./avatar.js";
 import { InviteDialog } from "./invite-dialog.js";
 import { TeamSetupModal } from "./team-setup-modal.js";
+import { Button } from "./ui/button.js";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog.js";
 
 // Floor for how long the "Switching to {name}…" veil stays up, so a fast
 // switch (cache clear + reconnect + /me) doesn't flash the veil for a single
@@ -40,14 +43,23 @@ export function TeamSwitcher({
   variant?: "full" | "compact";
   redirectHomeOnSwitch?: boolean;
 }) {
-  const { organizationId, role, teamDisplayName, selectOrganization, switchingOrg, setSwitchingOrg, refreshMe } =
-    useAuth();
+  const {
+    organizationId,
+    currentMembership,
+    role,
+    teamDisplayName,
+    selectOrganization,
+    switchingOrg,
+    setSwitchingOrg,
+    refreshMe,
+  } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [setupAction, setSetupAction] = useState<"create" | "join" | null>(null);
   const [renaming, setRenaming] = useState(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const [renameSaved, setRenameSaved] = useState(false);
   // Org id whose last switch attempt failed, so we can show a retry hint
@@ -138,6 +150,41 @@ export function TeamSwitcher({
     },
   });
 
+  const switchAfterLeave = async (org: OrgBrief) => {
+    setSwitchError(null);
+    setSwitchingOrg(org);
+    const startedAt = Date.now();
+    try {
+      await selectOrganization(org.id);
+      if (redirectHomeOnSwitch) navigate("/", { replace: true });
+      const wait = Math.max(0, MIN_SHOW_MS - (Date.now() - startedAt));
+      window.setTimeout(() => setSwitchingOrg(null), wait);
+    } catch {
+      setSwitchingOrg(null);
+      setSwitchError(org.id);
+      setOpen(true);
+    }
+  };
+
+  const leaveMutation = useMutation({
+    mutationFn: async () => {
+      if (!currentMembership?.id) throw new Error("current membership not loaded");
+      await leaveMembership(currentMembership.id);
+    },
+    onSuccess: async () => {
+      const nextOrg = others[0] ?? null;
+      setLeaveConfirmOpen(false);
+      setOpen(false);
+      await refreshMe();
+      if (nextOrg) {
+        await switchAfterLeave(nextOrg);
+      } else {
+        queryClient.clear();
+        if (redirectHomeOnSwitch) navigate("/", { replace: true });
+      }
+    },
+  });
+
   const handleSwitch = async (org: OrgBrief) => {
     if (org.id === organizationId) {
       setOpen(false);
@@ -176,6 +223,12 @@ export function TeamSwitcher({
     renameMutation.reset();
     setRenameDraft(currentOrg?.displayName ?? "");
     setRenaming(false);
+  };
+
+  const openLeaveConfirm = () => {
+    leaveMutation.reset();
+    setOpen(false);
+    setLeaveConfirmOpen(true);
   };
 
   const handleRenameSubmit = (e: FormEvent) => {
@@ -321,6 +374,16 @@ export function TeamSwitcher({
                   </>
                 )}
               </div>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={openLeaveConfirm}
+                className="mt-2 flex w-full items-center gap-2 rounded-[var(--radius-input)] px-2 py-1.5 text-left text-body transition-colors hover:bg-[var(--bg-hover)]"
+                style={{ color: "var(--state-error)" }}
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                <span>Leave this team</span>
+              </button>
             </div>
 
             {/* ② Switch list — other teams only; hidden for single-team users. */}
@@ -428,6 +491,49 @@ export function TeamSwitcher({
 
       <TeamSetupModal action={setupAction} onClose={() => setSetupAction(null)} />
       <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />
+      <Dialog
+        open={leaveConfirmOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !leaveMutation.isPending) setLeaveConfirmOpen(false);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Leave {currentOrg.displayName}?</DialogTitle>
+            <DialogDescription style={{ color: "var(--fg-2)" }}>
+              This removes only your membership from this team. The team, agents, settings, and historical work stay
+              intact.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-[var(--radius-panel)] border p-3 text-body" style={{ borderColor: "var(--border)" }}>
+            You will need an invite to join this team again. If you are the last admin, the team may be left without an
+            active administrator.
+          </div>
+          {leaveMutation.error instanceof Error && (
+            <p className="text-body" style={{ color: "var(--state-error)" }}>
+              {leaveMutation.error.message}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setLeaveConfirmOpen(false)}
+              disabled={leaveMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => leaveMutation.mutate()}
+              disabled={leaveMutation.isPending}
+            >
+              {leaveMutation.isPending ? "Leaving…" : "Leave team"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

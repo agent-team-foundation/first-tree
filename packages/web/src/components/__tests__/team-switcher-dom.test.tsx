@@ -18,6 +18,7 @@ const ORGS: OrgBrief[] = [
 ];
 
 const clientMocks = vi.hoisted(() => ({ get: vi.fn() }));
+const memberMocks = vi.hoisted(() => ({ leaveMembership: vi.fn() }));
 const orgMocks = vi.hoisted(() => ({ updateOrganization: vi.fn() }));
 
 // Mock api so the org list is deterministic, and stub the avatar + the two
@@ -26,6 +27,7 @@ vi.mock("../../api/client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../api/client.js")>();
   return { ...actual, api: { ...actual.api, get: clientMocks.get } };
 });
+vi.mock("../../api/members.js", () => memberMocks);
 vi.mock("../../api/organizations.js", () => orgMocks);
 vi.mock("../avatar.js", () => ({ Avatar: () => <span data-testid="avatar" /> }));
 vi.mock("../invite-dialog.js", () => ({ InviteDialog: () => null }));
@@ -131,8 +133,33 @@ function Harness({
         isAuthenticated: true,
         meLoaded: true,
         organizationId,
+        memberId: organizationId === "org-1" ? "member-1" : organizationId === "org-2" ? "member-2" : "member-3",
         role,
         teamDisplayName: "Acme Robotics",
+        memberships: ORGS.map((org) => ({
+          id: org.id === "org-1" ? "member-1" : org.id === "org-2" ? "member-2" : "member-3",
+          organizationId: org.id,
+          organizationName: org.displayName,
+          role: org.role,
+          agentId: `agent-${org.id}`,
+          orgHasOtherMembers: false,
+          hasUsableAgent: true,
+          onboardingSuppressedAt: null,
+          onboardingSuppressedReason: null,
+          onboardingCompletedAt: null,
+        })),
+        currentMembership: {
+          id: organizationId === "org-1" ? "member-1" : organizationId === "org-2" ? "member-2" : "member-3",
+          organizationId,
+          organizationName: organizationId === "org-1" ? "Acme Robotics" : organizationId,
+          role,
+          agentId: `agent-${organizationId}`,
+          orgHasOtherMembers: false,
+          hasUsableAgent: true,
+          onboardingSuppressedAt: null,
+          onboardingSuppressedReason: null,
+          onboardingCompletedAt: null,
+        },
         user: { id: "u", displayName: "Gandy", username: "gandy", avatarUrl: null },
         switchingOrg,
         setSwitchingOrg,
@@ -173,6 +200,7 @@ async function renderHarness(
 beforeEach(() => {
   document.body.innerHTML = "";
   clientMocks.get.mockResolvedValue(ORGS);
+  memberMocks.leaveMembership.mockResolvedValue(undefined);
   orgMocks.updateOrganization.mockImplementation(async (_id: string, patch: Partial<Organization>) =>
     organization({ ...patch }),
   );
@@ -325,6 +353,26 @@ describe("TeamSwitcher", () => {
     expect(buttonByText(container, "Globex")).toBeNull();
     // Management actions are still present for single-team users.
     expect(buttonByText(container, "Create new team")).not.toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
+  it("lets a user leave the current team, refreshes auth state, and switches to the next team", async () => {
+    const refreshMe = vi.fn(async () => {});
+    const select = vi.fn(async () => {});
+    const { container, root } = await renderHarness(select, { refreshMe });
+
+    await click(anchorOf(container));
+    await click(buttonByText(container, "Leave this team"));
+
+    expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain("Leave Acme Robotics?");
+    expect(document.body.textContent).toContain("This removes only your membership");
+
+    await click(buttonByText(document.body, "Leave team"));
+
+    expect(memberMocks.leaveMembership).toHaveBeenCalledWith("member-1");
+    expect(refreshMe).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledWith("org-2");
 
     await act(async () => root.unmount());
   });

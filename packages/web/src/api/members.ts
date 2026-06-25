@@ -27,6 +27,10 @@ export function deleteMember(id: string): Promise<void> {
   return api.delete<void>(withOrg(`/members/${encodeURIComponent(id)}`));
 }
 
+export function leaveMembership(memberId: string): Promise<void> {
+  return api.post<void>(`/me/memberships/${encodeURIComponent(memberId)}/leave`);
+}
+
 /**
  * Self-service profile edit (`PATCH /me/profile`) — user-scoped, NOT org-scoped
  * (no `withOrg`). The caller can rename themselves; the server has no `role`
