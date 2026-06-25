@@ -12,8 +12,8 @@ import { organizations } from "./organizations.js";
  * binding. Replaces the per-repo OAuth + webhook-secret model that lived in
  * `organization_settings.github_integration.webhookSecretCipher`.
  *
- * One installation simultaneously unlocks three capabilities (see design
- * doc `docs/github-app-design-zh.md` §3):
+ * One installation simultaneously unlocks three capabilities (see the GitHub
+ * App design in the First Tree context tree: `system/cloud/github/github-app.md`):
  *   1. User OAuth (user-to-server access + refresh tokens) — persisted on
  *      `auth_identities.metadata` for the signing-in user, not here.
  *   2. Webhook stream — `installation_id` resolves the inbound webhook to

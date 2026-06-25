@@ -10,8 +10,10 @@ import { z } from "zod";
  * (account type, permissions, output DTO) so server and web agree on the
  * wire format without duplicating literals.
  *
- * See `docs/github-app-design-zh.md` (decisions D0a / D0b / D1 / D2 / D3 / D4)
- * for the rationale.
+ * See the GitHub App design in the First Tree context tree:
+ * `system/cloud/github/github-app.md` (raw record:
+ * `raw-context/proposals/github-app-design.20260610.md`, decisions
+ * D0a / D0b / D1 / D2 / D3 / D4) for the rationale.
  */
 
 /**
