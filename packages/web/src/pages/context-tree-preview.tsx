@@ -39,6 +39,35 @@ const AGENTS = [
 const REPO_RESOURCE = [
   { type: "repo", defaultEnabled: "recommended", payload: { url: "https://github.com/acme/acme-web" } },
 ];
+// GitHub App installation + the repos it grants — seeds the inline connect+pick
+// states of the Context tab build entry (no repo resource yet).
+const INSTALLATION = {
+  installationId: 42,
+  accountLogin: "acme",
+  accountType: "Organization",
+  manageUrl: "https://github.com/organizations/acme/settings/installations/42",
+  suspended: false,
+  permissions: {},
+  events: [],
+};
+const GH_REPOS = [
+  {
+    fullName: "acme/acme-web",
+    cloneUrl: "https://github.com/acme/acme-web.git",
+    htmlUrl: "https://github.com/acme/acme-web",
+    private: true,
+    defaultBranch: "main",
+    pushedAt: null,
+  },
+  {
+    fullName: "acme/acme-api",
+    cloneUrl: "https://github.com/acme/acme-api.git",
+    htmlUrl: "https://github.com/acme/acme-api",
+    private: true,
+    defaultBranch: "main",
+    pushedAt: null,
+  },
+];
 const FEATURES_DISABLED = { contextReviewer: { enabled: false, agentUuid: null } };
 const FEATURES_ENABLED = { contextReviewer: { enabled: true, agentUuid: "0192bbbb-bot2" } };
 // Enabled, but the saved reviewer is no longer one of the admin's active agents.
@@ -204,10 +233,20 @@ export function ContextTreePreviewPage() {
           ]}
         />
         <BuildEntryCase
-          title="no repo connected"
+          title="no repo · GitHub not connected (install CTA)"
           seed={[
             [["context-build", "managed-agents", ORG], AGENTS],
             [["context-build", "resources", ORG], []],
+            [["context-build", "installation", ORG], null],
+          ]}
+        />
+        <BuildEntryCase
+          title="no repo · connected → pick a repo inline"
+          seed={[
+            [["context-build", "managed-agents", ORG], AGENTS],
+            [["context-build", "resources", ORG], []],
+            [["context-build", "installation", ORG], INSTALLATION],
+            [["context-build", "org-github-repos", ORG], GH_REPOS],
           ]}
         />
         <BuildEntryCase

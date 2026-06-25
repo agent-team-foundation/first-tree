@@ -47,10 +47,12 @@ export const ALLOWED_POST_INSTALL_NEXT: ReadonlySet<string> = new Set([
   // installs in a popup and lands the popup here so it can auto-close while the
   // original tab keeps polling.
   "/onboarding/connected",
-  // Build-tree recovery surface: its connect-code step passes itself as `next`
-  // when the install popup is blocked (the full-page redirect must return to
-  // the recovery flow, not Settings — see step-connect-code.tsx).
-  "/build-tree",
+  // Context tab build entry: its inline connect-code passes the Context page as
+  // `next` when the install popup is blocked (the full-page redirect must return
+  // to the inline build/repo-pick flow, not Settings — see
+  // context-tree-build-entry.tsx). This replaced the removed /build-tree page,
+  // whose recovery surface moved onto the Context tab.
+  "/context",
 ]);
 
 /**
