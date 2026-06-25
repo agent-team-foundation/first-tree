@@ -9,10 +9,12 @@
 // binary at install time trims the install footprint without touching the
 // small `@openai/codex-sdk` TypeScript client we actually import.
 //
-// Zero-config: runs as a `postinstall` of the published package. Honors
-// FIRST_TREE_KEEP_CODEX_BINARY=1 for users who prefer the bundled engine.
-// The whole body is wrapped so it NEVER exits non-zero — a prune failure must
-// not break the consumer's install (the runtime degrades gracefully to PATH).
+// Zero-config: runs as a `postinstall` of the published package, but ONLY
+// prunes for a global install (`npm install -g first-tree`) — see the
+// ownership-boundary note in main(). Honors FIRST_TREE_KEEP_CODEX_BINARY=1 for
+// users who prefer the bundled engine. The whole body is wrapped so it NEVER
+// exits non-zero — a prune failure must not break the install (the runtime
+// degrades gracefully to PATH).
 import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -80,6 +82,17 @@ function dirSize(dir) {
 function main() {
   if (process.env.FIRST_TREE_KEEP_CODEX_BINARY === "1") return;
   if (insideSourceMonorepo()) return;
+
+  // Ownership boundary: only prune in a GLOBAL install (`npm install -g
+  // first-tree`), where the codex engine sits in first-tree's own global
+  // root and is there because of first-tree. In a non-global consumer
+  // install, npm hoists `@openai/codex-*` to the app's root node_modules,
+  // where another dependency may share it — deleting it there could break an
+  // unrelated package. npm sets `npm_config_global=true` for `-g` installs;
+  // absent it (local dependency install, or a package manager that doesn't
+  // export the flag) we skip and leave the binary in place. The runtime still
+  // resolves a system `codex` on PATH, so skipping only forgoes the size win.
+  if (process.env.npm_config_global !== "true") return;
 
   // Anchor resolution at both the install package dir (cwd during a
   // `postinstall`) and this script's own dir, so the node_modules walk-up
