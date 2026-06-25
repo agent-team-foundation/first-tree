@@ -19,12 +19,6 @@ function formatSourceList(sourceUrls: readonly string[], heading: string): strin
   return [heading, ...sourceUrls.map((u) => `- ${u}`)];
 }
 
-function formatInlineScope(sourceUrls: readonly string[]): string {
-  if (sourceUrls.length === 0) return "your team's connected repos";
-  if (sourceUrls.length === 1) return sourceUrls[0] ?? "the connected repo";
-  return `${sourceUrls.length} connected repos`;
-}
-
 export function buildValueFirstBootstrap(
   sourceUrls: readonly string[],
   opts: {
@@ -35,29 +29,28 @@ export function buildValueFirstBootstrap(
   const sourceLines = sourceUrls.length > 0 ? ["", ...formatSourceList(sourceUrls, "Connected code:")] : [];
   const treeLine =
     opts.treeSetup === "pending"
-      ? "A separate setup chat will prepare the team's shared memory, so keep this chat focused on the user's first useful task."
+      ? "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep team context setup in the separate setup chat."
       : opts.treeSetup === "bound"
-        ? "Team context is available; keep this chat focused on the user's first useful task."
-        : "If the user shares code later, help them get value from it before asking about long-term team setup.";
+        ? "Operational note: use the first-tree-welcome skill for this onboarding first chat. Use team context when helpful, but keep this chat focused on the first task."
+        : "Operational note: use the first-tree-welcome skill for this onboarding first chat. If the user shares code later, help from that code before asking about long-term setup.";
 
   return [
-    `First Tree is getting ${opts.agentDisplayName} ready to help with ${formatInlineScope(sourceUrls)}.`,
-    "",
-    "Use the first-tree-welcome skill for this onboarding first chat.",
+    `This is your first task chat with ${opts.agentDisplayName}.`,
     ...sourceLines,
     "",
-    "Start with useful work: use the available code and team context to help the user choose a small first task.",
+    `${opts.agentDisplayName} will first read the available code and team context, then suggest a few small tasks you can start with.`,
+    "",
     treeLine,
   ].join("\n");
 }
 
 export function buildNoRepoBootstrap(agentDisplayName: string): string {
   return [
-    `First Tree is introducing ${agentDisplayName} before code is connected.`,
+    `This is your first chat with ${agentDisplayName}.`,
     "",
-    "Use the first-tree-welcome skill for this onboarding first chat.",
+    `No code is connected yet. Share a local folder path or a GitHub repo URL, and ${agentDisplayName} can start from there.`,
     "",
-    "Help the user start by sharing a local folder path or a GitHub repo URL. Keep setup light and show value from real code first.",
+    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep setup light and show value from real code first.",
   ].join("\n");
 }
 
@@ -68,13 +61,15 @@ export function buildTreeSetupBootstrap(
   const sourceLines = formatSourceList(sourceUrls, "Source code:");
   const treeLine = `Context Tree: ${opts.treeUrl ?? "resolved by First Tree Cloud"}`;
   return [
-    "First Tree opened this separate setup chat to prepare the team's shared memory.",
+    "This chat sets up team context for future agent work.",
     "",
     treeLine,
     "",
     ...sourceLines,
     "",
-    "Use first-tree-read, first-tree-seed, or first-tree-write after reading the bound tree. Keep this chat focused on shared-memory setup; the user's first work chat is separate.",
+    "This setup helps future agents understand the team's code, decisions, and conventions. The first task chat stays separate.",
+    "",
+    "Operational note: after reading the bound tree, use first-tree-read, first-tree-seed, or first-tree-write as appropriate.",
   ].join("\n");
 }
 
@@ -85,12 +80,12 @@ export function buildTreeSetupBootstrap(
  */
 export function buildInviteeReadyBootstrap(agentDisplayName: string, treeUrl: string): string {
   return [
-    `First Tree is getting ${agentDisplayName} ready for this team.`,
-    "",
-    "Use the first-tree-welcome skill for this onboarding first chat.",
+    `This is your first task chat with ${agentDisplayName}.`,
     "",
     `Team context: ${treeUrl}`,
     "",
-    "Start with useful work: use the team's code and context to help the user choose a small first task.",
+    `${agentDisplayName} will use the team's code and context to suggest a few small tasks you can start with.`,
+    "",
+    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Do not make team context setup the invitee's first task.",
   ].join("\n");
 }

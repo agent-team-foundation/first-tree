@@ -64,7 +64,7 @@ describe("POST /me/onboarding/kickoff", () => {
     // Chat carries the kind-scoped kickoff key.
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(chat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:tree`);
-    expect(chat?.topic).toBe("Team memory setup");
+    expect(chat?.topic).toBe("Set up team context");
 
     // Bootstrap message landed.
     const msgs = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
@@ -99,7 +99,7 @@ describe("POST /me/onboarding/kickoff", () => {
 
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(chat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work`);
-    expect(chat?.topic).toBe("First task");
+    expect(chat?.topic).toBe("Choose your first task");
 
     const [msg] = await app.db.select().from(messages).where(eq(messages.chatId, chatId)).limit(1);
     expect(msg?.senderId).toBe(admin.humanAgentUuid);
@@ -271,7 +271,7 @@ describe("POST /me/onboarding/kickoff", () => {
     });
     const introChatId = intro.json<{ chatId: string }>().chatId;
     const [introChat] = await app.db.select().from(chats).where(eq(chats.id, introChatId)).limit(1);
-    expect(introChat?.topic).toBe("Meet your agent");
+    expect(introChat?.topic).toBe("Meet your agent and share code");
 
     // 2) Later, /build-tree with the SAME agent → tree kickoff. Must be a NEW
     //    chat carrying the tree-seeding bootstrap, not the intro chat (regression
@@ -284,7 +284,7 @@ describe("POST /me/onboarding/kickoff", () => {
     });
     const treeChatId = tree.json<{ chatId: string }>().chatId;
     const [treeChat] = await app.db.select().from(chats).where(eq(chats.id, treeChatId)).limit(1);
-    expect(treeChat?.topic).toBe("Team memory setup");
+    expect(treeChat?.topic).toBe("Set up team context");
 
     expect(treeChatId).not.toBe(introChatId);
     const treeMsgs = await app.db.select().from(messages).where(eq(messages.chatId, treeChatId));
