@@ -9,7 +9,7 @@ import {
   updateMyProfileSchema,
 } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
-import { and, eq, isNull, ne } from "drizzle-orm";
+import { and, asc, eq, isNotNull, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { agents } from "../db/schema/agents.js";
@@ -253,10 +253,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
   /**
    * GET /me/onboarding/tree-setup-status — recovery probe for the standalone
    * `/build-tree` surface and Settings nav. A missing tree binding still needs
-   * setup. A binding created after the value-first work chat completed also
-   * needs setup until a tree kickoff bootstrap message exists; this covers the
-   * recoverable edge where Cloud wrote `context_tree` but the background tree
-   * kickoff failed before notifying the agent.
+   * setup. A binding created after the org's value-first work chat completed
+   * also needs setup until a tree kickoff bootstrap message exists; this covers
+   * the recoverable edge where Cloud wrote `context_tree` but the background
+   * tree kickoff failed before notifying the agent. The recovery decision is
+   * org-level: different admins in the same org must not see different setup
+   * debt just because their own onboarding completion timestamps differ.
    */
   app.get("/me/onboarding/tree-setup-status", async (request) => {
     const { userId } = requireUser(request);
@@ -266,14 +268,13 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       .select({
         organizationId: members.organizationId,
         role: members.role,
-        onboardingCompletedAt: members.onboardingCompletedAt,
       })
       .from(members)
       .where(eq(members.id, memberId))
       .limit(1);
     if (!member) throw new NotFoundError("Membership not found");
 
-    if (member.role !== "admin" || member.onboardingCompletedAt === null) {
+    if (member.role !== "admin") {
       return {
         needsTreeSetup: false,
         hasTreeBinding: false,
@@ -284,11 +285,21 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const tree = await getOrgContextTreeWithMeta(app.db, member.organizationId);
     const hasTreeBinding = !!tree.repo;
     const hasTreeSetupKickoff = await hasTreeSetupKickoffMessage(app.db, member.organizationId);
-    const bindingCreatedAfterCompletion =
-      hasTreeBinding && tree.updatedAt !== null && tree.updatedAt >= member.onboardingCompletedAt;
+    const [firstCompletedMembership] = await app.db
+      .select({ onboardingCompletedAt: members.onboardingCompletedAt })
+      .from(members)
+      .where(and(eq(members.organizationId, member.organizationId), isNotNull(members.onboardingCompletedAt)))
+      .orderBy(asc(members.onboardingCompletedAt))
+      .limit(1);
+    const orgOnboardingCompletedAt = firstCompletedMembership?.onboardingCompletedAt ?? null;
+    const bindingCreatedAfterOrgCompletion =
+      hasTreeBinding &&
+      tree.updatedAt !== null &&
+      orgOnboardingCompletedAt !== null &&
+      tree.updatedAt >= orgOnboardingCompletedAt;
 
     return {
-      needsTreeSetup: !hasTreeBinding || (bindingCreatedAfterCompletion && !hasTreeSetupKickoff),
+      needsTreeSetup: !hasTreeBinding || (bindingCreatedAfterOrgCompletion && !hasTreeSetupKickoff),
       hasTreeBinding,
       hasTreeSetupKickoff,
     };
