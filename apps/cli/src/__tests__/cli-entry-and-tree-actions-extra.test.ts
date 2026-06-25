@@ -44,6 +44,7 @@ const originalCwd = process.cwd();
 const originalHome = process.env.FIRST_TREE_HOME;
 const originalJson = process.env.FIRST_TREE_JSON;
 const originalLogLevel = process.env.FIRST_TREE_LOG_LEVEL;
+const originalProcessTitle = process.title;
 
 beforeEach(() => {
   vi.resetModules();
@@ -65,6 +66,7 @@ afterEach(() => {
   else process.env.FIRST_TREE_JSON = originalJson;
   if (originalLogLevel === undefined) delete process.env.FIRST_TREE_LOG_LEVEL;
   else process.env.FIRST_TREE_LOG_LEVEL = originalLogLevel;
+  process.title = originalProcessTitle;
 });
 
 describe("CLI entry and public exports", () => {
@@ -79,6 +81,7 @@ describe("CLI entry and public exports", () => {
     await import("../cli/index.js");
 
     expect(process.env.FIRST_TREE_HOME).toBeDefined();
+    expect(process.title).toBe("first-tree-dev");
     expect(clientMocks.setCliBinding).toHaveBeenCalledWith(expect.objectContaining({ binName: "first-tree-dev" }));
     expect(parseSpy).toHaveBeenCalledTimes(1);
     expect(

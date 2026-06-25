@@ -47,4 +47,11 @@ if (!process.env.FIRST_TREE_HOME) {
   process.env.FIRST_TREE_HOME = channelConfig.defaultHome;
 }
 
+// Best-effort operator UX: npm-installed CLIs run inside the Node.js
+// interpreter, so process viewers and filesystem activity tools can otherwise
+// show "node" while First Tree is reading the workspace. TCC/code-signing
+// prompts may still identify the underlying Node binary, but process-title
+// aware tools should show the channel-specific CLI name.
+process.title = channelConfig.binName;
+
 setCliBinding({ binName: channelConfig.binName, packageName: channelConfig.packageName });
