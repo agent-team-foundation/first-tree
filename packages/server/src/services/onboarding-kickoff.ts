@@ -39,9 +39,9 @@ export type KickoffOnboardingResult = {
 function topicForKickoffKind(kind: KickoffKind): string {
   switch (kind) {
     case "intro":
-      return "Meet your agent and share code";
+      return "Meet your agent";
     case "work":
-      return "Choose your first task";
+      return "First task chat";
     case "tree":
       return "Set up team context";
   }
