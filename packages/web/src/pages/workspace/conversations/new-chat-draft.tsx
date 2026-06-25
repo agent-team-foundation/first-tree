@@ -686,6 +686,11 @@ export function NewChatDraft({
                     inset: 0,
                     padding: "var(--sp-2) var(--sp-3)",
                     margin: 0,
+                    // Tracks the textarea, which the mobile zoom guard
+                    // (index.css) raises to the iOS no-zoom floor on phone
+                    // widths; reading the same var keeps this ghost hint
+                    // aligned with typed text.
+                    fontSize: "var(--composer-font-size)",
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
                     pointerEvents: "none",

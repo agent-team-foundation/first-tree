@@ -3600,7 +3600,11 @@ export function ChatView({
                           chipClassName="mention-text"
                           mirrorStyle={{
                             padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
-                            fontSize: "var(--text-subtitle)",
+                            // Tracks the textarea, which the mobile zoom guard
+                            // (index.css) raises to the iOS no-zoom floor on
+                            // phone widths; reading the same var keeps mirror
+                            // glyphs aligned there.
+                            fontSize: "var(--composer-font-size)",
                             lineHeight: "var(--text-subtitle--line-height)",
                             letterSpacing: "var(--text-subtitle--letter-spacing)",
                             // Textarea is `font-normal` (400) which overrides
