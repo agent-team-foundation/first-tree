@@ -4,7 +4,7 @@ import { type CSSProperties, type ReactElement, type ReactNode, useEffect, useMe
 import { getAgentUsageSummary, getAgentUsageTurns } from "../../api/usage.js";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
-import { activeTokenCount, processedTokenCount } from "../../lib/token-usage.js";
+import { activeTokenCount, PROCESSED_TOKENS_HINT, processedTokenCount } from "../../lib/token-usage.js";
 import { formatCompactCount, formatRelative } from "../../lib/utils.js";
 import { useAgentDetailContext } from "./layout-context.js";
 
@@ -298,7 +298,12 @@ function ActivityStatsPanel({
           </>
         }
       />
-      <StatTile label="Avg processed / day" value={formatCompactCount(stats.avgPerDay)} mono />
+      <StatTile
+        label="Avg processed / day"
+        value={formatCompactCount(stats.avgPerDay)}
+        mono
+        title={PROCESSED_TOKENS_HINT}
+      />
       <StatTile label="Peak day" value={peakLabel} mono />
       <StatTile
         label="Current streak"
@@ -316,9 +321,19 @@ function ActivityStatsPanel({
   );
 }
 
-function StatTile({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }): ReactElement {
+function StatTile({
+  label,
+  value,
+  mono,
+  title,
+}: {
+  label: string;
+  value: ReactNode;
+  mono?: boolean;
+  title?: string;
+}): ReactElement {
   return (
-    <div className="usage-stats-tile">
+    <div className="usage-stats-tile" title={title}>
       <div className="usage-stats-tile-label text-caption">{label}</div>
       <div className={`usage-stats-tile-value text-subtitle${mono ? " mono" : ""}`}>{value}</div>
     </div>
@@ -401,7 +416,9 @@ function TurnsTable({
             <th style={thStyle("right")}>Input</th>
             <th style={thStyle("right")}>Cached</th>
             <th style={thStyle("right")}>Output</th>
-            <th style={{ ...thStyle("left"), width: "var(--sp-20)" }}>Processed</th>
+            <th style={{ ...thStyle("left"), width: "var(--sp-20)" }} title={PROCESSED_TOKENS_HINT}>
+              Processed
+            </th>
           </tr>
         </thead>
         <tbody>
