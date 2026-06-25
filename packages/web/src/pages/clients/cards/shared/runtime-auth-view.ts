@@ -36,6 +36,19 @@ export function providerSupportsInProductAuth(provider: RuntimeProvider): boolea
 }
 
 /**
+ * Normalize a failing runtime's provider to the provider whose in-product login
+ * actually authenticates it. `claude-code-tui` shares the SAME Claude keychain
+ * as the Claude Code SDK — it has no distinct Connect target and the server's
+ * runtime-auth schema rejects it — so a `claude-code-tui` credential failure
+ * maps to the `claude-code` login target (used for `startRuntimeAuth`, the
+ * capability-entry lookup, and `deriveRuntimeAuthView`). Every other provider
+ * maps to itself.
+ */
+export function loginTargetProvider(provider: RuntimeProvider): RuntimeProvider {
+  return provider === "claude-code-tui" ? "claude-code" : provider;
+}
+
+/**
  * Providers whose credentials are obtained in-product — either directly via
  * Connect, OR shared: `claude-code-tui` uses the SAME Claude keychain as the
  * Claude Code SDK, so a Claude Code login authenticates it too. The card must

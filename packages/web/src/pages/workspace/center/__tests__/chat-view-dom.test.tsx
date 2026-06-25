@@ -214,6 +214,15 @@ const ORG_AGENTS = [
   agent({ uuid: "human-agent-self", name: "gandy", displayName: "Gandy", type: "human", clientId: null }),
   agent(),
   agent({ uuid: "agent-2", name: "design", displayName: "Design Critique", managerId: "member-alice" }),
+  // A teammate's agent pinned to a computer the caller does NOT own — its
+  // `clientId` is absent from `listClients()` (the caller's `/me/clients`).
+  agent({
+    uuid: "agent-teammate",
+    name: "teammate",
+    displayName: "Teammate Agent",
+    managerId: "member-alice",
+    clientId: "client-teammate",
+  }),
 ];
 
 function participant(overrides: Partial<ChatParticipantDetail> & { agentId: string }): ChatParticipantDetail {
@@ -963,6 +972,160 @@ describe("ChatView", () => {
       await waitForText(container, "not logged in");
       await flush();
       expect(buttonByText(container, "Connect Claude Code")).toBeNull();
+
+      await act(async () => root.unmount());
+    });
+
+    // Fix 1: ownership gate. The button mirrors the server's `assertClientOwner`
+    // — it renders only when the failing agent's resolved client is in the
+    // caller's own `/me/clients` set, so a teammate's agent on a computer the
+    // caller does not own gets the error WITHOUT a button.
+    it("does NOT render a Connect button when the failing agent's client is not owned by the caller", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      // `listClients()` (the caller's own computers) returns only client-1, so
+      // agent-teammate's client-teammate is resolvable but unowned.
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-teammate"));
+      });
+
+      await waitForText(container, "not logged in");
+      await flush();
+      expect(buttonByText(container, "Connect Claude Code")).toBeNull();
+
+      await act(async () => root.unmount());
+    });
+
+    it("renders a Connect button when the caller owns the failing agent's client (positive ownership case)", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      // agent-1 → client-1, and listClients() returns client-1 → owned.
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+      });
+
+      await waitForText(container, "not logged in");
+      await waitForCondition(
+        () => buttonByText(container, "Connect Claude Code") !== null,
+        "Expected the in-chat login button when the caller owns the client",
+      );
+
+      await act(async () => root.unmount());
+    });
+
+    // Fix 2: a `claude-code-tui` credential failure shares the Claude Code
+    // keychain, so it maps to the `claude-code` login target — the button is
+    // labeled "Connect Claude Code" and the click starts a `claude-code` login.
+    it("maps a claude-code-tui credential failure to the claude-code login target", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      function tuiCredentialErrorEvents(agentId: string): {
+        items: SessionEventRow[];
+        nextCursor: number | null;
+      } {
+        return {
+          items: [
+            {
+              id: "tui-cred-fail",
+              agentId,
+              chatId: "chat-1",
+              seq: 1,
+              kind: "error",
+              payload: {
+                source: "runtime",
+                message: encodeProviderRetryEventMessage({
+                  event: "provider_failure_terminal",
+                  provider: "claude-code-tui",
+                  scope: "session_start",
+                  category: "credential",
+                  reasonCode: "provider_credential_invalid",
+                  userSeverity: "error",
+                  messagePreview: "not logged in",
+                }),
+              },
+              createdAt: "2026-05-28T11:56:30.000Z",
+            },
+          ] satisfies SessionEventRow[],
+          nextCursor: null,
+        };
+      }
+
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], tuiCredentialErrorEvents("agent-1"));
+      });
+
+      await waitForText(container, "not logged in");
+      await waitForCondition(
+        () => buttonByText(container, "Connect Claude Code") !== null,
+        "Expected a Claude Code login button for a claude-code-tui credential failure",
+      );
+
+      await click(buttonByText(container, "Connect Claude Code"));
+      await waitForCondition(
+        () => activityMocks.startRuntimeAuth.mock.calls.length > 0,
+        "Expected the login click to start runtime auth",
+      );
+      // The TUI failure is normalized to the claude-code Connect target.
+      expect(activityMocks.startRuntimeAuth).toHaveBeenCalledWith("client-1", { provider: "claude-code" });
+
+      await act(async () => root.unmount());
+    });
+
+    // Fix 3: the single-client poll must disarm once the attempt resolves. After
+    // the click arms the poll, a terminal `lastAuthError` recorded at/after the
+    // click resolves it — `getClient` must stop being re-polled.
+    it("stops polling the single client once a terminal login failure is observed", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const clientBase = {
+        id: "client-1",
+        userId: "user-self",
+        status: "connected",
+        authState: "ok",
+        binName: "first-tree-dev",
+        sdkVersion: "0.5.0",
+        hostname: "gandy-macbook",
+        os: "darwin",
+        agentCount: 1,
+        connectedAt: NOW,
+        lastSeenAt: NOW,
+      } as const;
+      // Mount fetch: clean entry (no pending / no error) so the button reads
+      // "Connect Claude Code". After the first poll the client reports a terminal
+      // failure stamped now, which the poll predicate treats as resolved.
+      const cleanClient: HubClient = { ...clientBase, capabilities: {} };
+      const failedClient: HubClient = {
+        ...clientBase,
+        capabilities: {
+          "claude-code": {
+            state: "ok",
+            available: true,
+            detectedAt: NOW,
+            lastAuthError: { reason: "timeout", at: new Date().toISOString() },
+          },
+        },
+      };
+      let getClientCalls = 0;
+      activityMocks.getClient.mockImplementation(() => {
+        getClientCalls += 1;
+        // First fetch (mount): clean; every fetch after the click: terminal failure.
+        return Promise.resolve(getClientCalls <= 1 ? cleanClient : failedClient);
+      });
+
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+      });
+
+      await waitForCondition(
+        () => buttonByText(container, "Connect Claude Code") !== null,
+        "Expected the in-chat login button",
+      );
+      await click(buttonByText(container, "Connect Claude Code"));
+
+      // Let the post-click refetch + any disarm settle, then snapshot the call
+      // count and confirm it does not keep climbing (the poll disarmed).
+      await flush();
+      await flush();
+      const settledCalls = activityMocks.getClient.mock.calls.length;
+      await flush();
+      await flush();
+      expect(activityMocks.getClient.mock.calls.length).toBe(settledCalls);
 
       await act(async () => root.unmount());
     });
