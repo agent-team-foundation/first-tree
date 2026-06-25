@@ -9,7 +9,9 @@
 
 1. **App 缩权。** 终态权限只保留：`Metadata: read` + `Pull requests: read` + `Issues: read` + `Contents: read`（仅为 web 显示 tree）。砍掉：org `Members: read`、`Administration: write`、`Workflows: write`、`Pull requests: write`、`Contents: write`。
 
-2. **Context Tree 创建/初始化/更新交给 agent 用本地 `gh`**（不再走 App 的 server 端写）。`gh` 标准 `repo` scope 已覆盖建库/读写普通文件；**唯一例外** = `.github/workflows/validate-tree.yml`（写 `.github/workflows/` 需 `workflow` scope）→ 给 agent 的 gh 提权 `gh auth refresh -s workflow`，或不在本地 seed 该 workflow（它只是可选 CI 校验）。
+2. **Context Tree 创建/初始化/更新交给 agent 用本地 `gh`**（不再走 App 的 server 端写）。`gh` 标准 `repo` scope 已覆盖建库/读写普通文件；**唯一例外** = `.github/workflows/validate-tree.yml`（写 `.github/workflows/` 需 `workflow` scope）。
+   - **`workflow` 提权是交互式的**：`gh auth refresh -s workflow` 会走一次 GitHub OAuth 重新授权（device-code / 浏览器），**必须由用户本人在 GitHub 前端手动点确认**，agent 无法替他完成。
+   - 因此**优先方案 = 不在本地 seed 该 workflow**（它只是可选 CI 校验，可省或后续由用户手动加），从而完全免掉这次手动提权。
 
 3. **不再区分 GitHub user / org。** 二者作为「repo owner」对称，`gh repo create <owner>/<name>` 通吃 → 去掉 provisioner 的 user/org 建库分叉代码（`ensureOrganizationRepo` / `ensureUserRepo` 合一）。
 
@@ -31,7 +33,11 @@
   - 注意 `installation.created` webhook 落库时是 **unbound** 的（webhook 不知道是哪个 First Tree 用户装的）；「绑到哪个 team」仍需一次用户认领（OAuth 回调）。delayed-approval（owner 后来才批准）场景要有「回来认领」的收尾。
 - **一个 team = 一个 installation = 一个 GitHub 账号**（schema `UNIQUE(hub_organization_id)`）。automation 覆盖范围 = 那一个 installation 选中的 repo。
 - **tree repo 必须在 App installation 覆盖范围内**，否则：① Context Tree PR reviewer 收不到 PR webhook；② web 显示 tree 的 git-fetch 读不到。改动 2 由 agent 建 tree repo 后，要把它纳入 installation 的 repo 选择（或安装时选 "all repos"）。
-- **`Contents: read` 取舍**：它是 **installation 级**权限 = 能读**所有被授权 repo**（不只 tree repo）的源码，与「信任」最冲突。本次**保留**它仅为 web 显示 tree。若要「零源码读取」的信任满分，需新建 **agent → server 推 tree snapshot** 通道（agent 本地已有整棵树）——记为**后续可选优化**，本次不做。
+- **`Contents: read` 是核心取舍**：它是 **installation 级**权限 = 能读**所有被授权 repo**（不只 tree repo）的源码，与「信任」最冲突。web 的 context 页面其实是两块拼的，数据源不同：
+  - **tree 图 / dashboard** = 服务端 **git-fetch tree repo**（= `Contents: read`）。**去掉 Contents:read → 这块坏**（`snapshotStatus: "unavailable"`）。
+  - **下方的 context feed（IO 活动流 + usage）** = 来自 **`context_tree_io_events` 等 DB 遥测**，**不碰 GitHub**。**去掉 Contents:read 它照常活**（写归因会从「git 派生 + 遥测对账」退化为「纯遥测」，但 feed 本身不丢）。
+  - ⚠️ 注意：目前 UI 把 feed 渲染**门控在 snapshot 可用之下**（snapshot unavailable 时整页走「未就绪」分支、feed 一起被藏）。所以「去 Contents:read 但保住 feed」**需要一处小改动**：把 `ContextUsageFeed` 与 tree 图解耦、即使 snapshot 不可用也独立渲染。
+  - **三个选项**：(4a) **保留 `Contents: read`** → dashboard + feed 都全（本次默认）；(4b) **去掉 `Contents: read`** → dashboard 退化、feed 解耦后保留（信任满分、改动小）；(4c) 新建 **agent → server 推 tree snapshot** 通道 → 零源码读取 + dashboard 也保住（信任满分、工程量最大，后续可选）。**本次取 4a，把 4b/4c 列为后续可选优化。**
 
 ## Context Tree Review Agent —— 不冲突（已调研）
 
