@@ -95,7 +95,19 @@ function pendingEntry(base: CapabilityEntry | undefined, pending: PendingAuth, n
     available: true,
     detectedAt: new Date(nowMs).toISOString(),
   };
-  return { ...baseEntry, pendingAuth: pending };
+  // A login only starts after the provider binary resolved, so the provider IS
+  // installed: force the install fields rather than inheriting a possibly-stale
+  // non-`ok` base (which would yield a contradictory `missing` + pendingAuth
+  // entry). `authenticated`/`authMethod` are deprecated wire-compat for older
+  // servers (see the client-capabilities schema).
+  return {
+    ...baseEntry,
+    state: "ok",
+    available: true,
+    authenticated: true,
+    authMethod: "none",
+    pendingAuth: pending,
+  };
 }
 
 /**

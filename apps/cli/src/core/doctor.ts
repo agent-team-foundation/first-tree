@@ -311,8 +311,9 @@ function formatCapabilityDetail(entry: CapabilityEntry): string {
 }
 
 /**
- * Render one capability entry as a doctor CheckResult. `ok` ⟺ the launch-
- * verified probe reached `ok` (a real provider launch succeeded).
+ * Render one capability entry as a doctor CheckResult. `ok` ⟺ the install-only
+ * probe resolved the runtime binary (installed); authentication and usability
+ * are not probed (they surface at session run time).
  */
 export function runtimeProviderCheck(provider: string, entry: CapabilityEntry): CheckResult {
   return { label: provider, ok: entry.state === "ok", detail: formatCapabilityDetail(entry) };

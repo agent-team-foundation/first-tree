@@ -85,6 +85,60 @@ describe("capabilityEntrySchema", () => {
   // the capability schema (detection is install-only, no auth probe).
 });
 
+describe("capabilityEntrySchema — cross-version wire compat (rolling upgrade)", () => {
+  it("coerces a legacy `unauthenticated` state from an older daemon to `ok` (not rejected)", () => {
+    // Reject-on-one-bad-entry would drop a client's whole snapshot; an old
+    // daemon's `unauthenticated` (installed-but-logged-out, available:true) must
+    // be accepted and normalized to the canonical install-only `ok`.
+    const parsed = capabilityEntrySchema.parse({
+      state: "unauthenticated",
+      available: true,
+      authenticated: false,
+      authMethod: "none",
+      detectedAt: new Date().toISOString(),
+    });
+    expect(parsed.state).toBe("ok");
+  });
+
+  it("accepts (and keeps) the deprecated `authenticated` / `authMethod` an older server requires", () => {
+    const parsed = capabilityEntrySchema.parse({
+      state: "ok",
+      available: true,
+      authenticated: true,
+      authMethod: "oauth",
+      detectedAt: new Date().toISOString(),
+    });
+    expect(parsed.authenticated).toBe(true);
+    expect(parsed.authMethod).toBe("oauth");
+  });
+
+  it("accepts a new-shape entry that omits the deprecated auth fields", () => {
+    const parsed = capabilityEntrySchema.parse({
+      state: "ok",
+      available: true,
+      detectedAt: new Date().toISOString(),
+    });
+    expect(parsed.authenticated).toBeUndefined();
+    expect(parsed.authMethod).toBeUndefined();
+  });
+
+  it("a legacy `unauthenticated` entry does not poison the rest of the snapshot", () => {
+    const parsed = clientCapabilitiesSchema.parse({
+      "claude-code": { state: "ok", available: true, detectedAt: new Date().toISOString() },
+      codex: {
+        state: "unauthenticated",
+        available: true,
+        authenticated: false,
+        authMethod: "none",
+        detectedAt: new Date().toISOString(),
+      },
+    });
+    // Both entries survive; the legacy one is normalized to `ok`.
+    expect(parsed["claude-code"]?.state).toBe("ok");
+    expect(parsed.codex?.state).toBe("ok");
+  });
+});
+
 describe("clientCapabilitiesSchema + updateClientCapabilitiesSchema", () => {
   it("accepts a record keyed by arbitrary provider strings (forwards-compat)", () => {
     // Schema-level: the record key is `z.string()` so future providers don't

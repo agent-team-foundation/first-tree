@@ -85,6 +85,13 @@ export function deriveRuntimeAuthView(
   // connectable path explicitly via `forceConnectable` once a session credential
   // failure has surfaced, but only for providers the daemon can drive.
   if (forceConnectable && providerSupportsInProductAuth(provider)) {
+    // A credential failure is a runtime auth error on an INSTALLED runtime, so
+    // the keying capability `state` is `ok` (or absent — not yet probed). The
+    // daemon's `attachAuthError` also stamps `lastAuthError` when the binary is
+    // gone (`state: "missing"`) or the probe errored (`state: "error"`); a
+    // Connect there only re-fails forever, so withhold the affordance — there is
+    // nothing to log into until the runtime is installed.
+    if (entry?.state === "missing" || entry?.state === "error") return { kind: "none" };
     return { kind: "connectable", lastError: entry?.lastAuthError ?? undefined };
   }
   return { kind: "none" };

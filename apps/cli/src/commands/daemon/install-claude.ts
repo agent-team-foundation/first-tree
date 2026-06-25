@@ -50,14 +50,17 @@ export function registerDaemonInstallClaudeCommand(daemon: Command): void {
         print.line("\n  Re-probing claude-code capability...\n\n");
       }
 
-      // Re-probe so the new PATH binary is launch-verified and the claude-code
-      // row flips from `missing` toward `ok`/`unauthenticated`.
+      // Re-probe (install-only) so the new PATH binary flips the claude-code row
+      // from `missing` to `ok` (installed).
       const capabilities = await probeCapabilities();
       if (wantJson) {
         print.result(capabilities);
         return;
       }
       printResults(runtimeProviderChecks(capabilities));
-      print.line("  If claude-code now reports `unauthenticated`, run runtime auth (claude auth login) to finish.\n\n");
+      print.line(
+        "  claude-code now reports `ok` (installed). Authentication is no longer probed — if a session\n" +
+          "  fails needing login, sign in from that chat (or run `claude auth login` on this machine).\n\n",
+      );
     });
 }

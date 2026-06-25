@@ -1129,6 +1129,89 @@ describe("ChatView", () => {
 
       await act(async () => root.unmount());
     });
+
+    // Fix (Bug 2): the ErrorRow is a persistent timeline event, so after a
+    // SUCCESSFUL in-chat login the control must stop re-inviting login. Drive a
+    // real success transition — pending appears, then clears with `state: "ok"`
+    // and no `lastAuthError` — and assert the row flips to a terminal "Signed in"
+    // affordance with NO live Connect button.
+    it("shows a terminal signed-in state (not a Connect button) after a successful in-chat login", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const clientBase = {
+        id: "client-1",
+        userId: "user-self",
+        status: "connected",
+        authState: "ok",
+        binName: "first-tree-dev",
+        sdkVersion: "0.5.0",
+        hostname: "gandy-macbook",
+        os: "darwin",
+        agentCount: 1,
+        connectedAt: NOW,
+        lastSeenAt: NOW,
+      } as const;
+      // Mount: clean (Connect). The click's refetch delivers a live pending login
+      // (the daemon launched browser sign-in); the next single-row refetch
+      // delivers the resolved entry — pending cleared, still installed
+      // (`state: "ok"`), no `lastAuthError` — a successful resolution. The mock is
+      // phase-driven and we drive the resolving refetch by invalidating the
+      // single-row query, so the transition is deterministic (no dependence on the
+      // wall-clock poll cadence).
+      const cleanClient: HubClient = { ...clientBase, capabilities: {} };
+      const pendingClient: HubClient = {
+        ...clientBase,
+        capabilities: {
+          "claude-code": {
+            state: "ok",
+            available: true,
+            detectedAt: NOW,
+            pendingAuth: { method: "browser", expiresAt: new Date(Date.now() + 60_000).toISOString() },
+          },
+        },
+      };
+      const signedInClient: HubClient = {
+        ...clientBase,
+        capabilities: { "claude-code": { state: "ok", available: true, detectedAt: NOW } },
+      };
+      let phase: "clean" | "pending" | "signed-in" = "clean";
+      activityMocks.getClient.mockImplementation(() => {
+        if (phase === "clean") return Promise.resolve(cleanClient);
+        if (phase === "pending") return Promise.resolve(pendingClient);
+        return Promise.resolve(signedInClient);
+      });
+
+      const { container, root, queryClient } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (qc) => {
+        qc.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+      });
+
+      await waitForCondition(
+        () => buttonByText(container, "Connect Claude Code") !== null,
+        "Expected the in-chat login button before sign-in",
+      );
+      // The click's refetch picks up the launched (pending) login.
+      phase = "pending";
+      await click(buttonByText(container, "Connect Claude Code"));
+      await waitForCondition(
+        () => container.textContent?.includes("sign-in page is opening") ?? false,
+        "Expected the in-flight (pending) login state while the daemon drives sign-in",
+      );
+
+      // The daemon completes the login and re-probes: the resolving refetch
+      // delivers the signed-in entry. Drive it deterministically by invalidating
+      // the single-row query the button reads from.
+      phase = "signed-in";
+      await act(async () => {
+        await queryClient.invalidateQueries({ queryKey: ["clients", "single", "client-1"] });
+      });
+      await waitForCondition(
+        () => container.textContent?.includes("Signed in to Claude Code") ?? false,
+        "Expected the terminal signed-in affordance after a successful login",
+      );
+      // And the Connect button must be gone — no re-invitation to log in.
+      expect(buttonByText(container, "Connect Claude Code")).toBeNull();
+
+      await act(async () => root.unmount());
+    });
   });
 
   it("does not re-render old message markdown when the composer draft changes", async () => {

@@ -92,6 +92,78 @@ describe("deriveRuntimeAuthView", () => {
     expect(view.kind).toBe("browser-pending");
   });
 
+  it("forceConnectable revives the Connect affordance on an installed credential failure (state ok)", () => {
+    // The real in-chat case: a runtime credential error leaves the entry `state:
+    // "ok"` (installed) with a `lastAuthError`. forceConnectable must surface the
+    // connectable view carrying that error.
+    const view = deriveRuntimeAuthView(
+      "claude-code",
+      entry({ lastAuthError: { reason: "timeout", at: "2026-06-22T11:55:00.000Z" } }),
+      NOW,
+      true,
+    );
+    expect(view).toEqual({
+      kind: "connectable",
+      lastError: { reason: "timeout", at: "2026-06-22T11:55:00.000Z" },
+    });
+  });
+
+  it("forceConnectable still offers Connect when state is absent (not yet probed)", () => {
+    // An entry whose `state` key is missing (older daemon) is treated like `ok`:
+    // forceConnectable is honoured.
+    const view = deriveRuntimeAuthView(
+      "codex",
+      { available: true, detectedAt: "2026-06-22T12:00:00.000Z" } as CapabilityEntry,
+      NOW,
+      true,
+    );
+    expect(view).toEqual({ kind: "connectable", lastError: undefined });
+  });
+
+  it("forceConnectable offers NOTHING when the runtime is not installed (missing + lastAuthError)", () => {
+    // The daemon now stamps `lastAuthError` on ANY login failure, including when
+    // the binary is gone (`state: "missing"`). A Connect there only re-fails
+    // forever, so forceConnectable must withhold the affordance → none.
+    const view = deriveRuntimeAuthView(
+      "claude-code",
+      entry({
+        state: "missing",
+        available: false,
+        lastAuthError: { reason: "spawn-error", at: "2026-06-22T11:55:00.000Z" },
+      }),
+      NOW,
+      true,
+    );
+    expect(view).toEqual({ kind: "none" });
+  });
+
+  it("forceConnectable offers NOTHING when the probe errored (state error + lastAuthError)", () => {
+    const view = deriveRuntimeAuthView(
+      "codex",
+      entry({
+        state: "error",
+        available: false,
+        lastAuthError: { reason: "spawn-error", at: "2026-06-22T11:55:00.000Z" },
+      }),
+      NOW,
+      true,
+    );
+    expect(view).toEqual({ kind: "none" });
+  });
+
+  it("forceConnectable keeps the browser-pending state for an in-flight login regardless of state", () => {
+    // The pending branch is evaluated before the state guard, so a live pending
+    // login still wins (a missing entry with a live pending marker is the daemon
+    // having just launched the login).
+    const view = deriveRuntimeAuthView(
+      "claude-code",
+      entry({ state: "missing", available: false, pendingAuth: browserPending("2026-06-22T12:05:00.000Z") }),
+      NOW,
+      true,
+    );
+    expect(view.kind).toBe("browser-pending");
+  });
+
   it("knows which providers support in-product auth", () => {
     expect(providerSupportsInProductAuth("codex")).toBe(true);
     expect(providerSupportsInProductAuth("claude-code")).toBe(true);

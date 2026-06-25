@@ -111,6 +111,7 @@ describe("resolveClaudeCodeExecutable", () => {
       const migrated = join(home, ".claude", "local", "claude");
       mkdirSync(join(home, ".claude", "local"), { recursive: true });
       writeFileSync(migrated, "#!/bin/sh\nexit 0\n");
+      chmodSync(migrated, 0o755);
 
       const resolution = resolveClaudeCodeExecutable({
         env: { PATH: "", HOME: home },

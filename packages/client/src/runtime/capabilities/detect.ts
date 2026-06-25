@@ -45,6 +45,12 @@ export type DetectOutcome =
 function finish(startedAt: number, entry: Omit<CapabilityEntry, "detectedAt" | "latencyMs">): CapabilityEntry {
   return {
     ...entry,
+    // Deprecated wire-compat (see client-capabilities schema): install-only
+    // detection no longer computes auth, but an OLDER server still REQUIRES
+    // these on every entry, so keep emitting derived values until the version
+    // floor rises.
+    authenticated: entry.state === "ok",
+    authMethod: "none",
     detectedAt: new Date(startedAt).toISOString(),
     latencyMs: Date.now() - startedAt,
   };

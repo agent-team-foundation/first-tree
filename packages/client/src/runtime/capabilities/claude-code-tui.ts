@@ -1,18 +1,24 @@
 import { existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import type { CapabilityEntry } from "@first-tree/shared";
-import { type ClaudeExecutableResolution, resolveClaudeCodeExecutable } from "../../handlers/claude-executable.js";
+import {
+  type ClaudeExecutableResolution,
+  isExecutableFile,
+  resolveClaudeCodeExecutable,
+} from "../../handlers/claude-executable.js";
 import { type DetectOutcome, runDetect } from "./detect.js";
 
 /**
- * `which tmux` — true when an executable `tmux` exists on the daemon's PATH.
- * Install detection only: no `tmux -V`, no version gate (the launch-verified
- * probe used to require tmux >= 3.0; usability is no longer checked here).
+ * `which tmux` — true when an executable `tmux` file exists on the daemon's
+ * PATH. Install detection only: no `tmux -V`, no version gate (the launch-
+ * verified probe used to require tmux >= 3.0; usability is no longer checked).
+ * Uses an executable-file check (not bare `existsSync`) so a directory or a
+ * non-executable file named `tmux` on PATH does not yield a false positive.
  */
 export function tmuxOnPath(env: NodeJS.ProcessEnv = process.env): boolean {
   const binary = process.platform === "win32" ? "tmux.exe" : "tmux";
   const dirs = (env.PATH ?? "").split(delimiter).filter((d) => d.length > 0);
-  return dirs.some((dir) => existsSync(join(dir, binary)));
+  return dirs.some((dir) => isExecutableFile(join(dir, binary)));
 }
 
 /**

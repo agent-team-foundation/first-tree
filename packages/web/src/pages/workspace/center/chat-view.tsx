@@ -136,6 +136,7 @@ import { selectVisibleMessages } from "../../../utils/agent-final-text-filter.js
 import { findGapAfterMessageId } from "../../../utils/chat-gap.js";
 import { computeRequiresMention, shouldPrimeMentionOnFocus } from "../../../utils/requires-mention.js";
 import { filterEventsForTimeline } from "../../../utils/session-timeline.js";
+import { PROVIDER_LABEL } from "../../clients/cards/shared/providers.js";
 import { RuntimeAuthControls } from "../../clients/cards/shared/runtime-auth-controls.js";
 import { loginTargetProvider } from "../../clients/cards/shared/runtime-auth-view.js";
 import { ChatRightSidebar } from "../right-sidebar/index.js";
@@ -276,6 +277,18 @@ function ChatRuntimeLoginButton({ clientId, provider }: { clientId: string; prov
   // Re-derive on every poll tick so the `expiresAt` / lastAuthError windows are
   // evaluated against the current clock, not a value frozen at mount.
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // True once a login STARTED from this button resolved successfully. The error
+  // row is a persistent timeline event, so without a local terminal latch the
+  // control would keep rendering "Connect" and re-invite a now-pointless login
+  // after the user already signed in (the capability entry alone cannot tell
+  // "credential failure, please log in" from "already logged in" — both are
+  // `state: "ok"` with no markers). Renders a terminal "Signed in" affordance.
+  const [succeeded, setSucceeded] = useState(false);
+  // Whether the CURRENT attempt has observed a live `pendingAuth` (the daemon
+  // actually launched the browser login). Resolving from a state that saw
+  // pending — with no failure and an `ok` entry — is the success signal; a
+  // resolution that never saw pending is the backstop timeout, not a success.
+  const sawPendingRef = useRef(false);
 
   const clientQuery = useQuery({
     queryKey: ["clients", "single", clientId],
@@ -292,12 +305,42 @@ function ChatRuntimeLoginButton({ clientId, provider }: { clientId: string; prov
   });
   const entry = clientQuery.data?.capabilities[provider] ?? null;
 
-  // Disarm once the attempt resolves: a terminal failure landed at/after the
-  // click, the pending window elapsed, or pending cleared after having been set.
-  // Clearing `startedAt` collapses `refetchInterval` back to `false`.
+  // Track whether THIS attempt ever saw a live `pendingAuth`. The daemon
+  // publishes it once it launches the browser login; its later disappearance
+  // (with no failure) is the success transition.
   useEffect(() => {
     if (startedAt === null) return;
-    if (!chatLoginAttemptLive(entry, startedAt, nowMs)) setStartedAt(null);
+    if (entry?.pendingAuth) sawPendingRef.current = true;
+  }, [entry?.pendingAuth, startedAt]);
+
+  // Resolve the armed attempt. Two ways it ends:
+  //
+  //   1. SUCCESS: a `pendingAuth` we observed has now cleared with NO failure at/
+  //      after the click and the runtime still installed (`state: "ok"`). This is
+  //      the daemon completing the login and re-probing — detected directly (not
+  //      via `chatLoginAttemptLive`, whose post-pending backstop would otherwise
+  //      hold the attempt "live" for the full 30s window). Latch a terminal
+  //      signed-in affordance so the persistent ErrorRow stops re-inviting login.
+  //   2. OTHERWISE resolved (a terminal failure at/after the click, or the
+  //      pending window / never-launched backstop elapsing): just disarm and let
+  //      `RuntimeAuthControls` render its retry copy or the Connect button.
+  //
+  // Either way, clearing `startedAt` collapses `refetchInterval` back to `false`.
+  useEffect(() => {
+    if (startedAt === null) return;
+    const failureAt = entry?.lastAuthError ? Date.parse(entry.lastAuthError.at) : null;
+    const failedSinceStart = failureAt !== null && !Number.isNaN(failureAt) && failureAt >= startedAt;
+    const okState = entry == null || entry.state === "ok";
+    const succeededNow = sawPendingRef.current && !failedSinceStart && !entry?.pendingAuth && okState;
+    if (succeededNow) {
+      sawPendingRef.current = false;
+      setSucceeded(true);
+      setStartedAt(null);
+      return;
+    }
+    if (chatLoginAttemptLive(entry, startedAt, nowMs)) return;
+    sawPendingRef.current = false;
+    setStartedAt(null);
   }, [entry, startedAt, nowMs]);
 
   // Advance the clock on each poll tick so a time-only resolution (the pending
@@ -308,6 +351,15 @@ function ChatRuntimeLoginButton({ clientId, provider }: { clientId: string; prov
     return () => clearInterval(id);
   }, [startedAt]);
 
+  // Terminal success: stop offering Connect. The login this row prompted is done.
+  if (succeeded) {
+    return (
+      <p className="text-caption font-medium" style={{ color: "var(--success)", margin: 0 }}>
+        Signed in to {PROVIDER_LABEL[provider]} — try sending again.
+      </p>
+    );
+  }
+
   return (
     <RuntimeAuthControls
       clientId={clientId}
@@ -317,6 +369,7 @@ function ChatRuntimeLoginButton({ clientId, provider }: { clientId: string; prov
       // The shared control invalidates `["clients"]`; mirror that into the
       // single-row query this button reads from, and arm the in-flight poll.
       onStarted={() => {
+        sawPendingRef.current = false;
         setStartedAt(Date.now());
         setNowMs(Date.now());
         void clientQuery.refetch();
@@ -367,8 +420,10 @@ function ErrorRow({
   /** True only when the caller OWNS the given client (it is in their
    *  `GET /me/clients` set). The login button is gated on this, mirroring the
    *  server's `assertClientOwner`: a teammate's agent runs on a computer the
-   *  caller does not own, so the Connect click would only 4xx. */
-  ownsClient?: (clientId: string) => boolean;
+   *  caller does not own, so the Connect click would only 4xx. Required so the
+   *  gate fails CLOSED — an absent predicate must withhold the button, not
+   *  default it open. */
+  ownsClient: (clientId: string) => boolean;
 }) {
   const payload = asErrorPayload(event.payload);
   const retryPayload = payload ? parseProviderRetryEventMessage(payload.message) : null;
@@ -378,7 +433,7 @@ function ErrorRow({
   // caller owns that client (only then can the server-side login actually run).
   const resolvedClientId =
     retryReason?.category === "credential" && clientIdForAgent ? clientIdForAgent(event.agentId) : null;
-  const loginClientId = resolvedClientId && (!ownsClient || ownsClient(resolvedClientId)) ? resolvedClientId : null;
+  const loginClientId = resolvedClientId && ownsClient(resolvedClientId) ? resolvedClientId : null;
   // `claude-code-tui` shares the Claude Code keychain and is not a distinct
   // Connect target — normalize it to the `claude-code` login target.
   const loginProvider = retryReason ? loginTargetProvider(retryReason.provider) : null;

@@ -1,8 +1,25 @@
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { wellKnownBinDirs } from "../runtime/install-locations.js";
 import { getLoginShellPathDirs } from "../runtime/login-shell-path.js";
+
+/**
+ * A resolved `claude` candidate is usable only if it is a regular file that is
+ * executable. Bare `existsSync` matches a directory named `claude` or a
+ * non-executable shim, which would yield a false `ok` the runtime then can't
+ * spawn (mirrors codex's executability gate, plus a regular-file check so a
+ * directory entry named `claude` doesn't pass via the dir search bit).
+ */
+export function isExecutableFile(filePath: string): boolean {
+  try {
+    if (!statSync(filePath).isFile()) return false;
+    accessSync(filePath, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export type ClaudeExecutableSource = "env" | "path" | "well-known" | "default";
 
@@ -88,7 +105,7 @@ export function resolveClaudeCodeExecutable(
   if (fromDaemon) return { path: fromDaemon, source: "path" };
 
   for (const candidate of wellKnownClaudeCandidates(wellKnownDirs())) {
-    if (existsSync(candidate)) return { path: candidate, source: "well-known" };
+    if (isExecutableFile(candidate)) return { path: candidate, source: "well-known" };
   }
 
   // Login-shell PATH last — catches binaries on the user's interactive PATH
@@ -126,7 +143,7 @@ function findInDirs(
     seen.add(dir);
     for (const ext of exts) {
       const full = join(dir, name + ext);
-      if (existsSync(full)) return full;
+      if (isExecutableFile(full)) return full;
     }
   }
   return undefined;

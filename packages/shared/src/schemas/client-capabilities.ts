@@ -21,6 +21,30 @@ export const capabilityStateSchema = z.enum(["ok", "missing", "error"]);
 export type CapabilityState = z.infer<typeof capabilityStateSchema>;
 
 /**
+ * The capabilities map is a client↔server WIRE CONTRACT that versions
+ * independently (a daemon can upgrade before/after the server). This block
+ * keeps the contract a tolerant superset across a rolling upgrade — remove it
+ * only once the minimum supported daemon AND server both ship install-only.
+ *
+ * Parse-side tolerance: an OLDER daemon still emits the now-removed
+ * `state: "unauthenticated"`. Reject-on-one-bad-entry (`z.record`) would drop a
+ * client's WHOLE snapshot, so coerce it to `ok` (it carried `available: true` =
+ * installed) instead. The new daemon never emits `unauthenticated`.
+ */
+const wireCompatStateSchema = z.preprocess(
+  (value) => (value === "unauthenticated" ? "ok" : value),
+  capabilityStateSchema,
+);
+
+/**
+ * Deprecated wire-compat: the auth method an OLDER server still REQUIRES on
+ * every entry. The new daemon no longer detects auth but keeps emitting
+ * `authMethod`/`authenticated` (see below) so an older server accepts its PATCH.
+ */
+export const capabilityAuthMethodSchema = z.enum(["api_key", "oauth", "auth_json", "none"]);
+export type CapabilityAuthMethod = z.infer<typeof capabilityAuthMethodSchema>;
+
+/**
  * Which on-disk artifact backs the runtime:
  *   - "bundled": the SDK-bundled binary (the default the runtime spawns).
  *   - "path":    a system `claude` / `codex` found on PATH (or a well-known
@@ -57,9 +81,20 @@ export const pendingAuthSchema = z.object({
 export type PendingAuth = z.infer<typeof pendingAuthSchema>;
 
 export const capabilityEntrySchema = z.object({
-  state: capabilityStateSchema,
+  // Tolerant on input (coerces a legacy `unauthenticated` → `ok`); the inferred
+  // type stays the canonical `ok | missing | error`.
+  state: wireCompatStateSchema,
   /** Derived: the provider binary is installed/resolvable (`state === "ok"`). */
   available: z.boolean(),
+  /**
+   * Deprecated wire-compat fields — kept OPTIONAL so the map stays a tolerant
+   * superset during a rolling upgrade. An OLDER server requires both, so the new
+   * daemon still emits them (`authenticated = state==="ok"`, `authMethod = "none"`);
+   * the new server ignores them and gates on `available`/`state`. An OLDER
+   * daemon's values are accepted and ignored. Remove once the version floor rises.
+   */
+  authenticated: z.boolean().optional(),
+  authMethod: capabilityAuthMethodSchema.optional(),
   /**
    * Provider version, when cheaply known from the resolved package/binary.
    * Install-only detection does not launch the binary, so this is often absent.
