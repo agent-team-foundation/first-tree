@@ -1,5 +1,5 @@
-import type { FSWatcher } from "node:fs";
-import { existsSync, mkdirSync, readFileSync, watch, writeFileSync } from "node:fs";
+import type { Dirent, FSWatcher } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, watch, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   AgentSlot,
@@ -44,6 +44,12 @@ function authPausedDetail(error: Error): string {
   return `Auth rejection code: ${authCode}${authMessage ? ` — ${authMessage}` : ""}`;
 }
 
+function isRecursiveWatchUnsupported(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = "code" in error && typeof error.code === "string" ? error.code : "";
+  return code === "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM" || error.message.includes("watch recursively");
+}
+
 export type ClientRuntimeOptions = {
   /**
    * Version of the Command package this process was launched from. Passed to
@@ -79,7 +85,8 @@ export class ClientRuntime {
   private readonly agentIds = new Set<string>();
   private readonly options: ClientRuntimeOptions;
   private updateManager: UpdateManager | null = null;
-  private watcher: FSWatcher | null = null;
+  private agentWatchers: FSWatcher[] = [];
+  private agentsDirWatchMode: "recursive" | "fallback" | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * Directory we write auto-registered agent configs into (same path that
@@ -304,23 +311,88 @@ export class ClientRuntime {
     // Record the directory even if the watcher bails (e.g. dir missing) so
     // the `agent:pinned` handler knows where to materialise configs.
     this.agentsDir = agentsDir;
-    if (this.watcher) return;
+    if (this.agentWatchers.length > 0) return;
     if (!existsSync(agentsDir)) return;
 
-    this.watcher = watch(agentsDir, { recursive: true }, () => {
-      if (this.debounceTimer) clearTimeout(this.debounceTimer);
-      this.debounceTimer = setTimeout(() => {
-        this.debounceTimer = null;
-        this.scanForNewAgents(agentsDir);
-      }, 500);
+    try {
+      const watcher = this.createAgentsDirWatcher(agentsDir, { recursive: true }, () => {
+        this.scheduleAgentsDirScan(agentsDir);
+      });
+      this.agentWatchers = [watcher];
+      this.agentsDirWatchMode = "recursive";
+    } catch (err) {
+      if (!isRecursiveWatchUnsupported(err)) {
+        print.status("⚠️", `agents dir watcher failed: ${err instanceof Error ? err.message : String(err)}`);
+        this.unwatchAgentsDir();
+        return;
+      }
+      print.status("⚠️", "recursive agents dir watcher unavailable; using non-recursive fallback");
+      this.startFallbackAgentsDirWatchers(agentsDir);
+    }
+  }
+
+  private scheduleAgentsDirScan(agentsDir: string): void {
+    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = null;
+      this.scanForNewAgents(agentsDir);
+      if (this.agentsDirWatchMode === "fallback") this.refreshFallbackAgentsDirWatchers(agentsDir);
+    }, 500);
+  }
+
+  private createAgentsDirWatcher(path: string, options: { recursive?: boolean }, onChange: () => void): FSWatcher {
+    const watcher = watch(path, options, () => {
+      onChange();
     });
-    // A recursive FSWatcher can emit 'error' at runtime (watched dir removed,
-    // or inotify exhaustion on Linux). An unhandled 'error' throws and would
-    // take down the daemon — tear the watcher down so it degrades gracefully.
-    this.watcher.on("error", (err: Error) => {
+    // FSWatchers can emit 'error' at runtime (watched dir removed, or
+    // inotify exhaustion on Linux). An unhandled 'error' throws and would
+    // take down the daemon — tear watchers down so they degrade gracefully.
+    watcher.on("error", (err: Error) => {
       print.status("⚠️", `agents dir watcher error: ${err.message}`);
       this.unwatchAgentsDir();
     });
+    return watcher;
+  }
+
+  private startFallbackAgentsDirWatchers(agentsDir: string): void {
+    this.unwatchAgentsDir();
+    this.agentsDirWatchMode = "fallback";
+    try {
+      this.agentWatchers.push(this.createAgentsDirWatcher(agentsDir, {}, () => this.scheduleAgentsDirScan(agentsDir)));
+    } catch (err) {
+      print.status("⚠️", `agents dir watcher failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.unwatchAgentsDir();
+      return;
+    }
+
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(agentsDir, { withFileTypes: true });
+    } catch (err) {
+      print.status("⚠️", `agents dir watcher scan failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      try {
+        this.agentWatchers.push(
+          this.createAgentsDirWatcher(join(agentsDir, entry.name), {}, () => this.scheduleAgentsDirScan(agentsDir)),
+        );
+      } catch (err) {
+        print.status(
+          "⚠️",
+          `agent dir watcher skipped for ${entry.name}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  private refreshFallbackAgentsDirWatchers(agentsDir: string): void {
+    if (this.agentsDirWatchMode !== "fallback") return;
+    for (const watcher of this.agentWatchers.splice(0)) watcher.close();
+    this.agentsDirWatchMode = null;
+    if (existsSync(agentsDir)) this.startFallbackAgentsDirWatchers(agentsDir);
   }
 
   unwatchAgentsDir(): void {
@@ -328,10 +400,8 @@ export class ClientRuntime {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
-    if (this.watcher) {
-      this.watcher.close();
-      this.watcher = null;
-    }
+    for (const watcher of this.agentWatchers.splice(0)) watcher.close();
+    this.agentsDirWatchMode = null;
   }
 
   async stop(): Promise<void> {

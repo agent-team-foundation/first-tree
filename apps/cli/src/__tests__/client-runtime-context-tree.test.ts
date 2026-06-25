@@ -151,6 +151,12 @@ vi.mock("../core/version.js", () => ({
 describe("ClientRuntime context-tree wiring", () => {
   const originalHome = process.env.FIRST_TREE_HOME;
   let home: string;
+  type WatchCallback = (eventType: string, filename: string | Buffer | null) => void;
+  type WatchRegistration = {
+    path: string;
+    listener: WatchCallback | null;
+    close: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(() => {
     vi.resetModules();
@@ -181,6 +187,41 @@ describe("ClientRuntime context-tree wiring", () => {
     else process.env.FIRST_TREE_HOME = originalHome;
     vi.clearAllMocks();
   });
+
+  function mockRecursiveUnavailableWatch(): WatchRegistration[] {
+    type Listener = (...args: unknown[]) => void;
+    const registrations: WatchRegistration[] = [];
+    const isWatchCallback = (value: unknown): value is WatchCallback => typeof value === "function";
+
+    fsWatchMocks.watch.mockImplementation((...args: unknown[]) => {
+      const [path, optionsOrListener, maybeListener] = args;
+      if (
+        typeof optionsOrListener === "object" &&
+        optionsOrListener !== null &&
+        "recursive" in optionsOrListener &&
+        optionsOrListener.recursive === true
+      ) {
+        const err = new Error("The feature watch recursively is unavailable on the current platform");
+        (err as Error & { code: string }).code = "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM";
+        throw err;
+      }
+
+      const listener = isWatchCallback(optionsOrListener)
+        ? optionsOrListener
+        : isWatchCallback(maybeListener)
+          ? maybeListener
+          : null;
+      const close = vi.fn();
+      const watcher = {
+        on: vi.fn((_event: string, _listener: Listener) => watcher),
+        close,
+      };
+      registrations.push({ path: String(path), listener, close });
+      return watcher;
+    });
+
+    return registrations;
+  }
 
   it(
     "starts eager slots without a shared Context Tree binding",
@@ -620,5 +661,71 @@ describe("ClientRuntime context-tree wiring", () => {
     expect(print.status).toHaveBeenCalledWith("⚠️", expect.stringContaining("inotify exhausted"));
     expect(close).toHaveBeenCalled();
     await rt.stop();
+  });
+
+  it("falls back to non-recursive agents-dir watchers when recursive watch is unavailable", async () => {
+    vi.useFakeTimers();
+    try {
+      const { print } = await import("../core/output.js");
+      const registrations = mockRecursiveUnavailableWatch();
+
+      const { ClientRuntime } = await import("../core/client-runtime.js");
+      const rt = new ClientRuntime("https://first-tree.test", "client-test");
+      const agentsDir = join(home, "config", "agents");
+      mkdirSync(join(agentsDir, "existing"), { recursive: true });
+      writeFileSync(join(agentsDir, "existing", "agent.yaml"), "agentId: agent-existing\nruntime: claude-code\n");
+
+      expect(() => rt.watchAgentsDir(agentsDir)).not.toThrow();
+      expect(print.status).toHaveBeenCalledWith(
+        "⚠️",
+        expect.stringContaining("recursive agents dir watcher unavailable"),
+      );
+      expect(registrations).toHaveLength(2);
+
+      mkdirSync(join(agentsDir, "newcomer"), { recursive: true });
+      writeFileSync(join(agentsDir, "newcomer", "agent.yaml"), "agentId: agent-new\nruntime: claude-code\n");
+      registrations[0]?.listener?.("rename", "newcomer");
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(slotInstances.map((slot) => slot.name)).toContain("newcomer");
+      expect(registrations.some((registration) => registration.close.mock.calls.length > 0)).toBe(true);
+      await rt.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps watching fallback agent dirs when agent.yaml is written after the directory event", async () => {
+    vi.useFakeTimers();
+    try {
+      const registrations = mockRecursiveUnavailableWatch();
+
+      const { ClientRuntime } = await import("../core/client-runtime.js");
+      const rt = new ClientRuntime("https://first-tree.test", "client-test");
+      const agentsDir = join(home, "config", "agents");
+      mkdirSync(agentsDir, { recursive: true });
+
+      expect(() => rt.watchAgentsDir(agentsDir)).not.toThrow();
+      expect(registrations).toHaveLength(1);
+
+      mkdirSync(join(agentsDir, "newcomer"), { recursive: true });
+      registrations[0]?.listener?.("rename", "newcomer");
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(slotInstances.map((slot) => slot.name)).not.toContain("newcomer");
+      const newcomerWatcher = [...registrations]
+        .reverse()
+        .find((registration) => registration.path === join(agentsDir, "newcomer"));
+      expect(newcomerWatcher).toBeDefined();
+
+      writeFileSync(join(agentsDir, "newcomer", "agent.yaml"), "agentId: agent-new\nruntime: claude-code\n");
+      newcomerWatcher?.listener?.("change", "agent.yaml");
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(slotInstances.map((slot) => slot.name)).toContain("newcomer");
+      await rt.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
