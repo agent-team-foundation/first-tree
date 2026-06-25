@@ -28,7 +28,7 @@ const settingsMocks = vi.hoisted(() => ({
 }));
 
 const agentApiMocks = vi.hoisted(() => ({
-  listManagedAgents: vi.fn(),
+  listAllAgents: vi.fn(),
 }));
 
 const onboardingEventMocks = vi.hoisted(() => ({
@@ -82,6 +82,7 @@ function contextTreeFeatures(overrides: Partial<OrgContextTreeFeaturesOutput["co
     contextReviewer: {
       enabled: overrides.enabled ?? false,
       agentUuid: overrides.agentUuid ?? null,
+      reviewerAgent: overrides.reviewerAgent ?? null,
     },
   } satisfies OrgContextTreeFeaturesOutput;
 }
@@ -107,6 +108,10 @@ function managedAgent(overrides: {
     status: overrides.status ?? "active",
     avatarImageUrl: null,
   };
+}
+
+function paginatedAgents(items: ReturnType<typeof managedAgent>[]) {
+  return { items, nextCursor: null };
 }
 
 function createClient(): QueryClient {
@@ -262,13 +267,15 @@ beforeEach(() => {
   settingsMocks.putContextTreeFeaturesSetting.mockImplementation(
     async (_id: string, body: OrgContextTreeFeaturesOutput) => body,
   );
-  agentApiMocks.listManagedAgents.mockResolvedValue([
-    managedAgent({ uuid: "agent-beta", displayName: "Beta Reviewer", name: "beta" }),
-    managedAgent({ uuid: "agent-alpha", displayName: "Alpha Reviewer", name: "alpha" }),
-    managedAgent({ uuid: "human-1", displayName: "Human User", type: "human" }),
-    managedAgent({ uuid: "suspended-1", displayName: "Suspended", status: "suspended" }),
-    managedAgent({ uuid: "other-org-1", displayName: "Other Org", organizationId: "org-2" }),
-  ]);
+  agentApiMocks.listAllAgents.mockResolvedValue(
+    paginatedAgents([
+      managedAgent({ uuid: "agent-beta", displayName: "Beta Reviewer", name: "beta" }),
+      managedAgent({ uuid: "agent-alpha", displayName: "Alpha Reviewer", name: "alpha" }),
+      managedAgent({ uuid: "human-1", displayName: "Human User", type: "human" }),
+      managedAgent({ uuid: "suspended-1", displayName: "Suspended", status: "suspended" }),
+      managedAgent({ uuid: "other-org-1", displayName: "Other Org", organizationId: "org-2" }),
+    ]),
+  );
   contextApiMocks.initializeContextTree.mockResolvedValue({
     repo: "https://github.com/acme/acme-context-tree.git",
     htmlUrl: "https://github.com/acme/acme-context-tree",
@@ -405,7 +412,10 @@ describe("settings panels", () => {
     expect(container.textContent).toContain("https://github.com/acme/context");
     expect(container.textContent).toContain("branch main");
     expect(buttonByText(container, "Edit")).toBeNull();
-    expect(container.textContent).not.toContain("Context Reviewer");
+    expect(container.textContent).toContain("Context Reviewer");
+    expect(container.textContent).toContain("Automatic PR review");
+    expect(container.textContent).toContain("Off");
+    expect(reviewerSwitch(container)).toBeNull();
     expect(container.textContent).not.toContain("Repo URL");
     expect(container.querySelector('button[type="submit"]')).toBeNull();
     await act(async () => root.unmount());
@@ -435,7 +445,7 @@ describe("settings panels", () => {
     await waitForText(container, "Context Reviewer");
     expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("false");
     expect(settingsMocks.getContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1");
-    expect(agentApiMocks.listManagedAgents).not.toHaveBeenCalled();
+    expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
     expect(inputByLabel(container, "Repo URL")?.value).toBe("https://github.com/acme/draft-context");
 
     await act(async () => root.unmount());
@@ -482,7 +492,7 @@ describe("settings panels", () => {
 
     await click(reviewerSwitch(container));
     await waitForText(container, "Reviewer agent");
-    await waitForCondition(() => agentApiMocks.listManagedAgents.mock.calls.length > 0, "Expected agents to load");
+    await waitForCondition(() => agentApiMocks.listAllAgents.mock.calls.length > 0, "Expected agents to load");
     await waitForText(container, "Select an agent to enable Context Reviewer.");
 
     await selectOption(container, "Alpha Reviewer");
@@ -514,10 +524,12 @@ describe("settings panels", () => {
   });
 
   it("shows the empty state and saves nothing when no eligible agents exist", async () => {
-    agentApiMocks.listManagedAgents.mockResolvedValueOnce([
-      managedAgent({ uuid: "human-only", displayName: "Only Human", type: "human" }),
-      managedAgent({ uuid: "suspended-only", displayName: "Only Suspended", status: "suspended" }),
-    ]);
+    agentApiMocks.listAllAgents.mockResolvedValueOnce(
+      paginatedAgents([
+        managedAgent({ uuid: "human-only", displayName: "Only Human", type: "human" }),
+        managedAgent({ uuid: "suspended-only", displayName: "Only Suspended", status: "suspended" }),
+      ]),
+    );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
     await waitForText(container, "Context Reviewer");
@@ -530,36 +542,51 @@ describe("settings panels", () => {
     await act(async () => root.unmount());
   });
 
-  it("warns when the saved Context Reviewer is not visible to the current admin", async () => {
+  it("shows a saved Context Reviewer managed by another admin", async () => {
     settingsMocks.getContextTreeFeaturesSetting.mockResolvedValueOnce(
-      contextTreeFeatures({ enabled: true, agentUuid: "agent-hidden" }),
+      contextTreeFeatures({ enabled: true, agentUuid: "agent-other-admin" }),
+    );
+    agentApiMocks.listAllAgents.mockResolvedValueOnce(
+      paginatedAgents([
+        managedAgent({
+          uuid: "agent-other-admin",
+          displayName: "Other Admin Reviewer",
+          name: "other-admin-reviewer",
+        }),
+      ]),
     );
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
     await waitForText(container, "Context Reviewer");
 
-    await waitForText(container, "Current reviewer is not your active agent.");
+    await waitForText(container, "Other Admin Reviewer");
+    expect(container.textContent).not.toContain("Current reviewer is not your active agent.");
     expect(reviewerSwitch(container)?.getAttribute("aria-checked")).toBe("true");
-
-    // Turning it off from the warning state persists disabled/null at once.
-    await click(reviewerSwitch(container));
-    expect(settingsMocks.putContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1", {
-      contextReviewer: { enabled: false, agentUuid: null },
-    });
 
     await act(async () => root.unmount());
   });
 
-  it("shows admin-only Context Reviewer copy for members without requesting feature settings", async () => {
+  it("shows Context Reviewer read-only status for members", async () => {
     const { ContextTreeSettingsPanel } = await import("../context-tree-settings-panel.js");
     authMock.value = { ...authMock.value, role: "member" };
+    settingsMocks.getContextTreeFeaturesSetting.mockResolvedValueOnce(
+      contextTreeFeatures({
+        enabled: true,
+        agentUuid: "agent-reviewer",
+        reviewerAgent: { uuid: "agent-reviewer", name: "context-reviewer", displayName: "Context Reviewer Bot" },
+      }),
+    );
     const { container, root } = await renderPanel(<ContextTreeSettingsPanel />);
 
     await waitForText(container, "Your team's Context Tree");
-    expect(container.textContent).not.toContain("Context Reviewer");
-    expect(settingsMocks.getContextTreeFeaturesSetting).not.toHaveBeenCalled();
+    await waitForText(container, "Context Reviewer Bot");
+    expect(container.textContent).toContain("Automatic PR review");
+    expect(container.textContent).toContain("On");
+    expect(settingsMocks.getContextTreeFeaturesSetting).toHaveBeenCalledWith("org-1");
     expect(settingsMocks.putContextTreeFeaturesSetting).not.toHaveBeenCalled();
-    expect(agentApiMocks.listManagedAgents).not.toHaveBeenCalled();
+    expect(agentApiMocks.listAllAgents).not.toHaveBeenCalled();
+    expect(reviewerSwitch(container)).toBeNull();
+    expect(container.querySelector('[aria-label="Context Reviewer agent"]')).toBeNull();
 
     await act(async () => root.unmount());
   });

@@ -181,6 +181,12 @@ const orgContextReviewerSchema = z.object({
   agentUuid: z.string().min(1).nullable().default(null),
 });
 
+const orgContextReviewerAgentSummarySchema = z.object({
+  uuid: z.string().min(1),
+  name: z.string().nullable(),
+  displayName: z.string().min(1),
+});
+
 export const orgContextTreeFeaturesStorageSchema = z.object({
   contextReviewer: orgContextReviewerSchema
     .default({
@@ -210,7 +216,17 @@ export const orgContextTreeFeaturesInputSchema = z.object({
   }),
 });
 
-export const orgContextTreeFeaturesOutputSchema = orgContextTreeFeaturesStorageSchema;
+export const orgContextTreeFeaturesOutputSchema = z.object({
+  contextReviewer: orgContextReviewerSchema
+    .extend({
+      reviewerAgent: orgContextReviewerAgentSummarySchema.nullable().default(null),
+    })
+    .default({
+      enabled: false,
+      agentUuid: null,
+      reviewerAgent: null,
+    }),
+});
 
 // -- registry --
 
@@ -246,7 +262,7 @@ export const ORG_SETTINGS_NAMESPACES = {
     storage: orgContextTreeFeaturesStorageSchema,
     input: orgContextTreeFeaturesInputSchema,
     output: orgContextTreeFeaturesOutputSchema,
-    readPolicy: "admin",
+    readPolicy: "member",
   },
 } as const satisfies Record<
   string,

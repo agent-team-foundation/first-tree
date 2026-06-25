@@ -8,7 +8,7 @@ import {
   type OrgSettingOutput,
   type OrgSettingStorage,
 } from "@first-tree/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
@@ -106,7 +106,12 @@ function applyInputDelta<K extends OrgSettingNamespace>(
  * Project the storage row into the API output for a namespace, masking
  * any secret fields.
  */
-function toOutput<K extends OrgSettingNamespace>(namespace: K, storage: OrgSettingStorage<K>): OrgSettingOutput<K> {
+async function toOutput<K extends OrgSettingNamespace>(
+  db: Database,
+  orgId: string,
+  namespace: K,
+  storage: OrgSettingStorage<K>,
+): Promise<OrgSettingOutput<K>> {
   if (namespace === "context_tree") {
     const s = storage as OrgSettingStorage<"context_tree">;
     const out: OrgSettingOutput<"context_tree"> = {
@@ -128,6 +133,7 @@ function toOutput<K extends OrgSettingNamespace>(namespace: K, storage: OrgSetti
       contextReviewer: {
         enabled: s.contextReviewer.enabled,
         agentUuid: s.contextReviewer.agentUuid,
+        reviewerAgent: await resolveContextReviewerAgentSummary(db, orgId, s.contextReviewer.agentUuid),
       },
     };
     return out as OrgSettingOutput<K>;
@@ -147,7 +153,7 @@ export async function getOrgSetting<K extends OrgSettingNamespace>(
 ): Promise<OrgSettingOutput<K>> {
   assertNamespace(namespace);
   const storage = (await fetchStorageRow(db, orgId, namespace)) ?? emptyStorage(namespace);
-  return toOutput(namespace, storage);
+  return toOutput(db, orgId, namespace, storage);
 }
 
 /**
@@ -240,8 +246,26 @@ export async function putOrgSetting<K extends OrgSettingNamespace>(
         },
       });
 
-    return toOutput(namespace, validated);
+    return toOutput(txDb, orgId, namespace, validated);
   });
+}
+
+async function resolveContextReviewerAgentSummary(
+  db: Database,
+  orgId: string,
+  agentUuid: string | null,
+): Promise<{ uuid: string; name: string | null; displayName: string } | null> {
+  if (!agentUuid) return null;
+  const [agent] = await db
+    .select({
+      uuid: agents.uuid,
+      name: agents.name,
+      displayName: agents.displayName,
+    })
+    .from(agents)
+    .where(and(eq(agents.uuid, agentUuid), eq(agents.organizationId, orgId), ne(agents.status, "deleted")))
+    .limit(1);
+  return agent ?? null;
 }
 
 async function assertContextReviewerAgentAllowed(
@@ -265,20 +289,13 @@ async function assertContextReviewerAgentAllowed(
       type: agents.type,
       status: agents.status,
       organizationId: agents.organizationId,
-      managerId: agents.managerId,
     })
     .from(agents)
     .where(eq(agents.uuid, agentUuid))
     .limit(1);
 
-  if (
-    !agent ||
-    agent.organizationId !== orgId ||
-    agent.managerId !== memberId ||
-    agent.type === "human" ||
-    agent.status !== "active"
-  ) {
-    throw new BadRequestError("Context Reviewer agent must be an active non-human agent managed by the caller");
+  if (!agent || agent.organizationId !== orgId || agent.type === "human" || agent.status !== "active") {
+    throw new BadRequestError("Context Reviewer agent must be an active non-human agent in this organization");
   }
 }
 
