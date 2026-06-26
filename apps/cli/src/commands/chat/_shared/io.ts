@@ -42,9 +42,12 @@ export function readStdin(): Promise<string | null> {
 export async function readMessageBody(spec: string): Promise<string | null> {
   if (spec === "-") return readStdin();
 
-  // `.catch(() => null)` swallows only the stat() rejection (missing path /
-  // permissions); the fail() calls below stay OUTSIDE any try so their
-  // exit-throwing envelope is never caught and remapped here.
+  // Each fs call maps its own rejection to a clean `fail()` (exit 2) via
+  // `.catch`. fail() calls process.exit, so the `.catch` arms below never let a
+  // raw fs error escape to `handleSdkError` (which would mislabel it
+  // UNKNOWN_ERROR, exit 1). stat() fast-fails missing/non-file/oversize BEFORE
+  // reading; readFile() still has its own arm because the file can become
+  // unreadable or vanish between stat and read (EACCES, TOCTOU race).
   const info = await stat(spec).catch(() => null);
   if (info === null) {
     return fail("MESSAGE_FILE_NOT_FOUND", `--message-file path does not exist or is not readable: ${spec}`, 2);
@@ -55,7 +58,11 @@ export async function readMessageBody(spec: string): Promise<string | null> {
   if (info.size > MAX_STDIN_BYTES) {
     return fail("MESSAGE_FILE_TOO_LARGE", `--message-file exceeds the ${MAX_STDIN_BYTES}-byte limit: ${spec}`, 2);
   }
-  return (await readFile(spec)).toString("utf-8");
+  const buf = await readFile(spec).catch((err: unknown) => {
+    const detail = err instanceof Error ? err.message : String(err);
+    return fail("MESSAGE_FILE_UNREADABLE", `--message-file could not be read: ${detail}`, 2);
+  });
+  return buf.toString("utf-8");
 }
 
 /**

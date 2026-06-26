@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -168,5 +169,60 @@ describe("chat send/ask --message-file", () => {
       "chat-env",
       expect.objectContaining({ content: body, format: "request" }),
     );
+  });
+
+  // Adversarial edge cases — every fs failure must surface as a clean
+  // MESSAGE_FILE_* / NO_MESSAGE error (exit 2) and write nothing, never an
+  // UNKNOWN_ERROR (exit 1) leaked from a raw fs throw.
+  it("an empty file is treated as no message (exit 2, nothing sent)", async () => {
+    const path = join(dir, "empty.md");
+    writeFileSync(path, "");
+
+    await expect(runChat("send", ["code-agent", "--message-file", path])).rejects.toMatchObject({
+      code: "NO_MESSAGE",
+      exitCode: 2,
+    });
+    expect(outputMocks.success).not.toHaveBeenCalled();
+  });
+
+  it("a directory path fails as MESSAGE_FILE_NOT_FILE", async () => {
+    await expect(runChat("send", ["code-agent", "--message-file", dir])).rejects.toMatchObject({
+      code: "MESSAGE_FILE_NOT_FILE",
+      exitCode: 2,
+    });
+    expect(outputMocks.success).not.toHaveBeenCalled();
+  });
+
+  it("a file that stat()s but cannot be read fails as MESSAGE_FILE_UNREADABLE (not UNKNOWN_ERROR)", async () => {
+    const path = join(dir, "locked.md");
+    writeFileSync(path, "secret body");
+    chmodSync(path, 0o000);
+
+    try {
+      // Root ignores 0o000, so skip the assertion when the read still succeeds.
+      const readable = await readFile(path).then(
+        () => true,
+        () => false,
+      );
+      if (!readable) {
+        await expect(runChat("send", ["code-agent", "--message-file", path])).rejects.toMatchObject({
+          code: "MESSAGE_FILE_UNREADABLE",
+          exitCode: 2,
+        });
+        expect(outputMocks.success).not.toHaveBeenCalled();
+      }
+    } finally {
+      chmodSync(path, 0o600);
+    }
+  });
+
+  it("`-F -` with a TTY stdin (nothing piped) fails as NO_MESSAGE", async () => {
+    setProcessStdin({ isTTY: true });
+
+    await expect(runChat("send", ["code-agent", "-F", "-"])).rejects.toMatchObject({
+      code: "NO_MESSAGE",
+      exitCode: 2,
+    });
+    expect(outputMocks.success).not.toHaveBeenCalled();
   });
 });
