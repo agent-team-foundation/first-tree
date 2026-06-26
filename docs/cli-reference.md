@@ -258,8 +258,12 @@ first-tree chat
 │     --request                                    #   first message is a tracked ask; the body IS the ask; exactly one --to human
 │     --options <json> / --multi-select            #   (with --request) 2–4 options {label,description,preview?}; allow multi-pick
 ├── send <name> [message]                            # wake a participant — agent or human (a plain send to a human is a free reply; use `chat ask` for a tracked decision)
+│     # body: [message] arg, or stdin (omit [message]), or -F <path>; prefer stdin/-F for rich bodies (shell-safe)
+│     -F, --message-file <path>                      #   read the body from <path> (`-` = stdin); content never hits the shell
 │     --reply-to <messageId>                         #   thread a reply under a message (pure threading)
 ├── ask <name> [message]                             # ask a HUMAN a tracked question; the body IS the ask (background + question)
+│     # body: [message] arg, or stdin (omit [message]), or -F <path>; prefer stdin/-F for rich bodies (shell-safe)
+│     -F, --message-file <path>                      #   read the body from <path> (`-` = stdin); content never hits the shell
 │     --options <json>                               #   2–4 answer options {label (1–5 words), description, preview?}; omit for free-text
 │     --multi-select                                 #   allow picking more than one option (requires --options)
 │     # always a fresh top-level question — no threading, and no resolve flag
@@ -299,6 +303,14 @@ first-tree chat send code-agent "ship the PR"
 # Stdin (multiline, markdown, special chars)
 echo "long body" | first-tree chat send code-agent -f markdown
 
+# Rich / multi-line bodies: write to a file, then read it with --message-file
+# (or `-F`). This is the most robust form — the body never passes through the
+# shell, so backticks (`code`), quotes, apostrophes, and newlines are sent
+# byte-for-byte. Inlining such a body lets the shell run backticks as command
+# substitution and break on quotes, silently mangling the message.
+first-tree chat send code-agent -f markdown --message-file reply.md
+first-tree chat send code-agent -f markdown -F -   < reply.md   # `-` = stdin
+
 # Inline bodies must carry REAL newlines. A one-line quoted body written with
 # `\n` escapes — chat send code-agent "line1\n\n**title**" — is rejected
 # BEFORE anything is sent (ESCAPED_NEWLINES, exit 2): shells do not expand
@@ -323,6 +335,9 @@ first-tree chat ask alice \
 
 # Free-text ask (no options)
 first-tree chat ask alice "What rollback window do you want before we ship 0021?"
+
+# Rich ask body via a file (shell-safe — same rationale as `chat send -F`)
+first-tree chat ask alice --message-file ask-body.md
 
 # `chat ask` always opens a fresh top-level question — there is no threading
 # (no --reply-to) and no resolve command. An agent can only ASK — it cannot mark a question

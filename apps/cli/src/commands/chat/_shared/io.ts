@@ -1,3 +1,4 @@
+import { readFile, stat } from "node:fs/promises";
 import { fail } from "../../../cli/output.js";
 import { channelConfig } from "../../../core/channel.js";
 import { print } from "../../../core/output.js";
@@ -23,6 +24,45 @@ export function readStdin(): Promise<string | null> {
     process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
     process.stdin.on("error", reject);
   });
+}
+
+/**
+ * Resolve an outbound body from a `--message-file <path>` spec. `-` reads
+ * stdin (the clig.dev convention); any other value is a filesystem path read
+ * verbatim. Routing the body through a file or stdin — never an inline shell
+ * argument — is the one robust fix for shell mangling: backticks (command
+ * substitution), double quotes (early argument termination), apostrophes, and
+ * newlines all reach the server byte-for-byte because the shell never
+ * word-parses the file's contents. Unlike an inline body, a file body is NOT
+ * run through `looksLikeEscapedNewlineBody`: a file can legitimately contain a
+ * literal `\n`, and its real newlines already survive intact. Returns null
+ * only when `-` is given but stdin is a TTY (nothing piped); the caller
+ * surfaces its own "no body" error.
+ */
+export async function readMessageBody(spec: string): Promise<string | null> {
+  if (spec === "-") return readStdin();
+
+  // Each fs call maps its own rejection to a clean `fail()` (exit 2) via
+  // `.catch`. fail() calls process.exit, so the `.catch` arms below never let a
+  // raw fs error escape to `handleSdkError` (which would mislabel it
+  // UNKNOWN_ERROR, exit 1). stat() fast-fails missing/non-file/oversize BEFORE
+  // reading; readFile() still has its own arm because the file can become
+  // unreadable or vanish between stat and read (EACCES, TOCTOU race).
+  const info = await stat(spec).catch(() => null);
+  if (info === null) {
+    return fail("MESSAGE_FILE_NOT_FOUND", `--message-file path does not exist or is not readable: ${spec}`, 2);
+  }
+  if (!info.isFile()) {
+    return fail("MESSAGE_FILE_NOT_FILE", `--message-file is not a regular file: ${spec}`, 2);
+  }
+  if (info.size > MAX_STDIN_BYTES) {
+    return fail("MESSAGE_FILE_TOO_LARGE", `--message-file exceeds the ${MAX_STDIN_BYTES}-byte limit: ${spec}`, 2);
+  }
+  const buf = await readFile(spec).catch((err: unknown) => {
+    const detail = err instanceof Error ? err.message : String(err);
+    return fail("MESSAGE_FILE_UNREADABLE", `--message-file could not be read: ${detail}`, 2);
+  });
+  return buf.toString("utf-8");
 }
 
 /**
