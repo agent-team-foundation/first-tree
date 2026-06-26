@@ -9,6 +9,7 @@ quota.
 ```bash
 pnpm --filter @first-tree/skill-evals eval:floor
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:first-tree-read
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --json
@@ -30,10 +31,21 @@ Codex, Claude Code, LLM-as-judge, or live gate cases.
   `first-tree tree verify`;
 - implementation-only source material means no Context Tree diff.
 
+`eval:gate -- --suite first-tree-welcome` runs the live Codex gate for
+the currently implemented `first-tree-welcome` onboarding rows:
+
+- tree kickoff chat routes to the tree setup lane instead of welcome first-task
+  options;
+- no repo connected / intro chat asks for a local clone path or GitHub URL
+  without requiring GitHub authorization first;
+- readable repo + populated Context Tree reads both evidence sources and offers
+  two or three bounded first-task options without seeding or setting up the
+  tree.
+
 The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs
-the relevant skill, prepends a `first-tree` shim to `PATH`, and runs
-`codex exec --json` from the case workspace for live eval commands.
+the relevant skill, prepends command shims such as `first-tree` to `PATH`, and
+runs `codex exec --json` from the case workspace for live eval commands.
 
 Each case writes:
 

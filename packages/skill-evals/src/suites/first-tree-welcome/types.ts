@@ -1,0 +1,114 @@
+import type { CommandResult } from "../../core/types.js";
+
+export type WelcomeRole = "admin" | "invitee";
+export type WelcomeKickoffKind = "intro" | "work" | "tree";
+export type WelcomeRepoState = "none" | "local-readable" | "selected-readable" | "selected-auth-fails" | "unknown";
+export type WelcomeTreeState = "none" | "empty" | "populated" | "unknown";
+export type WelcomeGithubAppState = "installed" | "missing" | "unknown";
+export type WelcomeTreeSetupChatState = "absent" | "exists" | "promised";
+
+export type WelcomeExpectedAction =
+  | "route_to_tree_skill"
+  | "invitee_waits_for_team_readiness"
+  | "ask_for_repo_path_or_url"
+  | "report_auth_failure_without_claiming_repo_read"
+  | "value_first_then_setup_handoff"
+  | "guide_repo_selection_without_claiming_repo_read"
+  | "offer_code_value_without_tree_setup_task"
+  | "offer_bounded_first_tasks_from_repo_and_tree"
+  | "offer_repo_value_without_claiming_tree_ready";
+
+export type FirstTreeWelcomeFixture = {
+  githubAppState: WelcomeGithubAppState;
+  kickoffKind: WelcomeKickoffKind;
+  repoState: WelcomeRepoState;
+  role: WelcomeRole;
+  treeSetupChat: WelcomeTreeSetupChatState;
+  treeState: WelcomeTreeState;
+};
+
+export type FirstTreeWelcomeExpected = {
+  action: WelcomeExpectedAction;
+  evidenceSnippets?: readonly string[];
+  requiredResponseHints: readonly string[];
+  taskOptionHints?: readonly string[];
+};
+
+export type FirstTreeWelcomeForbidden = {
+  actions: readonly string[];
+  claims: readonly string[];
+  sideEffects: readonly string[];
+};
+
+export type FirstTreeWelcomeEvalCase = {
+  briefingMode: "generated-fixture";
+  expected: FirstTreeWelcomeExpected;
+  fixture: FirstTreeWelcomeFixture;
+  forbidden: FirstTreeWelcomeForbidden;
+  id: string;
+  prompt: string;
+  provider: "codex";
+  skill: "first-tree-welcome";
+  status: "implemented" | "planned";
+  tags: readonly string[];
+  tier: "gate";
+};
+
+export type CliOptions = {
+  caseId: string | null;
+  codexBin: string;
+  json: boolean;
+  model: string | null;
+  verbose: boolean;
+};
+
+export type FixtureValidation = {
+  contextTreeVerifyResult: CommandResult | null;
+  errors: readonly string[];
+  ok: boolean;
+  requiredFilesOk: boolean;
+};
+
+export type EvalMetrics = {
+  chatAskCount: number;
+  chatOptionCount: number | null;
+  chatText: string;
+  contextTreeChanged: boolean;
+  contextTreeStatus: string;
+  expectedEvidenceObserved: boolean;
+  expectedResponseObserved: boolean;
+  finalResponse: string;
+  forbiddenActionHits: readonly string[];
+  forbiddenClaimHits: readonly string[];
+  forbiddenSideEffectHits: readonly string[];
+  firstTreeArgv: readonly (readonly string[])[];
+  fixtureValidationOk: boolean;
+  repoEvidenceReadObserved: boolean;
+  runnerExitCode: number | null;
+  skillFileReadObserved: boolean;
+  sourceRepoChanged: boolean;
+  taskOptionsObserved: boolean;
+  treeEvidenceReadObserved: boolean;
+};
+
+export type CaseRunSummary = {
+  caseId: string;
+  driftNote: string | null;
+  expectedAction: WelcomeExpectedAction;
+  fixtureValidation: FixtureValidation;
+  metrics: EvalMetrics;
+  passed: boolean;
+  prompt: string;
+  runRoot: string;
+  startedAt: string;
+  summaryJsonPath: string;
+  summaryMdPath: string;
+  workspacePath: string;
+};
+
+export type BatchSummary = {
+  cases: readonly CaseRunSummary[];
+  failed: number;
+  passed: number;
+  runStartedAt: string;
+};

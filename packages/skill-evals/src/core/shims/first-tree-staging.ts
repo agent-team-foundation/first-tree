@@ -5,17 +5,13 @@ import { writeText } from "../commands.js";
 import { writeShellPathBootstrap } from "../paths.js";
 import type { RunPaths } from "../types.js";
 
-export function createFirstTreeShim(paths: RunPaths): void {
-  const tsxBin = join(paths.packageRoot, "node_modules", ".bin", "tsx");
-  const cliEntry = join(paths.repoRoot, "apps", "cli", "src", "cli", "index.ts");
-  const shimPath = join(paths.binDir, "first-tree");
+export function createFirstTreeStagingShim(paths: RunPaths): void {
+  const shimPath = join(paths.binDir, "first-tree-staging");
   const script = `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 const EVENTS_PATH = ${JSON.stringify(paths.eventsPath)};
-const TSX_BIN = ${JSON.stringify(tsxBin)};
-const CLI_ENTRY = ${JSON.stringify(cliEntry)};
 
 function preview(value) {
   if (!value) return "";
@@ -43,53 +39,15 @@ function trace(message) {
 
 const argv = process.argv.slice(2);
 const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
-append({ type: "first_tree_call", phase, argv, cwd: process.cwd() });
-trace("first-tree call: " + commandLine(argv));
-
-if (argv[0] === "github") {
-  const exitCode = 1;
-  const stderr = "Blocked first-tree github command in skill eval. No real GitHub side effect was attempted.\\n";
-  process.stderr.write(stderr);
-  append({
-    type: "first_tree_result",
-    phase,
-    argv,
-    cwd: process.cwd(),
-    exitCode,
-    signal: null,
-    stdoutPreview: "",
-    stderrPreview: preview(stderr),
-    blockedByEval: true,
-  });
-  trace("first-tree result: exit=1 blocked github command");
-  process.exit(exitCode);
-}
-
-if (argv[0] === "tree" && ["bind", "create", "init", "seed", "setup"].includes(argv[1] || "")) {
-  const exitCode = 1;
-  const stderr = "Blocked first-tree tree setup command in skill eval. No real tree setup side effect was attempted.\\n";
-  process.stderr.write(stderr);
-  append({
-    type: "first_tree_result",
-    phase,
-    argv,
-    cwd: process.cwd(),
-    exitCode,
-    signal: null,
-    stdoutPreview: "",
-    stderrPreview: preview(stderr),
-    blockedByEval: true,
-  });
-  trace("first-tree result: exit=1 blocked tree setup command");
-  process.exit(exitCode);
-}
+append({ type: "first_tree_staging_call", phase, argv, cwd: process.cwd() });
+trace("first-tree-staging call: " + commandLine(argv));
 
 if (argv[0] === "chat" && ["ask", "send", "update"].includes(argv[1] || "")) {
   const exitCode = 0;
-  const stdout = "Recorded first-tree chat " + argv[1] + " in skill eval. No real message was sent.\\n";
+  const stdout = "Recorded first-tree-staging chat " + argv[1] + " in skill eval. No real message was sent.\\n";
   process.stdout.write(stdout);
   append({
-    type: "first_tree_result",
+    type: "first_tree_staging_result",
     phase,
     argv,
     cwd: process.cwd(),
@@ -99,13 +57,11 @@ if (argv[0] === "chat" && ["ask", "send", "update"].includes(argv[1] || "")) {
     stderrPreview: "",
     recordedOnly: true,
   });
-  trace("first-tree result: exit=0 recorded-only chat " + argv[1]);
+  trace("first-tree-staging result: exit=0 recorded-only chat " + argv[1]);
   process.exit(exitCode);
 }
 
-const realCommand = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE || TSX_BIN;
-const realArgs = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE ? argv : [CLI_ENTRY, ...argv];
-const result = spawnSync(realCommand, realArgs, {
+const result = spawnSync("first-tree", argv, {
   cwd: process.cwd(),
   encoding: "utf8",
   env: process.env,
@@ -117,7 +73,7 @@ if (result.stderr) process.stderr.write(result.stderr);
 
 if (result.error) {
   append({
-    type: "first_tree_result",
+    type: "first_tree_staging_result",
     phase,
     argv,
     cwd: process.cwd(),
@@ -126,13 +82,13 @@ if (result.error) {
     stdoutPreview: preview(result.stdout || ""),
     stderrPreview: preview(result.stderr || ""),
   });
-  trace("first-tree result: exit=127 error=" + preview(String(result.error)));
+  trace("first-tree-staging result: exit=127 error=" + preview(String(result.error)));
   process.exit(127);
 }
 
 const exitCode = result.status == null ? 1 : result.status;
 append({
-  type: "first_tree_result",
+  type: "first_tree_staging_result",
   phase,
   argv,
   cwd: process.cwd(),
@@ -141,7 +97,7 @@ append({
   stdoutPreview: preview(result.stdout || ""),
   stderrPreview: preview(result.stderr || ""),
 });
-trace("first-tree result: exit=" + exitCode);
+trace("first-tree-staging result: exit=" + exitCode);
 
 process.exit(exitCode);
 `;
