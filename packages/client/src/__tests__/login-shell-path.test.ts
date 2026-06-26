@@ -122,30 +122,37 @@ describe("getLoginShellPathDirs", () => {
 });
 
 /**
- * Integration coverage for the real probe script. The script is launched by the
- * user's login shell as a single opaque `/bin/sh -c '…'` token, so it must run
- * identically no matter what that outer shell is — that shell-agnostic launcher
- * shape is exactly what lets fish / tcsh (which cannot parse a POSIX `do … done`
- * loop) work. We cannot assume fish is installed in CI, so this exercises the
- * mechanism through `/bin/sh` as the outer launcher (and the platform default
- * via the real `defaultRunShell`); fish itself is covered by the runtime-env-qa
+ * Integration coverage for the real probe script. The login shell launches it as
+ * a single opaque `/bin/sh -c '…'` token, so it must run identically no matter
+ * what that outer shell is — that shell-agnostic launcher shape is exactly what
+ * lets fish / tcsh (which cannot parse a POSIX `do … done` loop) work. We cannot
+ * assume fish is installed in CI, so this exercises the mechanism through
+ * `/bin/sh` as the outer launcher (and the platform default via the real
+ * `defaultRunShell`); fish itself is covered by the runtime-env-qa
  * `DW7_fish_frozen` scenario.
+ *
+ * The outer launcher is invoked with `-c` only — NOT the production `-lic`. The
+ * `-l`/`-i` flags exist solely to source the user's rc files, which this test
+ * does not need, and they are not portable: on Ubuntu CI `/bin/sh` is `dash`,
+ * whose `-l` support varies. `-c` is universally supported, and the nested
+ * `for`/`cd`/`pwd -P` loop runs identically under dash, so this stays green on
+ * every POSIX `/bin/sh`.
  */
 describe("probe script (real execution)", () => {
   afterEach(() => resetLoginShellPathDirsCache());
 
   it.skipIf(process.platform === "win32")(
-    "runs under a POSIX /bin/sh launcher and yields this process's canonical, absolute PATH dirs",
+    "runs the opaque nested /bin/sh command under a POSIX shell and yields canonical, absolute PATH dirs",
     () => {
-      const runViaSh: RunShell = () => {
-        const r = spawnSync("/bin/sh", ["-lic", buildProbeScript()], {
-          encoding: "utf-8",
-          timeout: 4_000,
-          stdio: ["ignore", "pipe", "ignore"],
-        });
-        return typeof r.stdout === "string" ? r.stdout : null;
-      };
-      const dirs = getLoginShellPathDirs(runViaSh);
+      const r = spawnSync("/bin/sh", ["-c", buildProbeScript()], {
+        encoding: "utf-8",
+        timeout: 4_000,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      // Surface a launcher failure explicitly instead of as an opaque empty result.
+      expect(r.error).toBeUndefined();
+      expect(r.status).toBe(0);
+      const dirs = getLoginShellPathDirs(() => (typeof r.stdout === "string" ? r.stdout : null));
       // A real environment always has at least one PATH dir, and every dir the
       // probe returns is canonicalized (`pwd -P`) so it must be absolute.
       expect(dirs.length).toBeGreaterThan(0);
