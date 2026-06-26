@@ -1,4 +1,5 @@
 import type { ChatContext } from "./chat-context.js";
+import { getCliBinding } from "./cli-binding.js";
 
 /**
  * Render the per-chat "Current Chat Context" markdown section. This material
@@ -59,31 +60,46 @@ export function renderChatContextSection(chatContext: ChatContext | undefined): 
 }
 
 /**
- * Provider system-prompt contract that resolves a conflict between the base
- * Claude Code harness ("all text you output outside of tool calls is displayed
- * to the user") and First Tree's delivery model, where reaching a teammate
- * requires an explicit `chat send` / `ask` / `update`.
+ * Provider-neutral runtime contract that reconciles an agent's native output
+ * model with First Tree's delivery model, where reaching a teammate requires an
+ * explicit `chat send` / `ask` / `update`. Every provider has a native channel
+ * it treats as user-facing — text outside tool calls (Claude Code), or the
+ * `commentary` / `final` channels (Codex). The wording stays provider-agnostic
+ * so each agent maps it onto its own output.
  *
- * Rather than *negating* the base instruction (a downstream, lower-salience
+ * Rather than *negating* the native instruction (a downstream, lower-salience
  * "your output is not a reply" loses to the model's strong prior ~1/3 of the
- * time), this *rebinds* it: the "user" reading the output stream is the First
- * Tree runtime; teammates are a separate audience reached only by an explicit
- * send. It folds three mutually-reinforcing framings — runtime-as-user, reach
- * = an outbound publish, and console-vs-outbox — into one block, kept accurate
- * about visibility (the trace is not private; it surfaces as a live-activity
- * preview). Injected through `systemPrompt.append`, which the SDK places after
- * the base preset yet at higher salience than the project CLAUDE.md.
+ * time), this *rebinds* it with a single boundary rule: everything you produce
+ * apart from an explicit chat command is the console, addressed to the First
+ * Tree runtime; the explicit commands are the outbox, the only path to a
+ * teammate. Stating the boundary by exclusion (console = everything but the
+ * chat commands) binds the turn-closing message — Codex's strong `final` prior
+ * — without enumerating channels. Kept accurate about visibility (the trace is
+ * not private; it surfaces as a live-activity preview).
+ *
+ * This is the single contract BOTH providers receive — keeping provider prompt
+ * differences minimal. The only difference is the delivery mechanism, which the
+ * provider's architecture forces: on the Claude path it rides `systemPrompt.append`
+ * (after the base preset, above the project CLAUDE.md); Codex has no persistent
+ * system-prompt channel, so it is prepended to every Codex turn input alongside
+ * the chat-context block. Either way the same block rides every turn and sits in
+ * the immediate context tail where a "discuss only / hold off" instruction lands.
  */
 export function renderRuntimeOutputContract(): string {
+  const bin = getCliBinding().binName;
   return [
     "<first-tree-runtime-contract>",
     "This block is authored by the First Tree runtime.",
     "",
-    'Who reads your output: the Claude Code harness tells you that all text you write outside of tool calls is displayed to "the user". Inside First Tree that user is the First Tree runtime — an automated operator that records your output as a live reasoning/activity trace, not a chat participant. Think, plan, and narrate there freely. That trace surfaces to people viewing the session as a one-line activity preview, so it is not private — but it is never delivered to anyone as a message.',
+    'Who reads your output: inside First Tree, the "user" your underlying agent addresses — the reader of everything you produce apart from running a chat command, including the text you write outside of tool calls and the message that closes your turn — is the First Tree runtime, an automated operator that records it as a live reasoning/activity trace. Think, plan, and narrate there freely. That trace surfaces to people viewing the session as a one-line activity preview, so treat it as visible. This is your console.',
     "",
-    "Your teammates — the humans and agents in this chat — are a different audience. They never receive your output text. Reaching a teammate is an outbound publish to the chat service that happens only when you run an explicit command: `chat send` (a reply, or to make an agent act), `chat ask` (a tracked decision for a human), or `chat update` (status). Your output stream is the console; `chat send` is the outbox. Finishing your thoughts writes the console; it does not send the outbox.",
+    "Your teammates — the humans and agents in this chat — are a separate audience. You reach a teammate by running the chat CLI as a command-line tool — a real command you run, the same execution path you use for any other tool:",
+    `- \`${bin} chat send <name> "<message>"\` — deliver a reply, or hand an agent its next step`,
+    `- \`${bin} chat ask <human> "<question>"\` — put a tracked decision to a human`,
+    `- \`${bin} chat update --description "<status>"\` — record status`,
+    "The console addresses the runtime; running one of these commands is what places your message in front of a teammate. Describing a reply in your output records words on the console, while running the command delivers them.",
     "",
-    "So answering a teammate is two acts, not one: do the work (console), then deliver the result with `chat send` (outbox). A turn that ends with only output text has told the runtime everything and told the teammate nothing — to them it reads as no reply.",
+    "So a request to hold off from acting scopes the business actions that change the workspace or the world — running a chat command delivers your words and changes nothing else, so it stays the way you finish a human-directed turn. (Replying to a human is required; an agent wake-up with nothing new to act on can end without a send.)",
     "</first-tree-runtime-contract>",
   ].join("\n");
 }

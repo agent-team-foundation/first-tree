@@ -428,29 +428,34 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("first-tree chat update --description");
     expect(briefing).not.toMatch(/server rejects a `?chat send`? to a human/);
 
-    // yuezengwu 2026-06-23: rebind, rather than negate, the base Claude Code
-    // harness ("all text you output … is displayed to the user"). The brief
-    // pins the harness's "user" to the First Tree runtime and frames teammates
-    // as a separate audience reached only by an explicit send (console vs
-    // outbox). Keep the PRECISE product boundary (codex R1/R5): the output
-    // stream is not an addressed reply, yet it is NOT private — a one-line
-    // preview surfaces as live session activity (`liveActivity.detail` /
-    // `turnText`) to viewers. So communication is always an explicit send.
-    expect(briefing).toMatch(/the "user" the Claude Code harness writes to is the First Tree runtime/i);
-    expect(briefing).toMatch(/reasoning\/activity\s+trace/i);
-    expect(briefing).toMatch(/never delivered to\s+anyone as a message/i);
-    expect(briefing).toMatch(/not\s+private/i);
+    // yuezengwu 2026-06-26: rebind, rather than negate, the agent's native
+    // output model with one provider-neutral boundary rule — everything apart
+    // from an explicit chat command is the console (addressed to the First Tree
+    // runtime); the chat commands are the outbox (the only path to a teammate).
+    // Stating it by exclusion binds the turn-closing message (Codex's `final`
+    // prior) without naming a provider. Keep the PRECISE product boundary
+    // (codex R1/R5): the output is not an addressed reply, yet it is visible —
+    // a one-line preview surfaces as live session activity to viewers.
+    expect(briefing).toMatch(/the "user" your underlying agent addresses is the First\s+Tree runtime/i);
+    expect(briefing).toMatch(/Everything you produce apart from an explicit chat\s+command/i);
+    expect(briefing).toMatch(/message that closes your turn/i);
+    expect(briefing).toMatch(/live reasoning\/activity trace/i);
+    expect(briefing).toMatch(/treating it as visible/i);
     expect(briefing).toMatch(/live session activity/i);
-    expect(briefing).toMatch(/console; `?chat send`? is the outbox/i);
-    expect(briefing).toMatch(/has sent\s+nothing/);
+    expect(briefing).toMatch(/This is your \*\*console\*\*/i);
+    expect(briefing).toMatch(/the outbox: the explicit\s+commands/i);
+    expect(briefing).toMatch(/places your message in front of\s+a teammate/i);
+    // The outbox-completion rule is scoped to HUMAN-directed turns, so it never
+    // contradicts the adjacent agent no-courtesy-send brake (codex review R5):
+    // an agent no-op wake-up must still be allowed to end without a send.
+    expect(briefing).toMatch(/A human-directed\s+turn is complete once you deliver your reply through the outbox/i);
+    expect(briefing).toMatch(/an agent\s+wake-up with nothing new to act on can end without a send/i);
+    expect(briefing).not.toMatch(/teammate triggered is complete/i);
     // The retired mirror term stays out — there is no `agent-final-text` row
     // post-#1190.
     expect(briefing).not.toContain("agent-final-text");
-    // Must NOT overclaim invisibility/privacy: the output stream is NOT
-    // undelivered-to-everyone (it shows as live activity), and chat send is NOT
-    // the sole channel a teammate ever sees (`chat ask` / `chat update` too).
-    expect(briefing).not.toMatch(/does not deliver it to anyone/i);
-    expect(briefing).not.toMatch(/only ever sees what you `?chat send`?/);
+    // Provider-neutral: the brief no longer names a specific harness.
+    expect(briefing).not.toMatch(/Claude Code harness/i);
 
     // Courtesy-send guard stays — the brake is on the *send* side.
     expect(briefing).toContain("Don't fire a courtesy");
@@ -666,6 +671,15 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
   it("emits Communication, Workspace Collaboration, Asking Humans, Chat Topic & Description, and CLI Overview subsections", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("## Communication");
+    // Action classification (the 07:22 root fix): reply transport is framed as
+    // a real command you run with the chat CLI (binds "reply" to executing a
+    // command, per real-agent QA 2026-06-26), and stated as a principle so a
+    // "hold off / discuss only" instruction scopes business actions and never
+    // suppresses the reply.
+    expect(briefing).toMatch(/is\s+a real command you run with the chat CLI/i);
+    expect(briefing).toMatch(/running it delivers your words to a teammate/i);
+    expect(briefing).toMatch(/A business action\s+is anything that changes the workspace or the world/i);
+    expect(briefing).toMatch(/hold off from acting/i);
     // Communication routing: `chat send` reaches any teammate (a plain send to a
     // human is a free reply); a human also has `chat ask` (decisions) and
     // `chat update --description` (progress). The courtesy-send guard prevents

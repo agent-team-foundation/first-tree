@@ -44,27 +44,53 @@ function mkChatDetail(overrides?: Partial<ChatDetail>): ChatDetail {
 }
 
 describe("renderRuntimeOutputContract", () => {
-  // The contract resolves the base-harness conflict by REBINDING "the user"
-  // (runtime, not teammates) rather than negating "output is displayed to the
-  // user". Pin the three load-bearing framings + the accurate visibility
-  // boundary so a future edit can't silently gut or over-claim them.
+  // The contract resolves the native-output conflict by REBINDING "the user"
+  // (runtime, not teammates) with one provider-neutral boundary rule —
+  // everything apart from an explicit chat command is the console — rather than
+  // negating "output is a reply". Pin the load-bearing framings + the accurate
+  // visibility boundary so a future edit can't silently gut or over-claim them.
   const contract = renderRuntimeOutputContract();
 
-  it("rebinds the harness 'user' to the First Tree runtime", () => {
-    expect(contract).toMatch(/that user is the First Tree runtime/i);
+  it("rebinds 'the user' to the First Tree runtime, provider-neutrally", () => {
+    expect(contract).toMatch(/the "user" your underlying agent addresses/i);
+    expect(contract).toMatch(/is the First Tree runtime, an automated operator/i);
+    // Stays provider-agnostic: names no specific harness.
+    expect(contract).not.toMatch(/Claude Code harness/i);
   });
 
-  it("frames reach as an explicit outbound publish (console vs outbox)", () => {
-    expect(contract).toMatch(/outbound publish to the chat service/i);
-    expect(contract).toMatch(/output stream is the console; `chat send` is the outbox/i);
-    expect(contract).toContain("`chat send`");
-    expect(contract).toContain("`chat ask`");
-    expect(contract).toContain("`chat update`");
+  it("draws the boundary by exclusion and binds the turn-closing message", () => {
+    expect(contract).toMatch(/everything you produce apart from running a chat command/i);
+    expect(contract).toMatch(/the message that closes your turn/i);
+    expect(contract).toMatch(/This is your console/i);
   });
 
-  it("keeps the visibility boundary accurate — not private, but never a delivered message", () => {
-    expect(contract).toMatch(/it is not private/i);
-    expect(contract).toMatch(/never delivered to anyone as a message/i);
+  it("frames reach as running the chat CLI command-line tool, with executable signatures", () => {
+    expect(contract).toMatch(/running the chat CLI as a command-line tool — a real command you run/i);
+    expect(contract).toMatch(/running one of these commands is what places your message in front of a teammate/i);
+    expect(contract).toMatch(
+      /Describing a reply in your output records words on the console, while running the command delivers them/i,
+    );
+    // Executable invocation signatures (the tool surface), bin from the binding.
+    expect(contract).toContain('first-tree chat send <name> "<message>"');
+    expect(contract).toContain('first-tree chat ask <human> "<question>"');
+    expect(contract).toContain('first-tree chat update --description "<status>"');
+  });
+
+  it("classifies reply transport apart from business actions (hold-off carve-out)", () => {
+    expect(contract).toMatch(/running a chat command delivers your words and changes nothing else/i);
+    expect(contract).toMatch(/hold off from acting/i);
+  });
+
+  it("scopes the outbox-completion rule to human-directed turns, preserving the agent no-op exception (codex review R5)", () => {
+    expect(contract).toMatch(/the way you finish a human-directed turn/i);
+    expect(contract).toMatch(/an agent wake-up with nothing new to act on can end without a send/i);
+    // Must not broaden completion to every teammate-triggered turn — that would
+    // contradict the agent no-courtesy-send loop guard.
+    expect(contract).not.toMatch(/teammate-triggered turn/i);
+  });
+
+  it("keeps the visibility boundary accurate — visible activity, not a delivered message", () => {
+    expect(contract).toMatch(/treat it as visible/i);
     // Must not over-claim that nobody ever sees the trace.
     expect(contract).not.toMatch(/no one (?:can )?sees?/i);
   });

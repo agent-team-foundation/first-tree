@@ -142,12 +142,15 @@ describe("bootstrapWorkspace — codex briefing + workspace marker", () => {
     expect(briefing).toContain("first-tree-staging chat send");
     // `chat send` reaches any teammate — agent or human; a human also has
     // `chat ask` (decisions) / `chat update --description` (progress). The
-    // output stream is reframed as a reasoning/activity trace read by the First
-    // Tree runtime (the harness's "user"), not the teammates — but the retired
-    // `agent-final-text` mirror term must NOT survive (post-#1190).
+    // output is reframed, provider-neutrally, as a reasoning/activity trace read
+    // by the First Tree runtime ("the user" the agent addresses), not the
+    // teammates — but the retired `agent-final-text` mirror term must NOT
+    // survive (post-#1190), and the brief names no Claude-specific harness so a
+    // Codex agent maps it onto its own `commentary` / `final` channels.
     expect(briefing).toContain("first-tree-staging chat ask <human>");
     expect(briefing).toContain("first-tree-staging chat update --description");
-    expect(briefing).toMatch(/the "user" the Claude Code harness writes to is the First Tree runtime/i);
+    expect(briefing).toMatch(/the "user" your underlying agent addresses is the First\s+Tree runtime/i);
+    expect(briefing).not.toMatch(/Claude Code harness/i);
     expect(briefing).not.toContain("agent-final-text");
     // The new Skill Map and Context Tree section are now part of every
     // briefing — pin both so a regenerator dropping them doesn't slip past
