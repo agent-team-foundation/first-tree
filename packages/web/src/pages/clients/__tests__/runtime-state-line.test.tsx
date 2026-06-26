@@ -33,7 +33,7 @@ afterEach(async () => {
 });
 
 describe("RuntimeStateLine", () => {
-  it("shows when Codex is running through the system CLI fallback", async () => {
+  it("shows a system-PATH codex as plainly installed (no `fallback` copy)", async () => {
     const entry: CapabilityEntry = {
       available: true,
       state: "ok",
@@ -45,8 +45,10 @@ describe("RuntimeStateLine", () => {
 
     const dom = await render(<RuntimeStateLine provider="codex" entry={entry} os="darwin" />);
 
+    // Under install-only, a system `codex` on PATH is the normal case, not a
+    // "fallback" — the state line just reads "installed".
     expect(dom.textContent).toContain("Codex installed v0.139.0");
-    expect(dom.textContent).toContain("system CLI fallback");
+    expect(dom.textContent).not.toContain("fallback");
   });
 
   // Dropped "drops the manual login hint for an in-product provider (codex)":
