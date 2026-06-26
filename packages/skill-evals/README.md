@@ -8,6 +8,7 @@ quota.
 
 ```bash
 pnpm --filter @first-tree/skill-evals eval:floor
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:first-tree-read
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --json
@@ -21,10 +22,18 @@ matrix, their `SKILL.md` frontmatter is readable, and their case declarations
 have the minimum schema required by the shared runner. It does not execute
 Codex, Claude Code, LLM-as-judge, or live gate cases.
 
+`eval:gate -- --suite first-tree-write` runs the live Codex gate for
+`first-tree-write`. It covers the minimum source-boundary cases:
+
+- no source artifact means no Context Tree diff;
+- durable source material can produce a minimal tree diff and must run
+  `first-tree tree verify`;
+- implementation-only source material means no Context Tree diff.
+
 The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs
-`first-tree-read`, prepends a `first-tree` shim to `PATH`, and runs
-`codex exec --json` from the case workspace.
+the relevant skill, prepends a `first-tree` shim to `PATH`, and runs
+`codex exec --json` from the case workspace for live eval commands.
 
 Each case writes:
 
