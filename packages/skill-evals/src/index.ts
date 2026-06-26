@@ -6,6 +6,7 @@ import { SHIPPED_SKILLS, type ShippedSkillName } from "./core/case-schema.js";
 import { type SkillEvalSuiteDefinition, validateCoverageMatrix } from "./core/coverage.js";
 import { isRecord } from "./core/events.js";
 import { readSkillFrontmatter } from "./core/skills/frontmatter.js";
+import { formatFirstTreeSeedGateSummary, runFirstTreeSeedGate } from "./suites/first-tree-seed/index.js";
 import { formatFirstTreeWelcomeGateSummary, runFirstTreeWelcomeGate } from "./suites/first-tree-welcome/index.js";
 import { formatFirstTreeWriteGateSummary, runFirstTreeWriteGate } from "./suites/first-tree-write/index.js";
 import { SKILL_EVAL_SUITES } from "./suites/registry.js";
@@ -40,6 +41,7 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:floor -- --suite <skill>
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
+  pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
 
 Commands:
   floor                  Run no-model schema, coverage, and skill-file checks.
@@ -243,6 +245,25 @@ async function runGate(options: CliOptions): Promise<void> {
     return;
   }
 
+  if (options.suite === "first-tree-seed") {
+    const batch = await runFirstTreeSeedGate(packageRoot(), {
+      caseId: options.caseId,
+      codexBin: options.codexBin,
+      json: options.json,
+      model: options.model,
+      verbose: options.verbose,
+    });
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
+    } else {
+      process.stdout.write(`${formatFirstTreeSeedGateSummary(batch)}\n`);
+    }
+    if (batch.failed > 0) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (options.suite === "first-tree-welcome") {
     const batch = await runFirstTreeWelcomeGate(packageRoot(), {
       caseId: options.caseId,
@@ -262,7 +283,9 @@ async function runGate(options: CliOptions): Promise<void> {
     return;
   }
 
-  throw new Error("eval:gate currently requires --suite first-tree-write or --suite first-tree-welcome.");
+  throw new Error(
+    "eval:gate currently requires --suite first-tree-write, --suite first-tree-seed, or --suite first-tree-welcome.",
+  );
 }
 
 async function main(): Promise<void> {
