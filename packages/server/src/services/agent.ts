@@ -17,7 +17,7 @@ import {
   runtimeProviderSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
@@ -41,6 +41,15 @@ import { recomputeWatchersForAgent } from "./watcher.js";
  */
 const RESERVED_AGENT_NAME_PREFIX = "__";
 type SelectDbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select">;
+export type NewChatDefaultCandidateAgent = {
+  uuid: string;
+  name: string | null;
+  displayName: string;
+  type: string;
+  status: string;
+  managerId: string | null;
+  createdAt: Date;
+};
 
 /**
  * Derive the relative URL clients should use to fetch a manager-uploaded
@@ -900,6 +909,72 @@ export async function listAgentsForMember(
   const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
 
   return { items, nextCursor };
+}
+
+export async function getNewChatDefaultCandidate(
+  db: Database,
+  scope: OrgScope,
+  cachedAgentId: string | null | undefined,
+): Promise<{
+  agent: NewChatDefaultCandidateAgent | null;
+}> {
+  const projection = {
+    uuid: agents.uuid,
+    name: agents.name,
+    displayName: agents.displayName,
+    type: agents.type,
+    status: agents.status,
+    managerId: agents.managerId,
+    createdAt: agents.createdAt,
+  };
+
+  if (cachedAgentId && cachedAgentId !== scope.humanAgentId) {
+    const [cachedAgent] = await db
+      .select(projection)
+      .from(agents)
+      .leftJoin(members, eq(members.agentId, agents.uuid))
+      .where(
+        and(
+          eq(agents.uuid, cachedAgentId),
+          eq(agents.type, AGENT_TYPES.AGENT),
+          agentVisibilityCondition(scope.organizationId, scope.memberId),
+          agentAddressableCondition(),
+        ),
+      )
+      .limit(1);
+    if (cachedAgent) return { agent: cachedAgent };
+  }
+
+  const [ownedFallback] = await db
+    .select(projection)
+    .from(agents)
+    .where(
+      and(
+        eq(agents.organizationId, scope.organizationId),
+        eq(agents.managerId, scope.memberId),
+        eq(agents.type, AGENT_TYPES.AGENT),
+        eq(agents.status, AGENT_STATUSES.ACTIVE),
+      ),
+    )
+    .orderBy(asc(agents.createdAt))
+    .limit(1);
+  if (ownedFallback) return { agent: ownedFallback };
+
+  const [orgFallback] = await db
+    .select(projection)
+    .from(agents)
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .where(
+      and(
+        eq(agents.type, AGENT_TYPES.AGENT),
+        agentVisibilityCondition(scope.organizationId, scope.memberId),
+        agentAddressableCondition(),
+      ),
+    )
+    .orderBy(asc(agents.createdAt))
+    .limit(1);
+
+  return { agent: orgFallback ?? null };
 }
 
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {

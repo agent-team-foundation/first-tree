@@ -240,6 +240,27 @@ export const agentSchema = z.object({
 });
 export type Agent = z.infer<typeof agentSchema>;
 
+export const newChatDefaultCandidateAgentSchema = z.object({
+  uuid: z.string(),
+  name: z.string().nullable(),
+  displayName: z.string(),
+  type: agentTypeSchema,
+  status: z.string(),
+  managerId: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type NewChatDefaultCandidateAgent = z.infer<typeof newChatDefaultCandidateAgentSchema>;
+
+export const newChatDefaultCandidatesRequestSchema = z.object({
+  cachedAgentId: z.string().min(1).nullable().optional(),
+});
+export type NewChatDefaultCandidatesRequest = z.infer<typeof newChatDefaultCandidatesRequestSchema>;
+
+export const newChatDefaultCandidatesResponseSchema = z.object({
+  agent: newChatDefaultCandidateAgentSchema.nullable(),
+});
+export type NewChatDefaultCandidatesResponse = z.infer<typeof newChatDefaultCandidatesResponseSchema>;
+
 export const contextTreeInfoSchema = z.object({
   repo: z.string().nullable(),
   branch: z.string().nullable(),

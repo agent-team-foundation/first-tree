@@ -1,6 +1,8 @@
 import { AGENT_VISIBILITY } from "@first-tree/shared";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { beforeEach, describe, expect, it } from "vitest";
+import { agents as agentsTable } from "../db/schema/agents.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import { createAdminContext, seedClient, useTestApp } from "./helpers.js";
@@ -184,6 +186,96 @@ describe("Agent Visibility", () => {
       expect(names).toContain("member-see-org");
       expect(names).toContain("member-see-my");
       expect(names).not.toContain("member-hidden");
+    });
+
+    it("new-chat default candidate resolves a cached active addressable agent past the roster first page", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+      const target = await seedAgent(app, {
+        name: `default-old-${Date.now()}`,
+        type: "agent",
+        visibility: "private",
+        managerId: admin.memberId,
+      });
+      await app.db
+        .update(agentsTable)
+        .set({ createdAt: new Date("2024-01-01T00:00:00.000Z") })
+        .where(eq(agentsTable.uuid, target.uuid));
+
+      for (let i = 0; i < 100; i += 1) {
+        await seedAgent(app, {
+          name: `default-new-${i}-${Date.now()}`,
+          type: "agent",
+          managerId: admin.memberId,
+        });
+      }
+
+      const rosterRes = await adminReq(
+        "GET",
+        `/api/v1/orgs/${admin.organizationId}/agents?limit=100&addressableOnly=true`,
+      );
+      expect(rosterRes.statusCode).toBe(200);
+      const rosterNames = rosterRes.json<{ items: Array<{ name: string | null }> }>().items.map((a) => a.name);
+      expect(rosterNames).not.toContain(target.name);
+
+      const candidateRes = await adminReq(
+        "POST",
+        `/api/v1/orgs/${admin.organizationId}/agents/new-chat-default-candidates`,
+        {
+          cachedAgentId: target.uuid,
+        },
+      );
+      expect(candidateRes.statusCode).toBe(200);
+      const body = candidateRes.json<{
+        agent: { uuid: string } | null;
+      }>();
+      expect(body.agent?.uuid).toBe(target.uuid);
+    });
+
+    it("new-chat default candidate falls back to the member's earliest owned active agent instead of delegate", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+      const cached = await seedAgent(app, {
+        name: `default-cached-suspended-${Date.now()}`,
+        type: "agent",
+        managerId: admin.memberId,
+      });
+      const delegate = await seedAgent(app, {
+        name: `default-delegate-ignored-${Date.now()}`,
+        type: "agent",
+        managerId: admin.memberId,
+      });
+      const ownedFallback = await seedAgent(app, {
+        name: `default-owned-fallback-${Date.now()}`,
+        type: "agent",
+        visibility: "private",
+        managerId: admin.memberId,
+      });
+      const newerOwned = await seedAgent(app, {
+        name: `default-owned-newer-${Date.now()}`,
+        type: "agent",
+        managerId: admin.memberId,
+      });
+      await app.db.update(agentsTable).set({ status: "suspended" }).where(eq(agentsTable.uuid, cached.uuid));
+      await app.db
+        .update(agentsTable)
+        .set({ delegateMention: delegate.uuid })
+        .where(eq(agentsTable.uuid, admin.humanAgentUuid));
+      await app.db
+        .update(agentsTable)
+        .set({ createdAt: new Date("2024-01-01T00:00:00.000Z") })
+        .where(eq(agentsTable.uuid, ownedFallback.uuid));
+      await app.db
+        .update(agentsTable)
+        .set({ createdAt: new Date("2025-01-01T00:00:00.000Z") })
+        .where(eq(agentsTable.uuid, newerOwned.uuid));
+
+      const res = await adminReq("POST", `/api/v1/orgs/${admin.organizationId}/agents/new-chat-default-candidates`, {
+        cachedAgentId: cached.uuid,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{ agent: { uuid: string } | null }>();
+      expect(body.agent?.uuid).toBe(ownedFallback.uuid);
     });
   });
 
