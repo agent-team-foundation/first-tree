@@ -1,6 +1,8 @@
 import { AGENT_VISIBILITY } from "@first-tree/shared";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { beforeEach, describe, expect, it } from "vitest";
+import { agents as agentsTable } from "../db/schema/agents.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import { createAdminContext, seedClient, useTestApp } from "./helpers.js";
@@ -184,6 +186,52 @@ describe("Agent Visibility", () => {
       expect(names).toContain("member-see-org");
       expect(names).toContain("member-see-my");
       expect(names).not.toContain("member-hidden");
+    });
+
+    it("new-chat default candidates resolve active addressable agents past the roster first page", async () => {
+      const app = getApp();
+      const { req: adminReq, admin } = await authedRequest(app);
+      const target = await seedAgent(app, {
+        name: `default-old-${Date.now()}`,
+        type: "agent",
+        visibility: "private",
+        managerId: admin.memberId,
+      });
+      await app.db
+        .update(agentsTable)
+        .set({ createdAt: new Date("2024-01-01T00:00:00.000Z") })
+        .where(eq(agentsTable.uuid, target.uuid));
+
+      for (let i = 0; i < 100; i += 1) {
+        await seedAgent(app, {
+          name: `default-new-${i}-${Date.now()}`,
+          type: "agent",
+          managerId: admin.memberId,
+        });
+      }
+
+      const rosterRes = await adminReq(
+        "GET",
+        `/api/v1/orgs/${admin.organizationId}/agents?limit=100&addressableOnly=true`,
+      );
+      expect(rosterRes.statusCode).toBe(200);
+      const rosterNames = rosterRes.json<{ items: Array<{ name: string | null }> }>().items.map((a) => a.name);
+      expect(rosterNames).not.toContain(target.name);
+
+      const candidateRes = await adminReq(
+        "POST",
+        `/api/v1/orgs/${admin.organizationId}/agents/new-chat-default-candidates`,
+        {
+          candidateIds: [target.uuid],
+        },
+      );
+      expect(candidateRes.statusCode).toBe(200);
+      const body = candidateRes.json<{
+        candidates: Array<{ uuid: string }>;
+        firstOwnedAgent: { uuid: string } | null;
+      }>();
+      expect(body.candidates.map((a) => a.uuid)).toContain(target.uuid);
+      expect(body.firstOwnedAgent?.uuid).toBe(target.uuid);
     });
   });
 

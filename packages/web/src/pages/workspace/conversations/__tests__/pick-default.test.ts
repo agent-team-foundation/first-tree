@@ -48,7 +48,7 @@ describe("pickDefault", () => {
   it("returns null when myAgentId is null (logged-out or org not yet selected)", () => {
     const agents = [agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }), agent({ uuid: DELEGATE })];
     expect(
-      pickDefault({ orgAgents: agents, recentChats: [], myAgentId: null, myMemberId: "member-me", nowMs: NOW }),
+      pickDefault({ defaultAgents: agents, recentChats: [], myAgentId: null, myMemberId: "member-me", nowMs: NOW }),
     ).toBeNull();
   });
 
@@ -77,7 +77,13 @@ describe("pickDefault", () => {
       }),
     ];
     expect(
-      pickDefault({ orgAgents: agents, recentChats: chats, myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
+      pickDefault({
+        defaultAgents: agents,
+        recentChats: chats,
+        myAgentId: ME_HUMAN,
+        myMemberId: "member-me",
+        nowMs: NOW,
+      }),
     ).toBe(OTHER);
   });
 
@@ -107,7 +113,13 @@ describe("pickDefault", () => {
       }),
     ];
     expect(
-      pickDefault({ orgAgents: agents, recentChats: chats, myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
+      pickDefault({
+        defaultAgents: agents,
+        recentChats: chats,
+        myAgentId: ME_HUMAN,
+        myMemberId: "member-me",
+        nowMs: NOW,
+      }),
     ).toBe(DELEGATE);
   });
 
@@ -118,7 +130,7 @@ describe("pickDefault", () => {
       agent({ uuid: OTHER, type: "agent" }),
     ];
     expect(
-      pickDefault({ orgAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
+      pickDefault({ defaultAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
     ).toBe(DELEGATE);
   });
 
@@ -131,8 +143,25 @@ describe("pickDefault", () => {
       agent({ uuid: OTHER, type: "agent", managerId: "other-member", createdAt: "2026-05-01T00:00:00.000Z" }),
     ];
     expect(
-      pickDefault({ orgAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
+      pickDefault({ defaultAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
     ).toBe(OWNED_FIRST);
+  });
+
+  it("uses server-resolved default candidates instead of the org roster first page", () => {
+    const agents = [
+      agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
+      agent({ uuid: OTHER, type: "agent" }),
+      agent({ uuid: OWNED_FIRST, type: "agent", managerId: "member-me", createdAt: "2026-01-01T00:00:00.000Z" }),
+    ];
+    expect(
+      pickDefault({
+        defaultAgents: agents,
+        recentChats: [chat({ chatId: "recent-101-plus" })],
+        myAgentId: ME_HUMAN,
+        myMemberId: "member-me",
+        nowMs: NOW,
+      }),
+    ).toBe(OTHER);
   });
 
   it("returns null when no safe candidate exists", () => {
@@ -141,7 +170,7 @@ describe("pickDefault", () => {
       agent({ uuid: OTHER, type: "agent", managerId: "other-member" }),
     ];
     expect(
-      pickDefault({ orgAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
+      pickDefault({ defaultAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
     ).toBeNull();
   });
 
@@ -150,7 +179,7 @@ describe("pickDefault", () => {
       agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
       agent({ uuid: DELEGATE, type: "agent" }),
     ];
-    const input = { orgAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW };
+    const input = { defaultAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW };
     const first = pickDefault(input);
     const second = pickDefault(input);
     expect(first).toBe(second);

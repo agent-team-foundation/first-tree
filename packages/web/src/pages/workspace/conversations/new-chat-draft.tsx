@@ -1,7 +1,14 @@
-import { type Agent, extractMentions, type MeChatRow, type MentionParticipant } from "@first-tree/shared";
+import {
+  type Agent,
+  extractMentions,
+  type MeChatRow,
+  type MentionParticipant,
+  type NewChatDefaultCandidatesResponse,
+} from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Check, Menu, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getNewChatDefaultCandidates } from "../../../api/agents.js";
 import { uploadImageAttachment } from "../../../api/attachments.js";
 import { type ImageRefContent, readFileAsBase64 } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
@@ -125,12 +132,11 @@ export function NewChatDraft({
   useAutoResizeTextarea(textareaRef, draft);
 
   /** First-page baseline of org-wide addressable agents (humans + AI),
-   *  backed by `GET /orgs/:orgId/agents` via `useOrgAgents`. Used to
-   *  seed the default chip and feed `extractMentions` for raw-typed
-   *  `@name` resolution on the small-org fast path. Picker dropdown and
-   *  `@`-autocomplete results come from the server-search hook below so
-   *  orgs above the 100-row cap can still reach every addable agent
-   *  (issue 494). */
+   *  backed by `GET /orgs/:orgId/agents` via `useOrgAgents`. Used to feed
+   *  `extractMentions` for raw-typed `@name` resolution on the small-org fast
+   *  path. Picker dropdown, `@`-autocomplete results, and the default-chip
+   *  candidate check all use server lookups so orgs above the 100-row cap can
+   *  still reach every addable agent (issue 494). */
   const { data: orgAgentsPage } = useOrgAgents({ addressableOnly: true });
   const {
     data: recentChatsPage,
@@ -139,6 +145,20 @@ export function NewChatDraft({
   } = useQuery({
     queryKey: ["me", "chats", "new-chat-default-agent"],
     queryFn: () => listMeChats({ limit: 50, filter: "all", engagement: "active", origin: ["manual"] }),
+  });
+  const defaultCandidateIds = useMemo(
+    () => recentManualPeerCandidateIds(recentChatsPage?.rows ?? [], myAgentId),
+    [recentChatsPage?.rows, myAgentId],
+  );
+  const recentChatsSettled = recentChatsFetched || recentChatsError;
+  const {
+    data: defaultCandidates,
+    isFetched: defaultCandidatesFetched,
+    isError: defaultCandidatesError,
+  } = useQuery({
+    queryKey: ["agents", "new-chat-default-candidates", defaultCandidateIds],
+    queryFn: () => getNewChatDefaultCandidates({ candidateIds: defaultCandidateIds }),
+    enabled: Boolean(myAgentId) && recentChatsSettled,
   });
 
   /** Map of every uuid we have ever shown to the user this session —
@@ -296,16 +316,15 @@ export function NewChatDraft({
       setChips([...initialParticipantIds]);
       return;
     }
-    // Wait for the org-list query to settle before picking — without
-    // this guard the pre-fetch render would always pick `null` and
-    // arm `seededDefaultRef`, locking out the real default once the
-    // data arrives. Wait for the recent-chat query as well so delegate fallback
-    // does not win just because the roster resolved first; on query error,
-    // fall back to delegate / first-owned rather than leaving the draft empty.
-    if (!orgAgentsPage?.items) return;
+    if (!myAgentId) return;
+    // Wait for recent-chat ordering and the dedicated default-candidate
+    // lookup. The candidate lookup is not the org roster first page: it
+    // validates peer/delegate candidates by uuid and resolves first-owned
+    // globally, so large orgs do not lose defaults past the 100-row roster cap.
     if (!recentChatsFetched && !recentChatsError) return;
+    if (!defaultCandidatesFetched && !defaultCandidatesError) return;
     const defaultId = pickDefault({
-      orgAgents: orgAgentsPage.items,
+      defaultAgents: collectDefaultAgents(defaultCandidates),
       recentChats: recentChatsPage?.rows ?? [],
       myAgentId,
       myMemberId,
@@ -313,7 +332,9 @@ export function NewChatDraft({
     seededDefaultRef.current = true;
     if (defaultId) setChips([defaultId]);
   }, [
-    orgAgentsPage?.items,
+    defaultCandidates,
+    defaultCandidatesFetched,
+    defaultCandidatesError,
     recentChatsPage?.rows,
     recentChatsFetched,
     recentChatsError,
@@ -1122,13 +1143,13 @@ export type PickDefaultChat = Pick<MeChatRow, "chatId" | "source" | "membershipK
 };
 
 export function pickDefault({
-  orgAgents,
+  defaultAgents,
   recentChats,
   myAgentId,
   myMemberId,
   nowMs = Date.now(),
 }: {
-  orgAgents: ReadonlyArray<PickDefaultAgent>;
+  defaultAgents: ReadonlyArray<PickDefaultAgent>;
   recentChats: ReadonlyArray<PickDefaultChat>;
   myAgentId: string | null;
   myMemberId: string | null;
@@ -1137,7 +1158,7 @@ export function pickDefault({
   if (!myAgentId) return null;
 
   const activeAgentById = new Map(
-    orgAgents.filter((a) => a.type === "agent" && a.status === "active").map((a) => [a.uuid, a]),
+    defaultAgents.filter((a) => a.type === "agent" && a.status === "active").map((a) => [a.uuid, a]),
   );
 
   const recentDefault = [...recentChats]
@@ -1158,15 +1179,47 @@ export function pickDefault({
     if (peer && activeAgentById.has(peer.agentId)) return peer.agentId;
   }
 
-  const myHuman = orgAgents.find((a) => a.uuid === myAgentId && a.type === "human");
+  const myHuman = defaultAgents.find((a) => a.uuid === myAgentId && a.type === "human");
   const delegateUuid = myHuman?.delegateMention ?? null;
   if (delegateUuid && activeAgentById.has(delegateUuid)) return delegateUuid;
 
   if (!myMemberId) return null;
-  const owned = orgAgents
+  const owned = defaultAgents
     .filter((a) => a.type === "agent" && a.status === "active" && a.managerId === myMemberId)
     .sort((a, b) => timestampMs(a.createdAt) - timestampMs(b.createdAt));
   return owned[0]?.uuid ?? null;
+}
+
+function recentManualPeerCandidateIds(
+  recentChats: ReadonlyArray<PickDefaultChat>,
+  myAgentId: string | null,
+  nowMs = Date.now(),
+): string[] {
+  if (!myAgentId) return [];
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const chat of recentChats) {
+    if (chat.source !== "manual") continue;
+    if (chat.membershipKind !== "participant" || !chat.canReply) continue;
+    const lastMessageMs = timestampMs(chat.lastMessageAt);
+    if (lastMessageMs === 0 || nowMs - lastMessageMs > RECENT_MANUAL_CHAT_MAX_AGE_MS) continue;
+    const others = chat.participants.filter((p) => p.agentId !== myAgentId);
+    if (others.length !== 1) continue;
+    const peer = others[0];
+    if (!peer || peer.type === "human" || seen.has(peer.agentId)) continue;
+    seen.add(peer.agentId);
+    ids.push(peer.agentId);
+  }
+  return ids;
+}
+
+function collectDefaultAgents(response: NewChatDefaultCandidatesResponse | undefined): PickDefaultAgent[] {
+  if (!response) return [];
+  const byId = new Map<string, PickDefaultAgent>();
+  for (const agent of [response.selfHuman, ...response.candidates, response.firstOwnedAgent]) {
+    if (agent) byId.set(agent.uuid, agent);
+  }
+  return [...byId.values()];
 }
 
 function timestampMs(value: string | null): number {

@@ -17,7 +17,7 @@ import {
   runtimeProviderSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, ilike, inArray, isNull, lt, ne, or } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
@@ -41,6 +41,14 @@ import { recomputeWatchersForAgent } from "./watcher.js";
  */
 const RESERVED_AGENT_NAME_PREFIX = "__";
 type SelectDbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select">;
+export type NewChatDefaultCandidateAgent = {
+  uuid: string;
+  type: string;
+  delegateMention: string | null;
+  status: string;
+  managerId: string | null;
+  createdAt: Date;
+};
 
 /**
  * Derive the relative URL clients should use to fetch a manager-uploaded
@@ -900,6 +908,69 @@ export async function listAgentsForMember(
   const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
 
   return { items, nextCursor };
+}
+
+export async function getNewChatDefaultCandidates(
+  db: Database,
+  scope: OrgScope,
+  candidateIds: ReadonlyArray<string>,
+): Promise<{
+  selfHuman: NewChatDefaultCandidateAgent | null;
+  candidates: NewChatDefaultCandidateAgent[];
+  firstOwnedAgent: NewChatDefaultCandidateAgent | null;
+}> {
+  const projection = {
+    uuid: agents.uuid,
+    type: agents.type,
+    delegateMention: agents.delegateMention,
+    status: agents.status,
+    managerId: agents.managerId,
+    createdAt: agents.createdAt,
+  };
+
+  const [selfHuman] = await db
+    .select(projection)
+    .from(agents)
+    .where(and(eq(agents.uuid, scope.humanAgentId), eq(agents.organizationId, scope.organizationId)))
+    .limit(1);
+
+  const distinctCandidateIds = [
+    ...new Set(
+      [...candidateIds, selfHuman?.delegateMention ?? null].filter(
+        (id): id is string => Boolean(id) && id !== scope.humanAgentId,
+      ),
+    ),
+  ];
+  const candidates =
+    distinctCandidateIds.length === 0
+      ? []
+      : await db
+          .select(projection)
+          .from(agents)
+          .leftJoin(members, eq(members.agentId, agents.uuid))
+          .where(
+            and(
+              inArray(agents.uuid, distinctCandidateIds),
+              agentVisibilityCondition(scope.organizationId, scope.memberId),
+              agentAddressableCondition(),
+            ),
+          );
+
+  const [firstOwnedAgent] = await db
+    .select(projection)
+    .from(agents)
+    .where(
+      and(
+        eq(agents.organizationId, scope.organizationId),
+        eq(agents.managerId, scope.memberId),
+        eq(agents.type, AGENT_TYPES.AGENT),
+        eq(agents.status, AGENT_STATUSES.ACTIVE),
+      ),
+    )
+    .orderBy(asc(agents.createdAt))
+    .limit(1);
+
+  return { selfHuman: selfHuman ?? null, candidates, firstOwnedAgent: firstOwnedAgent ?? null };
 }
 
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {

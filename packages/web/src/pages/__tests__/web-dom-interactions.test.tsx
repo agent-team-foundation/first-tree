@@ -28,6 +28,7 @@ const agentApiMocks = vi.hoisted(() => ({
   checkAgentNameAvailability: vi.fn(),
   createAgent: vi.fn(),
   getAgent: vi.fn(),
+  getNewChatDefaultCandidates: vi.fn(),
   listAgents: vi.fn(),
   listManagedAgents: vi.fn(),
 }));
@@ -89,6 +90,7 @@ const meChatMocks = vi.hoisted(() => ({
   addMeChatParticipants: vi.fn(),
   createMeChat: vi.fn(),
   createMeTaskChat: vi.fn(),
+  listMeChats: vi.fn(),
 }));
 
 const clientApiMocks = vi.hoisted(() => ({
@@ -616,6 +618,11 @@ beforeEach(() => {
     agent({ uuid: "agent-created", name: "deploy-bot", displayName: "Deploy Bot" }),
   );
   agentApiMocks.getAgent.mockResolvedValue(agent({ clientId: "client-bound" }));
+  agentApiMocks.getNewChatDefaultCandidates.mockResolvedValue({
+    selfHuman: agent({ uuid: "human-agent-self", type: "human", clientId: null, delegateMention: "agent-1" }),
+    candidates: [agent({ uuid: "agent-1" })],
+    firstOwnedAgent: agent({ uuid: "agent-1" }),
+  });
   agentApiMocks.listAgents.mockResolvedValue({ items: ORG_AGENTS, nextCursor: null });
   agentApiMocks.listManagedAgents.mockResolvedValue([
     {
@@ -692,6 +699,7 @@ beforeEach(() => {
   meChatMocks.addMeChatParticipants.mockResolvedValue({ ok: true });
   meChatMocks.createMeChat.mockResolvedValue({ chatId: "chat-created" });
   meChatMocks.createMeTaskChat.mockResolvedValue({ chatId: "chat-created" });
+  meChatMocks.listMeChats.mockResolvedValue({ rows: [], nextCursor: null });
   onboardingEventMocks.reportOnboardingEvent.mockResolvedValue(undefined);
   onboardingEventMocks.kickoffOnboarding.mockResolvedValue({ chatId: "chat-onboarding" });
   onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
