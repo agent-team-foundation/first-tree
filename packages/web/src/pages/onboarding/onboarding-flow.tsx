@@ -106,7 +106,7 @@ export const OnboardingFlowContext = createContext<OnboardingFlowValue | null>(n
 // because the provider mounts only after `/me` loads (see onboarding-page.tsx),
 // so anyone actually in the flow already has a resolved org.
 const STEP_KEY = (path: OnboardingPath, orgId: string | null): string | null =>
-  orgId ? `onboarding:stepIndex:${path}:${orgId}` : null;
+  orgId ? `onboarding:v2:stepIndex:${path}:${orgId}` : null;
 
 function readPersistedStep(path: OnboardingPath, orgId: string | null): number | null {
   if (typeof window === "undefined") return null;
@@ -133,17 +133,17 @@ function clearPersistedStep(path: OnboardingPath, orgId: string | null): void {
 }
 
 /**
- * The step index to land on for `path` within `orgId`: the server-inferred
- * step, but never behind a position already persisted for THIS org (so a
- * same-tab GitHub-redirect round-trip resumes where the user was). Used on
- * first mount and whenever the selected org changes under a mounted provider.
+ * The step index to land on for `path` within `orgId`: fresh entries start at
+ * the opening product step, while a position already persisted for THIS org
+ * resumes same-tab progress (for example a redirect round-trip or reload after
+ * create-agent). Used on first mount and whenever the selected org changes
+ * under a mounted provider.
  */
 function resolveLandingStep(path: OnboardingPath, orgStep: ServerOnboardingStep, orgId: string | null): number {
   const inferred = inferInitialStepIndex(path, {
     onboardingStep: orgStep,
-    // We can't observe finer team-rename state synchronously; the team step is
-    // cheap to revisit, so default returning admins past it only when the
-    // server already proves a computer exists.
+    // Kept in the pure API so tests can show server readiness no longer skips
+    // the opening step on fresh entry.
     teamSettled: orgStep !== "connect",
   });
   const persisted = readPersistedStep(path, orgId);

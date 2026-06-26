@@ -184,7 +184,7 @@ function AdminKickoff() {
   if (phase === "starting") return <StartingState />;
 
   // No repo connected is now a normal value-first path. The user can start
-  // chatting and share a local path or GitHub URL in the agent chat; GitHub
+  // chatting and share a project path or GitHub URL in the agent chat; GitHub
   // access is no longer a required onboarding chore.
   if (!hasRepos) {
     return (

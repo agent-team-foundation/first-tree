@@ -13,10 +13,10 @@ describe("kickoff bootstrap prose", () => {
       treeSetup: "pending",
     });
 
-    expect(message).toContain("This is your first task chat with Nova.");
+    expect(message).toContain("Welcome to your first First Tree chat with Nova.");
     expect(message).toContain("Connected code:");
     expect(message).toContain("https://github.com/acme/app");
-    expect(message).toContain("Nova will first read the available code and team context");
+    expect(message).toContain("Nova will first get oriented from any available code and team context");
     expect(message).toContain("then suggest a few small tasks you can start with");
     expect(message).toContain("Operational note: use the first-tree-welcome skill");
     expect(message).toContain("Keep team context setup in the separate setup chat");
@@ -31,14 +31,15 @@ describe("kickoff bootstrap prose", () => {
     expect(message).not.toContain("Skip for now");
     expect(message).not.toContain("My team's Context Tree");
     expect(message).not.toContain("Build tree");
+    expect(message).not.toContain("It'll read your");
   });
 
   it("builds a slim no-repo kickoff that asks for code without authorization-first setup", () => {
     const message = buildNoRepoBootstrap("Nova");
 
-    expect(message).toContain("This is your first chat with Nova.");
-    expect(message).toContain("No code is connected yet.");
-    expect(message).toContain("local folder path or a GitHub repo URL");
+    expect(message).toContain("Welcome to your first First Tree chat with Nova.");
+    expect(message).toContain("Ask the user for the project they want help with");
+    expect(message).not.toContain("No code is connected yet.");
     expect(message).toContain("Keep setup light");
     expect(message).toContain("show value from real code first");
     expect(message).toContain("use host gh/local credentials first");
@@ -52,6 +53,7 @@ describe("kickoff bootstrap prose", () => {
     expect(message).not.toContain("chat ask");
     expect(message).not.toContain("2–3");
     expect(message).not.toContain("Skip for now");
+    expect(message).not.toContain("It'll read your");
   });
 
   it("builds slim tree setup instructions that inspect a bound tree before choosing seed or write", () => {
@@ -100,14 +102,14 @@ describe("kickoff bootstrap prose", () => {
   it("builds a slim value-first joining-teammate invitee message", () => {
     const message = buildInviteeReadyBootstrap("Nova", "https://github.com/acme/context");
 
-    expect(message).toContain("This is your first task chat with Nova.");
+    expect(message).toContain("Welcome to your first First Tree chat with Nova.");
     expect(message).toContain("Team context: https://github.com/acme/context");
-    expect(message).toContain("Nova will use the team's code and context");
-    expect(message).toContain("suggest a few small tasks you can start with");
+    expect(message).toContain("Nova will use available team context to get oriented");
+    expect(message).toContain("suggest a few small tasks the user can start with");
     expect(message).toContain("Operational note: use the first-tree-welcome skill");
     expect(message).toContain("Do not make team context setup the invitee's first task");
     expect(message).toContain("admin-owned");
-    expect(message).toContain("continue with local path or host gh when possible");
+    expect(message).toContain("continue with a project path or host gh when possible");
     expect(message).not.toContain("First Tree is getting");
     expect(message).not.toContain("Start with useful work");
     expect(message).not.toContain("First response requirements:");
@@ -119,5 +121,6 @@ describe("kickoff bootstrap prose", () => {
     expect(message).not.toContain("first-tree-seed");
     expect(message).not.toContain("reflect them into the tree");
     expect(message).not.toContain("are now connected");
+    expect(message).not.toContain("It'll read your");
   });
 });

@@ -35,10 +35,10 @@ export function buildValueFirstBootstrap(
         : "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep setup light. If the user shares a GitHub URL, try host gh first before asking for First Tree GitHub App access.";
 
   return [
-    `This is your first task chat with ${opts.agentDisplayName}.`,
+    `Welcome to your first First Tree chat with ${opts.agentDisplayName}.`,
     ...sourceLines,
     "",
-    `${opts.agentDisplayName} will first read the available code and team context, then suggest a few small tasks you can start with.`,
+    `${opts.agentDisplayName} will first get oriented from any available code and team context, then suggest a few small tasks you can start with.`,
     "",
     treeLine,
   ].join("\n");
@@ -46,9 +46,9 @@ export function buildValueFirstBootstrap(
 
 export function buildNoRepoBootstrap(agentDisplayName: string): string {
   return [
-    `This is your first chat with ${agentDisplayName}.`,
+    `Welcome to your first First Tree chat with ${agentDisplayName}.`,
     "",
-    `No code is connected yet. Share a local folder path or a GitHub repo URL, and ${agentDisplayName} can start from there.`,
+    `Ask the user for the project they want help with, such as a path on their computer or a GitHub repo URL, then start from there.`,
     "",
     "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep setup light and show value from real code first. For GitHub URLs, use host gh/local credentials first. Ask for First Tree GitHub App access only when First Tree needs durable platform capabilities such as follow, webhook events, team repo resources, or Context Tree setup.",
   ].join("\n");
@@ -80,12 +80,12 @@ export function buildTreeSetupBootstrap(
  */
 export function buildInviteeReadyBootstrap(agentDisplayName: string, treeUrl: string): string {
   return [
-    `This is your first task chat with ${agentDisplayName}.`,
+    `Welcome to your first First Tree chat with ${agentDisplayName}.`,
     "",
     `Team context: ${treeUrl}`,
     "",
-    `${agentDisplayName} will use the team's code and context to suggest a few small tasks you can start with.`,
+    `${agentDisplayName} will use available team context to get oriented, then suggest a few small tasks the user can start with.`,
     "",
-    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Do not make team context setup the invitee's first task. If team setup is missing, explain that it is admin-owned and continue with local path or host gh when possible.",
+    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Do not make team context setup the invitee's first task. If team setup is missing, explain that it is admin-owned and continue with a project path or host gh when possible.",
   ].join("\n");
 }

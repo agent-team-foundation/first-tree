@@ -400,7 +400,7 @@ describe("onboarding hooks and flow", () => {
     expect(host.textContent).toContain("team");
     await act(async () => expectHookValue(latest.current).goTo(1));
     expect(expectHookValue(latest.current).activeStep).toBe("connect-computer");
-    expect(sessionStorage.getItem("onboarding:stepIndex:admin:org-1")).toBe("1");
+    expect(sessionStorage.getItem("onboarding:v2:stepIndex:admin:org-1")).toBe("1");
 
     await act(async () => expectHookValue(latest.current).finishLater());
     expect(authMock.value.dismissOnboarding).toHaveBeenCalled();
@@ -411,7 +411,29 @@ describe("onboarding hooks and flow", () => {
     // forever, so only the explicit finishLater above may have called it.
     expect(authMock.value.dismissOnboarding).toHaveBeenCalledTimes(1);
     expect(authMock.value.markOnboardingCompleted).toHaveBeenCalled();
-    expect(sessionStorage.getItem("onboarding:stepIndex:admin:org-1")).toBeNull();
+    expect(sessionStorage.getItem("onboarding:v2:stepIndex:admin:org-1")).toBeNull();
+  });
+
+  it("ignores legacy saved steps so the redesigned flow defaults to the opening step", async () => {
+    const latest = { current: null as OnboardingFlowValue | null };
+    sessionStorage.setItem("onboarding:stepIndex:admin:org-1", "1");
+
+    function Probe() {
+      function Inner() {
+        latest.current = useOnboardingFlow();
+        return <div>{latest.current.activeStep}</div>;
+      }
+      return (
+        <OnboardingFlowProvider path="admin">
+          <Inner />
+        </OnboardingFlowProvider>
+      );
+    }
+
+    await renderProbe(<Probe />);
+
+    expect(expectHookValue(latest.current).activeStep).toBe("create-team");
+    expect(sessionStorage.getItem("onboarding:v2:stepIndex:admin:org-1")).toBe("0");
   });
 
   it("does not carry a previous team's saved step into a newly created team", async () => {
@@ -430,9 +452,9 @@ describe("onboarding hooks and flow", () => {
     }
 
     // A returning admin (already has an agent in another team, so the account
-    // step is "completed") sets up team A. The org has no usable agent yet, so
-    // they land on create-agent; they advance to start-chat, persisting team
-    // A's final in-flow position.
+    // step is "completed") sets up team A. Fresh entry still starts at the
+    // opening step; they advance to start-chat, persisting team A's final
+    // in-flow position.
     authMock.value = {
       ...authMock.value,
       organizationId: "org-A",
@@ -440,7 +462,7 @@ describe("onboarding hooks and flow", () => {
       currentOrgHasUsableAgent: false,
     };
     await renderProbe(<Probe />);
-    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
+    expect(expectHookValue(latest.current).activeStep).toBe("create-team");
     await act(async () => expectHookValue(latest.current).goTo(3));
     expect(expectHookValue(latest.current).activeStep).toBe("start-chat");
 
@@ -449,7 +471,7 @@ describe("onboarding hooks and flow", () => {
 
     // Same tab: the admin now creates a brand-new team B (no agent yet). The
     // saved position is scoped per org, so team A's start-chat marker must
-    // NOT skip team B past create-agent — they must land on create-agent.
+    // NOT skip team B past the opening step.
     authMock.value = {
       ...authMock.value,
       organizationId: "org-B",
@@ -457,7 +479,7 @@ describe("onboarding hooks and flow", () => {
       currentOrgHasUsableAgent: false,
     };
     await renderProbe(<Probe />);
-    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
+    expect(expectHookValue(latest.current).activeStep).toBe("create-team");
   });
 
   it("re-derives the step when the org changes on a still-mounted provider", async () => {
@@ -498,7 +520,7 @@ describe("onboarding hooks and flow", () => {
     document.body.appendChild(container);
     root = createRoot(container);
 
-    // Team A: returning admin, no agent in this org yet → create-agent; advance
+    // Team A: returning admin, no agent in this org yet → opening step; advance
     // to start-chat, persisting team A's position.
     authMock.value = {
       ...authMock.value,
@@ -507,16 +529,16 @@ describe("onboarding hooks and flow", () => {
       currentOrgHasUsableAgent: false,
     };
     await rerender();
-    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
+    expect(expectHookValue(latest.current).activeStep).toBe("create-team");
     await act(async () => expectHookValue(latest.current).goTo(3));
     expect(expectHookValue(latest.current).activeStep).toBe("start-chat");
 
     // Switch to a brand-new team B (no agent) without leaving the route. The
-    // flow must re-derive for team B and land on create-agent — and must not
-    // write team A's start-chat index under team B's key.
+    // flow must re-derive for team B and land on the opening step — and must
+    // not write team A's start-chat index under team B's key.
     authMock.value = { ...authMock.value, organizationId: "org-B" };
     await rerender();
-    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
-    expect(sessionStorage.getItem("onboarding:stepIndex:admin:org-B")).not.toBe("3");
+    expect(expectHookValue(latest.current).activeStep).toBe("create-team");
+    expect(sessionStorage.getItem("onboarding:v2:stepIndex:admin:org-B")).not.toBe("3");
   });
 });

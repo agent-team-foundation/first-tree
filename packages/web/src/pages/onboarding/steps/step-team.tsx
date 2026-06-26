@@ -5,22 +5,15 @@ import { api } from "../../../api/client.js";
 import { reportOnboardingEvent } from "../../../api/onboarding-events.js";
 import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
-import { COPY, STEP_COPY } from "../copy.js";
-import { FlowHint, StepRoadmap, WelcomeHero } from "../flow-ui.js";
+import { COPY } from "../copy.js";
+import { FlowHint } from "../flow-ui.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
- * Admin step 1 — the ceremonial welcome (the highest-leverage frame in
- * onboarding). A centered "this is a moment" hero: brand mark, greeting, a
- * one-line value subtitle, a light "what's next" roadmap (this bookend has no
- * progress bar, so it's the only orientation), then the single first action —
- * confirm or rename the team. The team row already exists (auto-created at
- * sign-in); the name is pre-filled with a trailing "rename it freely" hint, so
- * naming reads as optional, not a cold required field. Enter or Get started
- * advances; an unchanged name skips the PATCH entirely.
- *
- * The shell renders this step in its hero layout (wider, centered, its own
- * title/why suppressed) — see HERO_STEPS in onboarding-shell.tsx.
+ * Admin step 1. The team row already exists (auto-created at sign-in); the
+ * name is pre-filled and editable, so this step reads as confirming the team
+ * context before connecting a computer. Enter or Continue advances; an
+ * unchanged name skips the PATCH entirely.
  */
 export function StepTeam() {
   const { organizationId, goNext } = useOnboardingFlow();
@@ -84,46 +77,30 @@ export function StepTeam() {
   );
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col items-center" style={{ width: "100%", gap: "var(--sp-7)" }}>
-      {/* Hero + roadmap are shared with the invitee opening (StepWelcome); the
-          greeting reuses the team STEP_COPY strings (the shell suppresses its
-          own copy for this hero step). */}
-      <WelcomeHero title={STEP_COPY["create-team"].title} subtitle={STEP_COPY["create-team"].why} />
-      <StepRoadmap steps={COPY.team.nextSteps} />
+    <form onSubmit={handleSubmit} className="flex flex-col" style={{ width: "100%", gap: "var(--sp-5)" }}>
+      <div className="flex flex-col" style={{ gap: "var(--sp-2)" }}>
+        <label htmlFor="onboarding-team-name" className="text-label font-medium" style={{ color: "var(--fg-2)" }}>
+          {COPY.team.nameLead}
+        </label>
+        <Input
+          ref={inputRef}
+          id="onboarding-team-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={200}
+          disabled={saving}
+        />
 
-      {/* ── Action ── name the field explicitly with a warm question on its own
-          line above the input (a bare box left the field's purpose ambiguous),
-          then the single primary CTA. */}
-      <div className="flex flex-col items-center" style={{ gap: "var(--sp-5)", width: "100%", maxWidth: "22rem" }}>
-        <div className="flex flex-col items-center" style={{ gap: "var(--sp-2_5)", width: "100%" }}>
-          <label
-            htmlFor="onboarding-team-name"
-            className="text-label"
-            style={{ color: "var(--fg-3)", textAlign: "center" }}
-          >
-            {COPY.team.nameLead}
-          </label>
-          {/* Design-system Input (not a hand-rolled box): it carries the
-              focus-visible border-ring, so keyboard focus stays visible on the
-              first screen's only field. */}
-          <Input
-            ref={inputRef}
-            id="onboarding-team-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={200}
-            disabled={saving}
-          />
+        {(saveError || loadError) && (
+          <FlowHint tone="error" role="alert">
+            {saveError ?? `Couldn't load your team — ${loadError}. Refresh and try again.`}
+          </FlowHint>
+        )}
+      </div>
 
-          {(saveError || loadError) && (
-            <FlowHint tone="error" role="alert">
-              {saveError ?? `Couldn't load your team — ${loadError}. Refresh and try again.`}
-            </FlowHint>
-          )}
-        </div>
-
-        <Button type="submit" disabled={!canSubmit} className="justify-center">
-          <span>{COPY.getStarted}</span>
+      <div className="flex">
+        <Button type="submit" disabled={!canSubmit}>
+          <span>{COPY.continue}</span>
           <ArrowRight className="h-4 w-4" />
         </Button>
       </div>

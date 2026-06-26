@@ -180,9 +180,10 @@ describe("onboarding shell and team step", () => {
     );
 
     expect(container.textContent).toContain("First Tree");
-    // Full journey progress shows every canonical onboarding step.
-    expect(container.textContent).toContain("Step 2 of 4");
-    expect(container.textContent).toContain("Install First Tree");
+    // The prominent progress bar shows only setup steps; start-chat is the
+    // payoff screen after setup, not a fourth configuration chore.
+    expect(container.textContent).toContain("Step 2 of 3");
+    expect(container.textContent).toContain("Connect this computer");
     expect(container.textContent).toContain("Step body");
 
     await click(
@@ -211,8 +212,34 @@ describe("onboarding shell and team step", () => {
     const container = await renderDom(<OnboardingShell>Body</OnboardingShell>);
 
     expect(container.textContent).not.toContain("I'll finish later");
-    // Invitee path also shows the full 4-step journey.
-    expect(container.textContent).toContain("Step 2 of 4");
+    // Invitee path also shows only the 3 setup milestones.
+    expect(container.textContent).toContain("Step 2 of 3");
+  });
+
+  it("renders the opening step with the same progress and heading layout as setup steps", async () => {
+    flowMock.value = { ...flowMock.value, activeStep: "create-team", path: "admin", hasAgent: false };
+    const { OnboardingShell } = await import("../onboarding-shell.js");
+
+    const container = await renderDom(
+      <OnboardingShell>
+        <div>Opening body</div>
+      </OnboardingShell>,
+    );
+
+    expect(container.textContent).toContain("Step 1 of 3");
+    expect(container.textContent).toContain("Create a First Tree team");
+    expect(container.textContent).toContain("Opening body");
+  });
+
+  it("does not show setup progress on the start-chat payoff screen", async () => {
+    flowMock.value = { ...flowMock.value, activeStep: "start-chat", path: "admin", hasAgent: true };
+    const { OnboardingShell } = await import("../onboarding-shell.js");
+
+    const container = await renderDom(<OnboardingShell>Start chat body</OnboardingShell>);
+
+    expect(container.textContent).toContain("Start chat body");
+    expect(container.textContent).not.toContain("Step 4 of 4");
+    expect(container.textContent).not.toContain("Step 3 of 3");
   });
 
   it("mounts a real team switcher for multi-team users in place of the bare sign-out link", async () => {

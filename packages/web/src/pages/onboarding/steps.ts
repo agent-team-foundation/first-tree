@@ -23,11 +23,13 @@ export const ADMIN_STEPS = ["create-team", "connect-computer", "create-agent", "
 export const INVITEE_STEPS = ["join-team", "connect-computer", "create-agent", "start-chat"] as const;
 
 /**
- * The visible journey steps. This intentionally includes the opening
- * (`create-team` / `join-team`) and closing (`start-chat`) screens so the
- * progress UI matches the canonical product path instead of presenting a
- * hidden subset of chores. GitHub access is not part of this journey.
+ * Prominent setup progress intentionally stops at agent readiness. `start-chat`
+ * remains a real flow state because it creates the first chat and stamps
+ * completion, but it is the payoff screen after setup rather than a fourth
+ * configuration chore in the progress bar.
  */
+export const ADMIN_PROGRESS_STEPS = ["create-team", "connect-computer", "create-agent"] as const;
+export const INVITEE_PROGRESS_STEPS = ["join-team", "connect-computer", "create-agent"] as const;
 export const ADMIN_CONFIG_STEPS = ["connect-computer", "create-agent"] as const;
 export const INVITEE_CONFIG_STEPS = ["connect-computer", "create-agent"] as const;
 
@@ -68,28 +70,19 @@ export type InitialStepFacts = {
 
 /**
  * Pick the step to land on when the page first mounts (or the user reloads
- * mid-flow). Driven by the few facts the server can vouch for:
+ * mid-flow). Fresh entries always start at the opening product step:
  *
- *   - `completed` (client + agent both exist) → start-chat
- *   - `create_agent` (client exists, no agent) → create the teammate
- *   - `connect` / null (no client yet) → the earliest unfinished setup step
+ *   - admin   → create-team
+ *   - invitee → join-team
  *
- * Finer progress (did they finish start-chat? connect-computer?) isn't
- * server-observable, so the wizard advances those locally via Continue;
- * this only needs to avoid dropping a returning user *behind* where the
- * server proves they already are.
+ * Server facts still decide whether `/` enters onboarding at all, but once the
+ * user is in the standalone flow the prominent setup journey should begin at
+ * the first milestone. Same-tab progress is restored separately from the
+ * per-org persisted step index in onboarding-flow.tsx.
  */
 export function inferInitialStepIndex(path: OnboardingPath, facts: InitialStepFacts): number {
-  const seq = getStepSequence(path);
-  if (facts.onboardingStep === "completed") {
-    return seq.indexOf("start-chat");
-  }
-  if (facts.onboardingStep === "create_agent") return seq.indexOf("create-agent");
-  // "connect" or null — no computer connected yet.
-  if (path === "admin") {
-    return facts.teamSettled ? seq.indexOf("connect-computer") : 0;
-  }
-  return 0; // invitee → join-team
+  void facts;
+  return path === "admin" ? ADMIN_STEPS.indexOf("create-team") : INVITEE_STEPS.indexOf("join-team");
 }
 
 /** Clamp an arbitrary index into the path's valid range. */
@@ -105,6 +98,11 @@ export function getConfigSteps(path: OnboardingPath): readonly StepId[] {
   return path === "admin" ? ADMIN_CONFIG_STEPS : INVITEE_CONFIG_STEPS;
 }
 
+/** The steps shown in the prominent setup progress bar. */
+export function getProgressSteps(path: OnboardingPath): readonly StepId[] {
+  return path === "admin" ? ADMIN_PROGRESS_STEPS : INVITEE_PROGRESS_STEPS;
+}
+
 export type StepProgress = {
   /** 0-based position of the active step among the visible journey steps. */
   index: number;
@@ -113,11 +111,12 @@ export type StepProgress = {
 };
 
 /**
- * Where `step` sits in the journey progress bar. Pure so the React layer stays
- * a thin map from this result to segments + a "Step N of M" label.
+ * Where `step` sits in the prominent setup progress bar. `start-chat` returns
+ * null so the final launch screen reads as the result of setup, not another
+ * setup chore.
  */
 export function resolveStepProgress(path: OnboardingPath, step: StepId): StepProgress | null {
-  const steps = getStepSequence(path);
+  const steps = getProgressSteps(path);
   const index = steps.indexOf(step);
   if (index < 0) return null;
   return { index, total: steps.length };

@@ -3,7 +3,7 @@ import { resolveStepProgress } from "./steps.js";
 
 /**
  * Top-anchored progress for the onboarding content column: a thin segmented
- * line (one segment per journey step) over a quiet "Step N of M" meta. The step
+ * line (one segment per setup step) over a quiet "Step N of M" meta. The step
  * name isn't repeated here — the page title right below already states it.
  * Replaces the old left rail — at 4 journey steps a full-height vertical rail
  * read half-empty and stole horizontal space, fighting the "lighter, less
@@ -17,8 +17,8 @@ import { resolveStepProgress } from "./steps.js";
  *   - active  → full-strength primary (where you are — the one that pops)
  *   - todo    → faint track (ahead)
  *
- * Includes the opening and start-chat screens so the visible route matches the
- * canonical onboarding path.
+ * Includes the setup milestones only. `start-chat` is still a real flow state,
+ * but it is the payoff screen after setup and does not render this progress.
  */
 export function StepProgress() {
   const { path, activeStep } = useOnboardingFlow();

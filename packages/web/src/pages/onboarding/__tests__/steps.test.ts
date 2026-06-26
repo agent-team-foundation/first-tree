@@ -23,17 +23,17 @@ describe("resolveOnboardingPath", () => {
 });
 
 describe("resolveStepProgress", () => {
-  it("tracks the full 4-step admin journey", () => {
-    expect(resolveStepProgress("admin", "create-team")).toEqual({ index: 0, total: 4 });
-    expect(resolveStepProgress("admin", "connect-computer")).toEqual({ index: 1, total: 4 });
-    expect(resolveStepProgress("admin", "create-agent")).toEqual({ index: 2, total: 4 });
-    expect(resolveStepProgress("admin", "start-chat")).toEqual({ index: 3, total: 4 });
+  it("tracks the 3-step admin setup progress and treats start-chat as the payoff", () => {
+    expect(resolveStepProgress("admin", "create-team")).toEqual({ index: 0, total: 3 });
+    expect(resolveStepProgress("admin", "connect-computer")).toEqual({ index: 1, total: 3 });
+    expect(resolveStepProgress("admin", "create-agent")).toEqual({ index: 2, total: 3 });
+    expect(resolveStepProgress("admin", "start-chat")).toBeNull();
   });
-  it("tracks the full 4-step invitee journey", () => {
-    expect(resolveStepProgress("invitee", "join-team")).toEqual({ index: 0, total: 4 });
-    expect(resolveStepProgress("invitee", "connect-computer")).toEqual({ index: 1, total: 4 });
-    expect(resolveStepProgress("invitee", "create-agent")).toEqual({ index: 2, total: 4 });
-    expect(resolveStepProgress("invitee", "start-chat")).toEqual({ index: 3, total: 4 });
+  it("tracks the 3-step invitee setup progress and treats start-chat as the payoff", () => {
+    expect(resolveStepProgress("invitee", "join-team")).toEqual({ index: 0, total: 3 });
+    expect(resolveStepProgress("invitee", "connect-computer")).toEqual({ index: 1, total: 3 });
+    expect(resolveStepProgress("invitee", "create-agent")).toEqual({ index: 2, total: 3 });
+    expect(resolveStepProgress("invitee", "start-chat")).toBeNull();
   });
 });
 
@@ -63,22 +63,22 @@ describe("inferInitialStepIndex", () => {
       ADMIN_STEPS.indexOf("create-team"),
     );
   });
-  it("admin: returning user past the team step lands on connect-computer", () => {
+  it("admin: connected users still start at create-team on a fresh entry", () => {
     expect(inferInitialStepIndex("admin", { onboardingStep: "connect", teamSettled: true })).toBe(
-      ADMIN_STEPS.indexOf("connect-computer"),
+      ADMIN_STEPS.indexOf("create-team"),
     );
   });
-  it("create_agent state → the create-agent step (computer already exists)", () => {
+  it("create_agent state still starts at the opening step on a fresh entry", () => {
     expect(inferInitialStepIndex("admin", { onboardingStep: "create_agent", teamSettled: true })).toBe(
-      ADMIN_STEPS.indexOf("create-agent"),
+      ADMIN_STEPS.indexOf("create-team"),
     );
   });
-  it("completed state → both paths resume at start-chat", () => {
+  it("completed state still starts at the opening step unless local progress resumes it", () => {
     expect(inferInitialStepIndex("admin", { onboardingStep: "completed", teamSettled: true })).toBe(
-      ADMIN_STEPS.indexOf("start-chat"),
+      ADMIN_STEPS.indexOf("create-team"),
     );
     expect(inferInitialStepIndex("invitee", { onboardingStep: "completed", teamSettled: true })).toBe(
-      INVITEE_STEPS.indexOf("start-chat"),
+      INVITEE_STEPS.indexOf("join-team"),
     );
   });
   it("invitee always starts at join-team when no computer exists", () => {
