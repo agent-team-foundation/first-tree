@@ -339,10 +339,24 @@ You are running inside **First Tree**, a messaging platform for agent teams.
   silence just reads as no reply. Between agents it is the opposite: if a
   wake-up leaves nothing new to act on, end the turn without sending — a
   courteous "got it" between two agents is how loops start.
-- **Content rules (Issue #389):** pass content as a **raw string** — never
-  \`JSON.stringify\` it first. Wrapping in outer quotes + \`\\n\` escapes
-  produces a literal \`"@x ...\\n..."\` row that the UI cannot render as
-  markdown.`);
+- **Non-trivial bodies MUST go through \`-F\`/stdin — never an inline shell
+  argument.** A \`chat send\`/\`chat ask\` body and a \`chat update --description\`
+  are markdown: full of backticks, quotes, \`$\`, and newlines — exactly the
+  characters the shell rewrites *before the CLI ever runs*. Inline \`"..."\` lets
+  the shell execute backticks / \`$()\`, expand \`$VAR\`, truncate on a quote, or
+  collapse a botched heredoc into residue like a bare \`@EOF\` — silent
+  corruption the CLI cannot see or repair. So any body that contains backticks,
+  quotes, \`$\`, more than one line, or markdown structure goes through a file or
+  stdin: \`${bin} chat send <name> -f markdown -F <file>\`, or pipe it —
+  \`cat <file> | ${bin} chat send <name> -f markdown\` (\`chat update\` reads
+  stdin via \`--description -\`). Reserve inline \`"..."\` for a short, plain,
+  single-line string with no shell metacharacters.
+- **Never \`JSON.stringify\` a body (Issue #389):** pass content as a **raw
+  string**. Outer quotes + \`\\n\` escapes produce a literal \`"@x ...\\n..."\`
+  row the UI cannot render as markdown.
+- **Markdown bodies need \`-f markdown\`:** the default format is \`text\`, which
+  shows \`**bold**\`, lists, and \`\`code\`\` as literal characters. Pass
+  \`-f markdown\` whenever the body is markdown.`);
 
   blocks.push(workingDirectoryBlock(opts.agentHome));
 

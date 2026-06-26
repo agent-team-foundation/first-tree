@@ -5,7 +5,7 @@ import { channelConfig } from "../../core/channel.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { print } from "../../core/output.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
-import { looksLikeEscapedNewlineBody, readMessageBody, readStdin } from "./_shared/io.js";
+import { guardInlineShellResidue, looksLikeEscapedNewlineBody, readMessageBody, readStdin } from "./_shared/io.js";
 import { buildRequestMetadata } from "./_shared/request.js";
 
 interface AskOptions {
@@ -88,6 +88,13 @@ export function registerChatAskCommand(chat: Command): void {
               "long unformatted line. Resend the body via stdin/heredoc with real newlines.",
             2,
           );
+        }
+
+        // Catch the two shell-residue shapes the CLI can still recognise in an
+        // inline body: a collapsed-heredoc delimiter (`@EOF`) and a
+        // JSON.stringify wrapper. Inline-only — `-F`/stdin is never checked.
+        if (inlineBody !== undefined) {
+          guardInlineShellResidue(inlineBody, { command: "ask" });
         }
 
         const content =

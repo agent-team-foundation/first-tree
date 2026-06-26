@@ -458,8 +458,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).not.toMatch(/\boutput nothing\b/);
 
     // Issue #389: pin the anti-double-encode rule.
-    expect(briefing).toContain("Content rules (Issue #389)");
+    expect(briefing).toContain("Issue #389");
     expect(briefing).toContain("JSON.stringify");
+    // Pin the hard `-F`/stdin rule for non-trivial bodies (the shell-quote
+    // regression fix): mandatory wording, not a soft "prefer".
+    expect(briefing).toContain("MUST go through");
+    expect(briefing).toMatch(/-F|stdin/);
+    expect(briefing).toContain("-f markdown");
   });
 
   it("interpolates the agent home into the Working Directory block", () => {

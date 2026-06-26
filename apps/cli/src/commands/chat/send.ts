@@ -5,7 +5,7 @@ import { channelConfig } from "../../core/channel.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { print } from "../../core/output.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
-import { looksLikeEscapedNewlineBody, readMessageBody, readStdin } from "./_shared/io.js";
+import { guardInlineShellResidue, looksLikeEscapedNewlineBody, readMessageBody, readStdin } from "./_shared/io.js";
 
 interface SendOptions {
   format: MessageFormat;
@@ -98,6 +98,13 @@ export function registerChatSendCommand(chat: Command): void {
               "printed above; stdin is not checked, so it also sends intentional literal \\n text).",
             2,
           );
+        }
+
+        // Catch the two shell-residue shapes the CLI can still recognise in an
+        // inline body: a collapsed-heredoc delimiter (`@EOF`) and a
+        // JSON.stringify wrapper. Inline-only — `-F`/stdin is never checked.
+        if (inlineBody !== undefined) {
+          guardInlineShellResidue(inlineBody, { command: "send" });
         }
 
         const content =
