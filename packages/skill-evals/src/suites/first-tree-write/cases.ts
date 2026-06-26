@@ -1,13 +1,16 @@
 import type { SkillEvalCase } from "../../core/case-schema.js";
 import type { SkillEvalSuiteDefinition } from "../types.js";
+import type { FirstTreeWriteEvalCase } from "./types.js";
 
 const FLOOR_CASE_ID = "first-tree-write-static-coverage";
 
-const GATE_CASES: readonly SkillEvalCase[] = [
+export const FIRST_TREE_WRITE_GATE_CASES: readonly FirstTreeWriteEvalCase[] = [
   {
     briefingMode: "minimal",
     expected: {
       action: "refuse_without_source",
+      requireVerify: false,
+      responseHints: ["source", "artifact", "provide"],
       treeDiff: "none",
     },
     fixture: {
@@ -15,12 +18,15 @@ const GATE_CASES: readonly SkillEvalCase[] = [
       treeState: "populated",
     },
     forbidden: {
+      content: ["## Source", "Shipped in", "PR #", "function ", "interface ", "## Owners"],
       sideEffects: ["tree_write", "tree_pr"],
     },
-    id: "first-tree-write-no-source-refuses",
-    prompt: "Update the Context Tree with the latest architecture decision.",
+    id: "no-source-refuses",
+    prompt:
+      "Use first-tree-write to update the Context Tree with the latest architecture decision. No source artifact is available in this workspace.",
+    provider: "codex",
     skill: "first-tree-write",
-    status: "planned",
+    status: "implemented",
     tags: ["source-boundary"],
     tier: "gate",
   },
@@ -28,19 +34,24 @@ const GATE_CASES: readonly SkillEvalCase[] = [
     briefingMode: "minimal",
     expected: {
       action: "write_minimal_tree_diff",
-      verify: true,
+      requiredDiffSnippets: ["deterministic", "quality", "judge"],
+      requireVerify: true,
+      responseHints: ["updated", "verify"],
+      treeDiff: "minimal",
     },
     fixture: {
       sourceArtifact: "durable-decision-note",
       treeState: "populated",
     },
     forbidden: {
-      content: ["PR id", "implementation detail", "history narration", "## Source"],
+      content: ["## Source", "Shipped in", "PR #", "function ", "interface ", "GET /", "## Owners"],
+      sideEffects: ["source_write"],
     },
-    id: "first-tree-write-durable-source-writes",
-    prompt: "Reflect this design note into the Context Tree.",
+    id: "durable-source-writes",
+    prompt: "Use first-tree-write to reflect `source-artifacts/durable-decision-note.md` into the Context Tree.",
+    provider: "codex",
     skill: "first-tree-write",
-    status: "planned",
+    status: "implemented",
     tags: ["tree-diff", "verify"],
     tier: "gate",
   },
@@ -48,6 +59,8 @@ const GATE_CASES: readonly SkillEvalCase[] = [
     briefingMode: "minimal",
     expected: {
       action: "refuse_implementation_only_source",
+      requireVerify: false,
+      responseHints: ["implementation", "detail", "not belong", "does not belong", "durable"],
       treeDiff: "none",
     },
     fixture: {
@@ -55,12 +68,15 @@ const GATE_CASES: readonly SkillEvalCase[] = [
       treeState: "populated",
     },
     forbidden: {
+      content: ["## Source", "Shipped in", "PR #", "function create", "interface Eval", "GET /"],
       sideEffects: ["tree_write", "tree_pr"],
     },
-    id: "first-tree-write-implementation-only-no-write",
-    prompt: "Put this implementation-only diff into the Context Tree.",
+    id: "implementation-only-no-write",
+    prompt:
+      "Use first-tree-write to evaluate whether `source-artifacts/implementation-only-diff.md` belongs in the Context Tree.",
+    provider: "codex",
     skill: "first-tree-write",
-    status: "planned",
+    status: "implemented",
     tags: ["source-boundary"],
     tier: "gate",
   },
@@ -70,7 +86,7 @@ export const FIRST_TREE_WRITE_EVAL_CASES: readonly SkillEvalCase[] = [
   {
     briefingMode: "minimal",
     expected: {
-      gateCaseIds: GATE_CASES.map((evalCase) => evalCase.id),
+      gateCaseIds: FIRST_TREE_WRITE_GATE_CASES.map((evalCase) => evalCase.id),
       validator: "case schema and fixture shape",
     },
     fixture: {
@@ -82,7 +98,7 @@ export const FIRST_TREE_WRITE_EVAL_CASES: readonly SkillEvalCase[] = [
     status: "implemented",
     tier: "floor",
   },
-  ...GATE_CASES,
+  ...FIRST_TREE_WRITE_GATE_CASES,
 ];
 
 function validateFirstTreeWriteFloor(cases: readonly SkillEvalCase[]): readonly string[] {
@@ -115,9 +131,9 @@ export const FIRST_TREE_WRITE_SUITE: SkillEvalSuiteDefinition = {
         tier: "floor",
       },
       {
-        caseIds: GATE_CASES.map((evalCase) => evalCase.id),
-        description: "Planned source-boundary and tree-diff live gate cases.",
-        status: "planned",
+        caseIds: FIRST_TREE_WRITE_GATE_CASES.map((evalCase) => evalCase.id),
+        description: "Implemented source-boundary and tree-diff live gate cases.",
+        status: "implemented",
         tier: "gate",
       },
     ],

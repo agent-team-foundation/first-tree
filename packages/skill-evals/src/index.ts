@@ -6,12 +6,17 @@ import { SHIPPED_SKILLS, type ShippedSkillName } from "./core/case-schema.js";
 import { type SkillEvalSuiteDefinition, validateCoverageMatrix } from "./core/coverage.js";
 import { isRecord } from "./core/events.js";
 import { readSkillFrontmatter } from "./core/skills/frontmatter.js";
+import { formatFirstTreeWriteGateSummary, runFirstTreeWriteGate } from "./suites/first-tree-write/index.js";
 import { SKILL_EVAL_SUITES } from "./suites/registry.js";
 
 type CliOptions = {
-  command: "floor";
+  caseId: string | null;
+  codexBin: string;
+  command: "floor" | "gate";
   json: boolean;
+  model: string | null;
   suite: ShippedSkillName | null;
+  verbose: boolean;
 };
 
 type FloorCheck = {
@@ -32,13 +37,19 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:floor
   pnpm --filter @first-tree/skill-evals eval:floor -- --json
   pnpm --filter @first-tree/skill-evals eval:floor -- --suite <skill>
+  pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
 
 Commands:
   floor                  Run no-model schema, coverage, and skill-file checks.
+  gate                   Run a live model gate suite.
 
 Options:
   --suite <skill>        Limit per-suite floor checks to one shipped skill.
+  --case <id>            Run one live gate case.
   --json                 Print summary as JSON.
+  --model <model>        Pass a model override to codex exec.
+  --codex-bin <path>     Codex binary to execute. Defaults to CODEX_BIN or codex.
+  --verbose              Print live readable progress to stderr.
   --help                 Show this help.
 `;
 }
@@ -58,20 +69,29 @@ function parseArgs(args: readonly string[]): CliOptions {
     process.stdout.write(usage());
     process.exit(0);
   }
-  if (command !== "floor") {
+  if (command !== "floor" && command !== "gate") {
     throw new Error(`Unknown command: ${command}`);
   }
 
   const options: CliOptions = {
+    caseId: null,
+    codexBin: process.env.CODEX_BIN ?? "codex",
     command,
     json: false,
+    model: process.env.CODEX_MODEL ?? null,
     suite: null,
+    verbose: false,
   };
 
   for (let index = 1; index < normalized.length; index += 1) {
     const arg = normalized[index];
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+    if (arg === "--case") {
+      options.caseId = readOptionValue(normalized, index, "--case");
+      index += 1;
       continue;
     }
     if (arg === "--suite") {
@@ -81,6 +101,20 @@ function parseArgs(args: readonly string[]): CliOptions {
       }
       options.suite = suite as ShippedSkillName;
       index += 1;
+      continue;
+    }
+    if (arg === "--model") {
+      options.model = readOptionValue(normalized, index, "--model");
+      index += 1;
+      continue;
+    }
+    if (arg === "--codex-bin") {
+      options.codexBin = readOptionValue(normalized, index, "--codex-bin");
+      index += 1;
+      continue;
+    }
+    if (arg === "--verbose") {
+      options.verbose = true;
       continue;
     }
     if (arg === "--help" || arg === "-h") {
@@ -187,8 +221,35 @@ function formatFloorSummary(summary: FloorSummary): string {
   return lines.join("\n");
 }
 
+async function runGate(options: CliOptions): Promise<void> {
+  if (options.suite !== "first-tree-write") {
+    throw new Error("eval:gate currently requires --suite first-tree-write.");
+  }
+
+  const batch = await runFirstTreeWriteGate(packageRoot(), {
+    caseId: options.caseId,
+    codexBin: options.codexBin,
+    json: options.json,
+    model: options.model,
+    verbose: options.verbose,
+  });
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
+  } else {
+    process.stdout.write(`${formatFirstTreeWriteGateSummary(batch)}\n`);
+  }
+  if (batch.failed > 0) {
+    process.exitCode = 1;
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
+  if (options.command === "gate") {
+    await runGate(options);
+    return;
+  }
+
   const summary = buildFloorSummary(options);
   if (options.json) {
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);

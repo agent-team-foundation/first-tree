@@ -64,10 +64,20 @@ export function validateCoverageMatrix(suites: readonly SkillEvalSuiteDefinition
     }
 
     const suiteCaseIds = new Set(suite.cases.map((evalCase) => evalCase.id));
+    const suiteCasesById = new Map(suite.cases.map((evalCase) => [evalCase.id, evalCase]));
     for (const tierEntry of suite.coverage.tiers) {
       for (const caseId of tierEntry.caseIds) {
         if (!suiteCaseIds.has(caseId)) {
           errors.push(`${suite.skill}: coverage references unknown case ${caseId}.`);
+          continue;
+        }
+
+        const evalCase = suiteCasesById.get(caseId);
+        if (evalCase?.skill !== suite.skill) {
+          errors.push(`${suite.skill}: coverage references case ${caseId} with skill ${evalCase?.skill}.`);
+        }
+        if (evalCase?.tier !== tierEntry.tier) {
+          errors.push(`${suite.skill}: ${tierEntry.tier} coverage references ${evalCase?.tier} case ${caseId}.`);
         }
       }
     }
