@@ -445,7 +445,12 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toMatch(/This is your \*\*console\*\*/i);
     expect(briefing).toMatch(/the outbox: the explicit\s+commands/i);
     expect(briefing).toMatch(/places your message in front of\s+a teammate/i);
-    expect(briefing).toMatch(/complete once you deliver your reply through the\s+outbox/i);
+    // The outbox-completion rule is scoped to HUMAN-directed turns, so it never
+    // contradicts the adjacent agent no-courtesy-send brake (codex review R5):
+    // an agent no-op wake-up must still be allowed to end without a send.
+    expect(briefing).toMatch(/A human-directed\s+turn is complete once you deliver your reply through the outbox/i);
+    expect(briefing).toMatch(/an agent\s+wake-up with nothing new to act on can end without a send/i);
+    expect(briefing).not.toMatch(/teammate triggered is complete/i);
     // The retired mirror term stays out — there is no `agent-final-text` row
     // post-#1190.
     expect(briefing).not.toContain("agent-final-text");
