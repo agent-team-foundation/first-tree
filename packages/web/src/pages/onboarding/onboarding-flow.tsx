@@ -1,7 +1,15 @@
 import type { AgentVisibility } from "@first-tree/shared";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import { reportOnboardingEvent } from "../../api/onboarding-events.js";
 import { useAuth } from "../../auth/auth-context.js";
+import {
+  type AgentCreationPhase,
+  type CreateAgentArgs,
+  type CreatedAgentInfo,
+  useAgentCreation,
+} from "../../features/agent-setup/use-agent-creation.js";
+import { type ComputerConnection, useComputerConnection } from "../../features/agent-setup/use-computer-connection.js";
 import {
   readOnboardingSelectedRepos,
   writeOnboardingAgentUuid,
@@ -15,8 +23,6 @@ import {
   type ServerOnboardingStep,
   type StepId,
 } from "./steps.js";
-import { type AgentCreationPhase, type CreateAgentArgs, useAgentCreation } from "./use-agent-creation.js";
-import { type ComputerConnection, useComputerConnection } from "./use-computer-connection.js";
 
 export type TreeBindingPlan = "createBinding" | "useBoundTree";
 
@@ -208,13 +214,17 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
     void refreshMe();
     setActiveIndex((i) => clampStepIndex(path, i + 1));
   }, [refreshMe, path]);
+  const onAgentCreated = useCallback((info: CreatedAgentInfo) => {
+    writeOnboardingAgentUuid(info.agentUuid);
+    void reportOnboardingEvent("agent_created", { runtimeProvider: info.args.runtimeProvider });
+  }, []);
   const {
     phase: agentPhase,
     error: agentError,
     create: createAgent,
     retry: retryAgent,
     createdUuid: createdAgentUuid,
-  } = useAgentCreation(onAgentOnline);
+  } = useAgentCreation({ onCreated: onAgentCreated, onOnline: onAgentOnline });
 
   const [agentDisplayName, setAgentDisplayName] = useState<string>(() =>
     user?.username ? `${user.username} assistant` : "Assistant",

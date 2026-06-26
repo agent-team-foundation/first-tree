@@ -3,9 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getAgentClientStatus } from "../../api/agent-config.js";
 import { api, withOrg } from "../../api/client.js";
-import { reportOnboardingEvent } from "../../api/onboarding-events.js";
 import { slugify } from "../../utils/agent-naming.js";
-import { writeOnboardingAgentUuid } from "../../utils/onboarding-flags.js";
 
 // Wait the full server-side offline window before surfacing the "still starting"
 // state: a cold runtime (first claude-code/codex spawn, proxy-slow TLS) can take
@@ -27,24 +25,36 @@ export type CreateAgentArgs = {
   organizationId: string | null;
 };
 
+export type CreatedAgentInfo = {
+  agentUuid: string;
+  args: CreateAgentArgs;
+};
+
+export type UseAgentCreationOptions = {
+  onCreated?: (info: CreatedAgentInfo) => void | Promise<void>;
+  onOnline?: (uuid: string) => void;
+};
+
 /**
- * Creates the first agent (an unbound `agent` with caller-supplied
+ * Creates an agent (an unbound `agent` with caller-supplied
  * `visibility`) and waits for it to come online on the connected computer.
  *
  * Same two-phase shape the legacy Step2Body used: POST `/agents`, then poll
  * `client-status` until the runtime reports online (or a 60s timeout). The
- * agent is created without any project binding — the kickoff step attaches
- * the source repo later, so a slow GitHub call can never block teammate
- * creation. On success, `onOnline(uuid)` fires once.
+ * hook is intentionally flow-agnostic: callers decide whether this is formal
+ * onboarding, campaign quickstart, or another first-agent flow by wiring their
+ * own side effects through `onCreated` and `onOnline`.
  */
-export function useAgentCreation(onOnline: (uuid: string) => void) {
+export function useAgentCreation(options: UseAgentCreationOptions = {}) {
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<AgentCreationPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const createdRef = useRef<string | null>(null);
   const pollCancelRef = useRef<{ cancelled: boolean } | null>(null);
-  const onOnlineRef = useRef(onOnline);
-  onOnlineRef.current = onOnline;
+  const onCreatedRef = useRef(options.onCreated);
+  const onOnlineRef = useRef(options.onOnline);
+  onCreatedRef.current = options.onCreated;
+  onOnlineRef.current = options.onOnline;
 
   useEffect(
     () => () => {
@@ -70,7 +80,7 @@ export function useAgentCreation(onOnline: (uuid: string) => void) {
       }
       if (online) {
         setPhase("online");
-        onOnlineRef.current(agentUuid);
+        onOnlineRef.current?.(agentUuid);
         return;
       }
       if (Date.now() - startedAt > RUNTIME_READY_TIMEOUT_MS) {
@@ -101,9 +111,8 @@ export function useAgentCreation(onOnline: (uuid: string) => void) {
         });
         agentUuid = res.uuid;
         createdRef.current = agentUuid;
-        writeOnboardingAgentUuid(agentUuid);
+        await onCreatedRef.current?.({ agentUuid, args });
         await queryClient.invalidateQueries({ queryKey: ["agents"] });
-        void reportOnboardingEvent("agent_created", { runtimeProvider: args.runtimeProvider });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to add your agent to the team");
         setPhase("idle");

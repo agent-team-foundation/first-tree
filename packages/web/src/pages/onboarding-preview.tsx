@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { HubClient } from "../api/activity.js";
 import type { GithubRepo } from "../api/github.js";
+import type { ComputerConnection } from "../features/agent-setup/use-computer-connection.js";
 import { InviteAcceptCard, InviteAcceptError, InviteAcceptShell, InviteAcceptSkeleton } from "./invite-accept.js";
 import { COPY } from "./onboarding/copy.js";
 import { WorkingState } from "./onboarding/flow-ui.js";
@@ -15,7 +16,6 @@ import { StepKickoff } from "./onboarding/steps/step-kickoff.js";
 import { StepTeam } from "./onboarding/steps/step-team.js";
 import { StepWelcome } from "./onboarding/steps/step-welcome.js";
 import { getStepSequence, type OnboardingPath, type StepId } from "./onboarding/steps.js";
-import type { ComputerConnection } from "./onboarding/use-computer-connection.js";
 import { MockTeamStepsA, MockTeamStepsB, MockWelcomeCeremonial } from "./onboarding-team-steps-mocks.js";
 
 /**

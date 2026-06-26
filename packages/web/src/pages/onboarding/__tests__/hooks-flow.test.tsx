@@ -6,11 +6,11 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAgentCreation } from "../../../features/agent-setup/use-agent-creation.js";
+import type { ComputerConnection } from "../../../features/agent-setup/use-computer-connection.js";
+import { useComputerConnection } from "../../../features/agent-setup/use-computer-connection.js";
 import { OnboardingFlowProvider, type OnboardingFlowValue, useOnboardingFlow } from "../onboarding-flow.js";
 import type { ServerOnboardingStep } from "../steps.js";
-import { useAgentCreation } from "../use-agent-creation.js";
-import type { ComputerConnection } from "../use-computer-connection.js";
-import { useComputerConnection } from "../use-computer-connection.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -229,9 +229,12 @@ describe("onboarding hooks and flow", () => {
     expect(expectHookValue(latest.current).tokenError).toBe("token failed");
   }, 10_000);
 
-  it("creates an agent, stores its uuid, reports onboarding, and reaches online", async () => {
+  it("creates an agent, supports caller side effects, and reaches online", async () => {
     const latest = { current: null as ReturnType<typeof useAgentCreation> | null };
     const onOnline = vi.fn();
+    const onCreated = vi.fn(({ agentUuid }: { agentUuid: string }) => {
+      window.sessionStorage.setItem("test:created-agent", agentUuid);
+    });
     const queryClient = testQueryClient();
     const rosterKey = ["agents", "org-list", { addressableOnly: true }] as const;
     queryClient.setQueryData(rosterKey, {
@@ -244,7 +247,7 @@ describe("onboarding hooks and flow", () => {
       .mockResolvedValueOnce({ online: true });
 
     function Probe() {
-      latest.current = useAgentCreation(onOnline);
+      latest.current = useAgentCreation({ onCreated, onOnline });
       return <div>{latest.current.phase}</div>;
     }
 
@@ -268,8 +271,13 @@ describe("onboarding hooks and flow", () => {
         runtimeProvider: "claude-code",
       }),
     );
-    expect(sessionStorage.getItem("onboarding:agentUuid")).toBe("agent-created");
-    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("agent_created", { runtimeProvider: "claude-code" });
+    expect(onCreated).toHaveBeenCalledWith({
+      agentUuid: "agent-created",
+      args: expect.objectContaining({ runtimeProvider: "claude-code" }),
+    });
+    expect(sessionStorage.getItem("test:created-agent")).toBe("agent-created");
+    expect(sessionStorage.getItem("onboarding:agentUuid")).toBeNull();
+    expect(eventMocks.reportOnboardingEvent).not.toHaveBeenCalled();
     expect(queryClient.getQueryState(rosterKey)?.isInvalidated).toBe(true);
     expect(onOnline).toHaveBeenCalledWith("agent-created");
     expect(expectHookValue(latest.current).phase).toBe("online");
@@ -284,7 +292,7 @@ describe("onboarding hooks and flow", () => {
     agentConfigMocks.getAgentClientStatus.mockResolvedValue({ online: false });
 
     function Probe() {
-      latest.current = useAgentCreation(() => undefined);
+      latest.current = useAgentCreation();
       return <div>{latest.current.phase}</div>;
     }
 
@@ -335,6 +343,42 @@ describe("onboarding hooks and flow", () => {
     });
     await retry;
     expect(expectHookValue(latest.current).phase).toBe("timeout");
+  });
+
+  it("wires onboarding-specific agent side effects in the onboarding provider", async () => {
+    const latest = { current: null as OnboardingFlowValue | null };
+    clientMocks.api.post.mockResolvedValueOnce({ uuid: "agent-onboarding" });
+    agentConfigMocks.getAgentClientStatus
+      .mockResolvedValueOnce({ online: false })
+      .mockResolvedValueOnce({ online: true });
+
+    function Probe() {
+      function Inner() {
+        latest.current = useOnboardingFlow();
+        return <div>{latest.current.activeStep}</div>;
+      }
+      return (
+        <OnboardingFlowProvider path="admin">
+          <Inner />
+        </OnboardingFlowProvider>
+      );
+    }
+
+    await renderProbe(<Probe />);
+    await act(async () => {
+      await expectHookValue(latest.current).createAgent({
+        displayName: "Onboarding Bot",
+        clientId: "client-1",
+        runtimeProvider: "codex",
+        visibility: "organization",
+        organizationId: "org-1",
+      });
+    });
+
+    expect(sessionStorage.getItem("onboarding:agentUuid")).toBe("agent-onboarding");
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("agent_created", { runtimeProvider: "codex" });
+    expect(authMock.value.refreshMe).toHaveBeenCalled();
+    expect(expectHookValue(latest.current).activeStep).toBe("connect-computer");
   });
 
   it("persists flow progress and navigates on finish actions", async () => {
