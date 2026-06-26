@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildInviteeReadyBootstrap,
   buildNoRepoBootstrap,
-  buildRepoWorkBootstrap,
+  buildProductionScanBootstrap,
   buildTreeSetupBootstrap,
   buildValueFirstBootstrap,
 } from "../bootstrap-prose.js";
@@ -115,20 +115,20 @@ describe("kickoff bootstrap prose", () => {
     expect(message).not.toContain("are now connected");
   });
 
-  it("builds a repo-work kickoff around local-first access and continuable tasks", () => {
-    const message = buildRepoWorkBootstrap({
+  it("builds a production-scan kickoff around local-first access and a launch-readiness report", () => {
+    const message = buildProductionScanBootstrap({
       repoUrl: "https://github.com/acme/backend",
       agentDisplayName: "Backend Agent",
     });
 
-    expect(message).toContain("This is a repo work thread with Backend Agent.");
+    expect(message).toContain("This is a production scan thread with Backend Agent.");
     expect(message).toContain("GitHub repo: https://github.com/acme/backend");
     expect(message).toContain("Operational note: use the first-tree-welcome skill");
-    expect(message).toContain("repo_work lane");
+    expect(message).toContain("production_scan lane");
     expect(message).toContain("local-first repo access");
     expect(message).toContain("Do not require GitHub App installation before reading the repo");
-    expect(message).toContain("2-3 continuable task candidates");
-    expect(message).toContain("Find work worth continuing");
+    expect(message).toContain("production-readiness report");
+    expect(message).toContain("security-weighted launch blockers");
     expect(message).toContain("Task Brief");
     expect(message).toContain("goal, scope, key files, plan, current status, and next step");
     expect(message).not.toContain("first-tree-repo-work");

@@ -292,7 +292,7 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(treeMsgs[0]?.content).toBe("Seed the team tree.");
   });
 
-  it("keeps repo_work as a distinct repo-specific work thread", async () => {
+  it("keeps production_scan as a distinct repo-specific audit thread", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const agent = await createOrgAgent(app, admin);
@@ -310,7 +310,7 @@ describe("POST /me/onboarding/kickoff", () => {
       method: "POST",
       url: KICKOFF_URL,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { ...base, bootstrap: "Start repo-specific work.", kind: "repo_work" },
+      payload: { ...base, bootstrap: "Start production scan.", kind: "production_scan" },
     });
     expect(repoWork.statusCode).toBe(200);
 
@@ -319,11 +319,11 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(repoWorkChatId).not.toBe(workChatId);
 
     const [repoWorkChat] = await app.db.select().from(chats).where(eq(chats.id, repoWorkChatId)).limit(1);
-    expect(repoWorkChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:repo_work`);
-    expect(repoWorkChat?.topic).toBe("Repo work thread");
+    expect(repoWorkChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:production_scan`);
+    expect(repoWorkChat?.topic).toBe("Production scan");
 
     const [repoWorkMessage] = await app.db.select().from(messages).where(eq(messages.chatId, repoWorkChatId)).limit(1);
-    expect(repoWorkMessage?.content).toBe("Start repo-specific work.");
+    expect(repoWorkMessage?.content).toBe("Start production scan.");
   });
 });
 

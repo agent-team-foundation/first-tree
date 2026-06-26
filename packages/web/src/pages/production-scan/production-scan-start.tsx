@@ -1,17 +1,22 @@
 import { CheckCircle2, Copy, Github, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router";
+import { useNavigate } from "react-router";
 import { kickoffOnboarding, reportOnboardingEvent } from "../../api/onboarding-events.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { useAgentCreation } from "../onboarding/use-agent-creation.js";
 import { useComputerConnection } from "../onboarding/use-computer-connection.js";
-import { buildRepoWorkBootstrap } from "../workspace/center/onboarding/bootstrap-prose.js";
-import { clearRepoWorkIntent, deriveRepoAgentDisplayName, type RepoWorkIntent, readRepoWorkIntent } from "./intent.js";
+import { buildProductionScanBootstrap } from "../workspace/center/onboarding/bootstrap-prose.js";
+import {
+  clearProductionScanIntent,
+  deriveRepoAgentDisplayName,
+  type ProductionScanIntent,
+  readProductionScanIntent,
+} from "./intent.js";
 
-function buildSetupPrompt(intent: RepoWorkIntent, cliCommand: string | null): string {
+function buildSetupPrompt(intent: ProductionScanIntent, cliCommand: string | null): string {
   return [
-    "Set up First Tree for this repo work thread.",
+    "Set up First Tree for this production scan.",
     "",
     cliCommand ?? "Open First Tree and connect this computer.",
     "",
@@ -22,10 +27,10 @@ function buildSetupPrompt(intent: RepoWorkIntent, cliCommand: string | null): st
   ].join("\n");
 }
 
-export function RepoWorkStartPage() {
+export function ProductionScanStartPage() {
   const navigate = useNavigate();
   const { organizationId } = useAuth();
-  const intent = readRepoWorkIntent();
+  const intent = readProductionScanIntent();
   const computer = useComputerConnection(true);
   const [readyAgentUuid, setReadyAgentUuid] = useState<string | null>(null);
   const [kickoffError, setKickoffError] = useState<string | null>(null);
@@ -61,21 +66,21 @@ export function RepoWorkStartPage() {
       const { chatId } = await kickoffOnboarding({
         ...(organizationId ? { organizationId } : {}),
         agentUuid: activeAgentUuid,
-        bootstrap: buildRepoWorkBootstrap({
+        bootstrap: buildProductionScanBootstrap({
           repoUrl: intent.url,
           agentDisplayName: deriveRepoAgentDisplayName(intent.repo),
         }),
-        kind: "repo_work",
+        kind: "production_scan",
         complete: true,
       });
-      await reportOnboardingEvent("repo_work_kickoff_started", {
+      await reportOnboardingEvent("production_scan_kickoff_started", {
         agentUuid: activeAgentUuid,
         chatId,
       });
-      clearRepoWorkIntent();
+      clearProductionScanIntent();
       navigate(`/?c=${encodeURIComponent(chatId)}`);
     } catch (err) {
-      setKickoffError(err instanceof Error ? err.message : "Could not start the repo work thread");
+      setKickoffError(err instanceof Error ? err.message : "Could not start the production scan");
     }
   }, [activeAgentUuid, intent, navigate, organizationId]);
 
@@ -87,7 +92,7 @@ export function RepoWorkStartPage() {
     await navigator.clipboard?.writeText(setupPrompt);
     setCopied(true);
     if (intent) {
-      void reportOnboardingEvent("repo_work_setup_prompt_copied", {
+      void reportOnboardingEvent("production_scan_setup_prompt_copied", {
         repoHost: "github.com",
       });
     }
@@ -99,10 +104,10 @@ export function RepoWorkStartPage() {
         <div className="max-w-md rounded-[var(--radius-panel)] border border-border bg-card p-5">
           <h1 className="text-title">Paste a GitHub repo URL</h1>
           <p className="mt-2 text-body text-fg-2">
-            Start from the repo-work landing page so First Tree knows which repo to inspect.
+            Start from the production scan landing page so First Tree knows which repo to inspect.
           </p>
           <Button asChild className="mt-4">
-            <Link to="/repo-work">Go to repo work</Link>
+            <a href="https://first-tree.ai/production-scan">Go to production scan</a>
           </Button>
         </div>
       </div>
@@ -122,11 +127,11 @@ export function RepoWorkStartPage() {
             {intent.repoSlug}
           </div>
           <h1 className="mt-4 text-[2.5rem] font-semibold leading-tight tracking-normal">
-            Connecting your repo work thread
+            Connecting your production scan
           </h1>
           <p className="mt-2 max-w-2xl text-body text-fg-2">
             First Tree uses your local computer for private repo access, creates a private agent, then opens a
-            repo-specific thread.
+            production-readiness thread.
           </p>
         </div>
 
@@ -164,7 +169,7 @@ export function RepoWorkStartPage() {
               <Loader2 className="h-5 w-5 animate-spin text-fg-3" />
             )}
             <div>
-              <div className="text-body font-medium">Create private repo agent</div>
+              <div className="text-body font-medium">Create private scan agent</div>
               <div className="text-label text-fg-3">
                 {online
                   ? "Agent online"

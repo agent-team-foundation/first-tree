@@ -54,9 +54,9 @@ export type CompleteOnboarding = z.infer<typeof completeOnboardingSchema>;
  *   - "work"  — wake the agent for the value-first first chat: read the repo /
  *     team context, show concrete understanding, and ask the user to pick a
  *     first useful task.
- *   - "repo_work" — wake the agent for a repo-specific growth entry thread:
- *     use local-first repo access, suggest continuable tasks, and pin a Task
- *     Brief after the user chooses one.
+ *   - "production_scan" — wake the agent for the website production-scan
+ *     growth path: use local-first repo access, produce a launch-readiness
+ *     report, and pin a Task Brief around the selected fix.
  *   - "tree"  — wake the agent to seed/read the team's Context Tree (admin with
  *     repos AND the `/build-tree` recovery surface). It is intentionally
  *     separate from "work" so heavy tree setup can run in its own chat.
@@ -66,7 +66,7 @@ export type CompleteOnboarding = z.infer<typeof completeOnboardingSchema>;
  * send-if-empty guard would skip the tree-seeding bootstrap — the UI completes
  * but the agent is never woken to build the tree.
  */
-export const kickoffKindSchema = z.enum(["intro", "work", "repo_work", "tree"]);
+export const kickoffKindSchema = z.enum(["intro", "work", "production_scan", "tree"]);
 export type KickoffKind = z.infer<typeof kickoffKindSchema>;
 
 /**
@@ -108,9 +108,8 @@ export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSche
  *   - `team_renamed`           — Step 1 user changed the auto-named team
  *   - `agent_created`          — Step 2 successfully created the agent
  *   - `kickoff_chat_started`   — an intro/work/tree kickoff chat was created
- *   - `repo_work_landing_submitted` — growth landing accepted a repo URL
- *   - `repo_work_setup_prompt_copied` — user copied the local-first setup prompt
- *   - `repo_work_kickoff_started` — repo-specific work thread kickoff was created
+ *   - `production_scan_setup_prompt_copied` — user copied the local-first setup prompt
+ *   - `production_scan_kickoff_started` — repo-specific production scan thread was created
  *   - `tree_chat_started`      — legacy name for the Step 3 tree kickoff event
  *   - `tree_intro_dismissed`   — Step 3 [I'll do it later] clicked
  */
@@ -118,9 +117,8 @@ export const onboardingEventNameSchema = z.enum([
   "team_renamed",
   "agent_created",
   "kickoff_chat_started",
-  "repo_work_landing_submitted",
-  "repo_work_setup_prompt_copied",
-  "repo_work_kickoff_started",
+  "production_scan_setup_prompt_copied",
+  "production_scan_kickoff_started",
   "tree_chat_started",
   "tree_intro_dismissed",
 ]);

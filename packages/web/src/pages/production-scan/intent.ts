@@ -1,6 +1,6 @@
-const INTENT_KEY = "first-tree:repo-work:intent";
+const INTENT_KEY = "first-tree:production-scan:intent";
 
-export type RepoWorkIntent = {
+export type ProductionScanIntent = {
   owner: string;
   repo: string;
   repoSlug: string;
@@ -14,7 +14,7 @@ function cleanRepoName(repo: string): string {
   return repo.replace(/\.git$/u, "");
 }
 
-function makeIntent(owner: string, repoInput: string): RepoWorkIntent | null {
+function makeIntent(owner: string, repoInput: string): ProductionScanIntent | null {
   const repo = cleanRepoName(repoInput);
   if (!OWNER_RE.test(owner) || !REPO_RE.test(repo)) return null;
   return {
@@ -25,7 +25,7 @@ function makeIntent(owner: string, repoInput: string): RepoWorkIntent | null {
   };
 }
 
-export function normalizeGitHubRepoUrl(input: string): RepoWorkIntent | null {
+export function normalizeGitHubRepoUrl(input: string): ProductionScanIntent | null {
   const raw = input.trim();
   if (!raw) return null;
 
@@ -46,33 +46,33 @@ export function normalizeGitHubRepoUrl(input: string): RepoWorkIntent | null {
   return makeIntent(owner, repo);
 }
 
-export function writeRepoWorkIntent(intent: RepoWorkIntent): void {
+export function writeProductionScanIntent(intent: ProductionScanIntent): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.setItem(INTENT_KEY, JSON.stringify(intent));
 }
 
-export function readRepoWorkIntent(): RepoWorkIntent | null {
+export function readProductionScanIntent(): ProductionScanIntent | null {
   if (typeof window === "undefined") return null;
   const raw = window.sessionStorage.getItem(INTENT_KEY);
   if (!raw) return null;
   try {
-    const value = JSON.parse(raw) as Partial<RepoWorkIntent>;
+    const value = JSON.parse(raw) as Partial<ProductionScanIntent>;
     if (
       typeof value.owner !== "string" ||
       typeof value.repo !== "string" ||
       typeof value.repoSlug !== "string" ||
       typeof value.url !== "string"
     ) {
-      throw new Error("invalid repo work intent");
+      throw new Error("invalid production scan intent");
     }
-    return value as RepoWorkIntent;
+    return value as ProductionScanIntent;
   } catch {
-    clearRepoWorkIntent();
+    clearProductionScanIntent();
     return null;
   }
 }
 
-export function clearRepoWorkIntent(): void {
+export function clearProductionScanIntent(): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.removeItem(INTENT_KEY);
 }
@@ -82,5 +82,21 @@ export function deriveRepoAgentDisplayName(repo: string): string {
     .split(/[-_\s]+/u)
     .filter(Boolean)
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1));
-  return `${words.length > 0 ? words.join(" ") : "Repo"} agent`;
+  return `${words.length > 0 ? words.join(" ") : "Repo"} scan agent`;
+}
+
+function paramsFromHash(hash: string): URLSearchParams {
+  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+  return new URLSearchParams(raw.startsWith("?") ? raw.slice(1) : raw);
+}
+
+export function readProductionScanHandoff(location: Pick<Location, "search" | "hash">): ProductionScanIntent | null {
+  for (const params of [new URLSearchParams(location.search ?? ""), paramsFromHash(location.hash ?? "")]) {
+    if (params.get("intent") !== "production-scan") continue;
+    const repo = params.get("repo");
+    if (!repo) continue;
+    const intent = normalizeGitHubRepoUrl(repo);
+    if (intent) return intent;
+  }
+  return null;
 }

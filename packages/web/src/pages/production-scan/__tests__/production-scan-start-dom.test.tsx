@@ -8,8 +8,8 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../api/activity.js";
 import type { ComputerConnection } from "../../onboarding/use-computer-connection.js";
-import { normalizeGitHubRepoUrl, writeRepoWorkIntent } from "../intent.js";
-import { RepoWorkStartPage } from "../repo-work-start.js";
+import { normalizeGitHubRepoUrl, writeProductionScanIntent } from "../intent.js";
+import { ProductionScanStartPage } from "../production-scan-start.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -54,7 +54,7 @@ const agentCreationMock = vi.hoisted(() => ({
 }));
 
 const onboardingMocks = vi.hoisted(() => ({
-  kickoffOnboarding: vi.fn(async () => ({ chatId: "chat-repo-work" })),
+  kickoffOnboarding: vi.fn(async () => ({ chatId: "chat-production-scan" })),
   reportOnboardingEvent: vi.fn(async () => undefined),
 }));
 
@@ -158,7 +158,7 @@ async function renderPage(): Promise<HTMLElement> {
     root?.render(
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
-          <RepoWorkStartPage />
+          <ProductionScanStartPage />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -173,10 +173,10 @@ async function renderPage(): Promise<HTMLElement> {
 function seedIntent() {
   const intent = normalizeGitHubRepoUrl("https://github.com/acme/backend");
   if (!intent) throw new Error("expected valid intent");
-  writeRepoWorkIntent(intent);
+  writeProductionScanIntent(intent);
 }
 
-describe("RepoWorkStartPage", () => {
+describe("ProductionScanStartPage", () => {
   it("shows a local-first setup prompt while waiting for the computer", async () => {
     seedIntent();
 
@@ -185,10 +185,11 @@ describe("RepoWorkStartPage", () => {
     expect(container.textContent).toContain("acme/backend");
     expect(container.textContent).toContain("first-tree connect --token ft_test");
     expect(container.textContent).toContain("gh repo clone acme/backend");
+    expect(container.textContent).toContain("production scan");
     expect(agentCreationMock.create).not.toHaveBeenCalled();
   });
 
-  it("auto-creates a private repo agent when computer and runtime are ready", async () => {
+  it("auto-creates a private production-scan agent when computer and runtime are ready", async () => {
     seedIntent();
     computerMock.value = {
       ...computerMock.value,
@@ -201,7 +202,7 @@ describe("RepoWorkStartPage", () => {
     await renderPage();
 
     expect(agentCreationMock.create).toHaveBeenCalledWith({
-      displayName: "Backend agent",
+      displayName: "Backend scan agent",
       clientId: "client-1",
       runtimeProvider: "claude-code",
       visibility: "private",
@@ -209,7 +210,7 @@ describe("RepoWorkStartPage", () => {
     });
   });
 
-  it("starts a repo_work kickoff chat when the created agent is online", async () => {
+  it("starts a production_scan kickoff chat when the created agent is online", async () => {
     seedIntent();
     agentCreationMock.value = {
       ...agentCreationMock.value,
@@ -222,18 +223,18 @@ describe("RepoWorkStartPage", () => {
     expect(onboardingMocks.kickoffOnboarding).toHaveBeenCalledWith({
       organizationId: "org-1",
       agentUuid: "agent-repo",
-      kind: "repo_work",
+      kind: "production_scan",
       complete: true,
       bootstrap: expect.stringContaining("GitHub repo: https://github.com/acme/backend"),
     });
-    expect(onboardingMocks.reportOnboardingEvent).toHaveBeenCalledWith("repo_work_kickoff_started", {
+    expect(onboardingMocks.reportOnboardingEvent).toHaveBeenCalledWith("production_scan_kickoff_started", {
       agentUuid: "agent-repo",
-      chatId: "chat-repo-work",
+      chatId: "chat-production-scan",
     });
-    expect(navigateMock).toHaveBeenCalledWith("/?c=chat-repo-work");
+    expect(navigateMock).toHaveBeenCalledWith("/?c=chat-production-scan");
   });
 
-  it("does not loop retries when repo_work kickoff fails", async () => {
+  it("does not loop retries when production_scan kickoff fails", async () => {
     seedIntent();
     onboardingMocks.kickoffOnboarding.mockRejectedValueOnce(new Error("server unavailable"));
     agentCreationMock.value = {

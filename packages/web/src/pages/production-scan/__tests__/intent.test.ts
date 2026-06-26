@@ -2,11 +2,12 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  clearRepoWorkIntent,
+  clearProductionScanIntent,
   deriveRepoAgentDisplayName,
   normalizeGitHubRepoUrl,
-  readRepoWorkIntent,
-  writeRepoWorkIntent,
+  readProductionScanHandoff,
+  readProductionScanIntent,
+  writeProductionScanIntent,
 } from "../intent.js";
 
 function createStorage(): Storage {
@@ -62,38 +63,63 @@ describe("normalizeGitHubRepoUrl", () => {
   });
 });
 
-describe("repo work intent storage", () => {
+describe("production scan intent storage", () => {
   it("stores repo intent only in sessionStorage", () => {
     const intent = normalizeGitHubRepoUrl("https://github.com/acme/backend");
     if (!intent) throw new Error("expected valid intent");
 
-    writeRepoWorkIntent(intent);
+    writeProductionScanIntent(intent);
 
-    expect(readRepoWorkIntent()).toEqual(intent);
-    expect(window.localStorage?.getItem?.("first-tree:repo-work:intent") ?? null).toBeNull();
+    expect(readProductionScanIntent()).toEqual(intent);
+    expect(window.localStorage?.getItem?.("first-tree:production-scan:intent") ?? null).toBeNull();
   });
 
   it("clears invalid stored intent", () => {
-    window.sessionStorage.setItem("first-tree:repo-work:intent", "{bad");
+    window.sessionStorage.setItem("first-tree:production-scan:intent", "{bad");
 
-    expect(readRepoWorkIntent()).toBeNull();
-    expect(window.sessionStorage.getItem("first-tree:repo-work:intent")).toBeNull();
+    expect(readProductionScanIntent()).toBeNull();
+    expect(window.sessionStorage.getItem("first-tree:production-scan:intent")).toBeNull();
   });
 
   it("can clear a valid intent after kickoff starts", () => {
     const intent = normalizeGitHubRepoUrl("https://github.com/acme/backend");
     if (!intent) throw new Error("expected valid intent");
 
-    writeRepoWorkIntent(intent);
-    clearRepoWorkIntent();
+    writeProductionScanIntent(intent);
+    clearProductionScanIntent();
 
-    expect(readRepoWorkIntent()).toBeNull();
+    expect(readProductionScanIntent()).toBeNull();
+  });
+
+  it("reads the website handoff from query or hash params", () => {
+    expect(
+      readProductionScanHandoff({
+        search: "?intent=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
+        hash: "",
+      }),
+    ).toEqual({
+      owner: "acme",
+      repo: "backend",
+      repoSlug: "acme/backend",
+      url: "https://github.com/acme/backend",
+    });
+    expect(
+      readProductionScanHandoff({
+        search: "",
+        hash: "#intent=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
+      }),
+    ).toEqual({
+      owner: "acme",
+      repo: "backend",
+      repoSlug: "acme/backend",
+      url: "https://github.com/acme/backend",
+    });
   });
 });
 
 describe("deriveRepoAgentDisplayName", () => {
   it("derives a compact agent display name from the repo name", () => {
-    expect(deriveRepoAgentDisplayName("backend")).toBe("Backend agent");
-    expect(deriveRepoAgentDisplayName("first-tree-web")).toBe("First Tree Web agent");
+    expect(deriveRepoAgentDisplayName("backend")).toBe("Backend scan agent");
+    expect(deriveRepoAgentDisplayName("first-tree-web")).toBe("First Tree Web scan agent");
   });
 });

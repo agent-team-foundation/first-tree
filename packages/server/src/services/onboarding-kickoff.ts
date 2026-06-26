@@ -42,8 +42,8 @@ function topicForKickoffKind(kind: KickoffKind): string {
       return "Meet your agent";
     case "work":
       return "First task chat";
-    case "repo_work":
-      return "Repo work thread";
+    case "production_scan":
+      return "Production scan";
     case "tree":
       return "Set up team context";
   }
