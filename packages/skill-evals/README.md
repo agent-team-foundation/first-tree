@@ -7,12 +7,19 @@ quota.
 ## first-tree-read
 
 ```bash
+pnpm --filter @first-tree/skill-evals eval:floor
 pnpm --filter @first-tree/skill-evals eval:first-tree-read
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --json
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --verbose
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger --validate-fixtures --verbose
 ```
+
+`eval:floor` is a no-model check for the skill-eval framework itself. It
+validates that all shipped First Tree skills are present in the coverage
+matrix, their `SKILL.md` frontmatter is readable, and their case declarations
+have the minimum schema required by the shared runner. It does not execute
+Codex, Claude Code, LLM-as-judge, or live gate cases.
 
 The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs
