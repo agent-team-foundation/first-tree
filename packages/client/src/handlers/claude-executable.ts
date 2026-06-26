@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync, statSync } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { wellKnownBinDirs } from "../runtime/install-locations.js";
@@ -26,6 +26,14 @@ export type ClaudeExecutableSource = "env" | "path" | "well-known" | "default";
 export type ClaudeExecutableResolution = {
   path: string | undefined;
   source: ClaudeExecutableSource;
+  /**
+   * Set only when `CLAUDE_CODE_EXECUTABLE` was provided but did not resolve to an
+   * executable regular file. The override is still soft (we fall through to PATH /
+   * well-known / login-shell), so this is populated only on the final `default`
+   * resolution — i.e. when nothing else resolved either — letting the probe name
+   * the misconfigured override precisely instead of the generic missing text.
+   */
+  overrideError?: string;
 };
 
 /** Injectable seams so probe tests stay hermetic (no real shell spawn / no host install dirs). */
@@ -92,9 +100,18 @@ export function resolveClaudeCodeExecutable(
   const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
   const wellKnownDirs = opts.wellKnownDirs ?? (() => wellKnownBinDirs(home));
 
+  // Explicit operator override. Accept it ONLY when it is an executable regular
+  // file — the same isFile + X_OK gate the PATH / well-known search applies. A
+  // bare existsSync() also matched a directory named `claude` or a non-executable
+  // shim, yielding a false `env` hit the SDK then can't spawn. A set-but-unusable
+  // override stays non-fatal (First Tree's soft-override contract: fall through to
+  // PATH / well-known / login-shell), but the reason is captured so the probe can
+  // name it precisely if nothing else resolves.
   const override = env.CLAUDE_CODE_EXECUTABLE;
-  if (override && override.length > 0 && existsSync(override)) {
-    return { path: override, source: "env" };
+  let overrideError: string | undefined;
+  if (override && override.length > 0) {
+    if (isExecutableFile(override)) return { path: override, source: "env" };
+    overrideError = `CLAUDE_CODE_EXECUTABLE is set to "${override}" but is not an executable file; searching PATH and well-known install dirs instead`;
   }
 
   // Daemon PATH first, then cheap well-known dirs — both pure existence checks,
@@ -116,7 +133,7 @@ export function resolveClaudeCodeExecutable(
     if (fromLogin) return { path: fromLogin, source: "path" };
   }
 
-  return { path: undefined, source: "default" };
+  return { path: undefined, source: "default", ...(overrideError ? { overrideError } : {}) };
 }
 
 function pathDirs(env: NodeJS.ProcessEnv): string[] {

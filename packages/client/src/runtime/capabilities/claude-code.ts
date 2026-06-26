@@ -159,6 +159,10 @@ export async function probeClaudeCodeCapability(deps: ClaudeCodeProbeDeps = {}):
     if (resolution.source !== "default" && resolution.path && exists(resolution.path)) {
       return { installed: true, runtimeSource: "path", runtimePath: resolution.path };
     }
+    // A set-but-unusable CLAUDE_CODE_EXECUTABLE only surfaces here, when nothing
+    // resolved — prepend it so the operator sees the precise cause, not just the
+    // generic "no claude found" text.
+    const overridePrefix = resolution.overrideError ? `${resolution.overrideError}. ` : "";
     // No on-disk binary — the SDK would spawn its bundled Claude binary (absent
     // by default since the native engine is externalized).
     try {
@@ -166,14 +170,16 @@ export async function probeClaudeCodeCapability(deps: ClaudeCodeProbeDeps = {}):
       if (exists(bundled.path)) return { installed: true, runtimeSource: "bundled", runtimePath: null };
       return {
         installed: false,
-        error: formatClaudeBinaryMissingMessage(
-          `the SDK-bundled Claude binary is declared at ${bundled.path} but does not exist`,
-        ),
+        error:
+          overridePrefix +
+          formatClaudeBinaryMissingMessage(
+            `the SDK-bundled Claude binary is declared at ${bundled.path} but does not exist`,
+          ),
       };
     } catch (err) {
       return {
         installed: false,
-        error: formatClaudeBinaryMissingMessage(err instanceof Error ? err.message : String(err)),
+        error: overridePrefix + formatClaudeBinaryMissingMessage(err instanceof Error ? err.message : String(err)),
       };
     }
   });
