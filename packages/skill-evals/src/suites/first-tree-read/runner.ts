@@ -3,8 +3,8 @@ import { createRunPaths } from "../../core/paths.js";
 import { runCodexProvider } from "../../core/provider/codex.js";
 import { createEvalReporter } from "../../core/reporter.js";
 import { createFirstTreeShim } from "../../core/shims/first-tree.js";
-import { casePassed, deriveMetrics, fixtureOnlyPassed } from "./metrics.js";
 import { setupFixture, validateFixture } from "./fixture.js";
+import { casePassed, deriveMetrics, fixtureOnlyPassed } from "./metrics.js";
 import { driftNote, writeCaseSummaries } from "./summary.js";
 import type { CaseRunSummary, CliOptions, FirstTreeReadEvalCase } from "./types.js";
 

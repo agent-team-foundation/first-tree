@@ -30,7 +30,11 @@ export function installRepoSkill(repoRoot: string, workspacePath: string, skillN
   return readFileSync(skillPath, "utf8");
 }
 
-export function writeSingleSkillAgentsMarkdown(workspacePath: string, skillName: string, skillDescription: string): void {
+export function writeSingleSkillAgentsMarkdown(
+  workspacePath: string,
+  skillName: string,
+  skillDescription: string,
+): void {
   writeText(
     join(workspacePath, "AGENTS.md"),
     `# Eval Workspace Instructions
