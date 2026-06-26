@@ -44,6 +44,56 @@ describe("resolveClaudeCodeExecutable", () => {
     expect(resolution).toEqual({ path: fakeClaude, source: "path" });
   });
 
+  it("ignores an override that is a directory (not an executable file) and falls through to PATH", () => {
+    const dirOverride = mkdtempSync(join(tmpdir(), "ftt-claude-dirovr-"));
+    try {
+      const resolution = resolveClaudeCodeExecutable({
+        env: { CLAUDE_CODE_EXECUTABLE: dirOverride, PATH: binDir },
+      });
+      // A bare existsSync() would have accepted the directory; isExecutableFile rejects it.
+      expect(resolution).toEqual({ path: fakeClaude, source: "path" });
+    } finally {
+      rmSync(dirOverride, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a non-executable override file and falls through to PATH", () => {
+    const nonExec = join(binDir, "claude-nonexec");
+    writeFileSync(nonExec, "#!/bin/sh\nexit 0\n");
+    chmodSync(nonExec, 0o644); // readable, NOT executable
+    try {
+      const resolution = resolveClaudeCodeExecutable({
+        env: { CLAUDE_CODE_EXECUTABLE: nonExec, PATH: binDir },
+      });
+      expect(resolution).toEqual({ path: fakeClaude, source: "path" });
+    } finally {
+      rmSync(nonExec, { force: true });
+    }
+  });
+
+  it("surfaces overrideError on the default resolution when an unusable override and nothing else resolves", () => {
+    const badOverride = join(binDir, "nonexistent-override");
+    const resolution = resolveClaudeCodeExecutable({
+      env: {
+        CLAUDE_CODE_EXECUTABLE: badOverride,
+        PATH: join(tmpdir(), "definitely-not-a-real-bin-dir-xyz"),
+        HOME: emptyHome,
+      },
+      loginShellPathDirs: noLoginShell,
+    });
+    expect(resolution.path).toBeUndefined();
+    expect(resolution.source).toBe("default");
+    expect(resolution.overrideError).toContain(badOverride);
+  });
+
+  it("does NOT attach overrideError when the override is unusable but PATH resolves a claude", () => {
+    const resolution = resolveClaudeCodeExecutable({
+      env: { CLAUDE_CODE_EXECUTABLE: join(binDir, "nonexistent"), PATH: binDir },
+    });
+    expect(resolution).toEqual({ path: fakeClaude, source: "path" });
+    expect(resolution.overrideError).toBeUndefined();
+  });
+
   it("finds `claude` on PATH when the env override is absent", () => {
     const resolution = resolveClaudeCodeExecutable({
       env: { PATH: `${join(binDir, "missing")}${delimiter}${binDir}` },

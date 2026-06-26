@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
 
 /**
- * Unique marker that brackets `$PATH` in the probe output so we can isolate it
- * from any prompt / rc-file noise the interactive login shell prints. Chosen to
- * be vanishingly unlikely to appear in a real PATH entry.
+ * Unique marker that brackets the canonical dir list in the probe output so we
+ * can isolate it from any prompt / rc-file noise the interactive login shell
+ * prints. Chosen to be vanishingly unlikely to appear in a real PATH entry.
  */
 const DELIM = "__FT_SHELL_PATH__";
 
@@ -34,6 +34,13 @@ let failedAttempts = 0;
  * that interactive PATH — so a `claude` / `codex` installed there is invisible to
  * the daemon's `env.PATH`. This probes the login shell and returns the extra
  * dirs so install-only capability detection can find those binaries.
+ *
+ * Each dir is **canonicalized inside the still-alive shell** (`cd "$d" && pwd -P`)
+ * before being returned. fnm / nvm "multishell" PATH entries are per-session
+ * symlink dirs (e.g. `/tmp/fnm_multishells/xxx/bin`) that are torn down when the
+ * probe shell exits — by the time the caller `existsSync`-checks them they would
+ * be gone. Resolving the symlink to the stable underlying install dir while the
+ * shell lives hands back a path that still exists at search time.
  *
  * Properties:
  *   - **Memoized on success**: a probe that ran the shell, exited 0, and parsed a
@@ -97,10 +104,27 @@ function probe(runShell: RunShell): string[] | null {
   return parsePathFromShellOutput(output);
 }
 
-/** Spawn the user's interactive login shell and echo `$PATH` bracketed by {@link DELIM}. */
+/**
+ * Spawn the user's interactive login shell and print, bracketed by {@link DELIM},
+ * the **canonicalized** dirs of `$PATH` — one per line.
+ *
+ * The script splits `$PATH` with `tr ':' '\n'` (NOT a `for d in $PATH` loop:
+ * zsh, the macOS default, does not field-split an unquoted scalar, so a for-loop
+ * would iterate once over the whole string), then for each dir runs
+ * `(cd "$d" && pwd -P)` in a subshell to resolve symlinks to the real install dir
+ * while the shell — and any per-session fnm/nvm multishell symlink — is still
+ * alive. Dirs that fail `cd` (gone / unreadable) are silently dropped; they could
+ * not hold a spawnable binary anyway. Verified to split correctly and canonicalize
+ * symlinked dirs under bash, zsh, and sh.
+ */
 function defaultRunShell(): string | null {
   const shell = pickShell();
-  const result = spawnSync(shell, ["-lic", `printf '${DELIM}%s${DELIM}' "$PATH"`], {
+  const script =
+    `printf %s '${DELIM}'; ` +
+    `printf %s "$PATH" | tr ':' '\\n' | ` +
+    `while IFS= read -r d; do [ -n "$d" ] && (cd "$d" 2>/dev/null && pwd -P); done; ` +
+    `printf %s '${DELIM}'`;
+  const result = spawnSync(shell, ["-lic", script], {
     encoding: "utf-8",
     timeout: 4_000,
     // SIGTERM (the spawnSync default) is ignored by a shell that traps it, spawns
@@ -122,15 +146,16 @@ function pickShell(): string {
 }
 
 /**
- * Extract the text between the two delimiters and split it into PATH dirs.
- * Returns `null` on a parse miss (delimiters absent) so the caller treats it as a
- * retryable failure rather than a genuine empty PATH.
+ * Extract the text between the two delimiters and split it into the canonical
+ * dirs the shell printed (one per line). Returns `null` on a parse miss
+ * (delimiters absent) so the caller treats it as a retryable failure rather than
+ * a genuine empty PATH.
  */
 function parsePathFromShellOutput(output: string): string[] | null {
   const start = output.indexOf(DELIM);
   if (start < 0) return null;
   const end = output.indexOf(DELIM, start + DELIM.length);
   if (end < 0) return null;
-  const path = output.slice(start + DELIM.length, end);
-  return path.split(":").filter((dir) => dir.length > 0);
+  const inner = output.slice(start + DELIM.length, end);
+  return inner.split("\n").filter((dir) => dir.length > 0);
 }
