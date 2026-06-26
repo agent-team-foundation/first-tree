@@ -1,22 +1,14 @@
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
 
-import { appendEvent, previewText } from "./events.js";
-import type { EvalReporter } from "./reporter.js";
-import { stripShimTraceLines } from "./reporter.js";
-import type { CommandResult, FirstTreeReadEvalCase, FixtureValidation, RunPaths } from "./types.js";
+import { assertCommandOk, runCommand, writeText } from "../../core/commands.js";
+import { appendEvent, previewText } from "../../core/events.js";
+import type { EvalReporter } from "../../core/reporter.js";
+import { stripShimTraceLines } from "../../core/reporter.js";
+import { installRepoSkill, parseSkillDescription } from "../../core/skills/install.js";
+import type { CommandResult, RunPaths } from "../../core/types.js";
+import type { FirstTreeReadEvalCase, FixtureValidation } from "./types.js";
 
 const DOMAIN_NODE_TARGET_COUNT = 100;
 const SKILL_NAME = "first-tree-read";
@@ -30,35 +22,6 @@ type RequiredTreeFile = {
   path: string;
   reason: string;
 };
-
-function writeText(path: string, text: string): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, text, "utf8");
-}
-
-function runCommand(command: string, args: readonly string[], cwd: string): CommandResult {
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-  });
-
-  return {
-    args,
-    command,
-    cwd,
-    exitCode: result.status ?? 1,
-    stderr: result.stderr ?? "",
-    stdout: result.stdout ?? "",
-  };
-}
-
-function assertCommandOk(result: CommandResult): void {
-  if (result.exitCode === 0) return;
-  throw new Error(
-    `${result.command} ${result.args.join(" ")} failed with exit ${result.exitCode}\n${result.stderr}${result.stdout}`,
-  );
-}
 
 function titleFromPath(path: string): string {
   return path
@@ -147,30 +110,8 @@ skill workflow exactly. In particular, if the skill instructs you to inspect a
 `;
 }
 
-function parseSkillDescription(skillMarkdown: string): string {
-  const match = skillMarkdown.match(/^description:\s*"?(.+?)"?\s*$/mu);
-  return match?.[1] ?? "Read relevant Context Tree files for the current repo from task signals.";
-}
-
 function installFirstTreeReadSkill(repoRoot: string, workspacePath: string): void {
-  const sourceDir = join(repoRoot, "skills", SKILL_NAME);
-  const agentsDir = join(workspacePath, ".agents", "skills", SKILL_NAME);
-  const claudeDir = join(workspacePath, ".claude", "skills");
-  const claudeLink = join(claudeDir, SKILL_NAME);
-
-  if (!existsSync(join(sourceDir, "SKILL.md"))) {
-    throw new Error(`Missing source skill: ${sourceDir}`);
-  }
-
-  rmSync(agentsDir, { force: true, recursive: true });
-  mkdirSync(dirname(agentsDir), { recursive: true });
-  cpSync(sourceDir, agentsDir, { recursive: true });
-
-  rmSync(claudeLink, { force: true, recursive: true });
-  mkdirSync(claudeDir, { recursive: true });
-  symlinkSync(join("..", "..", ".agents", "skills", SKILL_NAME), claudeLink, "dir");
-
-  const skillMarkdown = readFileSync(join(sourceDir, "SKILL.md"), "utf8");
+  const skillMarkdown = installRepoSkill(repoRoot, workspacePath, SKILL_NAME);
   writeText(join(workspacePath, "AGENTS.md"), workspaceAgentsMarkdown(parseSkillDescription(skillMarkdown)));
 }
 
@@ -376,134 +317,6 @@ function initializeGitRepo(paths: RunPaths, contextTreePath: string): void {
   for (const result of commands) {
     assertCommandOk(result);
   }
-}
-
-export function createRunPaths(packageRoot: string, evalCase: FirstTreeReadEvalCase, startedAt: string): RunPaths {
-  const repoRoot = dirname(dirname(packageRoot));
-  const stamp = startedAt.replace(/[-:.]/gu, "");
-  const runRoot = join(packageRoot, ".runs", `${stamp}-${evalCase.id}`);
-  const workspacePath = join(runRoot, "workspace");
-  const binDir = join(runRoot, "bin");
-  const shellEnvDir = join(runRoot, "shell-env");
-
-  rmSync(runRoot, { force: true, recursive: true });
-  mkdirSync(workspacePath, { recursive: true });
-  mkdirSync(binDir, { recursive: true });
-  mkdirSync(shellEnvDir, { recursive: true });
-
-  return {
-    binDir,
-    eventsPath: join(runRoot, "events.jsonl"),
-    packageRoot,
-    repoRoot,
-    runRoot,
-    shellEnvDir,
-    summaryJsonPath: join(runRoot, "summary.json"),
-    summaryMdPath: join(runRoot, "summary.md"),
-    workspacePath,
-  };
-}
-
-function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/gu, "'\\''")}'`;
-}
-
-function writeShellPathBootstrap(paths: RunPaths): void {
-  const bootstrap = `export PATH=${shellSingleQuote(paths.binDir)}:\${PATH:-}\n`;
-  writeText(join(paths.shellEnvDir, ".zshenv"), bootstrap);
-  writeText(join(paths.shellEnvDir, ".zprofile"), bootstrap);
-  writeText(join(paths.shellEnvDir, ".bash_profile"), bootstrap);
-  writeText(join(paths.shellEnvDir, "bash-env"), bootstrap);
-  writeText(join(paths.shellEnvDir, "sh-env"), bootstrap);
-}
-
-export function createFirstTreeShim(paths: RunPaths): void {
-  const tsxBin = join(paths.repoRoot, "node_modules", ".bin", "tsx");
-  const cliEntry = join(paths.repoRoot, "apps", "cli", "src", "cli", "index.ts");
-  const shimPath = join(paths.binDir, "first-tree");
-  const script = `#!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
-
-const EVENTS_PATH = ${JSON.stringify(paths.eventsPath)};
-const TSX_BIN = ${JSON.stringify(tsxBin)};
-const CLI_ENTRY = ${JSON.stringify(cliEntry)};
-
-function preview(value) {
-  if (!value) return "";
-  return value.length <= 4000 ? value : value.slice(0, 4000) + "...<truncated " + (value.length - 4000) + " chars>";
-}
-
-function append(event) {
-  appendFileSync(EVENTS_PATH, JSON.stringify({ timestamp: new Date().toISOString(), ...event }) + "\\n", "utf8");
-}
-
-function formatArg(arg) {
-  return /^[A-Za-z0-9_./:=@+-]+$/.test(arg) ? arg : JSON.stringify(arg);
-}
-
-function commandLine(argv) {
-  return argv.map(formatArg).join(" ");
-}
-
-function trace(message) {
-  if (process.env.FIRST_TREE_EVAL_VERBOSE === "1") {
-    const caseId = process.env.FIRST_TREE_EVAL_CASE_ID || "unknown";
-    process.stderr.write("[" + caseId + "] " + message + "\\n");
-  }
-}
-
-const argv = process.argv.slice(2);
-const phase = process.env.FIRST_TREE_EVAL_PHASE || "model";
-append({ type: "first_tree_call", phase, argv, cwd: process.cwd() });
-trace("first-tree call: " + commandLine(argv));
-
-const realCommand = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE || TSX_BIN;
-const realArgs = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE ? argv : [CLI_ENTRY, ...argv];
-const result = spawnSync(realCommand, realArgs, {
-  cwd: process.cwd(),
-  encoding: "utf8",
-  env: process.env,
-  maxBuffer: 20 * 1024 * 1024,
-});
-
-if (result.stdout) process.stdout.write(result.stdout);
-if (result.stderr) process.stderr.write(result.stderr);
-
-if (result.error) {
-  append({
-    type: "first_tree_result",
-    phase,
-    argv,
-    cwd: process.cwd(),
-    exitCode: 127,
-    error: String(result.error),
-    stdoutPreview: preview(result.stdout || ""),
-    stderrPreview: preview(result.stderr || ""),
-  });
-  trace("first-tree result: exit=127 error=" + preview(String(result.error)));
-  process.exit(127);
-}
-
-const exitCode = result.status == null ? 1 : result.status;
-append({
-  type: "first_tree_result",
-  phase,
-  argv,
-  cwd: process.cwd(),
-  exitCode,
-  signal: result.signal || null,
-  stdoutPreview: preview(result.stdout || ""),
-  stderrPreview: preview(result.stderr || ""),
-});
-trace("first-tree result: exit=" + exitCode);
-
-process.exit(exitCode);
-`;
-
-  writeText(shimPath, script);
-  chmodSync(shimPath, 0o755);
-  writeShellPathBootstrap(paths);
 }
 
 export function setupFixture(evalCase: FirstTreeReadEvalCase, paths: RunPaths, reporter: EvalReporter): string | null {

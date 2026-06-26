@@ -1,4 +1,4 @@
-import { findStringValue, isRecord, isStringArray } from "./events.js";
+import { findStringValue, isRecord, isStringArray } from "../../core/events.js";
 import type { EvalMetrics, FixtureValidation } from "./types.js";
 
 const HELP_ARGV = ["tree", "tree", "--help"];

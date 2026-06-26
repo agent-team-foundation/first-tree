@@ -1,5 +1,5 @@
 import { isRecord, isStringArray, previewText } from "./events.js";
-import type { CommandResult, WorkspaceKind } from "./types.js";
+import type { CommandResult } from "./types.js";
 
 export type EvalReporter = {
   caseFinished(passed: boolean): void;
@@ -10,8 +10,8 @@ export type EvalReporter = {
   codexSpawnError(error: Error): void;
   codexStderrLine(line: string): void;
   codexStdoutLine(line: string): void;
-  fixtureSetupFinished(workspaceKind: WorkspaceKind, contextTreePath: string | null): void;
-  fixtureSetupStarted(workspaceKind: WorkspaceKind): void;
+  fixtureSetupFinished(workspaceKind: string, contextTreePath: string | null): void;
+  fixtureSetupStarted(workspaceKind: string): void;
   fixtureValidationFinished(result: CommandResult): void;
   fixtureValidationSkipped(): void;
   fixtureValidationStarted(args: readonly string[], contextTreePath: string): void;
