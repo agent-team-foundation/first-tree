@@ -339,24 +339,15 @@ You are running inside **First Tree**, a messaging platform for agent teams.
   silence just reads as no reply. Between agents it is the opposite: if a
   wake-up leaves nothing new to act on, end the turn without sending — a
   courteous "got it" between two agents is how loops start.
-- **Non-trivial bodies MUST go through \`-F\`/stdin — never an inline shell
-  argument.** A \`chat send\`/\`chat ask\` body and a \`chat update --description\`
-  are markdown: full of backticks, quotes, \`$\`, and newlines — exactly the
-  characters the shell rewrites *before the CLI ever runs*. Inline \`"..."\` lets
-  the shell execute backticks / \`$()\`, expand \`$VAR\`, truncate on a quote, or
-  collapse a botched heredoc into residue like a bare \`@EOF\` — silent
-  corruption the CLI cannot see or repair. So any body that contains backticks,
-  quotes, \`$\`, more than one line, or markdown structure goes through a file or
-  stdin: \`${bin} chat send <name> -f markdown -F <file>\`, or pipe it —
-  \`cat <file> | ${bin} chat send <name> -f markdown\` (\`chat update\` reads
-  stdin via \`--description -\`). Reserve inline \`"..."\` for a short, plain,
-  single-line string with no shell metacharacters.
-- **Never \`JSON.stringify\` a body (Issue #389):** pass content as a **raw
-  string**. Outer quotes + \`\\n\` escapes produce a literal \`"@x ...\\n..."\`
-  row the UI cannot render as markdown.
-- **Markdown bodies need \`-f markdown\`:** the default format is \`text\`, which
-  shows \`**bold**\`, lists, and \`\`code\`\` as literal characters. Pass
-  \`-f markdown\` whenever the body is markdown.`);
+- **Form a rich body as a file or stdin, so the markdown reaches the chat
+  verbatim.** Write a \`chat send\`/\`chat ask\` body — or a \`chat update
+  --description\` — to a file and send it with \`-F\`, or pipe it via stdin
+  (\`chat update\` reads \`--description -\`): \`${bin} chat send <name> -f markdown -F <file>\`.
+  Reserve inline \`"..."\` for a short, plain, single-line string. Markdown needs
+  \`-f markdown\` (the default \`text\` shows \`**bold**\`, lists, and \`\`code\`\`
+  as literal characters), and the body is a raw string — never \`JSON.stringify\`
+  it. Why a file/stdin is the verbatim-safe path — and the Issue #389
+  double-encode trap — is in \`## Communication\`.`);
 
   blocks.push(workingDirectoryBlock(opts.agentHome));
 
@@ -675,7 +666,18 @@ message in the chat.
 
 Every \`chat send\` names a recipient — there is no no-mention send. A group
 chat rejects a message that addresses no one; pass \`<name>\` to @mention the
-recipient.`;
+recipient.
+
+**Why a rich body goes through a file or stdin.** An inline \`"..."\` body is
+parsed by the shell before the CLI runs: it executes backticks and \`$(...)\`,
+expands \`$VAR\`, ends the string early on a quote, and collapses a botched
+heredoc into residue like a bare \`@EOF\` — silent corruption the CLI cannot see
+or repair. A file (\`-F <path>\`) or a pipe (stdin) hands the bytes to the CLI
+untouched, so backticks, quotes, \`$\`, and newlines arrive verbatim; \`chat
+update\` takes its description the same way via \`--description -\`. For the same
+reason pass the body as a raw string and never \`JSON.stringify\` it — outer
+quotes plus \`\\n\` escapes persist as a literal \`"@x ...\\n..."\` row the UI
+cannot render as markdown (Issue #389).`;
 }
 
 function workspaceCollaborationBlock(bin: string): string {
