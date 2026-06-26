@@ -18,7 +18,11 @@ import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { NotFoundError } from "../errors.js";
 import { requireUser } from "../scope/require-user.js";
-import { listAgentsManagedByUser, listOrgsWithUsableNonHumanAgent } from "../services/access-control.js";
+import {
+  listAgentsManagedByUser,
+  listOrgsWithPersonalAgent,
+  listOrgsWithUsableNonHumanAgent,
+} from "../services/access-control.js";
 import { resolveAvatarImageUrl } from "../services/agent.js";
 import * as authService from "../services/auth.js";
 import * as clientService from "../services/client.js";
@@ -96,6 +100,10 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       app.db,
       memberships.map((mb) => ({ memberId: mb.memberId, organizationId: mb.organizationId })),
     );
+    const orgsWithPersonalAgent = await listOrgsWithPersonalAgent(
+      app.db,
+      memberships.map((mb) => ({ memberId: mb.memberId, organizationId: mb.organizationId })),
+    );
 
     // Surface invite URL only for users who admin at least one org. The
     // web client picks the relevant org from `selectedOrganizationId`
@@ -122,6 +130,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         agentId: mb.agentId,
         orgHasOtherMembers: (memberCounts.get(mb.organizationId) ?? 1) > 1,
         hasUsableAgent: orgsWithUsableAgent.has(mb.organizationId),
+        hasPersonalAgent: orgsWithPersonalAgent.has(mb.organizationId),
         onboardingSuppressedAt: mb.onboardingSuppressedAt ? mb.onboardingSuppressedAt.toISOString() : null,
         onboardingSuppressedReason:
           mb.onboardingSuppressedReason === "finish_later" ||

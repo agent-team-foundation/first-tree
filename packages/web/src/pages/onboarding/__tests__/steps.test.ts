@@ -108,7 +108,7 @@ describe("shouldEnterOnboarding", () => {
   const base = {
     meLoaded: true,
     onboardingStep: "connect" as const,
-    currentOrgReady: false,
+    currentOrgHasPersonalAgent: false,
     onboardingSuppressedAt: null,
     // Ignored by the entry gate; present because both gates share the facts type.
     onboardingCompletedAt: null,
@@ -116,19 +116,25 @@ describe("shouldEnterOnboarding", () => {
   it("redirects a fresh incomplete user (no computer yet → connect)", () => {
     expect(shouldEnterOnboarding(base)).toBe(true);
   });
-  it("redirects a connected user whose current org has no usable agent (create_agent)", () => {
-    expect(shouldEnterOnboarding({ ...base, onboardingStep: "create_agent", currentOrgReady: false })).toBe(true);
+  it("redirects a connected user whose current org has no personal agent (create_agent)", () => {
+    expect(shouldEnterOnboarding({ ...base, onboardingStep: "create_agent", currentOrgHasPersonalAgent: false })).toBe(
+      true,
+    );
   });
-  it("redirects an account-completed user who joined a brand-new / all-private org (org not ready)", () => {
+  it("redirects an account-completed user who joined an org where they have no personal agent", () => {
     // The whole point of the org-level gate: a returning user who set up an
     // agent in a *prior* org must still create one here.
-    expect(shouldEnterOnboarding({ ...base, onboardingStep: "completed", currentOrgReady: false })).toBe(true);
+    expect(shouldEnterOnboarding({ ...base, onboardingStep: "completed", currentOrgHasPersonalAgent: false })).toBe(
+      true,
+    );
   });
-  it("does NOT redirect when connected and the current org already has a usable agent", () => {
-    expect(shouldEnterOnboarding({ ...base, onboardingStep: "completed", currentOrgReady: true })).toBe(false);
-    // Even a shared (org-visible) agent created by someone else counts — a
-    // user joining a mature org doesn't need to build their own.
-    expect(shouldEnterOnboarding({ ...base, onboardingStep: "create_agent", currentOrgReady: true })).toBe(false);
+  it("does NOT redirect when connected and the current org already has a personal agent", () => {
+    expect(shouldEnterOnboarding({ ...base, onboardingStep: "completed", currentOrgHasPersonalAgent: true })).toBe(
+      false,
+    );
+    expect(shouldEnterOnboarding({ ...base, onboardingStep: "create_agent", currentOrgHasPersonalAgent: true })).toBe(
+      false,
+    );
   });
   it("does not redirect before /me loads", () => {
     expect(shouldEnterOnboarding({ ...base, meLoaded: false })).toBe(false);
@@ -144,7 +150,7 @@ describe("shouldEnterOnboarding", () => {
       shouldEnterOnboarding({
         ...base,
         onboardingStep: "completed",
-        currentOrgReady: false,
+        currentOrgHasPersonalAgent: false,
         onboardingSuppressedAt: null,
       }),
     ).toBe(true);
@@ -166,7 +172,7 @@ describe("shouldLeaveOnboarding", () => {
   const base = {
     meLoaded: true,
     onboardingStep: "connect" as const,
-    currentOrgReady: false,
+    currentOrgHasPersonalAgent: false,
     onboardingSuppressedAt: null,
     onboardingCompletedAt: null as string | null,
   };
@@ -175,7 +181,7 @@ describe("shouldLeaveOnboarding", () => {
       shouldLeaveOnboarding({
         ...base,
         onboardingStep: "completed",
-        currentOrgReady: true,
+        currentOrgHasPersonalAgent: true,
         onboardingCompletedAt: "2026-05-31T00:00:00Z",
       }),
     ).toBe(true);
@@ -189,18 +195,22 @@ describe("shouldLeaveOnboarding", () => {
       shouldLeaveOnboarding({
         ...base,
         onboardingStep: "completed",
-        currentOrgReady: true,
+        currentOrgHasPersonalAgent: true,
         onboardingCompletedAt: null,
       }),
     ).toBe(false);
   });
   it("stays while the user hasn't connected a computer yet (connect step)", () => {
     expect(shouldLeaveOnboarding(base)).toBe(false);
-    expect(shouldLeaveOnboarding({ ...base, currentOrgReady: true })).toBe(false);
+    expect(shouldLeaveOnboarding({ ...base, currentOrgHasPersonalAgent: true })).toBe(false);
   });
-  it("stays for a connected user whose current org still has no usable agent", () => {
-    expect(shouldLeaveOnboarding({ ...base, onboardingStep: "create_agent", currentOrgReady: false })).toBe(false);
-    expect(shouldLeaveOnboarding({ ...base, onboardingStep: "completed", currentOrgReady: false })).toBe(false);
+  it("stays for a connected user whose current org still has no personal agent", () => {
+    expect(shouldLeaveOnboarding({ ...base, onboardingStep: "create_agent", currentOrgHasPersonalAgent: false })).toBe(
+      false,
+    );
+    expect(shouldLeaveOnboarding({ ...base, onboardingStep: "completed", currentOrgHasPersonalAgent: false })).toBe(
+      false,
+    );
   });
   it("does not strand a merely-dismissed user who returned via Resume into an unready org", () => {
     expect(
@@ -218,7 +228,7 @@ describe("shouldLeaveOnboarding", () => {
         ...base,
         meLoaded: false,
         onboardingStep: "completed",
-        currentOrgReady: true,
+        currentOrgHasPersonalAgent: true,
         onboardingCompletedAt: "2026-05-31T00:00:00Z",
       }),
     ).toBe(false);

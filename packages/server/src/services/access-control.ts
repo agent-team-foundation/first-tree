@@ -140,3 +140,32 @@ export async function listOrgsWithUsableNonHumanAgent(
     );
   return new Set(rows.map((r) => r.organizationId));
 }
+
+/**
+ * Org-scoped personal-agent readiness for onboarding. Given the caller's
+ * memberships, return the orgIds where that exact membership manages at least
+ * one active non-human agent. Organization-visible agents owned by another
+ * member deliberately do NOT count: they may be usable in general product
+ * surfaces, but onboarding's create-agent step is about creating this member's
+ * own teammate in the selected team.
+ */
+export async function listOrgsWithPersonalAgent(
+  db: Database,
+  memberRows: ReadonlyArray<{ memberId: string; organizationId: string }>,
+): Promise<Set<string>> {
+  if (memberRows.length === 0) return new Set<string>();
+  const orgIds = memberRows.map((m) => m.organizationId);
+  const memberIds = memberRows.map((m) => m.memberId);
+  const rows = await db
+    .selectDistinct({ organizationId: agents.organizationId })
+    .from(agents)
+    .where(
+      and(
+        inArray(agents.organizationId, orgIds),
+        inArray(agents.managerId, memberIds),
+        ne(agents.type, "human"),
+        eq(agents.status, AGENT_STATUSES.ACTIVE),
+      ),
+    );
+  return new Set(rows.map((r) => r.organizationId));
+}

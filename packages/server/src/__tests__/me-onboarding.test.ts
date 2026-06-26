@@ -6,6 +6,7 @@ import { authIdentities } from "../db/schema/auth-identities.js";
 import { members } from "../db/schema/members.js";
 import { encryptValue } from "../services/crypto.js";
 import { createMember } from "../services/member.js";
+import { ensureMembership } from "../services/membership.js";
 import { createOrganization } from "../services/organization.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -610,11 +611,14 @@ describe("POST /me/onboarding-completed", () => {
 describe("GET /me — per-membership hasUsableAgent", () => {
   const getApp = useTestApp();
 
-  type MeMembershipsBody = { memberships: Array<{ organizationId: string; hasUsableAgent: boolean }> };
+  type MeMembershipsBody = {
+    memberships: Array<{ organizationId: string; hasUsableAgent: boolean; hasPersonalAgent: boolean }>;
+  };
 
-  it("is false for a fresh org (only the seeded human agent), true once a non-human agent exists", async () => {
+  it("keeps usable and personal agent readiness separate", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
+    const other = await createTestAdmin(app);
 
     const before = await app.inject({
       method: "GET",
@@ -625,9 +629,42 @@ describe("GET /me — per-membership hasUsableAgent", () => {
       .json<MeMembershipsBody>()
       .memberships.find((m) => m.organizationId === admin.organizationId);
     expect(beforeRow?.hasUsableAgent).toBe(false);
+    expect(beforeRow?.hasPersonalAgent).toBe(false);
+
+    const otherMember = await ensureMembership(app.db, {
+      userId: other.userId,
+      organizationId: admin.organizationId,
+      username: `member-${crypto.randomUUID().slice(0, 8)}`,
+      displayName: "Other Member",
+      role: "member",
+    });
+
+    const sharedUuid = crypto.randomUUID();
+    await app.db.insert(agents).values({
+      uuid: sharedUuid,
+      name: `shared-${sharedUuid.slice(0, 8)}`,
+      organizationId: admin.organizationId,
+      type: "agent",
+      displayName: "Shared Assistant",
+      inboxId: `inbox_${sharedUuid}`,
+      status: "active",
+      visibility: "organization",
+      managerId: otherMember.id,
+    });
+
+    const afterShared = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    const sharedRow = afterShared
+      .json<MeMembershipsBody>()
+      .memberships.find((m) => m.organizationId === admin.organizationId);
+    expect(sharedRow?.hasUsableAgent).toBe(true);
+    expect(sharedRow?.hasPersonalAgent).toBe(false);
 
     // Drop in a non-human agent the admin manages (private — own agents
-    // count regardless of visibility).
+    // count for personal readiness regardless of visibility).
     const uuid = crypto.randomUUID();
     await app.db.insert(agents).values({
       uuid,
@@ -648,5 +685,6 @@ describe("GET /me — per-membership hasUsableAgent", () => {
     });
     const afterRow = after.json<MeMembershipsBody>().memberships.find((m) => m.organizationId === admin.organizationId);
     expect(afterRow?.hasUsableAgent).toBe(true);
+    expect(afterRow?.hasPersonalAgent).toBe(true);
   });
 });
