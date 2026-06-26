@@ -10,6 +10,7 @@ quota.
 pnpm --filter @first-tree/skill-evals eval:floor
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
 pnpm --filter @first-tree/skill-evals eval:first-tree-read
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --json
@@ -41,6 +42,18 @@ the currently implemented `first-tree-welcome` onboarding rows:
 - readable repo + populated Context Tree reads both evidence sources and offers
   two or three bounded first-task options without seeding or setting up the
   tree.
+
+`eval:gate -- --suite first-tree-seed` runs the live Codex gate for
+`first-tree-seed`. It covers the minimum bootstrap lifecycle boundaries:
+
+- empty tree + present bare source proposes only Phase 1 skeleton for user
+  approval;
+- non-empty tree refuses seed and points to incremental write or focused
+  maintenance;
+- missing source clone stops on incomplete provisioning instead of partial
+  seed;
+- bare source repos are read through a materialized read worktree, not as
+  checkouts.
 
 The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs
