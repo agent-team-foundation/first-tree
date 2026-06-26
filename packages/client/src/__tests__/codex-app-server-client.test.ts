@@ -4,6 +4,18 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "../handlers/codex/app-server/client.js";
 
+/**
+ * Upper-bound request timeout for the success-path tests, where the `initialize`
+ * response is written asynchronously (via `setImmediate`) right after start. A
+ * tight value (e.g. 50ms) races that async delivery: under a congested CI event
+ * loop the timer can fire before the response is parsed, spuriously failing the
+ * test with "request timed out: initialize". These tests are not exercising the
+ * timeout — the SIGTERM→SIGKILL escalation they assert is driven by
+ * `shutdown(ms)` — so the bound is set generously to remove the race. The
+ * dedicated timeout test below intentionally keeps its own tiny value.
+ */
+const RESPONSE_OK_TIMEOUT_MS = 2_000;
+
 function makeChild(exitOnSignals: readonly NodeJS.Signals[] = []) {
   const child = new EventEmitter() as ChildProcessWithoutNullStreams & {
     killed: boolean;
@@ -49,7 +61,7 @@ describe("CodexAppServerClient lifecycle", () => {
     const { child, signals, stdout } = makeChild(["SIGKILL"]);
     const startPromise = CodexAppServerClient.start({
       binary: "/tmp/fake-codex",
-      requestTimeoutMs: 50,
+      requestTimeoutMs: RESPONSE_OK_TIMEOUT_MS,
       spawnProcess: () => child,
     });
     setImmediate(() => {
@@ -67,7 +79,7 @@ describe("CodexAppServerClient lifecycle", () => {
     const onClose = vi.fn();
     const startPromise = CodexAppServerClient.start({
       binary: "/tmp/fake-codex",
-      requestTimeoutMs: 50,
+      requestTimeoutMs: RESPONSE_OK_TIMEOUT_MS,
       spawnProcess: () => child,
       onClose,
     });
@@ -88,7 +100,7 @@ describe("CodexAppServerClient lifecycle", () => {
     const onClose = vi.fn();
     const startPromise = CodexAppServerClient.start({
       binary: "/tmp/fake-codex",
-      requestTimeoutMs: 50,
+      requestTimeoutMs: RESPONSE_OK_TIMEOUT_MS,
       spawnProcess: () => child,
       onClose,
     });
