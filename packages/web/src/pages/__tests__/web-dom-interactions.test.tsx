@@ -118,6 +118,7 @@ const authMock = vi.hoisted(() => {
       teamDisplayName: nullableString("Acme"),
       orgHasOtherMembers: true,
       currentOrgHasUsableAgent: true,
+      currentOrgHasPersonalAgent: true,
       onboardingStep: onboardingStep("completed"),
       onboardingDismissedAt: nullableString(null),
       onboardingCompletedAt: nullableString("2026-05-01T00:00:00.000Z"),

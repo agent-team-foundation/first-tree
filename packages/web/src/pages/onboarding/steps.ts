@@ -145,17 +145,17 @@ export type OnboardingGateFacts = {
    * Account-level server step from `/me`. Only its `connect` / `null` value
    * is consulted here — it tells us whether the user has connected a runtime
    * client yet (a once-per-account step). The `create_agent` / `completed`
-   * distinction is org-specific and comes from `currentOrgReady` instead.
+   * distinction is org-specific and comes from `currentOrgHasPersonalAgent`
+   * instead.
    */
   onboardingStep: ServerOnboardingStep;
   /**
-   * Whether the *currently selected* org has a non-human agent this member
-   * can use (own or org-visible) — `auth.currentOrgHasUsableAgent`. Replaces
-   * the old account-level `onboardingCompletedAt` short-circuit so a
-   * returning user joining a brand-new / all-private org is still routed
-   * through create-agent for that org.
+   * Whether the *currently selected* membership manages an active non-human
+   * agent in this org — `auth.currentOrgHasPersonalAgent`. Replaces the old
+   * "usable" readiness so a returning user joining a mature team with another
+   * member's shared org-visible agent still creates their own personal agent.
    */
-  currentOrgReady: boolean;
+  currentOrgHasPersonalAgent: boolean;
   onboardingSuppressedAt: string | null;
   /**
    * The *currently selected* membership's completion stamp
@@ -176,10 +176,11 @@ export type OnboardingGateFacts = {
  *   1. Account-level — the user hasn't connected a runtime client yet
  *      (server step `connect` / null). Connecting a computer is a
  *      once-per-account step, so this is judged user-wide.
- *   2. Org-level — they're connected, but the *selected* org has no agent
- *      they can use (`!currentOrgReady`). This is what makes a returning,
- *      already-onboarded user still get walked through create-agent when
- *      they join a brand-new or all-private org.
+ *   2. Membership-level — they're connected, but the selected membership has
+ *      no personal agent in this org (`!currentOrgHasPersonalAgent`). This is
+ *      what makes a returning, already-onboarded user still get walked through
+ *      create-agent when they join another team, even if that team has shared
+ *      org-visible agents.
  *
  * A membership that already suppressed auto-open (finish later, invitee skip,
  * or normal completion) is never bounced. Note there is deliberately no
@@ -194,8 +195,8 @@ export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
   if (facts.onboardingStep === null) return false;
   // (1) No runtime client connected yet → start at "connect a computer".
   if (facts.onboardingStep === "connect") return true;
-  // (2) Connected, but this org has no usable agent → "create an agent" here.
-  if (!facts.currentOrgReady) return true;
+  // (2) Connected, but this membership has no personal agent → create one here.
+  if (!facts.currentOrgHasPersonalAgent) return true;
   return false;
 }
 
@@ -203,10 +204,10 @@ export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
  * Should the `/onboarding` route bounce the user back to the workspace?
  *
  * Only once the selected org's onboarding is terminally done: the user is
- * connected, the org has a usable agent, AND this membership carries its
+ * connected, the org has a personal agent, AND this membership carries its
  * completion stamp (`onboardingCompletedAt`). The stamp is the load-bearing
- * gate. Creating the agent flips `currentOrgReady` true and makes the server
- * infer `onboardingStep="completed"` the instant the agent comes online, but
+ * gate. Creating the agent flips `currentOrgHasPersonalAgent` true and makes
+ * the server infer `onboardingStep="completed"` the instant the agent comes online, but
  * the admin still has connect-code + kickoff ahead (the invitee, kickoff).
  * The in-page leave decision is frozen in a ref so an active session isn't
  * ejected mid-flow, yet a full page reload builds a fresh component that
@@ -215,7 +216,7 @@ export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
  * the stamp, so gating on it keeps a reloaded user in the flow until setup is
  * genuinely finished.
  *
- * A user still on `connect`, in an org without a usable agent, or in an org
+ * A user still on `connect`, in an org without a personal agent, or in an org
  * whose membership has not been stamped complete is allowed to stay and work
  * through the wizard (including a "finish later"-dismissed user who returned
  * via "Resume"). They leave via the explicit completion / finish-later
@@ -224,7 +225,7 @@ export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
 export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
   if (!facts.meLoaded) return false;
   if (facts.onboardingStep === "connect" || facts.onboardingStep === null) return false;
-  if (!facts.currentOrgReady) return false;
+  if (!facts.currentOrgHasPersonalAgent) return false;
   return facts.onboardingCompletedAt !== null;
 }
 

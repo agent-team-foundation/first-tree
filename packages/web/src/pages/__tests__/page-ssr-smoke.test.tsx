@@ -42,9 +42,10 @@ const authMock = vi.hoisted(() => {
       agentId: nullableString("human-agent-self"),
       teamDisplayName: nullableString("Acme"),
       orgHasOtherMembers: true,
-      // Fully set-up user: connected + the selected org has a usable agent,
+      // Fully set-up user: connected + the selected org has a personal agent,
       // so the workspace renders rather than redirecting to onboarding.
       currentOrgHasUsableAgent: true,
+      currentOrgHasPersonalAgent: true,
       onboardingStep: onboardingStep("completed"),
       onboardingDismissedAt: nullableString(null),
       onboardingCompletedAt: nullableString("2026-05-01T00:00:00.000Z"),
