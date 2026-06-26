@@ -6,6 +6,7 @@ import { SHIPPED_SKILLS, type ShippedSkillName } from "./core/case-schema.js";
 import { type SkillEvalSuiteDefinition, validateCoverageMatrix } from "./core/coverage.js";
 import { isRecord } from "./core/events.js";
 import { readSkillFrontmatter } from "./core/skills/frontmatter.js";
+import { formatFirstTreeWelcomeGateSummary, runFirstTreeWelcomeGate } from "./suites/first-tree-welcome/index.js";
 import { formatFirstTreeWriteGateSummary, runFirstTreeWriteGate } from "./suites/first-tree-write/index.js";
 import { SKILL_EVAL_SUITES } from "./suites/registry.js";
 
@@ -38,6 +39,7 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:floor -- --json
   pnpm --filter @first-tree/skill-evals eval:floor -- --suite <skill>
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
+  pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
 
 Commands:
   floor                  Run no-model schema, coverage, and skill-file checks.
@@ -222,25 +224,45 @@ function formatFloorSummary(summary: FloorSummary): string {
 }
 
 async function runGate(options: CliOptions): Promise<void> {
-  if (options.suite !== "first-tree-write") {
-    throw new Error("eval:gate currently requires --suite first-tree-write.");
+  if (options.suite === "first-tree-write") {
+    const batch = await runFirstTreeWriteGate(packageRoot(), {
+      caseId: options.caseId,
+      codexBin: options.codexBin,
+      json: options.json,
+      model: options.model,
+      verbose: options.verbose,
+    });
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
+    } else {
+      process.stdout.write(`${formatFirstTreeWriteGateSummary(batch)}\n`);
+    }
+    if (batch.failed > 0) {
+      process.exitCode = 1;
+    }
+    return;
   }
 
-  const batch = await runFirstTreeWriteGate(packageRoot(), {
-    caseId: options.caseId,
-    codexBin: options.codexBin,
-    json: options.json,
-    model: options.model,
-    verbose: options.verbose,
-  });
-  if (options.json) {
-    process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
-  } else {
-    process.stdout.write(`${formatFirstTreeWriteGateSummary(batch)}\n`);
+  if (options.suite === "first-tree-welcome") {
+    const batch = await runFirstTreeWelcomeGate(packageRoot(), {
+      caseId: options.caseId,
+      codexBin: options.codexBin,
+      json: options.json,
+      model: options.model,
+      verbose: options.verbose,
+    });
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
+    } else {
+      process.stdout.write(`${formatFirstTreeWelcomeGateSummary(batch)}\n`);
+    }
+    if (batch.failed > 0) {
+      process.exitCode = 1;
+    }
+    return;
   }
-  if (batch.failed > 0) {
-    process.exitCode = 1;
-  }
+
+  throw new Error("eval:gate currently requires --suite first-tree-write or --suite first-tree-welcome.");
 }
 
 async function main(): Promise<void> {
