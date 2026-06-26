@@ -1,5 +1,5 @@
 /**
- * Kickoff bootstrap prose for onboarding-created chats. Prose, not shell
+ * Start-chat bootstrap prose for onboarding-created chats. Prose, not shell
  * recipes: the agent's workspace has the shipped First Tree skills
  * (`first-tree-welcome`, `first-tree-write`, `first-tree-read`,
  * `first-tree-seed`), and those skills own the concrete flow.
@@ -9,7 +9,7 @@
  * reads the actual bound tree content and chooses seed vs read/write from that
  * evidence. A mere binding does not imply a populated tree.
  *
- * Single source of truth: only the kickoff step sends these. If a future surface
+ * Single source of truth: only the start-chat step sends these. If a future surface
  * needs the same prompts, hoist these builders to `packages/shared`.
  */
 

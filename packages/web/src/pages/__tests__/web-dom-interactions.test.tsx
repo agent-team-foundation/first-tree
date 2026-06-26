@@ -79,11 +79,15 @@ const resourceMocks = vi.hoisted(() => ({
   listTeamResourcesForOrg: vi.fn(),
 }));
 
-const onboardingEventMocks = vi.hoisted(() => ({
-  reportOnboardingEvent: vi.fn(),
-  kickoffOnboarding: vi.fn(),
-  getTreeSetupStatus: vi.fn(),
-}));
+const onboardingEventMocks = vi.hoisted(() => {
+  const startOnboardingChat = vi.fn();
+  return {
+    reportOnboardingEvent: vi.fn(),
+    startOnboardingChat,
+    postOnboardingStartChat: startOnboardingChat,
+    getTreeSetupStatus: vi.fn(),
+  };
+});
 
 const meChatMocks = vi.hoisted(() => ({
   addMeChatParticipants: vi.fn(),
@@ -709,11 +713,11 @@ beforeEach(() => {
   meChatMocks.createMeChat.mockResolvedValue({ chatId: "chat-created" });
   meChatMocks.createMeTaskChat.mockResolvedValue({ chatId: "chat-created" });
   onboardingEventMocks.reportOnboardingEvent.mockResolvedValue(undefined);
-  onboardingEventMocks.kickoffOnboarding.mockResolvedValue({ chatId: "chat-onboarding" });
+  onboardingEventMocks.startOnboardingChat.mockResolvedValue({ chatId: "chat-onboarding" });
   onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
     needsTreeSetup: false,
     hasTreeBinding: true,
-    hasTreeSetupKickoff: true,
+    hasTreeSetupStartChat: true,
   });
   contextTreeMocks.initializeContextTree.mockResolvedValue({
     repo: "https://github.com/acme/context-tree",
@@ -1215,7 +1219,7 @@ describe("web DOM interaction coverage", () => {
     expect(back?.getAttribute("href")).toBe("/settings/github");
     await unmountRoot(expired.root);
 
-    // Install refused: kickoff admin's authority no longer holds.
+    // Install refused: start-chat admin's authority no longer holds.
     Object.defineProperty(window, "location", {
       configurable: true,
       value: { ...window.location, hash: "#error=install-not-admin", pathname: "/auth/github/complete" },
@@ -1703,7 +1707,7 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(noDraft.root);
 
     // Resumed draft (user narrowed to just one repo earlier, then bailed before
-    // kickoff) → no auto-select; the saved selection is left untouched instead
+    // start-chat) → no auto-select; the saved selection is left untouched instead
     // of being clobbered back to "all granted".
     const resumedSet = vi.fn();
     const withDraft = await renderOnboardingDom(<StepConnectCode />, {
@@ -1719,7 +1723,7 @@ describe("web DOM interaction coverage", () => {
 
     // Resumed draft carrying a repo the GitHub App no longer grants (uninstall /
     // changed grant between bailout and resume) → prune it against the current
-    // grant list so a stale URL can't ride into kickoff. acme/web is still
+    // grant list so a stale URL can't ride into start-chat. acme/web is still
     // granted; the gone repo is dropped.
     const prunedSet = vi.fn();
     const staleDraft = await renderOnboardingDom(<StepConnectCode />, {
@@ -1798,8 +1802,8 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
-  it("drives StepKickoff admin and invitee start flows", async () => {
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+  it("drives StepStartChat admin and invitee start flows", async () => {
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     const findButton = (container: ParentNode, text: string): HTMLButtonElement | null =>
       ([...container.querySelectorAll("button")].find((button) => button.textContent?.includes(text)) ??
         null) as HTMLButtonElement | null;
@@ -1809,7 +1813,7 @@ describe("web DOM interaction coverage", () => {
     const setTreeBindingPlan = vi.fn();
     const setTreeUrl = vi.fn();
     const markTreeAutoDetectDone = vi.fn();
-    const adminAutoDetect = await renderOnboardingDom(<StepKickoff />, {
+    const adminAutoDetect = await renderOnboardingDom(<StepStartChat />, {
       activeStep: "start-chat",
       selectedRepoUrls: ["https://github.com/acme/web.git"],
       treeBindingPlan: "createBinding",
@@ -1819,7 +1823,7 @@ describe("web DOM interaction coverage", () => {
       setTreeUrl,
       markTreeAutoDetectDone,
     });
-    await waitForText("Your agent's ready to get to work", adminAutoDetect.container);
+    await waitForText("Start working with your agent", adminAutoDetect.container);
     expect(markTreeAutoDetectDone).toHaveBeenCalled();
     expect(setTreeBindingPlan).toHaveBeenCalledWith("useBoundTree");
     expect(setTreeUrl).toHaveBeenCalledWith("https://github.com/acme/context-tree");
@@ -1828,26 +1832,26 @@ describe("web DOM interaction coverage", () => {
     // Admin · bound tree → Start enters the value-first work chat. It does not
     // start tree setup automatically; that now requires a later explicit user
     // consent flow or Settings/Context entry.
-    const adminExisting = await renderOnboardingDom(<StepKickoff />, {
+    const adminExisting = await renderOnboardingDom(<StepStartChat />, {
       activeStep: "start-chat",
       selectedRepoUrls: ["https://github.com/acme/web.git"],
       treeBindingPlan: "useBoundTree",
       treeUrl: "https://github.com/acme/context-tree",
     });
-    await waitForText("Your agent's ready to get to work", adminExisting.container);
-    await click(findButton(adminExisting.container, "Start with your agent"));
+    await waitForText("Start working with your agent", adminExisting.container);
+    await click(findButton(adminExisting.container, "Start chat"));
     await waitForText("Starting your agent", adminExisting.container);
     expect(agentApiMocks.listManagedAgents).toHaveBeenCalled();
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
       expect.objectContaining({
         organizationId: "org-1",
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("This is your first task chat with Nova."),
+        bootstrap: expect.stringContaining("Welcome to your first First Tree chat with Nova."),
         kind: "work",
         complete: true,
       }),
     );
-    expect(onboardingEventMocks.kickoffOnboarding.mock.calls.some(([body]) => body.kind === "tree")).toBe(false);
+    expect(onboardingEventMocks.startOnboardingChat.mock.calls.some(([body]) => body.kind === "tree")).toBe(false);
     expect(resourceMocks.createTeamResourceForOrg).toHaveBeenCalledWith("org-1", {
       type: "repo",
       name: "acme/web",
@@ -1858,25 +1862,25 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(adminExisting.root);
 
     // Admin · no repo → honestly just "meet your agent" (intro), no provisioning.
-    const adminNoProject = await renderOnboardingDom(<StepKickoff />, {
+    const adminNoProject = await renderOnboardingDom(<StepStartChat />, {
       activeStep: "start-chat",
       selectedRepoUrls: [],
       treeBindingPlan: "createBinding",
       treeUrl: "",
     });
-    await waitForText("Start with your agent", adminNoProject.container);
+    await waitForText("Start working with your agent", adminNoProject.container);
     await click(findButton(adminNoProject.container, "Start chat"));
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenLastCalledWith(
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenLastCalledWith(
       expect.objectContaining({ agentUuid: "agent-1", kind: "intro" }),
     );
     expect(adminNoProject.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
     await unmountRoot(adminNoProject.root);
 
     // Invitee · not-ready via no team tree → "Meet your agent" lands in a real
-    // chat (runKickoff → completeAndEnterChat), not finishLater.
+    // chat (runStartChat → completeAndEnterChat), not finishLater.
     orgSettingsMocks.getContextTreeSetting.mockResolvedValueOnce({ repo: "", branch: null });
-    const inviteeNoTree = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "start-chat" });
-    await waitForText("Start with your agent", inviteeNoTree.container);
+    const inviteeNoTree = await renderOnboardingDom(<StepStartChat />, { path: "invitee", activeStep: "start-chat" });
+    await waitForText("Start working with your agent", inviteeNoTree.container);
     await click(findButton(inviteeNoTree.container, "Start chat"));
     await waitForText("Starting your agent", inviteeNoTree.container);
     expect(inviteeNoTree.flow.completeAndEnterChat).toHaveBeenCalled();
@@ -1885,33 +1889,39 @@ describe("web DOM interaction coverage", () => {
     // Invitee · not-ready via no installation (tree set, GitHub not connected) →
     // the same single not-ready screen + "meet your agent" bailout.
     githubAppMocks.getGithubAppInstallationExists.mockResolvedValueOnce(false);
-    const inviteeNoInstall = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "start-chat" });
-    await waitForText("Start with your agent", inviteeNoInstall.container);
+    const inviteeNoInstall = await renderOnboardingDom(<StepStartChat />, {
+      path: "invitee",
+      activeStep: "start-chat",
+    });
+    await waitForText("Start working with your agent", inviteeNoInstall.container);
     await click(findButton(inviteeNoInstall.container, "Start chat"));
     expect(inviteeNoInstall.flow.completeAndEnterChat).toHaveBeenCalled();
     await unmountRoot(inviteeNoInstall.root);
 
     // Invitee · tree present but the install probe FAILS (unknown) → hold in
-    // not-ready, never render "ready"/Start with your agent. An optimistic hasInstallation
+    // not-ready, never render the ready action state. An optimistic hasInstallation
     // (null → true) must not launch tree-reading without an authoritative
     // install=true, or the agent would 403 on its first git op.
     githubAppMocks.getGithubAppInstallationExists.mockRejectedValueOnce(new Error("probe failed"));
-    const inviteeProbeFail = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "start-chat" });
-    await waitForText("Start with your agent", inviteeProbeFail.container);
-    expect(findButton(inviteeProbeFail.container, "Start with your agent")).toBeNull();
+    const inviteeProbeFail = await renderOnboardingDom(<StepStartChat />, {
+      path: "invitee",
+      activeStep: "start-chat",
+    });
+    await waitForText("Start working with your agent", inviteeProbeFail.container);
+    expect(findButton(inviteeProbeFail.container, "Start working with your agent")).toBeNull();
     await unmountRoot(inviteeProbeFail.root);
 
     // Invitee · ready (tree + install) → a single launch, no repo selection. The
     // agent already inherits the team's recommended repos.
-    const inviteeReady = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "start-chat" });
-    await waitForText("Your agent's ready to go", inviteeReady.container);
-    await click(findButton(inviteeReady.container, "Start with your agent"));
+    const inviteeReady = await renderOnboardingDom(<StepStartChat />, { path: "invitee", activeStep: "start-chat" });
+    await waitForText("Start working with your agent", inviteeReady.container);
+    await click(findButton(inviteeReady.container, "Start chat"));
     // Ready invitee also lands in a value-first work chat, not the tree setup
     // chat. The inherited team tree is context for orientation.
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("This is your first task chat with Nova."),
+        bootstrap: expect.stringContaining("Welcome to your first First Tree chat with Nova."),
         kind: "work",
       }),
     );
@@ -1924,23 +1934,23 @@ describe("web DOM interaction coverage", () => {
   });
 
   it("does not start background tree setup from onboarding start-chat", async () => {
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     orgSettingsMocks.getContextTreeSetting.mockResolvedValue({ repo: "", branch: null });
 
-    const view = await renderOnboardingDom(<StepKickoff />, {
+    const view = await renderOnboardingDom(<StepStartChat />, {
       activeStep: "start-chat",
       selectedRepoUrls: ["https://github.com/acme/web.git"],
       treeBindingPlan: "createBinding",
       treeUrl: "",
     });
-    await waitForText("Your agent's ready to get to work", view.container);
+    await waitForText("Start working with your agent", view.container);
     await click(
       ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
         null) as HTMLButtonElement | null,
     );
     await waitForText("Starting your agent", view.container);
 
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
         kind: "work",
@@ -1948,7 +1958,7 @@ describe("web DOM interaction coverage", () => {
       }),
     );
     expect(contextTreeMocks.initializeContextTree).not.toHaveBeenCalled();
-    expect(onboardingEventMocks.kickoffOnboarding.mock.calls.some(([body]) => body.kind === "tree")).toBe(false);
+    expect(onboardingEventMocks.startOnboardingChat.mock.calls.some(([body]) => body.kind === "tree")).toBe(false);
     expect(view.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
     await unmountRoot(view.root);
   });
@@ -1968,8 +1978,8 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Building", view.container);
 
     expect(contextTreeMocks.initializeContextTree).toHaveBeenCalledWith("org-1");
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledTimes(1);
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledTimes(1);
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
         bootstrap: expect.stringContaining("This chat sets up team context for future agent work."),
@@ -1977,27 +1987,29 @@ describe("web DOM interaction coverage", () => {
         complete: true,
       }),
     );
-    expect(onboardingEventMocks.kickoffOnboarding).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "work" }));
+    expect(onboardingEventMocks.startOnboardingChat).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "work" }),
+    );
     await unmountRoot(view.root);
   });
 
-  it("prunes a no-longer-granted repo at kickoff before writing team resources", async () => {
-    // A flow can resume directly at kickoff (persisted step index) without ever
+  it("prunes a no-longer-granted repo at start-chat before writing team resources", async () => {
+    // A flow can resume directly at start-chat (persisted step index) without ever
     // mounting StepConnectCode, so connect-code's grant prune never runs. The
-    // kickoff handler must re-validate the (possibly stale) selection against the
+    // start-chat handler must re-validate the (possibly stale) selection against the
     // current grant list, so a repo removed from the installation since the user
     // picked it is never registered as a team repo resource.
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     // Current grants are web + api (GITHUB_REPOS); the draft also carries a repo
     // the app no longer grants.
     githubMocks.listOrgGithubRepos.mockResolvedValue(GITHUB_REPOS);
-    const view = await renderOnboardingDom(<StepKickoff />, {
+    const view = await renderOnboardingDom(<StepStartChat />, {
       activeStep: "start-chat",
       selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
       treeBindingPlan: "useBoundTree",
       treeUrl: "https://github.com/acme/context-tree",
     });
-    await waitForText("Your agent's ready to get to work", view.container);
+    await waitForText("Start working with your agent", view.container);
     await click(
       ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
         null) as HTMLButtonElement | null,
@@ -2015,20 +2027,20 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
-  it("fails closed at kickoff when the grant list can't be read (no stale write)", async () => {
+  it("fails closed at start-chat when the grant list can't be read (no stale write)", async () => {
     // If the current-grant read fails we can't prove the selected repos are still
-    // accessible and nothing downstream re-checks grants, so kickoff must NOT
+    // accessible and nothing downstream re-checks grants, so start-chat must NOT
     // write the (possibly stale) selection — it surfaces a retryable error and
     // stays on the form instead.
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     githubMocks.listOrgGithubRepos.mockRejectedValue(new Error("github unavailable"));
-    const view = await renderOnboardingDom(<StepKickoff />, {
+    const view = await renderOnboardingDom(<StepStartChat />, {
       activeStep: "start-chat",
       selectedRepoUrls: ["https://github.com/acme/web.git"],
       treeBindingPlan: "useBoundTree",
       treeUrl: "https://github.com/acme/context-tree",
     });
-    await waitForText("Your agent's ready to get to work", view.container);
+    await waitForText("Start working with your agent", view.container);
     await click(
       ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
         null) as HTMLButtonElement | null,
@@ -2040,18 +2052,18 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
-  it("kickoff grant check is authoritative — ignores a stale cached grant list", async () => {
+  it("start-chat grant check is authoritative — ignores a stale cached grant list", async () => {
     // The QueryClient is an app-level singleton and finishLater is SPA nav, so a
     // grant list connect-code cached earlier can still be in the cache when the
-    // user resumes at kickoff — possibly minutes stale. The write-path check
+    // user resumes at start-chat — possibly minutes stale. The write-path check
     // must read CURRENT grants, not trust the cache (guards against re-adding a
     // staleTime). Seed the cache with a stale list that still contains a repo
     // that has since been removed; assert the live read prunes it anyway.
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     // Current grants (live) are web + api; the stale cache still has `gone`.
     githubMocks.listOrgGithubRepos.mockResolvedValue(GITHUB_REPOS);
     const view = await renderOnboardingDom(
-      <StepKickoff />,
+      <StepStartChat />,
       {
         activeStep: "start-chat",
         selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
@@ -2082,7 +2094,7 @@ describe("web DOM interaction coverage", () => {
         );
       },
     );
-    await waitForText("Your agent's ready to get to work", view.container);
+    await waitForText("Start working with your agent", view.container);
     await click(
       ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
         null) as HTMLButtonElement | null,

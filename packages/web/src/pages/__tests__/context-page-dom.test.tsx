@@ -24,11 +24,15 @@ const resourceApiMocks = vi.hoisted(() => ({
   listTeamResourcesForOrg: vi.fn(),
 }));
 
-const onboardingEventMocks = vi.hoisted(() => ({
-  getTreeSetupStatus: vi.fn(),
-  kickoffOnboarding: vi.fn(),
-  reportOnboardingEvent: vi.fn(),
-}));
+const onboardingEventMocks = vi.hoisted(() => {
+  const startOnboardingChat = vi.fn();
+  return {
+    getTreeSetupStatus: vi.fn(),
+    startOnboardingChat,
+    postOnboardingStartChat: startOnboardingChat,
+    reportOnboardingEvent: vi.fn(),
+  };
+});
 
 const orgSettingsMocks = vi.hoisted(() => ({
   getContextTreeSetting: vi.fn(),
@@ -194,7 +198,7 @@ beforeEach(() => {
   resourceApiMocks.listTeamResourcesForOrg.mockReset();
   resourceApiMocks.createTeamResourceForOrg.mockReset();
   onboardingEventMocks.getTreeSetupStatus.mockReset();
-  onboardingEventMocks.kickoffOnboarding.mockReset();
+  onboardingEventMocks.startOnboardingChat.mockReset();
   onboardingEventMocks.reportOnboardingEvent.mockReset();
   orgSettingsMocks.getContextTreeSetting.mockReset();
   agentApiMocks.listManagedAgents.mockResolvedValue([]);
@@ -212,9 +216,9 @@ beforeEach(() => {
   onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
     needsTreeSetup: false,
     hasTreeBinding: true,
-    hasTreeSetupKickoff: true,
+    hasTreeSetupStartChat: true,
   });
-  onboardingEventMocks.kickoffOnboarding.mockResolvedValue({ chatId: "chat-tree-setup" });
+  onboardingEventMocks.startOnboardingChat.mockResolvedValue({ chatId: "chat-tree-setup" });
   githubAppMocks.getGithubAppInstallation.mockReset();
   githubAppMocks.getGithubAppInstallationExists.mockReset();
   githubAppMocks.getGithubAppInstallUrl.mockReset();
@@ -501,7 +505,7 @@ describe("ContextPage DOM behavior", () => {
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/");
 
     // Picking a repo reveals the build CTA (inline pick → build wiring) without
-    // navigating anywhere — the actual kickoff mechanics are covered by the
+    // navigating anywhere — the actual start-chat mechanics are covered by the
     // bound-tree recovery test below, which shares handleBuild.
     await click(container.querySelector('input[type="checkbox"]'));
     await waitForText(container, "Build your Context Tree");
@@ -548,7 +552,7 @@ describe("ContextPage DOM behavior", () => {
     expect(githubMocks.listOrgGithubRepos).toHaveBeenCalledWith("org-1");
     expect(githubMocks.listOrgGithubRepos.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(resourceApiMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
-    expect(onboardingEventMocks.kickoffOnboarding).not.toHaveBeenCalled();
+    expect(onboardingEventMocks.startOnboardingChat).not.toHaveBeenCalled();
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/");
 
     await act(async () => root.unmount());
@@ -602,12 +606,12 @@ describe("ContextPage DOM behavior", () => {
     await act(async () => root.unmount());
   });
 
-  it("recovers a bound tree whose setup kickoff was never sent", async () => {
+  it("recovers a bound tree whose setup start-chat was never sent", async () => {
     authMock.value = { organizationId: "org-1", role: "admin" };
     onboardingEventMocks.getTreeSetupStatus.mockResolvedValueOnce({
       needsTreeSetup: true,
       hasTreeBinding: true,
-      hasTreeSetupKickoff: false,
+      hasTreeSetupStartChat: false,
     });
     agentApiMocks.listManagedAgents.mockResolvedValue([
       {
@@ -640,7 +644,7 @@ describe("ContextPage DOM behavior", () => {
     await click(buttonByText(container, "Build your Context Tree"));
 
     expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
         bootstrap: expect.stringContaining("This chat sets up team context for future agent work."),

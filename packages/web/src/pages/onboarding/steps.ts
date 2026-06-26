@@ -144,7 +144,7 @@ export type OnboardingGateFacts = {
   /**
    * The *currently selected* membership's completion stamp
    * (`auth.onboardingCompletedAt`, resolved per-membership) — non-null only
-   * once the kickoff/completion path has run for THIS org. `shouldLeaveOnboarding`
+   * once the start-chat/completion path has run for THIS org. `shouldLeaveOnboarding`
    * gates the `/onboarding` → `/` bounce on it; `shouldEnterOnboarding` ignores
    * it (the `/` auto-entry gate keys off connect + org readiness only, never
    * completion — start-chat is not an auto-entry predicate).
@@ -195,7 +195,7 @@ export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
  * The in-page leave decision is frozen in a ref so an active session isn't
  * ejected mid-flow, yet a full page reload builds a fresh component that
  * recomputes from `/me`; without the completion gate that reload bounces the
- * user out before those steps finish. Only the kickoff/completion path writes
+ * user out before those steps finish. Only the start-chat/completion path writes
  * the stamp, so gating on it keeps a reloaded user in the flow until setup is
  * genuinely finished.
  *
@@ -213,14 +213,14 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
 }
 
 /**
- * Which invitee kickoff state to show, given what the team has set up. Just two:
+ * Which invitee start-chat state to show, given what the team has set up. Just two:
  *   - "ready"     → the team has BOTH a Context Tree and a GitHub connection;
  *                   the agent can do real work, so launch.
  *   - "not-ready" → either is missing. We don't distinguish "no tree" from "no
  *                   GitHub": in both cases the invitee is blocked on the admin
  *                   and can't act on it, so a single screen ("your team is still
  *                   setting up" + a "Meet your agent" bailout) covers both. The
- *                   kickoff query keeps polling, so this flips to "ready" on its
+ *                   start-chat query keeps polling, so this flips to "ready" on its
  *                   own the moment the admin finishes whichever half was missing.
  *
  * Pure so it's unit-testable (the React component just maps the result to a
@@ -228,8 +228,11 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
  * team's `recommended` repo resources automatically (enabled for every org
  * agent), so there was never anything to pick here.
  */
-export type InviteeKickoffState = "ready" | "not-ready";
+export type InviteeStartChatState = "ready" | "not-ready";
 
-export function resolveInviteeKickoffState(args: { treeUrl: string; hasInstallation: boolean }): InviteeKickoffState {
+export function resolveInviteeStartChatState(args: {
+  treeUrl: string;
+  hasInstallation: boolean;
+}): InviteeStartChatState {
   return args.treeUrl && args.hasInstallation ? "ready" : "not-ready";
 }

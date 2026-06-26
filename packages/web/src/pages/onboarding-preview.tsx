@@ -12,7 +12,7 @@ import { OnboardingShell } from "./onboarding/onboarding-shell.js";
 import { StepConnectCode } from "./onboarding/steps/step-connect-code.js";
 import { StepConnectComputer } from "./onboarding/steps/step-connect-computer.js";
 import { StepCreateAgent } from "./onboarding/steps/step-create-agent.js";
-import { StepKickoff } from "./onboarding/steps/step-kickoff.js";
+import { StepStartChat } from "./onboarding/steps/step-start-chat.js";
 import { StepTeam } from "./onboarding/steps/step-team.js";
 import { StepWelcome } from "./onboarding/steps/step-welcome.js";
 import { getStepSequence, type OnboardingPath, type StepId } from "./onboarding/steps.js";
@@ -289,7 +289,7 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
   if (p === "/me/organizations") {
     return jsonResponse([{ id: ORG_ID, name: "acme", displayName: TEAM_NAME, role: "admin" }]);
   }
-  // Invitee kickoff picker → /me/github/repos; admin connect-code picker →
+  // Invitee start-chat picker → /me/github/repos; admin connect-code picker →
   // the org-scoped installation repos. Both render from the same `repos`
   // outcome so existing picker scenarios cover either source.
   if (p === "/me/github/repos") return reposResponse(activeNet.repos);
@@ -312,7 +312,7 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
     if (activeNet.contextTree === "pending") return new Promise<Response>(() => {});
     return jsonResponse({ repo: activeNet.contextTree ?? null });
   }
-  // Managed agents used by kickoff and setup preview branches.
+  // Managed agents used by start-chat and setup preview branches.
   if (p === "/me/managed-agents") {
     return jsonResponse([
       {
@@ -654,7 +654,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     wizard: {
       step: "start-chat",
       flow: { selectedRepoUrls: [REPO_WEB] },
-      body: <WorkingState label={COPY.kickoff.starting} />,
+      body: <WorkingState label={COPY.startChat.starting} />,
     },
   },
 
@@ -786,7 +786,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     label: "Starting…",
     group: "Start-chat states",
     role: "invitee",
-    wizard: { step: "start-chat", body: <WorkingState label={COPY.kickoff.starting} /> },
+    wizard: { step: "start-chat", body: <WorkingState label={COPY.startChat.starting} /> },
   },
 ];
 
@@ -845,7 +845,7 @@ function StepBody({ step, connectStuck }: { step: PreviewStepId; connectStuck?: 
     case "create-agent":
       return <StepCreateAgent />;
     case "start-chat":
-      return <StepKickoff />;
+      return <StepStartChat />;
     case "join-team":
       return <StepWelcome />;
     default:

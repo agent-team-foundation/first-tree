@@ -5,7 +5,7 @@ import { OnboardingFlowProvider, useOnboardingFlow } from "./onboarding-flow.js"
 import { OnboardingShell } from "./onboarding-shell.js";
 import { StepConnectComputer } from "./steps/step-connect-computer.js";
 import { StepCreateAgent } from "./steps/step-create-agent.js";
-import { StepKickoff } from "./steps/step-kickoff.js";
+import { StepStartChat } from "./steps/step-start-chat.js";
 import { StepTeam } from "./steps/step-team.js";
 import { StepWelcome } from "./steps/step-welcome.js";
 import { resolveOnboardingPath, shouldLeaveOnboarding } from "./steps.js";
@@ -24,14 +24,14 @@ import { resolveOnboardingPath, shouldLeaveOnboarding } from "./steps.js";
  * per-render check therefore ejected an actively-onboarding user the instant
  * they made their agent, skipping those steps. Freezing the decision at entry
  * lets them finish; they leave via the explicit `completeAndEnterChat`
- * navigate at the end of kickoff (or `finishLater`).
+ * navigate at the end of start-chat (or `finishLater`).
  *
  * The ref freeze only protects the current component instance, so it cannot
  * help a full page reload: that builds a fresh `OnboardingPage` whose ref
  * starts null and recomputes the guard from `/me`. After create-agent a reload
  * sees `onboardingStep="completed"` + a ready org and would bounce out before
  * start-chat. The guard therefore also requires this membership's
- * `onboardingCompletedAt` stamp (written only by the kickoff/completion path),
+ * `onboardingCompletedAt` stamp (written only by the start-chat/completion path),
  * so a reload mid-flow resumes the remaining step instead of leaving.
  */
 export function OnboardingPage() {
@@ -75,7 +75,7 @@ function OnboardingBody() {
     case "create-agent":
       return <StepCreateAgent />;
     case "start-chat":
-      return <StepKickoff />;
+      return <StepStartChat />;
     case "join-team":
       return <StepWelcome />;
     default:

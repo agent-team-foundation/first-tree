@@ -6,8 +6,8 @@ import {
   buildValueFirstBootstrap,
 } from "../bootstrap-prose.js";
 
-describe("kickoff bootstrap prose", () => {
-  it("builds a first-task kickoff that explains the chat before the operational note", () => {
+describe("start-chat bootstrap prose", () => {
+  it("builds a first-task start chat that explains the chat before the operational note", () => {
     const message = buildValueFirstBootstrap(["https://github.com/acme/app"], {
       agentDisplayName: "Nova",
       treeSetup: "pending",
@@ -34,7 +34,7 @@ describe("kickoff bootstrap prose", () => {
     expect(message).not.toContain("It'll read your");
   });
 
-  it("builds a slim no-repo kickoff that asks for code without authorization-first setup", () => {
+  it("builds a slim no-repo first chat that asks for code without authorization-first setup", () => {
     const message = buildNoRepoBootstrap("Nova");
 
     expect(message).toContain("Welcome to your first First Tree chat with Nova.");

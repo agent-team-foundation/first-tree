@@ -1236,7 +1236,7 @@ describe("page SSR smoke coverage", () => {
     const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
     const { StepConnectComputer } = await import("../onboarding/steps/step-connect-computer.js");
     const { StepCreateAgent } = await import("../onboarding/steps/step-create-agent.js");
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     const { StepTeam } = await import("../onboarding/steps/step-team.js");
     const { StepWelcome } = await import("../onboarding/steps/step-welcome.js");
 
@@ -1289,24 +1289,24 @@ describe("page SSR smoke coverage", () => {
     expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain(
       "Loading your repos",
     );
-    expect(await renderOnboardingStep(<StepKickoff />, { activeStep: "start-chat" })).toContain(
-      "Your agent&#x27;s ready to get to work",
+    expect(await renderOnboardingStep(<StepStartChat />, { activeStep: "start-chat" })).toContain(
+      "Start working with your agent",
     );
     expect(
-      await renderOnboardingStep(<StepKickoff />, {
+      await renderOnboardingStep(<StepStartChat />, {
         activeStep: "start-chat",
         selectedRepoUrls: [],
         treeBindingPlan: "createBinding",
         treeUrl: "",
       }),
-    ).toContain("Start with your agent");
+    ).toContain("Start working with your agent");
     expect(
-      await renderOnboardingStep(<StepKickoff />, {
+      await renderOnboardingStep(<StepStartChat />, {
         path: "invitee",
         activeStep: "start-chat",
         selectedRepoUrls: [],
       }),
-    ).toContain("Your agent&#x27;s ready to go");
+    ).toContain("Start working with your agent");
   });
 
   it("renders invite, GitHub App, settings, and layout surfaces", async () => {

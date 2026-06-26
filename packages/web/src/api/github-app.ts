@@ -31,7 +31,7 @@ export async function getGithubAppInstallation(organizationId: string): Promise<
  *
  * The full installation endpoint above is admin-only because it exposes
  * install-id / permissions / events. This redacted boolean view exists so
- * non-admin onboarding paths (specifically invitee kickoff) can detect
+ * non-admin onboarding paths (specifically invitee start-chat) can detect
  * the "admin set up the tree but never connected code" failure mode
  * without either (a) silently 403-ing every invitee out of the flow or
  * (b) never tripping at all. Presence is the whole answer — no 404 path.

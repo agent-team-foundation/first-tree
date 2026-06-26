@@ -1,17 +1,18 @@
 ---
 name: first-tree-welcome
 version: 1.0.0
-description: Use only when a First Tree onboarding system kickoff explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup kickoffs, ordinary chats, PR reviews, tree writes, or maintenance.
+description: Use only when a First Tree onboarding start-chat system message explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup chats, ordinary chats, PR reviews, tree writes, or maintenance.
 ---
 
 # First Tree Welcome
 
 ## Scope
 
-Use this skill only when a First Tree system onboarding message explicitly asks
-you to use `first-tree-welcome`, or when the chat is clearly the onboarding
-welcome / intro / first work chat created by First Tree. Do not use it for tree
-setup kickoffs, ordinary chats, PR reviews, tree writes, or maintenance work.
+Use this skill only when a First Tree onboarding start-chat system message
+explicitly asks you to use `first-tree-welcome`, or when the chat is clearly
+the onboarding welcome / intro / first work chat created by First Tree. Do not
+use it for tree setup chats, ordinary chats, PR reviews, tree writes, or
+maintenance work.
 
 ## Goal
 
@@ -33,20 +34,20 @@ verifiable task. Heavy Context Tree setup runs in a separate chat.
 4. **Keep tree work in its lane.** Mention tree setup briefly, then use or point
    to the separate tree setup chat for seeding or updating the Context Tree.
 
-Do not pretend the user sent the kickoff. First Tree sent it.
+Do not pretend the user sent the start-chat system message. First Tree sent it.
 
 ## Read Setup State First
 
-Before your first substantive reply, infer the onboarding state from the kickoff
-message, runtime briefing, repo resources, Context Tree binding, and available
-local files:
+Before your first substantive reply, infer the onboarding state from the
+start-chat system message, runtime briefing, repo resources, Context Tree
+binding, and available local files:
 
 - role: admin, invitee, or unclear;
-- kickoff kind: `intro`, `work`, or `tree`;
+- start-chat kind: `intro`, `work`, or `tree`;
 - GitHub App: missing, installed, or unknown;
 - code repo: selected/recommended, local path/URL provided, or none;
 - Context Tree: no binding, newly bound empty tree, bound populated tree, or unknown;
-- tree setup chat: already exists, explicitly promised by kickoff, or absent.
+- tree setup chat: already exists, explicitly promised by start-chat, or absent.
 
 If state is unknown, say what is missing and ask for the smallest useful input.
 Do not invent repo access, GitHub authorization, or tree readiness.
@@ -59,7 +60,7 @@ evidence to read and which first-task options to offer.
 
 | Priority | State | What to do |
 | --- | --- | --- |
-| 1 | Tree kickoff chat | This is the heavy tree lane. Use `first-tree-seed`, `first-tree-read`, or `first-tree-write` as appropriate instead of this value-chat flow. |
+| 1 | Tree setup chat | This is the heavy tree lane. Use `first-tree-seed`, `first-tree-read`, or `first-tree-write` as appropriate instead of this value-chat flow. |
 | 2 | Invitee on a not-ready team | Do not show admin setup, select repos, or create a duplicate tree. Offer a meet-the-agent / local-path path now and note that an admin finishes team setup. |
 | 3 | No repo connected / intro chat | Ask for one local clone path or GitHub URL. For GitHub URLs, try host `gh` / local credentials first. Do not ask for GitHub authorization first. |
 | 4 | Team repo/resource exists but local credentials cannot read it | State the exact read failure. Do not claim private repo contents. Ask for a local clone path, accessible URL, or credential setup. |
@@ -88,7 +89,7 @@ Before handing off:
    admin and ask who should be involved.
 2. Look for stable target data: console base URL, org/team slug, product deep
    link, GitHub App install URL, or GitHub App slug. Sources may include the
-   kickoff message, runtime briefing, non-secret local config, product context,
+   start-chat system message, runtime briefing, non-secret local config, product context,
    or `first-tree agent status` output. Use the channel-correct binary name from
    the runtime briefing. Do not expose tokens, secrets, or private keys.
 3. If the human is an admin, give the most specific stable target available:
@@ -105,7 +106,7 @@ Before handing off:
 After a setup handoff completes or new access appears, re-read setup state and
 continue this value chat from the first matching Setup State Matrix row. Do not
 treat setup handoff as a mode switch: heavy tree seeding or updating stays in a
-separate tree kickoff chat, while this chat uses newly readable repo or tree
+separate tree setup chat, while this chat uses newly readable repo or tree
 context to offer or continue useful first-task work.
 
 Do not hardcode exact button labels, avatar menus, tab names, or step-by-step

@@ -28,7 +28,7 @@ const VISIBILITY_OPTIONS: ReadonlyArray<{ value: AgentVisibility; title: string;
  * Name the agent and choose who can use it. The computer + runtime
  * were settled in the previous step; we read them off the flow and never
  * surface "runtime" / "client" here. On success the flow auto-advances to
- * kickoff (the agent-online callback), so this renders form → creating →
+ * start-chat (the agent-online callback), so this renders form → creating →
  * (timeout fallback) only.
  */
 export function StepCreateAgent() {

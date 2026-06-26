@@ -58,7 +58,7 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     why: "",
   },
   "start-chat": {
-    // title/why are rendered per-state by StepKickoff (new / existing / no
+    // title/why are rendered per-state by StepStartChat (new / existing / no
     // project / invitee sub-states); the shell skips them while empty.
     title: "",
     why: "",
@@ -265,7 +265,7 @@ export const COPY = {
   /** start-chat — one unified "launch" finale across every path. Titles/bodies are
       rendered per-state by the step; the shell leaves STEP_COPY["start-chat"] empty
       for this finale. */
-  kickoff: {
+  startChat: {
     // admin · new tree (the default — the team has none yet). Lead with the
     // agent + immediate code value; the Context Tree setup moves into its own
     // background chat and is named/explained there.
@@ -283,7 +283,7 @@ export const COPY = {
     startExisting: "Start chat",
 
     noProjectTitle: "Start working with your agent",
-    noProjectBody: "Start now. In chat, share your project path or GitHub URL when you want the agent to look at code.",
+    noProjectBody: "Setup is ready. In chat, share a project path, a GitHub repo URL, or the task you want help with.",
     startChatting: "Start chat",
 
     // invitee · ready (team has a tree + a GitHub connection). Replaces the old
@@ -330,7 +330,7 @@ export const COPY = {
     noAgent: "We couldn't find your agent. Go back a step and add one.",
   },
   /**
-   * Human-readable messages for Context Tree provisioning failures at kickoff.
+   * Human-readable messages for Context Tree provisioning failures at start-chat.
    * The server returns a machine `code` from POST /context-tree/initialize; we
    * map it to plain language + a way forward, rather than leaking the raw
    * server string (e.g. "administration: write and contents: write"). Keyed by

@@ -75,8 +75,8 @@ export type OnboardingFlowValue = {
   treeUrl: string;
   setTreeUrl: (next: string) => void;
   /**
-   * True once the kickoff step's bound-tree auto-detect has run. Held here
-   * (not in a per-mount ref) so leaving kickoff and coming back doesn't re-fire
+   * True once the start-chat step's bound-tree auto-detect has run. Held here
+   * (not in a per-mount ref) so leaving start-chat and coming back doesn't re-fire
    * the detect and overwrite the resolved binding plan.
    */
   treeAutoDetectDone: boolean;
@@ -171,7 +171,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
   // an agent in *any* org. For step selection we care about the *current*
   // org, so once past the account-level `connect` stage we recompute
   // create_agent vs completed from this org's readiness — otherwise a
-  // returning user joining an empty org would skip straight to kickoff.
+  // returning user joining an empty org would skip straight to start-chat.
   const orgStep: ServerOnboardingStep =
     onboardingStep === "connect" || onboardingStep === null
       ? onboardingStep
@@ -231,7 +231,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
   );
   const [visibility, setVisibility] = useState<AgentVisibility>("organization");
   // Hydrate the repo selection from this org's saved draft so a bailout before
-  // kickoff (top-bar "finish later", a refresh, a mid-flow navigation) resumes
+  // start-chat (top-bar "finish later", a refresh, a mid-flow navigation) resumes
   // with the picked repos instead of losing them. `null` draft → empty (the
   // connect-code step will auto-select all granted repos); a non-null draft —
   // including `[]` — is a deliberate selection we restore verbatim.
@@ -256,7 +256,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
 
   // Wrap the setter so every change writes through to the per-org draft and
   // marks a draft as present. The formal team-resource write still happens only
-  // at kickoff — this is the in-flight draft that survives a bailout.
+  // at start-chat — this is the in-flight draft that survives a bailout.
   const setSelectedRepoUrls = useCallback(
     (next: string[]) => {
       setSelectedRepoUrlsState(next);
@@ -272,9 +272,9 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
 
   const completeAndEnterChat = useCallback(
     async (chatId: string) => {
-      // Single-chat kickoff paths may already have stamped completion inside
+      // Single-chat start-chat paths may already have stamped completion inside
       // POST /me/onboarding/kickoff. Multi-chat paths deliberately defer that
-      // stamp until every required kickoff side effect succeeds, then call this
+      // stamp until every required start-chat side effect succeeds, then call this
       // helper. The write stays idempotent and best-effort so a network blip
       // does not strand the user after the required chat(s) exist.
       //
@@ -283,12 +283,12 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       // finish-later path here would blur the reason semantics that keep new
       // memberships eligible for first-need onboarding.
       clearPersistedStep(path, organizationId);
-      // Clear the per-tab agent-uuid stash now that the kickoff has resolved and
+      // Clear the per-tab agent-uuid stash now that start-chat has resolved and
       // used it — so a later same-tab onboarding/recovery in a DIFFERENT org
       // can't read a stale cross-org agent (the org filter in
       // resolveOnboardingAgent only catches that when the org id is known).
       writeOnboardingAgentUuid(null);
-      // The selection has now been consumed by kickoff (written as team repo
+      // The selection has now been consumed by start-chat (written as team repo
       // resources), so drop the in-flight draft — a later same-tab onboarding
       // in this org starts clean rather than resurrecting a stale pick. Only
       // completion clears it; `finishLater` deliberately keeps it so the user

@@ -67,32 +67,35 @@ describe("onboarding vocabulary (connect-agent reframe)", () => {
   });
 
   it("keeps the start-chat finale action-oriented and consistent", () => {
-    expect(COPY.kickoff.newTitle).toBe("Start working with your agent");
-    expect(COPY.kickoff.existingTitle).toBe("Start working with your agent");
-    expect(COPY.kickoff.noProjectTitle).toBe("Start working with your agent");
-    expect(COPY.kickoff.inviteeReadyTitle).toBe("Start working with your agent");
+    expect(COPY.startChat.newTitle).toBe("Start working with your agent");
+    expect(COPY.startChat.existingTitle).toBe("Start working with your agent");
+    expect(COPY.startChat.noProjectTitle).toBe("Start working with your agent");
+    expect(COPY.startChat.inviteeReadyTitle).toBe("Start working with your agent");
     expect(COPY.invitee.notReadyTitle).toBe("Start working with your agent");
 
-    expect(COPY.kickoff.startBuilding).toBe("Start chat");
-    expect(COPY.kickoff.startExisting).toBe("Start chat");
-    expect(COPY.kickoff.startChatting).toBe("Start chat");
-    expect(COPY.kickoff.startWorking).toBe("Start chat");
+    expect(COPY.startChat.startBuilding).toBe("Start chat");
+    expect(COPY.startChat.startExisting).toBe("Start chat");
+    expect(COPY.startChat.startChatting).toBe("Start chat");
+    expect(COPY.startChat.startWorking).toBe("Start chat");
     expect(COPY.invitee.startAnyway).toBe("Start chat");
   });
 
   it("frames no-repo start-chat as a normal path, not missing setup", () => {
-    expect(COPY.kickoff.noProjectBody).not.toContain("No code is connected");
-    expect(COPY.kickoff.noProjectBody).toContain("project path or GitHub URL");
+    expect(COPY.startChat.noProjectBody).not.toContain("No code is connected");
+    expect(COPY.startChat.noProjectBody).toContain("Setup is ready");
+    expect(COPY.startChat.noProjectBody).toContain("a project path");
+    expect(COPY.startChat.noProjectBody).toContain("a GitHub repo URL");
+    expect(COPY.startChat.noProjectBody).toContain("the task you want help with");
   });
 
   it("does not overpromise repo access on start-chat screens", () => {
     const strings = [
-      COPY.kickoff.newWhy(1),
-      COPY.kickoff.newWhy(3),
-      COPY.kickoff.existingWhy(1),
-      COPY.kickoff.existingWhy(3),
-      COPY.kickoff.noProjectBody,
-      COPY.kickoff.inviteeReadyBody,
+      COPY.startChat.newWhy(1),
+      COPY.startChat.newWhy(3),
+      COPY.startChat.existingWhy(1),
+      COPY.startChat.existingWhy(3),
+      COPY.startChat.noProjectBody,
+      COPY.startChat.inviteeReadyBody,
       COPY.invitee.notReadyBody,
     ];
 

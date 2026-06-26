@@ -5,7 +5,7 @@ import {
   getStepSequence,
   INVITEE_STEPS,
   inferInitialStepIndex,
-  resolveInviteeKickoffState,
+  resolveInviteeStartChatState,
   resolveOnboardingPath,
   resolveStepProgress,
   shouldEnterOnboarding,
@@ -142,14 +142,14 @@ describe("shouldEnterOnboarding", () => {
   });
 });
 
-describe("resolveInviteeKickoffState", () => {
+describe("resolveInviteeStartChatState", () => {
   it("is not-ready while either the tree or the GitHub connection is missing", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: false })).toBe("not-ready");
-    expect(resolveInviteeKickoffState({ treeUrl: "", hasInstallation: true })).toBe("not-ready");
-    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: false })).toBe("not-ready");
+    expect(resolveInviteeStartChatState({ treeUrl: "", hasInstallation: false })).toBe("not-ready");
+    expect(resolveInviteeStartChatState({ treeUrl: "", hasInstallation: true })).toBe("not-ready");
+    expect(resolveInviteeStartChatState({ treeUrl: "https://x/y", hasInstallation: false })).toBe("not-ready");
   });
   it("is ready to launch once the tree is set and the App is installed (no repo selection)", () => {
-    expect(resolveInviteeKickoffState({ treeUrl: "https://x/y", hasInstallation: true })).toBe("ready");
+    expect(resolveInviteeStartChatState({ treeUrl: "https://x/y", hasInstallation: true })).toBe("ready");
   });
 });
 

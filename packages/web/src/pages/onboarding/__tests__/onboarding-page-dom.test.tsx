@@ -44,8 +44,8 @@ vi.mock("../steps/step-connect-computer.js", () => ({
 vi.mock("../steps/step-create-agent.js", () => ({
   StepCreateAgent: () => <div>Create Agent Step</div>,
 }));
-vi.mock("../steps/step-kickoff.js", () => ({
-  StepKickoff: () => <div>Start Chat Step</div>,
+vi.mock("../steps/step-start-chat.js", () => ({
+  StepStartChat: () => <div>Start Chat Step</div>,
 }));
 vi.mock("../steps/step-team.js", () => ({
   StepTeam: () => <div>Create Team Step</div>,
