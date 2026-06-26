@@ -2,12 +2,12 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  clearProductionScanIntent,
+  clearCampaignIntent,
   deriveRepoAgentDisplayName,
   normalizeGitHubRepoUrl,
-  readProductionScanHandoff,
-  readProductionScanIntent,
-  writeProductionScanIntent,
+  readCampaignHandoff,
+  readCampaignIntent,
+  writeCampaignIntent,
 } from "../intent.js";
 
 function createStorage(): Storage {
@@ -63,52 +63,56 @@ describe("normalizeGitHubRepoUrl", () => {
   });
 });
 
-describe("production scan intent storage", () => {
+describe("campaign quickstart intent storage", () => {
   it("stores repo intent only in sessionStorage", () => {
-    const intent = normalizeGitHubRepoUrl("https://github.com/acme/backend");
+    const repo = normalizeGitHubRepoUrl("https://github.com/acme/backend");
+    const intent = repo ? { campaign: "production_scan" as const, ...repo } : null;
     if (!intent) throw new Error("expected valid intent");
 
-    writeProductionScanIntent(intent);
+    writeCampaignIntent(intent);
 
-    expect(readProductionScanIntent()).toEqual(intent);
-    expect(window.localStorage?.getItem?.("first-tree:production-scan:intent") ?? null).toBeNull();
+    expect(readCampaignIntent()).toEqual(intent);
+    expect(window.localStorage?.getItem?.("first-tree:quickstart:intent") ?? null).toBeNull();
   });
 
   it("clears invalid stored intent", () => {
-    window.sessionStorage.setItem("first-tree:production-scan:intent", "{bad");
+    window.sessionStorage.setItem("first-tree:quickstart:intent", "{bad");
 
-    expect(readProductionScanIntent()).toBeNull();
-    expect(window.sessionStorage.getItem("first-tree:production-scan:intent")).toBeNull();
+    expect(readCampaignIntent()).toBeNull();
+    expect(window.sessionStorage.getItem("first-tree:quickstart:intent")).toBeNull();
   });
 
   it("can clear a valid intent after kickoff starts", () => {
-    const intent = normalizeGitHubRepoUrl("https://github.com/acme/backend");
+    const repo = normalizeGitHubRepoUrl("https://github.com/acme/backend");
+    const intent = repo ? { campaign: "production_scan" as const, ...repo } : null;
     if (!intent) throw new Error("expected valid intent");
 
-    writeProductionScanIntent(intent);
-    clearProductionScanIntent();
+    writeCampaignIntent(intent);
+    clearCampaignIntent();
 
-    expect(readProductionScanIntent()).toBeNull();
+    expect(readCampaignIntent()).toBeNull();
   });
 
-  it("reads the website handoff from query or hash params", () => {
+  it("reads the website handoff from legacy intent or campaign params", () => {
     expect(
-      readProductionScanHandoff({
+      readCampaignHandoff({
         search: "?intent=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
         hash: "",
       }),
     ).toEqual({
+      campaign: "production_scan",
       owner: "acme",
       repo: "backend",
       repoSlug: "acme/backend",
       url: "https://github.com/acme/backend",
     });
     expect(
-      readProductionScanHandoff({
+      readCampaignHandoff({
         search: "",
-        hash: "#intent=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
+        hash: "#campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
       }),
     ).toEqual({
+      campaign: "production_scan",
       owner: "acme",
       repo: "backend",
       repoSlug: "acme/backend",

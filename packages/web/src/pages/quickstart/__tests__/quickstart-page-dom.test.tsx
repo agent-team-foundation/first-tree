@@ -8,8 +8,8 @@ import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../api/activity.js";
 import type { ComputerConnection } from "../../onboarding/use-computer-connection.js";
-import { normalizeGitHubRepoUrl, writeProductionScanIntent } from "../intent.js";
-import { ProductionScanStartPage } from "../production-scan-start.js";
+import { normalizeGitHubRepoUrl, writeCampaignIntent } from "../intent.js";
+import { QuickstartPage } from "../quickstart-page.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -158,7 +158,7 @@ async function renderPage(): Promise<HTMLElement> {
     root?.render(
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
-          <ProductionScanStartPage />
+          <QuickstartPage />
         </QueryClientProvider>
       </MemoryRouter>,
     );
@@ -171,12 +171,13 @@ async function renderPage(): Promise<HTMLElement> {
 }
 
 function seedIntent() {
-  const intent = normalizeGitHubRepoUrl("https://github.com/acme/backend");
+  const repo = normalizeGitHubRepoUrl("https://github.com/acme/backend");
+  const intent = repo ? { campaign: "production_scan" as const, ...repo } : null;
   if (!intent) throw new Error("expected valid intent");
-  writeProductionScanIntent(intent);
+  writeCampaignIntent(intent);
 }
 
-describe("ProductionScanStartPage", () => {
+describe("QuickstartPage", () => {
   it("shows a local-first setup prompt while waiting for the computer", async () => {
     seedIntent();
 

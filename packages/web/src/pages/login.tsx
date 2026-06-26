@@ -4,7 +4,7 @@ import { useAuth } from "../auth/auth-context.js";
 import { readFromPath } from "../auth/redirect-from-state.js";
 import { FirstTreeLogo } from "../components/first-tree-logo.js";
 import { Button } from "../components/ui/button.js";
-import { readProductionScanHandoff, writeProductionScanIntent } from "./production-scan/intent.js";
+import { readCampaignHandoff, writeCampaignIntent } from "./quickstart/intent.js";
 
 // Marketing site (parent brand) — the "Back to home" link points here rather
 // than the in-app landing route. Mirrors the pattern in footer.tsx / layout.tsx.
@@ -35,15 +35,15 @@ export function LoginPage() {
   const isLocalhost =
     typeof window !== "undefined" &&
     (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
-  const productionScanIntent = readProductionScanHandoff(location);
+  const campaignIntent = readCampaignHandoff(location);
 
-  if (productionScanIntent) {
+  if (campaignIntent) {
     // Capture the marketing-site handoff before OAuth or authenticated
-    // navigation. The OAuth `next` carries only the internal start path.
-    writeProductionScanIntent(productionScanIntent);
+    // navigation. The OAuth `next` carries only the internal quickstart path.
+    writeCampaignIntent(campaignIntent);
   }
 
-  const redirectTo = productionScanIntent ? "/production-scan/start" : (readFromPath(location.state) ?? "/");
+  const redirectTo = campaignIntent ? "/quickstart" : (readFromPath(location.state) ?? "/");
   // GitHub OAuth is a full-page navigation, so React Router state is
   // dropped on the way out. Pass the deep-link target through the
   // server's `?next=` instead — the server validates it via the same

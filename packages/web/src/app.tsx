@@ -20,7 +20,7 @@ import { LoginPage } from "./pages/login.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
-import { ProductionScanStartPage } from "./pages/production-scan/production-scan-start.js";
+import { QuickstartPage } from "./pages/quickstart/quickstart-page.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsContextTreePage } from "./pages/settings/context-tree.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
@@ -325,7 +325,7 @@ export function App() {
                 {/* Standalone onboarding — full-screen, outside the workspace
                     chrome. The workspace root redirects incomplete users
                     here; this route redirects back once setup is complete. */}
-                <Route path="/production-scan/start" element={<ProductionScanStartPage />} />
+                <Route path="/quickstart" element={<QuickstartPage />} />
                 <Route path="/onboarding" element={<OnboardingPage />} />
                 <Route
                   element={

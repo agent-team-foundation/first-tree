@@ -7,14 +7,9 @@ import { Button } from "../../components/ui/button.js";
 import { useAgentCreation } from "../onboarding/use-agent-creation.js";
 import { useComputerConnection } from "../onboarding/use-computer-connection.js";
 import { buildProductionScanBootstrap } from "../workspace/center/onboarding/bootstrap-prose.js";
-import {
-  clearProductionScanIntent,
-  deriveRepoAgentDisplayName,
-  type ProductionScanIntent,
-  readProductionScanIntent,
-} from "./intent.js";
+import { type CampaignIntent, clearCampaignIntent, deriveRepoAgentDisplayName, readCampaignIntent } from "./intent.js";
 
-function buildSetupPrompt(intent: ProductionScanIntent, cliCommand: string | null): string {
+function buildSetupPrompt(intent: CampaignIntent, cliCommand: string | null): string {
   return [
     "Set up First Tree for this production scan.",
     "",
@@ -27,10 +22,10 @@ function buildSetupPrompt(intent: ProductionScanIntent, cliCommand: string | nul
   ].join("\n");
 }
 
-export function ProductionScanStartPage() {
+export function QuickstartPage() {
   const navigate = useNavigate();
   const { organizationId } = useAuth();
-  const intent = readProductionScanIntent();
+  const intent = readCampaignIntent();
   const computer = useComputerConnection(true);
   const [readyAgentUuid, setReadyAgentUuid] = useState<string | null>(null);
   const [kickoffError, setKickoffError] = useState<string | null>(null);
@@ -77,7 +72,7 @@ export function ProductionScanStartPage() {
         agentUuid: activeAgentUuid,
         chatId,
       });
-      clearProductionScanIntent();
+      clearCampaignIntent();
       navigate(`/?c=${encodeURIComponent(chatId)}`);
     } catch (err) {
       setKickoffError(err instanceof Error ? err.message : "Could not start the production scan");
@@ -104,7 +99,7 @@ export function ProductionScanStartPage() {
         <div className="max-w-md rounded-[var(--radius-panel)] border border-border bg-card p-5">
           <h1 className="text-title">Paste a GitHub repo URL</h1>
           <p className="mt-2 text-body text-fg-2">
-            Start from the production scan landing page so First Tree knows which repo to inspect.
+            Start from a First Tree campaign landing page so First Tree knows which repo to inspect.
           </p>
           <Button asChild className="mt-4">
             <a href="https://first-tree.ai/production-scan">Go to production scan</a>

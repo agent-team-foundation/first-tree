@@ -1,11 +1,16 @@
-const INTENT_KEY = "first-tree:production-scan:intent";
+const INTENT_KEY = "first-tree:quickstart:intent";
 
-export type ProductionScanIntent = {
+export type CampaignKind = "production_scan";
+
+export type CampaignIntent = {
+  campaign: CampaignKind;
   owner: string;
   repo: string;
   repoSlug: string;
   url: string;
 };
+
+type RepoIntent = Omit<CampaignIntent, "campaign">;
 
 const OWNER_RE = /^[A-Za-z0-9_.-]+$/;
 const REPO_RE = /^[A-Za-z0-9_.-]+$/;
@@ -14,7 +19,7 @@ function cleanRepoName(repo: string): string {
   return repo.replace(/\.git$/u, "");
 }
 
-function makeIntent(owner: string, repoInput: string): ProductionScanIntent | null {
+function makeIntent(owner: string, repoInput: string): RepoIntent | null {
   const repo = cleanRepoName(repoInput);
   if (!OWNER_RE.test(owner) || !REPO_RE.test(repo)) return null;
   return {
@@ -25,7 +30,7 @@ function makeIntent(owner: string, repoInput: string): ProductionScanIntent | nu
   };
 }
 
-export function normalizeGitHubRepoUrl(input: string): ProductionScanIntent | null {
+export function normalizeGitHubRepoUrl(input: string): RepoIntent | null {
   const raw = input.trim();
   if (!raw) return null;
 
@@ -46,33 +51,44 @@ export function normalizeGitHubRepoUrl(input: string): ProductionScanIntent | nu
   return makeIntent(owner, repo);
 }
 
-export function writeProductionScanIntent(intent: ProductionScanIntent): void {
+function normalizeCampaign(input: string | null): CampaignKind | null {
+  const normalized = input?.trim().toLowerCase().replace(/-/gu, "_");
+  return normalized === "production_scan" ? "production_scan" : null;
+}
+
+function campaignIntent(campaign: CampaignKind, repoUrl: string): CampaignIntent | null {
+  const repo = normalizeGitHubRepoUrl(repoUrl);
+  return repo ? { campaign, ...repo } : null;
+}
+
+export function writeCampaignIntent(intent: CampaignIntent): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.setItem(INTENT_KEY, JSON.stringify(intent));
 }
 
-export function readProductionScanIntent(): ProductionScanIntent | null {
+export function readCampaignIntent(): CampaignIntent | null {
   if (typeof window === "undefined") return null;
   const raw = window.sessionStorage.getItem(INTENT_KEY);
   if (!raw) return null;
   try {
-    const value = JSON.parse(raw) as Partial<ProductionScanIntent>;
+    const value = JSON.parse(raw) as Partial<CampaignIntent>;
     if (
+      normalizeCampaign(value.campaign ?? null) === null ||
       typeof value.owner !== "string" ||
       typeof value.repo !== "string" ||
       typeof value.repoSlug !== "string" ||
       typeof value.url !== "string"
     ) {
-      throw new Error("invalid production scan intent");
+      throw new Error("invalid quickstart intent");
     }
-    return value as ProductionScanIntent;
+    return { ...value, campaign: normalizeCampaign(value.campaign ?? null) } as CampaignIntent;
   } catch {
-    clearProductionScanIntent();
+    clearCampaignIntent();
     return null;
   }
 }
 
-export function clearProductionScanIntent(): void {
+export function clearCampaignIntent(): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.removeItem(INTENT_KEY);
 }
@@ -90,12 +106,13 @@ function paramsFromHash(hash: string): URLSearchParams {
   return new URLSearchParams(raw.startsWith("?") ? raw.slice(1) : raw);
 }
 
-export function readProductionScanHandoff(location: Pick<Location, "search" | "hash">): ProductionScanIntent | null {
+export function readCampaignHandoff(location: Pick<Location, "search" | "hash">): CampaignIntent | null {
   for (const params of [new URLSearchParams(location.search ?? ""), paramsFromHash(location.hash ?? "")]) {
-    if (params.get("intent") !== "production-scan") continue;
+    const campaign = normalizeCampaign(params.get("campaign") ?? params.get("intent"));
+    if (!campaign) continue;
     const repo = params.get("repo");
     if (!repo) continue;
-    const intent = normalizeGitHubRepoUrl(repo);
+    const intent = campaignIntent(campaign, repo);
     if (intent) return intent;
   }
   return null;

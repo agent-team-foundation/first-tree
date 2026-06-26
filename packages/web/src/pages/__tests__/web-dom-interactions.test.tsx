@@ -1124,7 +1124,7 @@ describe("web DOM interaction coverage", () => {
 
   it("renders login states and builds safe OAuth links", async () => {
     const { LoginPage } = await import("../login.js");
-    const { readProductionScanIntent } = await import("../production-scan/intent.js");
+    const { readCampaignIntent } = await import("../quickstart/intent.js");
 
     Object.defineProperty(window, "location", {
       configurable: true,
@@ -1143,16 +1143,15 @@ describe("web DOM interaction coverage", () => {
       "/login?intent=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
       undefined,
     );
-    expect(readProductionScanIntent()).toEqual({
+    expect(readCampaignIntent()).toEqual({
+      campaign: "production_scan",
       owner: "acme",
       repo: "backend",
       repoSlug: "acme/backend",
       url: "https://github.com/acme/backend",
     });
     expect(
-      handoff.container.querySelector<HTMLAnchorElement>(
-        'a[href="/api/v1/auth/github/start?next=%2Fproduction-scan%2Fstart"]',
-      ),
+      handoff.container.querySelector<HTMLAnchorElement>('a[href="/api/v1/auth/github/start?next=%2Fquickstart"]'),
     ).toBeTruthy();
     await unmountRoot(handoff.root);
 
