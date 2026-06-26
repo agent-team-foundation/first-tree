@@ -88,7 +88,7 @@ export function StepTeam() {
       {/* Hero + roadmap are shared with the invitee opening (StepWelcome); the
           greeting reuses the team STEP_COPY strings (the shell suppresses its
           own copy for this hero step). */}
-      <WelcomeHero title={STEP_COPY.team.title} subtitle={STEP_COPY.team.why} />
+      <WelcomeHero title={STEP_COPY["create-team"].title} subtitle={STEP_COPY["create-team"].why} />
       <StepRoadmap steps={COPY.team.nextSteps} />
 
       {/* ── Action ── name the field explicitly with a warm question on its own

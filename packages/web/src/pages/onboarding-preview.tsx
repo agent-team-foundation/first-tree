@@ -373,6 +373,7 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
 
 type Role = OnboardingPath;
 type PreviewView = "flow" | "states" | "experiments";
+type PreviewStepId = StepId | "connect-code";
 
 const PREVIEW_VIEWS: Array<{ id: PreviewView; label: string; subtitle: string }> = [
   { id: "flow", label: "Flow", subtitle: "Primary journey. Real components, mocked state." },
@@ -383,7 +384,7 @@ const PREVIEW_VIEWS: Array<{ id: PreviewView; label: string; subtitle: string }>
 const DEFAULT_VIEW: PreviewView = "flow";
 
 type WizardSpec = {
-  step: StepId;
+  step: PreviewStepId;
   flow?: Partial<OnboardingFlowValue>;
   net?: NetProfile;
   /** Override the rendered body (used for transient working states). */
@@ -427,7 +428,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     group: "Admin happy path",
     role: "admin",
     view: "flow",
-    wizard: { step: "team" },
+    wizard: { step: "create-team" },
   },
   {
     id: "admin-team-steps-a",
@@ -617,7 +618,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     label: "No Context Tree finale",
     group: "Kickoff states",
     role: "admin",
-    wizard: { step: "kickoff", flow: { selectedRepoUrls: [] } },
+    wizard: { step: "start-chat", flow: { selectedRepoUrls: [] } },
   },
   {
     id: "admin-ko-new",
@@ -626,7 +627,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     role: "admin",
     view: "flow",
     wizard: {
-      step: "kickoff",
+      step: "start-chat",
       flow: { selectedRepoUrls: [REPO_WEB], treeBindingPlan: "createBinding" },
       net: { contextTree: null },
     },
@@ -636,14 +637,14 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     label: "Existing (auto-detected)",
     group: "Kickoff states",
     role: "admin",
-    wizard: { step: "kickoff", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: TREE_URL } },
+    wizard: { step: "start-chat", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: TREE_URL } },
   },
   {
     id: "admin-ko-checking",
     label: "Checking team setup",
     group: "Kickoff states",
     role: "admin",
-    wizard: { step: "kickoff", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: "pending" } },
+    wizard: { step: "start-chat", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: "pending" } },
   },
   {
     id: "admin-ko-starting",
@@ -651,7 +652,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     group: "Kickoff states",
     role: "admin",
     wizard: {
-      step: "kickoff",
+      step: "start-chat",
       flow: { selectedRepoUrls: [REPO_WEB] },
       body: <WorkingState label={COPY.kickoff.starting} />,
     },
@@ -760,7 +761,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     group: "Invitee happy path",
     role: "invitee",
     view: "flow",
-    wizard: { step: "welcome", flow: { teamDisplayName: "Acme Inc" } },
+    wizard: { step: "join-team", flow: { teamDisplayName: "Acme Inc" } },
   },
 
   {
@@ -770,7 +771,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     role: "invitee",
     // Missing tree, missing GitHub install, or an uncertain probe all collapse to
     // the one not-ready screen; the invitee cannot fix those separately here.
-    wizard: { step: "kickoff", net: { contextTree: null, installExists: false } },
+    wizard: { step: "start-chat", net: { contextTree: null, installExists: false } },
   },
   {
     id: "inv-ko-ready",
@@ -778,14 +779,14 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
     group: "Invitee happy path",
     role: "invitee",
     view: "flow",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true } },
+    wizard: { step: "start-chat", net: { contextTree: TREE_URL, installExists: true } },
   },
   {
     id: "inv-ko-starting",
     label: "Starting…",
     group: "Kickoff states",
     role: "invitee",
-    wizard: { step: "kickoff", body: <WorkingState label={COPY.kickoff.starting} /> },
+    wizard: { step: "start-chat", body: <WorkingState label={COPY.kickoff.starting} /> },
   },
 ];
 
@@ -833,9 +834,9 @@ function baseFlow(path: OnboardingPath): OnboardingFlowValue {
   };
 }
 
-function StepBody({ step, connectStuck }: { step: StepId; connectStuck?: boolean }): ReactNode {
+function StepBody({ step, connectStuck }: { step: PreviewStepId; connectStuck?: boolean }): ReactNode {
   switch (step) {
-    case "team":
+    case "create-team":
       return <StepTeam />;
     case "connect-code":
       return <StepConnectCode />;
@@ -843,9 +844,9 @@ function StepBody({ step, connectStuck }: { step: StepId; connectStuck?: boolean
       return <StepConnectComputer initialStuck={connectStuck} />;
     case "create-agent":
       return <StepCreateAgent />;
-    case "kickoff":
+    case "start-chat":
       return <StepKickoff />;
-    case "welcome":
+    case "join-team":
       return <StepWelcome />;
     default:
       return null;
@@ -856,7 +857,8 @@ function StepBody({ step, connectStuck }: { step: StepId; connectStuck?: boolean
 function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
   const path: OnboardingPath = role;
   const sequence = getStepSequence(path);
-  const activeIndex = Math.max(0, sequence.indexOf(spec.step));
+  const canonicalStep = sequence.some((step) => step === spec.step) ? (spec.step as StepId) : (sequence[0] as StepId);
+  const activeIndex = Math.max(0, sequence.indexOf(canonicalStep));
   const init = spec.flow ?? {};
 
   const [agentDisplayName, setAgentDisplayName] = useState<string>(init.agentDisplayName ?? DEFAULT_AGENT_NAME);
@@ -881,7 +883,7 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
     path,
     sequence,
     activeIndex,
-    activeStep: spec.step,
+    activeStep: canonicalStep,
     agentDisplayName,
     setAgentDisplayName,
     visibility,

@@ -20,7 +20,7 @@ export function StepWelcome() {
   return (
     <div className="flex flex-col items-center" style={{ width: "100%", gap: "var(--sp-7)" }}>
       <WelcomeHero
-        title={STEP_COPY.welcome.title}
+        title={STEP_COPY["join-team"].title}
         subtitle={
           <>
             {COPY.invitee.welcomeBody.pre}

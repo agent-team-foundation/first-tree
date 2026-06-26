@@ -9,9 +9,9 @@ describe("STEP_COPY", () => {
       expect((STEP_COPY[id] as unknown as Record<string, unknown>).outcomes).toBeUndefined();
     }
   });
-  it("kickoff's title/why stay empty (the step renders per-sub-state headings itself)", () => {
-    expect(STEP_COPY.kickoff.title).toBe("");
-    expect(STEP_COPY.kickoff.why).toBe("");
+  it("start-chat's title/why stay empty (the step renders per-sub-state headings itself)", () => {
+    expect(STEP_COPY["start-chat"].title).toBe("");
+    expect(STEP_COPY["start-chat"].why).toBe("");
   });
 });
 

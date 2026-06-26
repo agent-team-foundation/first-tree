@@ -387,8 +387,8 @@ describe("onboarding hooks and flow", () => {
 
     // A returning admin (already has an agent in another team, so the account
     // step is "completed") sets up team A. The org has no usable agent yet, so
-    // they land on create-agent; they advance to connect-code, persisting team
-    // A's position for the GitHub-redirect round-trip.
+    // they land on create-agent; they advance to start-chat, persisting team
+    // A's final in-flow position.
     authMock.value = {
       ...authMock.value,
       organizationId: "org-A",
@@ -398,13 +398,13 @@ describe("onboarding hooks and flow", () => {
     await renderProbe(<Probe />);
     expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
     await act(async () => expectHookValue(latest.current).goTo(3));
-    expect(expectHookValue(latest.current).activeStep).toBe("connect-code");
+    expect(expectHookValue(latest.current).activeStep).toBe("start-chat");
 
     await act(async () => root?.unmount());
     root = null;
 
     // Same tab: the admin now creates a brand-new team B (no agent yet). The
-    // saved position is scoped per org, so team A's connect-code marker must
+    // saved position is scoped per org, so team A's start-chat marker must
     // NOT skip team B past create-agent — they must land on create-agent.
     authMock.value = {
       ...authMock.value,
@@ -455,7 +455,7 @@ describe("onboarding hooks and flow", () => {
     root = createRoot(container);
 
     // Team A: returning admin, no agent in this org yet → create-agent; advance
-    // to connect-code, persisting team A's position.
+    // to start-chat, persisting team A's position.
     authMock.value = {
       ...authMock.value,
       organizationId: "org-A",
@@ -465,11 +465,11 @@ describe("onboarding hooks and flow", () => {
     await rerender();
     expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
     await act(async () => expectHookValue(latest.current).goTo(3));
-    expect(expectHookValue(latest.current).activeStep).toBe("connect-code");
+    expect(expectHookValue(latest.current).activeStep).toBe("start-chat");
 
     // Switch to a brand-new team B (no agent) without leaving the route. The
     // flow must re-derive for team B and land on create-agent — and must not
-    // write team A's connect-code index under team B's key.
+    // write team A's start-chat index under team B's key.
     authMock.value = { ...authMock.value, organizationId: "org-B" };
     await rerender();
     expect(expectHookValue(latest.current).activeStep).toBe("create-agent");

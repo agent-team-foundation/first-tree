@@ -37,9 +37,9 @@ const toastMock = vi.hoisted(() => ({
 
 const flowMock = vi.hoisted(() => ({
   value: {
-    activeStep: "team",
+    activeStep: "create-team",
     activeIndex: 1,
-    sequence: ["team", "connect-computer", "create-agent"],
+    sequence: ["create-team", "connect-computer", "create-agent", "start-chat"],
     path: "admin",
     goTo: vi.fn(),
     goNext: vi.fn(),
@@ -148,9 +148,9 @@ beforeEach(() => {
   authMock.switchingOrg = null;
   document.body.innerHTML = "";
   flowMock.value = {
-    activeStep: "team",
+    activeStep: "create-team",
     activeIndex: 1,
-    sequence: ["team", "connect-computer", "create-agent"],
+    sequence: ["create-team", "connect-computer", "create-agent", "start-chat"],
     path: "admin",
     goTo: vi.fn(),
     goNext: vi.fn(),
@@ -180,8 +180,8 @@ describe("onboarding shell and team step", () => {
     );
 
     expect(container.textContent).toContain("First Tree");
-    // config step → top segmented progress shows position (admin has 3)
-    expect(container.textContent).toContain("Step 1 of 3");
+    // Full journey progress shows every canonical onboarding step.
+    expect(container.textContent).toContain("Step 2 of 4");
     expect(container.textContent).toContain("Install First Tree");
     expect(container.textContent).toContain("Step body");
 
@@ -211,8 +211,8 @@ describe("onboarding shell and team step", () => {
     const container = await renderDom(<OnboardingShell>Body</OnboardingShell>);
 
     expect(container.textContent).not.toContain("I'll finish later");
-    // invitee has 2 config steps → connect-computer is step 1 of 2
-    expect(container.textContent).toContain("Step 1 of 2");
+    // Invitee path also shows the full 4-step journey.
+    expect(container.textContent).toContain("Step 2 of 4");
   });
 
   it("mounts a real team switcher for multi-team users in place of the bare sign-out link", async () => {

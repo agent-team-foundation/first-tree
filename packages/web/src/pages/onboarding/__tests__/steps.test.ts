@@ -23,53 +23,44 @@ describe("resolveOnboardingPath", () => {
 });
 
 describe("resolveStepProgress", () => {
-  it("tracks only the config steps — admin sees 3, in sequence order", () => {
-    expect(resolveStepProgress("admin", "connect-computer")).toEqual({ index: 0, total: 3 });
-    expect(resolveStepProgress("admin", "create-agent")).toEqual({ index: 1, total: 3 });
-    expect(resolveStepProgress("admin", "connect-code")).toEqual({ index: 2, total: 3 });
+  it("tracks the full 4-step admin journey", () => {
+    expect(resolveStepProgress("admin", "create-team")).toEqual({ index: 0, total: 4 });
+    expect(resolveStepProgress("admin", "connect-computer")).toEqual({ index: 1, total: 4 });
+    expect(resolveStepProgress("admin", "create-agent")).toEqual({ index: 2, total: 4 });
+    expect(resolveStepProgress("admin", "start-chat")).toEqual({ index: 3, total: 4 });
   });
-  it("invitee sees 2 config steps", () => {
-    expect(resolveStepProgress("invitee", "connect-computer")).toEqual({ index: 0, total: 2 });
-    expect(resolveStepProgress("invitee", "create-agent")).toEqual({ index: 1, total: 2 });
-  });
-  it("returns null on the bookends so the indicator hides there", () => {
-    expect(resolveStepProgress("admin", "team")).toBeNull();
-    expect(resolveStepProgress("admin", "kickoff")).toBeNull();
-    expect(resolveStepProgress("invitee", "welcome")).toBeNull();
-    expect(resolveStepProgress("invitee", "kickoff")).toBeNull();
+  it("tracks the full 4-step invitee journey", () => {
+    expect(resolveStepProgress("invitee", "join-team")).toEqual({ index: 0, total: 4 });
+    expect(resolveStepProgress("invitee", "connect-computer")).toEqual({ index: 1, total: 4 });
+    expect(resolveStepProgress("invitee", "create-agent")).toEqual({ index: 2, total: 4 });
+    expect(resolveStepProgress("invitee", "start-chat")).toEqual({ index: 3, total: 4 });
   });
 });
 
 describe("getStepSequence", () => {
-  it("admin sequence ends at kickoff and starts at team", () => {
+  it("admin sequence shows the full create-team to start-chat path", () => {
     expect(getStepSequence("admin")).toEqual(ADMIN_STEPS);
-    expect(ADMIN_STEPS[0]).toBe("team");
-    expect(ADMIN_STEPS[ADMIN_STEPS.length - 1]).toBe("kickoff");
+    expect(ADMIN_STEPS).toEqual(["create-team", "connect-computer", "create-agent", "start-chat"]);
   });
-  it("invitee skips team + code", () => {
+  it("invitee sequence shows the full join-team to start-chat path", () => {
     expect(getStepSequence("invitee")).toEqual(INVITEE_STEPS);
-    expect(INVITEE_STEPS).not.toContain("team");
-    expect(INVITEE_STEPS).not.toContain("connect-code");
+    expect(INVITEE_STEPS).toEqual(["join-team", "connect-computer", "create-agent", "start-chat"]);
   });
   it("connect-computer precedes create-agent in both paths (agent needs a computer)", () => {
     for (const seq of [ADMIN_STEPS, INVITEE_STEPS]) {
       expect(seq.indexOf("connect-computer")).toBeLessThan(seq.indexOf("create-agent"));
     }
   });
-  it("admin: connect-code comes after create-agent (defer the GitHub ask past the first win)", () => {
-    expect(ADMIN_STEPS.indexOf("connect-code")).toBeGreaterThan(ADMIN_STEPS.indexOf("create-agent"));
-    expect(ADMIN_STEPS.indexOf("connect-code")).toBeLessThan(ADMIN_STEPS.indexOf("kickoff"));
-  });
-  it("admin: connect-code is immediately followed by kickoff", () => {
-    const seq = getStepSequence("admin");
-    expect(seq[seq.indexOf("connect-code") + 1]).toBe("kickoff");
+  it("GitHub access is not part of either main path", () => {
+    expect(ADMIN_STEPS).not.toContain("connect-code" as never);
+    expect(INVITEE_STEPS).not.toContain("connect-code" as never);
   });
 });
 
 describe("inferInitialStepIndex", () => {
   it("admin: fresh user (connect, unsettled team) starts at team", () => {
     expect(inferInitialStepIndex("admin", { onboardingStep: "connect", teamSettled: false })).toBe(
-      ADMIN_STEPS.indexOf("team"),
+      ADMIN_STEPS.indexOf("create-team"),
     );
   });
   it("admin: returning user past the team step lands on connect-computer", () => {
@@ -82,15 +73,15 @@ describe("inferInitialStepIndex", () => {
       ADMIN_STEPS.indexOf("create-agent"),
     );
   });
-  it("completed state → admin resumes at connect-code, invitee at kickoff", () => {
+  it("completed state → both paths resume at start-chat", () => {
     expect(inferInitialStepIndex("admin", { onboardingStep: "completed", teamSettled: true })).toBe(
-      ADMIN_STEPS.indexOf("connect-code"),
+      ADMIN_STEPS.indexOf("start-chat"),
     );
     expect(inferInitialStepIndex("invitee", { onboardingStep: "completed", teamSettled: true })).toBe(
-      INVITEE_STEPS.indexOf("kickoff"),
+      INVITEE_STEPS.indexOf("start-chat"),
     );
   });
-  it("invitee always starts at welcome when no computer exists", () => {
+  it("invitee always starts at join-team when no computer exists", () => {
     expect(inferInitialStepIndex("invitee", { onboardingStep: "connect", teamSettled: true })).toBe(0);
     expect(inferInitialStepIndex("invitee", { onboardingStep: null, teamSettled: false })).toBe(0);
   });
@@ -183,8 +174,8 @@ describe("shouldLeaveOnboarding", () => {
   it("stays after create-agent on a hard reload until the completion stamp is written", () => {
     // The bug: a full reload right after create-agent sees onboardingStep
     // "completed" + a ready org (server infers both the instant the agent comes
-    // online), but the membership stamp is still null because connect-code /
-    // kickoff haven't run. Readiness alone must NOT eject the user.
+    // online), but the membership stamp is still null because start-chat
+    // hasn't run. Readiness alone must NOT eject the user.
     expect(
       shouldLeaveOnboarding({
         ...base,

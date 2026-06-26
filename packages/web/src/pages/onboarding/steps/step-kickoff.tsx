@@ -17,7 +17,7 @@ import { type TreeBindingPlan, useOnboardingFlow } from "../onboarding-flow.js";
 import { kickoffErrorMessage } from "../provision-tree.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
 import { resolveInviteeKickoffState } from "../steps.js";
-import { ensureKickoffRepos, type KickoffAgent, startKickoffChat, startTreeSetupKickoff } from "../tree-kickoff.js";
+import { ensureKickoffRepos, type KickoffAgent, startKickoffChat } from "../tree-kickoff.js";
 
 /** Shared "create chat + send kickoff + finish" sequence for single-chat paths. */
 async function runKickoff(args: {
@@ -57,13 +57,10 @@ function AdminKickoff() {
     selectedRepoUrls,
     treeBindingPlan,
     setTreeBindingPlan,
-    treeUrl,
     setTreeUrl,
     treeAutoDetectDone,
     markTreeAutoDetectDone,
     completeAndEnterChat,
-    goTo,
-    sequence,
   } = useOnboardingFlow();
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<"form" | "starting">("form");
@@ -161,8 +158,7 @@ function AdminKickoff() {
       }
 
       const useBoundTree = treeBindingPlan === "useBoundTree";
-      const detectedUrl = useBoundTree ? treeUrl.trim() || null : null;
-      const resolvedTreeBindingPlan = useBoundTree ? "useBoundTree" : "createBinding";
+      const resolvedTreeBindingPlan = useBoundTree ? "useBoundTree" : "none";
       const agent = await resolveOnboardingAgent(organizationId);
       await ensureKickoffRepos(organizationId, repos);
 
@@ -170,7 +166,7 @@ function AdminKickoff() {
         agent,
         bootstrap: buildValueFirstBootstrap(repos, {
           agentDisplayName: agent.displayName || "your agent",
-          treeSetup: resolvedTreeBindingPlan === "createBinding" ? "pending" : "bound",
+          treeSetup: resolvedTreeBindingPlan === "useBoundTree" ? "bound" : "none",
         }),
         organizationId,
         kind: "work",
@@ -178,19 +174,6 @@ function AdminKickoff() {
         complete: true,
       });
 
-      if (organizationId) {
-        void startTreeSetupKickoff({
-          agent,
-          organizationId,
-          sourceRepos: repos,
-          treeBindingPlan: resolvedTreeBindingPlan,
-          detectedTreeUrl: detectedUrl,
-          queryClient,
-          complete: false,
-        }).catch((err) => {
-          console.warn("onboarding: tree setup kickoff failed after work chat started", err);
-        });
-      }
       await completeAndEnterChat(workChatId);
     } catch (err) {
       setError(kickoffErrorMessage(err, COPY.errors.chatFailed));
@@ -200,31 +183,13 @@ function AdminKickoff() {
 
   if (phase === "starting") return <StartingState />;
 
-  // No repo connected — same state as "no Context Tree". The title is honest
-  // (the agent works, but the team has no tree), and the recovery — go back to
-  // connect-code and connect GitHub — lives INLINE in the body (not a separate
-  // orphaned link below the CTA), the same pre/link/post idiom as create-agent's
-  // "reconnect it".
+  // No repo connected is now a normal value-first path. The user can start
+  // chatting and share a local path or GitHub URL in the agent chat; GitHub
+  // access is no longer a required onboarding chore.
   if (!hasRepos) {
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-        <StepHeading
-          title={COPY.kickoff.noProjectTitle}
-          why={
-            <>
-              {COPY.kickoff.noProjectBody.pre}
-              <button
-                type="button"
-                className="font-medium underline underline-offset-2"
-                style={{ color: "var(--primary)" }}
-                onClick={() => goTo(sequence.indexOf("connect-code"))}
-              >
-                {COPY.kickoff.noProjectBody.link}
-              </button>
-              {COPY.kickoff.noProjectBody.post}
-            </>
-          }
-        />
+        <StepHeading title={COPY.kickoff.noProjectTitle} why={COPY.kickoff.noProjectBody} />
         <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
           {error && (
             <FlowHint tone="error" role="alert">

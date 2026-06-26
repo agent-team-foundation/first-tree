@@ -29,10 +29,10 @@ export function buildValueFirstBootstrap(
   const sourceLines = sourceUrls.length > 0 ? ["", ...formatSourceList(sourceUrls, "Connected code:")] : [];
   const treeLine =
     opts.treeSetup === "pending"
-      ? "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep team context setup in the separate setup chat."
+      ? "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep team context setup in the separate setup chat. For any new GitHub URL the user shares here, try host gh first before asking for First Tree GitHub App access."
       : opts.treeSetup === "bound"
-        ? "Operational note: use the first-tree-welcome skill for this onboarding first chat. Use team context when helpful, but keep this chat focused on the first task."
-        : "Operational note: use the first-tree-welcome skill for this onboarding first chat. If the user shares code later, help from that code before asking about long-term setup.";
+        ? "Operational note: use the first-tree-welcome skill for this onboarding first chat. Use team context when helpful, but keep this chat focused on the first task. For any new GitHub URL the user shares here, try host gh first before asking for First Tree GitHub App access."
+        : "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep setup light. If the user shares a GitHub URL, try host gh first before asking for First Tree GitHub App access.";
 
   return [
     `This is your first task chat with ${opts.agentDisplayName}.`,
@@ -50,7 +50,7 @@ export function buildNoRepoBootstrap(agentDisplayName: string): string {
     "",
     `No code is connected yet. Share a local folder path or a GitHub repo URL, and ${agentDisplayName} can start from there.`,
     "",
-    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep setup light and show value from real code first.",
+    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep setup light and show value from real code first. For GitHub URLs, use host gh/local credentials first. Ask for First Tree GitHub App access only when First Tree needs durable platform capabilities such as follow, webhook events, team repo resources, or Context Tree setup.",
   ].join("\n");
 }
 
@@ -86,6 +86,6 @@ export function buildInviteeReadyBootstrap(agentDisplayName: string, treeUrl: st
     "",
     `${agentDisplayName} will use the team's code and context to suggest a few small tasks you can start with.`,
     "",
-    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Do not make team context setup the invitee's first task.",
+    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Do not make team context setup the invitee's first task. If team setup is missing, explain that it is admin-owned and continue with local path or host gh when possible.",
   ].join("\n");
 }

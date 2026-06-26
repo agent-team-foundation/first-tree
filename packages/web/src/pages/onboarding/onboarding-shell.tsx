@@ -17,11 +17,10 @@ import { StepProgress } from "./step-progress.js";
  * offset so it never jumps as content height changes.
  *
  * Progress lives at the top of the content column (`StepProgress`) rather than
- * in a left rail: at 2–3 config steps a full-height vertical rail read
+ * in a left rail: at 2 config steps a full-height vertical rail read
  * half-empty and stole horizontal space, fighting the "lighter, less pressure"
  * goal. The column-internal progress also means one layout at every width — no
- * desktop-rail / narrow-eyebrow split. It renders nothing on the bookend steps
- * (team / welcome / kickoff), which are intentionally progress-free.
+ * desktop-rail / narrow-eyebrow split.
  *
  * Outcomes (the old "What you'll have" footer) were folded into each step's
  * `why` copy — one place for the user to read, less repetition, less density.
@@ -30,8 +29,8 @@ import { StepProgress } from "./step-progress.js";
 // own the column) instead of the standard left-aligned config column: a wider
 // column, anchored higher, with the shell's title/why suppressed because the
 // step renders its own hero. The journey's two welcomes: the admin opening
-// (`team`) and the invitee landing (`welcome`).
-const HERO_STEPS = new Set<string>(["team", "welcome"]);
+// (`create-team`) and the invitee landing (`join-team`).
+const HERO_STEPS = new Set<string>(["create-team", "join-team"]);
 
 export function OnboardingShell({ children }: { children: ReactNode }) {
   const { activeStep, finishLater, hasAgent } = useOnboardingFlow();
@@ -152,8 +151,7 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
               isHero ? { display: "flex", flexDirection: "column", alignItems: "center", width: "100%" } : undefined
             }
           >
-            {/* Progress at the top of the column — renders nothing on bookend
-                steps (team / welcome / kickoff). */}
+            {/* Progress at the top of the column. */}
             <StepProgress />
             {/* Hero steps render their own greeting inside the step, so the
                 shell suppresses its title/why for them. */}

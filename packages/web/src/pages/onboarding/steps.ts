@@ -8,36 +8,27 @@
  * tested without a DOM (matching this package's `.test.ts` convention).
  *
  * Two paths:
- *   - "admin"   — the team creator (org admin). Walks the full ceremony:
- *                 name the team, connect code, connect a computer, create
- *                 the agent, and kick off the first task.
- *   - "invitee" — joining a team an admin has already set up. Skips the
- *                 team + code steps (the team already owns those) and just
- *                 connects a computer, creates their teammate, and starts.
+ *   - "admin"   — the team creator (org admin). Creates/confirms the team,
+ *                 connects a computer, creates the agent, and starts chat.
+ *   - "invitee" — joining an existing team. Skips team-wide GitHub / Context
+ *                 Tree setup, connects a computer, creates their teammate, and
+ *                 starts chat.
  *
  * Step ids are deliberately product-facing, jargon-free concepts — never
  * "tree" / "binding" / "runtime" / "installation". The user-facing strings
  * live in copy.ts.
  */
 
-export const ADMIN_STEPS = ["team", "connect-computer", "create-agent", "connect-code", "kickoff"] as const;
-export const INVITEE_STEPS = ["welcome", "connect-computer", "create-agent", "kickoff"] as const;
+export const ADMIN_STEPS = ["create-team", "connect-computer", "create-agent", "start-chat"] as const;
+export const INVITEE_STEPS = ["join-team", "connect-computer", "create-agent", "start-chat"] as const;
 
 /**
- * The subset of steps the progress indicator actually tracks: the real
- * hands-on configuration work. The opening step (`team` / `welcome`) and the
- * closing `kickoff` are journey *bookends* — an orientation page and a
- * completion celebration, not tasks — so they're deliberately excluded.
- *
- * Why this matters for the indicator: counting "name your team" or "say hello
- * and start" as steps reads them as chores and reinflates the task-list
- * pressure the wizard is trying to shed. With the bookends dropped the bar
- * shows admin 3 / invitee 2 — small enough that "how much is left" stops being
- * a source of anxiety. The bookends still render full screens; they just don't
- * carry a progress bar (the opening page previews the journey in prose
- * instead, the celebration page stays rail-free for a cleaner finish).
+ * The visible journey steps. This intentionally includes the opening
+ * (`create-team` / `join-team`) and closing (`start-chat`) screens so the
+ * progress UI matches the canonical product path instead of presenting a
+ * hidden subset of chores. GitHub access is not part of this journey.
  */
-export const ADMIN_CONFIG_STEPS = ["connect-computer", "create-agent", "connect-code"] as const;
+export const ADMIN_CONFIG_STEPS = ["connect-computer", "create-agent"] as const;
 export const INVITEE_CONFIG_STEPS = ["connect-computer", "create-agent"] as const;
 
 export type AdminStepId = (typeof ADMIN_STEPS)[number];
@@ -79,12 +70,11 @@ export type InitialStepFacts = {
  * Pick the step to land on when the page first mounts (or the user reloads
  * mid-flow). Driven by the few facts the server can vouch for:
  *
- *   - `completed` (client + agent both exist) → admin resumes at connect-code
- *     (connect-code + kickoff are still ahead of create-agent); invitee at kickoff
+ *   - `completed` (client + agent both exist) → start-chat
  *   - `create_agent` (client exists, no agent) → create the teammate
  *   - `connect` / null (no client yet) → the earliest unfinished setup step
  *
- * Finer progress (did they finish connect-code? connect-computer?) isn't
+ * Finer progress (did they finish start-chat? connect-computer?) isn't
  * server-observable, so the wizard advances those locally via Continue;
  * this only needs to avoid dropping a returning user *behind* where the
  * server proves they already are.
@@ -92,17 +82,14 @@ export type InitialStepFacts = {
 export function inferInitialStepIndex(path: OnboardingPath, facts: InitialStepFacts): number {
   const seq = getStepSequence(path);
   if (facts.onboardingStep === "completed") {
-    // Server proves client + agent exist (through create-agent). For admins,
-    // connect-code + kickoff are still ahead and aren't server-tracked, so
-    // resume at connect-code. For invitees, kickoff is the only step left.
-    return path === "admin" ? seq.indexOf("connect-code") : seq.indexOf("kickoff");
+    return seq.indexOf("start-chat");
   }
   if (facts.onboardingStep === "create_agent") return seq.indexOf("create-agent");
   // "connect" or null — no computer connected yet.
   if (path === "admin") {
     return facts.teamSettled ? seq.indexOf("connect-computer") : 0;
   }
-  return 0; // invitee → welcome
+  return 0; // invitee → join-team
 }
 
 /** Clamp an arbitrary index into the path's valid range. */
@@ -113,26 +100,24 @@ export function clampStepIndex(path: OnboardingPath, index: number): number {
   return index;
 }
 
-/** The config-step subset for a path (the steps the progress bar tracks). */
+/** The setup-only subset, kept for analytics/copy that needs chore counts. */
 export function getConfigSteps(path: OnboardingPath): readonly StepId[] {
   return path === "admin" ? ADMIN_CONFIG_STEPS : INVITEE_CONFIG_STEPS;
 }
 
 export type StepProgress = {
-  /** 0-based position of the active step among the config steps. */
+  /** 0-based position of the active step among the visible journey steps. */
   index: number;
-  /** How many config steps this path has (3 for admin, 2 for invitee). */
+  /** How many visible journey steps this path has. */
   total: number;
 };
 
 /**
- * Where `step` sits in the progress bar, or `null` when it's a bookend
- * (`team` / `welcome` / `kickoff`) the bar doesn't track — the indicator
- * renders nothing on those screens. Pure so the React layer stays a thin map
- * from this result to segments + a "Step N of M" label.
+ * Where `step` sits in the journey progress bar. Pure so the React layer stays
+ * a thin map from this result to segments + a "Step N of M" label.
  */
 export function resolveStepProgress(path: OnboardingPath, step: StepId): StepProgress | null {
-  const steps = getConfigSteps(path);
+  const steps = getStepSequence(path);
   const index = steps.indexOf(step);
   if (index < 0) return null;
   return { index, total: steps.length };
@@ -163,7 +148,7 @@ export type OnboardingGateFacts = {
    * once the kickoff/completion path has run for THIS org. `shouldLeaveOnboarding`
    * gates the `/onboarding` → `/` bounce on it; `shouldEnterOnboarding` ignores
    * it (the `/` auto-entry gate keys off connect + org readiness only, never
-   * completion — connect-code and kickoff are not auto-entry predicates).
+   * completion — start-chat is not an auto-entry predicate).
    */
   onboardingCompletedAt: string | null;
 };
@@ -207,7 +192,7 @@ export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
  * completion stamp (`onboardingCompletedAt`). The stamp is the load-bearing
  * gate. Creating the agent flips `currentOrgReady` true and makes the server
  * infer `onboardingStep="completed"` the instant the agent comes online, but
- * the admin still has connect-code + kickoff ahead (the invitee, kickoff).
+ * both paths still have start-chat ahead.
  * The in-page leave decision is frozen in a ref so an active session isn't
  * ejected mid-flow, yet a full page reload builds a fresh component that
  * recomputes from `/me`; without the completion gate that reload bounces the

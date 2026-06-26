@@ -3,7 +3,6 @@ import { Navigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { OnboardingFlowProvider, useOnboardingFlow } from "./onboarding-flow.js";
 import { OnboardingShell } from "./onboarding-shell.js";
-import { StepConnectCode } from "./steps/step-connect-code.js";
 import { StepConnectComputer } from "./steps/step-connect-computer.js";
 import { StepCreateAgent } from "./steps/step-create-agent.js";
 import { StepKickoff } from "./steps/step-kickoff.js";
@@ -19,8 +18,8 @@ import { resolveOnboardingPath, shouldLeaveOnboarding } from "./steps.js";
  *
  * The "bounce back" is an ENTRY-time guard, decided ONCE when `/me` first
  * loads — not a live leash re-checked every render. Both admin and invitee
- * have steps AFTER create-agent (admin: connect-code + kickoff; invitee:
- * kickoff), and creating the agent flips `currentOrgHasUsableAgent` true (the
+ * have start-chat AFTER create-agent, and creating the agent flips
+ * `currentOrgHasUsableAgent` true (the
  * flow's own `refreshMe` surfaces it the moment the agent comes online). A
  * per-render check therefore ejected an actively-onboarding user the instant
  * they made their agent, skipping those steps. Freezing the decision at entry
@@ -31,7 +30,7 @@ import { resolveOnboardingPath, shouldLeaveOnboarding } from "./steps.js";
  * help a full page reload: that builds a fresh `OnboardingPage` whose ref
  * starts null and recomputes the guard from `/me`. After create-agent a reload
  * sees `onboardingStep="completed"` + a ready org and would bounce out before
- * connect-code/kickoff. The guard therefore also requires this membership's
+ * start-chat. The guard therefore also requires this membership's
  * `onboardingCompletedAt` stamp (written only by the kickoff/completion path),
  * so a reload mid-flow resumes the remaining step instead of leaving.
  */
@@ -69,17 +68,15 @@ export function OnboardingPage() {
 function OnboardingBody() {
   const { activeStep } = useOnboardingFlow();
   switch (activeStep) {
-    case "team":
+    case "create-team":
       return <StepTeam />;
-    case "connect-code":
-      return <StepConnectCode />;
     case "connect-computer":
       return <StepConnectComputer />;
     case "create-agent":
       return <StepCreateAgent />;
-    case "kickoff":
+    case "start-chat":
       return <StepKickoff />;
-    case "welcome":
+    case "join-team":
       return <StepWelcome />;
     default:
       return null;

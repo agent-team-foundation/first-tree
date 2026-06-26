@@ -13,8 +13,8 @@
  * is Connect (link the tool) → Add (give it a team identity). "runtime" is NO
  * LONGER used in UI copy — it was once a sanctioned exception in
  * connect-computer, but "coding agent" / the tool's own name reads truer to
- * how the user already thinks about it. "repo" stays (connect-code / kickoff
- * install a GitHub App, and "project" is ambiguous next to GitHub's own
+ * how the user already thinks about it. "repo" stays (GitHub access / start-chat
+ * can still involve repos, and "project" is ambiguous next to GitHub's own
  * "Projects"). "binding" and other deep internals still never leak.
  * We distinguish people from AI: human members are
  * "teammates", the AI workers are "agents" (matching the rest of the product;
@@ -38,7 +38,7 @@ export type StepCopy = {
 };
 
 export const STEP_COPY: Record<StepId, StepCopy> = {
-  team: {
+  "create-team": {
     // The admin's first screen is their welcome moment (the invitee path has
     // one too) — landing straight on a bare "Name your team" form felt abrupt.
     // The title greets, the why sets expectations, and naming the team becomes
@@ -48,27 +48,6 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     // matches the product's "your coding agent already exists, connect it" framing
     // (Claude Code / Codex are first-class vocabulary).
     why: "You and your local coding agent (Claude Code, Codex) join a First Tree team to work together.",
-  },
-  "connect-code": {
-    // "repo" (not "project"): this step connects a GitHub repository — the App
-    // install dialog and the picker below both show repos as owner/name, and
-    // "project" is ambiguous in a GitHub context (GitHub has a separate "Projects"
-    // feature). This audience installs a GitHub App + runs a CLI, so "repo" reads
-    // clearer than the beginner-softened "project". Role-framed and agent-centric,
-    // matching the connect-computer title; NOT "your agent's repo" (the repo
-    // belongs to the user/team, the agent only works on it).
-    // Short, clear action in the title; the "why" + reassurance ride in the
-    // subtitle (titles get read, subtitles get skimmed — but the action is
-    // self-evident enough, and the why is one glance below). "code" (not jargon
-    // "repo") for the concept; "repos" is reserved for the actual selection.
-    title: "Connect to GitHub",
-    // why = explain BOTH the reason and the action: sentence 1 is the WHY (the
-    // agent needs your code), sentence 2 is the WHAT (connect GitHub + scope the
-    // repos). The "install the GitHub App" mechanism lives on the CTA button (so
-    // this never reads as "install software"). Only the trailing "never changes
-    // them without your okay" reassurance was cut — "choose which repos it can
-    // use" already carries the in-control message.
-    why: "Your agent works on your code. Connect your GitHub and choose which repos it can use.",
   },
   "connect-computer": {
     // Reframed: this step installs the First Tree client (a small background app)
@@ -88,13 +67,13 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
     title: "Create your first agent",
     why: "",
   },
-  kickoff: {
+  "start-chat": {
     // title/why are rendered per-state by StepKickoff (new / existing / no
     // project / invitee sub-states); the shell skips them while empty.
     title: "",
     why: "",
   },
-  welcome: {
+  "join-team": {
     title: "Welcome to the team",
     // The personalized one-liner (with the team name) lives in StepWelcome's
     // body, so the static why stays empty — avoids the old why+body
@@ -117,11 +96,7 @@ export const COPY = {
   hideSetup: "Hide setup",
   /** team (opening / welcome) states */
   team: {
-    // The ceremonial admin opening. This bookend renders no progress bar, so the
-    // single-line roadmap below the hero (StepRoadmap, which derives the "N
-    // steps" count from this list) is the only orientation. The admin journey
-    // after team: install → create agent → connect GitHub.
-    nextSteps: ["Install First Tree", "Create your first agent", "Connect to GitHub"],
+    nextSteps: ["Connect your computer", "Create your first agent", "Start chat"],
     // A warm question that doubles as the field's label, sitting on its own line
     // above the input — so the pre-filled value is unmistakably the team's name
     // (a bare box with only a "rename" hint left the field's purpose ambiguous).
@@ -303,9 +278,9 @@ export const COPY = {
       post: ".",
     },
   },
-  /** kickoff — one unified "launch" finale across every path. Titles/bodies are
-      rendered per-state by the step; the shell leaves STEP_COPY.kickoff empty
-      for this bookend. */
+  /** start-chat — one unified "launch" finale across every path. Titles/bodies are
+      rendered per-state by the step; the shell leaves STEP_COPY["start-chat"] empty
+      for this finale. */
   kickoff: {
     // admin · new tree (the default — the team has none yet). Lead with the
     // agent + immediate code value; the Context Tree setup moves into its own
@@ -323,21 +298,10 @@ export const COPY = {
       `It'll get oriented from your team's shared knowledge and start with your ${repoCount === 1 ? "repo" : `${repoCount} repos`}.`,
     startExisting: "Start with your agent",
 
-    // admin · no repo connected (connect-code skipped / 0 picked). "No repo" and
-    // "no Context Tree" are the same state, so frame it as the tree being absent
-    // (the value), not the mechanism. The title is honest, not a "you're done"
-    // celebration — the agent works, but the team has no Context Tree yet. The
-    // recovery is inline in the body: "Connect GitHub" routes back to connect-code
-    // (install + pick a repo), the same pre/link/post idiom as create-agent's
-    // "reconnect it". The agent stays usable now (Meet your agent), so this nudges
-    // toward the tree without blocking the lighter start.
-    noProjectTitle: "Your agent's ready — but your team has no Context Tree yet",
-    noProjectBody: {
-      pre: "No repo connected, so your agent will start with a quick intro. ",
-      link: "Connect GitHub",
-      post: " to build your team's Context Tree.",
-    },
-    startChatting: "Meet your agent",
+    noProjectTitle: "Start with your agent",
+    noProjectBody:
+      "No code is connected yet. Start a chat now, then share a local folder path or GitHub URL when you're ready.",
+    startChatting: "Start chat",
 
     // invitee · ready (team has a tree + a GitHub connection). Replaces the old
     // confirm/picker screens — the agent already inherits the team's repos
@@ -377,19 +341,12 @@ export const COPY = {
       // CTA — the roadmap + button carry the action; this carries the welcome.
       post: " — let's bring your coding agent (Claude Code, Codex) onto the team.",
     },
-    nextSteps: ["Install First Tree", "Create your first agent", "Start working"],
-    // Title states the fact; the body names the cause (the admin's First Tree
-    // setup) and leads with the reassurance — you can start now. The most common
-    // not-ready cause is "admin finished without a tree", which never resolves,
-    // so "Meet your agent" is the real path forward (the primary CTA). The page
-    // still advances on its own if the team does finish, but we no longer
-    // announce it — a "coming soon" promise the team may break reads worse than
-    // a quiet hand-off.
-    notReadyTitle: "Your team is still setting up",
-    notReadyBody: "Your admin is still setting up the team on First Tree — but you can meet your agent now.",
+    nextSteps: ["Connect your computer", "Create your first agent", "Start chat"],
+    notReadyTitle: "Start with your agent",
+    notReadyBody: "Your team's shared code and Context Tree can be added by an admin later. You can start a chat now.",
     // The primary action on the not-ready screen — start an intro chat now
     // instead of waiting on the team.
-    startAnyway: "Meet your agent",
+    startAnyway: "Start chat",
   },
   /** failure recovery, shared */
   errors: {

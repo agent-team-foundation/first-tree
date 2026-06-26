@@ -758,6 +758,18 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toMatch(/there\s+is no auto-binding/);
   });
 
+  it("emits the GitHub working posture before entity-follow rules", () => {
+    const briefing = buildAgentBriefing(makeOpts());
+    expect(briefing).toContain("## GitHub Working Posture");
+    expect(briefing.indexOf("## GitHub Working Posture")).toBeLessThan(briefing.indexOf("## GitHub Entity Attention"));
+    expect(briefing).toContain("try the host `gh` CLI first");
+    expect(briefing).toContain("GitHub URLs are not, by themselves, a reason to ask for First Tree GitHub App");
+    expect(briefing).toContain("Ask for First Tree GitHub access only when the desired outcome needs platform");
+    expect(briefing).toContain("If the current member is not an org admin");
+    expect(briefing).toContain("do not ask them to install the");
+    expect(briefing).toContain("Do not use agent-accessible local files or tree snapshots as a hidden server");
+  });
+
   it("keeps the GitHub Entity Attention full-guide pointer on CLI help", () => {
     const treeless = buildAgentBriefing(makeOpts());
     expect(treeless).not.toContain("`first-tree-github` skill");

@@ -20,6 +20,7 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("then suggest a few small tasks you can start with");
     expect(message).toContain("Operational note: use the first-tree-welcome skill");
     expect(message).toContain("Keep team context setup in the separate setup chat");
+    expect(message).toContain("try host gh first before asking for First Tree GitHub App access");
     expect(message).not.toContain("First Tree is getting");
     expect(message).not.toContain("Start with useful work");
     expect(message).not.toContain("First response requirements:");
@@ -40,6 +41,10 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("local folder path or a GitHub repo URL");
     expect(message).toContain("Keep setup light");
     expect(message).toContain("show value from real code first");
+    expect(message).toContain("use host gh/local credentials first");
+    expect(message).toContain(
+      "Ask for First Tree GitHub App access only when First Tree needs durable platform capabilities",
+    );
     expect(message).toContain("Operational note: use the first-tree-welcome skill");
     expect(message).not.toContain("First Tree is introducing");
     expect(message).not.toContain("First response requirements:");
@@ -101,6 +106,8 @@ describe("kickoff bootstrap prose", () => {
     expect(message).toContain("suggest a few small tasks you can start with");
     expect(message).toContain("Operational note: use the first-tree-welcome skill");
     expect(message).toContain("Do not make team context setup the invitee's first task");
+    expect(message).toContain("admin-owned");
+    expect(message).toContain("continue with local path or host gh when possible");
     expect(message).not.toContain("First Tree is getting");
     expect(message).not.toContain("Start with useful work");
     expect(message).not.toContain("First response requirements:");
