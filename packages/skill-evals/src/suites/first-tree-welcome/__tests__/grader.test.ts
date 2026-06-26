@@ -99,6 +99,59 @@ describe("first-tree-welcome grader", () => {
     ).toBe(true);
   });
 
+  it("fails row 3 when setup is packaged as first-task options", () => {
+    expect(
+      casePassed(
+        findCase("first-tree-welcome-no-repo-intro"),
+        baseMetrics({
+          chatAskCount: 1,
+          chatOptionCount: 3,
+          finalResponse: "Choose a local clone path or GitHub URL setup option.",
+          forbiddenActionHits: ["setup-as-first-task"],
+          taskOptionsObserved: true,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("detects setup-as-first-task from chat ask options", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-row3-options-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: [
+              "chat",
+              "ask",
+              "baixiaohang",
+              "Choose a setup task: local clone path, GitHub URL, or install GitHub App.",
+              "--options",
+              JSON.stringify({
+                options: [
+                  { description: "Provide a local clone path.", label: "Local path" },
+                  { description: "Provide a GitHub URL.", label: "GitHub URL" },
+                  { description: "Install the GitHub App.", label: "Install app" },
+                ],
+              }),
+            ],
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("first-tree-welcome-no-repo-intro"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.taskOptionsObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toContain("setup-as-first-task");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("passes row 8 when the model reads repo and tree evidence and offers bounded options", () => {
     expect(
       casePassed(

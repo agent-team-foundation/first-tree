@@ -288,6 +288,15 @@ function forbiddenActionHits(
       hits.push(action);
     }
     if (
+      action === "setup-as-first-task" &&
+      taskOptionsObserved &&
+      /install|select repo|connect repo|setup|set up|github app|authorization|authorize|local clone path|github url/iu.test(
+        combinedText,
+      )
+    ) {
+      hits.push(action);
+    }
+    if (
       (action === "seed-tree" || action === "seed-tree-in-welcome-chat") &&
       /tree seed|seeded the tree|seeding the tree/iu.test(firstTreeText.concat("\n", combinedText))
     ) {
@@ -473,7 +482,7 @@ export function casePassed(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetr
   }
 
   if (evalCase.expected.action === "ask_for_repo_path_or_url") {
-    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
+    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && !metrics.taskOptionsObserved;
   }
 
   if (evalCase.expected.action === "offer_bounded_first_tasks_from_repo_and_tree") {
