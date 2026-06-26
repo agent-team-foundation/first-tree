@@ -5,7 +5,7 @@ import { channelConfig } from "../../core/channel.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { print } from "../../core/output.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
-import { looksLikeEscapedNewlineBody, readStdin } from "./_shared/io.js";
+import { looksLikeEscapedNewlineBody, readMessageBody, readStdin } from "./_shared/io.js";
 import { buildRequestMetadata } from "./_shared/request.js";
 
 interface AskOptions {
@@ -14,6 +14,7 @@ interface AskOptions {
   agent?: string;
   options?: string;
   multiSelect?: boolean;
+  messageFile?: string;
 }
 
 export function registerChatAskCommand(chat: Command): void {
@@ -24,11 +25,20 @@ export function registerChatAskCommand(chat: Command): void {
         "answer. Writes an open question (format=request) directed at a single human <name>: the message body IS " +
         "the ask (background + question). Omit --options for a free-text answer, or pass 2–4 --options for a " +
         "choice. Raises a tracked red dot and blocks the chat for them until they answer. The human resolves it " +
-        "in the web UI — an agent can only ASK; it cannot answer or close a question.",
+        "in the web UI — an agent can only ASK; it cannot answer or close a question. The body can be the " +
+        "[message] argument, piped via stdin (omit [message]), or read from a file with --message-file <path> " +
+        "(`-` = stdin); prefer stdin or --message-file for any rich or multi-line body so the shell cannot mangle " +
+        "backticks, quotes, or newlines.",
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
+    .option(
+      "-F, --message-file <path>",
+      "Read the ask body from <path> (or `-` for stdin) instead of the [message] argument. Preferred for any rich " +
+        "or multi-line body: the content never passes through the shell, so backticks, quotes, and newlines are " +
+        "sent verbatim.",
+    )
     .option(
       "--options <json>",
       "Answer options as a JSON array, 2–4 items of {label (1–5 words), description, preview?}. e.g. " +
@@ -54,6 +64,12 @@ export function registerChatAskCommand(chat: Command): void {
           fail("NO_TARGET", "Pass <name> to direct the question at a single human member.", 2);
         }
 
+        // --message-file (a path, or `-` for stdin) is the shell-safe path for
+        // a rich body; it cannot also take an inline [message].
+        if (options.messageFile !== undefined && inlineBody !== undefined) {
+          fail("CONFLICTING_ARGS", "Pass the ask body either inline as [message] or via --message-file, not both.", 2);
+        }
+
         // Reject an inline body whose newlines are the two-character escape
         // `\n` — shell quotes do not expand it, so the row would render as one
         // long unformatted line. Stdin bodies are never checked.
@@ -74,7 +90,10 @@ export function registerChatAskCommand(chat: Command): void {
           );
         }
 
-        const content = inlineBody ?? (await readStdin());
+        const content =
+          options.messageFile !== undefined
+            ? await readMessageBody(options.messageFile)
+            : (inlineBody ?? (await readStdin()));
 
         let metadata: Record<string, unknown> | undefined;
         if (options.metadata) {
@@ -93,7 +112,7 @@ export function registerChatAskCommand(chat: Command): void {
           fail(
             "ASK_NEEDS_BODY",
             "`chat ask` needs a message body — the body is the ask (background + question). " +
-              "Pass it as an argument or via stdin.",
+              "Pass it as the [message] argument, via stdin, or with --message-file <path>.",
             2,
           );
         }

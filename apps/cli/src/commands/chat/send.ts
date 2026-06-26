@@ -5,13 +5,14 @@ import { channelConfig } from "../../core/channel.js";
 import { captureOutboundDocs } from "../../core/doc-capture.js";
 import { print } from "../../core/output.js";
 import { createSdk, handleSdkError } from "../_shared/local-agent.js";
-import { looksLikeEscapedNewlineBody, readStdin } from "./_shared/io.js";
+import { looksLikeEscapedNewlineBody, readMessageBody, readStdin } from "./_shared/io.js";
 
 interface SendOptions {
   format: MessageFormat;
   metadata?: string;
   agent?: string;
   replyTo?: string;
+  messageFile?: string;
 }
 
 export function registerChatSendCommand(chat: Command): void {
@@ -22,7 +23,9 @@ export function registerChatSendCommand(chat: Command): void {
         "human; the recipient is @mentioned and woken (must already be a participant — `chat invite` an agent " +
         "first). A plain send to a human is a free reply; put a tracked decision to a human with `chat ask`, or " +
         "report progress with `chat update --description`. A message must name a recipient — there is no " +
-        "no-mention send.",
+        "no-mention send. The body can be the [message] argument, piped via stdin (omit [message]), or read " +
+        "from a file with --message-file <path> (`-` = stdin); prefer stdin or --message-file for any rich or " +
+        "multi-line body so the shell cannot mangle backticks, quotes, or newlines.",
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
@@ -30,6 +33,12 @@ export function registerChatSendCommand(chat: Command): void {
     .option(
       "--reply-to <messageId>",
       "Thread a reply under a message — sets inReplyTo (pure threading; does NOT resolve a question)",
+    )
+    .option(
+      "-F, --message-file <path>",
+      "Read the message body from <path> (or `-` for stdin) instead of the [message] argument. Preferred for any " +
+        "rich or multi-line body: the content never passes through the shell, so backticks, quotes, and newlines " +
+        "are sent verbatim.",
     )
     .action(async (name: string | undefined, message: string | undefined, options: SendOptions) => {
       try {
@@ -53,6 +62,16 @@ export function registerChatSendCommand(chat: Command): void {
           fail(
             "NO_TARGET",
             "Pass <name> to @mention a recipient — a message must name a recipient (there is no no-mention send).",
+            2,
+          );
+        }
+
+        // --message-file (a path, or `-` for stdin) is the shell-safe path for
+        // a rich body; it cannot also take an inline [message].
+        if (options.messageFile !== undefined && inlineBody !== undefined) {
+          fail(
+            "CONFLICTING_ARGS",
+            "Pass the message body either inline as [message] or via --message-file, not both.",
             2,
           );
         }
@@ -81,9 +100,16 @@ export function registerChatSendCommand(chat: Command): void {
           );
         }
 
-        const content = inlineBody ?? (await readStdin());
+        const content =
+          options.messageFile !== undefined
+            ? await readMessageBody(options.messageFile)
+            : (inlineBody ?? (await readStdin()));
         if (!content) {
-          fail("NO_MESSAGE", "No message provided. Pass as argument or pipe via stdin.", 2);
+          fail(
+            "NO_MESSAGE",
+            "No message provided. Pass it as the [message] argument, pipe it via stdin, or use --message-file <path>.",
+            2,
+          );
         }
 
         let metadata: Record<string, unknown> | undefined;
