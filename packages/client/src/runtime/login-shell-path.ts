@@ -105,26 +105,49 @@ function probe(runShell: RunShell): string[] | null {
 }
 
 /**
- * Spawn the user's interactive login shell and print, bracketed by {@link DELIM},
- * the **canonicalized** dirs of `$PATH` — one per line.
+ * Build the probe command the login shell launches: it prints, bracketed by
+ * {@link DELIM}, the **canonicalized** dirs of `$PATH` — one per line. Exported
+ * for tests.
  *
- * The script splits `$PATH` with `tr ':' '\n'` (NOT a `for d in $PATH` loop:
- * zsh, the macOS default, does not field-split an unquoted scalar, so a for-loop
- * would iterate once over the whole string), then for each dir runs
- * `(cd "$d" && pwd -P)` in a subshell to resolve symlinks to the real install dir
- * while the shell — and any per-session fnm/nvm multishell symlink — is still
- * alive. Dirs that fail `cd` (gone / unreadable) are silently dropped; they could
- * not hold a spawnable binary anyway. Verified to split correctly and canonicalize
- * symlinked dirs under bash, zsh, and sh.
+ * The probe must work no matter what the user's login shell is — including
+ * **non-POSIX shells like fish / tcsh**, whose loop and quoting syntax differ
+ * from `sh`. So the login shell is used only as a launcher: it runs a single
+ * opaque `/bin/sh -c '…'` token (a literal, single-quoted string it never parses
+ * as code), and ALL of the `$PATH` splitting and canonicalization happens inside
+ * that nested POSIX `sh`. An earlier version inlined a POSIX `while … do … done`
+ * pipeline directly in the login shell; fish parses the whole `-c` string as one
+ * unit, hits the `do`/`done`, errors at parse time, and prints nothing — so every
+ * login-shell-only `claude` / `codex` was reported missing.
+ *
+ * Inside the nested `sh`, `IFS=:; for d in $PATH` field-splits `$PATH` on `:`
+ * (POSIX-defined here — unlike zsh, which would not field-split an unquoted
+ * scalar), and each dir is canonicalized with `(cd "$d" && pwd -P)` **while the
+ * login shell — and any per-session fnm/nvm multishell symlink — is still alive**.
+ * Those multishell PATH entries (e.g. `/tmp/fnm_multishells/xxx/bin`) are torn
+ * down when the login shell exits, so resolving them here, in-process, hands back
+ * the stable underlying install dir that still exists at search time;
+ * canonicalizing later in Node would find the symlink already gone. Dirs that
+ * fail `cd` (gone / unreadable) are silently dropped — they could not hold a
+ * spawnable binary anyway. The nested `sh` reads the login shell's exported
+ * `$PATH`, which is colon-delimited regardless of how the outer shell stores it.
+ * Verified end to end under bash, zsh, and sh; fish is covered by the
+ * runtime-env-qa `DW7_fish_frozen` scenario.
  */
+export function buildProbeScript(): string {
+  // POSIX body run by the nested `sh`; uses only double quotes so the whole
+  // string can be wrapped in single quotes for `/bin/sh -c '…'`. DELIM is a bare
+  // word (letters + underscores), safe unquoted.
+  const posix =
+    `printf %s ${DELIM}; ` +
+    `IFS=:; for d in $PATH; do [ -n "$d" ] && (cd "$d" 2>/dev/null && pwd -P); done; ` +
+    `printf %s ${DELIM}`;
+  return `/bin/sh -c '${posix}'`;
+}
+
+/** Spawn the user's interactive login shell to run the probe; raw stdout or null. */
 function defaultRunShell(): string | null {
   const shell = pickShell();
-  const script =
-    `printf %s '${DELIM}'; ` +
-    `printf %s "$PATH" | tr ':' '\\n' | ` +
-    `while IFS= read -r d; do [ -n "$d" ] && (cd "$d" 2>/dev/null && pwd -P); done; ` +
-    `printf %s '${DELIM}'`;
-  const result = spawnSync(shell, ["-lic", script], {
+  const result = spawnSync(shell, ["-lic", buildProbeScript()], {
     encoding: "utf-8",
     timeout: 4_000,
     // SIGTERM (the spawnSync default) is ignored by a shell that traps it, spawns
