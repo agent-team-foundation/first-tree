@@ -90,6 +90,97 @@ export function looksLikeEscapedNewlineBody(body: string): boolean {
 }
 
 /**
+ * Detect an inline body that is the residue of a collapsed heredoc — the value
+ * the shell actually handed the CLI is a bare heredoc delimiter (the reported
+ * `@EOF` screenshot) rather than the intended markdown. The shell mangled the
+ * body before the CLI ran, so this is the one inline malformation that survives
+ * as a recognisable shape we can fail loudly on.
+ *
+ * Deliberately whole-body and narrow, to keep prose that merely *mentions* a
+ * delimiter sendable:
+ * - the ENTIRE trimmed body is a lone, optionally `@`-prefixed common heredoc
+ *   terminator (`@EOF`, `EOF`, `EOT`, `HEREDOC`), or
+ * - the ENTIRE trimmed body is a lone heredoc *opener* line that leaked
+ *   verbatim (`<<EOF`, `<<-'END'`).
+ * A larger message that contains `<<EOF` / `@EOF` as one token among others is
+ * left alone — and any such rich body should go through `-F`/stdin, which is
+ * never checked.
+ */
+export function looksLikeHeredocResidueBody(body: string): boolean {
+  const trimmed = body.trim();
+  if (trimmed.length === 0) return false;
+  if (/^@?(?:EOF|EOT|HEREDOC)$/i.test(trimmed)) return true;
+  if (/^<<-?\s*['"]?[A-Za-z_]\w*['"]?$/.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * Detect an inline body that was `JSON.stringify`-wrapped (Issue #389): the
+ * shell passed a value wrapped in outer double quotes whose newlines are the
+ * two-character `\n` escape — e.g. `"@x line1\nline2"`. The UI renders the
+ * literal quotes and `\n` tokens instead of markdown.
+ *
+ * `looksLikeEscapedNewlineBody` already rejects the ≥2-escape shape; this
+ * catches the single-escape wrapper it misses. Whole-body and inline-only: a
+ * body that legitimately quotes a phrase but carries no `\n` escape is left
+ * alone (and a rich body belongs on `-F`/stdin, which is never checked).
+ */
+export function looksLikeJsonWrappedBody(body: string): boolean {
+  const trimmed = body.trim();
+  if (trimmed.length < 4) return false;
+  if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) return false;
+  if (trimmed.includes("\n")) return false;
+  return /\\n/.test(trimmed);
+}
+
+/**
+ * Guard an inline `chat send` / `chat ask` body against the two shell-residue
+ * shapes the CLI can still recognise after the shell has already mangled the
+ * argument: a collapsed-heredoc delimiter (`@EOF`) and a `JSON.stringify`
+ * wrapper. Mirrors {@link guardInlineDescription} — prints a copyable retry to
+ * stderr, then `fail()`s (exit 2). Only ever called for an inline `[message]`;
+ * `-F`/stdin bodies reach the server verbatim and are never checked.
+ */
+export function guardInlineShellResidue(body: string, opts: { command: "send" | "ask" }): void {
+  const bin = channelConfig.binName;
+  const cmd = `chat ${opts.command}`;
+  if (looksLikeHeredocResidueBody(body)) {
+    print.line(
+      `${cmd}: the message body is a bare heredoc delimiter (\`${body.trim()}\`) — a heredoc that collapsed in the ` +
+        "shell, so the intended markdown never reached the argument. Send the real body via stdin or a file:\n\n" +
+        `  cat <<'EOF' | ${bin} ${cmd} <name> -f markdown\n` +
+        "  your real message\n" +
+        "  EOF\n\n" +
+        `(or: ${bin} ${cmd} <name> -f markdown -F <file>)\n\n`,
+    );
+    fail(
+      "HEREDOC_RESIDUE",
+      `Inline message body is a bare heredoc delimiter (\`${body.trim()}\`) — the heredoc collapsed before the CLI ` +
+        "ran, so the intended body was lost. Resend the real body via stdin/heredoc or --message-file (copyable " +
+        "form printed above).",
+      2,
+    );
+  }
+  if (looksLikeJsonWrappedBody(body)) {
+    print.line(
+      `${cmd}: the message body looks JSON-stringified — wrapped in outer quotes with \\n escapes — so the UI would ` +
+        "render literal quotes and `\\n` text instead of markdown. Pass the raw string via stdin or a file:\n\n" +
+        `  cat <<'EOF' | ${bin} ${cmd} <name> -f markdown\n` +
+        "  first line\n" +
+        "\n" +
+        "  **second** line\n" +
+        "  EOF\n\n",
+    );
+    fail(
+      "JSON_WRAPPED_BODY",
+      "Inline message body looks JSON-stringified (outer quotes + \\n escapes) — pass the raw markdown string via " +
+        "stdin/heredoc or --message-file instead (copyable form printed above).",
+      2,
+    );
+  }
+}
+
+/**
  * Guard an inline `--description` (chat update / create) exactly the way
  * `chat send` guards a message body. A chat description is authored markdown,
  * surfaced verbatim in the chat sidebar and in every agent's prompt. When its

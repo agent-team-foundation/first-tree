@@ -462,9 +462,19 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("end the turn without sending");
     expect(briefing).not.toMatch(/\boutput nothing\b/);
 
-    // Issue #389: pin the anti-double-encode rule.
-    expect(briefing).toContain("Content rules (Issue #389)");
+    // Issue #389: pin the anti-double-encode rule (rationale now in the
+    // Communication block, where the shell-mechanics WHY was moved).
+    expect(briefing).toContain("Issue #389");
     expect(briefing).toContain("JSON.stringify");
+    // Pin the `-F`/stdin body rule (the shell-quote regression fix): a concise
+    // affirmative principle up top, with the detailed shell-mechanics rationale
+    // (heredoc residue `@EOF`, the CLI cannot repair it) moved down into the
+    // Communication block.
+    expect(briefing).toMatch(/Form a rich body as a file or stdin/i);
+    expect(briefing).toMatch(/-F|stdin/);
+    expect(briefing).toContain("-f markdown");
+    expect(briefing).toMatch(/Why a rich body goes through a file or stdin/i);
+    expect(briefing).toContain("@EOF");
   });
 
   it("interpolates the agent home into the Working Directory block", () => {
