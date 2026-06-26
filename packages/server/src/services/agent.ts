@@ -17,7 +17,7 @@ import {
   runtimeProviderSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, asc, count, desc, eq, getTableColumns, ilike, inArray, isNull, lt, ne, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
@@ -43,8 +43,9 @@ const RESERVED_AGENT_NAME_PREFIX = "__";
 type SelectDbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select">;
 export type NewChatDefaultCandidateAgent = {
   uuid: string;
+  name: string | null;
+  displayName: string;
   type: string;
-  delegateMention: string | null;
   status: string;
   managerId: string | null;
   createdAt: Date;
@@ -910,53 +911,41 @@ export async function listAgentsForMember(
   return { items, nextCursor };
 }
 
-export async function getNewChatDefaultCandidates(
+export async function getNewChatDefaultCandidate(
   db: Database,
   scope: OrgScope,
-  candidateIds: ReadonlyArray<string>,
+  cachedAgentId: string | null | undefined,
 ): Promise<{
-  selfHuman: NewChatDefaultCandidateAgent | null;
-  candidates: NewChatDefaultCandidateAgent[];
-  firstOwnedAgent: NewChatDefaultCandidateAgent | null;
+  agent: NewChatDefaultCandidateAgent | null;
 }> {
   const projection = {
     uuid: agents.uuid,
+    name: agents.name,
+    displayName: agents.displayName,
     type: agents.type,
-    delegateMention: agents.delegateMention,
     status: agents.status,
     managerId: agents.managerId,
     createdAt: agents.createdAt,
   };
 
-  const [selfHuman] = await db
-    .select(projection)
-    .from(agents)
-    .where(and(eq(agents.uuid, scope.humanAgentId), eq(agents.organizationId, scope.organizationId)))
-    .limit(1);
+  if (cachedAgentId && cachedAgentId !== scope.humanAgentId) {
+    const [cachedAgent] = await db
+      .select(projection)
+      .from(agents)
+      .leftJoin(members, eq(members.agentId, agents.uuid))
+      .where(
+        and(
+          eq(agents.uuid, cachedAgentId),
+          eq(agents.type, AGENT_TYPES.AGENT),
+          agentVisibilityCondition(scope.organizationId, scope.memberId),
+          agentAddressableCondition(),
+        ),
+      )
+      .limit(1);
+    if (cachedAgent) return { agent: cachedAgent };
+  }
 
-  const distinctCandidateIds = [
-    ...new Set(
-      [...candidateIds, selfHuman?.delegateMention ?? null].filter(
-        (id): id is string => Boolean(id) && id !== scope.humanAgentId,
-      ),
-    ),
-  ];
-  const candidates =
-    distinctCandidateIds.length === 0
-      ? []
-      : await db
-          .select(projection)
-          .from(agents)
-          .leftJoin(members, eq(members.agentId, agents.uuid))
-          .where(
-            and(
-              inArray(agents.uuid, distinctCandidateIds),
-              agentVisibilityCondition(scope.organizationId, scope.memberId),
-              agentAddressableCondition(),
-            ),
-          );
-
-  const [firstOwnedAgent] = await db
+  const [ownedFallback] = await db
     .select(projection)
     .from(agents)
     .where(
@@ -969,8 +958,23 @@ export async function getNewChatDefaultCandidates(
     )
     .orderBy(asc(agents.createdAt))
     .limit(1);
+  if (ownedFallback) return { agent: ownedFallback };
 
-  return { selfHuman: selfHuman ?? null, candidates, firstOwnedAgent: firstOwnedAgent ?? null };
+  const [orgFallback] = await db
+    .select(projection)
+    .from(agents)
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .where(
+      and(
+        eq(agents.type, AGENT_TYPES.AGENT),
+        agentVisibilityCondition(scope.organizationId, scope.memberId),
+        agentAddressableCondition(),
+      ),
+    )
+    .orderBy(asc(agents.createdAt))
+    .limit(1);
+
+  return { agent: orgFallback ?? null };
 }
 
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {

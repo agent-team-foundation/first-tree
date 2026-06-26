@@ -619,9 +619,7 @@ beforeEach(() => {
   );
   agentApiMocks.getAgent.mockResolvedValue(agent({ clientId: "client-bound" }));
   agentApiMocks.getNewChatDefaultCandidates.mockResolvedValue({
-    selfHuman: agent({ uuid: "human-agent-self", type: "human", clientId: null, delegateMention: "agent-1" }),
-    candidates: [agent({ uuid: "agent-1" })],
-    firstOwnedAgent: agent({ uuid: "agent-1" }),
+    agent: agent({ uuid: "agent-1" }),
   });
   agentApiMocks.listAgents.mockResolvedValue({ items: ORG_AGENTS, nextCursor: null });
   agentApiMocks.listManagedAgents.mockResolvedValue([
@@ -876,9 +874,11 @@ describe("web DOM interaction coverage", () => {
 
   it("creates one-on-one and group chats from NewChatDraft", async () => {
     const { NewChatDraft } = await import("../workspace/conversations/new-chat-draft.js");
+    const cacheKey = "first-tree:new-chat-default-agent:user-self:org-1";
     const onCreated = vi.fn();
     const first = await renderDom(<NewChatDraft onCreated={onCreated} onShowConversations={() => undefined} />);
     await waitForText("Nova", first.container);
+    expect(agentApiMocks.getNewChatDefaultCandidates).toHaveBeenLastCalledWith({ cachedAgentId: null });
     const textarea = first.container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Draft textarea missing");
     await setValue(textarea, "hello");
@@ -898,12 +898,14 @@ describe("web DOM interaction coverage", () => {
     });
     expect(chatApiMocks.sendChatMessage).not.toHaveBeenCalled();
     expect(onCreated).toHaveBeenCalledWith("chat-created");
+    expect(window.localStorage.getItem(cacheKey)).toBe("agent-1");
     await unmountRoot(first.root);
 
     meChatMocks.createMeTaskChat.mockClear();
     chatApiMocks.sendChatMessage.mockClear();
     const second = await renderDom(<NewChatDraft onCreated={() => undefined} />);
     await waitForText("Nova", second.container);
+    expect(agentApiMocks.getNewChatDefaultCandidates).toHaveBeenLastCalledWith({ cachedAgentId: "agent-1" });
     await click(second.container.querySelector('button[aria-label="Add participant"]'));
     await waitForText("Design Critique", second.container);
     await click(
@@ -930,6 +932,75 @@ describe("web DOM interaction coverage", () => {
       },
     });
     expect(chatApiMocks.sendChatMessage).not.toHaveBeenCalled();
+    await unmountRoot(second.root);
+
+    meChatMocks.createMeTaskChat.mockClear();
+    const humanOnly = await renderDom(
+      <NewChatDraft onCreated={() => undefined} initialParticipantIds={["human-agent-self"]} />,
+    );
+    await waitForText("human-agent-self", humanOnly.container);
+    const humanTextarea = humanOnly.container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!humanTextarea) throw new Error("Human-only draft textarea missing");
+    await setValue(humanTextarea, "hello human");
+    await click(humanOnly.container.querySelector('button[aria-label="Send"]'));
+
+    expect(meChatMocks.createMeTaskChat).toHaveBeenCalledWith({
+      mode: "task",
+      initialRecipientAgentIds: ["human-agent-self"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      initialMessage: {
+        format: "text",
+        content: "hello human",
+        source: "web",
+      },
+    });
+    expect(window.localStorage.getItem(cacheKey)).toBeNull();
+    await unmountRoot(humanOnly.root);
+
+    const afterHumanOnly = await renderDom(<NewChatDraft onCreated={() => undefined} />);
+    await waitForText("Nova", afterHumanOnly.container);
+    expect(agentApiMocks.getNewChatDefaultCandidates).toHaveBeenLastCalledWith({ cachedAgentId: null });
+    await unmountRoot(afterHumanOnly.root);
+
+    agentApiMocks.getNewChatDefaultCandidates.mockImplementation(
+      async ({ cachedAgentId }: { cachedAgentId?: string | null }) => ({
+        agent:
+          cachedAgentId === "agent-off-page"
+            ? agent({ uuid: "agent-off-page", name: "off-page", displayName: "Off Page" })
+            : agent({ uuid: "agent-1" }),
+      }),
+    );
+    meChatMocks.createMeTaskChat.mockClear();
+    const offPage = await renderDom(
+      <NewChatDraft onCreated={() => undefined} initialParticipantIds={["agent-off-page"]} />,
+    );
+    await waitForText("agent-off-page", offPage.container);
+    const offPageTextarea = offPage.container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!offPageTextarea) throw new Error("Off-page draft textarea missing");
+    await setValue(offPageTextarea, "hello off page");
+    await click(offPage.container.querySelector('button[aria-label="Send"]'));
+
+    expect(meChatMocks.createMeTaskChat).toHaveBeenCalledWith({
+      mode: "task",
+      initialRecipientAgentIds: ["agent-off-page"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      initialMessage: {
+        format: "text",
+        content: "hello off page",
+        source: "web",
+      },
+    });
+    expect(window.localStorage.getItem(cacheKey)).toBe("agent-off-page");
+    await unmountRoot(offPage.root);
+
+    const afterOffPage = await renderDom(<NewChatDraft onCreated={() => undefined} />);
+    await waitForText("Off Page", afterOffPage.container);
+    expect(agentApiMocks.getNewChatDefaultCandidates).toHaveBeenLastCalledWith({ cachedAgentId: "agent-off-page" });
+    await unmountRoot(afterOffPage.root);
   });
 
   it("drives NewChatDraft participants, mention autocomplete, image send, and error paths", async () => {

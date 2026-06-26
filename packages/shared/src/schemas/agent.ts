@@ -242,8 +242,9 @@ export type Agent = z.infer<typeof agentSchema>;
 
 export const newChatDefaultCandidateAgentSchema = z.object({
   uuid: z.string(),
+  name: z.string().nullable(),
+  displayName: z.string(),
   type: agentTypeSchema,
-  delegateMention: z.string().nullable(),
   status: z.string(),
   managerId: z.string().nullable(),
   createdAt: z.string(),
@@ -251,14 +252,12 @@ export const newChatDefaultCandidateAgentSchema = z.object({
 export type NewChatDefaultCandidateAgent = z.infer<typeof newChatDefaultCandidateAgentSchema>;
 
 export const newChatDefaultCandidatesRequestSchema = z.object({
-  candidateIds: z.array(z.string().min(1)).max(50).default([]),
+  cachedAgentId: z.string().min(1).nullable().optional(),
 });
 export type NewChatDefaultCandidatesRequest = z.infer<typeof newChatDefaultCandidatesRequestSchema>;
 
 export const newChatDefaultCandidatesResponseSchema = z.object({
-  selfHuman: newChatDefaultCandidateAgentSchema.nullable(),
-  candidates: z.array(newChatDefaultCandidateAgentSchema),
-  firstOwnedAgent: newChatDefaultCandidateAgentSchema.nullable(),
+  agent: newChatDefaultCandidateAgentSchema.nullable(),
 });
 export type NewChatDefaultCandidatesResponse = z.infer<typeof newChatDefaultCandidatesResponseSchema>;
 

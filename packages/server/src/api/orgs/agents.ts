@@ -118,11 +118,9 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { orgId: string } }>("/new-chat-default-candidates", async (request) => {
     const scope = await requireOrgMembership(request, app.db);
     const body = newChatDefaultCandidatesRequestSchema.parse(request.body ?? {});
-    const result = await agentService.getNewChatDefaultCandidates(app.db, scope, body.candidateIds);
+    const result = await agentService.getNewChatDefaultCandidate(app.db, scope, body.cachedAgentId);
     return {
-      selfHuman: result.selfHuman ? serializeNewChatDefaultCandidate(result.selfHuman) : null,
-      candidates: result.candidates.map(serializeNewChatDefaultCandidate),
-      firstOwnedAgent: result.firstOwnedAgent ? serializeNewChatDefaultCandidate(result.firstOwnedAgent) : null,
+      agent: result.agent ? serializeNewChatDefaultCandidate(result.agent) : null,
     };
   });
 
