@@ -249,7 +249,6 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
     return;
   }
   const webhookSecret = appConfig.webhookSecret;
-  const appSlug = appConfig.slug ?? null;
 
   app.post("/github-app", async (request, reply) => {
     const rawBody = request.body;
@@ -381,8 +380,8 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
         return reply.status(200).send({ ok: true, event: eventType, handled: false, contextReviewer });
       }
 
-      const audience = await resolveAudience(app.db, event, appSlug);
-      if (audience.length === 0) {
+      const audience = await resolveAudience(app.db, event);
+      if (audience.targets.length === 0) {
         // Distinguish "expected nobody" (no involves, no subscription)
         // from "had explicit involves but resolved to zero agents" — the
         // latter usually means a mentioned GitHub login has no
@@ -403,7 +402,10 @@ export async function githubAppWebhookRoutes(app: FastifyInstance): Promise<void
         );
         return reply.status(200).send({ ok: true, event: eventType, audience: 0, reason, contextReviewer });
       }
-      const stats = await deliverNormalizedEvent(app, event, audience, { entityStateSeed });
+      const stats = await deliverNormalizedEvent(app, event, audience.targets, {
+        entityStateSeed,
+        actorHumanId: audience.actorHumanId,
+      });
       return reply.status(200).send({ ok: true, event: eventType, ...stats, contextReviewer });
     } catch (err) {
       if (deliveryId) {
