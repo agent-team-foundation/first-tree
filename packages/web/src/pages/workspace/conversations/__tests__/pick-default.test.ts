@@ -1,22 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { type PickDefaultAgent, pickDefault } from "../new-chat-draft.js";
+import { type PickDefaultAgent, type PickDefaultChat, pickDefault } from "../new-chat-draft.js";
 
 /**
  * Pure-function tests for the New Chat default-chip seed (`pickDefault`).
  *
- * Locks the issue 494 behaviour:
- *   - default = caller's own human agent's `delegateMention`
- *   - null when caller has no `delegateMention` set
- *   - null when the delegate target is missing from the org list
- *   - null when the delegate target is suspended
- *   - null when the caller's own row is missing from the org list (rare —
- *     the user's row is past the 100-row first-page cap of `useOrgAgents`)
- *   - null when `myAgentId` is null (logged-out or org not yet selected)
+ * Locks the New Chat default-chip seed:
+ *   - prefer the most recent manual 1:1 agent chat
+ *   - fall back to the caller's own human agent's `delegateMention`
+ *   - fall back to the caller's earliest owned active agent
+ *   - null only when no safe, visible, active candidate exists
  */
 
 const ME_HUMAN = "human-me";
 const DELEGATE = "agent-delegate";
 const OTHER = "agent-other";
+const OWNED_FIRST = "agent-owned-first";
+const OWNED_SECOND = "agent-owned-second";
+const NOW = Date.parse("2026-06-26T00:00:00.000Z");
 
 /** Build an agent slice with only the fields `pickDefault` reads. */
 function agent(partial: Partial<PickDefaultAgent> & Pick<PickDefaultAgent, "uuid">): PickDefaultAgent {
@@ -25,6 +25,21 @@ function agent(partial: Partial<PickDefaultAgent> & Pick<PickDefaultAgent, "uuid
     managerId: null,
     status: "active",
     delegateMention: null,
+    createdAt: "2026-06-01T00:00:00.000Z",
+    ...partial,
+  };
+}
+
+function chat(partial: Partial<PickDefaultChat> & Pick<PickDefaultChat, "chatId">): PickDefaultChat {
+  return {
+    source: "manual",
+    membershipKind: "participant",
+    canReply: true,
+    lastMessageAt: "2026-06-25T00:00:00.000Z",
+    participants: [
+      { agentId: ME_HUMAN, type: "human" },
+      { agentId: OTHER, type: "agent" },
+    ],
     ...partial,
   };
 }
@@ -32,63 +47,112 @@ function agent(partial: Partial<PickDefaultAgent> & Pick<PickDefaultAgent, "uuid
 describe("pickDefault", () => {
   it("returns null when myAgentId is null (logged-out or org not yet selected)", () => {
     const agents = [agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }), agent({ uuid: DELEGATE })];
-    expect(pickDefault(agents, null)).toBeNull();
+    expect(
+      pickDefault({ orgAgents: agents, recentChats: [], myAgentId: null, myMemberId: "member-me", nowMs: NOW }),
+    ).toBeNull();
   });
 
-  it("returns the human's delegateMention when set and the target is visible + active", () => {
+  it("prefers the most recent manual 1:1 agent chat over delegateMention", () => {
     const agents = [
       agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
       agent({ uuid: DELEGATE, type: "agent" }),
       agent({ uuid: OTHER, type: "agent" }),
     ];
-    expect(pickDefault(agents, ME_HUMAN)).toBe(DELEGATE);
+    const chats = [
+      chat({
+        chatId: "older",
+        lastMessageAt: "2026-06-20T00:00:00.000Z",
+        participants: [
+          { agentId: ME_HUMAN, type: "human" },
+          { agentId: DELEGATE, type: "agent" },
+        ],
+      }),
+      chat({
+        chatId: "newer",
+        lastMessageAt: "2026-06-25T00:00:00.000Z",
+        participants: [
+          { agentId: ME_HUMAN, type: "human" },
+          { agentId: OTHER, type: "agent" },
+        ],
+      }),
+    ];
+    expect(
+      pickDefault({ orgAgents: agents, recentChats: chats, myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
+    ).toBe(OTHER);
   });
 
-  it("returns null when the human has no delegateMention set", () => {
+  it("ignores automatic, group, stale, and unavailable recent chats before using delegateMention", () => {
+    const agents = [
+      agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
+      agent({ uuid: DELEGATE, type: "agent" }),
+      agent({ uuid: OTHER, type: "agent" }),
+    ];
+    const chats = [
+      chat({ chatId: "github", source: "github" }),
+      chat({
+        chatId: "group",
+        participants: [
+          { agentId: ME_HUMAN, type: "human" },
+          { agentId: OTHER, type: "agent" },
+          { agentId: "agent-extra", type: "agent" },
+        ],
+      }),
+      chat({ chatId: "stale", lastMessageAt: "2026-05-01T00:00:00.000Z" }),
+      chat({
+        chatId: "suspended",
+        participants: [
+          { agentId: ME_HUMAN, type: "human" },
+          { agentId: "agent-suspended", type: "agent" },
+        ],
+      }),
+    ];
+    expect(
+      pickDefault({ orgAgents: agents, recentChats: chats, myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
+    ).toBe(DELEGATE);
+  });
+
+  it("falls back to delegateMention when there is no valid recent manual 1:1 agent chat", () => {
+    const agents = [
+      agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
+      agent({ uuid: DELEGATE, type: "agent" }),
+      agent({ uuid: OTHER, type: "agent" }),
+    ];
+    expect(
+      pickDefault({ orgAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
+    ).toBe(DELEGATE);
+  });
+
+  it("falls back to the caller's earliest owned active agent when delegate is missing or unusable", () => {
+    const agents = [
+      agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
+      agent({ uuid: DELEGATE, type: "agent", status: "suspended", managerId: "other-member" }),
+      agent({ uuid: OWNED_SECOND, type: "agent", managerId: "member-me", createdAt: "2026-06-02T00:00:00.000Z" }),
+      agent({ uuid: OWNED_FIRST, type: "agent", managerId: "member-me", createdAt: "2026-06-01T00:00:00.000Z" }),
+      agent({ uuid: OTHER, type: "agent", managerId: "other-member", createdAt: "2026-05-01T00:00:00.000Z" }),
+    ];
+    expect(
+      pickDefault({ orgAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
+    ).toBe(OWNED_FIRST);
+  });
+
+  it("returns null when no safe candidate exists", () => {
     const agents = [
       agent({ uuid: ME_HUMAN, type: "human", delegateMention: null }),
-      agent({ uuid: OTHER, type: "agent" }),
+      agent({ uuid: OTHER, type: "agent", managerId: "other-member" }),
     ];
-    // Notably we do NOT fall back to PA / other my-managed agents —
-    // the caller must declare a delegate explicitly.
-    expect(pickDefault(agents, ME_HUMAN)).toBeNull();
+    expect(
+      pickDefault({ orgAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW }),
+    ).toBeNull();
   });
 
-  it("returns null when the delegate target is missing from the org list", () => {
-    // The delegate uuid was set sometime in the past; meanwhile the row
-    // was deleted / made private / moved orgs. We refuse to seed a chip
-    // that can't be confirmed against the current visible roster.
-    const agents = [agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE })];
-    expect(pickDefault(agents, ME_HUMAN)).toBeNull();
-  });
-
-  it("returns null when the delegate target is suspended", () => {
-    const agents = [
-      agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
-      agent({ uuid: DELEGATE, type: "agent", status: "suspended" }),
-    ];
-    expect(pickDefault(agents, ME_HUMAN)).toBeNull();
-  });
-
-  it("returns null when the caller's own human row is missing from the org list", () => {
-    // Edge: caller's human agent is past the 100-row first-page cap, so
-    // we can't read its `delegateMention`. Falling back to null is
-    // intentional — better an empty chip row than guessing.
-    const agents = [agent({ uuid: DELEGATE, type: "agent" })];
-    expect(pickDefault(agents, ME_HUMAN)).toBeNull();
-  });
-
-  it("is stable across calls — does not depend on runtime presence (issue 342 regression lock)", () => {
-    // The pre-issue 343 implementation sorted by `runtimeUpdatedAt` and
-    // could flip between adjacent calls when presence shifted; the
-    // delegate-based default has no such dependency, so two passes
-    // over the same input must agree.
+  it("is stable across calls — does not depend on runtime presence", () => {
     const agents = [
       agent({ uuid: ME_HUMAN, type: "human", delegateMention: DELEGATE }),
       agent({ uuid: DELEGATE, type: "agent" }),
     ];
-    const first = pickDefault(agents, ME_HUMAN);
-    const second = pickDefault(agents, ME_HUMAN);
+    const input = { orgAgents: agents, recentChats: [], myAgentId: ME_HUMAN, myMemberId: "member-me", nowMs: NOW };
+    const first = pickDefault(input);
+    const second = pickDefault(input);
     expect(first).toBe(second);
     expect(first).toBe(DELEGATE);
   });

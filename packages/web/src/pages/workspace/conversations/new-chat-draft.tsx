@@ -1,11 +1,11 @@
-import { type Agent, extractMentions, type MentionParticipant } from "@first-tree/shared";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { type Agent, extractMentions, type MeChatRow, type MentionParticipant } from "@first-tree/shared";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Check, Menu, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { uploadImageAttachment } from "../../../api/attachments.js";
 import { type ImageRefContent, readFileAsBase64 } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
-import { createMeTaskChat } from "../../../api/me-chats.js";
+import { createMeTaskChat, listMeChats } from "../../../api/me-chats.js";
 import { useAuth } from "../../../auth/auth-context.js";
 import {
   ambiguousDisplayNames,
@@ -31,10 +31,10 @@ import { cn } from "../../../lib/utils.js";
  *   - Chip row at the top of the composer is the participants list for
  *     the chat being created. Independent of the textarea — adding a
  *     chip never injects text, removing one never strips an `@<name>`.
- *     Default state seeds a single chip (the caller's personal assistant
- *     or any of their managed agents — see `pickDefault`) so the common
- *     "ask my PA something" case is zero-step. Stable across clicks —
- *     no runtime-presence MRU here, see issue 342.
+ *     Default state seeds a single chip from explicit participants, the
+ *     caller's recent manual 1:1 agent chat, delegate, or first owned
+ *     active agent — see `pickDefault`. Runtime presence is deliberately
+ *     not a signal.
  *
  *   - Textarea carries the message content. Server's explicit-recipient enforcement
  *     contract requires an explicit recipient on every send — for 1:1
@@ -132,6 +132,14 @@ export function NewChatDraft({
    *  orgs above the 100-row cap can still reach every addable agent
    *  (issue 494). */
   const { data: orgAgentsPage } = useOrgAgents({ addressableOnly: true });
+  const {
+    data: recentChatsPage,
+    isFetched: recentChatsFetched,
+    isError: recentChatsError,
+  } = useQuery({
+    queryKey: ["me", "chats", "new-chat-default-agent"],
+    queryFn: () => listMeChats({ limit: 50, filter: "all", engagement: "active", origin: ["manual"] }),
+  });
 
   /** Map of every uuid we have ever shown to the user this session —
    *  seeded from the first page and grown with each search round-trip
@@ -291,12 +299,29 @@ export function NewChatDraft({
     // Wait for the org-list query to settle before picking — without
     // this guard the pre-fetch render would always pick `null` and
     // arm `seededDefaultRef`, locking out the real default once the
-    // data arrives.
+    // data arrives. Wait for the recent-chat query as well so delegate fallback
+    // does not win just because the roster resolved first; on query error,
+    // fall back to delegate / first-owned rather than leaving the draft empty.
     if (!orgAgentsPage?.items) return;
-    const defaultId = pickDefault(orgAgentsPage.items, myAgentId);
+    if (!recentChatsFetched && !recentChatsError) return;
+    const defaultId = pickDefault({
+      orgAgents: orgAgentsPage.items,
+      recentChats: recentChatsPage?.rows ?? [],
+      myAgentId,
+      myMemberId,
+    });
     seededDefaultRef.current = true;
     if (defaultId) setChips([defaultId]);
-  }, [orgAgentsPage?.items, myAgentId, chips.length, initialParticipantIds]);
+  }, [
+    orgAgentsPage?.items,
+    recentChatsPage?.rows,
+    recentChatsFetched,
+    recentChatsError,
+    myAgentId,
+    myMemberId,
+    chips.length,
+    initialParticipantIds,
+  ]);
 
   // Persist unsent body + chosen participants for this compose context so
   // navigating away and back (or a reload) restores the draft. saveDraft gates
@@ -1072,38 +1097,80 @@ function ParticipantChips({
   );
 }
 
+const RECENT_MANUAL_CHAT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
 /** Pick a default seed chip when the user opens an empty draft.
  *
- *  Single rule: the caller's own human agent's `delegateMention` — i.e.
- *  the agent the user has explicitly designated as their stand-in. When
- *  it's unset (or the target was suspended / deleted) we return `null`
- *  and let the user pick.
+ *  Priority after explicit `?with=` participants:
+ *  1. the most recent manual 1:1 agent chat;
+ *  2. the caller's delegate agent;
+ *  3. the caller's earliest owned active agent.
  *
- *  Pre-issue 494 the default walked the caller's managed agents
- *  (personal_assistant first, then any) — which seeded a chip even when
- *  the user had no opinion about who that should be. Defaulting to the
- *  caller-declared delegate is a more deliberate signal: if the user
- *  hasn't set one, no chip is the right starting state.
- *
- *  Validation: we still need to confirm the delegate is in the org list
- *  and not suspended, so a delegate set months ago but since deleted
- *  doesn't seed a dangling uuid. When the user's own row is past the
- *  100-row first-page cap of `useOrgAgents()` we can't validate — in
- *  that rare case we return null rather than seed a chip we can't
- *  confirm. */
+ *  Every candidate is validated against the current addressable org roster
+ *  before seeding a chip, so stale chat rows, suspended agents, or invisible
+ *  private agents cannot become a dangling recipient. Runtime presence is not
+ *  considered: "recently online" is not the same as "the user meant to chat
+ *  with this agent."
+ */
 
 /** Exported for `__tests__/pick-default.test.ts`. The signature accepts
  *  a `Pick<Agent, ...>` slice rather than `Agent` so callers (and tests)
  *  can pass minimal fixtures without inventing inboxIds, metadata, etc. */
-export type PickDefaultAgent = Pick<Agent, "uuid" | "type" | "managerId" | "status" | "delegateMention">;
+export type PickDefaultAgent = Pick<Agent, "uuid" | "type" | "managerId" | "status" | "delegateMention" | "createdAt">;
+export type PickDefaultChat = Pick<MeChatRow, "chatId" | "source" | "membershipKind" | "canReply" | "lastMessageAt"> & {
+  participants: Array<Pick<MeChatRow["participants"][number], "agentId" | "type">>;
+};
 
-export function pickDefault(orgAgents: ReadonlyArray<PickDefaultAgent>, myAgentId: string | null): string | null {
+export function pickDefault({
+  orgAgents,
+  recentChats,
+  myAgentId,
+  myMemberId,
+  nowMs = Date.now(),
+}: {
+  orgAgents: ReadonlyArray<PickDefaultAgent>;
+  recentChats: ReadonlyArray<PickDefaultChat>;
+  myAgentId: string | null;
+  myMemberId: string | null;
+  nowMs?: number;
+}): string | null {
   if (!myAgentId) return null;
-  const myHuman = orgAgents.find((a) => a.uuid === myAgentId);
+
+  const activeAgentById = new Map(
+    orgAgents.filter((a) => a.type === "agent" && a.status === "active").map((a) => [a.uuid, a]),
+  );
+
+  const recentDefault = [...recentChats]
+    .sort((a, b) => timestampMs(b.lastMessageAt) - timestampMs(a.lastMessageAt))
+    .find((chat) => {
+      if (chat.source !== "manual") return false;
+      if (chat.membershipKind !== "participant" || !chat.canReply) return false;
+      const lastMessageMs = timestampMs(chat.lastMessageAt);
+      if (lastMessageMs === 0 || nowMs - lastMessageMs > RECENT_MANUAL_CHAT_MAX_AGE_MS) return false;
+      const others = chat.participants.filter((p) => p.agentId !== myAgentId);
+      if (others.length !== 1) return false;
+      const peer = others[0];
+      if (!peer || peer.type === "human") return false;
+      return activeAgentById.has(peer.agentId);
+    });
+  if (recentDefault) {
+    const peer = recentDefault.participants.find((p) => p.agentId !== myAgentId);
+    if (peer && activeAgentById.has(peer.agentId)) return peer.agentId;
+  }
+
+  const myHuman = orgAgents.find((a) => a.uuid === myAgentId && a.type === "human");
   const delegateUuid = myHuman?.delegateMention ?? null;
-  if (!delegateUuid) return null;
-  const delegate = orgAgents.find((a) => a.uuid === delegateUuid);
-  if (!delegate) return null;
-  if (delegate.status === "suspended") return null;
-  return delegate.uuid;
+  if (delegateUuid && activeAgentById.has(delegateUuid)) return delegateUuid;
+
+  if (!myMemberId) return null;
+  const owned = orgAgents
+    .filter((a) => a.type === "agent" && a.status === "active" && a.managerId === myMemberId)
+    .sort((a, b) => timestampMs(a.createdAt) - timestampMs(b.createdAt));
+  return owned[0]?.uuid ?? null;
+}
+
+function timestampMs(value: string | null): number {
+  if (!value) return 0;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : 0;
 }
