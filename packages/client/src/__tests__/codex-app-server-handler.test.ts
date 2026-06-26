@@ -1707,6 +1707,29 @@ describe("codex app-server briefing-update notice", () => {
     await handler.shutdown();
   });
 
+  it("prepends the same provider-neutral runtime contract onto every turn input (immediate-tail salience)", async () => {
+    // Codex has no persistent system-prompt channel (unlike the Claude path's
+    // `systemPrompt.append`), so the same runtime contract both providers get
+    // must ride every Codex turn input — keeping the console/outbox boundary
+    // next to where a "discuss only / hold off" instruction lands. Without this
+    // the rule lives only in the thread-init AGENTS read and loses salience.
+    const fake = new FakeAppServerClient();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ finishTurn: async () => {} });
+
+    const startPromise = handler.start(makeMessage("m1", "先讨论下，不动手"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    const start = fake.requests.find((request) => request.method === "turn/start");
+    const input = JSON.stringify(start?.params ?? {});
+    expect(input).toContain("first-tree-runtime-contract");
+    expect(input).toContain("running the chat CLI as a command-line tool");
+
+    completeTurn(fake, "turn-1", "ok");
+    await startPromise;
+    await handler.shutdown();
+  });
+
   it("adds no notice when the briefing is unchanged since the session last ran a turn", async () => {
     // First session start seeds the briefing baseline for this thread id at the
     // shared agent home (keyed off `workspaceRoot`).
