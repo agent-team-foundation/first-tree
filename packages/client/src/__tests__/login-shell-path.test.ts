@@ -1,5 +1,11 @@
+import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getLoginShellPathDirs, type RunShell, resetLoginShellPathDirsCache } from "../runtime/login-shell-path.js";
+import {
+  buildProbeScript,
+  getLoginShellPathDirs,
+  type RunShell,
+  resetLoginShellPathDirsCache,
+} from "../runtime/login-shell-path.js";
 
 const DELIM = "__FT_SHELL_PATH__";
 
@@ -112,5 +118,44 @@ describe("getLoginShellPathDirs", () => {
     expect(getLoginShellPathDirs(runShell)).toEqual([]);
     expect(getLoginShellPathDirs(runShell)).toEqual([]);
     expect(runShell).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Integration coverage for the real probe script. The script is launched by the
+ * user's login shell as a single opaque `/bin/sh -c '…'` token, so it must run
+ * identically no matter what that outer shell is — that shell-agnostic launcher
+ * shape is exactly what lets fish / tcsh (which cannot parse a POSIX `do … done`
+ * loop) work. We cannot assume fish is installed in CI, so this exercises the
+ * mechanism through `/bin/sh` as the outer launcher (and the platform default
+ * via the real `defaultRunShell`); fish itself is covered by the runtime-env-qa
+ * `DW7_fish_frozen` scenario.
+ */
+describe("probe script (real execution)", () => {
+  afterEach(() => resetLoginShellPathDirsCache());
+
+  it.skipIf(process.platform === "win32")(
+    "runs under a POSIX /bin/sh launcher and yields this process's canonical, absolute PATH dirs",
+    () => {
+      const runViaSh: RunShell = () => {
+        const r = spawnSync("/bin/sh", ["-lic", buildProbeScript()], {
+          encoding: "utf-8",
+          timeout: 4_000,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        return typeof r.stdout === "string" ? r.stdout : null;
+      };
+      const dirs = getLoginShellPathDirs(runViaSh);
+      // A real environment always has at least one PATH dir, and every dir the
+      // probe returns is canonicalized (`pwd -P`) so it must be absolute.
+      expect(dirs.length).toBeGreaterThan(0);
+      for (const dir of dirs) expect(dir.startsWith("/")).toBe(true);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("the real default-shell probe returns absolute dirs without throwing", () => {
+    const dirs = getLoginShellPathDirs();
+    expect(Array.isArray(dirs)).toBe(true);
+    for (const dir of dirs) expect(dir.startsWith("/")).toBe(true);
   });
 });
