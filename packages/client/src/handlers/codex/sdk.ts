@@ -25,7 +25,7 @@ import {
   writeAgentBriefing,
 } from "../../runtime/bootstrap.js";
 import { type ChatContext, fetchChatContext } from "../../runtime/chat-context.js";
-import { renderChatContextPrompt } from "../../runtime/chat-context-section.js";
+import { renderChatContextPrompt, renderRuntimeOutputContract } from "../../runtime/chat-context-section.js";
 import {
   createCodexClientWithBinaryFallback,
   formatCodexBinaryMissingMessage,
@@ -548,9 +548,15 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
   function consumePendingChatContext(input: Input): Input {
     const chatPrompt = pendingChatContextPrompt;
     pendingChatContextPrompt = null;
-    if (!chatPrompt) return input;
-    if (typeof input === "string") return `${chatPrompt}\n\n${input}`;
-    return [{ type: "text", text: chatPrompt }, ...input];
+    // Codex has no persistent system-prompt channel (unlike the Claude path's
+    // `systemPrompt.append`), so the same provider-neutral runtime contract
+    // rides every turn input — keeping the console/outbox boundary in the
+    // immediate context tail where a "discuss only / hold off" instruction also
+    // lands. Prepended ahead of any chat-context block.
+    const contract = renderRuntimeOutputContract();
+    const prefix = chatPrompt ? `${contract}\n\n${chatPrompt}` : contract;
+    if (typeof input === "string") return `${prefix}\n\n${input}`;
+    return [{ type: "text", text: prefix }, ...input];
   }
 
   /**
