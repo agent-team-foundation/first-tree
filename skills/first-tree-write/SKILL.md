@@ -460,20 +460,20 @@ stay in the node body.
 
 ## CLI Surface
 
-CLI examples in this skill use the canonical prod binary `first-tree` for
-readability. Substitute the channel-correct binary from AGENTS / current
-channel (`first-tree` on prod, `first-tree-staging` on staging,
-`first-tree-dev` on dev) before running them.
+Start from the top-level CLI help, then use the tree-specific command from
+inside the context repo to inspect and locate the current Context Tree
+structure:
 
-The Context-management CLI you actually depend on while reading or
-writing is small. Today only one command is operationally required:
+```bash
+cd "$CONTEXT_REPO"
+first-tree --help
+first-tree tree tree --help
+first-tree tree tree
+```
 
-- `first-tree tree verify` — validate frontmatter and node structure;
-  the Hard Rule 5 gate that must pass before any commit.
+Treat these help outputs as the source of truth for commands, flags, and
+filtering modes. Do not invent flags from memory.
 
-A simplified CLI surface (a structural `list`, a `verify`, and an
-`upgrade`) is the design target; until that lands, map the tree with
-standard tooling (`ls`, `Read`, `Grep`) and rely on `tree verify` as
-the write gate. Everything else (opening PRs, fetching code, reading
-the workspace binding) goes through standard tools (`git`, `gh`,
-`Read`, etc.).
+After you finish editing a Node, run `first-tree tree verify` from inside the
+context repo to validate frontmatter and node structure before treating the
+write as complete.

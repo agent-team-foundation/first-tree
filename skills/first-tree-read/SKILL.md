@@ -19,44 +19,7 @@ is available and ask for a specific source artifact or scope.
 
 ## Workflow
 
-### 1. Resolve the context repo
-
-Find the workspace binding from the current working directory:
-
-```bash
-find_workspace_root() {
-  local d=$(pwd)
-  while [ "$d" != "/" ]; do
-    if [ -f "$d/.first-tree/workspace.json" ]; then echo "$d"; return; fi
-    d=$(dirname "$d")
-  done
-  return 1
-}
-
-WS=$(find_workspace_root) || { echo "No First Tree workspace at or above cwd"; exit 1; }
-cat "$WS/.first-tree/workspace.json"
-```
-
-Resolve the context repo as `<workspaceRoot>/<manifest.tree>`. If the
-manifest is missing or malformed, stop and report the binding gap — do
-not guess a context repo.
-
-If the manifest is present but the resolved path **does not exist on
-disk**, the workspace is agent-managed and this is the agent's job to
-materialise: follow the **Tree Location** block in your `AGENTS.md` /
-`CLAUDE.md` briefing to clone the upstream tree repo into the resolved
-path (the briefing carries the upstream URL, branch, and a ready
-`git clone` command). Once the directory exists, continue below. (If the
-path exists as a **symlink**, treat it as the legacy shared-pool layout —
-remove only the symlink, then clone per the briefing.)
-
-You do **not** need a separate `git pull` step before reading: the
-`first-tree tree tree` command in step 2 runs `git pull --ff-only` on the
-context repo for you (a built-in freshness guarantee), degrading to the
-local copy with a warning if the remote is unreachable. Pass `--no-pull`
-only when you deliberately want a stable snapshot or are working offline.
-
-### 2. Inspect the reader command every time
+### 1. Inspect the reader command every time
 
 Run the help command from inside the context repo before using any
 `tree tree` selector:
@@ -70,7 +33,7 @@ Treat this help output as the source of truth for flags and filtering modes.
 Do not invent flags from memory. Note `first-tree tree tree` refreshes the
 repo with `git pull --ff-only` before listing (use `--no-pull` to skip).
 
-### 3. Build the read query from the user's signal
+### 2. Build the read query from the user's signal
 
 Extract concrete selectors from the request:
 
@@ -88,7 +51,7 @@ matter. Prefer reading:
 - `soft_links` targets from matched files when they affect the task
 - `members/<id>/NODE.md` only when ownership or review scope matters
 
-### 4. Use `first-tree tree tree` to select files
+### 3. Use `first-tree tree tree` to select files
 
 Use the filtering options shown by `first-tree tree tree --help` to list
 candidate files. The exact flags may change; choose them from the fresh help
@@ -107,7 +70,7 @@ Operational rules:
 - If the command fails, report the failure, cwd, and attempted selector. Do not
   silently bypass the CLI filtering requirement.
 
-### 5. Apply what was read
+### 4. Apply what was read
 
 Before acting on the user's task, state the context files read when useful and
 separate durable tree facts from your own inference.
