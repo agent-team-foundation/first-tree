@@ -48,6 +48,23 @@ const CODEX_VERSION_VERIFY_TIMEOUT_MS = 10_000;
 const TRANSIENT_SPAWN_CODES: ReadonlySet<string> = new Set(["ETIMEDOUT", "EAGAIN", "ENOMEM", "ETXTBSY"]);
 
 /**
+ * Kill signals that mean "the binary crashed deterministically" — a broken /
+ * incompatible native install that will fault the same way on every retry.
+ * These must stay NON-transient: classifying them transient would loop a
+ * permanently-broken binary through session-bring-up retries forever instead of
+ * surfacing an actionable binary failure. Any OTHER signal (the SIGTERM/SIGKILL
+ * a `spawnSync` timeout uses to enforce its deadline, an OOM kill, an external
+ * shutdown) is a host condition and stays transient.
+ */
+const DETERMINISTIC_CRASH_SIGNALS: ReadonlySet<NodeJS.Signals> = new Set([
+  "SIGSEGV",
+  "SIGABRT",
+  "SIGILL",
+  "SIGBUS",
+  "SIGFPE",
+]);
+
+/**
  * A codex binary that EXISTS on PATH (resolution already found it) but whose
  * `--version` smoke check did not complete for a transient reason — a spawn
  * timeout, a kill by the timeout signal, or transient resource pressure. The
@@ -149,9 +166,12 @@ export function verifyCodexExecutable(
     return { ok: false, transient, reason: timedOut ? "`codex --version` timed out" : result.error.message };
   }
   // A timeout can surface as a kill signal (e.g. SIGTERM) with no `error`
-  // populated; treat any signal-kill as the same transient host condition.
+  // populated. Treat a termination/timeout kill as transient, but a
+  // deterministic crash signal (SIGSEGV/SIGABRT/…) as a real broken binary so a
+  // permanently-faulting `--version` does not retry forever.
   if (result.signal) {
-    return { ok: false, transient: true, reason: `\`codex --version\` killed by ${result.signal}` };
+    const crashed = DETERMINISTIC_CRASH_SIGNALS.has(result.signal);
+    return { ok: false, transient: !crashed, reason: `\`codex --version\` killed by ${result.signal}` };
   }
   if (result.status !== 0) {
     const detail = [result.stderr, result.stdout]

@@ -137,6 +137,34 @@ describe("codex binary resolution", () => {
     );
   });
 
+  it("verifyCodexExecutable: a deterministic crash signal is NOT transient (broken binary surfaces, no infinite retry)", () => {
+    tmp = mkdtempSync(join(tmpdir(), "ft-codex-crash-"));
+    const executable = join(tmp, "codex");
+    // Self-terminate with SIGSEGV: a binary that always faults on `--version`.
+    writeFileSync(executable, "#!/bin/sh\nkill -SEGV $$\n");
+    chmodSync(executable, 0o755);
+
+    const v = verifyCodexExecutable(executable, { PATH: "" });
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.transient).toBe(false);
+      expect(v.reason).toMatch(/SEGV/);
+    }
+  });
+
+  it("verifyCodexExecutable: a termination kill (timeout-equivalent) IS transient", () => {
+    tmp = mkdtempSync(join(tmpdir(), "ft-codex-term-"));
+    const executable = join(tmp, "codex");
+    // SIGTERM is how a spawnSync timeout enforces its deadline — a host
+    // condition, not a broken binary.
+    writeFileSync(executable, "#!/bin/sh\nkill -TERM $$\n");
+    chmodSync(executable, 0o755);
+
+    const v = verifyCodexExecutable(executable, { PATH: "" });
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.transient).toBe(true);
+  });
+
   it("finds an executable codex via a login-shell-only PATH dir", () => {
     const dir = mkdtempSync(join(tmpdir(), "ft-codex-login-"));
     tmp = dir;
