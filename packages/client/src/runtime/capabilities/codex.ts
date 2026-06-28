@@ -208,6 +208,15 @@ export async function resolveCodexRuntimeBinary(
         version: match ? match[0] : null,
       };
     }
+    // A present binary that only flaked its smoke check (timeout / host
+    // pressure) is NOT missing — say so honestly instead of telling the
+    // operator to reinstall codex.
+    if (verification.transient) {
+      return {
+        ok: false,
+        error: `codex resolved at ${pathBinary} but \`codex --version\` did not complete (transient host condition): ${verification.reason}`,
+      };
+    }
     return {
       ok: false,
       error: formatCodexBinaryMissingMessage(`PATH codex failed validation: ${verification.reason}`),

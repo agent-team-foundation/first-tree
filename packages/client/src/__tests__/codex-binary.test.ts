@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CodexBinaryVerifyTransientError,
   createCodexClientWithBinaryFallback,
   findCodexExecutableOnPath,
   formatCodexBinaryMissingMessage,
@@ -70,10 +71,33 @@ describe("codex binary resolution", () => {
         },
         {
           resolvePath: () => "/usr/local/bin/codex",
-          verifyPath: () => ({ ok: false, reason: "`codex --version` exited 1: broken shim" }),
+          verifyPath: () => ({ ok: false, transient: false, reason: "`codex --version` exited 1: broken shim" }),
         },
       ),
     ).toThrow(/PATH codex failed validation: `codex --version` exited 1: broken shim/);
+  });
+
+  it("treats a transient PATH-codex verify flake as retryable, NOT a missing binary", () => {
+    let thrown: unknown;
+    try {
+      createCodexClientWithBinaryFallback(
+        { env: { PATH: "/usr/local/bin" } },
+        () => {
+          throw new Error("Unable to locate Codex CLI binaries for x86_64-apple-darwin");
+        },
+        {
+          resolvePath: () => "/usr/local/bin/codex",
+          verifyPath: () => ({ ok: false, transient: true, reason: "`codex --version` timed out" }),
+        },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    // A present-but-flaky binary must surface as the transient error the
+    // taxonomy retries — never as a permanent "binary missing".
+    expect(thrown).toBeInstanceOf(CodexBinaryVerifyTransientError);
+    expect((thrown as Error).message).not.toMatch(/binary is missing/i);
+    expect(isCodexBinaryMissingError(thrown)).toBe(false);
   });
 
   it("throws an actionable error when neither bundled nor PATH codex exists", () => {
