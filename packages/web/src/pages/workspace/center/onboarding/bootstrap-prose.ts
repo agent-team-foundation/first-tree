@@ -54,6 +54,27 @@ export function buildNoRepoBootstrap(agentDisplayName: string): string {
   ].join("\n");
 }
 
+export function buildProductionScanBootstrap(opts: { repoUrl: string; agentDisplayName: string }): string {
+  return [
+    `This is a production scan thread with ${opts.agentDisplayName}.`,
+    "",
+    `GitHub repo: ${opts.repoUrl}`,
+    "",
+    "The user came from the website production-scan landing page. Help them audit launch readiness in this repository, not generic setup.",
+    "",
+    "Operational note: use the first-tree-welcome skill's production_scan lane. Prefer local-first repo access through the user's connected computer, existing gh auth, git credentials, or local clone. Do not require GitHub App installation before reading the repo.",
+    "",
+    "First response requirements:",
+    "- Read enough concrete repo evidence to produce a production-readiness report.",
+    "- Prioritize security-weighted launch blockers over generic code quality observations.",
+    "- Score or group findings across practical launch dimensions such as security, secrets/config, auth/data boundaries, tests/CI, deploy/runtime, observability, dependencies, and docs/onboarding.",
+    "- Recommend 2-3 must-fix tasks from the report, each grounded in files or commands you inspected.",
+    "- Ask the user to choose one must-fix task before doing broad implementation work.",
+    "",
+    "After the user chooses, create and pin a Task Brief in the chat summary/description with goal, scope, key files, plan, current status, and next step.",
+  ].join("\n");
+}
+
 export function buildTreeSetupBootstrap(
   sourceUrls: readonly string[],
   opts: { treeBindingPlan: TreeSetupBootstrapPlan; treeUrl: string | null },

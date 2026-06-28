@@ -1,7 +1,7 @@
 ---
 name: first-tree-welcome
-version: 1.0.0
-description: Use only when a First Tree onboarding system kickoff explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup kickoffs, ordinary chats, PR reviews, tree writes, or maintenance.
+version: 1.0.1
+description: Use only when a First Tree onboarding system kickoff explicitly names first-tree-welcome, including production_scan growth kickoffs, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup kickoffs, ordinary chats, PR reviews, tree writes, or maintenance.
 ---
 
 # First Tree Welcome
@@ -18,7 +18,9 @@ setup kickoffs, ordinary chats, PR reviews, tree writes, or maintenance work.
 Help the user feel First Tree's core value: an agent can work from their GitHub
 code repo and their team's Context Tree. Guide any missing setup just enough to
 unlock that value, then steer the welcome chat toward one small, useful,
-verifiable task. Heavy Context Tree setup runs in a separate chat.
+verifiable task. In production_scan growth chats, produce a repo-grounded
+launch-readiness report, steer toward one must-fix task, and preserve a Task
+Brief. Heavy Context Tree setup runs in a separate chat.
 
 ## Priority Order
 
@@ -41,7 +43,7 @@ message, runtime briefing, repo resources, Context Tree binding, and available
 local files:
 
 - role: admin, invitee, or unclear;
-- kickoff kind: `intro`, `work`, or `tree`;
+- kickoff kind: `intro`, `work`, `production_scan`, or `tree`;
 - GitHub App: missing, installed, or unknown;
 - code repo: selected/recommended, local path/URL provided, or none;
 - Context Tree: no binding, newly bound empty tree, bound populated tree, or unknown;
@@ -59,14 +61,15 @@ evidence to read and which first-task options to offer.
 | Priority | State | What to do |
 | --- | --- | --- |
 | 1 | Tree kickoff chat | This is the heavy tree lane. Use `first-tree-seed`, `first-tree-read`, or `first-tree-write` as appropriate instead of this value-chat flow. |
-| 2 | Invitee on a not-ready team | Do not show admin setup, select repos, or create a duplicate tree. Offer a meet-the-agent / local-path path now and note that an admin finishes team setup. |
-| 3 | No repo connected / intro chat | Ask for one local clone path or GitHub URL. Do not ask for GitHub authorization first. |
-| 4 | Team repo/resource exists but local credentials cannot read it | State the exact read failure. Do not claim private repo contents. Ask for a local clone path, accessible URL, or credential setup. |
-| 5 | Admin missing GitHub App for durable code access after local path/URL or repo evidence exists | Give value from available local path or accessible URL first. When durable team access is the blocker, use Setup Handoff to provide a stable deep link or durable fallback. |
-| 6 | Admin has GitHub App but no selected/recommended repo | Explain that repo selection lets the agent work with code long-term. If any local path or URL is available, inspect it now; otherwise point to the product repo-selection surface using Setup Handoff. |
-| 7 | Repo readable but Context Tree missing or empty | Give code-based value in this chat. Mention that the separate tree chat will build the team's shared memory; do not make tree setup a first-task option. |
-| 8 | Repo readable and populated Context Tree readable | Read both, cite concrete evidence, then offer first-task options. Do not seed the tree. |
-| 9 | Repo readable but tree state unknown | Give repo-based value; do not invent tree readiness. Mention the missing tree signal only if it affects durable value. |
+| 2 | production_scan kickoff chat | Use the Production Scan Lane below: local-first repo access, no upfront GitHub App, a production-readiness report, 2-3 must-fix candidates, and a Task Brief after the user chooses. |
+| 3 | Invitee on a not-ready team | Do not show admin setup, select repos, or create a duplicate tree. Offer a meet-the-agent / local-path path now and note that an admin finishes team setup. |
+| 4 | No repo connected / intro chat | Ask for one local clone path or GitHub URL. Do not ask for GitHub authorization first. |
+| 5 | Team repo/resource exists but local credentials cannot read it | State the exact read failure. Do not claim private repo contents. Ask for a local clone path, accessible URL, or credential setup. |
+| 6 | Admin missing GitHub App for durable code access after local path/URL or repo evidence exists | Give value from available local path or accessible URL first. When durable team access is the blocker, use Setup Handoff to provide a stable deep link or durable fallback. |
+| 7 | Admin has GitHub App but no selected/recommended repo | Explain that repo selection lets the agent work with code long-term. If any local path or URL is available, inspect it now; otherwise point to the product repo-selection surface using Setup Handoff. |
+| 8 | Repo readable but Context Tree missing or empty | Give code-based value in this chat. Mention that the separate tree chat will build the team's shared memory; do not make tree setup a first-task option. |
+| 9 | Repo readable and populated Context Tree readable | Read both, cite concrete evidence, then offer first-task options. Do not seed the tree. |
+| 10 | Repo readable but tree state unknown | Give repo-based value; do not invent tree readiness. Mention the missing tree signal only if it affects durable value. |
 
 Cloud onboarding owns one-click Context Tree repo bootstrap and org binding.
 Agents may seed an empty bound tree or update a populated bound tree in the
@@ -111,6 +114,44 @@ Do not hardcode exact button labels, avatar menus, tab names, or step-by-step
 click paths in this skill. Product navigation changes faster than shipped
 skills; deep links plus durable fallback areas are safer than precise prose
 that can drift.
+
+## Production Scan Lane
+
+Use this lane when the kickoff kind is `production_scan` or the kickoff says
+the user came from the production-scan growth path.
+
+This is still an onboarding first chat, not a long-term standalone skill. The
+goal is to help the user feel First Tree's repo-thread value quickly through a
+launch-readiness audit:
+
+1. Prefer local-first repo access through the connected computer, existing
+   `gh` auth, git credentials, or a local clone. Do not require GitHub App
+   installation before reading the repo.
+2. Read enough concrete repo evidence before making recommendations: README,
+   manifests, build/test config, auth/data boundaries, dependency manifests,
+   deploy/runtime config, observability hooks, TODOs, recent failures, or
+   high-risk code paths.
+3. Produce a concise production-readiness report. Prioritize
+   security-weighted launch blockers over generic code quality observations.
+   Useful dimensions include security, secrets/config, auth/data boundaries,
+   tests/CI, deploy/runtime, observability, dependencies, and docs/onboarding.
+4. Offer 2-3 must-fix task candidates from the report. Each candidate should
+   include why it matters, evidence, likely scope, key files, first
+   verification step, and how it could become a PR, follow-up thread, or
+   teammate handoff.
+5. Ask the user to choose one candidate before broad implementation work.
+6. After the user chooses, update the chat description with a concise Task
+   Brief: goal, scope, key files, plan, current status, and next step.
+
+Bring up GitHub App only when the chosen task needs durable GitHub-side
+capabilities such as opening a PR, commenting on a PR/issue, following GitHub
+events, or long-term team repo integration. Explain the specific capability
+needed; do not ask for abstract integration just in case.
+
+Production scan task candidates should be more durable than ordinary
+fast-value tasks: they should be worth resuming, reviewing, handing off, or
+turning into a PR. If the repo evidence is too thin, start with a read-only
+orientation/report task instead of inventing implementation work.
 
 ## First Response Contract
 
@@ -169,7 +210,7 @@ Use concise option labels and one-sentence descriptions. Do **not** include a
 Make clear the user can type free text for another task.
 
 If there is only one responsible next step, recommend it in a normal reply and
-ask for confirmation. If setup blocks all useful repo work, ask for the one
+ask for confirmation. If setup blocks all useful code work, ask for the one
 missing input or guide the product setup step instead of faking task options.
 
 Example shape:
@@ -227,6 +268,8 @@ setup chat. In a tree setup chat, use `first-tree-seed`, `first-tree-read`, or
 - Use concrete evidence, not generic onboarding prose.
 - Treat setup as a path to value, not as a first-task option.
 - Give 2-3 bounded first-task options only when evidence supports them.
+- In `production_scan`, make those options must-fix launch-readiness candidates
+  and update a Task Brief after the user chooses.
 - Do not put `Skip for now` in request options; rely on the web ask footer Skip.
 - Keep the menu as a request when the user is choosing between real tasks.
 - Do not block the value chat on Context Tree setup.

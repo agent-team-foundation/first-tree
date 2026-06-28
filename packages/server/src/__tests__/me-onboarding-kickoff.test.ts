@@ -291,6 +291,40 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(treeMsgs).toHaveLength(1);
     expect(treeMsgs[0]?.content).toBe("Seed the team tree.");
   });
+
+  it("keeps production_scan as a distinct repo-specific audit thread", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const base = { organizationId: admin.organizationId, agentUuid: agent.uuid };
+
+    const work = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...base, bootstrap: "Start ordinary onboarding work.", kind: "work" },
+    });
+    expect(work.statusCode).toBe(200);
+
+    const repoWork = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...base, bootstrap: "Start production scan.", kind: "production_scan" },
+    });
+    expect(repoWork.statusCode).toBe(200);
+
+    const workChatId = work.json<{ chatId: string }>().chatId;
+    const repoWorkChatId = repoWork.json<{ chatId: string }>().chatId;
+    expect(repoWorkChatId).not.toBe(workChatId);
+
+    const [repoWorkChat] = await app.db.select().from(chats).where(eq(chats.id, repoWorkChatId)).limit(1);
+    expect(repoWorkChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:production_scan`);
+    expect(repoWorkChat?.topic).toBe("Production scan");
+
+    const [repoWorkMessage] = await app.db.select().from(messages).where(eq(messages.chatId, repoWorkChatId)).limit(1);
+    expect(repoWorkMessage?.content).toBe("Start production scan.");
+  });
 });
 
 describe("GET /me/onboarding/tree-setup-status", () => {
