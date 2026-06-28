@@ -64,6 +64,10 @@ export function Tooltip({
   const triggerRef = useRef<HTMLElement | null>(null);
   const tipRef = useRef<HTMLDivElement | null>(null);
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // A pointer press focuses the trigger; this flag suppresses the focus-open
+  // that immediately follows so a mouse click doesn't flash the tooltip. The
+  // hover (pointerenter) path still shows it; keyboard focus is unaffected.
+  const suppressFocusOpen = useRef(false);
   const tipId = useId();
 
   const clearTimer = useCallback(() => {
@@ -136,18 +140,26 @@ export function Tooltip({
 
   if (!label) return children;
 
-  const childRef = (children as ReactElement & { ref?: Ref<HTMLElement> }).ref;
+  // React 19 passes `ref` as a regular prop, so read it from `children.props`
+  // (accessing `children.ref` is deprecated and logs a dev warning).
   const childProps = children.props as {
+    ref?: Ref<HTMLElement>;
+    onPointerDown?: (e: React.PointerEvent) => void;
     onPointerEnter?: (e: React.PointerEvent) => void;
     onPointerLeave?: (e: React.PointerEvent) => void;
     onFocus?: (e: React.FocusEvent) => void;
     onBlur?: (e: React.FocusEvent) => void;
   };
+  const childRef = childProps.ref;
 
   const trigger = cloneElement(children, {
     ref: (node: HTMLElement | null) => {
       triggerRef.current = node;
       setRef(childRef, node);
+    },
+    onPointerDown: (e: React.PointerEvent) => {
+      childProps.onPointerDown?.(e);
+      suppressFocusOpen.current = true;
     },
     onPointerEnter: (e: React.PointerEvent) => {
       childProps.onPointerEnter?.(e);
@@ -159,10 +171,18 @@ export function Tooltip({
     },
     onFocus: (e: React.FocusEvent) => {
       childProps.onFocus?.(e);
+      // Open immediately only for keyboard focus. A focus that follows a
+      // pointer press is a click — the hover path covers that case, so opening
+      // here too would just flash the tooltip on every click.
+      if (suppressFocusOpen.current) {
+        suppressFocusOpen.current = false;
+        return;
+      }
       openNow();
     },
     onBlur: (e: React.FocusEvent) => {
       childProps.onBlur?.(e);
+      suppressFocusOpen.current = false;
       close();
     },
   } as Partial<typeof children.props>);

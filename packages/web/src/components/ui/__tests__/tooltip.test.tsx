@@ -40,6 +40,30 @@ describe("Tooltip", () => {
     expect(tip()).toBeNull();
   });
 
+  it("does not open on pointer-induced focus, but still opens on keyboard focus", async () => {
+    h.render(
+      <Tooltip label="Save">
+        <button type="button" aria-label="Save">
+          icon
+        </button>
+      </Tooltip>,
+    );
+    const button = h.container.querySelector("button");
+
+    // A click presses the pointer (which focuses the trigger) — the tooltip
+    // must not flash open from that focus.
+    await act(async () => {
+      button?.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      button?.focus();
+    });
+    expect(tip()).toBeNull();
+
+    // A later keyboard focus (no preceding pointer press) still opens.
+    await act(async () => button?.blur());
+    await act(async () => button?.focus());
+    expect(tip()?.textContent).toBe("Save");
+  });
+
   it("hides on Escape while open", async () => {
     h.render(
       <Tooltip label="Add participant">
