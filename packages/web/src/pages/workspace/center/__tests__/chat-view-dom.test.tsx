@@ -785,7 +785,7 @@ describe("ChatView", () => {
     const renameInput = container.querySelector<HTMLInputElement>("input");
     if (!renameInput) throw new Error("Rename input missing");
     await setValue(renameInput, "Renamed launch");
-    await click(buttonByTitle(container, "Save"));
+    await click(container.querySelector('button[aria-label="Save"]'));
     await waitForCondition(() => chatMocks.renameChat.mock.calls.length > 0, "Expected rename");
     expect(chatMocks.renameChat).toHaveBeenCalledWith("chat-1", "Renamed launch");
 

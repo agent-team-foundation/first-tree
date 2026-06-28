@@ -12,6 +12,7 @@ import {
   type MentionCandidate,
   MentionLabel,
 } from "./mention-autocomplete.js";
+import { Tooltip } from "./ui/tooltip.js";
 
 /**
  * Shared "add an agent to this chat" dropdown. Backs both the header
@@ -224,27 +225,28 @@ export function AddParticipantDropdown({
   return (
     <div ref={containerRef} className="relative">
       {variant === "icon" ? (
-        <button
-          type="button"
-          onClick={() => setOpen(!open)}
-          disabled={disabled}
-          title="Add participant"
-          aria-label="Add participant"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-          style={{
-            width: 28,
-            height: 28,
-            border: 0,
-            background: "transparent",
-            borderRadius: "var(--radius-input)",
-            color: disabled ? "var(--fg-4)" : "var(--fg-3)",
-            cursor: disabled ? "not-allowed" : "pointer",
-          }}
-        >
-          <UserPlus size={16} />
-        </button>
+        <Tooltip label="Add participant">
+          <button
+            type="button"
+            onClick={() => setOpen(!open)}
+            disabled={disabled}
+            aria-label="Add participant"
+            aria-haspopup="menu"
+            aria-expanded={open}
+            className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+            style={{
+              width: 28,
+              height: 28,
+              border: 0,
+              background: "transparent",
+              borderRadius: "var(--radius-input)",
+              color: disabled ? "var(--fg-4)" : "var(--fg-3)",
+              cursor: disabled ? "not-allowed" : "pointer",
+            }}
+          >
+            <UserPlus size={16} />
+          </button>
+        </Tooltip>
       ) : (
         <button
           type="button"

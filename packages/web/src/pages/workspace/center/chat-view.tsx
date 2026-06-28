@@ -116,6 +116,7 @@ import {
 import { Button } from "../../../components/ui/button.js";
 import { Markdown, type MarkdownProps } from "../../../components/ui/markdown.js";
 import { StatusGlyph } from "../../../components/ui/status-glyph.js";
+import { Tooltip } from "../../../components/ui/tooltip.js";
 import { UnreadDivider } from "../../../components/unread-divider.js";
 import { useChatScroll } from "../../../hooks/use-chat-scroll.js";
 import { useReadTracker } from "../../../hooks/use-read-tracker.js";
@@ -1284,16 +1285,18 @@ function EntityLink({ metadata }: { metadata: Record<string, unknown> | undefine
   const url = typeof metadata.entityUrl === "string" ? metadata.entityUrl : null;
   if (!url) return null;
   return (
-    <a
-      href={url}
-      target="_blank"
-      rel="noopener noreferrer"
-      title="View on GitHub"
-      className="inline-flex items-center"
-      style={{ color: "var(--fg-3)", padding: "0 var(--sp-1)", textDecoration: "none" }}
-    >
-      <ExternalLink className="h-3.5 w-3.5" />
-    </a>
+    <Tooltip label="View on GitHub">
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="View on GitHub"
+        className="inline-flex items-center"
+        style={{ color: "var(--fg-3)", padding: "0 var(--sp-1)", textDecoration: "none" }}
+      >
+        <ExternalLink className="h-3.5 w-3.5" />
+      </a>
+    </Tooltip>
   );
 }
 
@@ -3344,24 +3347,25 @@ export function ChatView({
                   list, so it sits at the very left of the chat header
                   (i.e. the visible left edge of the workspace). */}
               {onShowConversations ? (
-                <button
-                  type="button"
-                  onClick={onShowConversations}
-                  aria-label="Show conversations"
-                  title="Show conversations"
-                  className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                  style={{
-                    width: 28,
-                    height: 28,
-                    border: 0,
-                    background: "transparent",
-                    borderRadius: "var(--radius-input)",
-                    color: "var(--fg-3)",
-                    cursor: "pointer",
-                  }}
-                >
-                  <Menu size={16} strokeWidth={2.25} />
-                </button>
+                <Tooltip label="Show conversations">
+                  <button
+                    type="button"
+                    onClick={onShowConversations}
+                    aria-label="Show conversations"
+                    className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                    style={{
+                      width: 28,
+                      height: 28,
+                      border: 0,
+                      background: "transparent",
+                      borderRadius: "var(--radius-input)",
+                      color: "var(--fg-3)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Menu size={16} strokeWidth={2.25} />
+                  </button>
+                </Tooltip>
               ) : null}
               {/* Identity — title is the sole click-to-rename affordance
               (Slack / Linear pattern). The hover-only ✏️ pencil was
@@ -3446,26 +3450,30 @@ export function ChatView({
                         padding: "var(--sp-0_5) var(--sp-1_5)",
                       }}
                     />
-                    <button
-                      type="button"
-                      onClick={commitRename}
-                      disabled={renameMut.isPending}
-                      title="Save"
-                      className="inline-flex items-center"
-                      style={{ color: "var(--primary)", padding: 2 }}
-                    >
-                      <Check className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRenaming(false)}
-                      disabled={renameMut.isPending}
-                      title="Cancel"
-                      className="inline-flex items-center"
-                      style={{ color: "var(--fg-3)", padding: 2 }}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
+                    <Tooltip label="Save">
+                      <button
+                        type="button"
+                        onClick={commitRename}
+                        disabled={renameMut.isPending}
+                        aria-label="Save"
+                        className="inline-flex items-center"
+                        style={{ color: "var(--primary)", padding: 2 }}
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                      </button>
+                    </Tooltip>
+                    <Tooltip label="Cancel">
+                      <button
+                        type="button"
+                        onClick={() => setRenaming(false)}
+                        disabled={renameMut.isPending}
+                        aria-label="Cancel"
+                        className="inline-flex items-center"
+                        style={{ color: "var(--fg-3)", padding: 2 }}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </Tooltip>
                   </span>
                 ) : (
                   <button
@@ -3543,25 +3551,30 @@ export function ChatView({
               only deliberate sends + human messages. Eye / EyeOff conveys the
               show/hide state; pressed styling marks "currently hiding". */}
               {finalTextToggleEnabled && (
-                <button
-                  type="button"
-                  onClick={toggleHideAgentFinalText}
-                  aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                  aria-pressed={hideAgentFinalText}
-                  title={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                  className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                  style={{
-                    width: 28,
-                    height: 28,
-                    border: 0,
-                    background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
-                    borderRadius: "var(--radius-input)",
-                    color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
-                    cursor: "pointer",
-                  }}
-                >
-                  {hideAgentFinalText ? <EyeOff size={16} strokeWidth={2.25} /> : <Eye size={16} strokeWidth={2.25} />}
-                </button>
+                <Tooltip label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}>
+                  <button
+                    type="button"
+                    onClick={toggleHideAgentFinalText}
+                    aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
+                    aria-pressed={hideAgentFinalText}
+                    className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                    style={{
+                      width: 28,
+                      height: 28,
+                      border: 0,
+                      background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
+                      borderRadius: "var(--radius-input)",
+                      color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {hideAgentFinalText ? (
+                      <EyeOff size={16} strokeWidth={2.25} />
+                    ) : (
+                      <Eye size={16} strokeWidth={2.25} />
+                    )}
+                  </button>
+                </Tooltip>
               )}
               {/* Chat details toggle — opens the right rail (Participants /
               GitHub / Chat actions). Sits at the panel's far right,
@@ -3571,26 +3584,27 @@ export function ChatView({
               background + darker foreground) carries the open/closed state.
               An ellipsis is reserved for overflow-action menus (see
               row-actions-menu.tsx), so it would mislead here. */}
-              <button
-                type="button"
-                onClick={toggleSidebar}
-                aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
-                aria-expanded={showSidebar}
-                aria-pressed={showSidebar}
-                title={showSidebar ? "Hide chat details" : "Show chat details"}
-                className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                style={{
-                  width: 28,
-                  height: 28,
-                  border: 0,
-                  background: showSidebar ? "var(--bg-sunken)" : "transparent",
-                  borderRadius: "var(--radius-input)",
-                  color: showSidebar ? "var(--fg)" : "var(--fg-3)",
-                  cursor: "pointer",
-                }}
-              >
-                <PanelRight size={16} strokeWidth={2.25} />
-              </button>
+              <Tooltip label={showSidebar ? "Hide chat details" : "Show chat details"}>
+                <button
+                  type="button"
+                  onClick={toggleSidebar}
+                  aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
+                  aria-expanded={showSidebar}
+                  aria-pressed={showSidebar}
+                  className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                  style={{
+                    width: 28,
+                    height: 28,
+                    border: 0,
+                    background: showSidebar ? "var(--bg-sunken)" : "transparent",
+                    borderRadius: "var(--radius-input)",
+                    color: showSidebar ? "var(--fg)" : "var(--fg-3)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <PanelRight size={16} strokeWidth={2.25} />
+                </button>
+              </Tooltip>
             </div>
           </div>
 
@@ -4209,24 +4223,26 @@ function ParticipantsStats({
         />
       ))}
       {overflow > 0 ? (
-        <button
-          type="button"
-          onClick={onOpen}
-          aria-label={`Show ${overflow} more participant${overflow === 1 ? "" : "s"}`}
-          className="mono text-label inline-flex items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-          style={{
-            marginLeft: -8,
-            width: 24,
-            height: 24,
-            borderRadius: 999,
-            border: "var(--hairline-bold) solid var(--bg-raised)",
-            background: "var(--bg-sunken)",
-            color: "var(--fg-3)",
-            cursor: "pointer",
-          }}
-        >
-          +{overflow}
-        </button>
+        <Tooltip label={`Show ${overflow} more participant${overflow === 1 ? "" : "s"}`}>
+          <button
+            type="button"
+            onClick={onOpen}
+            aria-label={`Show ${overflow} more participant${overflow === 1 ? "" : "s"}`}
+            className="mono text-label inline-flex items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+            style={{
+              marginLeft: -8,
+              width: 24,
+              height: 24,
+              borderRadius: 999,
+              border: "var(--hairline-bold) solid var(--bg-raised)",
+              background: "var(--bg-sunken)",
+              color: "var(--fg-3)",
+              cursor: "pointer",
+            }}
+          >
+            +{overflow}
+          </button>
+        </Tooltip>
       ) : null}
     </div>
   );
@@ -4270,52 +4286,53 @@ function ParticipantAvatar({
   const stateText = view ? view.label : isHuman ? "human" : "…";
 
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      aria-label={`${label} · ${stateText}. Open chat details.`}
-      title={`${label} · ${stateText}`}
-      className="relative inline-flex items-center justify-center transition-transform hover:translate-y-px"
-      style={{
-        marginLeft: stackIndex === 0 ? 0 : -8,
-        zIndex: MAX_VISIBLE_AVATARS - stackIndex,
-        border: 0,
-        background: "transparent",
-        padding: 0,
-        cursor: "pointer",
-      }}
-    >
-      <span
-        aria-hidden="true"
+    <Tooltip label={`${label} · ${stateText}`}>
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`${label} · ${stateText}. Open chat details.`}
+        className="relative inline-flex items-center justify-center transition-transform hover:translate-y-px"
         style={{
-          display: "inline-block",
-          width: 24,
-          height: 24,
-          borderRadius: 999,
-          border: "var(--hairline-bold) solid var(--bg-raised)",
-          overflow: "hidden",
+          marginLeft: stackIndex === 0 ? 0 : -8,
+          zIndex: MAX_VISIBLE_AVATARS - stackIndex,
+          border: 0,
+          background: "transparent",
+          padding: 0,
+          cursor: "pointer",
         }}
       >
-        <RealAvatar
-          src={ident?.avatarImageUrl ?? null}
-          name={label}
-          seed={participant.agentId}
-          colorToken={ident?.avatarColorToken ?? null}
-          size={22}
-        />
-      </span>
-      {view ? (
-        <span aria-hidden="true" className="absolute" style={{ right: -1, bottom: -2 }}>
-          <StatusGlyph
-            colorVar={view.colorVar}
-            shape={view.shape}
-            pulse={view.pulse}
-            size={8}
-            ariaLabel={view.label}
-            separator
+        <span
+          aria-hidden="true"
+          style={{
+            display: "inline-block",
+            width: 24,
+            height: 24,
+            borderRadius: 999,
+            border: "var(--hairline-bold) solid var(--bg-raised)",
+            overflow: "hidden",
+          }}
+        >
+          <RealAvatar
+            src={ident?.avatarImageUrl ?? null}
+            name={label}
+            seed={participant.agentId}
+            colorToken={ident?.avatarColorToken ?? null}
+            size={22}
           />
         </span>
-      ) : null}
-    </button>
+        {view ? (
+          <span aria-hidden="true" className="absolute" style={{ right: -1, bottom: -2 }}>
+            <StatusGlyph
+              colorVar={view.colorVar}
+              shape={view.shape}
+              pulse={view.pulse}
+              size={8}
+              ariaLabel={view.label}
+              separator
+            />
+          </span>
+        ) : null}
+      </button>
+    </Tooltip>
   );
 }
