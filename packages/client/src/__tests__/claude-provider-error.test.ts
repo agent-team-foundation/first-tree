@@ -91,4 +91,38 @@ describe("claude provider error adapter", () => {
     expect(notice).toContain("insufficient account balance");
     expect(notice).toContain("Original provider message");
   });
+
+  it("does not blame auth for a 403 `Request not allowed` (egress / region block)", () => {
+    // Anthropic returns this string before authentication, so the credential
+    // classification must NOT surface the misleading "run claude auth login"
+    // lead — it should enumerate egress / entitlement / auth instead.
+    const notice = formatClaudeProviderFailureNotice(
+      {
+        category: "credential",
+        reasonCode: "provider_credential_required",
+        message: "forbidden",
+        sourceKind: "permanent",
+      },
+      "Failed to authenticate. API Error: 403 Request not allowed",
+    );
+
+    expect(notice).not.toContain("rejected the local Claude authentication");
+    expect(notice).toContain("before authentication");
+    expect(notice).toContain("daemon.env");
+    expect(notice).toContain("Original provider message");
+  });
+
+  it("still surfaces the auth lead for a genuine credential failure", () => {
+    const notice = formatClaudeProviderFailureNotice(
+      {
+        category: "credential",
+        reasonCode: "provider_credential_required",
+        message: "auth",
+        sourceKind: "permanent",
+      },
+      "Failed to authenticate. API Error: 401 invalid x-api-key",
+    );
+
+    expect(notice).toContain("rejected the local Claude authentication");
+  });
 });

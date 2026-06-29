@@ -91,8 +91,33 @@ export function formatClaudeProviderFailureNotice(
 ): string {
   const detail = redactErrorPreview(messagePreview.trim(), 500);
   const suffix = detail.length > 0 ? ` Original provider message: ${detail}` : "";
-  return `${noticeLead(classification.category, classification.reasonCode)}${suffix}`;
+  const lead = looksLikeEgressForbidden(classification, messagePreview)
+    ? EGRESS_FORBIDDEN_LEAD
+    : noticeLead(classification.category, classification.reasonCode);
+  return `${lead}${suffix}`;
 }
+
+/**
+ * Anthropic returns HTTP 403 `Request not allowed` (a `forbidden` body) BEFORE
+ * authentication when the request is rejected at the edge — most often a blocked
+ * network egress (the background daemon not going through the user's proxy), but
+ * also a region or account-entitlement block. The string is indistinguishable
+ * from a genuine credential 403, so we deliberately do NOT re-classify the retry
+ * behavior — but we refuse to print the misleading "run `claude auth login`"
+ * lead, which sends operators chasing an auth problem that does not exist.
+ * Instead we enumerate the real causes in priority order.
+ */
+function looksLikeEgressForbidden(classification: ProviderFailureClassification, messagePreview: string): boolean {
+  return classification.category === "credential" && /request not allowed/i.test(messagePreview);
+}
+
+const EGRESS_FORBIDDEN_LEAD =
+  'Claude Code could not run this turn: Anthropic returned 403 "Request not allowed". ' +
+  "This status comes back before authentication, so it is usually NOT a login problem — most often " +
+  "the background daemon cannot reach Anthropic (e.g. it is not going through your network proxy). " +
+  "Check, in order: (1) if you use a proxy, give the daemon its proxy env via ~/.first-tree/daemon.env " +
+  "and restart it; (2) your Anthropic plan / region entitlement; (3) only if those are fine, " +
+  "re-authenticate with `claude auth login`.";
 
 function readResultMessage(message: unknown): {
   subtype: string;

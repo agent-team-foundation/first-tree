@@ -603,6 +603,32 @@ Most environment variables use the `FIRST_TREE_` prefix.
 | `FIRST_TREE_LOG_LEVEL` | Log level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`). | `info` |
 | `FIRST_TREE_JSON` | JSON output mode (equivalent to `--json`). | — |
 
+### Daemon environment file (`daemon.env`) — user-owned
+
+A launchd / systemd daemon does **not** inherit your interactive login-shell
+environment, so anything your shell exports (most commonly an `HTTP_PROXY` /
+`HTTPS_PROXY` for users behind a network proxy) is invisible to the background
+daemon and the agent runtimes it spawns. That is why an interactive `claude` /
+`git` can work while the daemon's calls to `api.anthropic.com` / `github.com`
+fail.
+
+To supply that environment, create `~/.first-tree/daemon.env` (under your
+channel's `FIRST_TREE_HOME`) with simple `KEY=VALUE` lines:
+
+```sh
+HTTPS_PROXY=http://127.0.0.1:7897
+HTTP_PROXY=http://127.0.0.1:7897
+NO_PROXY=localhost,127.0.0.1
+```
+
+The daemon loads this file on start and passes the values to every child it
+spawns. First Tree is **compatible with** your proxy — it only ever *reads*
+this file and never writes your proxy into it on your behalf. Values already
+present in the daemon's environment are preserved (the file fills gaps, it does
+not override). Edit or delete the file freely, then restart the daemon
+(`<channel> daemon stop && <channel> daemon start`) to apply changes. See
+[troubleshooting/proxy.md](troubleshooting/proxy.md).
+
 ### CLI — internal (set by the CLI for its own subprocesses)
 
 These are mentioned for completeness; operators don't set them in shell rc.
