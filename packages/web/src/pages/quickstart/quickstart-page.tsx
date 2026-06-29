@@ -25,7 +25,7 @@ import { type CampaignIntent, readCampaignHandoff, readCampaignIntent, writeCamp
 export function QuickstartPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { organizationId } = useAuth();
+  const { organizationId, refreshMe } = useAuth();
 
   // Resolve the campaign handoff once. Prefer the URL — the landing CTA and the
   // post-login `next` round-trip land the params here — and persist it so a
@@ -61,6 +61,11 @@ export function QuickstartPage() {
           campaign: intent.campaign,
           complete: false,
         });
+        // Refresh /me so the workspace's onboarding gate sees the just-created
+        // agent + connected client. Without it the cached pre-flow /me still
+        // reads "no personal agent", and the gate bounces a fresh user into
+        // /onboarding instead of landing them in the chat.
+        await refreshMe();
         navigate(`/?c=${encodeURIComponent(chatId)}`);
       } catch (err) {
         // Surface and let the user retry; do not loop (a failed start chat is
@@ -69,10 +74,10 @@ export function QuickstartPage() {
         setStartChatError(err instanceof Error ? err.message : "Couldn't open your chat. Please try again.");
       }
     },
-    [intent, campaign, organizationId, navigate],
+    [intent, campaign, organizationId, navigate, refreshMe],
   );
 
-  const { phase, create } = useAgentCreation({ onOnline: startChat });
+  const { phase, error: agentError, create, retry: retryAgent } = useAgentCreation({ onOnline: startChat });
 
   // Auto-create Cedar the moment a computer is connected with a usable runtime —
   // no button, no picker (the runtime auto-resolves, Claude Code preferred). The
@@ -94,6 +99,17 @@ export function QuickstartPage() {
   const retryStartChat = useCallback(() => {
     if (onlineAgentRef.current) void startChat(onlineAgentRef.current);
   }, [startChat]);
+
+  const retryAgentSetup = useCallback(() => {
+    // Timeout = the agent was created but didn't come online in time → re-poll.
+    // Otherwise create() failed and the hook reset to idle → clear the
+    // once-guard so the auto-create effect fires a fresh attempt.
+    if (phase === "timeout") {
+      void retryAgent();
+      return;
+    }
+    createStartedRef.current = false;
+  }, [phase, retryAgent]);
 
   if (!intent || !campaign) {
     return (
@@ -124,7 +140,7 @@ export function QuickstartPage() {
       </h1>
 
       {!connected ? (
-        <ConnectStep cliCommand={computer.cliCommand} />
+        <ConnectStep cliCommand={computer.cliCommand} tokenError={computer.tokenError} onRetry={computer.retry} />
       ) : noRuntime ? (
         <NoRuntimeStep hostname={hostname} />
       ) : startChatError ? (
@@ -135,7 +151,20 @@ export function QuickstartPage() {
           </FlowHint>
           <div className="flex">
             <Button type="button" onClick={retryStartChat}>
-              <span>Retry</span>
+              <span>Try again</span>
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      ) : phase === "timeout" || agentError ? (
+        <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+          <StatusRow state="ok" label={<RuntimeStatus hostname={hostname} runtime={computer.selectedRuntime} />} />
+          <FlowHint tone="error" role="alert">
+            {agentError ?? `Setting up ${QUICKSTART_AGENT_NAME} is taking longer than expected.`}
+          </FlowHint>
+          <div className="flex">
+            <Button type="button" onClick={retryAgentSetup}>
+              <span>Try again</span>
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
@@ -168,7 +197,33 @@ function RuntimeStatus({ hostname, runtime }: { hostname: string; runtime: strin
   );
 }
 
-function ConnectStep({ cliCommand }: { cliCommand: string | null }) {
+function ConnectStep({
+  cliCommand,
+  tokenError,
+  onRetry,
+}: {
+  cliCommand: string | null;
+  tokenError: string | null;
+  onRetry: () => void;
+}) {
+  if (tokenError) {
+    return (
+      <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+        <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
+          First Tree runs on your own computer, so your code stays local.
+        </p>
+        <FlowHint tone="error" role="alert">
+          {tokenError}
+        </FlowHint>
+        <div className="flex">
+          <Button type="button" onClick={onRetry}>
+            <span>Try again</span>
+            <ArrowRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
+    );
+  }
   return (
     <>
       <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>

@@ -16,7 +16,11 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const navigateMock = vi.hoisted(() => vi.fn());
 const authMock = vi.hoisted(() => ({
-  value: { organizationId: "org-1" as string | null, user: { username: "gandy" } },
+  value: {
+    organizationId: "org-1" as string | null,
+    user: { username: "gandy" },
+    refreshMe: vi.fn(async () => undefined),
+  },
 }));
 
 const computerMock = vi.hoisted(() => ({
@@ -134,7 +138,7 @@ beforeEach(() => {
   };
   agentCreationMock.value = { phase: "idle", error: null, createdUuid: null };
   agentCreationMock.onOnline = undefined;
-  authMock.value = { organizationId: "org-1", user: { username: "gandy" } };
+  authMock.value = { organizationId: "org-1", user: { username: "gandy" }, refreshMe: vi.fn(async () => undefined) };
 });
 
 afterEach(async () => {
@@ -283,8 +287,40 @@ describe("QuickstartPage — full flow (e2e)", () => {
 
     expect(onboardingMocks.postOnboardingStartChat).toHaveBeenCalledTimes(1);
     expect(container.textContent).toContain("server unavailable");
-    expect(container.textContent?.toLowerCase()).toContain("retry");
+    expect(container.textContent?.toLowerCase()).toContain("try again");
     expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes /me before navigating so the workspace gate sees the new agent (no bounce to onboarding)", async () => {
+    seedIntent("production-scan");
+    connectedWith("claude-code");
+    await renderPage();
+    await fireOnline("agent-1");
+
+    expect(authMock.value.refreshMe).toHaveBeenCalled();
+    expect(navigateMock).toHaveBeenCalledWith("/?c=chat-1");
+  });
+
+  it("agent-creation timeout surfaces an error + retry instead of spinning forever", async () => {
+    seedIntent();
+    connectedWith("claude-code");
+    agentCreationMock.value = { phase: "timeout", error: null, createdUuid: "agent-x" };
+    const container = await renderPage();
+    expect(container.textContent?.toLowerCase()).toContain("try again");
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it("connect-token failure surfaces an error + retry on the connect step", async () => {
+    seedIntent();
+    computerMock.value = {
+      ...computerMock.value,
+      connectedClient: null,
+      cliCommand: null,
+      tokenError: "Couldn't generate your connect command",
+    };
+    const container = await renderPage();
+    expect(container.textContent).toContain("Couldn't generate your connect command");
+    expect(container.textContent?.toLowerCase()).toContain("try again");
   });
 
   it("missing campaign intent → renders a graceful pointer, creates nothing, never navigates", async () => {
