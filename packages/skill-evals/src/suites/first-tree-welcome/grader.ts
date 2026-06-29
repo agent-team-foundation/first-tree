@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { runCommand } from "../../core/commands.js";
 import { findStringValue, isRecord, isStringArray } from "../../core/events.js";
 import type { RunPaths } from "../../core/types.js";
-import type { EvalMetrics, FirstTreeWelcomeEvalCase, FixtureValidation } from "./types.js";
+import type { EvalMetrics, FirstTreeWelcomeEvalCase, FixtureValidation, WelcomeExpectedAction } from "./types.js";
 
 const TEXT_KEYS = ["content", "message", "output_text", "text"];
 
@@ -465,6 +465,18 @@ export function deriveMetrics(
     treeEvidenceReadObserved,
   };
 }
+
+/**
+ * Actions that `casePassed` has a real pass path for. Any gate row promoted to
+ * `status: "implemented"` MUST use one of these — `validateFirstTreeWelcomeFloor`
+ * asserts no orphan (an implemented row whose action falls straight through to
+ * `return false`). Keep this in sync with the action branches below.
+ */
+export const GRADED_ACTIONS: ReadonlySet<WelcomeExpectedAction> = new Set([
+  "route_to_tree_skill",
+  "ask_for_repo_path_or_url",
+  "offer_bounded_first_tasks_from_repo_and_tree",
+]);
 
 export function casePassed(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): boolean {
   if (!metrics.fixtureValidationOk) return false;
