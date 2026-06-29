@@ -48,4 +48,24 @@ describe("first-tree-welcome floor invariants", () => {
     const withoutCatchAll = cases.filter((evalCase) => !hasTag(evalCase, "catch-all"));
     expect(validateFloor(withoutCatchAll).some((error) => error.includes("catch-all"))).toBe(true);
   });
+
+  it("requires the catch-all row to be the last gate row", () => {
+    const sample = cases.find((evalCase) => evalCase.tier === "gate" && !hasTag(evalCase, "catch-all"));
+    if (!sample) throw new Error("expected at least one non-catch-all gate row");
+    // A specific (non-catch-all) row placed AFTER the catch-all would be
+    // unreachable under first-match-wins. Give it a unique tuple so only the
+    // "must be last" invariant fires, not the uniqueness one.
+    const trailing: SkillEvalCase = {
+      ...sample,
+      id: `${sample.id}-trailing`,
+      fixture: {
+        ...(sample.fixture as Record<string, unknown>),
+        role: "invitee",
+        kickoffKind: "tree",
+        repoState: "local-readable",
+        treeState: "empty",
+      },
+    };
+    expect(validateFloor([...cases, trailing]).some((error) => error.includes("must be last"))).toBe(true);
+  });
 });

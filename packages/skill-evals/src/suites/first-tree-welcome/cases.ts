@@ -280,6 +280,14 @@ function validateFirstTreeWelcomeFloor(cases: readonly SkillEvalCase[]): readonl
     errors.push(`welcome matrix must declare exactly one catch-all gate row, found ${catchAllRows.length}.`);
   }
 
+  // The catch-all must be the LAST gate row: under first-match-wins, any specific
+  // row placed after it would be unreachable (shadowed). The skill prose relies
+  // on this ("the last row is an explicit catch-all"), so lock it here too.
+  const lastGateRow = gateRows.at(-1);
+  if (lastGateRow && !rowTags(lastGateRow).includes("catch-all")) {
+    errors.push(`the catch-all gate row must be last; found "${lastGateRow.id}" in the last position.`);
+  }
+
   // Uniqueness: every non-catch-all row maps a distinct (role, kickoffKind,
   // repoState, treeState) tuple, so first-match-wins is unambiguous. This
   // replaces the old fixed row-count assertion — rows can be added freely as
