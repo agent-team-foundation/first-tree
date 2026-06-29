@@ -1,7 +1,15 @@
 import type { AgentVisibility } from "@first-tree/shared";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router";
+import { reportOnboardingEvent } from "../../api/onboarding-events.js";
 import { useAuth } from "../../auth/auth-context.js";
+import {
+  type AgentCreationPhase,
+  type CreateAgentArgs,
+  type CreatedAgentInfo,
+  useAgentCreation,
+} from "../../features/agent-setup/use-agent-creation.js";
+import { type ComputerConnection, useComputerConnection } from "../../features/agent-setup/use-computer-connection.js";
 import {
   readOnboardingSelectedRepos,
   writeOnboardingAgentUuid,
@@ -15,8 +23,6 @@ import {
   type ServerOnboardingStep,
   type StepId,
 } from "./steps.js";
-import { type AgentCreationPhase, type CreateAgentArgs, useAgentCreation } from "./use-agent-creation.js";
-import { type ComputerConnection, useComputerConnection } from "./use-computer-connection.js";
 
 export type TreeBindingPlan = "createBinding" | "useBoundTree";
 
@@ -59,8 +65,9 @@ export type OnboardingFlowValue = {
   /**
    * True once a per-org repo-selection draft exists (the user has touched the
    * picker, or a saved draft was restored on resume). The connect-code step
-   * reads this to decide whether to auto-select all granted repos: it only does
-   * so when there is NO draft, so a resumed narrowing — to a subset or to none —
+   * (retained but not in the live onboarding sequence — see steps.ts) reads
+   * this to decide whether to auto-select all granted repos: it only does so
+   * when there is NO draft, so a resumed narrowing — to a subset or to none —
    * is never overwritten back to "all".
    */
   hasRepoDraft: boolean;
@@ -69,8 +76,8 @@ export type OnboardingFlowValue = {
   treeUrl: string;
   setTreeUrl: (next: string) => void;
   /**
-   * True once the kickoff step's bound-tree auto-detect has run. Held here
-   * (not in a per-mount ref) so leaving kickoff and coming back doesn't re-fire
+   * True once the start-chat step's bound-tree auto-detect has run. Held here
+   * (not in a per-mount ref) so leaving start-chat and coming back doesn't re-fire
    * the detect and overwrite the resolved binding plan.
    */
   treeAutoDetectDone: boolean;
@@ -100,7 +107,7 @@ export const OnboardingFlowContext = createContext<OnboardingFlowValue | null>(n
 // because the provider mounts only after `/me` loads (see onboarding-page.tsx),
 // so anyone actually in the flow already has a resolved org.
 const STEP_KEY = (path: OnboardingPath, orgId: string | null): string | null =>
-  orgId ? `onboarding:stepIndex:${path}:${orgId}` : null;
+  orgId ? `onboarding:v2:stepIndex:${path}:${orgId}` : null;
 
 function readPersistedStep(path: OnboardingPath, orgId: string | null): number | null {
   if (typeof window === "undefined") return null;
@@ -127,17 +134,17 @@ function clearPersistedStep(path: OnboardingPath, orgId: string | null): void {
 }
 
 /**
- * The step index to land on for `path` within `orgId`: the server-inferred
- * step, but never behind a position already persisted for THIS org (so a
- * same-tab GitHub-redirect round-trip resumes where the user was). Used on
- * first mount and whenever the selected org changes under a mounted provider.
+ * The step index to land on for `path` within `orgId`: fresh entries start at
+ * the opening product step, while a position already persisted for THIS org
+ * resumes same-tab progress (for example a redirect round-trip or reload after
+ * create-agent). Used on first mount and whenever the selected org changes
+ * under a mounted provider.
  */
 function resolveLandingStep(path: OnboardingPath, orgStep: ServerOnboardingStep, orgId: string | null): number {
   const inferred = inferInitialStepIndex(path, {
     onboardingStep: orgStep,
-    // We can't observe finer team-rename state synchronously; the team step is
-    // cheap to revisit, so default returning admins past it only when the
-    // server already proves a computer exists.
+    // Kept in the pure API so tests can show server readiness no longer skips
+    // the opening step on fresh entry.
     teamSettled: orgStep !== "connect",
   });
   const persisted = readPersistedStep(path, orgId);
@@ -166,7 +173,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
   // org, so once past the account-level `connect` stage we recompute
   // create_agent vs completed from this membership's personal-agent readiness
   // — otherwise a returning user joining a team with only another member's
-  // shared agent would skip straight to kickoff without their own agent.
+  // shared agent would skip straight to start-chat without their own agent.
   const orgStep: ServerOnboardingStep =
     onboardingStep === "connect" || onboardingStep === null
       ? onboardingStep
@@ -209,23 +216,28 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
     void refreshMe();
     setActiveIndex((i) => clampStepIndex(path, i + 1));
   }, [refreshMe, path]);
+  const onAgentCreated = useCallback((info: CreatedAgentInfo) => {
+    writeOnboardingAgentUuid(info.agentUuid);
+    void reportOnboardingEvent("agent_created", { runtimeProvider: info.args.runtimeProvider });
+  }, []);
   const {
     phase: agentPhase,
     error: agentError,
     create: createAgent,
     retry: retryAgent,
     createdUuid: createdAgentUuid,
-  } = useAgentCreation(onAgentOnline);
+  } = useAgentCreation({ onCreated: onAgentCreated, onOnline: onAgentOnline });
 
   const [agentDisplayName, setAgentDisplayName] = useState<string>(() =>
     user?.username ? `${user.username} assistant` : "Assistant",
   );
   const [visibility, setVisibility] = useState<AgentVisibility>("organization");
   // Hydrate the repo selection from this org's saved draft so a bailout before
-  // kickoff (top-bar "finish later", a refresh, a mid-flow navigation) resumes
+  // start-chat (top-bar "finish later", a refresh, a mid-flow navigation) resumes
   // with the picked repos instead of losing them. `null` draft → empty (the
-  // connect-code step will auto-select all granted repos); a non-null draft —
-  // including `[]` — is a deliberate selection we restore verbatim.
+  // connect-code step — retained but not in the live sequence, see steps.ts —
+  // would auto-select all granted repos); a non-null draft — including `[]` —
+  // is a deliberate selection we restore verbatim.
   const [selectedRepoUrls, setSelectedRepoUrlsState] = useState<string[]>(() =>
     organizationId ? (readOnboardingSelectedRepos(organizationId) ?? []) : [],
   );
@@ -247,7 +259,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
 
   // Wrap the setter so every change writes through to the per-org draft and
   // marks a draft as present. The formal team-resource write still happens only
-  // at kickoff — this is the in-flight draft that survives a bailout.
+  // at start-chat — this is the in-flight draft that survives a bailout.
   const setSelectedRepoUrls = useCallback(
     (next: string[]) => {
       setSelectedRepoUrlsState(next);
@@ -263,9 +275,9 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
 
   const completeAndEnterChat = useCallback(
     async (chatId: string) => {
-      // Single-chat kickoff paths may already have stamped completion inside
+      // Single-chat start-chat paths may already have stamped completion inside
       // POST /me/onboarding/kickoff. Multi-chat paths deliberately defer that
-      // stamp until every required kickoff side effect succeeds, then call this
+      // stamp until every required start-chat side effect succeeds, then call this
       // helper. The write stays idempotent and best-effort so a network blip
       // does not strand the user after the required chat(s) exist.
       //
@@ -274,12 +286,12 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
       // finish-later path here would blur the reason semantics that keep new
       // memberships eligible for first-need onboarding.
       clearPersistedStep(path, organizationId);
-      // Clear the per-tab agent-uuid stash now that the kickoff has resolved and
+      // Clear the per-tab agent-uuid stash now that start-chat has resolved and
       // used it — so a later same-tab onboarding/recovery in a DIFFERENT org
       // can't read a stale cross-org agent (the org filter in
       // resolveOnboardingAgent only catches that when the org id is known).
       writeOnboardingAgentUuid(null);
-      // The selection has now been consumed by kickoff (written as team repo
+      // The selection has now been consumed by start-chat (written as team repo
       // resources), so drop the in-flight draft — a later same-tab onboarding
       // in this org starts clean rather than resurrecting a stale pick. Only
       // completion clears it; `finishLater` deliberately keeps it so the user

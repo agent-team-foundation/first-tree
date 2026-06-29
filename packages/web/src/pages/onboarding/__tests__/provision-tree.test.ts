@@ -14,7 +14,7 @@ vi.mock("../../../api/resources.js", () => ({
 }));
 
 import { ApiError } from "../../../api/client.js";
-import { ensureSourceReposRegistered, kickoffErrorMessage, provisionNewTree, repoLabel } from "../provision-tree.js";
+import { ensureSourceReposRegistered, provisionNewTree, repoLabel, startChatErrorMessage } from "../provision-tree.js";
 
 const CREATED = {
   repo: "https://github.com/acme/acme-context-tree",
@@ -133,33 +133,35 @@ describe("repoLabel", () => {
   });
 });
 
-describe("kickoffErrorMessage", () => {
+describe("startChatErrorMessage", () => {
   it("maps a known provisioning code to a plain message (not the raw server string)", () => {
-    const msg = kickoffErrorMessage(
+    const msg = startChatErrorMessage(
       new ApiError(409, "GitHub repo octocat/team-context-tree exists", undefined, "context_tree_repo_access_required"),
       "fallback",
     );
     expect(msg).toMatch(/Grant the App access/i);
     expect(msg).not.toMatch(/octocat\/team-context-tree/);
     // repo_unavailable (repo create/access denied by the App installation) is mapped too.
-    expect(kickoffErrorMessage(new ApiError(409, "not accessible", undefined, "repo_unavailable"), "fallback")).toMatch(
-      /couldn't create or access/,
-    );
+    expect(
+      startChatErrorMessage(new ApiError(409, "not accessible", undefined, "repo_unavailable"), "fallback"),
+    ).toMatch(/couldn't create or access/);
     // A missing/expired GitHub user token maps to a "reconnect GitHub" message.
     expect(
-      kickoffErrorMessage(new ApiError(503, "token", undefined, "github_user_token_required"), "fallback"),
+      startChatErrorMessage(new ApiError(503, "token", undefined, "github_user_token_required"), "fallback"),
     ).toMatch(/Reconnect GitHub/);
   });
   it("falls back for an ApiError with an unknown / missing code (never leaks the server string)", () => {
-    expect(kickoffErrorMessage(new ApiError(500, "internal detail"), "fallback")).toBe("fallback");
-    expect(kickoffErrorMessage(new ApiError(409, "weird", undefined, "totally_unknown"), "fallback")).toBe("fallback");
+    expect(startChatErrorMessage(new ApiError(500, "internal detail"), "fallback")).toBe("fallback");
+    expect(startChatErrorMessage(new ApiError(409, "weird", undefined, "totally_unknown"), "fallback")).toBe(
+      "fallback",
+    );
   });
   it("surfaces a plain Error's message (our own friendly errors carry good copy)", () => {
-    expect(kickoffErrorMessage(new Error("Couldn't register 2 source repos"), "fallback")).toBe(
+    expect(startChatErrorMessage(new Error("Couldn't register 2 source repos"), "fallback")).toBe(
       "Couldn't register 2 source repos",
     );
   });
   it("uses the fallback for a non-Error throw", () => {
-    expect(kickoffErrorMessage("nope", "fallback")).toBe("fallback");
+    expect(startChatErrorMessage("nope", "fallback")).toBe("fallback");
   });
 });

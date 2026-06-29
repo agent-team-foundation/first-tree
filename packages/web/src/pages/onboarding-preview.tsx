@@ -3,19 +3,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import type { HubClient } from "../api/activity.js";
 import type { GithubRepo } from "../api/github.js";
+import type { ComputerConnection } from "../features/agent-setup/use-computer-connection.js";
 import { InviteAcceptCard, InviteAcceptError, InviteAcceptShell, InviteAcceptSkeleton } from "./invite-accept.js";
 import { COPY } from "./onboarding/copy.js";
-import { WorkingState } from "./onboarding/flow-ui.js";
+import { FlowHint, StepHeading, WorkingState } from "./onboarding/flow-ui.js";
 import { OnboardingFlowContext, type OnboardingFlowValue, type TreeBindingPlan } from "./onboarding/onboarding-flow.js";
 import { OnboardingShell } from "./onboarding/onboarding-shell.js";
 import { StepConnectCode } from "./onboarding/steps/step-connect-code.js";
 import { StepConnectComputer } from "./onboarding/steps/step-connect-computer.js";
 import { StepCreateAgent } from "./onboarding/steps/step-create-agent.js";
-import { StepKickoff } from "./onboarding/steps/step-kickoff.js";
+import { StepJoinTeam } from "./onboarding/steps/step-join-team.js";
+import { StepStartChat } from "./onboarding/steps/step-start-chat.js";
 import { StepTeam } from "./onboarding/steps/step-team.js";
-import { StepWelcome } from "./onboarding/steps/step-welcome.js";
 import { getStepSequence, type OnboardingPath, type StepId } from "./onboarding/steps.js";
-import type { ComputerConnection } from "./onboarding/use-computer-connection.js";
 import { MockTeamStepsA, MockTeamStepsB, MockWelcomeCeremonial } from "./onboarding-team-steps-mocks.js";
 
 /**
@@ -52,6 +52,7 @@ const DEFAULT_AGENT_NAME = "gandy assistant";
 // reads true for design review instead of showing literal <package>/<binName>
 // placeholders a real user never sees.
 const SAMPLE_CLI = "npm install -g first-tree\nfirst-tree login ft_3aK9d2hQ7s_pVx1n8Wc4Lr6";
+const GITHUB_ACCESS_GROUP = "GitHub access states";
 
 const NOW_ISO = new Date().toISOString();
 
@@ -288,7 +289,7 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
   if (p === "/me/organizations") {
     return jsonResponse([{ id: ORG_ID, name: "acme", displayName: TEAM_NAME, role: "admin" }]);
   }
-  // Invitee kickoff picker → /me/github/repos; admin connect-code picker →
+  // Invitee start-chat picker → /me/github/repos; admin connect-code picker →
   // the org-scoped installation repos. Both render from the same `repos`
   // outcome so existing picker scenarios cover either source.
   if (p === "/me/github/repos") return reposResponse(activeNet.repos);
@@ -311,7 +312,7 @@ function handleNet(rawUrl: string): Promise<Response> | Response | null {
     if (activeNet.contextTree === "pending") return new Promise<Response>(() => {});
     return jsonResponse({ repo: activeNet.contextTree ?? null });
   }
-  // Managed agents used by kickoff and setup preview branches.
+  // Managed agents used by start-chat and setup preview branches.
   if (p === "/me/managed-agents") {
     return jsonResponse([
       {
@@ -373,6 +374,7 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response>
 
 type Role = OnboardingPath;
 type PreviewView = "flow" | "states" | "experiments";
+type PreviewStepId = StepId | "connect-code";
 
 const PREVIEW_VIEWS: Array<{ id: PreviewView; label: string; subtitle: string }> = [
   { id: "flow", label: "Flow", subtitle: "Primary journey. Real components, mocked state." },
@@ -383,7 +385,7 @@ const PREVIEW_VIEWS: Array<{ id: PreviewView; label: string; subtitle: string }>
 const DEFAULT_VIEW: PreviewView = "flow";
 
 type WizardSpec = {
-  step: StepId;
+  step: PreviewStepId;
   flow?: Partial<OnboardingFlowValue>;
   net?: NetProfile;
   /** Override the rendered body (used for transient working states). */
@@ -423,16 +425,16 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   // ── ADMIN ──────────────────────────────────────────────────────────────
   {
     id: "admin-team",
-    label: "Welcome / name team",
-    group: "Admin happy path",
+    label: "Create team",
+    group: "Admin flow",
     role: "admin",
     view: "flow",
-    wizard: { step: "team" },
+    wizard: { step: "create-team" },
   },
   {
     id: "admin-team-steps-a",
     label: "Steps preview · A list",
-    group: "Team welcome experiments",
+    group: "Create-team experiments",
     role: "admin",
     view: "experiments",
     mockup: <MockTeamStepsA />,
@@ -440,15 +442,15 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   {
     id: "admin-team-steps-b",
     label: "Steps preview · B one-liner",
-    group: "Team welcome experiments",
+    group: "Create-team experiments",
     role: "admin",
     view: "experiments",
     mockup: <MockTeamStepsB />,
   },
   {
     id: "admin-welcome-ceremonial",
-    label: "Welcome · ceremonial",
-    group: "Team welcome experiments",
+    label: "Create team · ceremonial",
+    group: "Create-team experiments",
     role: "admin",
     view: "experiments",
     mockup: <MockWelcomeCeremonial />,
@@ -456,59 +458,59 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
 
   {
     id: "admin-cc-waiting",
-    label: "Install First Tree",
-    group: "Admin happy path",
+    label: "Connect computer",
+    group: "Admin flow",
     role: "admin",
     view: "flow",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.waiting } },
   },
   {
     id: "admin-cc-tokenerr",
-    label: "Connect-token error",
-    group: "Computer states",
+    label: "Connect token error",
+    group: "Connect-computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.tokenError } },
   },
   {
     id: "admin-cc-detecting",
     label: "Connected · detecting",
-    group: "Computer states",
+    group: "Connect-computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.detecting } },
   },
   {
     id: "admin-cc-noruntime",
     label: "Connected · no coding agent",
-    group: "Computer states",
+    group: "Connect-computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.noRuntime } },
   },
   {
     id: "admin-cc-ready",
     label: "Connected · ready (1 coding agent)",
-    group: "Computer states",
+    group: "Connect-computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.ready } },
   },
   {
     id: "admin-cc-ready-multi",
     label: "Connected · ready (multiple coding agents)",
-    group: "Computer states",
+    group: "Connect-computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.readyMulti } },
   },
   {
     id: "admin-cc-stuck",
     label: "Waiting · Node.js hint",
-    group: "Computer states",
+    group: "Connect-computer states",
     role: "admin",
     wizard: { step: "connect-computer", flow: { computer: COMPUTER.waiting }, connectStuck: true },
   },
 
   {
     id: "admin-ca-form",
-    label: "Create first agent",
-    group: "Admin happy path",
+    label: "Create agent",
+    group: "Admin flow",
     role: "admin",
     view: "flow",
     wizard: { step: "create-agent", flow: { computer: COMPUTER.ready, agentPhase: "idle" } },
@@ -516,21 +518,21 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   {
     id: "admin-ca-creating",
     label: "Creating…",
-    group: "Agent creation states",
+    group: "Create-agent states",
     role: "admin",
     wizard: { step: "create-agent", flow: { computer: COMPUTER.ready, agentPhase: "creating" } },
   },
   {
     id: "admin-ca-timeout",
     label: "Timeout",
-    group: "Agent creation states",
+    group: "Create-agent states",
     role: "admin",
     wizard: { step: "create-agent", flow: { computer: COMPUTER.ready, agentPhase: "timeout" } },
   },
   {
     id: "admin-ca-error",
     label: "Create error",
-    group: "Agent creation states",
+    group: "Create-agent states",
     role: "admin",
     wizard: {
       step: "create-agent",
@@ -540,7 +542,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   {
     id: "admin-ca-computer-lost",
     label: "Form · computer disconnected",
-    group: "Agent creation states",
+    group: "Create-agent states",
     role: "admin",
     wizard: { step: "create-agent", flow: { computer: COMPUTER.lostWhileReady, agentPhase: "idle" } },
   },
@@ -548,28 +550,28 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   {
     id: "admin-code-notinstalled",
     label: "Not installed",
-    group: "GitHub states",
+    group: GITHUB_ACCESS_GROUP,
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false } },
   },
   {
     id: "admin-code-err-cantconnect",
     label: "Install error · can't connect (click Install)",
-    group: "GitHub states",
+    group: GITHUB_ACCESS_GROUP,
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false, installUrlError: 503 } },
   },
   {
     id: "admin-code-err-generic",
     label: "Install error · generic (click Install)",
-    group: "GitHub states",
+    group: GITHUB_ACCESS_GROUP,
     role: "admin",
     wizard: { step: "connect-code", net: { installed: false, installUrlError: 500 } },
   },
   {
     id: "admin-code-waiting",
     label: "Waiting for GitHub (after click)",
-    group: "GitHub states",
+    group: GITHUB_ACCESS_GROUP,
     role: "admin",
     // installPending keeps the install query loading; seedInstallAttempt marks
     // the click so the status shows (pre-click there's nothing to wait for).
@@ -578,55 +580,54 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   {
     id: "admin-code-loading",
     label: "Loading repos",
-    group: "GitHub states",
+    group: GITHUB_ACCESS_GROUP,
     role: "admin",
     wizard: { step: "connect-code", net: { installed: true, repos: "pending" } },
   },
   {
     id: "admin-code-norepos",
     label: "No repos",
-    group: "GitHub states",
+    group: GITHUB_ACCESS_GROUP,
     role: "admin",
     wizard: { step: "connect-code", net: { installed: true, repos: [] } },
   },
   {
     id: "admin-code-loadfailed",
     label: "Load failed",
-    group: "GitHub states",
+    group: GITHUB_ACCESS_GROUP,
     role: "admin",
     wizard: { step: "connect-code", net: { installed: true, repos: "neterror" } },
   },
   {
     id: "admin-code-repos",
     label: "Connect GitHub / pick repos",
-    group: "Admin happy path",
+    group: GITHUB_ACCESS_GROUP,
     role: "admin",
-    view: "flow",
     wizard: { step: "connect-code", net: { installed: true, repos: REPOS, installAccount: "org" } },
   },
   {
     id: "admin-code-repos-user",
     label: "Pick repos · personal-account install",
-    group: "GitHub states",
+    group: GITHUB_ACCESS_GROUP,
     role: "admin",
     wizard: { step: "connect-code", net: { installed: true, repos: REPOS, installAccount: "user" } },
   },
 
   {
     id: "admin-ko-noproject",
-    label: "No Context Tree finale",
-    group: "Kickoff states",
+    label: "Start chat · no repo",
+    group: "Start-chat states",
     role: "admin",
-    wizard: { step: "kickoff", flow: { selectedRepoUrls: [] } },
+    wizard: { step: "start-chat", flow: { selectedRepoUrls: [] } },
   },
   {
     id: "admin-ko-new",
-    label: "Kickoff / new tree",
-    group: "Admin happy path",
+    label: "Start chat",
+    group: "Admin flow",
     role: "admin",
     view: "flow",
     wizard: {
-      step: "kickoff",
+      step: "start-chat",
       flow: { selectedRepoUrls: [REPO_WEB], treeBindingPlan: "createBinding" },
       net: { contextTree: null },
     },
@@ -634,26 +635,26 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   {
     id: "admin-ko-existing",
     label: "Existing (auto-detected)",
-    group: "Kickoff states",
+    group: "Start-chat states",
     role: "admin",
-    wizard: { step: "kickoff", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: TREE_URL } },
+    wizard: { step: "start-chat", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: TREE_URL } },
   },
   {
     id: "admin-ko-checking",
     label: "Checking team setup",
-    group: "Kickoff states",
+    group: "Start-chat states",
     role: "admin",
-    wizard: { step: "kickoff", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: "pending" } },
+    wizard: { step: "start-chat", flow: { selectedRepoUrls: [REPO_WEB] }, net: { contextTree: "pending" } },
   },
   {
     id: "admin-ko-starting",
     label: "Starting…",
-    group: "Kickoff states",
+    group: "Start-chat states",
     role: "admin",
     wizard: {
-      step: "kickoff",
+      step: "start-chat",
       flow: { selectedRepoUrls: [REPO_WEB] },
-      body: <WorkingState label={COPY.kickoff.starting} />,
+      body: <WorkingState label={COPY.startChat.starting} />,
     },
   },
 
@@ -661,21 +662,21 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   {
     id: "inv-link-loading",
     label: "Loading",
-    group: "Invite link states",
+    group: "Join-team invite states",
     role: "invitee",
     invite: <InviteAcceptSkeleton />,
   },
   {
     id: "inv-link-invalid",
     label: "Invalid / expired",
-    group: "Invite link states",
+    group: "Join-team invite states",
     role: "invitee",
     invite: <InviteAcceptError message="This invitation is no longer valid" />,
   },
   {
     id: "inv-link-signedout",
-    label: "Invite link / signed out",
-    group: "Invitee happy path",
+    label: "Join team · signed out",
+    group: "Invitee flow",
     role: "invitee",
     view: "flow",
     invite: (
@@ -691,8 +692,8 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   },
   {
     id: "inv-link-signedin",
-    label: "Signed in · join",
-    group: "Invite link states",
+    label: "Join team · signed in",
+    group: "Join-team invite states",
     role: "invitee",
     invite: (
       <InviteAcceptCard
@@ -708,7 +709,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   {
     id: "inv-link-switch",
     label: "Team switch warning",
-    group: "Invite link states",
+    group: "Join-team invite states",
     role: "invitee",
     invite: (
       <InviteAcceptCard
@@ -724,7 +725,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   {
     id: "inv-link-exp-days",
     label: "Expiry · days",
-    group: "Invite link states",
+    group: "Join-team invite states",
     role: "invitee",
     invite: (
       <InviteAcceptCard
@@ -740,7 +741,7 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
   {
     id: "inv-link-exp-hours",
     label: "Expiry · hours (urgent)",
-    group: "Invite link states",
+    group: "Join-team invite states",
     role: "invitee",
     invite: (
       <InviteAcceptCard
@@ -756,36 +757,36 @@ export const ONBOARDING_PREVIEW_SCENARIOS: Scenario[] = [
 
   {
     id: "inv-welcome",
-    label: "Welcome",
-    group: "Invitee happy path",
+    label: "Join team",
+    group: "Invitee flow",
     role: "invitee",
     view: "flow",
-    wizard: { step: "welcome", flow: { teamDisplayName: "Acme Inc" } },
+    wizard: { step: "join-team", flow: { teamDisplayName: "Acme Inc" } },
   },
 
   {
     id: "inv-ko-not-ready",
     label: "Team not ready · missing setup",
-    group: "Kickoff states",
+    group: "Start-chat states",
     role: "invitee",
     // Missing tree, missing GitHub install, or an uncertain probe all collapse to
     // the one not-ready screen; the invitee cannot fix those separately here.
-    wizard: { step: "kickoff", net: { contextTree: null, installExists: false } },
+    wizard: { step: "start-chat", net: { contextTree: null, installExists: false } },
   },
   {
     id: "inv-ko-ready",
-    label: "Start working",
-    group: "Invitee happy path",
+    label: "Start chat",
+    group: "Invitee flow",
     role: "invitee",
     view: "flow",
-    wizard: { step: "kickoff", net: { contextTree: TREE_URL, installExists: true } },
+    wizard: { step: "start-chat", net: { contextTree: TREE_URL, installExists: true } },
   },
   {
     id: "inv-ko-starting",
     label: "Starting…",
-    group: "Kickoff states",
+    group: "Start-chat states",
     role: "invitee",
-    wizard: { step: "kickoff", body: <WorkingState label={COPY.kickoff.starting} /> },
+    wizard: { step: "start-chat", body: <WorkingState label={COPY.startChat.starting} /> },
   },
 ];
 
@@ -833,9 +834,9 @@ function baseFlow(path: OnboardingPath): OnboardingFlowValue {
   };
 }
 
-function StepBody({ step, connectStuck }: { step: StepId; connectStuck?: boolean }): ReactNode {
+function StepBody({ step, connectStuck }: { step: PreviewStepId; connectStuck?: boolean }): ReactNode {
   switch (step) {
-    case "team":
+    case "create-team":
       return <StepTeam />;
     case "connect-code":
       return <StepConnectCode />;
@@ -843,20 +844,60 @@ function StepBody({ step, connectStuck }: { step: StepId; connectStuck?: boolean
       return <StepConnectComputer initialStuck={connectStuck} />;
     case "create-agent":
       return <StepCreateAgent />;
-    case "kickoff":
-      return <StepKickoff />;
-    case "welcome":
-      return <StepWelcome />;
+    case "start-chat":
+      return <StepStartChat />;
+    case "join-team":
+      return <StepJoinTeam />;
     default:
       return null;
   }
+}
+
+function GithubAccessPreviewShell({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <div
+        className="flex-1 min-h-0 flex flex-col items-center"
+        style={{
+          overflowY: "auto",
+          paddingTop: "6rem",
+          paddingBottom: "var(--sp-8)",
+          paddingInline: "var(--sp-5)",
+        }}
+      >
+        <main
+          className="min-w-0"
+          style={{
+            width: "34rem",
+            maxWidth: "100%",
+            flexShrink: 0,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: 0,
+          }}
+        >
+          <div className="onboarding-shell-step fade-in">
+            <StepHeading
+              title="Connect GitHub when a task needs it"
+              why="This surface is for Settings or task-time GitHub access, not a required onboarding step."
+            />
+            <div className="flex flex-col" style={{ gap: "var(--sp-5)", marginTop: "var(--sp-5)" }}>
+              <FlowHint>Preview only: GitHub access stays outside the main onboarding path.</FlowHint>
+              {children}
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
 }
 
 /** Renders one wizard scenario at full fidelity. Remounted per scenario via key. */
 function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
   const path: OnboardingPath = role;
   const sequence = getStepSequence(path);
-  const activeIndex = Math.max(0, sequence.indexOf(spec.step));
+  const canonicalStep = sequence.some((step) => step === spec.step) ? (spec.step as StepId) : (sequence[0] as StepId);
+  const activeIndex = Math.max(0, sequence.indexOf(canonicalStep));
   const init = spec.flow ?? {};
 
   const [agentDisplayName, setAgentDisplayName] = useState<string>(init.agentDisplayName ?? DEFAULT_AGENT_NAME);
@@ -881,7 +922,7 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
     path,
     sequence,
     activeIndex,
-    activeStep: spec.step,
+    activeStep: canonicalStep,
     agentDisplayName,
     setAgentDisplayName,
     visibility,
@@ -900,11 +941,16 @@ function WizardScenarioView({ spec, role }: { spec: WizardSpec; role: Role }) {
   };
 
   const Shell = OnboardingShell;
+  const body = spec.body ?? <StepBody step={spec.step} connectStuck={spec.connectStuck} />;
 
   return (
     <QueryClientProvider client={queryClient}>
       <OnboardingFlowContext.Provider value={flow}>
-        <Shell>{spec.body ?? <StepBody step={spec.step} connectStuck={spec.connectStuck} />}</Shell>
+        {spec.step === "connect-code" ? (
+          <GithubAccessPreviewShell>{body}</GithubAccessPreviewShell>
+        ) : (
+          <Shell>{body}</Shell>
+        )}
       </OnboardingFlowContext.Provider>
     </QueryClientProvider>
   );

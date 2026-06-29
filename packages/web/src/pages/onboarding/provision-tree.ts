@@ -6,7 +6,7 @@ import { createTeamResourceForOrg, listTeamResourcesForOrg } from "../../api/res
 import { COPY } from "./copy.js";
 
 /**
- * Turn a kickoff failure into a message worth showing the user. Context Tree
+ * Turn a start-chat failure into a message worth showing the user. Context Tree
  * provisioning errors arrive as an `ApiError` carrying the server's machine
  * `code` (context_tree_repo_access_required, installation_permissions_insufficient,
  * …); map those to plain language with a way forward rather than leaking the raw
@@ -14,7 +14,7 @@ import { COPY } from "./copy.js";
  * already carry a friendly message, so surface those as-is; an unmapped ApiError
  * falls back to `fallback` rather than exposing a technical string.
  */
-export function kickoffErrorMessage(err: unknown, fallback: string): string {
+export function startChatErrorMessage(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
     const messages: Record<string, string> = COPY.provisionErrors;
     const mapped = err.code ? messages[err.code] : undefined;
@@ -52,10 +52,10 @@ function repoKey(url: string): string {
 /**
  * Provision a fresh Context Tree for the tree setup lane: create the repo +
  * write the org `context_tree` binding via the admin initializer. Runs before
- * the tree setup kickoff is sent so the agent's session resolves the binding.
+ * the tree setup chat is started so the agent's session resolves the binding.
  *
  * A `409` from the initializer is ambiguous — it can mean the tree is **already
- * provisioned** (a detect→create race, or a retry after a later kickoff step
+ * provisioned** (a detect→create race, or a retry after a later start-chat step
  * failed) OR that **no tree could be created** (the merged initializer also
  * returns 409 for `context_tree_repo_access_required` / `repo_unavailable`).
  * We distinguish by the **actual binding

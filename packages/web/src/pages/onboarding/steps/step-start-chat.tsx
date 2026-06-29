@@ -1,9 +1,9 @@
-import type { KickoffKind } from "@first-tree/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
+import type { StartChatKind } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting } from "../../../api/org-settings.js";
 import { Button } from "../../../components/ui/button.js";
 import {
@@ -14,26 +14,26 @@ import {
 import { COPY } from "../copy.js";
 import { FlowHint, StatusRow, StepHeading, WorkingState } from "../flow-ui.js";
 import { type TreeBindingPlan, useOnboardingFlow } from "../onboarding-flow.js";
-import { kickoffErrorMessage } from "../provision-tree.js";
+import { startChatErrorMessage } from "../provision-tree.js";
 import { resolveOnboardingAgent } from "../resolve-agent.js";
-import { resolveInviteeKickoffState } from "../steps.js";
-import { ensureKickoffRepos, type KickoffAgent, startKickoffChat, startTreeSetupKickoff } from "../tree-kickoff.js";
+import { resolveInviteeStartChatState } from "../steps.js";
+import { ensureStartChatRepos, type StartChatAgent, startOnboardingChat } from "../tree-setup-chat.js";
 
-/** Shared "create chat + send kickoff + finish" sequence for single-chat paths. */
-async function runKickoff(args: {
-  bootstrap: string | ((agent: KickoffAgent) => string);
+/** Shared "create chat + send start-chat bootstrap + finish" sequence for single-chat paths. */
+async function runStartChat(args: {
+  bootstrap: string | ((agent: StartChatAgent) => string);
   /** The selected org — scopes agent resolution so the seed never lands on an
    *  agent from a different org. */
   organizationId: string | null;
   /** "intro" = meet-only; "work" = value-first first chat; "tree" = Context Tree setup/update chat. */
-  kind: KickoffKind;
+  kind: StartChatKind;
   treeBindingPlan?: TreeBindingPlan | "none";
   joinPath?: "invite";
   complete: (chatId: string) => Promise<void>;
 }): Promise<void> {
   const agent = await resolveOnboardingAgent(args.organizationId);
   const bootstrap = typeof args.bootstrap === "function" ? args.bootstrap(agent) : args.bootstrap;
-  const chatId = await startKickoffChat({
+  const chatId = await startOnboardingChat({
     agent,
     bootstrap,
     organizationId: args.organizationId,
@@ -44,31 +44,33 @@ async function runKickoff(args: {
   await args.complete(chatId);
 }
 
-export function StepKickoff() {
+export function StepStartChat() {
   const { path } = useOnboardingFlow();
-  return path === "admin" ? <AdminKickoff /> : <InviteeKickoff />;
+  return path === "admin" ? <AdminStartChat /> : <InviteeStartChat />;
 }
 
 // ── Admin ───────────────────────────────────────────────────────────────
 
-function AdminKickoff() {
+function AdminStartChat() {
   const {
     organizationId,
     selectedRepoUrls,
     treeBindingPlan,
     setTreeBindingPlan,
-    treeUrl,
     setTreeUrl,
     treeAutoDetectDone,
     markTreeAutoDetectDone,
     completeAndEnterChat,
-    goTo,
-    sequence,
   } = useOnboardingFlow();
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<"form" | "starting">("form");
   const [error, setError] = useState<string | null>(null);
 
+  // `selectedRepoUrls` is only populated by StepConnectCode, which the
+  // value-first redesign removed from the onboarding sequence (see steps.ts).
+  // So in the live flow `hasRepos` is currently always false and the repo-aware
+  // branches below stay dormant — kept intact for when/if a GitHub connect step
+  // is re-added to onboarding.
   const hasRepos = selectedRepoUrls.length > 0;
   const repoCount = selectedRepoUrls.length;
 
@@ -100,7 +102,7 @@ function AdminKickoff() {
     setPhase("starting");
     try {
       if (!hasRepos) {
-        await runKickoff({
+        await runStartChat({
           bootstrap: (agent) => buildNoRepoBootstrap(agent.displayName || "your agent"),
           organizationId,
           kind: "intro",
@@ -113,7 +115,7 @@ function AdminKickoff() {
       // Re-validate the selection against the CURRENT GitHub App grant list
       // before writing any team repo resource. `selectedRepoUrls` may be a
       // restored per-org draft, and the connect-code prune only runs when that
-      // step mounts — a flow resumed directly at kickoff (persisted step index)
+      // step mounts — a flow resumed directly at start-chat (persisted step index)
       // would otherwise register a repo removed from the installation since the
       // user picked it.
       //
@@ -135,7 +137,7 @@ function AdminKickoff() {
             // navigation (not a reload), so the connect-code cache stays alive —
             // reusing it could pass a list minutes-stale relative to grants that
             // changed in another tab / GitHub settings, and write a removed repo.
-            // A redundant read on the normal connect-code → kickoff path is the
+            // A redundant read on the normal connect-code → start-chat path is the
             // accepted cost of correctness here.
             staleTime: 0,
           })
@@ -150,7 +152,7 @@ function AdminKickoff() {
       // seed a tree from, so fall to the intro path instead of provisioning a
       // tree from repos the app can no longer access.
       if (repos.length === 0) {
-        await runKickoff({
+        await runStartChat({
           bootstrap: (agent) => buildNoRepoBootstrap(agent.displayName || "your agent"),
           organizationId,
           kind: "intro",
@@ -161,16 +163,15 @@ function AdminKickoff() {
       }
 
       const useBoundTree = treeBindingPlan === "useBoundTree";
-      const detectedUrl = useBoundTree ? treeUrl.trim() || null : null;
-      const resolvedTreeBindingPlan = useBoundTree ? "useBoundTree" : "createBinding";
+      const resolvedTreeBindingPlan = useBoundTree ? "useBoundTree" : "none";
       const agent = await resolveOnboardingAgent(organizationId);
-      await ensureKickoffRepos(organizationId, repos);
+      await ensureStartChatRepos(organizationId, repos);
 
-      const workChatId = await startKickoffChat({
+      const workChatId = await startOnboardingChat({
         agent,
         bootstrap: buildValueFirstBootstrap(repos, {
           agentDisplayName: agent.displayName || "your agent",
-          treeSetup: resolvedTreeBindingPlan === "createBinding" ? "pending" : "bound",
+          treeSetup: resolvedTreeBindingPlan === "useBoundTree" ? "bound" : "none",
         }),
         organizationId,
         kind: "work",
@@ -178,53 +179,22 @@ function AdminKickoff() {
         complete: true,
       });
 
-      if (organizationId) {
-        void startTreeSetupKickoff({
-          agent,
-          organizationId,
-          sourceRepos: repos,
-          treeBindingPlan: resolvedTreeBindingPlan,
-          detectedTreeUrl: detectedUrl,
-          queryClient,
-          complete: false,
-        }).catch((err) => {
-          console.warn("onboarding: tree setup kickoff failed after work chat started", err);
-        });
-      }
       await completeAndEnterChat(workChatId);
     } catch (err) {
-      setError(kickoffErrorMessage(err, COPY.errors.chatFailed));
+      setError(startChatErrorMessage(err, COPY.errors.chatFailed));
       setPhase("form");
     }
   };
 
   if (phase === "starting") return <StartingState />;
 
-  // No repo connected — same state as "no Context Tree". The title is honest
-  // (the agent works, but the team has no tree), and the recovery — go back to
-  // connect-code and connect GitHub — lives INLINE in the body (not a separate
-  // orphaned link below the CTA), the same pre/link/post idiom as create-agent's
-  // "reconnect it".
+  // No repo connected is now a normal value-first path. The user can start
+  // chatting and share a project path or GitHub URL in the agent chat; GitHub
+  // access is no longer a required onboarding chore.
   if (!hasRepos) {
     return (
       <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-        <StepHeading
-          title={COPY.kickoff.noProjectTitle}
-          why={
-            <>
-              {COPY.kickoff.noProjectBody.pre}
-              <button
-                type="button"
-                className="font-medium underline underline-offset-2"
-                style={{ color: "var(--primary)" }}
-                onClick={() => goTo(sequence.indexOf("connect-code"))}
-              >
-                {COPY.kickoff.noProjectBody.link}
-              </button>
-              {COPY.kickoff.noProjectBody.post}
-            </>
-          }
-        />
+        <StepHeading title={COPY.startChat.noProjectTitle} why={COPY.startChat.noProjectBody} />
         <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
           {error && (
             <FlowHint tone="error" role="alert">
@@ -233,7 +203,7 @@ function AdminKickoff() {
           )}
           <div className="flex">
             <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
-              <span>{COPY.kickoff.startChatting}</span>
+              <span>{COPY.startChat.startChatting}</span>
               <ArrowRight className="h-4 w-4" />
             </Button>
           </div>
@@ -252,8 +222,8 @@ function AdminKickoff() {
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
       <StepHeading
-        title={usesBoundTree ? COPY.kickoff.existingTitle : COPY.kickoff.newTitle}
-        why={usesBoundTree ? COPY.kickoff.existingWhy(repoCount) : COPY.kickoff.newWhy(repoCount)}
+        title={usesBoundTree ? COPY.startChat.existingTitle : COPY.startChat.newTitle}
+        why={usesBoundTree ? COPY.startChat.existingWhy(repoCount) : COPY.startChat.newWhy(repoCount)}
       />
       <div className="flex flex-col" style={{ gap: "var(--sp-5)" }}>
         {error && (
@@ -263,7 +233,7 @@ function AdminKickoff() {
         )}
         <div className="flex">
           <Button type="button" variant="cta" onClick={() => void handleStart()} disabled={!canStart}>
-            <span>{usesBoundTree ? COPY.kickoff.startExisting : COPY.kickoff.startBuilding}</span>
+            <span>{usesBoundTree ? COPY.startChat.startExisting : COPY.startChat.startBuilding}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
@@ -274,7 +244,7 @@ function AdminKickoff() {
 
 // ── Invitee ─────────────────────────────────────────────────────────────
 
-function InviteeKickoff() {
+function InviteeStartChat() {
   const { organizationId } = useOnboardingFlow();
   // The team is "ready" only with BOTH a Context Tree and a GitHub connection;
   // either missing → "not-ready". The install bit matters because a tree without
@@ -341,8 +311,8 @@ function InviteeKickoff() {
   // not-ready holds: it offers an intro-only "meet your agent" (no git op, no 403)
   // and keeps polling, so it advances to ready on its own once install is confirmed.
   const installed = installationKnown && hasInstallation;
-  return resolveInviteeKickoffState({ treeUrl, hasInstallation: installed }) === "ready" ? (
-    <InviteeReady treeUrl={treeUrl} />
+  return resolveInviteeStartChatState({ treeUrl, hasInstallation: installed }) === "ready" ? (
+    <InviteeReady />
   ) : (
     <InviteeNotReady />
   );
@@ -355,7 +325,7 @@ function InviteeKickoff() {
  * (they're enabled for every org agent). This mirrors the admin finale as a
  * pure launch into a real chat. An invitee never mutates team config.
  */
-function InviteeReady({ treeUrl }: { treeUrl: string }) {
+function InviteeReady() {
   const { organizationId, completeAndEnterChat } = useOnboardingFlow();
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -367,8 +337,8 @@ function InviteeReady({ treeUrl }: { treeUrl: string }) {
       // The agent already inherits the team's repos; a joining teammate's first
       // chat is value-first: read the team's tree/recommended repos, show
       // concrete understanding, then ask which useful first task to do.
-      await runKickoff({
-        bootstrap: (agent) => buildInviteeReadyBootstrap(agent.displayName || "your agent", treeUrl),
+      await runStartChat({
+        bootstrap: (agent) => buildInviteeReadyBootstrap(agent.displayName || "your agent"),
         organizationId,
         kind: "work",
         treeBindingPlan: "useBoundTree",
@@ -376,7 +346,7 @@ function InviteeReady({ treeUrl }: { treeUrl: string }) {
         complete: completeAndEnterChat,
       });
     } catch (err) {
-      setError(kickoffErrorMessage(err, COPY.errors.chatFailed));
+      setError(startChatErrorMessage(err, COPY.errors.chatFailed));
       setPhase("idle");
     }
   };
@@ -385,7 +355,7 @@ function InviteeReady({ treeUrl }: { treeUrl: string }) {
 
   return (
     <div className="flex flex-col" style={{ gap: "var(--sp-6)" }}>
-      <StepHeading title={COPY.kickoff.inviteeReadyTitle} why={COPY.kickoff.inviteeReadyBody} />
+      <StepHeading title={COPY.startChat.inviteeReadyTitle} why={COPY.startChat.inviteeReadyBody} />
       <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
         {error && (
           <FlowHint tone="error" role="alert">
@@ -394,7 +364,7 @@ function InviteeReady({ treeUrl }: { treeUrl: string }) {
         )}
         <div className="flex">
           <Button type="button" variant="cta" onClick={() => void handleStart()}>
-            <span>{COPY.kickoff.startWorking}</span>
+            <span>{COPY.startChat.startWorking}</span>
             <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
@@ -406,11 +376,11 @@ function InviteeReady({ treeUrl }: { treeUrl: string }) {
 /**
  * Invitee · the team's workspace isn't ready yet — either no Context Tree or no
  * GitHub connection. We don't split those: in both cases the invitee is blocked
- * on the admin and can't act on it, so one screen covers both. The kickoff query
+ * on the admin and can't act on it, so one screen covers both. The start-chat query
  * keeps polling, so this advances to `ready` on its own the moment the admin
  * finishes whichever half was missing.
  *
- * "Meet your agent" runs an intro-only kickoff (`runKickoff` with no repo → an
+ * "Meet your agent" runs an intro-only start-chat (`runStartChat` with no repo → an
  * agent that introduces itself, repos connectable later from Settings), the same
  * launch the `ready` state uses. Routing it through `completeAndEnterChat` — not
  * `finishLater` — means the button lands the user in a real chat WITH the agent,
@@ -425,7 +395,7 @@ function InviteeNotReady() {
     setError(null);
     setPhase("starting");
     try {
-      await runKickoff({
+      await runStartChat({
         bootstrap: (agent) => buildNoRepoBootstrap(agent.displayName || "your agent"),
         organizationId,
         kind: "intro",
@@ -434,7 +404,7 @@ function InviteeNotReady() {
         complete: completeAndEnterChat,
       });
     } catch (err) {
-      setError(kickoffErrorMessage(err, COPY.errors.chatFailed));
+      setError(startChatErrorMessage(err, COPY.errors.chatFailed));
       setPhase("idle");
     }
   };
@@ -468,5 +438,5 @@ function InviteeNotReady() {
 // ── shared ──────────────────────────────────────────────────────────────
 
 function StartingState() {
-  return <WorkingState label={COPY.kickoff.starting} />;
+  return <WorkingState label={COPY.startChat.starting} />;
 }
