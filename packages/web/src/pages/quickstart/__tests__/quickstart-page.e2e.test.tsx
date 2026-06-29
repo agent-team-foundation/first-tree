@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../api/activity.js";
 import type { StartOnboardingChatArgs } from "../../../api/onboarding-events.js";
 import type { ComputerConnection } from "../../../features/agent-setup/use-computer-connection.js";
-import { type CampaignIntent, readCampaignIntent, writeCampaignIntent, writeQuickstartAgentUuid } from "../intent.js";
+import { type CampaignIntent, readCampaignIntent, writeCampaignIntent, writeQuickstartAgent } from "../intent.js";
 import { QuickstartPage } from "../quickstart-page.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -362,7 +362,7 @@ describe("QuickstartPage — full flow (e2e)", () => {
   it("on remount with an already-created agent, reuses it (no duplicate Cedar) and resumes start chat", async () => {
     seedIntent("production-scan");
     connectedWith("claude-code");
-    writeQuickstartAgentUuid("agent-existing");
+    writeQuickstartAgent({ campaign: "production-scan", organizationId: "org-1", uuid: "agent-existing" });
     await renderPage();
 
     expect(agentCreationMock.create).not.toHaveBeenCalled();
@@ -371,5 +371,18 @@ describe("QuickstartPage — full flow (e2e)", () => {
     if (!arg) throw new Error("expected a start-chat call");
     expect(arg.agentUuid).toBe("agent-existing");
     expect(navigateMock).toHaveBeenCalledWith("/?c=chat-1");
+  });
+
+  it("ignores a stale stashed agent from a different campaign and creates fresh instead of resuming", async () => {
+    seedIntent("production-scan");
+    connectedWith("claude-code");
+    // Stash left over from a DIFFERENT campaign (abandoned earlier attempt).
+    writeQuickstartAgent({ campaign: "agent-readiness", organizationId: "org-1", uuid: "stale-agent" });
+    await renderPage();
+
+    // The mismatched stash is ignored → a fresh Cedar is created, and we do NOT
+    // resume start chat against the inaccessible stale agent.
+    expect(agentCreationMock.create).toHaveBeenCalledTimes(1);
+    expect(onboardingMocks.postOnboardingStartChat).not.toHaveBeenCalled();
   });
 });

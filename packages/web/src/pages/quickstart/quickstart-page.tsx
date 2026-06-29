@@ -14,9 +14,9 @@ import {
   clearCampaignIntent,
   readCampaignHandoff,
   readCampaignIntent,
-  readQuickstartAgentUuid,
+  readQuickstartAgent,
   writeCampaignIntent,
-  writeQuickstartAgentUuid,
+  writeQuickstartAgent,
 } from "./intent.js";
 
 /**
@@ -56,7 +56,10 @@ export function QuickstartPage() {
   // Read once on mount: an agent created in a prior attempt this tab (it
   // survives a remount). When present we resume with it rather than create a
   // duplicate.
-  const stashedAgentUuid = useMemo(() => readQuickstartAgentUuid(), []);
+  const stashedAgentUuid = useMemo(
+    () => (intent ? readQuickstartAgent(intent.campaign, organizationId) : null),
+    [intent, organizationId],
+  );
   const [startChatError, setStartChatError] = useState<string | null>(null);
 
   const startChat = useCallback(
@@ -99,7 +102,9 @@ export function QuickstartPage() {
     create,
     retry: retryAgent,
   } = useAgentCreation({
-    onCreated: (info) => writeQuickstartAgentUuid(info.agentUuid),
+    onCreated: (info) => {
+      if (intent) writeQuickstartAgent({ campaign: intent.campaign, organizationId, uuid: info.agentUuid });
+    },
     onOnline: startChat,
   });
 
