@@ -114,7 +114,6 @@ first-tree
 - `packages/server/` — Fastify API 服务（`@first-tree/server`）
 - `packages/client/` — Agent SDK + Runtime（`@first-tree/client`）
 - `packages/web/` — React Web 工作空间（`@first-tree/web`）
-- `packages/e2e/` — 黑盒 e2e 测试框架（`@first-tree/e2e`）
 - `skills/` — First Tree Agent 使用的仓库内技能内容
 
 ## 文档
