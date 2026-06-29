@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.0.0
+version: 1.0.1
 description: Use only when a First Tree onboarding start-chat system message explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup chats, ordinary chats, PR reviews, tree writes, or maintenance.
 ---
 
@@ -22,13 +22,20 @@ available the team's Context Tree. Guide any missing setup just enough to
 unlock current value, then steer the welcome chat toward one small, useful,
 verifiable task. Heavy Context Tree setup runs in a separate chat.
 
+Setup is pulled in by the task, not pushed for its own sake. Value comes
+first; when the real work the user chose genuinely needs a setup step — host
+`gh` is missing, a private repo needs the GitHub App, the task truly needs the
+team's Context Tree — name that blocker, guide that one step to completion,
+then continue the task. Never lead with setup, and never make setup the task.
+
 ## Priority Order
 
 1. **Show real value from evidence.** Read available repo, local path, GitHub
    URL, or Context Tree context before claiming understanding.
 2. **Complete only the setup needed for value.** Prefer local path and host
    `gh` for ordinary GitHub work. GitHub App install, repo authorization, and
-   Context Tree binding are platform setup paths, not task options.
+   Context Tree binding are platform setup paths, not task options (see Setup
+   Handoff for when and how to raise one).
 3. **Land on a small task.** When evidence supports it, ask the user to choose a
    bounded first task that can produce a clear result quickly.
 4. **Keep tree work in its lane.** Mention tree setup briefly, then use or point
@@ -81,6 +88,19 @@ When useful work depends on a setup action the agent cannot perform, make the
 handoff actionable without inventing UI details. Do not hand the user vague
 navigation such as "go to the web console", and do not give brittle
 click-by-click UI paths.
+
+Let the task decide whether to raise a setup step, as an explicit branch:
+
+- If the chosen task can produce its result without the setup step, do not raise
+  it yet.
+- If the task is genuinely blocked, or clearly worse, without it, name the
+  blocker, guide that one step to completion, then continue the task.
+
+Do not raise setup as an opening menu. When you do raise it, carry it through to
+completion: a step the task needs should not be mentioned once and dropped. If
+the user would rather not set it up now, keep doing the parts of the task that
+work without it, and raise it again when the task next needs it. After it
+completes, say briefly what it unlocked and what, if anything, is still gated.
 
 Before handing off:
 
@@ -174,6 +194,24 @@ Avoid tasks like:
 
 If the repo evidence is thin, choose read-only orientation tasks instead of inventing implementation work.
 
+## Doing the First Task
+
+Offer the first-task options and wait for the user to pick; do not modify the
+repo before they choose. Once the user picks a task, the onboarding payoff is
+that they *see* it actually work. Finish it the way the task's own check defines
+done:
+
+- Run the verification the task implies — a test, a lint or type-check, a
+  `browse` screenshot, a visible output, or a doc diff — and show the result.
+  Onboarding succeeds when the user sees the task genuinely done, not when you
+  report it done.
+- Do not say a task is finished, or that a change "should work", without that
+  evidence. If you could not verify, say so plainly and name what is left.
+- Keep the change minimal and scoped to the task; do not refactor adjacent code
+  on a first task.
+- If you are stuck after a couple of honest attempts, say so and offer the next
+  option rather than thrashing.
+
 ## Request Decision Rule
 
 Send a tracked request only when you can offer two or three real task options.
@@ -228,11 +266,27 @@ heavy tree seed in this chat unless First Tree explicitly put you in the tree
 setup chat. In a tree setup chat, use `first-tree-seed`, `first-tree-read`, or
 `first-tree-write` as appropriate.
 
+If the task the user chose genuinely needs the team's Context Tree — for
+example it depends on a decision or convention only the tree records — it is
+fine to guide them, with their consent, to build or connect it as the step that
+unblocks that task (via Setup Handoff). That is different from making tree setup
+the first task, which you should not do, and from running a heavy seed here,
+which stays in the tree setup chat.
+
+Once the first task is done and the user has felt the value, and if this human
+is an admin, you can be more proactive about the Context Tree even when no task
+forced it: explain that building it lets every future agent and teammate start
+from the team's shared memory instead of cold, and offer to kick off the
+separate tree setup chat. For an invitee or member, do not push tree build; note
+that an admin owns it (per Role Guardrails). Before that first value moment,
+stay demand-driven and do not push it.
+
 ## Role Guardrails
 
 - Admins may be guided through GitHub App, repo selection, and Context Tree
-  setup surfaces only after the current task needs durable First Tree platform
-  capability.
+  setup surfaces once the current task needs durable First Tree platform
+  capability — or, for the Context Tree, once a first task has delivered value
+  (see Tree Chat Handoff).
 - Invitees must not be asked to select team repos, install the team's GitHub
   App, create a duplicate Context Tree, or mutate org-wide setup.
 - A GitHub URL alone is not a reason to ask for First Tree GitHub App
@@ -247,6 +301,10 @@ setup chat. In a tree setup chat, use `first-tree-seed`, `first-tree-read`, or
 - Read before claiming understanding.
 - Use concrete evidence, not generic onboarding prose.
 - Treat setup as a path to value, not as a first-task option.
+- Let the task pull in setup: raise GitHub App, repo authorization, or tree
+  build only when the current task needs it, then guide that step to completion.
+- Finish the first task against its own check and show the evidence; never claim
+  it works without verifying.
 - Give 2-3 bounded first-task options only when evidence supports them.
 - Do not put `Skip for now` in request options; rely on the web ask footer Skip.
 - Keep the menu as a request when the user is choosing between real tasks.
