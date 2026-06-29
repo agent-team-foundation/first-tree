@@ -4,10 +4,12 @@ Opt-in live model evaluations for First Tree skills. These scripts are not part
 of `pnpm test`, `pnpm check`, or default CI because they can consume real model
 quota.
 
-## first-tree-read
+## Commands
 
 ```bash
 pnpm --filter @first-tree/skill-evals eval:floor
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
@@ -16,11 +18,6 @@ pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-welcome --judge-model <model>
 pnpm --filter @first-tree/skill-evals eval:select -- --base main
 pnpm --filter @first-tree/skill-evals eval:compare
-pnpm --filter @first-tree/skill-evals eval:first-tree-read
-pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger
-pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --json
-pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --verbose
-pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger --validate-fixtures --verbose
 ```
 
 `eval:floor` is a no-model check for the skill-eval framework itself. It
@@ -67,6 +64,16 @@ isolated `HOME` / temp directory, an environment allowlist, and failing command
 guards for common external side-effect commands such as `git`, `gh`,
 `first-tree`, `curl`, and `wget`. This is a guardrail for the text judge; it is
 not a substitute for a future direct no-tools judge API.
+
+`eval:gate -- --suite first-tree-read` runs the live Codex gate for
+`first-tree-read`. It covers the existing read cases through the shared gate
+runner:
+
+- blank workspace + casual prompt should not trigger Context Tree reads;
+- Context Tree workspace + software prompt should read the skill, inspect
+  `first-tree tree tree --help`, use a selector successfully, and report the
+  expected durable facts;
+- Context Tree workspace + non-software prompt should not use `first-tree`.
 
 `eval:gate -- --suite first-tree-write` runs the live Codex gate for
 `first-tree-write`. It covers the minimum source-boundary cases:
@@ -144,4 +151,13 @@ Fixture-only validation is available without model calls:
 
 ```bash
 pnpm --filter @first-tree/skill-evals validate:first-tree-read-fixtures
+```
+
+Legacy read eval aliases are retained for compatibility, but the shared gate
+command is the primary live path:
+
+```bash
+pnpm --filter @first-tree/skill-evals eval:first-tree-read
+pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger
+pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger --validate-fixtures --verbose
 ```

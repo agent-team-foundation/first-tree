@@ -17,6 +17,8 @@ import {
 } from "./core/result-store.js";
 import { changedFilesFromGit, formatSelectionSummary, selectSkillEvalRecommendations } from "./core/select.js";
 import { readSkillFrontmatter } from "./core/skills/frontmatter.js";
+import { formatFirstTreeReadGateSummary, runFirstTreeReadGate } from "./suites/first-tree-read/index.js";
+import type { BatchSummary as ReadBatchSummary } from "./suites/first-tree-read/types.js";
 import { formatFirstTreeSeedGateSummary, runFirstTreeSeedGate } from "./suites/first-tree-seed/index.js";
 import type { BatchSummary as SeedBatchSummary } from "./suites/first-tree-seed/types.js";
 import { formatFirstTreeWelcomeGateSummary, runFirstTreeWelcomeGate } from "./suites/first-tree-welcome/index.js";
@@ -61,6 +63,7 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:floor
   pnpm --filter @first-tree/skill-evals eval:floor -- --json
   pnpm --filter @first-tree/skill-evals eval:floor -- --suite <skill>
+  pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
@@ -369,12 +372,12 @@ function floorResultEntries(
   }));
 }
 
-type GateBatchSummary = SeedBatchSummary | WelcomeBatchSummary | WriteBatchSummary;
+type GateBatchSummary = ReadBatchSummary | SeedBatchSummary | WelcomeBatchSummary | WriteBatchSummary;
 
 function gateResultEntries(
   packageRootPath: string,
   batch: GateBatchSummary,
-  suite: Exclude<ShippedSkillName, "first-tree-read">,
+  suite: ShippedSkillName,
   options: CliOptions,
 ): readonly ResultStoreEntry[] {
   const runGroupId = createRunGroupId(batch.runStartedAt, `eval-gate-${suite}`);
@@ -446,6 +449,26 @@ function qualityResultEntries(
 
 async function runGate(options: CliOptions): Promise<void> {
   const packageRootPath = packageRoot();
+  if (options.suite === "first-tree-read") {
+    const batch = await runFirstTreeReadGate(packageRootPath, {
+      caseId: options.caseId,
+      codexBin: options.codexBin,
+      json: options.json,
+      model: options.model,
+      verbose: options.verbose,
+    });
+    appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
+    } else {
+      process.stdout.write(`${formatFirstTreeReadGateSummary(batch)}\n`);
+    }
+    if (batch.failed > 0) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   if (options.suite === "first-tree-write") {
     const batch = await runFirstTreeWriteGate(packageRootPath, {
       caseId: options.caseId,
@@ -507,7 +530,7 @@ async function runGate(options: CliOptions): Promise<void> {
   }
 
   throw new Error(
-    "eval:gate currently requires --suite first-tree-write, --suite first-tree-seed, or --suite first-tree-welcome.",
+    "eval:gate currently requires --suite first-tree-read, --suite first-tree-write, --suite first-tree-seed, or --suite first-tree-welcome.",
   );
 }
 

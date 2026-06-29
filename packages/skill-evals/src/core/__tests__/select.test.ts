@@ -25,15 +25,22 @@ describe("skill eval selection", () => {
     ]);
   });
 
-  it("selects read fixture validation and opt-in live read eval for read suite changes", () => {
-    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/suites/first-tree-read/runner.ts"]);
+  it("selects read floor and unified gate for read suite changes", () => {
+    const summary = selectSkillEvalRecommendations(["skills/first-tree-read/SKILL.md"]);
 
     expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
       "pnpm --filter @first-tree/skill-evals eval:floor -- --suite first-tree-read",
-      "pnpm --filter @first-tree/skill-evals validate:first-tree-read-fixtures",
-      "pnpm --filter @first-tree/skill-evals eval:first-tree-read",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read",
     ]);
-    expect(summary.recommendations[2]?.reason).toMatch(/opt-in/u);
+  });
+
+  it("selects read floor and unified gate for legacy read wrapper changes", () => {
+    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/first-tree-read/index.ts"]);
+
+    expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
+      "pnpm --filter @first-tree/skill-evals eval:floor -- --suite first-tree-read",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read",
+    ]);
   });
 
   it("selects all implemented gates and quality when shared judge core changes", () => {
@@ -41,6 +48,7 @@ describe("skill eval selection", () => {
 
     expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
       "pnpm --filter @first-tree/skill-evals eval:floor",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome",
