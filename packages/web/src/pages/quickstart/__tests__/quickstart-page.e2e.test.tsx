@@ -310,6 +310,26 @@ describe("QuickstartPage — full flow (e2e)", () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
+  it("agent create failure → Try again actually re-attempts creation (not just a ref mutation)", async () => {
+    seedIntent();
+    connectedWith("claude-code");
+    agentCreationMock.value = { phase: "idle", error: "agent service unavailable", createdUuid: null };
+    const container = await renderPage();
+
+    // Auto-create fired once; the error branch is shown with a retry.
+    expect(agentCreationMock.create).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("agent service unavailable");
+
+    const retryBtn = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Try again"));
+    if (!retryBtn) throw new Error("expected a Try again button");
+    await act(async () => {
+      retryBtn.click();
+      await Promise.resolve();
+    });
+    // Clicking Try again must issue a second /agents attempt, not silently no-op.
+    expect(agentCreationMock.create).toHaveBeenCalledTimes(2);
+  });
+
   it("connect-token failure surfaces an error + retry on the connect step", async () => {
     seedIntent();
     computerMock.value = {

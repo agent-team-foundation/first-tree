@@ -79,13 +79,11 @@ export function QuickstartPage() {
 
   const { phase, error: agentError, create, retry: retryAgent } = useAgentCreation({ onOnline: startChat });
 
-  // Auto-create Cedar the moment a computer is connected with a usable runtime —
-  // no button, no picker (the runtime auto-resolves, Claude Code preferred). The
-  // ref makes this fire exactly once even though the mocked/real `create` and
-  // `phase` may not change between renders.
-  useEffect(() => {
-    if (createStartedRef.current || !intent) return;
-    if (!computer.connectedClient || !computer.selectedRuntime || phase !== "idle") return;
+  // Create Cedar with the auto-resolved runtime + neutral private default. The
+  // ref guards a single attempt; the retry path calls this directly (a ref
+  // reset alone would not re-trigger the effect, whose deps don't change).
+  const createCedar = useCallback(() => {
+    if (!computer.connectedClient || !computer.selectedRuntime) return;
     createStartedRef.current = true;
     void create({
       displayName: QUICKSTART_AGENT_NAME,
@@ -94,7 +92,15 @@ export function QuickstartPage() {
       visibility: "private",
       organizationId,
     });
-  }, [computer.connectedClient, computer.selectedRuntime, phase, intent, create, organizationId]);
+  }, [computer.connectedClient, computer.selectedRuntime, create, organizationId]);
+
+  // Auto-create the moment a computer is connected with a usable runtime — no
+  // button, no picker (Claude Code preferred). The ref makes this fire once.
+  useEffect(() => {
+    if (createStartedRef.current || !intent) return;
+    if (!computer.connectedClient || !computer.selectedRuntime || phase !== "idle") return;
+    createCedar();
+  }, [computer.connectedClient, computer.selectedRuntime, phase, intent, createCedar]);
 
   const retryStartChat = useCallback(() => {
     if (onlineAgentRef.current) void startChat(onlineAgentRef.current);
@@ -102,14 +108,14 @@ export function QuickstartPage() {
 
   const retryAgentSetup = useCallback(() => {
     // Timeout = the agent was created but didn't come online in time → re-poll.
-    // Otherwise create() failed and the hook reset to idle → clear the
-    // once-guard so the auto-create effect fires a fresh attempt.
+    // Otherwise create() failed → re-attempt directly (a ref reset wouldn't
+    // re-trigger the effect, whose deps didn't change).
     if (phase === "timeout") {
       void retryAgent();
       return;
     }
-    createStartedRef.current = false;
-  }, [phase, retryAgent]);
+    createCedar();
+  }, [phase, retryAgent, createCedar]);
 
   if (!intent || !campaign) {
     return (
