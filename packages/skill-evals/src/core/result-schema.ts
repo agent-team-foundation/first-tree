@@ -29,6 +29,23 @@ export type SkillEvalRunResult = {
   tier: string;
 };
 
+export type QualityJudgeRunResult = {
+  caseId: string;
+  cost_usd: number | null;
+  duration_ms: number;
+  failures: readonly string[];
+  judge_model: string;
+  judge_provider: string;
+  judge_reasoning: string | null;
+  judge_scores: Record<string, number> | null;
+  passed: boolean;
+  raw_output: string;
+  runId: string;
+  skill: string;
+  thresholds: Record<string, number>;
+  tier: "quality";
+};
+
 export function allScoresPass(scores: SkillCaseScores): boolean {
   return scores.routing_pass && scores.process_pass && scores.outcome_pass && scores.risk_pass;
 }

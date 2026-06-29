@@ -9,12 +9,16 @@ import { readSkillFrontmatter } from "./core/skills/frontmatter.js";
 import { formatFirstTreeSeedGateSummary, runFirstTreeSeedGate } from "./suites/first-tree-seed/index.js";
 import { formatFirstTreeWelcomeGateSummary, runFirstTreeWelcomeGate } from "./suites/first-tree-welcome/index.js";
 import { formatFirstTreeWriteGateSummary, runFirstTreeWriteGate } from "./suites/first-tree-write/index.js";
+import { formatQualitySummaryTable, runQualityEval } from "./suites/quality/index.js";
+import type { QualitySkillName } from "./suites/quality/types.js";
 import { SKILL_EVAL_SUITES } from "./suites/registry.js";
 
 type CliOptions = {
   caseId: string | null;
   codexBin: string;
-  command: "floor" | "gate";
+  command: "floor" | "gate" | "quality";
+  judgeBin: string;
+  judgeModel: string | null;
   json: boolean;
   model: string | null;
   suite: ShippedSkillName | null;
@@ -42,10 +46,13 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
+  pnpm --filter @first-tree/skill-evals eval:quality
+  pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write
 
 Commands:
   floor                  Run no-model schema, coverage, and skill-file checks.
   gate                   Run a live model gate suite.
+  quality                Run opt-in LLM-as-judge quality cases.
 
 Options:
   --suite <skill>        Limit per-suite floor checks to one shipped skill.
@@ -53,6 +60,8 @@ Options:
   --json                 Print summary as JSON.
   --model <model>        Pass a model override to codex exec.
   --codex-bin <path>     Codex binary to execute. Defaults to CODEX_BIN or codex.
+  --judge-model <model>  Judge model override. Defaults to JUDGE_MODEL, CODEX_MODEL, or provider default.
+  --judge-bin <path>     Judge Codex binary. Defaults to JUDGE_CODEX_BIN, CODEX_BIN, or codex.
   --verbose              Print live readable progress to stderr.
   --help                 Show this help.
 `;
@@ -73,7 +82,7 @@ function parseArgs(args: readonly string[]): CliOptions {
     process.stdout.write(usage());
     process.exit(0);
   }
-  if (command !== "floor" && command !== "gate") {
+  if (command !== "floor" && command !== "gate" && command !== "quality") {
     throw new Error(`Unknown command: ${command}`);
   }
 
@@ -81,6 +90,8 @@ function parseArgs(args: readonly string[]): CliOptions {
     caseId: null,
     codexBin: process.env.CODEX_BIN ?? "codex",
     command,
+    judgeBin: process.env.JUDGE_CODEX_BIN ?? process.env.CODEX_BIN ?? "codex",
+    judgeModel: process.env.JUDGE_MODEL ?? process.env.CODEX_MODEL ?? null,
     json: false,
     model: process.env.CODEX_MODEL ?? null,
     suite: null,
@@ -117,6 +128,16 @@ function parseArgs(args: readonly string[]): CliOptions {
       index += 1;
       continue;
     }
+    if (arg === "--judge-model") {
+      options.judgeModel = readOptionValue(normalized, index, "--judge-model");
+      index += 1;
+      continue;
+    }
+    if (arg === "--judge-bin") {
+      options.judgeBin = readOptionValue(normalized, index, "--judge-bin");
+      index += 1;
+      continue;
+    }
     if (arg === "--verbose") {
       options.verbose = true;
       continue;
@@ -129,6 +150,14 @@ function parseArgs(args: readonly string[]): CliOptions {
   }
 
   return options;
+}
+
+function qualitySuite(options: CliOptions): QualitySkillName | null {
+  if (options.suite === null) return null;
+  if (options.suite === "first-tree-write" || options.suite === "first-tree-welcome") {
+    return options.suite;
+  }
+  throw new Error("eval:quality currently supports --suite first-tree-write or --suite first-tree-welcome.");
 }
 
 function packageRoot(): string {
@@ -288,10 +317,35 @@ async function runGate(options: CliOptions): Promise<void> {
   );
 }
 
+async function runQuality(options: CliOptions): Promise<void> {
+  const batch = await runQualityEval(packageRoot(), {
+    caseId: options.caseId,
+    codexBin: options.codexBin,
+    judgeBin: options.judgeBin,
+    judgeModel: options.judgeModel,
+    json: options.json,
+    model: options.model,
+    suite: qualitySuite(options),
+    verbose: options.verbose,
+  });
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
+  } else {
+    process.stdout.write(`${formatQualitySummaryTable(batch)}\n`);
+  }
+  if (batch.failed > 0) {
+    process.exitCode = 1;
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   if (options.command === "gate") {
     await runGate(options);
+    return;
+  }
+  if (options.command === "quality") {
+    await runQuality(options);
     return;
   }
 
