@@ -505,14 +505,37 @@ describe("resolveCodexRuntimeBinary (handler-contract parity)", () => {
     });
   });
 
-  it("bundle NOT found + PATH codex fails validation → binary-missing", async () => {
-    const verifyPath = (): CodexExecutableVerification => ({ ok: false, reason: "`codex --version` timed out" });
+  it("bundle NOT found + PATH codex non-transient validation failure → binary-missing", async () => {
+    const verifyPath = (): CodexExecutableVerification => ({
+      ok: false,
+      transient: false,
+      reason: "`codex --version` exited 1: broken shim",
+    });
     const res = await resolveCodexRuntimeBinary(
       {},
       { resolveBundled: notFound, findOnPath: () => "/usr/local/bin/codex", verifyPath },
     );
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain("Codex runtime binary is missing");
+  });
+
+  it("bundle NOT found + PATH codex TRANSIENT validation flake → NOT binary-missing", async () => {
+    const verifyPath = (): CodexExecutableVerification => ({
+      ok: false,
+      transient: true,
+      reason: "`codex --version` timed out",
+    });
+    const res = await resolveCodexRuntimeBinary(
+      {},
+      { resolveBundled: notFound, findOnPath: () => "/usr/local/bin/codex", verifyPath },
+    );
+    expect(res.ok).toBe(false);
+    // A flaky smoke check on a present binary must not tell the operator to
+    // reinstall codex.
+    if (!res.ok) {
+      expect(res.error).not.toContain("Codex runtime binary is missing");
+      expect(res.error).toContain("transient host condition");
+    }
   });
 
   it("bundle NOT found + no PATH codex → binary-missing", async () => {

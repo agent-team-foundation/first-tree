@@ -25,7 +25,63 @@ export type CodexBinaryFallbackDeps = {
   log?: (message: string) => void;
 };
 
-export type CodexExecutableVerification = { ok: true; output?: string } | { ok: false; reason: string };
+export type CodexExecutableVerification =
+  | { ok: true; output?: string }
+  | { ok: false; reason: string; transient: boolean };
+
+/**
+ * `codex --version` smoke-check ceiling. A cold `codex` behind a version-manager
+ * shim (nvm / fnm / volta / mise / asdf) or on a loaded machine can take several
+ * seconds to first respond, so a tight bound turns a present, working binary
+ * into a spurious failure. Paired with the transient-vs-missing split below: a
+ * verify that flakes (timeout / machine pressure) is retried, not declared
+ * permanently missing.
+ */
+const CODEX_VERSION_VERIFY_TIMEOUT_MS = 10_000;
+
+/**
+ * Spawn errnos that mean "the machine couldn't run the check right now", NOT
+ * "the binary is broken/absent": the timeout kill, plus transient resource
+ * pressure. These map to a transient verification failure (→ retry), never to a
+ * missing-binary verdict (→ permanent / needs-operator / terminal).
+ */
+const TRANSIENT_SPAWN_CODES: ReadonlySet<string> = new Set(["ETIMEDOUT", "EAGAIN", "ENOMEM", "ETXTBSY"]);
+
+/**
+ * Kill signals that mean "the binary crashed deterministically" — a broken /
+ * incompatible native install that will fault the same way on every retry.
+ * These must stay NON-transient: classifying them transient would loop a
+ * permanently-broken binary through session-bring-up retries forever instead of
+ * surfacing an actionable binary failure. Any OTHER signal (the SIGTERM/SIGKILL
+ * a `spawnSync` timeout uses to enforce its deadline, an OOM kill, an external
+ * shutdown) is a host condition and stays transient.
+ */
+const DETERMINISTIC_CRASH_SIGNALS: ReadonlySet<NodeJS.Signals> = new Set([
+  "SIGSEGV",
+  "SIGABRT",
+  "SIGILL",
+  "SIGBUS",
+  "SIGFPE",
+]);
+
+/**
+ * A codex binary that EXISTS on PATH (resolution already found it) but whose
+ * `--version` smoke check did not complete for a transient reason — a spawn
+ * timeout, a kill by the timeout signal, or transient resource pressure. The
+ * binary is installed; the host was merely too busy / cold to answer in time.
+ *
+ * This carries a distinct `name` the error taxonomy maps to `transient`, so a
+ * flaky check reschedules the session bring-up instead of surfacing as a
+ * permanent "Codex runtime binary is missing" terminal failure (which does NOT
+ * retry). The message deliberately avoids the missing-binary / capability
+ * wording so it never gets re-absorbed into the terminal `capability` bucket.
+ */
+export class CodexBinaryVerifyTransientError extends Error {
+  constructor(reason: string) {
+    super(`codex --version smoke check did not complete (transient host condition); will retry. Detail: ${reason}`);
+    this.name = "CodexBinaryVerifyTransientError";
+  }
+}
 
 const CODEX_BINARY_MISSING_PATTERNS: readonly RegExp[] = [
   /codex runtime binary is missing/i,
@@ -66,6 +122,14 @@ export function createCodexClientWithBinaryFallback<TOptions extends CodexOption
     }
     const verification = (deps.verifyPath ?? verifyCodexExecutable)(fallbackPath, options.env);
     if (!verification.ok) {
+      // The binary EXISTS (resolution found it at `fallbackPath`) — only the
+      // smoke check failed. A transient flake (timeout / machine pressure) must
+      // stay transient so the session bring-up is retried; only a genuine
+      // non-transient failure (broken / incompatible binary) is reported as
+      // missing, which classifies permanent and terminates the session.
+      if (verification.transient) {
+        throw new CodexBinaryVerifyTransientError(verification.reason);
+      }
       throw new Error(
         formatCodexBinaryMissingMessage(`${errorText(err)} PATH codex failed validation: ${verification.reason}`),
       );
@@ -92,20 +156,35 @@ export function verifyCodexExecutable(
     env: { ...process.env, ...env },
     encoding: "utf-8",
     shell: false,
-    timeout: 3_000,
+    timeout: CODEX_VERSION_VERIFY_TIMEOUT_MS,
     windowsHide: true,
   });
   if (result.error) {
     const code = (result.error as NodeJS.ErrnoException).code;
     const timedOut = code === "ETIMEDOUT";
-    return { ok: false, reason: timedOut ? "`codex --version` timed out" : result.error.message };
+    const transient = timedOut || (typeof code === "string" && TRANSIENT_SPAWN_CODES.has(code));
+    return { ok: false, transient, reason: timedOut ? "`codex --version` timed out" : result.error.message };
+  }
+  // A timeout can surface as a kill signal (e.g. SIGTERM) with no `error`
+  // populated. Treat a termination/timeout kill as transient, but a
+  // deterministic crash signal (SIGSEGV/SIGABRT/…) as a real broken binary so a
+  // permanently-faulting `--version` does not retry forever.
+  if (result.signal) {
+    const crashed = DETERMINISTIC_CRASH_SIGNALS.has(result.signal);
+    return { ok: false, transient: !crashed, reason: `\`codex --version\` killed by ${result.signal}` };
   }
   if (result.status !== 0) {
     const detail = [result.stderr, result.stdout]
       .filter((text): text is string => typeof text === "string" && text.trim().length > 0)
       .join(" ")
       .trim();
-    return { ok: false, reason: `\`codex --version\` exited ${result.status}${detail ? `: ${detail}` : ""}` };
+    // A clean non-zero exit is the binary answering "I'm broken/incompatible"
+    // — a genuine, non-transient install problem.
+    return {
+      ok: false,
+      transient: false,
+      reason: `\`codex --version\` exited ${result.status}${detail ? `: ${detail}` : ""}`,
+    };
   }
   const output = [result.stdout, result.stderr]
     .filter((text): text is string => typeof text === "string" && text.trim().length > 0)

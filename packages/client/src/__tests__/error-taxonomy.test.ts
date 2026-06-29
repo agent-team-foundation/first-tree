@@ -147,6 +147,27 @@ describe("error-taxonomy.classify", () => {
       expect(stackClass.strategy.kind).toBe("none");
     });
 
+    it("a transient codex --version verify flake is transient, not a missing binary", () => {
+      const err = new Error("codex --version smoke check did not complete (transient host condition); will retry.");
+      err.name = "CodexBinaryVerifyTransientError";
+      const c = classify(err, { source: "session" });
+      expect(c.kind).toBe(ERROR_KINDS.TRANSIENT);
+      expect(c.reasonCode).toBe("codex_verify_transient");
+      expect(c.strategy.kind).toBe("exponentialBackoff");
+    });
+
+    it("AbortSignal.timeout TimeoutError is transient (recognised by name and by message)", () => {
+      const byName = classify(new DOMException("The operation was aborted due to timeout", "TimeoutError"), {
+        source: "session",
+      });
+      expect(byName.kind).toBe(ERROR_KINDS.TRANSIENT);
+      expect(byName.reasonCode).toBe("operation_timeout");
+      // Proxied/wrapped errors that lose the DOMException name still match on text.
+      const byText = classify(new Error("The operation was aborted due to timeout"));
+      expect(byText.reasonCode).toBe("operation_timeout");
+      expect(byText.kind).toBe(ERROR_KINDS.TRANSIENT);
+    });
+
     it("status-only and text-only Claude errors cover non-name branches and defaults", () => {
       expect(classify(noMessageShape({ status: 429 })).message).toBe("Claude API rate limit");
       expect(classify("rate limit exceeded").reasonCode).toBe("claude_rate_limit");

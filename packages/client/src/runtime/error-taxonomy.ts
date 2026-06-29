@@ -267,12 +267,39 @@ export function classify(err: unknown, context?: { source?: ErrorSource }): Clas
       message: shape.message ?? "Claude Code CLI requires re-authentication (run /login)",
     };
   }
+  // A *present* codex binary whose `--version` smoke check flaked (spawn
+  // timeout / host pressure) is transient — retry the bring-up. This MUST win
+  // over the missing-binary check below so a busy host never masquerades as an
+  // uninstalled codex (which would terminate the session with no retry).
+  if (shape.name === "CodexBinaryVerifyTransientError") {
+    return {
+      kind: ERROR_KINDS.TRANSIENT,
+      strategy: TRANSIENT_FAST,
+      reasonCode: "codex_verify_transient",
+      message: shape.message ?? "codex --version smoke check did not complete (transient)",
+    };
+  }
   if (isCodexBinaryMissingError(err)) {
     return {
       kind: ERROR_KINDS.PERMANENT,
       strategy: NONE,
       reasonCode: "codex_binary_missing",
       message: shape.message ?? "Codex runtime binary missing",
+    };
+  }
+  // `AbortSignal.timeout()` aborts with a `DOMException` whose `name` is
+  // `TimeoutError` (Web spec, Node 22+) and message "The operation was aborted
+  // due to timeout" — a clearly transient backend/SDK timeout. Recognise it
+  // explicitly so it retries on the fast transient strategy instead of falling
+  // into the `unknown` bucket with a slow, mislabelled backoff. (The hub-fetch
+  // path in `sdk.ts` already treats this shape as a timeout; this keeps the
+  // provider-side taxonomy consistent with it.)
+  if (shape.name === "TimeoutError" || /operation was aborted due to timeout/i.test(shape.message ?? "")) {
+    return {
+      kind: ERROR_KINDS.TRANSIENT,
+      strategy: TRANSIENT_FAST,
+      reasonCode: "operation_timeout",
+      message: shape.message ?? "Operation aborted due to timeout",
     };
   }
   // -- Anthropic SDK / stream errors ---------------------------------------
