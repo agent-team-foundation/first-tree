@@ -27,25 +27,29 @@ export type DeliveryStats = {
 
 type DeliveryOptions = {
   entityStateSeed?: EntityStateSeed | null;
+  actorHumanId?: string | null;
 };
 
 /**
  * Per-chat delivery accumulator. "Deliver once per chat" (S7/S9): multiple
  * audience targets (subscribed and/or involved) that resolve to the same chat
- * collapse into a single card whose wake-set is the union of their delegates.
+ * collapse into a single card whose wake-set is the union of surviving
+ * per-human entries.
  */
+type DeliveryReason = "follow" | InvolveReason;
+
+type DeliveryEntry = {
+  humanAgentId: string;
+  wakeAgentId: string;
+  reasons: Set<DeliveryReason>;
+  involveReason: InvolveReason | null;
+  involveLogin: string | null;
+};
+
 type ChatDelivery = {
   chatId: string;
   created: boolean;
-  /** Native mention / wake-set — the delegates to notify in this chat. */
-  delegateIds: Set<string>;
-  /** Echo suppress-set — actor agents excluded from notify (still get a silent row). */
-  actorIds: Set<string>;
-  /** Card framing: an involved target's reason/login wins over plain subscribed. */
-  involveReason: InvolveReason | null;
-  involveLogin: string | null;
-  /** Chat-local representative human used as `senderId` (rendered as the GitHub system sender). */
-  humanAgentId: string;
+  entries: Map<string, DeliveryEntry>;
 };
 
 /**
@@ -54,9 +58,10 @@ type ChatDelivery = {
  * Two phases. Phase 1 resolves every audience target to a chat (subscribed
  * targets short-circuit; involved targets reuse the entity's existing chat
  * when the involved human+delegate are already speakers, else mint a fresh
- * one) and accumulates the per-chat wake-set / suppress-set / card framing.
- * Phase 2 delivers one card per chat, waking the union of delegates via native
- * `metadata.mentions` and suppressing the actor via `suppressNotifyAgentIds`.
+ * one) and accumulates the per-chat entries. Self-echo pruning happens before
+ * fresh-chat resolution, so an actor's own target does not create an empty
+ * chat. Phase 2 delivers one card per chat, waking the union of surviving
+ * wake agents via native `metadata.mentions`.
  * Each chat is delivered independently so a single failure doesn't poison the
  * rest — the loop logs and continues.
  */
@@ -67,10 +72,16 @@ export async function deliverNormalizedEvent(
   options: DeliveryOptions = {},
 ): Promise<DeliveryStats> {
   const stats: DeliveryStats = { delivered: 0, newChats: 0, failed: 0 };
+  const actorHumanId = options.actorHumanId ?? null;
+  const existingMappedChatIds = existingMappedChatIdsForProjection(audience);
+  const entity = entityFromEvent(event);
 
   // Phase 1 — resolve each target to a chat and merge into per-chat deliveries.
   const byChat = new Map<string, ChatDelivery>();
   for (const target of audience) {
+    if (actorHumanId && target.humanAgentId === actorHumanId) {
+      continue;
+    }
     let resolved: ResolvedChat | null;
     try {
       resolved = await resolveChatFor(app, event, target, options);
@@ -119,31 +130,21 @@ export async function deliverNormalizedEvent(
       delivery = {
         chatId: resolved.chatId,
         created: resolved.created,
-        delegateIds: new Set(),
-        actorIds: new Set(),
-        involveReason: null,
-        involveLogin: null,
-        humanAgentId: target.humanAgentId,
+        entries: new Map(),
       };
       byChat.set(resolved.chatId, delivery);
     } else if (resolved.created) {
       delivery.created = true;
     }
-    delivery.delegateIds.add(target.delegateAgentId);
-    if (target.actorAgentId) delivery.actorIds.add(target.actorAgentId);
-    // Prefer an involved target's reason/login for the (single) card framing.
-    if (target.kind === "new" && target.involveReason && !delivery.involveReason) {
-      delivery.involveReason = target.involveReason;
-      delivery.involveLogin = target.involveLogin;
-    }
+    addDeliveryEntry(delivery, target);
   }
 
-  // Phase 1.5 — refresh the persisted title for this entity's mapping rows.
-  // Seeding happens on insert, but rows created before titles were persisted
-  // (and any upstream rename) only get a label here. Scoped to the entity's
-  // cluster, gated on at least one resolved chat, and isolated so a title
-  // write never aborts card delivery.
-  if (byChat.size > 0 && event.entity.title && event.entity.title.length > 0) {
+  // Phase 1.5 — refresh the local projection for this entity independently
+  // from card delivery. A self-only event can prune every delivery entry, but
+  // it still proves the entity has an existing local mapping whose title/topic
+  // projection must stay fresh.
+  const shouldRefreshEntityProjection = byChat.size > 0 || existingMappedChatIds.length > 0;
+  if (shouldRefreshEntityProjection && event.entity.title && event.entity.title.length > 0) {
     try {
       await setEntityTitle(app.db, {
         organizationId: event.source.organizationId,
@@ -163,6 +164,9 @@ export async function deliverNormalizedEvent(
       );
     }
   }
+  for (const chatId of existingMappedChatIds) {
+    await refreshGithubChatTopic(app.db, chatId, entity);
+  }
 
   // Phase 2 — one card per chat.
   for (const delivery of byChat.values()) {
@@ -173,16 +177,13 @@ export async function deliverNormalizedEvent(
         // edits propagate into the chat list. The helper only touches a chat
         // whose own `direct` anchor entity matches this event, preserves the
         // original prefix, and no-ops when the payload carries no title.
-        const entity: GithubEntity = {
-          type: event.entity.type,
-          key: event.entity.key,
-          title: event.entity.title,
-          url: event.entity.url,
-        };
         await refreshGithubChatTopic(app.db, delivery.chatId, entity);
       }
 
-      const card = buildCard(event, delivery.involveReason, delivery.involveLogin);
+      const entries = [...delivery.entries.values()].sort(compareEntries);
+      const senderId = selectSenderId(entries);
+      const cardContext = selectCardContext(entries);
+      const card = buildCard(event, cardContext.involveReason, cardContext.involveLogin);
       const mentionedUser = card.mentionedUser ?? undefined;
       // Native wake-set (S8): the delegates are passed as `metadata.mentions`,
       // so the generic fan-out wakes them — no GitHub-specific addressing
@@ -190,15 +191,11 @@ export async function deliverNormalizedEvent(
       // out by the message service (the card still lands as a silent row via
       // `allowRecipientlessSend`). The unread-mention red dot stays off because
       // delegates are non-human mention targets.
-      const mentions = [...delivery.delegateIds].sort();
-      // Echo suppression (S2 / D1): the event's actor agent(s), decoupled from
-      // `senderId` and from the wake-set. A suppressed agent still gets a
-      // silent (notify=false) inbox row — the card lands, it just doesn't wake.
-      const suppressNotifyAgentIds = [...delivery.actorIds];
+      const mentions = [...new Set(entries.map((entry) => entry.wakeAgentId))].sort();
       const { message, recipients } = await sendMessage(
         app.db,
         delivery.chatId,
-        delivery.humanAgentId,
+        senderId,
         {
           format: "card",
           content: card,
@@ -222,7 +219,6 @@ export async function deliverNormalizedEvent(
           },
         },
         {
-          suppressNotifyAgentIds,
           // Opt in to writing `metadata.systemSender` — the message service
           // strips that key from every untrusted caller (web / agent SDK POST)
           // so HTTP boundaries cannot impersonate the GitHub sender. This is
@@ -231,10 +227,9 @@ export async function deliverNormalizedEvent(
           // Opt out of the default explicit-recipient guard. This trusted
           // system delivery owns its own routing, but on some events the
           // wake-set resolves to no live speaker (every delegate is a
-          // non-speaker, or the only addressable agent is the suppressed
-          // actor). Such a card is still a valid history/context row for human
-          // observers; without this opt-out the default guard would make this
-          // trusted path start throwing.
+          // non-speaker). Such a card is still a valid history/context row
+          // for human observers; without this opt-out the default guard would
+          // make this trusted path start throwing.
           allowRecipientlessSend: true,
         },
       );
@@ -252,7 +247,7 @@ export async function deliverNormalizedEvent(
           metric: "github_delivery_failed_total",
           errorClass: err instanceof Error ? err.name : "Unknown",
           chatId: delivery.chatId,
-          delegateAgents: [...delivery.delegateIds],
+          delegateAgents: [...delivery.entries.values()].map((entry) => entry.wakeAgentId),
           entityType: event.entity.type,
           entityKey: event.entity.key,
           eventType: event.rawEventType,
@@ -264,6 +259,84 @@ export async function deliverNormalizedEvent(
   }
 
   return stats;
+}
+
+function existingMappedChatIdsForProjection(audience: AudienceTarget[]): string[] {
+  return [
+    ...new Set(
+      audience.filter((target) => target.kind === "existing" && target.chatId).map((target) => target.chatId as string),
+    ),
+  ].sort();
+}
+
+function entityFromEvent(event: NormalizedEvent): GithubEntity {
+  return {
+    type: event.entity.type,
+    key: event.entity.key,
+    title: event.entity.title,
+    url: event.entity.url,
+  };
+}
+
+function addDeliveryEntry(delivery: ChatDelivery, target: AudienceTarget): void {
+  const key = `${target.humanAgentId}:${target.delegateAgentId}`;
+  const existing = delivery.entries.get(key);
+  const reasons = reasonsForTarget(target);
+  if (existing) {
+    for (const reason of reasons) existing.reasons.add(reason);
+    if (!existing.involveReason && target.involveReason) {
+      existing.involveReason = target.involveReason;
+      existing.involveLogin = target.involveLogin;
+    }
+    return;
+  }
+  delivery.entries.set(key, {
+    humanAgentId: target.humanAgentId,
+    wakeAgentId: target.delegateAgentId,
+    reasons,
+    involveReason: target.involveReason,
+    involveLogin: target.involveLogin,
+  });
+}
+
+function reasonsForTarget(target: AudienceTarget): Set<DeliveryReason> {
+  const reasons = new Set<DeliveryReason>();
+  if (target.kind === "existing") reasons.add("follow");
+  if (target.involveReason) reasons.add(target.involveReason);
+  return reasons;
+}
+
+function compareEntries(a: DeliveryEntry, b: DeliveryEntry): number {
+  return a.humanAgentId.localeCompare(b.humanAgentId) || a.wakeAgentId.localeCompare(b.wakeAgentId);
+}
+
+function selectSenderId(entries: DeliveryEntry[]): string {
+  const first = entries[0];
+  if (!first) throw new Error("delivery plan must have at least one surviving entry");
+  return first.humanAgentId;
+}
+
+function selectCardContext(entries: DeliveryEntry[]): {
+  involveReason: InvolveReason | null;
+  involveLogin: string | null;
+} {
+  const involved = [...entries]
+    .filter((entry) => entry.involveReason)
+    .sort((a, b) => involveReasonRank(a.involveReason) - involveReasonRank(b.involveReason) || compareEntries(a, b))[0];
+  return { involveReason: involved?.involveReason ?? null, involveLogin: involved?.involveLogin ?? null };
+}
+
+function involveReasonRank(reason: InvolveReason | null): number {
+  switch (reason) {
+    case "review_requested":
+      return 0;
+    case "mentioned":
+      return 1;
+    case "assigned":
+      return 2;
+    default:
+      return 3;
+  }
 }
 
 type ResolvedChat = { chatId: string; created: boolean };

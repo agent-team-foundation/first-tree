@@ -7,7 +7,9 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
+import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { users } from "../db/schema/users.js";
 import { type AudienceTarget, resolveAudience } from "../services/github-audience.js";
 import { deliverNormalizedEvent } from "../services/github-delivery.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -20,10 +22,42 @@ async function seedAgent(
     orgId: string;
     memberId: string;
     name: string;
+    type?: "agent" | "human";
     delegateMention?: string | null;
   },
 ): Promise<string> {
   const uuid = randomUUID();
+  const managerId = opts.type === "human" ? randomUUID() : opts.memberId;
+  if (opts.type === "human") {
+    const userId = randomUUID();
+    await app.db.transaction(async (tx) => {
+      await tx.insert(users).values({
+        id: userId,
+        username: `user-${uuid}`,
+        passwordHash: "test",
+        displayName: opts.name,
+      });
+      await tx.insert(agents).values({
+        uuid,
+        name: opts.name,
+        organizationId: opts.orgId,
+        type: "human",
+        displayName: opts.name,
+        inboxId: `inbox_${uuid}`,
+        managerId,
+        delegateMention: opts.delegateMention ?? null,
+        visibility: "organization",
+      });
+      await tx.insert(members).values({
+        id: managerId,
+        userId,
+        organizationId: opts.orgId,
+        agentId: uuid,
+        role: "member",
+      });
+    });
+    return uuid;
+  }
   await app.db.insert(agents).values({
     uuid,
     name: opts.name,
@@ -31,7 +65,7 @@ async function seedAgent(
     type: "agent",
     displayName: opts.name,
     inboxId: `inbox_${uuid}`,
-    managerId: opts.memberId,
+    managerId,
     delegateMention: opts.delegateMention ?? null,
     // Match `services/agent.ts::defaultVisibility` — an `autonomous_agent`
     // created via the service layer is `organization`-visible. The raw
@@ -53,6 +87,7 @@ function makeEvent(opts: {
   body?: string;
   rawEventType?: string;
   rawAction?: string;
+  kind?: NormalizedEvent["kind"];
   title?: string;
   actorLogin?: string;
 }): NormalizedEvent {
@@ -69,7 +104,7 @@ function makeEvent(opts: {
       url: `https://github.com/owner/repo/pull/1`,
     },
     actor: { githubLogin: opts.actorLogin ?? "alice", isBot: false },
-    kind: "opened",
+    kind: opts.kind ?? "opened",
     involves: opts.involves ?? [],
     surface: {
       title: "PR #1: Refactor inbox",
@@ -78,6 +113,25 @@ function makeEvent(opts: {
     },
     relatedRefs: [],
   };
+}
+
+async function notifyCount(app: App, chatId: string, agentId: string): Promise<number> {
+  const [agent] = await app.db
+    .select({ inboxId: agents.inboxId })
+    .from(agents)
+    .where(eq(agents.uuid, agentId))
+    .limit(1);
+  const rows = await app.db
+    .select({ id: inboxEntries.messageId })
+    .from(inboxEntries)
+    .where(
+      and(
+        eq(inboxEntries.inboxId, agent?.inboxId ?? ""),
+        eq(inboxEntries.chatId, chatId),
+        eq(inboxEntries.notify, true),
+      ),
+    );
+  return rows.length;
 }
 
 describe("deliverNormalizedEvent", () => {
@@ -96,6 +150,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
 
     // Seed an existing chat + mapping for the target entity
@@ -118,7 +173,6 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
-      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -157,6 +211,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
 
     // Bind a chat for the entity, but make ONLY the human a speaker — the
@@ -189,7 +244,6 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
-      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -213,14 +267,11 @@ describe("deliverNormalizedEvent", () => {
     expect(delegateEntries).toHaveLength(0);
   });
 
-  it("echo (#942, S2/D1): suppresses the actor's notify but keeps it addressed — card lands as a silent row", async () => {
-    // The delegate is a live speaker of the bound chat, so it would normally
-    // be woken. When the delegate is ALSO the event's actor (its own GitHub
-    // action, surfaced as `target.actorAgentId`), Stage 3 passes it through
-    // `suppressNotifyAgentIds` (#942, S2/D1): the delegate stays structurally
-    // addressed and the card still lands as a silent `notify=false` row, but
-    // the actor is not woken / red-dotted. With `actorAgentId = null` the same
-    // speaker-delegate IS woken — the two deliveries below pin both sides.
+  it("echo pruning: drops a self-only delivery before writing a card", async () => {
+    // The delegate is a live speaker of the bound chat, so an unresolved actor
+    // would normally wake it. When the GitHub actor resolves to the same human
+    // that owns this mapping, delivery prunes that entry before send: no card,
+    // no inbox row, and no wake.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -233,6 +284,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
@@ -256,45 +308,280 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
-    } satisfies Omit<AudienceTarget, "actorAgentId">;
+    } satisfies AudienceTarget;
     const event = makeEvent({
       orgId: admin.organizationId,
       entityType: "pull_request",
       entityKey: "owner/repo#205",
     });
 
-    // (1) actor === delegate: suppressed from notify but kept addressed →
-    // card written, no wake, yet the actor still gets a silent context row.
-    const echoStats = await deliverNormalizedEvent(app, event, [{ ...baseTarget, actorAgentId: delegate }]);
-    expect(echoStats.delivered).toBe(1);
-    const afterEcho = await app.db
-      .select()
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)));
-    expect(afterEcho).toHaveLength(0);
-    // The suppressed actor-delegate still receives exactly one silent
-    // (notify=false) row — the card lands as context, it just doesn't wake.
-    const [delegateRow] = await app.db
-      .select({ inboxId: agents.inboxId })
-      .from(agents)
-      .where(eq(agents.uuid, delegate))
-      .limit(1);
-    const delegateInbox = delegateRow?.inboxId ?? "";
-    const delegateSilent = await app.db
-      .select({ notify: inboxEntries.notify })
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.inboxId, delegateInbox), eq(inboxEntries.chatId, chatId)));
-    expect(delegateSilent).toHaveLength(1);
-    expect(delegateSilent[0]?.notify).toBe(false);
+    const echoStats = await deliverNormalizedEvent(app, event, [baseTarget], { actorHumanId: human });
+    expect(echoStats).toEqual({ delivered: 0, newChats: 0, failed: 0 });
+    await expect(app.db.select().from(messages).where(eq(messages.chatId, chatId))).resolves.toHaveLength(0);
+    await expect(app.db.select().from(inboxEntries).where(eq(inboxEntries.chatId, chatId))).resolves.toHaveLength(0);
 
-    // (2) actor !== delegate (null): the speaker-delegate IS woken.
-    const okStats = await deliverNormalizedEvent(app, event, [{ ...baseTarget, actorAgentId: null }]);
+    // Unknown actor: no self pruning, so the speaker-delegate IS woken.
+    const okStats = await deliverNormalizedEvent(app, event, [baseTarget], { actorHumanId: null });
     expect(okStats.delivered).toBe(1);
     const afterOk = await app.db
       .select()
       .from(inboxEntries)
       .where(and(eq(inboxEntries.chatId, chatId), eq(inboxEntries.notify, true)));
     expect(afterOk.length).toBeGreaterThan(0);
+  });
+
+  it("humanA requesting humanB review prunes humanA's follow delivery and wakes humanB's delegate", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-a-${randomUUID().slice(0, 6)}`,
+    });
+    const humanAName = `human-a-${randomUUID().slice(0, 6)}`;
+    const humanA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanAName,
+      delegateMention: delegateA,
+      type: "human",
+    });
+    const delegateB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-b-${randomUUID().slice(0, 6)}`,
+    });
+    const humanBName = `human-b-${randomUUID().slice(0, 6)}`;
+    const humanB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanBName,
+      delegateMention: delegateB,
+      type: "human",
+    });
+
+    const chatA = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatA, organizationId: admin.organizationId, type: "group" });
+    await app.db.insert(chatMembership).values([
+      { chatId: chatA, agentId: humanA, role: "owner", accessMode: "speaker", mode: "full", source: "manual" },
+      { chatId: chatA, agentId: delegateA, role: "member", accessMode: "speaker", mode: "full", source: "manual" },
+    ]);
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: humanA,
+      delegateAgentId: delegateA,
+      entityType: "pull_request",
+      entityKey: "owner/repo#206",
+      chatId: chatA,
+      boundVia: "agent_declared",
+    });
+
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#206",
+      actorLogin: humanAName,
+      involves: [{ githubLogin: humanBName, reason: "review_requested" }],
+      kind: "review_requested",
+      rawAction: "review_requested",
+    });
+    const resolution = await resolveAudience(app.db, event);
+    expect(resolution.actorHumanId).toBe(humanA);
+
+    const stats = await deliverNormalizedEvent(app, event, resolution.targets, {
+      actorHumanId: resolution.actorHumanId,
+    });
+    expect(stats).toEqual({ delivered: 1, newChats: 1, failed: 0 });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, chatA))).toHaveLength(0);
+    expect(await notifyCount(app, chatA, delegateA)).toBe(0);
+
+    const [mappingB] = await app.db
+      .select()
+      .from(githubEntityChatMappings)
+      .where(
+        and(
+          eq(githubEntityChatMappings.entityKey, "owner/repo#206"),
+          eq(githubEntityChatMappings.humanAgentId, humanB),
+        ),
+      )
+      .limit(1);
+    expect(mappingB?.delegateAgentId).toBe(delegateB);
+    expect(mappingB?.chatId).toBeTruthy();
+    const chatB = mappingB?.chatId ?? "";
+    expect(await notifyCount(app, chatB, delegateB)).toBe(1);
+    const [messageB] = await app.db.select().from(messages).where(eq(messages.chatId, chatB)).limit(1);
+    expect(messageB?.senderId).toBe(humanB);
+  });
+
+  it("reviewer comment prunes the reviewer's own follow chat but not the PR author's chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-a-${randomUUID().slice(0, 6)}`,
+    });
+    const humanA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `human-a-${randomUUID().slice(0, 6)}`,
+      delegateMention: delegateA,
+      type: "human",
+    });
+    const delegateB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-b-${randomUUID().slice(0, 6)}`,
+    });
+    const humanBName = `human-b-${randomUUID().slice(0, 6)}`;
+    const humanB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanBName,
+      delegateMention: delegateB,
+      type: "human",
+    });
+    const chatA = `chat_${randomUUID()}`;
+    const chatB = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values([
+      { id: chatA, organizationId: admin.organizationId, type: "group" },
+      { id: chatB, organizationId: admin.organizationId, type: "group" },
+    ]);
+    await app.db.insert(chatMembership).values([
+      { chatId: chatA, agentId: humanA, role: "owner", accessMode: "speaker", mode: "full", source: "manual" },
+      { chatId: chatA, agentId: delegateA, role: "member", accessMode: "speaker", mode: "full", source: "manual" },
+      { chatId: chatB, agentId: humanB, role: "owner", accessMode: "speaker", mode: "full", source: "manual" },
+      { chatId: chatB, agentId: delegateB, role: "member", accessMode: "speaker", mode: "full", source: "manual" },
+    ]);
+    await app.db.insert(githubEntityChatMappings).values([
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: humanA,
+        delegateAgentId: delegateA,
+        entityType: "pull_request",
+        entityKey: "owner/repo#207",
+        chatId: chatA,
+        boundVia: "agent_declared",
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: humanB,
+        delegateAgentId: delegateB,
+        entityType: "pull_request",
+        entityKey: "owner/repo#207",
+        chatId: chatB,
+        boundVia: "direct",
+      },
+    ]);
+
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#207",
+      actorLogin: humanBName,
+      rawEventType: "issue_comment",
+      rawAction: "created",
+      kind: "commented",
+    });
+    const resolution = await resolveAudience(app.db, event);
+    expect(resolution.actorHumanId).toBe(humanB);
+    const stats = await deliverNormalizedEvent(app, event, resolution.targets, {
+      actorHumanId: resolution.actorHumanId,
+    });
+
+    expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, chatA))).toHaveLength(1);
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, chatB))).toHaveLength(0);
+    expect(await notifyCount(app, chatA, delegateA)).toBe(1);
+    expect(await notifyCount(app, chatB, delegateB)).toBe(0);
+  });
+
+  it("mixed chat echo pruning removes only the actor's entry", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegateA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-a-${randomUUID().slice(0, 6)}`,
+    });
+    const humanAName = `human-a-${randomUUID().slice(0, 6)}`;
+    const humanA = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanAName,
+      delegateMention: delegateA,
+      type: "human",
+    });
+    const delegateB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-b-${randomUUID().slice(0, 6)}`,
+    });
+    const humanBName = `human-b-${randomUUID().slice(0, 6)}`;
+    const humanB = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanBName,
+      delegateMention: delegateB,
+      type: "human",
+    });
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "group" });
+    await app.db.insert(chatMembership).values(
+      [humanA, delegateA, humanB, delegateB].map((agentId, index) => ({
+        chatId,
+        agentId,
+        role: index === 0 ? "owner" : "member",
+        accessMode: "speaker" as const,
+        mode: "full" as const,
+        source: "manual" as const,
+      })),
+    );
+    await app.db.insert(githubEntityChatMappings).values([
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: humanA,
+        delegateAgentId: delegateA,
+        entityType: "pull_request",
+        entityKey: "owner/repo#208",
+        chatId,
+        boundVia: "agent_declared",
+      },
+      {
+        organizationId: admin.organizationId,
+        humanAgentId: humanB,
+        delegateAgentId: delegateB,
+        entityType: "pull_request",
+        entityKey: "owner/repo#208",
+        chatId,
+        boundVia: "direct",
+      },
+    ]);
+
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#208",
+      actorLogin: humanAName,
+      involves: [{ githubLogin: humanBName, reason: "mentioned" }],
+      rawEventType: "issue_comment",
+      rawAction: "created",
+      kind: "commented",
+    });
+    const resolution = await resolveAudience(app.db, event);
+    expect(resolution.actorHumanId).toBe(humanA);
+
+    const stats = await deliverNormalizedEvent(app, event, resolution.targets, {
+      actorHumanId: resolution.actorHumanId,
+    });
+    expect(stats).toEqual({ delivered: 1, newChats: 0, failed: 0 });
+    const [message] = await app.db.select().from(messages).where(eq(messages.chatId, chatId)).limit(1);
+    expect(message?.senderId).toBe(humanB);
+    const metadata = message?.metadata as { mentions?: string[]; reason?: string };
+    expect(metadata.mentions).toEqual([delegateB]);
+    expect(metadata.reason).toBe("mentioned");
+    expect(await notifyCount(app, chatId, delegateA)).toBe(0);
+    expect(await notifyCount(app, chatId, delegateB)).toBe(1);
   });
 
   it("refreshes chats.topic to match the current entity title on each subsequent event for a github-bound chat", async () => {
@@ -310,6 +597,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
 
     // Seed an existing github-bound chat with a stale topic (e.g. PR title
@@ -338,7 +626,6 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
-      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -364,6 +651,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
 
     // Chat was minted from `pull_request.opened` → head is the plain "PR"
@@ -393,7 +681,6 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
-      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -419,6 +706,71 @@ describe("deliverNormalizedEvent", () => {
     expect(mapping?.title).toBe("Renamed title");
   });
 
+  it("refreshes entity projection even when self-echo pruning drops the card", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const delegate = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `dlg-${randomUUID().slice(0, 6)}`,
+    });
+    const humanName = `human-${randomUUID().slice(0, 6)}`;
+    const human = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: humanName,
+      delegateMention: delegate,
+      type: "human",
+    });
+
+    const chatId = `chat_${randomUUID()}`;
+    await app.db.insert(chats).values({
+      id: chatId,
+      organizationId: admin.organizationId,
+      type: "direct",
+      topic: "PR repo#209: Old title",
+    });
+    await app.db.insert(githubEntityChatMappings).values({
+      organizationId: admin.organizationId,
+      humanAgentId: human,
+      delegateAgentId: delegate,
+      entityType: "pull_request",
+      entityKey: "owner/repo#209",
+      chatId,
+      boundVia: "direct",
+      title: "Old title",
+    });
+
+    const event = makeEvent({
+      orgId: admin.organizationId,
+      entityType: "pull_request",
+      entityKey: "owner/repo#209",
+      actorLogin: humanName,
+      rawEventType: "pull_request",
+      rawAction: "edited",
+      kind: "edited",
+      title: "New title",
+    });
+    const resolution = await resolveAudience(app.db, event);
+    expect(resolution.actorHumanId).toBe(human);
+
+    const stats = await deliverNormalizedEvent(app, event, resolution.targets, {
+      actorHumanId: resolution.actorHumanId,
+    });
+    expect(stats).toEqual({ delivered: 0, newChats: 0, failed: 0 });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, chatId))).toHaveLength(0);
+    expect(await app.db.select().from(inboxEntries).where(eq(inboxEntries.chatId, chatId))).toHaveLength(0);
+
+    const [chat] = await app.db.select({ topic: chats.topic }).from(chats).where(eq(chats.id, chatId)).limit(1);
+    expect(chat?.topic).toBe("PR repo#209: New title");
+    const [mapping] = await app.db
+      .select({ title: githubEntityChatMappings.title })
+      .from(githubEntityChatMappings)
+      .where(eq(githubEntityChatMappings.entityKey, "owner/repo#209"))
+      .limit(1);
+    expect(mapping?.title).toBe("New title");
+  });
+
   it("does NOT overwrite the owning topic when a linked (fixes_link) entity's event arrives", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -432,6 +784,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
 
     // Chat was minted for issue#42 (its direct anchor + topic). A PR#99 that
@@ -472,7 +825,6 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
-      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -499,6 +851,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
 
     // A chat that the agent renamed to a custom label — no mapping row.
@@ -517,7 +870,6 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
-      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -544,6 +896,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegate,
+      type: "human",
     });
 
     const target: AudienceTarget = {
@@ -553,7 +906,6 @@ describe("deliverNormalizedEvent", () => {
       chatId: null,
       involveReason: "review_requested",
       involveLogin: humanName.toLowerCase(),
-      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -608,6 +960,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `human-good-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const goodChatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id: goodChatId, organizationId: admin.organizationId, type: "direct" });
@@ -628,7 +981,6 @@ describe("deliverNormalizedEvent", () => {
       chatId: null, // forces the runtime guard to throw
       involveReason: null,
       involveLogin: null,
-      actorAgentId: null,
     };
     const ok: AudienceTarget = {
       humanAgentId: goodHuman,
@@ -637,7 +989,6 @@ describe("deliverNormalizedEvent", () => {
       chatId: goodChatId,
       involveReason: null,
       involveLogin: null,
-      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -670,6 +1021,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `humanA-${randomUUID().slice(0, 6)}`,
       delegateMention: delegateA,
+      type: "human",
     });
     const delegateR = await mk("dlgR");
     const humanR = await seedAgent(app, {
@@ -677,6 +1029,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `humanR-${randomUUID().slice(0, 6)}`,
       delegateMention: delegateR,
+      type: "human",
     });
 
     const chatId = `chat_${randomUUID()}`;
@@ -711,7 +1064,6 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
-      actorAgentId: null,
     };
     const involved: AudienceTarget = {
       humanAgentId: humanR,
@@ -720,7 +1072,6 @@ describe("deliverNormalizedEvent", () => {
       chatId: null,
       involveReason: "review_requested",
       involveLogin: "humanr",
-      actorAgentId: null,
     };
 
     const stats = await deliverNormalizedEvent(app, event, [subscribed, involved]);
@@ -777,6 +1128,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `humanA-${randomUUID().slice(0, 6)}`,
       delegateMention: delegateA,
+      type: "human",
     });
     const delegateM = await seedAgent(app, {
       orgId: admin.organizationId,
@@ -788,6 +1140,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `humanM-${randomUUID().slice(0, 6)}`,
       delegateMention: delegateM,
+      type: "human",
     });
 
     const chatId = `chat_${randomUUID()}`;
@@ -821,7 +1174,6 @@ describe("deliverNormalizedEvent", () => {
       chatId: null,
       involveReason: "mentioned",
       involveLogin: "humanm",
-      actorAgentId: null,
     };
 
     const stats = await deliverNormalizedEvent(app, event, [involvedMention]);
@@ -860,6 +1212,7 @@ describe("deliverNormalizedEvent", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const watcher = await seedAgent(app, {
       orgId: admin.organizationId,
@@ -891,7 +1244,6 @@ describe("deliverNormalizedEvent", () => {
       chatId,
       involveReason: null,
       involveLogin: null,
-      actorAgentId: null,
     };
     const event = makeEvent({
       orgId: admin.organizationId,
@@ -923,17 +1275,10 @@ describe("deliverNormalizedEvent", () => {
     expect(watcherRow?.notify).toBe(false);
   });
 
-  it("M2 + echo combined: actor is the represented human, entity bound from two chats — both wake their delegate (regression)", async () => {
-    // Single fixture that lights up BOTH old defects at once — the exact shape
-    // of the multi-human-not-pushed bug, which only manifests when they stack:
-    //   - old M2 (dedup by `humanAgentId`, keep earliest) dropped the LATER
-    //     chat (chatB) — bound_at order is load-bearing;
-    //   - old echo (actor on the human side → drop the whole row) then dropped
-    //     chatA too, since the actor IS chatA's represented human.
-    // Old code → empty audience → both chats silent. This pins the fix end to
-    // end: drives `resolveAudience` → `deliverNormalizedEvent` and asserts both
-    // chats not only re-enter the audience but each delegate (≠ actor) is
-    // actually woken — a pure audience-layer assertion cannot prove the wake.
+  it("prunes every self-owned follow delivery even when the actor has multiple mapped chats", async () => {
+    // Stage 2 must still keep distinct (human, chat) mappings so routing facts
+    // are not lost, but Stage 3 removes entries owned by actorHuman before
+    // sending. With no other human entry left, neither chat gets a card.
     const app = getApp();
     const admin = await createTestAdmin(app);
     const humanName = `rep-human-${randomUUID().slice(0, 6)}`;
@@ -941,6 +1286,7 @@ describe("deliverNormalizedEvent", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: humanName,
+      type: "human",
     });
     const da = await seedAgent(app, {
       orgId: admin.organizationId,
@@ -999,54 +1345,17 @@ describe("deliverNormalizedEvent", () => {
       rawAction: "synchronize",
     });
 
-    // Stage 2: both chats survive. M2 keeps the (human, chat) pairs distinct;
-    // echo annotates `actorAgentId = H` on every row instead of dropping any.
-    const audience = await resolveAudience(app.db, event, "first-tree");
+    // Stage 2: both chats survive. M2 keeps the (human, chat) pairs distinct.
+    const resolution = await resolveAudience(app.db, event);
+    const audience = resolution.targets;
     expect(audience).toHaveLength(2);
     expect(new Set(audience.map((a) => a.chatId))).toEqual(new Set([chatA, chatB]));
-    for (const target of audience) expect(target.actorAgentId).toBe(human);
+    expect(resolution.actorHumanId).toBe(human);
 
-    // Stage 3: both cards land AND each chat's delegate (≠ actor) is woken.
-    const stats = await deliverNormalizedEvent(app, event, audience);
-    expect(stats.delivered).toBe(2);
-
-    const [daRow] = await app.db.select({ inboxId: agents.inboxId }).from(agents).where(eq(agents.uuid, da)).limit(1);
-    const [dbRow] = await app.db.select({ inboxId: agents.inboxId }).from(agents).where(eq(agents.uuid, db)).limit(1);
-    const [hRow] = await app.db.select({ inboxId: agents.inboxId }).from(agents).where(eq(agents.uuid, human)).limit(1);
-
-    // chatA: card written + Da woken.
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, chatA))).toHaveLength(1);
-    const daWoken = await app.db
-      .select()
-      .from(inboxEntries)
-      .where(
-        and(
-          eq(inboxEntries.chatId, chatA),
-          eq(inboxEntries.notify, true),
-          eq(inboxEntries.inboxId, daRow?.inboxId ?? ""),
-        ),
-      );
-    expect(daWoken.length).toBeGreaterThan(0);
-
-    // chatB: card written + Db woken — chatB is the chat the OLD dedup silently dropped.
-    expect(await app.db.select().from(messages).where(eq(messages.chatId, chatB))).toHaveLength(1);
-    const dbWoken = await app.db
-      .select()
-      .from(inboxEntries)
-      .where(
-        and(
-          eq(inboxEntries.chatId, chatB),
-          eq(inboxEntries.notify, true),
-          eq(inboxEntries.inboxId, dbRow?.inboxId ?? ""),
-        ),
-      );
-    expect(dbWoken.length).toBeGreaterThan(0);
-
-    // The actor (== represented human H) is never woken by its own action.
-    const hWoken = await app.db
-      .select()
-      .from(inboxEntries)
-      .where(and(eq(inboxEntries.notify, true), eq(inboxEntries.inboxId, hRow?.inboxId ?? "")));
-    expect(hWoken).toHaveLength(0);
+    const stats = await deliverNormalizedEvent(app, event, audience, { actorHumanId: resolution.actorHumanId });
+    expect(stats).toEqual({ delivered: 0, newChats: 0, failed: 0 });
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, chatA))).toHaveLength(0);
+    expect(await app.db.select().from(messages).where(eq(messages.chatId, chatB))).toHaveLength(0);
+    expect(await app.db.select().from(inboxEntries).where(eq(inboxEntries.notify, true))).toHaveLength(0);
   });
 });

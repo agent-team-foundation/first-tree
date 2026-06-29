@@ -7,7 +7,9 @@ import { chats } from "../db/schema/chats.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
+import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { users } from "../db/schema/users.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -46,9 +48,40 @@ async function postWebhook(
 
 async function seedAgent(
   app: App,
-  opts: { orgId: string; memberId: string; name: string; delegateMention?: string | null },
+  opts: { orgId: string; memberId: string; name: string; type?: "agent" | "human"; delegateMention?: string | null },
 ): Promise<string> {
   const uuid = randomUUID();
+  const managerId = opts.type === "human" ? randomUUID() : opts.memberId;
+  if (opts.type === "human") {
+    const userId = randomUUID();
+    await app.db.transaction(async (tx) => {
+      await tx.insert(users).values({
+        id: userId,
+        username: `user-${uuid}`,
+        passwordHash: "test",
+        displayName: opts.name,
+      });
+      await tx.insert(agents).values({
+        uuid,
+        name: opts.name,
+        organizationId: opts.orgId,
+        type: "human",
+        displayName: opts.name,
+        inboxId: `inbox_${uuid}`,
+        managerId,
+        delegateMention: opts.delegateMention ?? null,
+        visibility: "organization",
+      });
+      await tx.insert(members).values({
+        id: managerId,
+        userId,
+        organizationId: opts.orgId,
+        agentId: uuid,
+        role: "member",
+      });
+    });
+    return uuid;
+  }
   await app.db.insert(agents).values({
     uuid,
     name: opts.name,
@@ -56,8 +89,9 @@ async function seedAgent(
     type: "agent",
     displayName: opts.name,
     inboxId: `inbox_${uuid}`,
-    managerId: opts.memberId,
+    managerId,
     delegateMention: opts.delegateMention ?? null,
+    visibility: "organization",
   });
   return uuid;
 }
@@ -302,6 +336,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
@@ -349,6 +384,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const prChatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id: prChatId, organizationId: admin.organizationId, type: "direct" });
@@ -404,6 +440,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
@@ -475,6 +512,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
@@ -530,6 +568,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
@@ -626,6 +665,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
@@ -681,6 +721,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
@@ -738,6 +779,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegate,
+      type: "human",
     });
 
     const res = await postWebhook(app, "pull_request", {
@@ -788,6 +830,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegate,
+      type: "human",
     });
 
     const res = await postWebhook(app, "issue_comment", {
@@ -840,6 +883,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegate,
+      type: "human",
     });
 
     const res = await postWebhook(app, "issue_comment", {
@@ -893,6 +937,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegate,
+      type: "human",
     });
 
     const res = await postWebhook(app, "pull_request_review_comment", {
@@ -946,6 +991,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
@@ -998,6 +1044,7 @@ describe("POST /webhooks/github-app", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = `chat_${randomUUID()}`;
     await app.db.insert(chats).values({ id: chatId, organizationId: admin.organizationId, type: "direct" });
