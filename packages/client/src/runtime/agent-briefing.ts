@@ -442,11 +442,11 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
     "   it), before creating any worktree run `git -C <path> fetch origin` so",
     "   `origin/<default>` is current.",
     "4. **Read through a worktree, not the clone path.** A bare clone has no",
-    "   files to read. To read source — `grep`, `cat`, `git log`, or a",
-    "   shipped skill scan (`first-tree-seed`) — create a",
-    "   read worktree off `origin/<default>` (or the pinned `ref`), read",
-    "   inside it, and remove it when done. To write, create a task worktree",
-    "   on a new branch. Both flows are in `## Worktrees`.",
+    "   files to read. Reads (`grep`, `cat`, `git log`) and writes share",
+    "   **one worktree per task, per touched source repo**: for each bare",
+    "   clone the task touches, create a worktree off `origin/<default>` (or",
+    "   the pinned `ref`) on a new branch, read and write in it, and remove",
+    "   it when the task ends. The flow is in `## Worktrees`.",
     "5. **Credential failures are reportable events** — if clone/fetch fails",
     "   with an auth error, tell a human in the chat what failed and continue",
     "   with what you have locally; do not retry silently.",
@@ -567,49 +567,64 @@ function sourceRepositoriesBlock(sourceRepos: ReadonlyArray<PredeclaredSourceRep
 
 function worktreesBlock(agentHome: string, sourceRepos: ReadonlyArray<PredeclaredSourceRepo>): string {
   // LLMs sometimes literal-copy `<placeholder>` strings, so the source path
-  // and worktree paths are shell-quoted real values; only `<name>`,
-  // `<task-name>`, `<new-branch>`, `origin/main` stay as placeholders.
+  // and worktree path are shell-quoted real values; only `<task-name>`,
+  // `<source-repo>`, `<new-branch>`, and `origin/main` stay as placeholders.
   const quotedHome = shellQuote(agentHome);
   const exampleSource = sourceRepos[0]
     ? shellQuote(sourceRepos[0].absolutePath)
     : `${quotedHome}/source-repos/<source-repo>`;
-  const readWorktreePath = shellQuote(`${agentHome}/worktrees/<name>-read`);
-  const taskWorktreePath = shellQuote(`${agentHome}/worktrees/<task-name>`);
+  const taskWorktreePath = shellQuote(`${agentHome}/worktrees/<task-name>-<source-repo>`);
   return `## Worktrees (how you read AND write a bare source repo)
 
 The source clones are **bare**, so every read and every write goes
 through a worktree you create off the bare clone and remove when done.
 **No worktrees are pre-created.**
 
-**Read worktree** — grep / browse / a skill scan, off the latest default
-branch:
+**One worktree per task — read AND write in it.** Whether the task is
+pure reading (answer a question, browse code) or will produce a PR,
+create a worktree off fresh \`origin/main\` on a new branch and do ALL of
+that task's reading and writing inside it. A task usually touches a
+single source repo (one worktree); a task spanning **multiple** bound
+sources makes **one worktree per source repo** — each off its own bare
+clone, all on the task's branch, with source-qualified paths so they do
+not collide:
 
 \`\`\`bash
 # <source> is one of the bare clone paths listed under Source Repositories, e.g. ${exampleSource}
 git -C <source> fetch origin
-git -C <source> worktree add ${readWorktreePath} origin/main
-# read inside the worktree, then remove it:
-git -C <source> worktree remove ${readWorktreePath}
-\`\`\`
-
-**Task (write) worktree** — one per task, frozen for the PR's life:
-
-\`\`\`bash
-git -C <source> fetch origin
 git -C <source> worktree add ${taskWorktreePath} -b <new-branch> origin/main
 \`\`\`
 
-Replace \`<source>\`, \`<name>\`, \`<task-name>\`, \`<new-branch>\`, and
-\`origin/main\` to fit. A pinned \`ref\` (when listed in Source Repositories)
-is the base to branch from instead of \`origin/main\`.
+Replace \`<source>\`, \`<task-name>\`, \`<source-repo>\`, \`<new-branch>\`,
+and \`origin/main\` to fit — \`<source-repo>\` (the source repo's name)
+qualifies the worktree path per repo so a multi-source task's worktrees
+do not collide. A pinned \`ref\` (when listed in Source Repositories) is
+the base to branch from instead of \`origin/main\`. Branch even for read-only
+work — a never-pushed local branch costs nothing and leaves you ready the
+moment a read turns into a change.
 
-- **Frozen for the task's life**: a task worktree stays on its branch
-  point for the whole PR — do not rebase/merge \`origin/main\` into it
+- **Fresh per task**: \`fetch\` and branch off the latest \`origin/main\`
+  when the task starts. Never reuse a previous task's worktree for new
+  analysis — its base may be weeks behind main.
+- **Frozen for the task's life**: once created, stay on the branch point
+  for the whole task/PR — do not rebase/merge \`origin/main\` into it
   mid-task unless a human asks.
-- **Cleanup is yours**: remove a read worktree as soon as the read is
-  done; remove a task worktree when the task closes (PR merged or
-  abandoned) with \`git -C <source> worktree remove <path>\`. Sweep stale
-  worktrees of finished tasks when you notice them.`;
+- **Clean up your own, and only your own**: remove the worktree
+  (\`git -C <source> worktree remove <path>\`) when the task ends — a PR
+  task when the PR merges or is abandoned, a read-only task once you've
+  delivered the result. There is no reliable "task done" event for non-PR
+  work, so also sweep **your own** worktrees from already-finished tasks
+  whenever you start a new one — leave a worktree whose PR is still open.
+  Leave **other chats'** worktrees alone: \`worktrees/\` is shared across
+  all your chats, and one you did not create may be a sibling chat's live
+  task (a read-only task shows no diff either), so removing it would yank
+  its working directory out from under it.
+  **If unsure whether a worktree is yours, leave it** — keeping one costs
+  only disk, removing a live one loses work.
+- **A task-specific skill may override this**: when a shipped skill
+  prescribes its own worktree flow (e.g. \`first-tree-seed\` materializes a
+  read worktree per bound source for its one-time scan), follow the skill
+  for that task.`;
 }
 
 function communicationBlock(bin: string): string {

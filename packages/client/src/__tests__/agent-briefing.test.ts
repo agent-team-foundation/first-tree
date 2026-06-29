@@ -485,21 +485,35 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("persistent state");
   });
 
-  it("emits the Worktrees block (read + write worktree convention) regardless of source repos presence", () => {
+  it("emits the Worktrees block (one read+write worktree per task) regardless of source repos presence", () => {
     const briefing = buildAgentBriefing(makeOpts());
     expect(briefing).toContain("## Worktrees");
     expect(briefing).toContain("No worktrees are pre-created");
     // Bare-clone worktree commands run against the clone with `git -C <source>`.
     expect(briefing).toContain("worktree add");
-    // Bare-clone model: both a read worktree and a task (write) worktree are
-    // documented. Only `<name>` / `<task-name>` / `<new-branch>` are literal
+    // Unified model: ONE worktree per task, used for read AND write. Only
+    // `<task-name>` / `<source-repo>` / `<new-branch>` are literal
     // placeholders; the home prefix is interpolated.
-    expect(briefing).toContain(`${AGENT_HOME}/worktrees/<name>-read`);
+    expect(briefing).toContain("One worktree per task");
     expect(briefing).toContain(`${AGENT_HOME}/worktrees/<task-name>`);
     expect(briefing).toContain("worktree remove");
+    // The separate ephemeral "read worktree" is gone — no `-read` path and
+    // no read-vs-task split.
+    expect(briefing).not.toContain(`${AGENT_HOME}/worktrees/<name>-read`);
+    expect(briefing).not.toContain("Task (write) worktree");
     // No literal `<placeholder>` for the home prefix — LLMs sometimes copy
     // those verbatim.
     expect(briefing).not.toContain("<agent-home>/worktrees/");
+    // Pin the behavior-load-bearing safety wording: weakening any of these
+    // must turn the test red (the most consequential text in the block).
+    expect(briefing).toContain("Clean up your own, and only your own");
+    expect(briefing).toContain("Leave **other chats'** worktrees alone");
+    expect(briefing).toContain("If unsure whether a worktree is yours, leave it");
+    expect(briefing).toContain("worktrees from already-finished tasks");
+    expect(briefing).toContain("Never reuse a previous task's worktree");
+    // Multi-source tasks make one worktree per touched source repo, not one
+    // total — pins the collision-safe rule.
+    expect(briefing).toContain("one worktree per source repo");
   });
 
   it("renders predeclared source repos with source-repos/ paths and upstream coordinates", () => {
@@ -545,6 +559,9 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain('mkdir -p "$(dirname <path>)"');
     // Read goes through a worktree, not the clone path; skills scan there too.
     expect(briefing).toContain("Read through a worktree, not the clone path.");
+    // The cross-ref carries the SAME per-source rule as the Worktrees block, so
+    // agents don't hit a stale "one worktree per task" before `## Worktrees`.
+    expect(briefing).toContain("one worktree per task, per touched source repo");
     expect(briefing).toContain("first-tree-seed");
     expect(briefing).not.toContain("first-tree-sync");
     expect(briefing).toContain("fetch origin");
