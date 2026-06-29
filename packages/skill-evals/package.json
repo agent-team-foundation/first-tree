@@ -8,6 +8,8 @@
     "eval:floor": "tsx src/index.ts floor",
     "eval:gate": "tsx src/index.ts gate",
     "eval:quality": "tsx src/index.ts quality",
+    "eval:select": "tsx src/index.ts select",
+    "eval:compare": "tsx src/index.ts compare",
     "eval:first-tree-read": "tsx src/first-tree-read/index.ts",
     "test": "vitest run --passWithNoTests",
     "validate:first-tree-read-fixtures": "tsx src/first-tree-read/index.ts --validate-fixtures",
