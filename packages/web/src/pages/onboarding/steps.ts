@@ -62,8 +62,9 @@ export type InitialStepFacts = {
   onboardingStep: ServerOnboardingStep;
   /**
    * `true` when the team no longer carries its auto-generated default name,
-   * OR the user already confirmed the team step this session. Lets a
-   * returning admin skip straight past "name your team".
+   * OR the user already confirmed the team step this session. Retained for
+   * callers and tests only — `inferInitialStepIndex` no longer consults it:
+   * a fresh entry always lands on the opening step regardless of readiness.
    */
   teamSettled: boolean;
 };

@@ -267,7 +267,7 @@ export function CommandBox({
  * border. `position: relative` makes the row the containing block for the
  * absolutely-positioned sr-only input, so it can't escape the picker's clip.
  */
-export function SelectableRow({
+function SelectableRow({
   checked,
   onToggle,
   children,
