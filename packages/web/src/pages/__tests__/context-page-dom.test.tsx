@@ -26,7 +26,7 @@ const resourceApiMocks = vi.hoisted(() => ({
 
 const onboardingEventMocks = vi.hoisted(() => ({
   getTreeSetupStatus: vi.fn(),
-  kickoffOnboarding: vi.fn(),
+  startOnboardingChat: vi.fn(),
   reportOnboardingEvent: vi.fn(),
 }));
 
@@ -194,7 +194,7 @@ beforeEach(() => {
   resourceApiMocks.listTeamResourcesForOrg.mockReset();
   resourceApiMocks.createTeamResourceForOrg.mockReset();
   onboardingEventMocks.getTreeSetupStatus.mockReset();
-  onboardingEventMocks.kickoffOnboarding.mockReset();
+  onboardingEventMocks.startOnboardingChat.mockReset();
   onboardingEventMocks.reportOnboardingEvent.mockReset();
   orgSettingsMocks.getContextTreeSetting.mockReset();
   agentApiMocks.listManagedAgents.mockResolvedValue([]);
@@ -212,9 +212,9 @@ beforeEach(() => {
   onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
     needsTreeSetup: false,
     hasTreeBinding: true,
-    hasTreeSetupKickoff: true,
+    hasTreeSetupStartChat: true,
   });
-  onboardingEventMocks.kickoffOnboarding.mockResolvedValue({ chatId: "chat-tree-setup" });
+  onboardingEventMocks.startOnboardingChat.mockResolvedValue({ chatId: "chat-tree-setup" });
   githubAppMocks.getGithubAppInstallation.mockReset();
   githubAppMocks.getGithubAppInstallationExists.mockReset();
   githubAppMocks.getGithubAppInstallUrl.mockReset();
@@ -548,7 +548,7 @@ describe("ContextPage DOM behavior", () => {
     expect(githubMocks.listOrgGithubRepos).toHaveBeenCalledWith("org-1");
     expect(githubMocks.listOrgGithubRepos.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(resourceApiMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
-    expect(onboardingEventMocks.kickoffOnboarding).not.toHaveBeenCalled();
+    expect(onboardingEventMocks.startOnboardingChat).not.toHaveBeenCalled();
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/");
 
     await act(async () => root.unmount());
@@ -607,7 +607,7 @@ describe("ContextPage DOM behavior", () => {
     onboardingEventMocks.getTreeSetupStatus.mockResolvedValueOnce({
       needsTreeSetup: true,
       hasTreeBinding: true,
-      hasTreeSetupKickoff: false,
+      hasTreeSetupStartChat: false,
     });
     agentApiMocks.listManagedAgents.mockResolvedValue([
       {
@@ -639,7 +639,7 @@ describe("ContextPage DOM behavior", () => {
     await waitForText(container, "LIVE");
     expect(container.textContent).not.toContain("Finish Context Tree setup");
     expect(container.textContent).not.toContain("Build your Context Tree");
-    expect(onboardingEventMocks.kickoffOnboarding).not.toHaveBeenCalled();
+    expect(onboardingEventMocks.startOnboardingChat).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });
@@ -649,7 +649,7 @@ describe("ContextPage DOM behavior", () => {
     onboardingEventMocks.getTreeSetupStatus.mockResolvedValueOnce({
       needsTreeSetup: true,
       hasTreeBinding: true,
-      hasTreeSetupKickoff: false,
+      hasTreeSetupStartChat: false,
     });
     const { ContextPage } = await import("../context.js");
     contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
@@ -682,7 +682,7 @@ describe("ContextPage DOM behavior", () => {
     await waitForText(container, "LIVE");
     expect(container.textContent).not.toContain("Finish Context Tree setup");
     expect(container.textContent).not.toContain("Build your Context Tree");
-    expect(onboardingEventMocks.kickoffOnboarding).not.toHaveBeenCalled();
+    expect(onboardingEventMocks.startOnboardingChat).not.toHaveBeenCalled();
 
     await act(async () => root.unmount());
   });

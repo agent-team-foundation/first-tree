@@ -485,7 +485,7 @@ describe("onboarding hooks and flow", () => {
     expect(expectHookValue(latest.current).activeStep).toBe("create-team");
   });
 
-  it("lands on create-agent when the org only has another member's shared agent", async () => {
+  it("lands on the opening join-team step for a returning invitee without a personal agent", async () => {
     const latest = { current: null as OnboardingFlowValue | null };
 
     function Probe() {
@@ -509,7 +509,11 @@ describe("onboarding hooks and flow", () => {
       currentOrgHasPersonalAgent: false,
     };
     await renderProbe(<Probe />);
-    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
+    // Redesign: fresh onboarding entry always starts at the opening step
+    // (`inferInitialStepIndex` ignores server readiness), so this invitee — who
+    // has no personal agent yet — starts at join-team and walks forward to
+    // create-agent, rather than being dropped straight onto create-agent.
+    expect(expectHookValue(latest.current).activeStep).toBe("join-team");
   });
 
   it("re-derives the step when the org changes on a still-mounted provider", async () => {
