@@ -399,13 +399,16 @@ describe("QuickstartPage — full flow (e2e)", () => {
     expect(onboardingMocks.postOnboardingStartChat).not.toHaveBeenCalled();
   });
 
-  it("campaign B after campaign A reuses the existing agent: names it (not Cedar), rebinds it, no duplicate create", async () => {
+  it("campaign B after campaign A reuses the existing agent as-is (names it, not Cedar; no client move, no duplicate create)", async () => {
     // Returning user: campaign A already created their agent, so /me reports a
     // personal agent and there is no per-tab stash (cleared on A's success). A
     // second create of "Cedar" would slugify to "cedar" and hit the (org, name)
-    // unique constraint, so the page reuses the existing agent — the dual-reader
-    // bootstrap must name THAT agent, not "Cedar", and the agent is rebound to
-    // the just-connected client (it was on another machine).
+    // unique constraint, so the page reuses the existing agent. Its client is
+    // immutable once set (the server allows clientId NULL -> ID only), so the
+    // page must NOT try to move the agent onto the just-connected machine — it
+    // reuses the agent on its own client (the cross-machine "runs elsewhere"
+    // case is a v0-accepted follow-up). The dual-reader bootstrap names THAT
+    // agent, not "Cedar".
     seedIntent("agent-readiness");
     connectedWith("claude-code"); // connected client id = "client-1"
     authMock.value = {
@@ -432,8 +435,10 @@ describe("QuickstartPage — full flow (e2e)", () => {
 
     // Reuses the existing agent; never POSTs a second "cedar" (which would 409).
     expect(agentCreationMock.create).not.toHaveBeenCalled();
-    // Rebinds the reused agent to the just-connected client (it was elsewhere).
-    expect(updateAgentMock).toHaveBeenCalledWith("existing-cedar", { clientId: "client-1" });
+    // The agent is pinned to another client ("old-client"); since clientId is
+    // immutable once set, the page must NOT attempt to move it (the server
+    // would reject ID -> ID) — it reuses the agent on its own client.
+    expect(updateAgentMock).not.toHaveBeenCalled();
     expect(onboardingMocks.postOnboardingStartChat).toHaveBeenCalledTimes(1);
     const arg = onboardingMocks.postOnboardingStartChat.mock.calls[0]?.[0];
     if (!arg) throw new Error("expected a start-chat call");

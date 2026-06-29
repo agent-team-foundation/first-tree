@@ -1,7 +1,7 @@
 import { ArrowRight } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { listManagedAgents, updateAgent } from "../../api/agents.js";
+import { listManagedAgents } from "../../api/agents.js";
 import { postOnboardingStartChat } from "../../api/onboarding-events.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
@@ -142,22 +142,19 @@ export function QuickstartPage() {
             a.type !== "human" && a.status === "active" && (!organizationId || a.organizationId === organizationId),
         );
         const clientId = computer.connectedClient?.id ?? null;
-        // Prefer an agent already on the just-connected client (same machine);
-        // otherwise the newest one.
+        // Prefer an agent already bound to the just-connected client (same
+        // machine — it runs right here); otherwise the newest one. We reuse it
+        // as-is and never move it: the server pins an agent's client immutably
+        // (clientId is NULL -> ID only — see services/agent.ts updateAgent), so
+        // a returning user on a *different* machine reuses their agent where it
+        // already lives, which must be online to answer. Hosting the agent on
+        // the newly connected machine (a true cross-machine move) is a
+        // v0-accepted follow-up — it needs a server rebind path that does not
+        // exist yet.
         const existing =
           (clientId ? usable.find((a) => a.clientId === clientId) : undefined) ??
           [...usable].sort((a, b) => b.uuid.localeCompare(a.uuid))[0];
         if (existing) {
-          // Rebind the reused agent to the connected client so it runs on the
-          // machine the user connected for this campaign — a no-op when already
-          // there, best-effort if it fails (it still runs on its current client).
-          if (clientId && existing.clientId !== clientId) {
-            try {
-              await updateAgent(existing.uuid, { clientId });
-            } catch {
-              // best-effort rebind
-            }
-          }
           void startChat(existing.uuid, existing.displayName);
           return;
         }
