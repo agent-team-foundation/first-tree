@@ -1699,6 +1699,10 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               // to do; repeating it adds noise without new information.
               if (message.subtype === "success") {
                 authHintEmitted = false;
+                // Drop any deferred auth signal too: a transient auth_status
+                // warning followed by a successful turn must not leak a stale
+                // auth-login hint at the next stream-end / turn boundary.
+                pendingAuthHint = null;
               }
             }
           }

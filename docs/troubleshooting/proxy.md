@@ -29,10 +29,18 @@ because your terminal already has the proxy in its environment.
 
 ## Fix: tell the daemon your proxy (`daemon.env`)
 
-Create `~/.first-tree/daemon.env` (under your channel's `FIRST_TREE_HOME`) with
-`KEY=VALUE` lines, then restart the daemon:
+Create `daemon.env` under your channel's `FIRST_TREE_HOME`, with `KEY=VALUE`
+lines, then restart the daemon. **The path is channel-specific** — use the home
+that matches the binary you run:
+
+| Channel | Binary | `daemon.env` path |
+|---|---|---|
+| prod | `first-tree` | `~/.first-tree/daemon.env` |
+| staging | `first-tree-staging` | `~/.first-tree-staging/daemon.env` |
+| dev | `first-tree-dev` | `~/.first-tree-dev/daemon.env` |
 
 ```sh
+# Example for the prod channel — swap the home if you run staging/dev.
 cat > ~/.first-tree/daemon.env <<'EOF'
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
@@ -41,6 +49,10 @@ EOF
 
 first-tree daemon stop && first-tree daemon start   # use your channel's binary
 ```
+
+`KEY=VALUE` only — one per line. A `# comment` is allowed on its own line or as
+a trailing ` # ...` on an unquoted value; quote the value (`KEY="..."`) to keep
+a literal `#`. An empty `KEY=` is ignored.
 
 This file is **yours**: First Tree reads it on daemon start and never rewrites
 it. Edit or delete it any time and restart to apply.
