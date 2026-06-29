@@ -18,11 +18,6 @@
     "test": "turbo run test",
     "coverage": "turbo run coverage",
     "coverage:summary": "node scripts/coverage-summary.mjs",
-    "e2e:doctor": "turbo run e2e:doctor --filter=@first-tree/e2e",
-    "e2e:smoke": "turbo run e2e:smoke --filter=@first-tree/e2e",
-    "e2e:full": "turbo run e2e:full --filter=@first-tree/e2e",
-    "e2e:up": "pnpm --filter @first-tree/e2e e2e:up",
-    "e2e:clean": "pnpm --filter @first-tree/e2e e2e:clean",
     "validate:skill": "python3 ./scripts/quick_validate_skill.py ./skills/first-tree-welcome && python3 ./scripts/quick_validate_skill.py ./skills/first-tree-write && python3 ./scripts/quick_validate_skill.py ./skills/first-tree-read && python3 ./scripts/quick_validate_skill.py ./skills/first-tree-seed"
   },
   "devDependencies": {

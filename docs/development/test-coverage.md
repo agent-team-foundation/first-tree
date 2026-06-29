@@ -26,4 +26,4 @@ After `pnpm coverage` finishes, print a package-by-package summary and weighted 
 pnpm coverage:summary
 ```
 
-Coverage output is generated state and is ignored by `.gitignore`. This local coverage entry does not set CI thresholds, upload artifacts, or include `packages/e2e`.
+Coverage output is generated state and is ignored by `.gitignore`. This local coverage entry does not set CI thresholds or upload artifacts.
