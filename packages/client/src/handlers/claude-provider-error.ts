@@ -42,7 +42,11 @@ export function claudeFailureFromSdkResult(message: unknown): ClaudeProviderFail
   const messagePreview =
     result.subtype === "success"
       ? firstNonEmpty(result.result, "Claude SDK returned an error result")
-      : firstNonEmpty(result.errors.join("; "), result.result, result.subtype);
+      : // Merge the typed error codes with the result text so an API detail
+        // like "403 Request not allowed" survives into the preview even when
+        // `errors` only carries the opaque `authentication_failed` code —
+        // otherwise egress detection downstream never sees it.
+        firstNonEmpty(combinePreviews(result.errors.join("; "), result.result ?? ""), result.subtype);
   const status = result.apiErrorStatus ?? undefined;
   const reason = result.subtype === "success" ? "claude_result_is_error" : `claude_result_${result.subtype}`;
   return buildFailure({
@@ -108,7 +112,16 @@ export function formatClaudeProviderFailureNotice(
  * Instead we enumerate the real causes in priority order.
  */
 function looksLikeEgressForbidden(classification: ProviderFailureClassification, messagePreview: string): boolean {
-  return classification.category === "credential" && /request not allowed/i.test(messagePreview);
+  return classification.category === "credential" && isEgressForbiddenText(messagePreview);
+}
+
+/**
+ * True when a provider message carries Anthropic's pre-auth edge-block signature
+ * (`403 Request not allowed`). Shared with the Claude handler so the early auth
+ * hint and the final failure notice make the same egress-vs-auth call.
+ */
+export function isEgressForbiddenText(text: string): boolean {
+  return /request not allowed/i.test(text);
 }
 
 const EGRESS_FORBIDDEN_LEAD =
