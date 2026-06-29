@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.0.1
+version: 1.0.2
 description: Use only when a First Tree onboarding start-chat system message explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup chats, ordinary chats, PR reviews, tree writes, or maintenance.
 ---
 
@@ -301,8 +301,11 @@ stay demand-driven and do not push it.
 - Read before claiming understanding.
 - Use concrete evidence, not generic onboarding prose.
 - Treat setup as a path to value, not as a first-task option.
-- Let the task pull in setup: raise GitHub App, repo authorization, or tree
-  build only when the current task needs it, then guide that step to completion.
+- Let the task pull in GitHub App install and repo authorization: raise them
+  only when the current task needs it, then guide that step to completion.
+- Raise Context Tree build when the task needs it; additionally, once a first
+  task has delivered value, an admin (not an invitee) may be prompted to build
+  it even when no task forced it — see Tree Chat Handoff. Guide to completion.
 - Finish the first task against its own check and show the evidence; never claim
   it works without verifying.
 - Give 2-3 bounded first-task options only when evidence supports them.
