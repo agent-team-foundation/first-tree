@@ -1,26 +1,44 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SHIPPED_SKILLS, type ShippedSkillName } from "./core/case-schema.js";
 import { type SkillEvalSuiteDefinition, validateCoverageMatrix } from "./core/coverage.js";
 import { isRecord } from "./core/events.js";
+import {
+  appendResultStoreEntries,
+  compareResultGroups,
+  createRunGroupId,
+  formatCompareSummary,
+  latestRunGroups,
+  type ResultStoreEntry,
+  readGitInfo,
+  readResultStore,
+} from "./core/result-store.js";
+import { changedFilesFromGit, formatSelectionSummary, selectSkillEvalRecommendations } from "./core/select.js";
 import { readSkillFrontmatter } from "./core/skills/frontmatter.js";
 import { formatFirstTreeSeedGateSummary, runFirstTreeSeedGate } from "./suites/first-tree-seed/index.js";
+import type { BatchSummary as SeedBatchSummary } from "./suites/first-tree-seed/types.js";
 import { formatFirstTreeWelcomeGateSummary, runFirstTreeWelcomeGate } from "./suites/first-tree-welcome/index.js";
+import type { BatchSummary as WelcomeBatchSummary } from "./suites/first-tree-welcome/types.js";
 import { formatFirstTreeWriteGateSummary, runFirstTreeWriteGate } from "./suites/first-tree-write/index.js";
+import type { BatchSummary as WriteBatchSummary } from "./suites/first-tree-write/types.js";
 import { formatQualitySummaryTable, runQualityEval } from "./suites/quality/index.js";
-import type { QualitySkillName } from "./suites/quality/types.js";
+import type { QualityBatchSummary, QualitySkillName } from "./suites/quality/types.js";
 import { SKILL_EVAL_SUITES } from "./suites/registry.js";
 
 type CliOptions = {
+  base: string | null;
   caseId: string | null;
+  changedFiles: readonly string[];
   codexBin: string;
-  command: "floor" | "gate" | "quality";
+  command: "compare" | "floor" | "gate" | "quality" | "select";
+  currentRunGroupId: string | null;
   judgeBin: string;
   judgeModel: string | null;
   json: boolean;
   model: string | null;
+  previousRunGroupId: string | null;
   suite: ShippedSkillName | null;
   verbose: boolean;
 };
@@ -48,15 +66,23 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
   pnpm --filter @first-tree/skill-evals eval:quality
   pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write
+  pnpm --filter @first-tree/skill-evals eval:select -- --base main
+  pnpm --filter @first-tree/skill-evals eval:compare
 
 Commands:
   floor                  Run no-model schema, coverage, and skill-file checks.
   gate                   Run a live model gate suite.
   quality                Run opt-in LLM-as-judge quality cases.
+  select                 Recommend eval commands from changed files.
+  compare                Compare latest result-store run groups.
 
 Options:
   --suite <skill>        Limit per-suite floor checks to one shipped skill.
   --case <id>            Run one live gate case.
+  --base <ref>           Base ref for eval:select git diff. Defaults to main.
+  --changed-file <path>  Add an explicit changed file for eval:select.
+  --current <run-id>     Current run group for eval:compare. Defaults to latest.
+  --previous <run-id>    Previous run group for eval:compare. Defaults to previous.
   --json                 Print summary as JSON.
   --model <model>        Pass a model override to codex exec.
   --codex-bin <path>     Codex binary to execute. Defaults to CODEX_BIN or codex.
@@ -82,18 +108,28 @@ function parseArgs(args: readonly string[]): CliOptions {
     process.stdout.write(usage());
     process.exit(0);
   }
-  if (command !== "floor" && command !== "gate" && command !== "quality") {
+  if (
+    command !== "floor" &&
+    command !== "gate" &&
+    command !== "quality" &&
+    command !== "select" &&
+    command !== "compare"
+  ) {
     throw new Error(`Unknown command: ${command}`);
   }
 
   const options: CliOptions = {
+    base: null,
     caseId: null,
+    changedFiles: [],
     codexBin: process.env.CODEX_BIN ?? "codex",
     command,
+    currentRunGroupId: null,
     judgeBin: process.env.JUDGE_CODEX_BIN ?? process.env.CODEX_BIN ?? "codex",
     judgeModel: process.env.JUDGE_MODEL ?? process.env.CODEX_MODEL ?? null,
     json: false,
     model: process.env.CODEX_MODEL ?? null,
+    previousRunGroupId: null,
     suite: null,
     verbose: false,
   };
@@ -106,6 +142,26 @@ function parseArgs(args: readonly string[]): CliOptions {
     }
     if (arg === "--case") {
       options.caseId = readOptionValue(normalized, index, "--case");
+      index += 1;
+      continue;
+    }
+    if (arg === "--base") {
+      options.base = readOptionValue(normalized, index, "--base");
+      index += 1;
+      continue;
+    }
+    if (arg === "--changed-file") {
+      options.changedFiles = [...options.changedFiles, readOptionValue(normalized, index, "--changed-file")];
+      index += 1;
+      continue;
+    }
+    if (arg === "--current") {
+      options.currentRunGroupId = readOptionValue(normalized, index, "--current");
+      index += 1;
+      continue;
+    }
+    if (arg === "--previous") {
+      options.previousRunGroupId = readOptionValue(normalized, index, "--previous");
       index += 1;
       continue;
     }
@@ -254,15 +310,151 @@ function formatFloorSummary(summary: FloorSummary): string {
   return lines.join("\n");
 }
 
+function floorCheckCaseId(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-|-$/gu, "");
+}
+
+function floorCheckSkill(name: string): ShippedSkillName | "framework" {
+  return SHIPPED_SKILLS.find((skill) => name.startsWith(`${skill}:`)) ?? "framework";
+}
+
+function writeFloorArtifact(
+  packageRootPath: string,
+  summary: FloorSummary,
+  runGroupId: string,
+): { runRoot: string; summaryJsonPath: string; summaryMdPath: string } {
+  const runRoot = join(packageRootPath, ".runs", runGroupId);
+  const summaryJsonPath = join(runRoot, "summary.json");
+  const summaryMdPath = join(runRoot, "summary.md");
+  mkdirSync(runRoot, { recursive: true });
+  writeFileSync(summaryJsonPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  writeFileSync(summaryMdPath, `${formatFloorSummary(summary)}\n`, "utf8");
+  return { runRoot, summaryJsonPath, summaryMdPath };
+}
+
+function floorResultEntries(
+  packageRootPath: string,
+  summary: FloorSummary,
+  options: {
+    artifact: { runRoot: string; summaryJsonPath: string; summaryMdPath: string };
+    base: string | null;
+    durationMs: number;
+    runGroupId: string;
+    startedAt: string;
+  },
+): readonly ResultStoreEntry[] {
+  const git = readGitInfo(repoRootFromPackage(packageRootPath), options.base);
+  return summary.checks.map((check) => ({
+    artifact: options.artifact,
+    caseId: floorCheckCaseId(check.name),
+    command: "eval:floor",
+    costUsd: null,
+    durationMs: options.durationMs,
+    failures: check.ok ? [] : [check.detail],
+    git,
+    judgeScores: null,
+    model: null,
+    passed: check.ok,
+    provider: null,
+    runGroupId: options.runGroupId,
+    schemaVersion: 1,
+    skill: floorCheckSkill(check.name),
+    startedAt: options.startedAt,
+    status: check.ok ? "passed" : "failed",
+    tier: "floor",
+    turns: null,
+  }));
+}
+
+type GateBatchSummary = SeedBatchSummary | WelcomeBatchSummary | WriteBatchSummary;
+
+function gateResultEntries(
+  packageRootPath: string,
+  batch: GateBatchSummary,
+  suite: Exclude<ShippedSkillName, "first-tree-read">,
+  options: CliOptions,
+): readonly ResultStoreEntry[] {
+  const runGroupId = createRunGroupId(batch.runStartedAt, `eval-gate-${suite}`);
+  const git = readGitInfo(repoRootFromPackage(packageRootPath), options.base);
+  return batch.cases.map((summary) => {
+    const durationMs = Math.max(0, Date.now() - Date.parse(summary.startedAt));
+    return {
+      artifact: {
+        runRoot: summary.runRoot,
+        summaryJsonPath: summary.summaryJsonPath,
+        summaryMdPath: summary.summaryMdPath,
+      },
+      caseId: summary.caseId,
+      command: "eval:gate",
+      costUsd: null,
+      durationMs,
+      failures: summary.passed ? [] : [summary.driftNote ?? "gate case failed"],
+      git,
+      judgeScores: null,
+      model: options.model,
+      passed: summary.passed,
+      provider: "codex",
+      runGroupId,
+      schemaVersion: 1,
+      skill: suite,
+      startedAt: summary.startedAt,
+      status: summary.passed ? "passed" : "failed",
+      tier: "gate",
+      turns: null,
+    } satisfies ResultStoreEntry;
+  });
+}
+
+function qualityResultEntries(
+  packageRootPath: string,
+  batch: QualityBatchSummary,
+  options: CliOptions,
+): readonly ResultStoreEntry[] {
+  const runGroupId = createRunGroupId(batch.runStartedAt, `eval-quality-${options.suite ?? "all"}`);
+  const git = readGitInfo(repoRootFromPackage(packageRootPath), options.base);
+  return batch.cases.map(
+    (summary) =>
+      ({
+        artifact: {
+          runRoot: summary.runRoot,
+          summaryJsonPath: summary.summaryJsonPath,
+          summaryMdPath: summary.summaryMdPath,
+        },
+        caseId: summary.caseId,
+        command: "eval:quality",
+        costUsd: summary.cost_usd,
+        durationMs: summary.duration_ms,
+        failures: summary.failures,
+        git,
+        judgeScores: summary.judge_scores,
+        model: summary.judge_model,
+        passed: summary.passed,
+        provider: summary.judge_provider,
+        runGroupId,
+        schemaVersion: 1,
+        skill: summary.skill as ShippedSkillName,
+        startedAt: summary.startedAt,
+        status: summary.passed ? "passed" : "failed",
+        tier: "quality",
+        turns: null,
+      }) satisfies ResultStoreEntry,
+  );
+}
+
 async function runGate(options: CliOptions): Promise<void> {
+  const packageRootPath = packageRoot();
   if (options.suite === "first-tree-write") {
-    const batch = await runFirstTreeWriteGate(packageRoot(), {
+    const batch = await runFirstTreeWriteGate(packageRootPath, {
       caseId: options.caseId,
       codexBin: options.codexBin,
       json: options.json,
       model: options.model,
       verbose: options.verbose,
     });
+    appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
     if (options.json) {
       process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
     } else {
@@ -275,13 +467,14 @@ async function runGate(options: CliOptions): Promise<void> {
   }
 
   if (options.suite === "first-tree-seed") {
-    const batch = await runFirstTreeSeedGate(packageRoot(), {
+    const batch = await runFirstTreeSeedGate(packageRootPath, {
       caseId: options.caseId,
       codexBin: options.codexBin,
       json: options.json,
       model: options.model,
       verbose: options.verbose,
     });
+    appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
     if (options.json) {
       process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
     } else {
@@ -294,13 +487,14 @@ async function runGate(options: CliOptions): Promise<void> {
   }
 
   if (options.suite === "first-tree-welcome") {
-    const batch = await runFirstTreeWelcomeGate(packageRoot(), {
+    const batch = await runFirstTreeWelcomeGate(packageRootPath, {
       caseId: options.caseId,
       codexBin: options.codexBin,
       json: options.json,
       model: options.model,
       verbose: options.verbose,
     });
+    appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
     if (options.json) {
       process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
     } else {
@@ -318,7 +512,8 @@ async function runGate(options: CliOptions): Promise<void> {
 }
 
 async function runQuality(options: CliOptions): Promise<void> {
-  const batch = await runQualityEval(packageRoot(), {
+  const packageRootPath = packageRoot();
+  const batch = await runQualityEval(packageRootPath, {
     caseId: options.caseId,
     codexBin: options.codexBin,
     judgeBin: options.judgeBin,
@@ -328,6 +523,7 @@ async function runQuality(options: CliOptions): Promise<void> {
     suite: qualitySuite(options),
     verbose: options.verbose,
   });
+  appendResultStoreEntries(packageRootPath, qualityResultEntries(packageRootPath, batch, options));
   if (options.json) {
     process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
   } else {
@@ -338,8 +534,41 @@ async function runQuality(options: CliOptions): Promise<void> {
   }
 }
 
+function runSelect(options: CliOptions): void {
+  const packageRootPath = packageRoot();
+  const repoRoot = repoRootFromPackage(packageRootPath);
+  const base = options.base ?? "main";
+  const changedFiles = options.changedFiles.length === 0 ? changedFilesFromGit(repoRoot, base) : options.changedFiles;
+  const summary = selectSkillEvalRecommendations(changedFiles, options.changedFiles.length === 0 ? base : null);
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+  } else {
+    process.stdout.write(`${formatSelectionSummary(summary)}\n`);
+  }
+}
+
+function runCompare(options: CliOptions): void {
+  const packageRootPath = packageRoot();
+  const entries = readResultStore(packageRootPath);
+  const { current, previous } = latestRunGroups(entries, options.currentRunGroupId, options.previousRunGroupId);
+  const summary = compareResultGroups(current, previous);
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+  } else {
+    process.stdout.write(`${formatCompareSummary(summary)}\n`);
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
+  if (options.command === "select") {
+    runSelect(options);
+    return;
+  }
+  if (options.command === "compare") {
+    runCompare(options);
+    return;
+  }
   if (options.command === "gate") {
     await runGate(options);
     return;
@@ -349,7 +578,22 @@ async function main(): Promise<void> {
     return;
   }
 
+  const packageRootPath = packageRoot();
+  const startedAt = new Date().toISOString();
+  const before = Date.now();
   const summary = buildFloorSummary(options);
+  const runGroupId = createRunGroupId(startedAt, `eval-floor-${options.suite ?? "all"}`);
+  const artifact = writeFloorArtifact(packageRootPath, summary, runGroupId);
+  appendResultStoreEntries(
+    packageRootPath,
+    floorResultEntries(packageRootPath, summary, {
+      artifact,
+      base: options.base,
+      durationMs: Date.now() - before,
+      runGroupId,
+      startedAt,
+    }),
+  );
   if (options.json) {
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   } else {

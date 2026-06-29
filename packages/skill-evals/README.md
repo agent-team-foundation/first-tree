@@ -14,6 +14,8 @@ pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
 pnpm --filter @first-tree/skill-evals eval:quality
 pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-welcome --judge-model <model>
+pnpm --filter @first-tree/skill-evals eval:select -- --base main
+pnpm --filter @first-tree/skill-evals eval:compare
 pnpm --filter @first-tree/skill-evals eval:first-tree-read
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --json
@@ -26,6 +28,22 @@ validates that all shipped First Tree skills are present in the coverage
 matrix, their `SKILL.md` frontmatter is readable, and their case declarations
 have the minimum schema required by the shared runner. It does not execute
 Codex, Claude Code, LLM-as-judge, or live gate cases.
+
+`eval:select` is a no-model helper for local development and PR review. It
+looks at changed files and recommends the smallest relevant eval commands:
+
+```bash
+pnpm --filter @first-tree/skill-evals eval:select -- --base main
+pnpm --filter @first-tree/skill-evals eval:select -- --changed-file skills/first-tree-write/SKILL.md
+pnpm --filter @first-tree/skill-evals eval:select -- --base main --json
+```
+
+The selector is intentionally conservative for shared skill-eval
+infrastructure: core runner or schema changes recommend floor plus all
+implemented deterministic gates, and judge-core changes also recommend quality.
+Suite or skill changes recommend that suite's floor/gate/quality coverage where
+implemented. The command only recommends; live gate and quality evals remain
+opt-in and are not part of `pnpm test`.
 
 `eval:quality` is an opt-in LLM-as-judge layer. It does not replace
 deterministic gates and is not called by `eval:gate`. Each quality case first
@@ -87,6 +105,27 @@ Each case writes:
   `first-tree` invocations.
 - `summary.json` with derived metrics.
 - `summary.md` with a human-readable case report.
+
+The top-level `eval:floor`, `eval:gate`, and `eval:quality` commands also append
+a lightweight local result-store entry to
+`packages/skill-evals/.runs/index.jsonl`. Entries record the run group, suite,
+tier, case, pass/fail state, git branch/sha, model/provider where available,
+artifact paths, duration, cost, and judge scores when present. The `.runs`
+directory is gitignored local eval state.
+
+Use `eval:compare` to compare the latest result-store run group with the
+previous one:
+
+```bash
+pnpm --filter @first-tree/skill-evals eval:compare
+pnpm --filter @first-tree/skill-evals eval:compare -- --json
+pnpm --filter @first-tree/skill-evals eval:compare -- --current <run-group-id> --previous <run-group-id>
+```
+
+The comparison highlights new failures, recoveries, cases still failing, cases
+still passing, score deltas for judge-backed cases, and artifact paths. If there
+is no previous run group yet, the command prints a clear "not enough runs"
+message instead of failing with a low-level store error.
 
 Quality cases also write `judge-prompt.txt` and `judge-raw-output.txt` in the
 case run directory, and include `judge_scores`, `judge_reasoning`,
