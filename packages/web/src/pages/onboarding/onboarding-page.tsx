@@ -5,9 +5,9 @@ import { OnboardingFlowProvider, useOnboardingFlow } from "./onboarding-flow.js"
 import { OnboardingShell } from "./onboarding-shell.js";
 import { StepConnectComputer } from "./steps/step-connect-computer.js";
 import { StepCreateAgent } from "./steps/step-create-agent.js";
+import { StepJoinTeam } from "./steps/step-join-team.js";
 import { StepStartChat } from "./steps/step-start-chat.js";
 import { StepTeam } from "./steps/step-team.js";
-import { StepWelcome } from "./steps/step-welcome.js";
 import { resolveOnboardingPath, shouldLeaveOnboarding } from "./steps.js";
 
 /**
@@ -77,7 +77,7 @@ function OnboardingBody() {
     case "start-chat":
       return <StepStartChat />;
     case "join-team":
-      return <StepWelcome />;
+      return <StepJoinTeam />;
     default:
       return null;
   }

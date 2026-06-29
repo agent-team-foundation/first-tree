@@ -19,6 +19,16 @@ import { useOnboardingFlow } from "../onboarding-flow.js";
 const INSTALL_ATTEMPT_KEY = "onboarding:connect-code:install-attempt";
 
 /**
+ * RETENTION NOTE (read before assuming this runs during onboarding): this step
+ * is intentionally NOT in the main onboarding sequence. The value-first redesign
+ * dropped GitHub connection from the critical path so a user reaches their agent
+ * first (see `ADMIN_STEPS` / `INVITEE_STEPS` in steps.ts — neither lists it).
+ * It is deliberately KEPT — still rendered by the dev onboarding preview and
+ * reused (via `RepoTokenPicker`) by the Context-tab tree build entry — and may
+ * be re-added to onboarding later, so it is not dead code. But nothing in the
+ * live admin/invitee flow mounts it or populates `selectedRepoUrls`; do not read
+ * this component as part of the normal onboarding path.
+ *
  * Admin step: install the GitHub App (the only reliable code-connection
  * entry — `installations/new`, not the sign-in `authorize` URL), then pick
  * the project the agent should help with.

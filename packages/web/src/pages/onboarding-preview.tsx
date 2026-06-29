@@ -12,9 +12,9 @@ import { OnboardingShell } from "./onboarding/onboarding-shell.js";
 import { StepConnectCode } from "./onboarding/steps/step-connect-code.js";
 import { StepConnectComputer } from "./onboarding/steps/step-connect-computer.js";
 import { StepCreateAgent } from "./onboarding/steps/step-create-agent.js";
+import { StepJoinTeam } from "./onboarding/steps/step-join-team.js";
 import { StepStartChat } from "./onboarding/steps/step-start-chat.js";
 import { StepTeam } from "./onboarding/steps/step-team.js";
-import { StepWelcome } from "./onboarding/steps/step-welcome.js";
 import { getStepSequence, type OnboardingPath, type StepId } from "./onboarding/steps.js";
 import { MockTeamStepsA, MockTeamStepsB, MockWelcomeCeremonial } from "./onboarding-team-steps-mocks.js";
 
@@ -847,7 +847,7 @@ function StepBody({ step, connectStuck }: { step: PreviewStepId; connectStuck?: 
     case "start-chat":
       return <StepStartChat />;
     case "join-team":
-      return <StepWelcome />;
+      return <StepJoinTeam />;
     default:
       return null;
   }

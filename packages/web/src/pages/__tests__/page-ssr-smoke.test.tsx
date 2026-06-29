@@ -1235,7 +1235,7 @@ describe("page SSR smoke coverage", () => {
     const { StepCreateAgent } = await import("../onboarding/steps/step-create-agent.js");
     const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     const { StepTeam } = await import("../onboarding/steps/step-team.js");
-    const { StepWelcome } = await import("../onboarding/steps/step-welcome.js");
+    const { StepJoinTeam } = await import("../onboarding/steps/step-join-team.js");
 
     const html = renderPage(
       <>
@@ -1270,7 +1270,9 @@ describe("page SSR smoke coverage", () => {
     expect(await renderOnboardingStep(<StepTeam />, { activeStep: "create-team" })).toContain(
       "What should we call your team?",
     );
-    expect(await renderOnboardingStep(<StepWelcome />, { path: "invitee", activeStep: "join-team" })).toContain("Acme");
+    expect(await renderOnboardingStep(<StepJoinTeam />, { path: "invitee", activeStep: "join-team" })).toContain(
+      "Acme",
+    );
     expect(await renderOnboardingStep(<StepConnectComputer />, { activeStep: "connect-computer" })).toContain(
       "gandy-macbook",
     );

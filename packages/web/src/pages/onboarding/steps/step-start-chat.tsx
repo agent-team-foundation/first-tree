@@ -66,6 +66,11 @@ function AdminStartChat() {
   const [phase, setPhase] = useState<"form" | "starting">("form");
   const [error, setError] = useState<string | null>(null);
 
+  // `selectedRepoUrls` is only populated by StepConnectCode, which the
+  // value-first redesign removed from the onboarding sequence (see steps.ts).
+  // So in the live flow `hasRepos` is currently always false and the repo-aware
+  // branches below stay dormant — kept intact for when/if a GitHub connect step
+  // is re-added to onboarding.
   const hasRepos = selectedRepoUrls.length > 0;
   const repoCount = selectedRepoUrls.length;
 

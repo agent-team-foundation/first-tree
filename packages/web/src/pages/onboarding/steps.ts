@@ -19,6 +19,14 @@
  * live in copy.ts.
  */
 
+// There is intentionally no GitHub-connect ("connect-code") step in either
+// sequence: the value-first redesign moved code connection off the onboarding
+// critical path so the user reaches their agent first (GitHub access happens
+// later, from Settings or when a task needs it). The `StepConnectCode` component
+// is KEPT (preview + Context-tab tree build entry) and may be re-added to a
+// sequence here later — see its retention note. Until then nothing in the live
+// flow populates `selectedRepoUrls`, so the repo-aware branches downstream
+// (e.g. the `hasRepos` path in step-start-chat.tsx) stay dormant by design.
 export const ADMIN_STEPS = ["create-team", "connect-computer", "create-agent", "start-chat"] as const;
 export const INVITEE_STEPS = ["join-team", "connect-computer", "create-agent", "start-chat"] as const;
 

@@ -51,8 +51,8 @@ vi.mock("../steps/step-start-chat.js", () => ({
 vi.mock("../steps/step-team.js", () => ({
   StepTeam: () => <div>Create Team Step</div>,
 }));
-vi.mock("../steps/step-welcome.js", () => ({
-  StepWelcome: () => <div>Join Team Step</div>,
+vi.mock("../steps/step-join-team.js", () => ({
+  StepJoinTeam: () => <div>Join Team Step</div>,
 }));
 
 let root: Root | null = null;

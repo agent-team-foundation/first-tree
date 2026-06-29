@@ -4,11 +4,11 @@ import { COPY } from "../copy.js";
 import { useOnboardingFlow } from "../onboarding-flow.js";
 
 /**
- * Invitee step 1. Joining is already settled by the invite acceptance flow;
- * this screen confirms the selected team before the member connects their
- * computer and creates their agent.
+ * Invitee opening step (`join-team`). Joining is already settled by the invite
+ * acceptance flow; this screen confirms the selected team before the member
+ * connects their computer and creates their agent.
  */
-export function StepWelcome() {
+export function StepJoinTeam() {
   const { teamDisplayName, goNext } = useOnboardingFlow();
   return (
     <div className="flex flex-col" style={{ width: "100%", gap: "var(--sp-5)" }}>

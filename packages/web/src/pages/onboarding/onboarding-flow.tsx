@@ -65,8 +65,9 @@ export type OnboardingFlowValue = {
   /**
    * True once a per-org repo-selection draft exists (the user has touched the
    * picker, or a saved draft was restored on resume). The connect-code step
-   * reads this to decide whether to auto-select all granted repos: it only does
-   * so when there is NO draft, so a resumed narrowing — to a subset or to none —
+   * (retained but not in the live onboarding sequence — see steps.ts) reads
+   * this to decide whether to auto-select all granted repos: it only does so
+   * when there is NO draft, so a resumed narrowing — to a subset or to none —
    * is never overwritten back to "all".
    */
   hasRepoDraft: boolean;
@@ -234,8 +235,9 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
   // Hydrate the repo selection from this org's saved draft so a bailout before
   // start-chat (top-bar "finish later", a refresh, a mid-flow navigation) resumes
   // with the picked repos instead of losing them. `null` draft → empty (the
-  // connect-code step will auto-select all granted repos); a non-null draft —
-  // including `[]` — is a deliberate selection we restore verbatim.
+  // connect-code step — retained but not in the live sequence, see steps.ts —
+  // would auto-select all granted repos); a non-null draft — including `[]` —
+  // is a deliberate selection we restore verbatim.
   const [selectedRepoUrls, setSelectedRepoUrlsState] = useState<string[]>(() =>
     organizationId ? (readOnboardingSelectedRepos(organizationId) ?? []) : [],
   );
