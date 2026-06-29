@@ -1,4 +1,5 @@
 import * as os from "node:os";
+import { defaultDataDir, defaultHome } from "@first-tree/shared/config";
 import { LOG_REDACT_CENSOR } from "@first-tree/shared/observability";
 import * as Sentry from "@sentry/node";
 import { createLogger } from "./logger.js";
@@ -159,18 +160,47 @@ function sanitizeUrl(url: string | undefined): string | undefined {
     parsed.pathname = sanitizeString(parsed.pathname);
     return parsed.toString();
   } catch {
-    return sanitizeString(url.replace(/[?#].*$/, ""));
+    return sanitizeString(stripUrlSuffix(url));
   }
 }
 
+function stripUrlSuffix(url: string): string {
+  const queryIndex = url.indexOf("?");
+  const hashIndex = url.indexOf("#");
+  const cutIndex = queryIndex === -1 ? hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex);
+  return cutIndex === -1 ? url : url.slice(0, cutIndex);
+}
+
 function sanitizeString(value: string): string {
-  let sanitized = redactUserPath(value, os.homedir());
-  const cwd = process.cwd();
-  if (cwd) sanitized = redactUserPath(sanitized, cwd);
+  let sanitized = value;
+  for (const path of localPathRedactionRoots()) {
+    sanitized = redactUserPath(sanitized, path);
+  }
   return sanitized
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${LOG_REDACT_CENSOR}`)
     .replace(/(access_token|refresh_token|token|api_key|apiKey|secret|password)=([^&\s]+)/gi, `$1=${LOG_REDACT_CENSOR}`)
     .replace(/((?:prompt|model output|tool output|stdout|stderr)\s*[:=]\s*)([^\n\r]+)/gi, `$1${LOG_REDACT_CENSOR}`);
+}
+
+function localPathRedactionRoots(): string[] {
+  const paths = [os.homedir(), process.cwd(), process.env.FIRST_TREE_HOME, safeDefaultHome(), safeDefaultDataDir()];
+  return Array.from(new Set(paths.filter((path): path is string => Boolean(path))));
+}
+
+function safeDefaultHome(): string | undefined {
+  try {
+    return defaultHome();
+  } catch {
+    return undefined;
+  }
+}
+
+function safeDefaultDataDir(): string | undefined {
+  try {
+    return defaultDataDir();
+  } catch {
+    return undefined;
+  }
 }
 
 function redactUserPath(value: string, path: string): string {

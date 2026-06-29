@@ -60,4 +60,53 @@ describe("sanitizeWebSentryEvent", () => {
       "first_tree.git_sha": "test-sha",
     });
   });
+
+  it("drops breadcrumbs and scrubs credentials from event payload fields", () => {
+    const rawEvent: Event = {
+      message: "failed at /invite/raw-invite-token?token=secret",
+      breadcrumbs: [{ message: "navigated to /auth/github/complete#access=secret" }],
+      contexts: {
+        firstTree: {
+          url: "https://cloud.first-tree.ai/invite/context-token?token=secret#fragment",
+          authorization: "Bearer secret",
+        },
+      },
+      extra: {
+        callback: "/auth/github/complete?code=secret#access=secret",
+        nested: {
+          note: "open https://cloud.first-tree.ai/invite/extra-token?token=secret",
+          refreshToken: "secret",
+        },
+      },
+      exception: {
+        values: [
+          {
+            type: "Error",
+            value: "OAuth failed at /auth/github/complete#access=secret",
+          },
+        ],
+      },
+    };
+    const event = sanitizeWebSentryEvent(rawEvent, {
+      enabled: true,
+      dsn: "https://public@example.ingest.sentry.io/1",
+      environment: "production",
+      release: "first-tree-web@test-sha",
+      buildId: "test-sha",
+      sampleRate: 0.1,
+    });
+
+    expect(event.breadcrumbs).toBeUndefined();
+    expect(event.message).toBe("failed at /invite/[token]");
+    expect(event.contexts?.firstTree).toMatchObject({
+      url: "https://cloud.first-tree.ai/invite/[token]",
+      authorization: "[REDACTED]",
+    });
+    expect(event.extra?.callback).toBe("/auth/github/complete");
+    expect(event.extra?.nested).toEqual({
+      note: "open https://cloud.first-tree.ai/invite/[token]",
+      refreshToken: "[REDACTED]",
+    });
+    expect(event.exception?.values?.[0]?.value).toBe("OAuth failed at /auth/github/complete");
+  });
 });

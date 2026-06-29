@@ -1,9 +1,14 @@
+import { LOG_REDACT_CENSOR } from "@first-tree/shared/observability";
 import * as Sentry from "@sentry/react";
 import type { ErrorInfo } from "react";
 import { PROD_HOST, sanitizePath } from "../analytics.js";
 
 const DEFAULT_SAMPLE_RATE = 0.1;
 const FALSE_VALUES = new Set(["0", "false", "off", "no"]);
+const SENSITIVE_KEY_RE =
+  /token|secret|password|credential|authorization|cookie|jwt|api[_-]?key|access[_-]?token|refresh[_-]?token|oauth[_-]?code/i;
+const ROUTE_TEXT_RE = /\/(?:invite\/[^\s"'<>)]*|auth\/github\/complete[^\s"'<>)]*)/g;
+const ABSOLUTE_URL_TEXT_RE = /https?:\/\/[^\s"'<>)]*/gi;
 
 type WebSentryConfig = {
   enabled: boolean;
@@ -37,6 +42,7 @@ export function initWebSentry(): void {
     release: config.release,
     tracesSampleRate: config.sampleRate,
     sendDefaultPii: false,
+    maxBreadcrumbs: 0,
     beforeSend(event) {
       return sanitizeWebSentryEvent(event, config);
     },
@@ -66,6 +72,11 @@ export function sanitizeWebSentryEvent<T extends Sentry.Event>(event: T, config:
   };
   event.request = sanitizeRequest(event.request);
   if (event.transaction) event.transaction = sanitizeTransaction(event.transaction);
+  event.breadcrumbs = undefined;
+  event.contexts = scrubValue(event.contexts) as T["contexts"];
+  event.extra = scrubValue(event.extra) as T["extra"];
+  event.exception = scrubValue(event.exception) as T["exception"];
+  if (event.message) event.message = sanitizeString(event.message);
   return event;
 }
 
@@ -88,13 +99,28 @@ function sanitizeHeaders(headers: SentryRequest["headers"]): SentryRequest["head
   const safeHeaders: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
     const lower = key.toLowerCase();
-    if (lower === "authorization" || lower === "cookie" || lower === "set-cookie") {
+    if (lower === "authorization" || lower === "cookie" || lower === "set-cookie" || SENSITIVE_KEY_RE.test(key)) {
       safeHeaders[key] = "[REDACTED]";
       continue;
     }
-    safeHeaders[key] = typeof value === "string" ? value : String(value);
+    safeHeaders[key] = sanitizeString(typeof value === "string" ? value : String(value));
   }
   return safeHeaders;
+}
+
+function scrubObject(value: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    out[key] = SENSITIVE_KEY_RE.test(key) ? LOG_REDACT_CENSOR : scrubValue(item);
+  }
+  return out;
+}
+
+function scrubValue(value: unknown): unknown {
+  if (typeof value === "string") return sanitizeString(value);
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map((item) => scrubValue(item));
+  return scrubObject(value as Record<string, unknown>);
 }
 
 function sanitizeUrl(url: string | undefined): string | undefined {
@@ -103,8 +129,7 @@ function sanitizeUrl(url: string | undefined): string | undefined {
     const parsed = new URL(url);
     return `${parsed.origin}${sanitizePath(parsed.pathname)}`;
   } catch {
-    const [pathOnly] = url.split(/[?#]/, 1);
-    return sanitizePath(pathOnly ?? url);
+    return sanitizePath(stripUrlSuffix(url));
   }
 }
 
@@ -113,9 +138,26 @@ function sanitizeTransaction(transaction: string): string {
     const parsed = new URL(transaction, "https://first-tree.invalid");
     return sanitizePath(parsed.pathname);
   } catch {
-    const [pathOnly] = transaction.split(/[?#]/, 1);
-    return sanitizePath(pathOnly ?? transaction);
+    return sanitizePath(stripUrlSuffix(transaction));
   }
+}
+
+function sanitizeString(value: string): string {
+  return value
+    .replace(ABSOLUTE_URL_TEXT_RE, (match) => sanitizeUrl(match) ?? match)
+    .replace(ROUTE_TEXT_RE, (match) => sanitizePath(stripUrlSuffix(match)))
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${LOG_REDACT_CENSOR}`)
+    .replace(
+      /(access_token|refresh_token|token|api_key|apiKey|secret|password|oauth_code|code)=([^&\s]+)/gi,
+      `$1=${LOG_REDACT_CENSOR}`,
+    );
+}
+
+function stripUrlSuffix(url: string): string {
+  const queryIndex = url.indexOf("?");
+  const hashIndex = url.indexOf("#");
+  const cutIndex = queryIndex === -1 ? hashIndex : hashIndex === -1 ? queryIndex : Math.min(queryIndex, hashIndex);
+  return cutIndex === -1 ? url : url.slice(0, cutIndex);
 }
 
 function defaultEnvironment(): string {

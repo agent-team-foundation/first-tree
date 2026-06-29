@@ -90,4 +90,65 @@ describe("sanitizeClientSentryEvent", () => {
       "first_tree.git_sha": "abc123",
     });
   });
+
+  it("redacts FIRST_TREE_HOME runtime paths outside the OS home and cwd", () => {
+    const previousHome = process.env.FIRST_TREE_HOME;
+    process.env.FIRST_TREE_HOME = "/mnt/ft";
+    try {
+      const rawEvent: Event = {
+        extra: {
+          workspacePath: "/mnt/ft/data/workspaces/acme/repo",
+          sessionPath: "/mnt/ft/data/sessions/acme.json",
+        },
+        exception: {
+          values: [
+            {
+              type: "Error",
+              value: "failed opening /mnt/ft/data/workspaces/acme/repo/package.json",
+            },
+          ],
+        },
+        transaction: "/mnt/ft/data/workspaces/acme/repo/src/index.ts",
+      };
+      const event = sanitizeClientSentryEvent(rawEvent, {
+        enabled: true,
+        dsn: "https://public@example.ingest.sentry.io/1",
+        environment: "production",
+        release: "first-tree-client@abc123",
+        gitSha: "abc123",
+        sampleRate: 0.05,
+      });
+
+      expect(event.extra?.workspacePath).toBe("[LOCAL_PATH]/data/workspaces/acme/repo");
+      expect(event.extra?.sessionPath).toBe("[LOCAL_PATH]/data/sessions/acme.json");
+      expect(event.exception?.values?.[0]?.value).toBe(
+        "failed opening [LOCAL_PATH]/data/workspaces/acme/repo/package.json",
+      );
+      expect(event.transaction).toBe("[LOCAL_PATH]/data/workspaces/acme/repo/src/index.ts");
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.FIRST_TREE_HOME;
+      } else {
+        process.env.FIRST_TREE_HOME = previousHome;
+      }
+    }
+  });
+
+  it("strips URL suffixes from fallback URL parsing without regular expression backtracking", () => {
+    const rawEvent: Event = {
+      request: {
+        url: `${"#".repeat(10_000)}?token=secret`,
+      },
+    };
+    const event = sanitizeClientSentryEvent(rawEvent, {
+      enabled: true,
+      dsn: "https://public@example.ingest.sentry.io/1",
+      environment: "production",
+      release: "first-tree-client@abc123",
+      gitSha: "abc123",
+      sampleRate: 0.05,
+    });
+
+    expect(event.request?.url).toBe("");
+  });
 });
