@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { extname, resolve } from "node:path";
 import fastifyOpenTelemetry from "@autotelic/fastify-opentelemetry";
+import compress from "@fastify/compress";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
@@ -138,6 +139,16 @@ function namePlugin<T extends FastifyPluginAsync>(name: string, fn: T): T {
   Object.defineProperty(fn, "name", { value: name, configurable: true });
   return fn;
 }
+
+// Response compression, scoped to the Context Tree snapshot endpoints only.
+// The snapshot payload (all nodes + edges + changes + writes) is large, highly
+// compressible JSON, and browser content-download was the second-largest chunk
+// of the context-tree page load. Registered inside an encapsulated child scope
+// per route (not global) so the rest of the API is untouched. Content-negotiated
+// and threshold-gated: small responses and clients without `Accept-Encoding`
+// are unaffected. @fastify/compress defaults brotli quality to 4, so it avoids
+// the slow zlib max-quality default.
+const CONTEXT_TREE_SNAPSHOT_COMPRESSION = { threshold: 1024 } as const;
 
 export async function buildApp(config: Config) {
   // Validate token-lifetime config eagerly so a typo in
@@ -503,7 +514,12 @@ export async function buildApp(config: Config) {
       await api.register(
         userScope("contextTreeScope", async (scope) => {
           await scope.register(contextTreeInfoRoutes);
-          await scope.register(contextTreeSnapshotRoutes);
+          await scope.register(
+            namePlugin("contextTreeSnapshotCompressedScope", async (snap) => {
+              await snap.register(compress, CONTEXT_TREE_SNAPSHOT_COMPRESSION);
+              await snap.register(contextTreeSnapshotRoutes);
+            }),
+          );
         }),
         { prefix: "/context-tree" },
       );
@@ -544,7 +560,13 @@ export async function buildApp(config: Config) {
           await scope.register(orgResourceRoutes, { prefix: "/resources" });
           await scope.register(orgGithubAppRoutes, { prefix: "/github-app-installation" });
           await scope.register(orgContextTreeRoutes, { prefix: "/context-tree" });
-          await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
+          await scope.register(
+            namePlugin("orgContextTreeSnapshotCompressedScope", async (treeSnap) => {
+              await treeSnap.register(compress, CONTEXT_TREE_SNAPSHOT_COMPRESSION);
+              await treeSnap.register(orgContextTreeSnapshotRoutes);
+            }),
+            { prefix: "/context-tree" },
+          );
           await scope.register(orgAttachmentRoutes, { prefix: "/attachments" });
         }),
         { prefix: "/orgs/:orgId" },
