@@ -1,10 +1,10 @@
-import { LOG_REDACT_CENSOR } from "@first-tree/shared/observability";
 import * as Sentry from "@sentry/react";
 import type { ErrorInfo } from "react";
 import { PROD_HOST, sanitizePath } from "../analytics.js";
 
 const DEFAULT_SAMPLE_RATE = 0.1;
 const FALSE_VALUES = new Set(["0", "false", "off", "no"]);
+const REDACTED = "[REDACTED]";
 const SENSITIVE_KEY_RE =
   /token|secret|password|credential|authorization|cookie|jwt|api[_-]?key|access[_-]?token|refresh[_-]?token|oauth[_-]?code/i;
 const ROUTE_TEXT_RE = /\/(?:invite\/[^\s"'<>)]*|auth\/github\/complete[^\s"'<>)]*)/g;
@@ -111,7 +111,7 @@ function sanitizeHeaders(headers: SentryRequest["headers"]): SentryRequest["head
 function scrubObject(value: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    out[key] = SENSITIVE_KEY_RE.test(key) ? LOG_REDACT_CENSOR : scrubValue(item);
+    out[key] = SENSITIVE_KEY_RE.test(key) ? REDACTED : scrubValue(item);
   }
   return out;
 }
@@ -146,10 +146,10 @@ function sanitizeString(value: string): string {
   return value
     .replace(ABSOLUTE_URL_TEXT_RE, (match) => sanitizeUrl(match) ?? match)
     .replace(ROUTE_TEXT_RE, (match) => sanitizePath(stripUrlSuffix(match)))
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${LOG_REDACT_CENSOR}`)
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, `Bearer ${REDACTED}`)
     .replace(
       /(access_token|refresh_token|token|api_key|apiKey|secret|password|oauth_code|code)=([^&\s]+)/gi,
-      `$1=${LOG_REDACT_CENSOR}`,
+      `$1=${REDACTED}`,
     );
 }
 
