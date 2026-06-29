@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { assertCommandOk, runCommand, writeText } from "../../core/commands.js";
 import { appendEvent, previewText } from "../../core/events.js";
+import { firstTreeCommandLabel, resolveFirstTreeBin } from "../../core/first-tree-bin.js";
 import type { EvalReporter } from "../../core/reporter.js";
 import { stripShimTraceLines } from "../../core/reporter.js";
 import { installRepoSkill, parseSkillDescription } from "../../core/skills/install.js";
@@ -346,7 +347,9 @@ function runFixtureVerify(
     FIRST_TREE_EVAL_VERBOSE: verbose ? "1" : "0",
     PATH: `${paths.binDir}:${process.env.PATH ?? ""}`,
   };
-  const result = spawnSync("first-tree", args, {
+  const command = resolveFirstTreeBin(paths, env);
+  const commandLabel = firstTreeCommandLabel(command);
+  const result = spawnSync(command, args, {
     cwd: paths.workspacePath,
     encoding: "utf8",
     env,
@@ -358,7 +361,7 @@ function runFixtureVerify(
 
   const commandResult: CommandResult = {
     args,
-    command: "first-tree",
+    command: commandLabel,
     cwd: paths.workspacePath,
     exitCode: result.status ?? 1,
     stderr: stripShimTraceLines(stderr),
