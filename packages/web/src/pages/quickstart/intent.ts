@@ -10,6 +10,7 @@ import { type CampaignSlug, isKnownCampaign } from "./campaigns.js";
  */
 
 const INTENT_KEY = "first-tree:quickstart:intent";
+const AGENT_KEY = "first-tree:quickstart:agent";
 
 /** A normalized GitHub repo reference parsed from a landing handoff. */
 export type RepoIntent = {
@@ -111,4 +112,21 @@ export function readCampaignIntent(): CampaignIntent | null {
 export function clearCampaignIntent(): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.removeItem(INTENT_KEY);
+  window.sessionStorage.removeItem(AGENT_KEY);
+}
+
+/**
+ * The agent created during a quickstart attempt, stashed per-tab so a remount
+ * (refresh while waiting, the timeout/error screen) reuses it instead of
+ * creating a duplicate. Cleared together with the intent once start chat
+ * succeeds (so a later bare /quickstart visit doesn't resume a consumed run).
+ */
+export function writeQuickstartAgentUuid(uuid: string): void {
+  if (typeof window === "undefined") return;
+  window.sessionStorage.setItem(AGENT_KEY, uuid);
+}
+
+export function readQuickstartAgentUuid(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.sessionStorage.getItem(AGENT_KEY);
 }

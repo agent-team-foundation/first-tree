@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubClient } from "../../../api/activity.js";
 import type { StartOnboardingChatArgs } from "../../../api/onboarding-events.js";
 import type { ComputerConnection } from "../../../features/agent-setup/use-computer-connection.js";
-import { type CampaignIntent, writeCampaignIntent } from "../intent.js";
+import { type CampaignIntent, readCampaignIntent, writeCampaignIntent, writeQuickstartAgentUuid } from "../intent.js";
 import { QuickstartPage } from "../quickstart-page.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -348,5 +348,28 @@ describe("QuickstartPage — full flow (e2e)", () => {
     expect(agentCreationMock.create).not.toHaveBeenCalled();
     expect(navigateMock).not.toHaveBeenCalled();
     expect((container.textContent ?? "").length).toBeGreaterThan(0);
+  });
+
+  it("clears the stored campaign intent once start chat succeeds (no stale re-run on a bare revisit)", async () => {
+    seedIntent();
+    connectedWith("claude-code");
+    await renderPage();
+    await fireOnline("agent-1");
+    expect(navigateMock).toHaveBeenCalledWith("/?c=chat-1");
+    expect(readCampaignIntent()).toBeNull();
+  });
+
+  it("on remount with an already-created agent, reuses it (no duplicate Cedar) and resumes start chat", async () => {
+    seedIntent("production-scan");
+    connectedWith("claude-code");
+    writeQuickstartAgentUuid("agent-existing");
+    await renderPage();
+
+    expect(agentCreationMock.create).not.toHaveBeenCalled();
+    expect(onboardingMocks.postOnboardingStartChat).toHaveBeenCalledTimes(1);
+    const arg = onboardingMocks.postOnboardingStartChat.mock.calls[0]?.[0];
+    if (!arg) throw new Error("expected a start-chat call");
+    expect(arg.agentUuid).toBe("agent-existing");
+    expect(navigateMock).toHaveBeenCalledWith("/?c=chat-1");
   });
 });

@@ -9,7 +9,15 @@ import { useComputerConnection } from "../../features/agent-setup/use-computer-c
 import { runtimeProviderLabel } from "../clients/cards/shared/providers.js";
 import { CommandBox, FlowHint, StatusRow, WorkingState } from "../onboarding/flow-ui.js";
 import { getCampaign, QUICKSTART_AGENT_NAME } from "./campaigns.js";
-import { type CampaignIntent, readCampaignHandoff, readCampaignIntent, writeCampaignIntent } from "./intent.js";
+import {
+  type CampaignIntent,
+  clearCampaignIntent,
+  readCampaignHandoff,
+  readCampaignIntent,
+  readQuickstartAgentUuid,
+  writeCampaignIntent,
+  writeQuickstartAgentUuid,
+} from "./intent.js";
 
 /**
  * Reusable quickstart growth entry (`/quickstart?campaign=<slug>&repo=...`).
@@ -44,6 +52,11 @@ export function QuickstartPage() {
   const createStartedRef = useRef(false);
   const startChatStartedRef = useRef(false);
   const onlineAgentRef = useRef<string | null>(null);
+  const resumeStartedRef = useRef(false);
+  // Read once on mount: an agent created in a prior attempt this tab (it
+  // survives a remount). When present we resume with it rather than create a
+  // duplicate.
+  const stashedAgentUuid = useMemo(() => readQuickstartAgentUuid(), []);
   const [startChatError, setStartChatError] = useState<string | null>(null);
 
   const startChat = useCallback(
@@ -61,6 +74,9 @@ export function QuickstartPage() {
           campaign: intent.campaign,
           complete: false,
         });
+        // Consume the campaign so a later bare /quickstart visit in this tab
+        // doesn't re-run it (clears the stored intent + the agent stash).
+        clearCampaignIntent();
         // Refresh /me so the workspace's onboarding gate sees the just-created
         // agent + connected client. Without it the cached pre-flow /me still
         // reads "no personal agent", and the gate bounces a fresh user into
@@ -77,7 +93,15 @@ export function QuickstartPage() {
     [intent, campaign, organizationId, navigate, refreshMe],
   );
 
-  const { phase, error: agentError, create, retry: retryAgent } = useAgentCreation({ onOnline: startChat });
+  const {
+    phase,
+    error: agentError,
+    create,
+    retry: retryAgent,
+  } = useAgentCreation({
+    onCreated: (info) => writeQuickstartAgentUuid(info.agentUuid),
+    onOnline: startChat,
+  });
 
   // Create Cedar with the auto-resolved runtime + neutral private default. The
   // ref guards a single attempt; the retry path calls this directly (a ref
@@ -95,12 +119,22 @@ export function QuickstartPage() {
   }, [computer.connectedClient, computer.selectedRuntime, create, organizationId]);
 
   // Auto-create the moment a computer is connected with a usable runtime — no
-  // button, no picker (Claude Code preferred). The ref makes this fire once.
+  // button, no picker (Claude Code preferred). The ref makes this fire once;
+  // skipped when an agent was already created this attempt (remount), so a
+  // refresh mid-flow resumes with that agent instead of spawning a second.
   useEffect(() => {
-    if (createStartedRef.current || !intent) return;
+    if (createStartedRef.current || stashedAgentUuid || !intent) return;
     if (!computer.connectedClient || !computer.selectedRuntime || phase !== "idle") return;
     createCedar();
-  }, [computer.connectedClient, computer.selectedRuntime, phase, intent, createCedar]);
+  }, [computer.connectedClient, computer.selectedRuntime, phase, intent, createCedar, stashedAgentUuid]);
+
+  // Remount after the agent was already created (refresh while waiting, or the
+  // timeout/error screen): reuse the stashed agent and resume start chat.
+  useEffect(() => {
+    if (resumeStartedRef.current || !stashedAgentUuid || !intent || !campaign) return;
+    resumeStartedRef.current = true;
+    void startChat(stashedAgentUuid);
+  }, [stashedAgentUuid, intent, campaign, startChat]);
 
   const retryStartChat = useCallback(() => {
     if (onlineAgentRef.current) void startChat(onlineAgentRef.current);
