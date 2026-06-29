@@ -291,6 +291,84 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(treeMsgs).toHaveLength(1);
     expect(treeMsgs[0]?.content).toBe("Seed the team tree.");
   });
+
+  it("scopes the kickoff key by campaign so two campaigns for the same agent get separate chats", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const base = {
+      organizationId: admin.organizationId,
+      agentUuid: agent.uuid,
+      kind: "work" as const,
+      complete: false,
+    };
+
+    const scan = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...base, bootstrap: "Welcome — let's scan acme/api.", campaign: "production-scan" },
+    });
+    expect(scan.statusCode).toBe(200);
+    const scanChatId = scan.json<{ chatId: string }>().chatId;
+
+    const ready = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...base, bootstrap: "Welcome — let's check agent-readiness.", campaign: "agent-readiness" },
+    });
+    expect(ready.statusCode).toBe(200);
+    const readyChatId = ready.json<{ chatId: string }>().chatId;
+
+    // Distinct campaigns for the same (human, agent, kind) must not collapse into
+    // one chat, or the second campaign's bootstrap is swallowed by the first's
+    // already-existing chat — the multi-landing "swallow" failure the campaign
+    // segment exists to prevent.
+    expect(readyChatId).not.toBe(scanChatId);
+
+    const [scanChat] = await app.db.select().from(chats).where(eq(chats.id, scanChatId)).limit(1);
+    const [readyChat] = await app.db.select().from(chats).where(eq(chats.id, readyChatId)).limit(1);
+    expect(scanChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work:production-scan`);
+    expect(readyChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work:agent-readiness`);
+  });
+
+  it("omits the campaign segment when no campaign is passed, keeping the legacy key", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+    const base = {
+      organizationId: admin.organizationId,
+      agentUuid: agent.uuid,
+      kind: "work" as const,
+      complete: false,
+    };
+
+    const legacy = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...base, bootstrap: "Legacy work kickoff." },
+    });
+    expect(legacy.statusCode).toBe(200);
+    const legacyChatId = legacy.json<{ chatId: string }>().chatId;
+
+    // Byte-identical to the pre-campaign key — no trailing segment — so onboarding,
+    // which never passes a campaign, is completely unaffected (no migration, no
+    // behavior change on the existing key).
+    const [legacyChat] = await app.db.select().from(chats).where(eq(chats.id, legacyChatId)).limit(1);
+    expect(legacyChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work`);
+
+    // A campaign kickoff for the same triple is a separate chat from the legacy one.
+    const campaign = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { ...base, bootstrap: "Campaign work kickoff.", campaign: "production-scan" },
+    });
+    expect(campaign.statusCode).toBe(200);
+    expect(campaign.json<{ chatId: string }>().chatId).not.toBe(legacyChatId);
+  });
 });
 
 describe("GET /me/onboarding/tree-setup-status", () => {

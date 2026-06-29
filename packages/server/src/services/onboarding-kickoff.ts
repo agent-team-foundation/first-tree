@@ -26,6 +26,14 @@ export type KickoffOnboardingArgs = {
   kind: KickoffKind;
   /** Whether this kickoff should stamp onboarding completion after the chat exists. */
   complete: boolean;
+  /**
+   * Optional campaign slug for reusable growth entries (quickstart). When set,
+   * it's appended to the idempotency key so two campaigns for the same
+   * (human, agent, kind) get distinct chats instead of the second being
+   * swallowed by the first's existing chat. Onboarding never sets it, so the
+   * key stays `<human>:<target>:<kind>` and onboarding is unaffected.
+   */
+  campaign?: string;
 };
 
 export type KickoffOnboardingResult = {
@@ -69,7 +77,8 @@ export async function hasTreeSetupKickoffMessage(db: Database, organizationId: s
  * completion) into one resumable operation:
  *
  *   1. find-or-create the kickoff chat, keyed by `<humanAgentId>:<targetAgentId>:<kind>`
- *      (race-safe via the unique index on `chats.onboarding_kickoff_key`);
+ *      (plus `:<campaign>` for reusable quickstart growth entries; race-safe via
+ *      the unique index on `chats.onboarding_kickoff_key`);
  *   2. send the bootstrap message only if the chat has no messages yet, under a
  *      row lock so concurrent requests can't both send;
  *   3. optionally stamp `onboarding_completed_at` (+ suppressed/reason) only
@@ -83,7 +92,9 @@ export async function hasTreeSetupKickoffMessage(db: Database, organizationId: s
  * same agent stay distinct chats.
  */
 export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArgs): Promise<KickoffOnboardingResult> {
-  const kickoffKey = `${args.humanAgentId}:${args.targetAgentId}:${args.kind}`;
+  const kickoffKey = args.campaign
+    ? `${args.humanAgentId}:${args.targetAgentId}:${args.kind}:${args.campaign}`
+    : `${args.humanAgentId}:${args.targetAgentId}:${args.kind}`;
 
   // 1. Find-or-create the kickoff chat. The fast path (existing chat) skips
   //    participant re-validation; only a first run pays for createChat, whose
