@@ -254,6 +254,106 @@ describe("agent-chat-status", () => {
       expect(s?.statusReason).toBeUndefined();
     });
 
+    it("drops a stale terminal statusReason once the agent is working a new turn", async () => {
+      // Repro: a turn exhausted its provider retries (terminal), then the user
+      // re-sent and a NEW turn is in flight (runtime working) but has not yet
+      // emitted a `turn_end`. The exhausted reason is from the prior, superseded
+      // turn — it must not keep rendering as a red "Provider retry exhausted"
+      // over a visibly-working agent. (Without the working-gate the compose bar
+      // shows the terminal reason for the whole new turn — the reported bug.)
+      const { app, peer, chatId } = await newChatWithAgent();
+      await bindPresence(peer.agent.uuid, peer.clientId);
+      await setSession(peer.agent.uuid, chatId, "active");
+      await setRuntime(peer.agent.uuid, chatId, "working");
+      await insertEvent(peer.agent.uuid, chatId, 1, "error", {
+        message: encodeProviderRetryEventMessage({
+          event: "provider_retry_exhausted",
+          provider: "claude-code",
+          scope: "provider_turn",
+          category: "configuration",
+          reasonCode: "claude_native_binary_missing",
+          attempt: 2,
+          maxAttempts: 2,
+          retryMode: "foreground",
+          replaySafety: "pre_provider",
+          userSeverity: "error",
+        }),
+      });
+      // The new turn's first activity event — higher seq than the exhaustion.
+      await insertEvent(peer.agent.uuid, chatId, 2, "tool_call", {
+        toolUseId: "t1",
+        name: "Bash",
+        args: null,
+        status: "pending",
+      });
+
+      const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+      expect(s?.main).toBe("working");
+      expect(s?.statusReason).toBeUndefined();
+    });
+
+    it("keeps a terminal statusReason while the agent is NOT working (last turn failed)", async () => {
+      // Idle after a terminal exhaustion with no new turn yet: the reason still
+      // describes the genuine last outcome and should remain visible until a new
+      // turn supersedes it. Guards against the working-gate over-clearing.
+      const { app, peer, chatId } = await newChatWithAgent();
+      await bindPresence(peer.agent.uuid, peer.clientId);
+      await setSession(peer.agent.uuid, chatId, "active");
+      await insertEvent(peer.agent.uuid, chatId, 1, "error", {
+        message: encodeProviderRetryEventMessage({
+          event: "provider_retry_exhausted",
+          provider: "claude-code",
+          scope: "provider_turn",
+          category: "configuration",
+          reasonCode: "claude_native_binary_missing",
+          attempt: 2,
+          maxAttempts: 2,
+          retryMode: "foreground",
+          replaySafety: "pre_provider",
+          userSeverity: "error",
+        }),
+      });
+
+      const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+      expect(s?.main).toBe("ready");
+      expect(s?.statusReason?.kind).toBe("terminal");
+      expect(s?.statusReason?.label).toBe("Provider retry exhausted");
+    });
+
+    it("keeps a retrying statusReason while the agent is working (in-turn foreground retry)", async () => {
+      // A foreground retry mid-turn is the legitimate working+reason combo — the
+      // working-gate only drops `terminal`, never `retrying` / `waiting`.
+      const { app, peer, chatId } = await newChatWithAgent();
+      await bindPresence(peer.agent.uuid, peer.clientId);
+      await setSession(peer.agent.uuid, chatId, "active");
+      await setRuntime(peer.agent.uuid, chatId, "working");
+      await insertEvent(peer.agent.uuid, chatId, 1, "tool_call", {
+        toolUseId: "t1",
+        name: "Bash",
+        args: null,
+        status: "pending",
+      });
+      await insertEvent(peer.agent.uuid, chatId, 2, "error", {
+        message: encodeProviderRetryEventMessage({
+          event: "provider_retry_scheduled",
+          provider: "claude-code",
+          scope: "provider_turn",
+          category: "transient_transport",
+          reasonCode: "provider_transient_transport",
+          attempt: 1,
+          maxAttempts: 2,
+          retryMode: "foreground",
+          delayMs: 500,
+          replaySafety: "pre_visible",
+          userSeverity: "info",
+        }),
+      });
+
+      const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+      expect(s?.main).toBe("working");
+      expect(s?.statusReason?.kind).toBe("retrying");
+    });
+
     it("clears provider-turn retry statusReason when a later turn_end succeeds", async () => {
       const { app, peer, chatId } = await newChatWithAgent();
       await bindPresence(peer.agent.uuid, peer.clientId);

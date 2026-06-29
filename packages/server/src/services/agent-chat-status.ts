@@ -442,6 +442,20 @@ export async function resolveAgentChatStatuses(
       const activity = perAgentActivity?.get(agentId) ?? null;
       const engagement: AgentEngagement = state === "active" ? "active" : state === "suspended" ? "suspended" : "none";
       const working = computeWorking(sess, activity, now);
+      // A `terminal` reason (provider_retry_exhausted / provider_failure_terminal)
+      // records that a *past* turn's provider attempts gave up. Once the agent is
+      // `working` again it is on a NEW turn, so that terminal reason is stale and
+      // must be dropped — otherwise the compose status bar (where the reason view
+      // overrides the main view) keeps rendering a red "Provider retry exhausted"
+      // over an agent that has visibly recovered. `deriveStatusReasons` only
+      // clears a provider_turn terminal reason at the next *successful* `turn_end`,
+      // which has not landed while the new turn is still in flight; this is the
+      // mid-turn gap. `retrying` / `waiting` reasons legitimately co-occur with
+      // working (an in-turn foreground retry) and are kept. Failed agents
+      // (errored ⇒ main "failed", working=false) also keep the reason — that is
+      // the correct co-display on the failure row.
+      const reason = perAgentStatusReason?.get(agentId);
+      const statusReason = working && reason?.kind === "terminal" ? undefined : reason;
       arr.push(
         buildAgentChatStatus({
           agentId,
@@ -462,7 +476,7 @@ export async function resolveAgentChatStatuses(
           // aren't in chainSessionOp) briefly emits activity=null; the next
           // runtime frame self-heals.
           activity: working ? activity : null,
-          statusReason: perAgentStatusReason?.get(agentId),
+          statusReason,
         }),
       );
     }
