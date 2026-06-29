@@ -292,6 +292,40 @@ describe("agent-chat-status", () => {
       expect(s?.statusReason).toBeUndefined();
     });
 
+    it("keeps a session-scoped terminal statusReason even while the agent is working", async () => {
+      // The working-gate is scoped strictly to `provider_turn`. A
+      // `session_resume` / `session_start` terminal reason is session-scoped, not
+      // turn-scoped, so a turn-level "working" signal must NOT hide it — otherwise
+      // it would flicker (hidden while working, reappearing when idle). It keeps
+      // its own lifecycle.
+      const { app, peer, chatId } = await newChatWithAgent();
+      await bindPresence(peer.agent.uuid, peer.clientId);
+      await setSession(peer.agent.uuid, chatId, "active");
+      await setRuntime(peer.agent.uuid, chatId, "working");
+      await insertEvent(peer.agent.uuid, chatId, 1, "error", {
+        message: encodeProviderRetryEventMessage({
+          event: "provider_failure_terminal",
+          provider: "claude-code",
+          scope: "session_resume",
+          category: "credential",
+          reasonCode: "session_resume_failed",
+          replaySafety: "unsafe",
+          userSeverity: "error",
+        }),
+      });
+      await insertEvent(peer.agent.uuid, chatId, 2, "tool_call", {
+        toolUseId: "t1",
+        name: "Bash",
+        args: null,
+        status: "pending",
+      });
+
+      const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+      expect(s?.main).toBe("working");
+      expect(s?.statusReason?.kind).toBe("terminal");
+      expect(s?.statusReason?.scope).toBe("session_resume");
+    });
+
     it("keeps a terminal statusReason while the agent is NOT working (last turn failed)", async () => {
       // Idle after a terminal exhaustion with no new turn yet: the reason still
       // describes the genuine last outcome and should remain visible until a new
