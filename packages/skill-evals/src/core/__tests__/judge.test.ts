@@ -6,9 +6,11 @@ import { describe, expect, it } from "vitest";
 
 import { runQualityEval } from "../../suites/quality/runner.js";
 import type { QualityArtifactInput } from "../../suites/quality/types.js";
+import { codexJudgeArgs, codexJudgeEnv } from "../judge/codex.js";
 import { createFakeJudgeProvider } from "../judge/fake.js";
 import { evaluateJudgeOutput, parseJudgeJson } from "../judge/schema.js";
 import type { JudgeRubricDimension } from "../judge/types.js";
+import { createRunPaths } from "../paths.js";
 
 const DIMENSIONS: readonly JudgeRubricDimension[] = [
   {
@@ -113,6 +115,57 @@ describe("judge schema", () => {
         DIMENSIONS,
       ),
     ).toThrow(/axis_b score/u);
+  });
+});
+
+describe("codex judge provider hardening", () => {
+  it("runs judge codex with read-only sandbox and a minimal environment", () => {
+    const packageRoot = tempPackageRoot();
+    try {
+      const paths = createRunPaths({
+        caseId: "judge-hardening-test",
+        packageRoot,
+        startedAt: "2026-06-29T00:00:00.000Z",
+      });
+      const request = {
+        caseId: "judge-hardening-test",
+        dimensions: DIMENSIONS,
+        prompt: "Return JSON.",
+      };
+      const env = codexJudgeEnv({
+        caseId: request.caseId,
+        eventsPath: paths.eventsPath,
+        paths,
+        sourceEnv: {
+          CODEX_HOME: "/codex-auth-home",
+          FIRST_TREE_SERVER_URL: "https://example.invalid",
+          GIT_CONFIG_GLOBAL: "/tmp/leaky-gitconfig",
+          HOME: "/operator-home",
+          OPENAI_API_KEY: "allowed",
+          PATH: "/usr/bin",
+        },
+      });
+      const args = codexJudgeArgs(request, "gpt-test", paths, env);
+
+      expect(args).toContain("--ignore-user-config");
+      expect(args).toContain("--ignore-rules");
+      expect(args).toContain("--sandbox");
+      expect(args).toContain("read-only");
+      expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+      expect(args.at(-1)).toContain("pure text scoring judge");
+      expect(env.HOME).toBe(`${paths.runRoot}/judge-home`);
+      expect(env.TMPDIR).toBe(`${paths.runRoot}/judge-tmp`);
+      expect(env.CODEX_HOME).toBe("/codex-auth-home");
+      expect(env.OPENAI_API_KEY).toBe("allowed");
+      expect(env.FIRST_TREE_SERVER_URL).toBeUndefined();
+      expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
+      expect(env.PATH?.startsWith(`${paths.binDir}:`)).toBe(true);
+      expect(args).toContain(`shell_environment_policy.set.PATH=${JSON.stringify(env.PATH)}`);
+      expect(args).toContain(`shell_environment_policy.set.HOME=${JSON.stringify(env.HOME)}`);
+      expect(args).toContain(`shell_environment_policy.set.TMPDIR=${JSON.stringify(env.TMPDIR)}`);
+    } finally {
+      rmSync(packageRoot, { force: true, recursive: true });
+    }
   });
 });
 

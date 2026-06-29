@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { assertCommandOk, runCommand, writeText } from "../../core/commands.js";
@@ -11,6 +11,7 @@ import type { CommandResult, RunPaths } from "../../core/types.js";
 import type { FirstTreeReadEvalCase, FixtureValidation } from "./types.js";
 
 const DOMAIN_NODE_TARGET_COUNT = 100;
+const NAVIGATION_NODE_MARKER = "evalNodeKind: navigation";
 const SKILL_NAME = "first-tree-read";
 
 type DomainNode = {
@@ -49,6 +50,20 @@ owners: [eval-owner]
 # ${titleFromPath(node.path)}
 
 ${facts}
+`;
+}
+
+function navigationNodeMarkdown(path: string): string {
+  return `---
+title: "${titleFromPath(path)}"
+owners: [eval-owner]
+${NAVIGATION_NODE_MARKER}
+---
+
+# ${titleFromPath(path)}
+
+This navigation node exists so agents can browse this eval fixture by natural
+Context Tree parent paths. Durable facts for grading live in descendant nodes.
 `;
 }
 
@@ -262,6 +277,17 @@ export function generateDomainNodes(): readonly DomainNode[] {
   return nodes;
 }
 
+function navigationParentPaths(nodes: readonly DomainNode[]): readonly string[] {
+  const paths = new Set<string>();
+  for (const node of nodes) {
+    const parts = node.path.split("/");
+    for (let index = 1; index < parts.length; index += 1) {
+      paths.add(parts.slice(0, index).join("/"));
+    }
+  }
+  return [...paths].sort();
+}
+
 function writeContextTreeFixture(paths: RunPaths): string {
   const contextTreePath = join(paths.workspacePath, "context-tree");
   const sourceRepoPath = join(paths.workspacePath, "source-repo");
@@ -292,7 +318,11 @@ function writeContextTreeFixture(paths: RunPaths): string {
   writeText(join(contextTreePath, "AGENTS.md"), treeAgentsMarkdown());
   writeText(join(contextTreePath, "members", "eval-owner", "NODE.md"), memberNodeMarkdown());
 
-  for (const node of generateDomainNodes()) {
+  const domainNodes = generateDomainNodes();
+  for (const parentPath of navigationParentPaths(domainNodes)) {
+    writeText(join(contextTreePath, parentPath, "NODE.md"), navigationNodeMarkdown(parentPath));
+  }
+  for (const node of domainNodes) {
     writeText(join(contextTreePath, node.path, "NODE.md"), nodeMarkdown(node));
   }
 
@@ -359,7 +389,8 @@ function collectNodeDirs(root: string): string[] {
       const child = join(dir, entry);
       if (entry.startsWith(".") || entry === "node_modules") continue;
       if (!isDirectory(child)) continue;
-      if (existsSync(join(child, "NODE.md"))) {
+      const nodeFilePath = join(child, "NODE.md");
+      if (existsSync(nodeFilePath) && !isNavigationNode(nodeFilePath)) {
         const relPath = relative(root, child).replace(/\\/gu, "/");
         if (!relPath.startsWith("members/")) found.push(relPath);
       }
@@ -368,6 +399,14 @@ function collectNodeDirs(root: string): string[] {
   }
   walk(root);
   return found.sort();
+}
+
+function isNavigationNode(nodeFilePath: string): boolean {
+  try {
+    return readFileSync(nodeFilePath, "utf8").includes(NAVIGATION_NODE_MARKER);
+  } catch {
+    return false;
+  }
 }
 
 function readdirSafe(path: string): string[] {
