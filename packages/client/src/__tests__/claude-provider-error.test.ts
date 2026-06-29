@@ -131,6 +131,22 @@ describe("claude provider error adapter", () => {
     expect(notice).toContain("Original provider message");
   });
 
+  it("does not treat a non-403 credential error as egress even if it mentions request not allowed", () => {
+    // The egress lead requires a 403/forbidden co-marker, so a 401 whose body
+    // happens to contain the phrase still gets the auth lead, not egress.
+    const notice = formatClaudeProviderFailureNotice(
+      {
+        category: "credential",
+        reasonCode: "provider_credential_required",
+        message: "auth",
+        sourceKind: "permanent",
+      },
+      "API Error: 401 invalid x-api-key — request not allowed for this key",
+    );
+    expect(notice).toContain("rejected the local Claude authentication");
+    expect(notice).not.toContain("before authentication");
+  });
+
   it("still surfaces the auth lead for a genuine credential failure", () => {
     const notice = formatClaudeProviderFailureNotice(
       {

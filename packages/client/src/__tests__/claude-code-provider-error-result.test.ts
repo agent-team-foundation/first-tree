@@ -367,6 +367,28 @@ describe("claude-code handler — structured provider error result", () => {
     expect(notice).not.toContain("rejected the local Claude authentication");
   });
 
+  it("does not leak a deferred auth hint when an auth_status warning is followed by success", async () => {
+    mockState.nextMessages = [
+      { type: "auth_status", error: "token will expire soon" },
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "done" }] },
+      },
+      { type: "result", subtype: "success", is_error: false, result: "all good" },
+    ];
+    const { emitted, forwardResult } = await runSingleResultTurn();
+
+    expect(forwardResult).toHaveBeenCalledWith("all good");
+    expect(
+      emitted.some(
+        (event) =>
+          event.kind === "error" &&
+          typeof event.payload.message === "string" &&
+          event.payload.message.includes("auth on this machine looks broken"),
+      ),
+    ).toBe(false);
+  });
+
   it("does not sniff ordinary success result text as a provider error", async () => {
     const resultText = "API Error: 401 Unauthorized is an example the user asked about.";
     mockState.nextMessages = [

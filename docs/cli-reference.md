@@ -612,8 +612,11 @@ daemon and the agent runtimes it spawns. That is why an interactive `claude` /
 `git` can work while the daemon's calls to `api.anthropic.com` / `github.com`
 fail.
 
-To supply that environment, create `~/.first-tree/daemon.env` (under your
-channel's `FIRST_TREE_HOME`) with simple `KEY=VALUE` lines:
+To supply that environment, create `daemon.env` under your channel's
+`FIRST_TREE_HOME` with simple `KEY=VALUE` lines. **The path is channel-specific**
+(`~/.first-tree/daemon.env` on prod, `~/.first-tree-staging/daemon.env` on
+staging, `~/.first-tree-dev/daemon.env` on dev) — it must match the channel of
+the daemon that reads it:
 
 ```sh
 HTTPS_PROXY=http://127.0.0.1:7897
