@@ -1,5 +1,6 @@
 import type { SkillEvalCase } from "../../core/case-schema.js";
 import type { SkillEvalSuiteDefinition } from "../types.js";
+import { FIRST_TREE_WRITE_QUALITY_CASE } from "./quality.js";
 import type { FirstTreeWriteEvalCase } from "./types.js";
 
 const FLOOR_CASE_ID = "first-tree-write-static-coverage";
@@ -99,6 +100,7 @@ export const FIRST_TREE_WRITE_EVAL_CASES: readonly SkillEvalCase[] = [
     tier: "floor",
   },
   ...FIRST_TREE_WRITE_GATE_CASES,
+  FIRST_TREE_WRITE_QUALITY_CASE,
 ];
 
 function validateFirstTreeWriteFloor(cases: readonly SkillEvalCase[]): readonly string[] {
@@ -135,6 +137,12 @@ export const FIRST_TREE_WRITE_SUITE: SkillEvalSuiteDefinition = {
         description: "Implemented source-boundary and tree-diff live gate cases.",
         status: "implemented",
         tier: "gate",
+      },
+      {
+        caseIds: [FIRST_TREE_WRITE_QUALITY_CASE.id],
+        description: "LLM-as-judge node quality case for durable, source-bounded tree writing.",
+        status: "implemented",
+        tier: "quality",
       },
     ],
   },

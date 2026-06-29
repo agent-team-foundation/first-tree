@@ -1,0 +1,226 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+import { runQualityEval } from "../../suites/quality/runner.js";
+import type { QualityArtifactInput } from "../../suites/quality/types.js";
+import { createFakeJudgeProvider } from "../judge/fake.js";
+import { evaluateJudgeOutput, parseJudgeJson } from "../judge/schema.js";
+import type { JudgeRubricDimension } from "../judge/types.js";
+
+const DIMENSIONS: readonly JudgeRubricDimension[] = [
+  {
+    description: "A",
+    key: "axis_a",
+    threshold: 4,
+  },
+  {
+    description: "B",
+    key: "axis_b",
+    threshold: 3,
+  },
+];
+
+function tempPackageRoot(): string {
+  return mkdtempSync(join(tmpdir(), "skill-evals-quality-test-"));
+}
+
+function fakeArtifactInput(): ReadonlyMap<string, QualityArtifactInput> {
+  return new Map([
+    [
+      "first-tree-write-node-quality",
+      {
+        artifact: "Actual tree diff from a fake deterministic gate.",
+        deterministicGatePassed: true,
+        gateCaseId: "durable-source-writes",
+        gateRunRoot: "/tmp/fake-gate",
+        gateSummaryJsonPath: "/tmp/fake-gate/summary.json",
+        gateSummaryMdPath: "/tmp/fake-gate/summary.md",
+        source: "Durable source artifact from a fake deterministic gate.",
+      },
+    ],
+  ]);
+}
+
+function failedGateArtifactInput(): ReadonlyMap<string, QualityArtifactInput> {
+  return new Map([
+    [
+      "first-tree-write-node-quality",
+      {
+        artifact: "No reliable tree diff because deterministic gate failed.",
+        deterministicGatePassed: false,
+        gateCaseId: "durable-source-writes",
+        gateRunRoot: "/tmp/fake-gate",
+        gateSummaryJsonPath: "/tmp/fake-gate/summary.json",
+        gateSummaryMdPath: "/tmp/fake-gate/summary.md",
+        source: "Durable source artifact from a fake deterministic gate.",
+      },
+    ],
+  ]);
+}
+
+describe("judge schema", () => {
+  it("passes good and borderline scores at configured thresholds", () => {
+    const parsed = parseJudgeJson(
+      JSON.stringify({
+        reasoning: "Borderline but acceptable.",
+        scores: {
+          axis_a: 4,
+          axis_b: 3,
+        },
+      }),
+      DIMENSIONS,
+    );
+
+    const evaluation = evaluateJudgeOutput(parsed, DIMENSIONS);
+    expect(evaluation.passed).toBe(true);
+    expect(evaluation.failures).toEqual([]);
+    expect(evaluation.judge_scores).toEqual({
+      axis_a: 4,
+      axis_b: 3,
+    });
+  });
+
+  it("fails scores below threshold without replacing deterministic pass/fail", () => {
+    const parsed = parseJudgeJson(
+      JSON.stringify({
+        reasoning: "Axis A is too weak.",
+        scores: {
+          axis_a: 3,
+          axis_b: 5,
+        },
+      }),
+      DIMENSIONS,
+    );
+
+    const evaluation = evaluateJudgeOutput(parsed, DIMENSIONS);
+    expect(evaluation.passed).toBe(false);
+    expect(evaluation.failures).toEqual(["axis_a: 3 < 4"]);
+  });
+
+  it("rejects invalid JSON and schema mismatches", () => {
+    expect(() => parseJudgeJson("not json", DIMENSIONS)).toThrow(/not strict JSON/u);
+    expect(() =>
+      parseJudgeJson(
+        JSON.stringify({
+          reasoning: "Missing axis B.",
+          scores: {
+            axis_a: 4,
+          },
+        }),
+        DIMENSIONS,
+      ),
+    ).toThrow(/axis_b score/u);
+  });
+});
+
+describe("quality runner with fake judge", () => {
+  it("records judge scores and pass/fail from fake outputs", async () => {
+    const packageRoot = tempPackageRoot();
+    try {
+      const provider = createFakeJudgeProvider(
+        new Map([
+          [
+            "first-tree-write-node-quality",
+            JSON.stringify({
+              reasoning: "The node is durable and source bounded.",
+              scores: {
+                conciseness: 4,
+                durability: 5,
+                rationale_quality: 4,
+                source_boundary: 5,
+              },
+            }),
+          ],
+        ]),
+      );
+
+      const batch = await runQualityEval(
+        packageRoot,
+        {
+          caseId: "first-tree-write-node-quality",
+          codexBin: "unused",
+          judgeBin: "unused",
+          judgeModel: null,
+          json: false,
+          model: null,
+          suite: "first-tree-write",
+          verbose: false,
+        },
+        provider,
+        fakeArtifactInput(),
+      );
+
+      expect(batch.failed).toBe(0);
+      expect(batch.passed).toBe(1);
+      expect(batch.cases[0]?.judge_scores).toMatchObject({
+        durability: 5,
+        source_boundary: 5,
+      });
+      expect(batch.cases[0]?.judge_model).toBe("fake-judge");
+    } finally {
+      rmSync(packageRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps raw invalid judge output and fails the case", async () => {
+    const packageRoot = tempPackageRoot();
+    try {
+      const provider = createFakeJudgeProvider(new Map([["first-tree-write-node-quality", "```json\n{}\n```"]]));
+
+      const batch = await runQualityEval(
+        packageRoot,
+        {
+          caseId: "first-tree-write-node-quality",
+          codexBin: "unused",
+          judgeBin: "unused",
+          judgeModel: null,
+          json: false,
+          model: null,
+          suite: "first-tree-write",
+          verbose: false,
+        },
+        provider,
+        fakeArtifactInput(),
+      );
+
+      expect(batch.failed).toBe(1);
+      expect(batch.cases[0]?.passed).toBe(false);
+      expect(batch.cases[0]?.raw_output).toBe("```json\n{}\n```");
+      expect(batch.cases[0]?.failures[0]).toMatch(/not strict JSON/u);
+    } finally {
+      rmSync(packageRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("fails without calling judge when the deterministic gate artifact failed", async () => {
+    const packageRoot = tempPackageRoot();
+    try {
+      const provider = createFakeJudgeProvider(new Map());
+
+      const batch = await runQualityEval(
+        packageRoot,
+        {
+          caseId: "first-tree-write-node-quality",
+          codexBin: "unused",
+          judgeBin: "unused",
+          judgeModel: null,
+          json: false,
+          model: null,
+          suite: "first-tree-write",
+          verbose: false,
+        },
+        provider,
+        failedGateArtifactInput(),
+      );
+
+      expect(batch.failed).toBe(1);
+      expect(batch.cases[0]?.judge_model).toBe("not-run");
+      expect(batch.cases[0]?.failures[0]).toMatch(/deterministic gate durable-source-writes failed/u);
+    } finally {
+      rmSync(packageRoot, { force: true, recursive: true });
+    }
+  });
+});

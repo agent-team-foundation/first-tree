@@ -1,5 +1,6 @@
 import type { SkillEvalCase } from "../../core/case-schema.js";
 import type { SkillEvalSuiteDefinition } from "../types.js";
+import { FIRST_TREE_WELCOME_QUALITY_CASE } from "./quality.js";
 import type { FirstTreeWelcomeEvalCase, WelcomeExpectedAction } from "./types.js";
 
 const FLOOR_CASE_ID = "first-tree-welcome-setup-matrix";
@@ -217,6 +218,7 @@ export const FIRST_TREE_WELCOME_EVAL_CASES: readonly SkillEvalCase[] = [
     tier: "floor",
   },
   ...GATE_CASES,
+  FIRST_TREE_WELCOME_QUALITY_CASE,
 ];
 
 function validateFirstTreeWelcomeFloor(cases: readonly SkillEvalCase[]): readonly string[] {
@@ -279,6 +281,12 @@ export const FIRST_TREE_WELCOME_SUITE: SkillEvalSuiteDefinition = {
         description: "Welcome onboarding matrix gate rows; row 1, row 3, and row 8 run as live gate cases.",
         status: "implemented",
         tier: "gate",
+      },
+      {
+        caseIds: [FIRST_TREE_WELCOME_QUALITY_CASE.id],
+        description: "LLM-as-judge first-task quality case for evidence-backed bounded welcome options.",
+        status: "implemented",
+        tier: "quality",
       },
     ],
   },

@@ -11,6 +11,9 @@ pnpm --filter @first-tree/skill-evals eval:floor
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
+pnpm --filter @first-tree/skill-evals eval:quality
+pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write
+pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-welcome --judge-model <model>
 pnpm --filter @first-tree/skill-evals eval:first-tree-read
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --json
@@ -23,6 +26,24 @@ validates that all shipped First Tree skills are present in the coverage
 matrix, their `SKILL.md` frontmatter is readable, and their case declarations
 have the minimum schema required by the shared runner. It does not execute
 Codex, Claude Code, LLM-as-judge, or live gate cases.
+
+`eval:quality` is an opt-in LLM-as-judge layer. It does not replace
+deterministic gates and is not called by `eval:gate`. Each quality case first
+runs the corresponding live gate case and requires that deterministic gate to
+pass; only then does it send the actual produced artifact to the judge. The
+first quality cases judge:
+
+- `first-tree-write` node quality from the actual `durable-source-writes` tree
+  diff, with scores for durability, source-boundary discipline, rationale
+  quality, and conciseness;
+- `first-tree-welcome` first-task quality from the actual readable-repo +
+  populated-tree row output, with scores for evidence grounding, boundedness,
+  usefulness, verifiability, and avoiding setup-as-task.
+
+The quality runner calls Codex as the judge by default. Use `--judge-model` or
+`JUDGE_MODEL` to select the judge model, and `--judge-bin` or `JUDGE_CODEX_BIN`
+to select the Codex binary. Judge output must be strict JSON; invalid JSON or a
+schema mismatch fails the quality case rather than being treated as a pass.
 
 `eval:gate -- --suite first-tree-write` runs the live Codex gate for
 `first-tree-write`. It covers the minimum source-boundary cases:
@@ -66,6 +87,10 @@ Each case writes:
   `first-tree` invocations.
 - `summary.json` with derived metrics.
 - `summary.md` with a human-readable case report.
+
+Quality cases also write `judge-prompt.txt` and `judge-raw-output.txt` in the
+case run directory, and include `judge_scores`, `judge_reasoning`,
+`judge_model`, duration, thresholds, and failure reasons in `summary.json`.
 
 Use `--verbose` to print live, human-readable progress to stderr. It can be
 combined with `--case`, `--validate-fixtures`, and `--json`; stdout remains the
