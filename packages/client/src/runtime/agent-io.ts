@@ -337,6 +337,41 @@ function renderFileMessageForLLM(message: SessionMessage): string | null {
   return null;
 }
 
+/**
+ * Server stamp on a First Tree onboarding kickoff message. Mirrors the writer
+ * in `packages/server/src/services/onboarding-kickoff.ts` and the web reader in
+ * `packages/web/src/components/chat/first-tree-system-message.tsx`. Kept as a
+ * local literal so this activation stays client-contained; all three sites must
+ * agree on the string.
+ */
+const FIRST_TREE_ONBOARDING_SYSTEM_SENDER = "first_tree_onboarding";
+
+/**
+ * Agent-only skill-activation directive for a First Tree onboarding first chat,
+ * or null for any other message. The kickoff body is user-facing prose, so it
+ * no longer names a skill; this directive is the reliable trigger and is added
+ * to the agent's prompt only. A single unconditional directive is correct for
+ * every onboarding chat kind: in a tree-setup kickoff the `first-tree-welcome`
+ * skill's first Setup-State row redirects to the tree skills.
+ *
+ * Keying on `metadata.systemSender` alone is safe: the server strips
+ * `systemSender` from any send that does not pass the trusted-internal
+ * `allowSystemSender` gate (`stripUntrustedMetadataKeys` in
+ * `packages/server/src/services/message.ts`), so a user/agent message cannot
+ * spoof this stamp. Only the onboarding kickoff path sets it.
+ */
+function onboardingSkillDirective(metadata: SessionMessage["metadata"]): string | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  if ((metadata as { systemSender?: unknown }).systemSender !== FIRST_TREE_ONBOARDING_SYSTEM_SENDER) {
+    return null;
+  }
+  return [
+    "<first-tree-onboarding>",
+    "This is a First Tree onboarding first chat. Before your first reply, load and follow the `first-tree-welcome` skill.",
+    "</first-tree-onboarding>",
+  ].join("\n");
+}
+
 export async function formatInboundContent(message: SessionMessage, participants: ParticipantCache): Promise<string> {
   const rawContent = renderForLLM(message);
   const preceding = message.precedingMessages ?? [];
@@ -353,7 +388,14 @@ export async function formatInboundContent(message: SessionMessage, participants
     header = `${lines.join("\n")}\n\n`;
   }
 
-  if (!message.senderId) return `${header}${rawContent}`;
-  const headerLine = formatFromHeaderLine(message.senderId, message.createdAt, await participants.get());
-  return `${header}${headerLine}\n\n${rawContent}`;
+  const base = message.senderId
+    ? `${header}${formatFromHeaderLine(message.senderId, message.createdAt, await participants.get())}\n\n${rawContent}`
+    : `${header}${rawContent}`;
+
+  // A First Tree onboarding kickoff body is ALSO rendered verbatim to the user
+  // as a "First Tree" chat bubble, so it stays a clean user-facing welcome. The
+  // reliable skill trigger is appended here, in the agent's prompt only, and
+  // never reaches the user's bubble.
+  const directive = onboardingSkillDirective(message.metadata);
+  return directive ? `${base}\n\n${directive}` : base;
 }

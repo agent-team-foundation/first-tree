@@ -116,7 +116,18 @@ that can drift.
 
 ## First Response Contract
 
-Your first substantive reply in a welcome / intro / work chat must:
+Your first substantive reply depends on whether you already have evidence to
+read:
+
+**A. No project yet** — the default onboarding first chat: no repo connected,
+no local path, and no GitHub URL given. Your first result is to ask the user
+for the project — a local folder path or a GitHub URL — without faking
+understanding. If they share a GitHub URL, use host `gh` first. This ask is a
+legitimate first result, not a failure; the evidence-backed contract in B
+applies to your next reply, once a project exists.
+
+**B. Evidence available** — a repo is connected, or the user has given a local
+path or URL. Your first substantive reply must:
 
 1. State specific understanding from evidence: stack, entry points, important
    modules, tests, TODOs, conventions, risks, repo shape, or team context you

@@ -1846,7 +1846,7 @@ describe("web DOM interaction coverage", () => {
       expect.objectContaining({
         organizationId: "org-1",
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("Welcome to your first First Tree chat with Nova."),
+        bootstrap: expect.stringContaining("Welcome to First Tree — this is your first chat with Nova."),
         kind: "work",
         complete: true,
       }),
@@ -1921,7 +1921,7 @@ describe("web DOM interaction coverage", () => {
     expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("Welcome to your first First Tree chat with Nova."),
+        bootstrap: expect.stringContaining("Welcome to First Tree — this is your first chat with Nova."),
         kind: "work",
       }),
     );

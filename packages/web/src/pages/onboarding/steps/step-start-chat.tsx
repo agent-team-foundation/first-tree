@@ -307,7 +307,7 @@ function InviteeStartChat() {
   // and keeps polling, so it advances to ready on its own once install is confirmed.
   const installed = installationKnown && hasInstallation;
   return resolveInviteeStartChatState({ treeUrl, hasInstallation: installed }) === "ready" ? (
-    <InviteeReady treeUrl={treeUrl} />
+    <InviteeReady />
   ) : (
     <InviteeNotReady />
   );
@@ -320,7 +320,7 @@ function InviteeStartChat() {
  * (they're enabled for every org agent). This mirrors the admin finale as a
  * pure launch into a real chat. An invitee never mutates team config.
  */
-function InviteeReady({ treeUrl }: { treeUrl: string }) {
+function InviteeReady() {
   const { organizationId, completeAndEnterChat } = useOnboardingFlow();
   const [phase, setPhase] = useState<"idle" | "starting">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -333,7 +333,7 @@ function InviteeReady({ treeUrl }: { treeUrl: string }) {
       // chat is value-first: read the team's tree/recommended repos, show
       // concrete understanding, then ask which useful first task to do.
       await runStartChat({
-        bootstrap: (agent) => buildInviteeReadyBootstrap(agent.displayName || "your agent", treeUrl),
+        bootstrap: (agent) => buildInviteeReadyBootstrap(agent.displayName || "your agent"),
         organizationId,
         kind: "work",
         treeBindingPlan: "useBoundTree",

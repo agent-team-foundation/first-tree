@@ -26,31 +26,29 @@ export function buildValueFirstBootstrap(
     treeSetup: "none" | "pending" | "bound";
   },
 ): string {
-  const sourceLines = sourceUrls.length > 0 ? ["", ...formatSourceList(sourceUrls, "Connected code:")] : [];
-  const treeLine =
-    opts.treeSetup === "pending"
-      ? "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep team context setup in the separate setup chat. For any new GitHub URL the user shares here, try host gh first before asking for First Tree GitHub App access."
-      : opts.treeSetup === "bound"
-        ? "Operational note: use the first-tree-welcome skill for this onboarding first chat. Use team context when helpful, but keep this chat focused on the first task. For any new GitHub URL the user shares here, try host gh first before asking for First Tree GitHub App access."
-        : "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep setup light. If the user shares a GitHub URL, try host gh first before asking for First Tree GitHub App access.";
+  const sourceLines =
+    sourceUrls.length > 0 ? ["", ...formatSourceList(sourceUrls, "It's already connected to your code:")] : [];
+  const teamContextLines =
+    opts.treeSetup === "bound"
+      ? ["", `${opts.agentDisplayName} can also draw on your team's shared context to get up to speed faster.`]
+      : [];
 
   return [
-    `Welcome to your first First Tree chat with ${opts.agentDisplayName}.`,
+    `Welcome to First Tree — this is your first chat with ${opts.agentDisplayName}.`,
     ...sourceLines,
     "",
-    `${opts.agentDisplayName} will first get oriented from any available code and team context, then suggest a few small tasks you can start with.`,
-    "",
-    treeLine,
+    `${opts.agentDisplayName} will get oriented and then suggest a few small tasks you could start with — or just tell it what you have in mind.`,
+    ...teamContextLines,
   ].join("\n");
 }
 
 export function buildNoRepoBootstrap(agentDisplayName: string): string {
   return [
-    `Welcome to your first First Tree chat with ${agentDisplayName}.`,
+    `Welcome to First Tree — this is your first chat with ${agentDisplayName}.`,
     "",
-    `Ask the user for the project they want help with, such as a path on their computer or a GitHub repo URL, then start from there.`,
+    `Tell ${agentDisplayName} what you'd like to work on: point it at a folder on your computer or paste a GitHub URL, and it'll take a look and suggest a few things you could start with.`,
     "",
-    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep setup light and show value from real code first. For GitHub URLs, use host gh/local credentials first. Ask for First Tree GitHub App access only when First Tree needs durable platform capabilities such as follow, webhook events, team repo resources, or Context Tree setup.",
+    `No GitHub connection needed to begin — ${agentDisplayName} works right from your machine. You can connect First Tree to GitHub later, only if a task needs it.`,
   ].join("\n");
 }
 
@@ -78,14 +76,10 @@ export function buildTreeSetupBootstrap(
  * recommended repos + Context Tree automatically, so the invitee never selects
  * repos or runs org setup. Keep the first chat value-first, not tree-authoring.
  */
-export function buildInviteeReadyBootstrap(agentDisplayName: string, treeUrl: string): string {
+export function buildInviteeReadyBootstrap(agentDisplayName: string): string {
   return [
-    `Welcome to your first First Tree chat with ${agentDisplayName}.`,
+    `Welcome to First Tree — this is your first chat with ${agentDisplayName}.`,
     "",
-    `Team context: ${treeUrl}`,
-    "",
-    `${agentDisplayName} will use available team context to get oriented, then suggest a few small tasks the user can start with.`,
-    "",
-    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Do not make team context setup the invitee's first task. If team setup is missing, explain that it is admin-owned and continue with a project path or host gh when possible.",
+    `Your team's shared context is already set up, so ${agentDisplayName} can get oriented from the team's work and suggest a few things to start with. Tell it what you'd like to dig into.`,
   ].join("\n");
 }
