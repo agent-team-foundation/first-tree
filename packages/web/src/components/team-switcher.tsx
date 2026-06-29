@@ -180,7 +180,7 @@ export function TeamSwitcher({
         await switchAfterLeave(nextOrg);
       } else {
         queryClient.clear();
-        if (redirectHomeOnSwitch) navigate("/", { replace: true });
+        if (redirectHomeOnSwitch) navigate("/onboarding", { replace: true });
       }
     },
   });

@@ -4,7 +4,7 @@ import type { Organization, OrgBrief } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, useMemo, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../auth/auth-context.js";
 import { TeamSwitcher } from "../team-switcher.js";
@@ -117,10 +117,12 @@ function Harness({
   select,
   role = "admin",
   refreshMe = async () => {},
+  redirectHomeOnSwitch = false,
 }: {
   select: (id: string) => Promise<void>;
   role?: "admin" | "member";
   refreshMe?: () => Promise<void>;
+  redirectHomeOnSwitch?: boolean;
 }) {
   // Fresh client per mount so the ['me-organizations'] cache never leaks across
   // tests (the single-team case swaps the mock and must not read a stale list).
@@ -174,18 +176,24 @@ function Harness({
   );
   return (
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={["/team"]}>
         <AuthContext.Provider value={value}>
-          <TeamSwitcher redirectHomeOnSwitch={false} />
+          <TeamSwitcher redirectHomeOnSwitch={redirectHomeOnSwitch} />
+          <LocationProbe />
         </AuthContext.Provider>
       </MemoryRouter>
     </QueryClientProvider>
   );
 }
 
+function LocationProbe() {
+  const location = useLocation();
+  return <span data-testid="location">{location.pathname}</span>;
+}
+
 async function renderHarness(
   select: (id: string) => Promise<void>,
-  options: { role?: "admin" | "member"; refreshMe?: () => Promise<void> } = {},
+  options: { role?: "admin" | "member"; refreshMe?: () => Promise<void>; redirectHomeOnSwitch?: boolean } = {},
 ): Promise<{ container: HTMLElement; root: Root }> {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -373,6 +381,24 @@ describe("TeamSwitcher", () => {
     expect(memberMocks.leaveMembership).toHaveBeenCalledWith("member-1");
     expect(refreshMe).toHaveBeenCalledTimes(1);
     expect(select).toHaveBeenCalledWith("org-2");
+
+    await act(async () => root.unmount());
+  });
+
+  it("routes to onboarding recovery when a user leaves their last team", async () => {
+    clientMocks.get.mockResolvedValue([ORGS[0]]);
+    const refreshMe = vi.fn(async () => {});
+    const select = vi.fn(async () => {});
+    const { container, root } = await renderHarness(select, { refreshMe, redirectHomeOnSwitch: true });
+
+    await click(anchorOf(container));
+    await click(buttonByText(container, "Leave this team"));
+    await click(buttonByText(document.body, "Leave team"));
+
+    expect(memberMocks.leaveMembership).toHaveBeenCalledWith("member-1");
+    expect(refreshMe).toHaveBeenCalledTimes(1);
+    expect(select).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/onboarding");
 
     await act(async () => root.unmount());
   });

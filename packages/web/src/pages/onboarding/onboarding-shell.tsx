@@ -1,7 +1,9 @@
-import type { ReactNode } from "react";
+import { Plus, UserPlus } from "lucide-react";
+import { type ReactNode, useState } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { FirstTreeLogo } from "../../components/first-tree-logo.js";
+import { TeamSetupModal } from "../../components/team-setup-modal.js";
 import { TeamSwitchOverlay } from "../../components/team-switch-overlay.js";
 import { TeamSwitcher } from "../../components/team-switcher.js";
 import { Button } from "../../components/ui/button.js";
@@ -38,8 +40,10 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
   const { logout, memberships } = useAuth();
   const { addToast } = useToast();
   const navigate = useNavigate();
+  const [setupAction, setSetupAction] = useState<"create" | "join" | null>(null);
   const copy = STEP_COPY[activeStep];
-  const isHero = HERO_STEPS.has(activeStep);
+  const needsTeam = memberships.length === 0;
+  const isHero = !needsTeam && HERO_STEPS.has(activeStep);
 
   // A multi-team user gets the real TeamSwitcher plus the bare "Sign out" link.
   // The account-only UserMenu is absent from onboarding chrome. The
@@ -149,29 +153,61 @@ export function OnboardingShell({ children }: { children: ReactNode }) {
             key={activeStep}
             className="onboarding-shell-step fade-in"
             style={
-              isHero ? { display: "flex", flexDirection: "column", alignItems: "center", width: "100%" } : undefined
+              isHero || needsTeam
+                ? { display: "flex", flexDirection: "column", alignItems: "center", width: "100%" }
+                : undefined
             }
           >
-            {/* Progress at the top of the column — renders nothing on bookend
-                steps (team / welcome / kickoff). */}
-            <StepProgress />
-            {/* Hero steps render their own greeting inside the step, so the
-                shell suppresses its title/why for them. */}
-            {!isHero && copy.title ? (
-              <h1 className="text-title font-semibold" style={{ margin: "0 0 var(--sp-2_5)", color: "var(--fg)" }}>
-                {copy.title}
-              </h1>
-            ) : null}
-            {!isHero && copy.why ? (
-              <p className="text-body" style={{ margin: "0 0 var(--sp-6)", color: "var(--fg-3)" }}>
-                {copy.why}
-              </p>
-            ) : null}
-            {children}
+            {needsTeam ? (
+              <NoTeamRecovery onCreate={() => setSetupAction("create")} onJoin={() => setSetupAction("join")} />
+            ) : (
+              <>
+                {/* Progress at the top of the column — renders nothing on bookend
+                    steps (team / welcome / kickoff). */}
+                <StepProgress />
+                {/* Hero steps render their own greeting inside the step, so the
+                    shell suppresses its title/why for them. */}
+                {!isHero && copy.title ? (
+                  <h1 className="text-title font-semibold" style={{ margin: "0 0 var(--sp-2_5)", color: "var(--fg)" }}>
+                    {copy.title}
+                  </h1>
+                ) : null}
+                {!isHero && copy.why ? (
+                  <p className="text-body" style={{ margin: "0 0 var(--sp-6)", color: "var(--fg-3)" }}>
+                    {copy.why}
+                  </p>
+                ) : null}
+                {children}
+              </>
+            )}
           </div>
         </main>
       </div>
+      <TeamSetupModal action={setupAction} onClose={() => setSetupAction(null)} />
       <TeamSwitchOverlay />
+    </div>
+  );
+}
+
+function NoTeamRecovery({ onCreate, onJoin }: { onCreate: () => void; onJoin: () => void }) {
+  return (
+    <div className="flex w-full max-w-md flex-col items-center text-center">
+      <h1 className="text-title font-semibold" style={{ margin: "0 0 var(--sp-2_5)", color: "var(--fg)" }}>
+        Create or join a team
+      </h1>
+      <p className="text-body" style={{ margin: "0 0 var(--sp-6)", color: "var(--fg-3)" }}>
+        You need an active team to continue in First Tree.
+      </p>
+      <div className="grid w-full gap-2 sm:grid-cols-2">
+        <Button type="button" onClick={onCreate} className="w-full">
+          <Plus className="h-3.5 w-3.5" />
+          Create new team
+        </Button>
+        <Button type="button" variant="outline" onClick={onJoin} className="w-full">
+          <UserPlus className="h-3.5 w-3.5" />
+          Join with invite link
+        </Button>
+      </div>
     </div>
   );
 }

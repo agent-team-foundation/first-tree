@@ -28,7 +28,7 @@ const authMock = vi.hoisted(() => ({
   switchingOrg: null as OrgBrief | null,
   setSwitchingOrg: vi.fn(),
   // Shell only reads memberships.length; keep the shape minimal.
-  memberships: [] as Array<{ organizationId: string }>,
+  memberships: [{ organizationId: "org-1" }] as Array<{ organizationId: string }>,
 }));
 
 const toastMock = vi.hoisted(() => ({
@@ -72,7 +72,8 @@ vi.mock("../../../components/invite-dialog.js", () => ({
 }));
 
 vi.mock("../../../components/team-setup-modal.js", () => ({
-  TeamSetupModal: () => null,
+  TeamSetupModal: ({ action }: { action: "create" | "join" | null }) =>
+    action ? <div role="dialog">Team setup modal: {action}</div> : null,
 }));
 
 vi.mock("../onboarding-flow.js", () => ({
@@ -122,6 +123,10 @@ async function click(element: Element | null): Promise<void> {
   await flush();
 }
 
+function buttonByText(scope: ParentNode, text: string): HTMLButtonElement | null {
+  return [...scope.querySelectorAll("button")].find((button) => button.textContent?.includes(text)) ?? null;
+}
+
 async function setInputValue(input: HTMLInputElement, value: string): Promise<void> {
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -141,7 +146,7 @@ async function submit(form: HTMLFormElement | null): Promise<void> {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  authMock.memberships = [];
+  authMock.memberships = [{ organizationId: "org-1" }];
   authMock.organizationId = "org-1";
   authMock.role = "admin";
   authMock.teamDisplayName = "Acme";
@@ -260,6 +265,32 @@ describe("onboarding shell and team step", () => {
 
     expect(container.querySelector("[data-testid='team-switcher']")).toBeNull();
     expect(container.textContent).toContain("Sign out");
+  });
+
+  it("shows create and join recovery actions when the user has no active team", async () => {
+    flowMock.value = {
+      ...flowMock.value,
+      activeStep: "create-agent",
+      hasAgent: false,
+      organizationId: null as unknown as string,
+    };
+    authMock.organizationId = null as unknown as string;
+    authMock.role = null as unknown as "admin";
+    authMock.teamDisplayName = null as unknown as string;
+    authMock.memberships = [];
+    const { OnboardingShell } = await import("../onboarding-shell.js");
+
+    const container = await renderDom(<OnboardingShell>Stranded setup step</OnboardingShell>);
+
+    expect(container.textContent).toContain("Create or join a team");
+    expect(container.textContent).toContain("You need an active team to continue");
+    expect(container.textContent).not.toContain("Stranded setup step");
+
+    await click(buttonByText(container, "Create new team"));
+    expect(document.body.textContent).toContain("Team setup modal: create");
+
+    await click(buttonByText(container, "Join with invite link"));
+    expect(document.body.textContent).toContain("Team setup modal: join");
   });
 
   it("loads the team name, saves changes, and skips unchanged submissions", async () => {
