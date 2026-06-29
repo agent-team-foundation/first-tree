@@ -1,6 +1,7 @@
 import { ArrowRight } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
+import { listManagedAgents } from "../../api/agents.js";
 import { postOnboardingStartChat } from "../../api/onboarding-events.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
@@ -33,7 +34,7 @@ import {
 export function QuickstartPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { organizationId, refreshMe } = useAuth();
+  const { organizationId, refreshMe, currentOrgHasPersonalAgent } = useAuth();
 
   // Resolve the campaign handoff once. Prefer the URL — the landing CTA and the
   // post-login `next` round-trip land the params here — and persist it so a
@@ -49,7 +50,7 @@ export function QuickstartPage() {
   const campaign = intent ? getCampaign(intent.campaign) : null;
 
   const computer = useComputerConnection(Boolean(intent && campaign));
-  const createStartedRef = useRef(false);
+  const setupStartedRef = useRef(false);
   const startChatStartedRef = useRef(false);
   const onlineAgentRef = useRef<string | null>(null);
   const resumeStartedRef = useRef(false);
@@ -64,8 +65,8 @@ export function QuickstartPage() {
 
   const startChat = useCallback(
     async (agentUuid: string) => {
-      onlineAgentRef.current = agentUuid;
       if (!intent || !campaign || startChatStartedRef.current) return;
+      onlineAgentRef.current = agentUuid;
       startChatStartedRef.current = true;
       setStartChatError(null);
       try {
@@ -102,18 +103,19 @@ export function QuickstartPage() {
     create,
     retry: retryAgent,
   } = useAgentCreation({
+    // Stash the created agent per-tab so a remount resumes with it. If the user
+    // abandons before start chat, the agent isn't orphaned for long: a later
+    // visit reuses it via setupAgent's (org, name) reuse path instead of
+    // creating another.
     onCreated: (info) => {
       if (intent) writeQuickstartAgent({ campaign: intent.campaign, organizationId, uuid: info.agentUuid });
     },
     onOnline: startChat,
   });
 
-  // Create Cedar with the auto-resolved runtime + neutral private default. The
-  // ref guards a single attempt; the retry path calls this directly (a ref
-  // reset alone would not re-trigger the effect, whose deps don't change).
+  // Create a fresh private Cedar — only for a brand-new user with no agent yet.
   const createCedar = useCallback(() => {
     if (!computer.connectedClient || !computer.selectedRuntime) return;
-    createStartedRef.current = true;
     void create({
       displayName: QUICKSTART_AGENT_NAME,
       clientId: computer.connectedClient.id,
@@ -123,15 +125,41 @@ export function QuickstartPage() {
     });
   }, [computer.connectedClient, computer.selectedRuntime, create, organizationId]);
 
-  // Auto-create the moment a computer is connected with a usable runtime — no
-  // button, no picker (Claude Code preferred). The ref makes this fire once;
-  // skipped when an agent was already created this attempt (remount), so a
-  // refresh mid-flow resumes with that agent instead of spawning a second.
-  useEffect(() => {
-    if (createStartedRef.current || stashedAgentUuid || !intent) return;
-    if (!computer.connectedClient || !computer.selectedRuntime || phase !== "idle") return;
+  // Resolve-or-create the campaign agent: REUSE the user's existing personal
+  // agent when they already have one (a second campaign after a successful
+  // first, or a returning user). Creating another would hit the (org, name)
+  // unique constraint — Cedar is the user's one long-term agent — so only a
+  // brand-new user with no agent yet gets a fresh Cedar.
+  const setupAgent = useCallback(async () => {
+    if (currentOrgHasPersonalAgent) {
+      try {
+        const agents = await listManagedAgents();
+        const existing = agents
+          .filter(
+            (a) =>
+              a.type !== "human" && a.status === "active" && (!organizationId || a.organizationId === organizationId),
+          )
+          .sort((a, b) => b.uuid.localeCompare(a.uuid))[0];
+        if (existing) {
+          void startChat(existing.uuid);
+          return;
+        }
+      } catch {
+        // Couldn't resolve the existing agent — fall through to create.
+      }
+    }
     createCedar();
-  }, [computer.connectedClient, computer.selectedRuntime, phase, intent, createCedar, stashedAgentUuid]);
+  }, [currentOrgHasPersonalAgent, organizationId, startChat, createCedar]);
+
+  // Set up the agent once a computer is connected with a usable runtime — no
+  // button, no picker. Fires once; skipped when an agent was already created
+  // this attempt (remount) — the resume effect below handles that.
+  useEffect(() => {
+    if (setupStartedRef.current || stashedAgentUuid || !intent || !campaign) return;
+    if (!computer.connectedClient || !computer.selectedRuntime || phase !== "idle") return;
+    setupStartedRef.current = true;
+    void setupAgent();
+  }, [computer.connectedClient, computer.selectedRuntime, phase, intent, campaign, setupAgent, stashedAgentUuid]);
 
   // Remount after the agent was already created (refresh while waiting, or the
   // timeout/error screen): reuse the stashed agent and resume start chat.
@@ -147,14 +175,13 @@ export function QuickstartPage() {
 
   const retryAgentSetup = useCallback(() => {
     // Timeout = the agent was created but didn't come online in time → re-poll.
-    // Otherwise create() failed → re-attempt directly (a ref reset wouldn't
-    // re-trigger the effect, whose deps didn't change).
+    // Otherwise setup failed → re-run resolve-or-create directly.
     if (phase === "timeout") {
       void retryAgent();
       return;
     }
-    createCedar();
-  }, [phase, retryAgent, createCedar]);
+    void setupAgent();
+  }, [phase, retryAgent, setupAgent]);
 
   if (!intent || !campaign) {
     return (
@@ -186,6 +213,18 @@ export function QuickstartPage() {
 
       {!connected ? (
         <ConnectStep cliCommand={computer.cliCommand} tokenError={computer.tokenError} onRetry={computer.retry} />
+      ) : !computer.capabilitiesLoaded ? (
+        <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+          <StatusRow
+            state="ok"
+            label={
+              <>
+                <span className="mono font-semibold">{hostname}</span> connected
+              </>
+            }
+          />
+          <StatusRow state="waiting" label="Checking your computer…" />
+        </div>
       ) : noRuntime ? (
         <NoRuntimeStep hostname={hostname} />
       ) : startChatError ? (

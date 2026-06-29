@@ -8,6 +8,12 @@
  *
  * Slugs are kebab-case to match the server's campaign idempotency-key segment
  * (`@first-tree/shared` `kickoffOnboardingSchema.campaign`).
+ *
+ * CONTRACT: a landing CTA MUST percent-encode the `repo` value in the
+ * `/quickstart?campaign=…&repo=…` URL. For a logged-out visitor the login
+ * round-trip carries that URL through `next`, validated by `safeRedirectPath`
+ * — a raw `https://…` repo (with `:` and `//`) is silently dropped to `/`,
+ * breaking the funnel; the encoded form survives (see safe-redirect tests).
  */
 
 /**
