@@ -241,6 +241,7 @@ describe("api wrapper paths", () => {
     await members.listMembers();
     await members.updateMember("member/id", { role: "admin" });
     await members.deleteMember("member/id");
+    await members.leaveMembership("member/id");
 
     expect(sessions.sessionQueryKey("agent-1", "chat-1")).toEqual(["session", "agent-1", "chat-1"]);
     expect(sessions.agentSessionsQueryKey("agent-1")).toEqual(["agent-sessions", "agent-1"]);
@@ -299,6 +300,7 @@ describe("api wrapper paths", () => {
     expect(apiMock.get).toHaveBeenCalledWith(
       "/chats/chat%2Fid/docs/preview?agentId=agent%2Fid&path=docs%2Fplan.md&basePath=%2Fworkspace",
     );
+    expect(apiMock.post).toHaveBeenCalledWith("/me/memberships/member%2Fid/leave");
     expect(apiMock.get).toHaveBeenCalledWith(
       "/agents/agent/id/sessions/chat/id/events?limit=30&cursor=5&direction=asc",
     );
