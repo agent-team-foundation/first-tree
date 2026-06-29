@@ -134,6 +134,12 @@ const PROXY_ENV_KEYS = [
   "ALL_PROXY",
   "NO_PROXY",
 ] as const;
+const CLIENT_SENTRY_ENV_KEYS = [
+  "FIRST_TREE_CLIENT_SENTRY_DSN",
+  "FIRST_TREE_CLIENT_SENTRY_ENABLED",
+  "FIRST_TREE_CLIENT_SENTRY_ENVIRONMENT",
+  "FIRST_TREE_CLIENT_SENTRY_TRACES_SAMPLE_RATE",
+] as const;
 
 /**
  * Pick proxy env vars out of `env` (default `process.env`). Returns the subset
@@ -166,6 +172,15 @@ const PROXY_ENV_KEYS = [
 export function collectProxyEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const out: Record<string, string> = {};
   for (const key of PROXY_ENV_KEYS) {
+    const value = env[key];
+    if (value && value.length > 0) out[key] = value;
+  }
+  return out;
+}
+
+export function collectClientSentryEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of CLIENT_SENTRY_ENV_KEYS) {
     const value = env[key];
     if (value && value.length > 0) out[key] = value;
   }
@@ -245,7 +260,11 @@ function launchdPlistPath(): string {
  * itself `exec`s the resolved CLI invocation with the daemon args (see
  * `renderLaunchdWrapper`), so nothing else needs to be on the command line.
  */
-export function renderPlist(wrapperPath: string, proxyEnv: Record<string, string> = collectProxyEnv()): string {
+export function renderPlist(
+  wrapperPath: string,
+  proxyEnv: Record<string, string> = collectProxyEnv(),
+  clientSentryEnv: Record<string, string> = collectClientSentryEnv(),
+): string {
   const programArgs: string[] = [wrapperPath];
 
   const argsXml = programArgs.map((a) => `    <string>${escapeXml(a)}</string>`).join("\n");
@@ -270,6 +289,9 @@ export function renderPlist(wrapperPath: string, proxyEnv: Record<string, string
   const proxyEnvXml = Object.entries(proxyEnv)
     .map(([k, v]) => `\n    <key>${escapeXml(k)}</key>\n    <string>${escapeXml(v)}</string>`)
     .join("");
+  const clientSentryEnvXml = Object.entries(clientSentryEnv)
+    .map(([k, v]) => `\n    <key>${escapeXml(k)}</key>\n    <string>${escapeXml(v)}</string>`)
+    .join("");
   // launchd does not inherit the operator's interactive shell PATH. Put the
   // current Node directory first so npm-installed CLI shims and self-update
   // run under the same Node toolchain that installed/refreshed the service.
@@ -290,7 +312,7 @@ ${argsXml}
     <key>PATH</key>
     <string>${pathEnvXml}</string>
     <key>FIRST_TREE_SERVICE_MODE</key>
-    <string>1</string>${homeEnvXml}${proxyEnvXml}
+    <string>1</string>${homeEnvXml}${proxyEnvXml}${clientSentryEnvXml}
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -526,6 +548,7 @@ function systemdUnitPath(): string {
 export function renderSystemdUnit(
   invocation: ResolvedBinary,
   proxyEnv: Record<string, string> = collectProxyEnv(),
+  clientSentryEnv: Record<string, string> = collectClientSentryEnv(),
 ): string {
   const execStart: string =
     invocation.kind === "bin"
@@ -546,6 +569,9 @@ export function renderSystemdUnit(
 
   // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
   const proxyEnvLines = Object.entries(proxyEnv)
+    .map(([k, v]) => `Environment=${k}=${shellQuote(v)}\n`)
+    .join("");
+  const clientSentryEnvLines = Object.entries(clientSentryEnv)
     .map(([k, v]) => `Environment=${k}=${shellQuote(v)}\n`)
     .join("");
 
@@ -579,7 +605,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=${SYSLOG_IDENT}
 ${pathEnv}Environment=FIRST_TREE_SERVICE_MODE=1
-${homeEnv}${proxyEnvLines}[Install]
+${homeEnv}${proxyEnvLines}${clientSentryEnvLines}[Install]
 WantedBy=default.target
 `;
 }

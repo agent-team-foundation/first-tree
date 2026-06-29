@@ -47,7 +47,7 @@ function withExecPath(execPath: string, callback: () => void): void {
 }
 
 describe("renderSystemdUnit — channel identity baked into unit text", () => {
-  const unit = renderSystemdUnit(FAKE_BIN_INVOCATION, {});
+  const unit = renderSystemdUnit(FAKE_BIN_INVOCATION, {}, {});
 
   it("uses the channel's syslog identifier (bare name, no .service)", () => {
     expect(unit).toMatch(new RegExp(`SyslogIdentifier=${channelConfig.launchdLabel}\\b`));
@@ -80,7 +80,7 @@ describe("renderSystemdUnit — channel identity baked into unit text", () => {
 });
 
 describe("renderPlist — channel identity baked into plist text", () => {
-  const plist = renderPlist(FAKE_WRAPPER_PATH, {});
+  const plist = renderPlist(FAKE_WRAPPER_PATH, {}, {});
 
   it("uses the channel's launchd label", () => {
     // Label tag — exact match in the <key>Label</key><string>…</string> pair.
@@ -125,7 +125,7 @@ describe("renderPlist — channel identity baked into plist text", () => {
 
   it("does not duplicate launchd fallback paths that match the current Node binary directory", () => {
     withExecPath("/usr/local/bin/node", () => {
-      const pathEntries = extractPlistPathValue(renderPlist(FAKE_WRAPPER_PATH, {})).split(":");
+      const pathEntries = extractPlistPathValue(renderPlist(FAKE_WRAPPER_PATH, {}, {})).split(":");
       expect(pathEntries[0]).toBe("/usr/local/bin");
       expect(pathEntries.filter((entry) => entry === "/usr/local/bin")).toHaveLength(1);
     });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectProxyEnv, renderPlist, renderSystemdUnit } from "../core/service-install.js";
+import { collectClientSentryEnv, collectProxyEnv, renderPlist, renderSystemdUnit } from "../core/service-install.js";
 
 describe("collectProxyEnv", () => {
   it("returns empty when no proxy env vars are set", () => {
@@ -56,21 +56,48 @@ describe("collectProxyEnv", () => {
   });
 });
 
+describe("collectClientSentryEnv", () => {
+  it("returns empty when no client sentry env vars are set", () => {
+    expect(collectClientSentryEnv({})).toEqual({});
+  });
+
+  it("picks up the explicit operator override env vars", () => {
+    expect(
+      collectClientSentryEnv({
+        FIRST_TREE_CLIENT_SENTRY_DSN: "https://public@example.ingest.sentry.io/2",
+        FIRST_TREE_CLIENT_SENTRY_ENABLED: "false",
+        FIRST_TREE_CLIENT_SENTRY_ENVIRONMENT: "production",
+        FIRST_TREE_CLIENT_SENTRY_TRACES_SAMPLE_RATE: "0.05",
+        FIRST_TREE_SERVER_URL: "https://cloud.first-tree.ai",
+      }),
+    ).toEqual({
+      FIRST_TREE_CLIENT_SENTRY_DSN: "https://public@example.ingest.sentry.io/2",
+      FIRST_TREE_CLIENT_SENTRY_ENABLED: "false",
+      FIRST_TREE_CLIENT_SENTRY_ENVIRONMENT: "production",
+      FIRST_TREE_CLIENT_SENTRY_TRACES_SAMPLE_RATE: "0.05",
+    });
+  });
+});
+
 describe("renderPlist proxy passthrough", () => {
   // renderPlist now takes the launcher script path; proxy passthrough is
   // independent of the program argument.
   const wrapper = "/Users/me/.first-tree/service/First Tree";
 
   it("omits proxy entries entirely when no proxy env is provided", () => {
-    const plist = renderPlist(wrapper, {});
+    const plist = renderPlist(wrapper, {}, {});
     expect(plist).not.toMatch(/proxy/i);
   });
 
   it("writes one <key>/<string> pair per proxy entry inside EnvironmentVariables", () => {
-    const plist = renderPlist(wrapper, {
-      https_proxy: "http://127.0.0.1:6152",
-      no_proxy: "localhost,127.0.0.1",
-    });
+    const plist = renderPlist(
+      wrapper,
+      {
+        https_proxy: "http://127.0.0.1:6152",
+        no_proxy: "localhost,127.0.0.1",
+      },
+      {},
+    );
     expect(plist).toContain("<key>https_proxy</key>");
     expect(plist).toContain("<string>http://127.0.0.1:6152</string>");
     expect(plist).toContain("<key>no_proxy</key>");
@@ -87,9 +114,13 @@ describe("renderPlist proxy passthrough", () => {
   });
 
   it("escapes XML special characters in proxy values (URL query strings with & must not break the plist)", () => {
-    const plist = renderPlist(wrapper, {
-      https_proxy: "http://user:pa&ss@proxy.example:8080/?x=1&y=2",
-    });
+    const plist = renderPlist(
+      wrapper,
+      {
+        https_proxy: "http://user:pa&ss@proxy.example:8080/?x=1&y=2",
+      },
+      {},
+    );
     // Must produce a plist that plutil would accept — i.e. & is escaped.
     expect(plist).not.toMatch(/pa&ss/);
     expect(plist).toContain("pa&amp;ss");
@@ -101,16 +132,20 @@ describe("renderSystemdUnit proxy passthrough", () => {
   const inv = { kind: "bin" as const, program: "/usr/local/bin/first-tree" };
 
   it("emits no Environment= lines for proxy when no proxy env is provided", () => {
-    const unit = renderSystemdUnit(inv, {});
+    const unit = renderSystemdUnit(inv, {}, {});
     // No proxy-related Environment= lines at all
     expect(unit).not.toMatch(/Environment=.*proxy/i);
   });
 
   it("emits one Environment= line per proxy entry, ordered between PATH/FIRST_TREE_SERVICE_MODE and [Install]", () => {
-    const unit = renderSystemdUnit(inv, {
-      https_proxy: "http://127.0.0.1:6152",
-      no_proxy: "localhost,127.0.0.1",
-    });
+    const unit = renderSystemdUnit(
+      inv,
+      {
+        https_proxy: "http://127.0.0.1:6152",
+        no_proxy: "localhost,127.0.0.1",
+      },
+      {},
+    );
     // Values that are safe under shellQuote() pass through unquoted.
     expect(unit).toContain("Environment=https_proxy=http://127.0.0.1:6152");
     // Comma is outside shellQuote's safe-char set, so the value is wrapped in
@@ -125,9 +160,13 @@ describe("renderSystemdUnit proxy passthrough", () => {
   });
 
   it("shell-quotes proxy values that contain shell-significant characters (otherwise systemd would mis-tokenise)", () => {
-    const unit = renderSystemdUnit(inv, {
-      https_proxy: "http://user pass@proxy:8080",
-    });
+    const unit = renderSystemdUnit(
+      inv,
+      {
+        https_proxy: "http://user pass@proxy:8080",
+      },
+      {},
+    );
     expect(unit).toContain('Environment=https_proxy="http://user pass@proxy:8080"');
   });
 
@@ -136,9 +175,13 @@ describe("renderSystemdUnit proxy passthrough", () => {
     // userinfo and host is not in shellQuote's safe-char regex, so the value
     // must be wrapped in double quotes — otherwise systemd's tokeniser would
     // split on `@` and read `pass` + `host:port` as two separate values.
-    const unit = renderSystemdUnit(inv, {
-      https_proxy: "http://user:pass@proxy.example.com:6152",
-    });
+    const unit = renderSystemdUnit(
+      inv,
+      {
+        https_proxy: "http://user:pass@proxy.example.com:6152",
+      },
+      {},
+    );
     expect(unit).toContain('Environment=https_proxy="http://user:pass@proxy.example.com:6152"');
   });
 });

@@ -3,8 +3,11 @@ import {
   applyClientLoggerConfig,
   ClientOrgMismatchError,
   ClientUserMismatchError,
+  captureClientException,
   configureClientLoggerForService,
   discoverClaudeCodeSkills,
+  flushClientSentry,
+  initClientSentry,
 } from "@first-tree/client";
 import {
   agentConfigSchema,
@@ -18,6 +21,7 @@ import {
   resetConfigMeta,
 } from "@first-tree/shared/config";
 import type { Command } from "commander";
+import { CLIENT_SENTRY_DSN, GIT_SHA } from "../../build-info.js";
 import { fail } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
 import {
@@ -167,6 +171,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         if (process.env.FIRST_TREE_SERVICE_MODE === "1") {
           configureClientLoggerForService(join(defaultHome(), "logs"));
         }
+        initClientSentry({ version: COMMAND_VERSION, gitSha: GIT_SHA, defaultDsn: CLIENT_SENTRY_DSN });
 
         // Load agents (may be empty — daemon can start without agents).
         // Phase 3 of the agent-naming refactor: run the local-dir rename
@@ -361,6 +366,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           capabilityRefresher.stop();
           runtime.unwatchAgentsDir();
           await runtime.stop();
+          await flushClientSentry();
           process.exit(0);
         };
         process.on("SIGINT", () => void shutdown());
@@ -387,6 +393,8 @@ export function registerDaemonStartCommand(daemon: Command): void {
           });
         }
         const msg = error instanceof Error ? error.message : String(error);
+        captureClientException(error, { command: "daemon start" });
+        await flushClientSentry();
         print.line(`  Error: ${msg}\n`);
         process.exit(1);
       } finally {

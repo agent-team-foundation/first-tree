@@ -6,8 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const clientMocks = vi.hoisted(() => ({
   applyClientLoggerConfig: vi.fn(),
+  captureClientException: vi.fn(),
   configureClientLoggerForService: vi.fn(),
   discoverClaudeCodeSkills: vi.fn(),
+  flushClientSentry: vi.fn(),
+  initClientSentry: vi.fn(),
   probeCapabilities: vi.fn(),
   reprobeOnReconnect: vi.fn(),
 }));

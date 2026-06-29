@@ -11,8 +11,11 @@ export { detectStreamApiError, StreamApiTransientError } from "./handlers/claude
 export { registerBuiltinHandlers } from "./handlers/index.js";
 export {
   applyClientLoggerConfig,
+  captureClientException,
   configureClientLoggerForService,
   createLogger,
+  flushClientSentry,
+  initClientSentry,
   rootLogger,
 } from "./observability/index.js";
 // Runtime

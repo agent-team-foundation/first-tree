@@ -127,10 +127,16 @@ describe("service install helpers", () => {
   });
 
   it("renders service templates with escaped values and quoted shell arguments", () => {
-    const plist = renderPlist("/tmp/First & Tree", { HTTP_PROXY: "http://a&b.test/<x>" });
+    const plist = renderPlist(
+      "/tmp/First & Tree",
+      { HTTP_PROXY: "http://a&b.test/<x>" },
+      { FIRST_TREE_CLIENT_SENTRY_ENABLED: "false" },
+    );
     expect(plist).toContain("<string>/tmp/First &amp; Tree</string>");
     expect(plist).toContain("<key>HTTP_PROXY</key>");
     expect(plist).toContain("<string>http://a&amp;b.test/&lt;x&gt;</string>");
+    expect(plist).toContain("<key>FIRST_TREE_CLIENT_SENTRY_ENABLED</key>");
+    expect(plist).toContain("<string>false</string>");
     expect(plist).toContain("<key>FIRST_TREE_HOME</key>");
     expect(plist).toContain(process.env.FIRST_TREE_HOME);
 
@@ -144,9 +150,11 @@ describe("service install helpers", () => {
     const unit = renderSystemdUnit(
       { kind: "bin", program: "/usr/local/bin/first tree" },
       { HTTPS_PROXY: "http://user:pa ss@example.test" },
+      { FIRST_TREE_CLIENT_SENTRY_ENABLED: "false" },
     );
     expect(unit).toContain('ExecStart="/usr/local/bin/first tree" daemon start --no-interactive');
     expect(unit).toContain('Environment=HTTPS_PROXY="http://user:pa ss@example.test"');
+    expect(unit).toContain("Environment=FIRST_TREE_CLIENT_SENTRY_ENABLED=false");
     expect(unit).toContain(`Environment=FIRST_TREE_HOME=${process.env.FIRST_TREE_HOME}`);
   });
 

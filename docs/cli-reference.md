@@ -729,6 +729,15 @@ source=github chats with no mapping use the same idle threshold.
 | `FIRST_TREE_OTEL_HEADERS` | OTLP headers as `key1=val1,key2=val2`. Typically holds the write token. | `""` |
 | `FIRST_TREE_OTEL_ENVIRONMENT` | Deployment label emitted as `deployment.environment.name`. | `development` |
 | `FIRST_TREE_OTEL_CAPTURE_CLIENT_IP` | Capture client IP attribute on traces. | `false` |
+| `VITE_SENTRY_DSN` | Public browser DSN for Web Console errors in the `first-tree-web` Sentry project. | unset |
+| `VITE_SENTRY_ENABLED` | Explicit Web Sentry switch; `false` / `0` / `off` disables even when a DSN is present. | enabled when DSN exists |
+| `VITE_SENTRY_ENVIRONMENT` | Web Sentry environment label. | host/mode-derived |
+| `VITE_SENTRY_TRACES_SAMPLE_RATE` | Web Sentry trace sample rate (`0.0–1.0`). | `0.1` |
+| `FIRST_TREE_CLIENT_SENTRY_DSN` | Client daemon/runtime DSN for the `first-tree-client` Sentry project. | unset |
+| `FIRST_TREE_CLIENT_SENTRY_ENABLED` | Explicit Client Sentry operator switch; `false` / `0` / `off` disables even when a DSN is present. | enabled when DSN exists |
+| `FIRST_TREE_CLIENT_SENTRY_ENVIRONMENT` | Client Sentry environment label. | `NODE_ENV` or `development` |
+| `FIRST_TREE_CLIENT_SENTRY_TRACES_SAMPLE_RATE` | Client Sentry trace sample rate (`0.0–1.0`). | `0.05` |
+| `FIRST_TREE_GIT_SHA` | Git SHA stamped onto Web/Client Sentry releases and tags when provided by CI. | `unknown` |
 
 See [observability.md](observability.md) for the full config reference, backend cheat sheet, and troubleshooting recipes.
 

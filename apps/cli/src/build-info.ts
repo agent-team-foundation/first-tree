@@ -7,3 +7,5 @@
 import type { ChannelName } from "@first-tree/shared/channel";
 
 export const CHANNEL: ChannelName = "dev";
+export const GIT_SHA = "dev";
+export const CLIENT_SENTRY_DSN = "";

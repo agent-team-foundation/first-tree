@@ -122,6 +122,9 @@ jobs:
 
       - name: Rewrite package.json + build-info.ts for prod
         working-directory: apps/cli
+        env:
+          RELEASE_GIT_SHA: ${{ github.sha }}
+          FIRST_TREE_CLIENT_SENTRY_DSN: ${{ vars.FIRST_TREE_CLIENT_SENTRY_DSN }}
         run: |
           node <<'NODE'
           const fs = require("node:fs");
@@ -135,7 +138,9 @@ jobs:
           fs.writeFileSync(
             "src/build-info.ts",
             'import type { ChannelName } from "@first-tree/shared/channel";\n' +
-              'export const CHANNEL: ChannelName = "prod";\n',
+              'export const CHANNEL: ChannelName = "prod";\n' +
+              `export const GIT_SHA = ${JSON.stringify(process.env.RELEASE_GIT_SHA)};\n` +
+              `export const CLIENT_SENTRY_DSN = ${JSON.stringify(process.env.FIRST_TREE_CLIENT_SENTRY_DSN || "")};\n`,
           );
           NODE
           echo "✓ Rewrote apps/cli/package.json + src/build-info.ts for prod publish"
@@ -278,6 +283,8 @@ jobs:
         working-directory: apps/cli
         env:
           STAGING_VERSION: ${{ steps.version.outputs.staging_version }}
+          RELEASE_GIT_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          FIRST_TREE_CLIENT_SENTRY_DSN: ${{ vars.FIRST_TREE_CLIENT_SENTRY_DSN }}
         run: |
           node <<'NODE'
           const fs = require("node:fs");
@@ -292,7 +299,9 @@ jobs:
           fs.writeFileSync(
             "src/build-info.ts",
             'import type { ChannelName } from "@first-tree/shared/channel";\n' +
-              'export const CHANNEL: ChannelName = "staging";\n',
+              'export const CHANNEL: ChannelName = "staging";\n' +
+              `export const GIT_SHA = ${JSON.stringify(process.env.RELEASE_GIT_SHA)};\n` +
+              `export const CLIENT_SENTRY_DSN = ${JSON.stringify(process.env.FIRST_TREE_CLIENT_SENTRY_DSN || "")};\n`,
           );
           NODE
           echo "✓ Rewrote apps/cli/package.json + src/build-info.ts for staging publish"
