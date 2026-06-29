@@ -6,10 +6,18 @@ import { isRecord } from "../../core/events.js";
 import { FIRST_TREE_READ_CASES, findFirstTreeReadCase } from "./cases.js";
 import { runFirstTreeReadCase } from "./runner.js";
 import { buildBatchSummary, formatSummaryTable } from "./summary.js";
-import type { CliOptions, FirstTreeReadEvalCase } from "./types.js";
+import type { BatchSummary, CliOptions, FirstTreeReadEvalCase } from "./types.js";
+
+export { findFirstTreeReadCase };
+
+export type FirstTreeReadGateOptions = Omit<CliOptions, "validateFixtures">;
 
 function usage(): string {
   return `Usage:
+  pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read
+  pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read --case <id>
+
+Compatibility aliases:
   pnpm --filter @first-tree/skill-evals eval:first-tree-read
   pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case <id>
   pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --json
@@ -87,15 +95,47 @@ function parseArgs(args: readonly string[]): CliOptions {
   return options;
 }
 
-function selectCases(options: CliOptions): readonly FirstTreeReadEvalCase[] {
-  if (options.caseId === null) return FIRST_TREE_READ_CASES;
+function selectCases(caseId: string | null): readonly FirstTreeReadEvalCase[] {
+  if (caseId === null) return FIRST_TREE_READ_CASES;
 
-  const evalCase = findFirstTreeReadCase(options.caseId);
+  const evalCase = findFirstTreeReadCase(caseId);
   if (evalCase === null) {
     const available = FIRST_TREE_READ_CASES.map((candidate) => candidate.id).join(", ");
-    throw new Error(`Unknown case '${options.caseId}'. Available cases: ${available}`);
+    throw new Error(`Unknown case '${caseId}'. Available cases: ${available}`);
   }
   return [evalCase];
+}
+
+export async function runFirstTreeReadGate(
+  packageRootPath: string,
+  options: FirstTreeReadGateOptions,
+): Promise<BatchSummary> {
+  const selectedCases = selectCases(options.caseId);
+  const runStartedAt = new Date().toISOString();
+  const summaries = [];
+
+  for (const evalCase of selectedCases) {
+    if (!options.verbose) {
+      process.stderr.write(`Running first-tree-read eval case: ${evalCase.id}\n`);
+    }
+    summaries.push(
+      await runFirstTreeReadCase(
+        packageRootPath,
+        evalCase,
+        {
+          ...options,
+          validateFixtures: false,
+        },
+        runStartedAt,
+      ),
+    );
+  }
+
+  return buildBatchSummary(summaries, runStartedAt);
+}
+
+export function formatFirstTreeReadGateSummary(batch: BatchSummary): string {
+  return formatSummaryTable(batch);
 }
 
 function packageRoot(): string {
@@ -113,9 +153,9 @@ function packageRoot(): string {
   throw new Error("Could not locate @first-tree/skill-evals package root.");
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  const selectedCases = selectCases(options);
+export async function runFirstTreeReadLegacyCli(args: readonly string[]): Promise<void> {
+  const options = parseArgs(args);
+  const selectedCases = selectCases(options.caseId);
   const runStartedAt = new Date().toISOString();
   const summaries = [];
 
@@ -141,9 +181,3 @@ async function main(): Promise<void> {
     process.exitCode = 1;
   }
 }
-
-main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`${message}\n`);
-  process.exitCode = 1;
-});

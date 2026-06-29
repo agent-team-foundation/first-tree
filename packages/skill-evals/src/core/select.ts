@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 
 import type { ShippedSkillName } from "./case-schema.js";
 
-export type EvalRecommendationKind = "floor" | "gate" | "quality" | "fixture-validation" | "read-live";
+export type EvalRecommendationKind = "floor" | "gate" | "quality";
 
 export type EvalRecommendation = {
   command: string;
@@ -55,9 +55,7 @@ function floorCommand(skill: ShippedSkillName | null): string {
   return `pnpm --filter @first-tree/skill-evals eval:floor -- --suite ${skill}`;
 }
 
-function gateCommand(
-  skill: Extract<ShippedSkillName, "first-tree-write" | "first-tree-seed" | "first-tree-welcome">,
-): string {
+function gateCommand(skill: ShippedSkillName): string {
   return `pnpm --filter @first-tree/skill-evals eval:gate -- --suite ${skill}`;
 }
 
@@ -76,22 +74,6 @@ function addSuiteRecommendations(
     reason,
     suite: skill,
   });
-
-  if (skill === "first-tree-read") {
-    addRecommendation(recommendations, {
-      command: "pnpm --filter @first-tree/skill-evals validate:first-tree-read-fixtures",
-      kind: "fixture-validation",
-      reason,
-      suite: skill,
-    });
-    addRecommendation(recommendations, {
-      command: "pnpm --filter @first-tree/skill-evals eval:first-tree-read",
-      kind: "read-live",
-      reason: `${reason}; live read eval remains opt-in and may consume model quota`,
-      suite: skill,
-    });
-    return;
-  }
 
   addRecommendation(recommendations, {
     command: gateCommand(skill),
@@ -117,7 +99,7 @@ function addAllImplementedGateRecommendations(recommendations: Map<string, EvalR
     reason,
     suite: "all",
   });
-  for (const skill of ["first-tree-write", "first-tree-seed", "first-tree-welcome"] as const) {
+  for (const skill of ["first-tree-read", "first-tree-write", "first-tree-seed", "first-tree-welcome"] as const) {
     addRecommendation(recommendations, {
       command: gateCommand(skill),
       kind: "gate",
