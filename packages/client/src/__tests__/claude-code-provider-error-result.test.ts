@@ -315,6 +315,58 @@ describe("claude-code handler — structured provider error result", () => {
     });
   });
 
+  it("treats a 403 Request not allowed as egress even with a typed authentication_failed signal", async () => {
+    // The exact mixed shape that misdiagnosed the China-network 403: a typed
+    // auth signal arrives first, the 403 "Request not allowed" detail only in
+    // the result. The user-visible output must lead with egress/proxy guidance
+    // and must NOT pre-empt it with the auth-login hint.
+    mockState.nextMessages = [
+      { type: "assistant", error: "authentication_failed" },
+      {
+        type: "result",
+        subtype: "success",
+        is_error: true,
+        api_error_status: 403,
+        result: "Failed to authenticate. API Error: 403 Request not allowed",
+      },
+    ];
+    const { sendMessage, emitted } = await runSingleResultTurn();
+
+    const notice = String(sendMessage.mock.calls[0]?.[1].content);
+    expect(notice).toContain("before authentication");
+    expect(notice).toContain("daemon.env");
+    expect(notice).not.toContain("rejected the local Claude authentication");
+    // The deferred auth hint must be suppressed for an egress 403.
+    expect(
+      emitted.some(
+        (event) =>
+          event.kind === "error" &&
+          typeof event.payload.message === "string" &&
+          event.payload.message.includes("auth on this machine looks broken"),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the 403 Request not allowed detail for a non-success result subtype", async () => {
+    // Bypass guard: a non-success subtype where `errors` carries only the
+    // opaque code must still surface the API detail so egress detection fires.
+    mockState.nextMessages = [
+      {
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        api_error_status: 403,
+        errors: ["authentication_failed"],
+        result: "Failed to authenticate. API Error: 403 Request not allowed",
+      },
+    ];
+    const { sendMessage } = await runSingleResultTurn();
+
+    const notice = String(sendMessage.mock.calls[0]?.[1].content);
+    expect(notice).toContain("before authentication");
+    expect(notice).not.toContain("rejected the local Claude authentication");
+  });
+
   it("does not sniff ordinary success result text as a provider error", async () => {
     const resultText = "API Error: 401 Unauthorized is an example the user asked about.";
     mockState.nextMessages = [

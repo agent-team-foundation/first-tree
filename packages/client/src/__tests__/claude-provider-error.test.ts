@@ -91,4 +91,57 @@ describe("claude provider error adapter", () => {
     expect(notice).toContain("insufficient account balance");
     expect(notice).toContain("Original provider message");
   });
+
+  it("merges error codes and result text for a non-success subtype so egress detail survives", () => {
+    const failure = claudeFailureFromSdkResult({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      api_error_status: 403,
+      errors: ["authentication_failed"],
+      result: "Failed to authenticate. API Error: 403 Request not allowed",
+    });
+    expect(failure).not.toBeNull();
+    if (!failure) throw new Error("expected failure");
+    // The opaque code alone would hide the egress signature; the merged preview
+    // keeps "Request not allowed" so the notice classifies it as egress.
+    expect(failure.messagePreview).toContain("Request not allowed");
+    const notice = formatClaudeProviderFailureNotice(classify(failure.signal.error), failure.messagePreview);
+    expect(notice).toContain("before authentication");
+    expect(notice).not.toContain("rejected the local Claude authentication");
+  });
+
+  it("does not blame auth for a 403 `Request not allowed` (egress / region block)", () => {
+    // Anthropic returns this string before authentication, so the credential
+    // classification must NOT surface the misleading "run claude auth login"
+    // lead — it should enumerate egress / entitlement / auth instead.
+    const notice = formatClaudeProviderFailureNotice(
+      {
+        category: "credential",
+        reasonCode: "provider_credential_required",
+        message: "forbidden",
+        sourceKind: "permanent",
+      },
+      "Failed to authenticate. API Error: 403 Request not allowed",
+    );
+
+    expect(notice).not.toContain("rejected the local Claude authentication");
+    expect(notice).toContain("before authentication");
+    expect(notice).toContain("daemon.env");
+    expect(notice).toContain("Original provider message");
+  });
+
+  it("still surfaces the auth lead for a genuine credential failure", () => {
+    const notice = formatClaudeProviderFailureNotice(
+      {
+        category: "credential",
+        reasonCode: "provider_credential_required",
+        message: "auth",
+        sourceKind: "permanent",
+      },
+      "Failed to authenticate. API Error: 401 invalid x-api-key",
+    );
+
+    expect(notice).toContain("rejected the local Claude authentication");
+  });
 });
