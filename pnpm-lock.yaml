@@ -137,54 +137,6 @@ importers:
         specifier: ^3.2.0
         version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.15)(happy-dom@20.9.0)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
 
-  packages/e2e:
-    devDependencies:
-      '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.3.187
-        version: 0.3.187(@anthropic-ai/sdk@0.105.0(zod@4.3.6))(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))(zod@4.3.6)
-      '@first-tree/server':
-        specifier: workspace:*
-        version: link:../server
-      '@first-tree/shared':
-        specifier: workspace:*
-        version: link:../shared
-      '@types/node':
-        specifier: ^22.16.0
-        version: 22.19.15
-      '@types/pg':
-        specifier: ^8.11.10
-        version: 8.15.6
-      '@types/ws':
-        specifier: ^8.5.13
-        version: 8.18.1
-      fastify:
-        specifier: ^5.2.0
-        version: 5.8.2
-      first-tree-dev:
-        specifier: workspace:*
-        version: link:../../apps/cli
-      get-port:
-        specifier: ^7.1.0
-        version: 7.1.0
-      jose:
-        specifier: ^5.9.6
-        version: 5.10.0
-      pg:
-        specifier: ^8.13.1
-        version: 8.20.0
-      tsx:
-        specifier: ^4.19.0
-        version: 4.21.0
-      vitest:
-        specifier: ^3.2.0
-        version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.15)(happy-dom@20.9.0)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.8.3)
-      ws:
-        specifier: ^8.18.0
-        version: 8.20.0
-      zod:
-        specifier: ^4.0.0
-        version: 4.3.6
-
   packages/server:
     dependencies:
       '@autotelic/fastify-opentelemetry':

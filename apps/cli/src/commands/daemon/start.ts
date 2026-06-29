@@ -37,6 +37,7 @@ import {
   isServiceSupported,
   listPinnedAgents,
   loadCredentials,
+  loadDaemonEnv,
   migrateLocalAgentDirs,
   promptMissingFields,
   promptUpdate,
@@ -58,6 +59,15 @@ export function registerDaemonStartCommand(daemon: Command): void {
     .option("--foreground", "Run inline instead of delegating to the background service (for debugging)")
     .action(async (options: { interactive?: boolean; foreground?: boolean }) => {
       const binName = channelConfig.binName;
+      // Compatibility, not management: a launchd / systemd daemon does not inherit
+      // the user's login-shell environment, so load the user-owned
+      // `~/.first-tree/daemon.env` (if present) into our env BEFORE the runtime
+      // spawns any child — so the Claude CLI / git / npm it launches inherit
+      // whatever proxy the user configured. First Tree only reads this file.
+      const appliedDaemonEnv = loadDaemonEnv();
+      if (appliedDaemonEnv.length > 0) {
+        print.line(`  loaded ${appliedDaemonEnv.length} var(s) from daemon.env (${appliedDaemonEnv.join(", ")})\n`);
+      }
       // Fail closed: never spin up the runtime without persisted credentials.
       // Hooking this in BEFORE the service-delegation branch keeps the policy
       // uniform — supervisor child, foreground debug, or background daemon

@@ -27,6 +27,7 @@ const coreMocks = vi.hoisted(() => ({
   isServiceSupported: vi.fn(),
   listPinnedAgents: vi.fn(),
   loadCredentials: vi.fn(),
+  loadDaemonEnv: vi.fn(() => []),
   migrateLocalAgentDirs: vi.fn(),
   promptMissingFields: vi.fn(),
   promptUpdate: vi.fn(),
@@ -117,6 +118,7 @@ beforeEach(() => {
   });
   clientMocks.discoverClaudeCodeSkills.mockResolvedValue([{ name: "review", description: "Review code." }]);
   coreMocks.loadCredentials.mockReturnValue({ refreshToken: "refresh" });
+  coreMocks.loadDaemonEnv.mockReturnValue([]);
   coreMocks.isServiceSupported.mockReturnValue(false);
   coreMocks.getClientServiceStatus.mockReturnValue({
     platform: "launchd",

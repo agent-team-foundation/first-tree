@@ -1,7 +1,6 @@
 import { Check, CircleAlert, Copy, ExternalLink, Info, Lock, Search, X } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import type { GithubRepo } from "../../api/github.js";
-import { FirstTreeLogo } from "../../components/first-tree-logo.js";
 import { Button } from "../../components/ui/button.js";
 import { useCopyFeedback } from "../../lib/use-copy-feedback.js";
 import { cn } from "../../lib/utils.js";
@@ -27,49 +26,6 @@ export function StepHeading({ title, why }: { title: string; why?: ReactNode }) 
         </p>
       ) : null}
     </div>
-  );
-}
-
-/**
- * The shared "ceremonial welcome" hero used by the journey's two openers — the
- * admin opening (StepTeam) and the invitee landing (StepWelcome): a centered
- * brand mark, the greeting, and a one-line value subtitle. `subtitle` is a
- * ReactNode so the invitee can emphasize the just-joined team name inline. The
- * 35rem cap keeps the subtitle on a comfortable measure (≈ one line on desktop)
- * while still wrapping freely on narrow widths (no nowrap).
- */
-export function WelcomeHero({ title, subtitle }: { title: string; subtitle: ReactNode }) {
-  return (
-    <div className="flex flex-col items-center" style={{ gap: "var(--sp-2_5)" }}>
-      <FirstTreeLogo width={42} height={47} style={{ color: "var(--brand-dim)" }} />
-      <h1
-        className="text-headline font-semibold"
-        style={{ margin: "var(--sp-3) 0 0", color: "var(--fg)", textAlign: "center" }}
-      >
-        {title}
-      </h1>
-      <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", textAlign: "center", maxWidth: "35rem" }}>
-        {subtitle}
-      </p>
-    </div>
-  );
-}
-
-/**
- * One quiet line of orientation under a welcome hero: a bold count leads, then
- * the steps in sequence. Used on the journey bookends (team / welcome), which
- * render no progress bar — so this is the only "what's next". The count is
- * derived from `steps` so it can never drift out of sync with the list.
- */
-export function StepRoadmap({ steps }: { steps: readonly string[] }) {
-  return (
-    <p className="text-label" style={{ margin: 0, color: "var(--fg-4)", textAlign: "center" }}>
-      <span className="font-semibold" style={{ color: "var(--brand-dim)" }}>
-        {steps.length} steps
-      </span>
-      {"  ·  "}
-      {steps.join("  →  ")}
-    </p>
   );
 }
 
@@ -311,7 +267,7 @@ export function CommandBox({
  * border. `position: relative` makes the row the containing block for the
  * absolutely-positioned sr-only input, so it can't escape the picker's clip.
  */
-export function SelectableRow({
+function SelectableRow({
   checked,
   onToggle,
   children,

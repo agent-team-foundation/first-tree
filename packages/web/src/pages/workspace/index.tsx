@@ -260,7 +260,7 @@ export function WorkspacePage() {
   }, [searchParams, setSearchParams]);
 
   // Users who haven't finished setup go through the standalone /onboarding
-  // flow — including the server-`completed`-but-no-kickoff case. Only
+  // flow — including the server-`completed`-but-no-start-chat case. Only
   // terminally completed or dismissed users fall through to the normal
   // workspace; the old inline center-panel onboarding has been retired.
   if (

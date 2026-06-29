@@ -34,10 +34,6 @@ coverage/
 lcov.info
 *.lcov
 
-# E2E framework — per-run logs and local env override (see packages/e2e/)
-packages/e2e/.e2e-runs/
-packages/e2e/.env.e2e
-
 # Opt-in live model skill eval artifacts
 packages/skill-evals/.runs/
 

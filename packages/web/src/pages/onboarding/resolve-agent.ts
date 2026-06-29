@@ -2,7 +2,7 @@ import { listManagedAgents, type ManagedAgent } from "../../api/agents.js";
 import { readOnboardingAgentUuid } from "../../utils/onboarding-flags.js";
 
 /**
- * Find the agent the kickoff step should act on.
+ * Find the agent the start-chat step should act on.
  *
  * Priority:
  *   1. The exact agent created earlier this session (uuid stashed by the

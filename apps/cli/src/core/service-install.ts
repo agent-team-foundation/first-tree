@@ -4,6 +4,7 @@ import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { defaultHome } from "@first-tree/shared/config";
 import { channelConfig } from "./channel.js";
+import { daemonEnvPath } from "./daemon-env.js";
 import { print } from "./output.js";
 
 export type ServiceState = "active" | "inactive" | "not-installed" | "unknown";
@@ -124,6 +125,11 @@ function launchdPathEnv(): string {
   return servicePathEnv(LAUNCHD_BASE_PATH);
 }
 
+// Proxy env keys scanned during the one-time upgrade migration below. Both
+// lower- and upper-case forms exist because libcurl, git, OpenSSL, and various
+// tools each prefer a different case. The service unit no longer bakes these in
+// (see `migrateBakedProxyEnv`); the daemon reads the user-owned `daemon.env`
+// instead — compatibility, not management.
 const PROXY_ENV_KEYS = [
   "http_proxy",
   "https_proxy",
@@ -134,57 +140,74 @@ const PROXY_ENV_KEYS = [
   "ALL_PROXY",
   "NO_PROXY",
 ] as const;
-const CLIENT_SENTRY_ENV_KEYS = [
-  "FIRST_TREE_CLIENT_SENTRY_DSN",
-  "FIRST_TREE_CLIENT_SENTRY_ENABLED",
-  "FIRST_TREE_CLIENT_SENTRY_ENVIRONMENT",
-  "FIRST_TREE_CLIENT_SENTRY_TRACES_SAMPLE_RATE",
-] as const;
 
-/**
- * Pick proxy env vars out of `env` (default `process.env`). Returns the subset
- * that are present and non-empty, preserving case.
- *
- * Threaded into the unit / plist templates so a daemon started by launchd /
- * systemd inherits the same proxy reachability the user's interactive shell
- * already has. Without this, `git fetch` inside the daemon-spawned agent
- * runtime can't route through the user's local proxy (Surge, Clash, mihomo,
- * corporate proxy …) and fails with `SSL_ERROR_SYSCALL` whenever direct
- * egress to github.com is blocked.
- *
- * Both lower- and upper-case keys are scanned because libcurl, git, OpenSSL,
- * the JVM, and various Windows tools each prefer different cases. Pass through
- * whatever the user set rather than guess.
- *
- * `refresh-unit` (called by the supervisor on auto-update) safely re-runs
- * this: the supervisor inherits its env from the launchd plist it was started
- * with, so once these vars land in the plist on first install they stay in
- * the supervisor's env and the next refresh-rendered plist matches → no drift,
- * no clobber.
- *
- * Security note: if a proxy URL embeds credentials (e.g.
- * `http://user:pass@host:port`), those credentials land in the rendered
- * plist / systemd unit on disk (mode 0o644 for plist, default file perms
- * for systemd user units — both group- and world-readable). Exposure level
- * matches `.zshrc` if the user originally `export`ed the URL there, but
- * operators relying on credential-bearing proxy URLs should be aware.
- */
-export function collectProxyEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+function unescapeXml(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&gt;/g, ">")
+    .replace(/&lt;/g, "<")
+    .replace(/&amp;/g, "&");
+}
+
+/** Lift proxy env vars baked into a previous launchd plist (pre-compat units). */
+function extractProxyFromPlist(xml: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const key of PROXY_ENV_KEYS) {
-    const value = env[key];
-    if (value && value.length > 0) out[key] = value;
+    const match = xml.match(new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`));
+    if (match && match[1].length > 0) out[key] = unescapeXml(match[1]);
   }
   return out;
 }
 
-export function collectClientSentryEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+/** Lift proxy env vars baked into a previous systemd unit (pre-compat units). */
+function extractProxyFromSystemd(text: string): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const key of CLIENT_SENTRY_ENV_KEYS) {
-    const value = env[key];
-    if (value && value.length > 0) out[key] = value;
+  for (const key of PROXY_ENV_KEYS) {
+    const match = text.match(new RegExp(`^Environment=${key}=(.*)$`, "m"));
+    if (!match) continue;
+    let value = match[1].trim();
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+      value = value.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    }
+    if (value.length > 0) out[key] = value;
   }
   return out;
+}
+
+/**
+ * One-time upgrade buffer. Service units built before the "compatible, not
+ * managing" redesign baked the user's proxy env directly into the plist /
+ * systemd unit, which then went stale and self-froze on auto-update. Now the
+ * daemon reads proxy from the user-owned `daemon.env` instead, so a straight
+ * re-render would silently drop a proxy the user is relying on.
+ *
+ * So when re-rendering: if `daemon.env` does not exist yet AND the previous
+ * on-disk unit carried proxy vars, copy them across ONCE. After that the file
+ * is the user's to edit or delete and First Tree never rewrites it. No previous
+ * unit, no baked proxy, or an existing `daemon.env` → no-op. Best-effort: a
+ * write failure must never block service install.
+ */
+function migrateBakedProxyEnv(proxy: Record<string, string>): void {
+  if (Object.keys(proxy).length === 0) return;
+  const envPath = daemonEnvPath();
+  if (existsSync(envPath)) return; // the user already owns this file
+  try {
+    mkdirSync(dirname(envPath), { recursive: true, mode: 0o700 });
+    const body = Object.entries(proxy)
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\n");
+    writeFileSync(
+      envPath,
+      "# Migrated once by First Tree from the previous service unit's baked proxy env.\n" +
+        "# This file is yours: edit or delete it freely. First Tree reads it on daemon\n" +
+        "# start but never rewrites it.\n" +
+        `${body}\n`,
+      { mode: 0o600 },
+    );
+    print.line(`    migrated proxy env into ${envPath} (yours to edit henceforth)\n`);
+  } catch {
+    // Best-effort migration — surfacing nothing is better than aborting install.
+  }
 }
 
 type ResolvedBinary = { kind: "bin"; program: string } | { kind: "node"; program: string; args: string[] };
@@ -260,11 +283,7 @@ function launchdPlistPath(): string {
  * itself `exec`s the resolved CLI invocation with the daemon args (see
  * `renderLaunchdWrapper`), so nothing else needs to be on the command line.
  */
-export function renderPlist(
-  wrapperPath: string,
-  proxyEnv: Record<string, string> = collectProxyEnv(),
-  clientSentryEnv: Record<string, string> = collectClientSentryEnv(),
-): string {
+export function renderPlist(wrapperPath: string): string {
   const programArgs: string[] = [wrapperPath];
 
   const argsXml = programArgs.map((a) => `    <string>${escapeXml(a)}</string>`).join("\n");
@@ -285,13 +304,6 @@ export function renderPlist(
   // home eliminates that drift.
   const homeEnvXml = `\n    <key>FIRST_TREE_HOME</key>\n    <string>${escapeXml(defaultHome())}</string>`;
 
-  // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
-  const proxyEnvXml = Object.entries(proxyEnv)
-    .map(([k, v]) => `\n    <key>${escapeXml(k)}</key>\n    <string>${escapeXml(v)}</string>`)
-    .join("");
-  const clientSentryEnvXml = Object.entries(clientSentryEnv)
-    .map(([k, v]) => `\n    <key>${escapeXml(k)}</key>\n    <string>${escapeXml(v)}</string>`)
-    .join("");
   // launchd does not inherit the operator's interactive shell PATH. Put the
   // current Node directory first so npm-installed CLI shims and self-update
   // run under the same Node toolchain that installed/refreshed the service.
@@ -312,7 +324,7 @@ ${argsXml}
     <key>PATH</key>
     <string>${pathEnvXml}</string>
     <key>FIRST_TREE_SERVICE_MODE</key>
-    <string>1</string>${homeEnvXml}${proxyEnvXml}${clientSentryEnvXml}
+    <string>1</string>${homeEnvXml}
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -414,11 +426,18 @@ function writeLaunchdServiceFiles(): { plistPath: string; wrapperPath: string } 
   const invocation = resolveCliInvocation();
   ensureLogDir();
 
+  const plistPath = launchdPlistPath();
+  // Upgrade buffer: lift any proxy env a prior version baked into the plist into
+  // the user-owned daemon.env before we re-render a proxy-free plist (no-op when
+  // there is no prior plist, no baked proxy, or a daemon.env already exists).
+  if (existsSync(plistPath)) {
+    migrateBakedProxyEnv(extractProxyFromPlist(readFileSync(plistPath, "utf-8")));
+  }
+
   const wrapperPath = launchdWrapperPath();
   mkdirSync(dirname(wrapperPath), { recursive: true, mode: 0o700 });
   writeFileSync(wrapperPath, renderLaunchdWrapper(invocation), { mode: 0o755 });
 
-  const plistPath = launchdPlistPath();
   mkdirSync(dirname(plistPath), { recursive: true });
   writeFileSync(plistPath, renderPlist(wrapperPath), { mode: 0o644 });
 
@@ -545,11 +564,7 @@ function systemdUnitPath(): string {
   return join(xdg, "systemd", "user", SYSTEMD_UNIT);
 }
 
-export function renderSystemdUnit(
-  invocation: ResolvedBinary,
-  proxyEnv: Record<string, string> = collectProxyEnv(),
-  clientSentryEnv: Record<string, string> = collectClientSentryEnv(),
-): string {
+export function renderSystemdUnit(invocation: ResolvedBinary): string {
   const execStart: string =
     invocation.kind === "bin"
       ? `${shellQuote(invocation.program)} daemon start --no-interactive`
@@ -566,14 +581,6 @@ export function renderSystemdUnit(
   // Put this CLI's Node directory first so npm/nvm-installed shebangs and
   // self-update use the same Node toolchain when supervised.
   const pathEnv = `Environment=PATH=${shellQuote(systemdPathEnv())}\n`;
-
-  // Forward shell-side proxy env (see `collectProxyEnv` docblock for why).
-  const proxyEnvLines = Object.entries(proxyEnv)
-    .map(([k, v]) => `Environment=${k}=${shellQuote(v)}\n`)
-    .join("");
-  const clientSentryEnvLines = Object.entries(clientSentryEnv)
-    .map(([k, v]) => `Environment=${k}=${shellQuote(v)}\n`)
-    .join("");
 
   // Restart policy split:
   //   - on-failure  → operator-issued `systemctl stop` (clean exit 0) really stops.
@@ -605,7 +612,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=${SYSLOG_IDENT}
 ${pathEnv}Environment=FIRST_TREE_SERVICE_MODE=1
-${homeEnv}${proxyEnvLines}${clientSentryEnvLines}[Install]
+${homeEnv}[Install]
 WantedBy=default.target
 `;
 }
@@ -681,6 +688,12 @@ function installSystemd(): ServiceInfo {
   const invocation = resolveCliInvocation();
   ensureLogDir();
   const unitPath = systemdUnitPath();
+  // Upgrade buffer: lift any proxy env a prior version baked into the unit into
+  // the user-owned daemon.env before we re-render a proxy-free unit (no-op when
+  // there is no prior unit, no baked proxy, or a daemon.env already exists).
+  if (existsSync(unitPath)) {
+    migrateBakedProxyEnv(extractProxyFromSystemd(readFileSync(unitPath, "utf-8")));
+  }
   mkdirSync(dirname(unitPath), { recursive: true });
   writeFileSync(unitPath, renderSystemdUnit(invocation), { mode: 0o644 });
 

@@ -56,6 +56,38 @@ afterEach(() => {
 });
 
 describe("onboarding preview review surface", () => {
+  it("keeps admin flow aligned to the lightweight onboarding path", async () => {
+    const { ONBOARDING_PREVIEW_SCENARIOS } = await import("../onboarding-preview.js");
+
+    const adminFlow = ONBOARDING_PREVIEW_SCENARIOS.filter(
+      (scenario) => scenario.role === "admin" && scenario.view === "flow",
+    );
+
+    expect(adminFlow.map((scenario) => scenario.id)).toEqual([
+      "admin-team",
+      "admin-cc-waiting",
+      "admin-ca-form",
+      "admin-ko-new",
+    ]);
+    expect(adminFlow.map((scenario) => scenario.label)).toEqual([
+      "Create team",
+      "Connect computer",
+      "Create agent",
+      "Start chat",
+    ]);
+    expect(adminFlow.some((scenario) => scenario.wizard?.step === "connect-code")).toBe(false);
+  });
+
+  it("keeps preview labels aligned to product step names", async () => {
+    const { ONBOARDING_PREVIEW_SCENARIOS } = await import("../onboarding-preview.js");
+
+    const previewText = ONBOARDING_PREVIEW_SCENARIOS.flatMap((scenario) => [scenario.label, scenario.group]).join("\n");
+
+    expect(previewText).not.toMatch(/\bKickoff\b/);
+    expect(previewText).not.toContain("Install First Tree");
+    expect(previewText).not.toContain("No Context Tree finale");
+  });
+
   it("keeps invitee focused on unique states and moves experiments out of the live flow", async () => {
     const { ONBOARDING_PREVIEW_SCENARIOS } = await import("../onboarding-preview.js");
 
@@ -79,7 +111,7 @@ describe("onboarding preview review surface", () => {
     const { ONBOARDING_PREVIEW_SCENARIOS } = await import("../onboarding-preview.js");
 
     const adminGithubStateIds = ONBOARDING_PREVIEW_SCENARIOS.filter(
-      (scenario) => scenario.role === "admin" && scenario.group === "GitHub states",
+      (scenario) => scenario.role === "admin" && scenario.group === "GitHub access states",
     ).map((scenario) => scenario.id);
 
     expect(adminGithubStateIds).toEqual([
@@ -90,13 +122,38 @@ describe("onboarding preview review surface", () => {
       "admin-code-loading",
       "admin-code-norepos",
       "admin-code-loadfailed",
+      "admin-code-repos",
       "admin-code-repos-user",
     ]);
     expect(
       ONBOARDING_PREVIEW_SCENARIOS.some(
-        (scenario) => /Need help|stuck|403|503/.test(scenario.label) && scenario.group === "GitHub states",
+        (scenario) => /Need help|stuck|403|503/.test(scenario.label) && scenario.group === "GitHub access states",
       ),
     ).toBe(false);
+  });
+
+  it("renders GitHub access states outside the onboarding setup step shell", async () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/preview/onboarding?role=admin&view=states&scenario=admin-code-notinstalled",
+    );
+
+    const { OnboardingPreviewPage } = await import("../onboarding-preview.js");
+    const { container, root } = await renderDom(
+      <MemoryRouter>
+        <OnboardingPreviewPage />
+      </MemoryRouter>,
+    );
+
+    expect(container.textContent).toContain("GitHub access states");
+    expect(container.textContent).toContain("Connect GitHub when a task needs it");
+    expect(container.textContent).toContain("not a required onboarding step");
+    expect(container.textContent).toContain("Install First Tree on GitHub");
+    expect(container.textContent).not.toContain("Step 1 of 3");
+    expect(container.textContent).not.toContain("Create a First Tree team");
+
+    await act(async () => root.unmount());
   });
 
   it("uses URL params for shareable role, view, and scenario selection", async () => {

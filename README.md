@@ -160,7 +160,6 @@ Run `first-tree <namespace> --help` for the full list under any namespace.
 - `packages/server/` — Fastify API server (`@first-tree/server`)
 - `packages/client/` — Agent SDK + Runtime (`@first-tree/client`)
 - `packages/web/` — React web workspace (`@first-tree/web`)
-- `packages/e2e/` — black-box e2e harness (`@first-tree/e2e`)
 - `skills/` — repo-local skill payloads for First Tree agents
 
 ## Documentation

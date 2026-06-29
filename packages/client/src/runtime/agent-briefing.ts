@@ -358,6 +358,7 @@ You are running inside **First Tree**, a messaging platform for agent teams.
   blocks.push(worktreesBlock(opts.agentHome, opts.sourceRepos));
   blocks.push(communicationBlock(bin));
   blocks.push(workspaceCollaborationBlock(bin));
+  blocks.push(githubWorkingPostureBlock());
   blocks.push(githubAttentionBlock(bin, opts.contextTreePath !== null));
   blocks.push(askingHumansBlock());
   blocks.push(chatTopicBlock(bin));
@@ -692,6 +693,32 @@ forms, history, invite, and related command details, use
 
 Substitute this agent's CLI binary, \`${bin}\`, anywhere external docs
 show the literal \`first-tree\`.`;
+}
+
+function githubWorkingPostureBlock(): string {
+  return `## GitHub Working Posture
+
+For GitHub URLs, PRs, Issues, Actions runs, repo metadata, comments, and
+ordinary PR / Issue creation, try the host \`gh\` CLI first when available.
+GitHub URLs are not, by themselves, a reason to ask for First Tree GitHub App
+installation or repo authorization.
+
+If \`gh\` is missing, unauthenticated, or lacks access, explain that specific
+capability gap and choose the narrowest non-platform recovery first: local
+clone path, GitHub CLI install, or \`gh\` auth/access.
+
+Ask for First Tree GitHub access only when the desired outcome needs platform
+capabilities beyond this local session: follow, webhook events, team repo
+resources, Context Tree provisioning, installation-token repo access, or
+cross-session/team access.
+
+If the current member is not an org admin, do not ask them to install the
+GitHub App, change repo authorization, or create/bind a Context Tree. Explain
+that those are admin-owned team setup actions and continue with local path /
+host \`gh\` when possible.
+
+Do not use agent-accessible local files or tree snapshots as a hidden server
+sync path. User-visible task output is fine; background bulk upload is not.`;
 }
 
 // Inline (not skill-only) on purpose: the follow-after-create default has to

@@ -1,4 +1,4 @@
 ---
 name: first-tree-welcome
-description: Use only when a First Tree onboarding system kickoff explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup kickoffs, ordinary chats, PR reviews, tree writes, or maintenance.
+description: Use only when a First Tree onboarding start-chat system message explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup chats, ordinary chats, PR reviews, tree writes, or maintenance.
 ---

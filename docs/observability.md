@@ -106,9 +106,10 @@ The npm publish workflow bakes `FIRST_TREE_CLIENT_SENTRY_DSN` from GitHub
 repository/environment variables into the published CLI package. Local operator
 env still wins at runtime, so a machine can override the DSN or set
 `FIRST_TREE_CLIENT_SENTRY_ENABLED=false` to disable Client events explicitly.
-When installing the background service, `FIRST_TREE_CLIENT_SENTRY_*` override
-env vars from the installing shell are rendered into the launchd/systemd unit so
-the operator's choice survives daemon restarts.
+For background services, put `FIRST_TREE_CLIENT_SENTRY_*` overrides in the
+user-owned `daemon.env` file under `FIRST_TREE_HOME`. The daemon loads that file
+before Sentry initialization, so the operator's choice survives daemon restarts
+without baking observability settings into the launchd/systemd unit.
 
 The Client scrubber drops user identity, request bodies, cookies, query
 strings, breadcrumbs, bearer tokens, OAuth/token-like fields, and local home /

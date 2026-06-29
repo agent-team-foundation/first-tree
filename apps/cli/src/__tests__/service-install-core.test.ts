@@ -4,7 +4,6 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { channelConfig } from "../core/channel.js";
 import {
-  collectProxyEnv,
   getClientServiceStatus,
   installClientService,
   isServiceSupported,
@@ -97,20 +96,6 @@ afterEach(() => {
 });
 
 describe("service install helpers", () => {
-  it("collects only non-empty proxy environment variables", () => {
-    expect(
-      collectProxyEnv({
-        HTTP_PROXY: "http://proxy.test",
-        HTTPS_PROXY: "",
-        no_proxy: "localhost,127.0.0.1",
-        OTHER: "ignored",
-      }),
-    ).toEqual({
-      HTTP_PROXY: "http://proxy.test",
-      no_proxy: "localhost,127.0.0.1",
-    });
-  });
-
   it("resolves the channel bin when it is on PATH and falls back to node plus script", () => {
     execFileSyncMock.mockReturnValueOnce(`/tmp/bin/${channelConfig.binName}\n`);
     expect(resolveCliInvocation()).toEqual({ kind: "bin", program: `/tmp/bin/${channelConfig.binName}` });
@@ -127,18 +112,13 @@ describe("service install helpers", () => {
   });
 
   it("renders service templates with escaped values and quoted shell arguments", () => {
-    const plist = renderPlist(
-      "/tmp/First & Tree",
-      { HTTP_PROXY: "http://a&b.test/<x>" },
-      { FIRST_TREE_CLIENT_SENTRY_ENABLED: "false" },
-    );
+    const plist = renderPlist("/tmp/First & Tree");
     expect(plist).toContain("<string>/tmp/First &amp; Tree</string>");
-    expect(plist).toContain("<key>HTTP_PROXY</key>");
-    expect(plist).toContain("<string>http://a&amp;b.test/&lt;x&gt;</string>");
-    expect(plist).toContain("<key>FIRST_TREE_CLIENT_SENTRY_ENABLED</key>");
-    expect(plist).toContain("<string>false</string>");
     expect(plist).toContain("<key>FIRST_TREE_HOME</key>");
     expect(plist).toContain(process.env.FIRST_TREE_HOME);
+    // The service unit no longer bakes proxy env in — the daemon reads the
+    // user-owned daemon.env instead (compatibility, not management).
+    expect(plist).not.toContain("HTTP_PROXY");
 
     const wrapper = renderLaunchdWrapper({
       kind: "node",
@@ -147,15 +127,60 @@ describe("service install helpers", () => {
     });
     expect(wrapper).toContain('exec "/opt/My Node/node" "/tmp/cli path/index.mjs" daemon start --no-interactive');
 
-    const unit = renderSystemdUnit(
-      { kind: "bin", program: "/usr/local/bin/first tree" },
-      { HTTPS_PROXY: "http://user:pa ss@example.test" },
-      { FIRST_TREE_CLIENT_SENTRY_ENABLED: "false" },
-    );
+    const unit = renderSystemdUnit({ kind: "bin", program: "/usr/local/bin/first tree" });
     expect(unit).toContain('ExecStart="/usr/local/bin/first tree" daemon start --no-interactive');
-    expect(unit).toContain('Environment=HTTPS_PROXY="http://user:pa ss@example.test"');
-    expect(unit).toContain("Environment=FIRST_TREE_CLIENT_SENTRY_ENABLED=false");
     expect(unit).toContain(`Environment=FIRST_TREE_HOME=${process.env.FIRST_TREE_HOME}`);
+    expect(unit).not.toContain("HTTPS_PROXY");
+  });
+
+  it("lifts a proxy baked into a prior launchd plist into the user-owned daemon.env (upgrade buffer)", () => {
+    setPlatform("darwin");
+    const plistPath = join(home, "Library", "LaunchAgents", `${channelConfig.launchdLabel}.plist`);
+    mkdirSync(dirname(plistPath), { recursive: true });
+    // A pre-redesign plist that baked the user's proxy straight into the unit.
+    writeFileSync(
+      plistPath,
+      "<plist><dict>" +
+        "<key>HTTP_PROXY</key><string>http://127.0.0.1:7897</string>" +
+        "<key>NO_PROXY</key><string>localhost,127.0.0.1</string>" +
+        "</dict></plist>",
+    );
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "not loaded" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "Could not find service" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "state = running\npid = 1\n", stderr: "" });
+
+    installClientService();
+
+    const envPath = join(process.env.FIRST_TREE_HOME ?? "", "daemon.env");
+    const env = readFileSync(envPath, "utf-8");
+    expect(env).toContain("HTTP_PROXY=http://127.0.0.1:7897");
+    expect(env).toContain("NO_PROXY=localhost,127.0.0.1");
+    // The freshly written plist no longer carries the proxy.
+    expect(readFileSync(plistPath, "utf-8")).not.toContain("HTTP_PROXY");
+  });
+
+  it("never overwrites an existing user-owned daemon.env during migration", () => {
+    setPlatform("darwin");
+    const plistPath = join(home, "Library", "LaunchAgents", `${channelConfig.launchdLabel}.plist`);
+    mkdirSync(dirname(plistPath), { recursive: true });
+    writeFileSync(plistPath, "<plist><dict><key>HTTP_PROXY</key><string>http://baked:1</string></dict></plist>");
+    const envPath = join(process.env.FIRST_TREE_HOME ?? "", "daemon.env");
+    mkdirSync(dirname(envPath), { recursive: true });
+    writeFileSync(envPath, "HTTPS_PROXY=http://user-set:2\n");
+
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "not loaded" })
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "Could not find service" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "state = running\npid = 1\n", stderr: "" });
+
+    installClientService();
+
+    expect(readFileSync(envPath, "utf-8")).toBe("HTTPS_PROXY=http://user-set:2\n");
   });
 
   it("reports support by platform", () => {

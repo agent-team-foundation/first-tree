@@ -1,10 +1,19 @@
-import type {
-  KickoffOnboarding,
-  KickoffOnboardingResult,
-  OnboardingEvent,
-  OnboardingEventName,
-} from "@first-tree/shared";
+import type { OnboardingEvent, OnboardingEventName } from "@first-tree/shared";
 import { api } from "./client.js";
+
+export type StartChatKind = "intro" | "work" | "tree";
+
+export type StartOnboardingChatArgs = {
+  organizationId?: string;
+  agentUuid: string;
+  bootstrap: string;
+  kind: StartChatKind;
+  complete?: boolean;
+};
+
+export type StartOnboardingChatResult = {
+  chatId: string;
+};
 
 /**
  * Best-effort report of an onboarding-funnel milestone. Errors are
@@ -48,25 +57,34 @@ export async function markOnboardingCompleted(organizationId?: string): Promise<
 }
 
 /**
- * Run the idempotent server-side onboarding kickoff: create-or-reuse the first
- * chat, send the bootstrap message if the chat is empty, and optionally stamp
- * completion. Single-chat paths use the default stamp; multi-chat paths defer it
- * until every required kickoff side effect has succeeded.
+ * Run the idempotent server-side onboarding start-chat operation: create-or-reuse
+ * the first chat, send the bootstrap message if the chat is empty, and
+ * optionally stamp completion. Single-chat paths use the default stamp;
+ * multi-chat paths defer it until every required start-chat side effect has
+ * succeeded.
  *
- * NOT best-effort: a failure here means the kickoff didn't happen, so the caller
- * surfaces it and lets the user retry (the endpoint is safe to re-run).
+ * NOT best-effort: a failure here means start-chat didn't happen, so the caller
+ * surfaces it and lets the user retry. The server endpoint still uses the
+ * legacy `/kickoff` path while web-facing code uses start-chat language.
  */
-export async function kickoffOnboarding(args: KickoffOnboarding): Promise<KickoffOnboardingResult> {
-  return api.post<KickoffOnboardingResult>("/me/onboarding/kickoff", args);
+export async function postOnboardingStartChat(args: StartOnboardingChatArgs): Promise<StartOnboardingChatResult> {
+  return api.post<StartOnboardingChatResult>("/me/onboarding/kickoff", args);
 }
 
 export type TreeSetupStatus = {
   needsTreeSetup: boolean;
   hasTreeBinding: boolean;
-  hasTreeSetupKickoff: boolean;
+  hasTreeSetupStartChat: boolean;
 };
 
 export async function getTreeSetupStatus(organizationId: string): Promise<TreeSetupStatus> {
   const params = new URLSearchParams({ organizationId });
-  return api.get<TreeSetupStatus>(`/me/onboarding/tree-setup-status?${params.toString()}`);
+  const status = await api.get<TreeSetupStatus & { hasTreeSetupKickoff?: boolean }>(
+    `/me/onboarding/tree-setup-status?${params.toString()}`,
+  );
+  return {
+    needsTreeSetup: status.needsTreeSetup,
+    hasTreeBinding: status.hasTreeBinding,
+    hasTreeSetupStartChat: Boolean(status.hasTreeSetupStartChat ?? status.hasTreeSetupKickoff),
+  };
 }

@@ -23,6 +23,8 @@ export { handleClientOrgMismatch } from "./client-reidentify.js";
 export type { ClientRuntimeOptions } from "./client-runtime.js";
 // Client runtime
 export { ClientRuntime } from "./client-runtime.js";
+// User-owned daemon environment (proxy etc.) — read, never written by us
+export { daemonEnvPath, loadDaemonEnv, parseDaemonEnv } from "./daemon-env.js";
 // Diagnostics (doctor)
 export type { CheckResult } from "./doctor.js";
 export {

@@ -1,5 +1,5 @@
 /**
- * Kickoff bootstrap prose for onboarding-created chats. Prose, not shell
+ * Start-chat bootstrap prose for onboarding-created chats. Prose, not shell
  * recipes: the agent's workspace has the shipped First Tree skills
  * (`first-tree-welcome`, `first-tree-write`, `first-tree-read`,
  * `first-tree-seed`), and those skills own the concrete flow.
@@ -9,7 +9,7 @@
  * reads the actual bound tree content and chooses seed vs read/write from that
  * evidence. A mere binding does not imply a populated tree.
  *
- * Single source of truth: only the kickoff step sends these. If a future surface
+ * Single source of truth: only the start-chat step sends these. If a future surface
  * needs the same prompts, hoist these builders to `packages/shared`.
  */
 
@@ -26,31 +26,29 @@ export function buildValueFirstBootstrap(
     treeSetup: "none" | "pending" | "bound";
   },
 ): string {
-  const sourceLines = sourceUrls.length > 0 ? ["", ...formatSourceList(sourceUrls, "Connected code:")] : [];
-  const treeLine =
-    opts.treeSetup === "pending"
-      ? "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep team context setup in the separate setup chat."
-      : opts.treeSetup === "bound"
-        ? "Operational note: use the first-tree-welcome skill for this onboarding first chat. Use team context when helpful, but keep this chat focused on the first task."
-        : "Operational note: use the first-tree-welcome skill for this onboarding first chat. If the user shares code later, help from that code before asking about long-term setup.";
+  const sourceLines =
+    sourceUrls.length > 0 ? ["", ...formatSourceList(sourceUrls, "It's already connected to your code:")] : [];
+  const teamContextLines =
+    opts.treeSetup === "bound"
+      ? ["", `${opts.agentDisplayName} can also draw on your team's shared context to get up to speed faster.`]
+      : [];
 
   return [
-    `This is your first task chat with ${opts.agentDisplayName}.`,
+    `Welcome to First Tree — this is your first chat with ${opts.agentDisplayName}.`,
     ...sourceLines,
     "",
-    `${opts.agentDisplayName} will first read the available code and team context, then suggest a few small tasks you can start with.`,
-    "",
-    treeLine,
+    `${opts.agentDisplayName} will get oriented and then suggest a few small tasks you could start with — or just tell it what you have in mind.`,
+    ...teamContextLines,
   ].join("\n");
 }
 
 export function buildNoRepoBootstrap(agentDisplayName: string): string {
   return [
-    `This is your first chat with ${agentDisplayName}.`,
+    `Welcome to First Tree — this is your first chat with ${agentDisplayName}.`,
     "",
-    `No code is connected yet. Share a local folder path or a GitHub repo URL, and ${agentDisplayName} can start from there.`,
+    `Tell ${agentDisplayName} what you'd like to work on: point it at a folder on your computer or paste a GitHub URL, and it'll take a look and suggest a few things you could start with.`,
     "",
-    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Keep setup light and show value from real code first.",
+    `No GitHub connection needed to begin — ${agentDisplayName} works right from your machine. You can connect First Tree to GitHub later, only if a task needs it.`,
   ].join("\n");
 }
 
@@ -78,14 +76,10 @@ export function buildTreeSetupBootstrap(
  * recommended repos + Context Tree automatically, so the invitee never selects
  * repos or runs org setup. Keep the first chat value-first, not tree-authoring.
  */
-export function buildInviteeReadyBootstrap(agentDisplayName: string, treeUrl: string): string {
+export function buildInviteeReadyBootstrap(agentDisplayName: string): string {
   return [
-    `This is your first task chat with ${agentDisplayName}.`,
+    `Welcome to First Tree — this is your first chat with ${agentDisplayName}.`,
     "",
-    `Team context: ${treeUrl}`,
-    "",
-    `${agentDisplayName} will use the team's code and context to suggest a few small tasks you can start with.`,
-    "",
-    "Operational note: use the first-tree-welcome skill for this onboarding first chat. Do not make team context setup the invitee's first task.",
+    `Your team's shared context is already set up, so ${agentDisplayName} can get oriented from the team's work and suggest a few things to start with. Tell it what you'd like to dig into.`,
   ].join("\n");
 }
