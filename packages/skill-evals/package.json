@@ -9,6 +9,7 @@
     "eval:gate": "tsx src/index.ts gate",
     "eval:quality": "tsx src/index.ts quality",
     "eval:select": "tsx src/index.ts select",
+    "eval:summary": "tsx src/index.ts summary",
     "eval:compare": "tsx src/index.ts compare",
     "eval:first-tree-read": "tsx src/first-tree-read/index.ts",
     "test": "vitest run --passWithNoTests",

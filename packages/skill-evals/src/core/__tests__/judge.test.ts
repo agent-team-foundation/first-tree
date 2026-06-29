@@ -4,6 +4,14 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import {
+  FIRST_TREE_WELCOME_QUALITY_DEFINITION,
+  FIRST_TREE_WELCOME_QUALITY_SANITY_FIXTURES,
+} from "../../suites/first-tree-welcome/quality.js";
+import {
+  FIRST_TREE_WRITE_QUALITY_DEFINITION,
+  FIRST_TREE_WRITE_QUALITY_SANITY_FIXTURES,
+} from "../../suites/first-tree-write/quality.js";
 import { runQualityEval } from "../../suites/quality/runner.js";
 import type { QualityArtifactInput } from "../../suites/quality/types.js";
 import { codexJudgeArgs, codexJudgeEnv } from "../judge/codex.js";
@@ -274,6 +282,36 @@ describe("quality runner with fake judge", () => {
       expect(batch.cases[0]?.failures[0]).toMatch(/deterministic gate durable-source-writes failed/u);
     } finally {
       rmSync(packageRoot, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("quality rubric sanity fixtures", () => {
+  it("keeps first-tree-write good, borderline, and bad fixtures aligned with thresholds", () => {
+    for (const fixture of FIRST_TREE_WRITE_QUALITY_SANITY_FIXTURES) {
+      const prompt = FIRST_TREE_WRITE_QUALITY_DEFINITION.buildJudgePrompt(fixture.input);
+      const evaluation = evaluateJudgeOutput(
+        parseJudgeJson(fixture.judgeOutput, FIRST_TREE_WRITE_QUALITY_DEFINITION.dimensions),
+        FIRST_TREE_WRITE_QUALITY_DEFINITION.dimensions,
+      );
+
+      expect(prompt).toContain(fixture.input.artifact);
+      expect(prompt).toContain(fixture.input.source);
+      expect(evaluation.passed, fixture.name).toBe(fixture.expectedPassed);
+    }
+  });
+
+  it("keeps first-tree-welcome good, borderline, and bad fixtures aligned with thresholds", () => {
+    for (const fixture of FIRST_TREE_WELCOME_QUALITY_SANITY_FIXTURES) {
+      const prompt = FIRST_TREE_WELCOME_QUALITY_DEFINITION.buildJudgePrompt(fixture.input);
+      const evaluation = evaluateJudgeOutput(
+        parseJudgeJson(fixture.judgeOutput, FIRST_TREE_WELCOME_QUALITY_DEFINITION.dimensions),
+        FIRST_TREE_WELCOME_QUALITY_DEFINITION.dimensions,
+      );
+
+      expect(prompt).toContain(fixture.input.artifact);
+      expect(prompt).toContain(fixture.input.source);
+      expect(evaluation.passed, fixture.name).toBe(fixture.expectedPassed);
     }
   });
 });

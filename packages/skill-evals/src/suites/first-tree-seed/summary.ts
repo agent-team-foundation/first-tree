@@ -147,6 +147,8 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
     summary.metrics.forbiddenSideEffectHits.length === 0 ? "none" : summary.metrics.forbiddenSideEffectHits.join(", ")
   }
 - runnerExitCode: ${summary.metrics.runnerExitCode === null ? "n/a" : summary.metrics.runnerExitCode}
+- turns: ${summary.turns ?? "n/a"}
+- firstResponseLatencyMs: ${summary.firstResponseLatencyMs ?? "n/a"}
 - gradingJsonPath: \`${summary.gradingJsonPath}\`
 
 ## Grading

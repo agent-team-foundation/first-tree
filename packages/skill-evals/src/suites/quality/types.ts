@@ -25,6 +25,13 @@ export type QualityExpected = {
   rubric: string;
 };
 
+export type QualitySanityFixture = {
+  expectedPassed: boolean;
+  input: QualityArtifactInput;
+  judgeOutput: string;
+  name: "bad" | "borderline" | "good";
+};
+
 export type QualityEvalCase = SkillEvalCase<QualityFixture, QualityExpected> & {
   provider: "codex";
   skill: QualitySkillName;

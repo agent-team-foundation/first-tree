@@ -82,6 +82,7 @@ export type CaseRunSummary = {
   caseId: string;
   driftNote: string | null;
   expectedAction: ExpectedAction;
+  firstResponseLatencyMs: number | null;
   fixtureValidation: FixtureValidation;
   grading: SkillCaseGrading;
   gradingJsonPath: string;
@@ -92,6 +93,7 @@ export type CaseRunSummary = {
   startedAt: string;
   summaryJsonPath: string;
   summaryMdPath: string;
+  turns: number | null;
   workspacePath: string;
 };
 
