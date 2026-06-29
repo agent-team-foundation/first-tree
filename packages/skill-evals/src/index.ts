@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { SHIPPED_SKILLS, type ShippedSkillName } from "./core/case-schema.js";
 import { type SkillEvalSuiteDefinition, validateCoverageMatrix } from "./core/coverage.js";
 import { isRecord } from "./core/events.js";
+import { gradingFailureMessages } from "./core/grading.js";
 import {
   appendResultStoreEntries,
   compareResultGroups,
@@ -74,7 +75,7 @@ function usage(): string {
 
 Commands:
   floor                  Run no-model schema, coverage, and skill-file checks.
-  gate                   Run a live model gate suite.
+  gate                   Run a live model gate suite and write grading.json.
   quality                Run opt-in LLM-as-judge quality cases.
   select                 Recommend eval commands from changed files.
   compare                Compare latest result-store run groups.
@@ -328,21 +329,21 @@ function writeFloorArtifact(
   packageRootPath: string,
   summary: FloorSummary,
   runGroupId: string,
-): { runRoot: string; summaryJsonPath: string; summaryMdPath: string } {
+): { gradingJsonPath: string | null; runRoot: string; summaryJsonPath: string; summaryMdPath: string } {
   const runRoot = join(packageRootPath, ".runs", runGroupId);
   const summaryJsonPath = join(runRoot, "summary.json");
   const summaryMdPath = join(runRoot, "summary.md");
   mkdirSync(runRoot, { recursive: true });
   writeFileSync(summaryJsonPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   writeFileSync(summaryMdPath, `${formatFloorSummary(summary)}\n`, "utf8");
-  return { runRoot, summaryJsonPath, summaryMdPath };
+  return { gradingJsonPath: null, runRoot, summaryJsonPath, summaryMdPath };
 }
 
 function floorResultEntries(
   packageRootPath: string,
   summary: FloorSummary,
   options: {
-    artifact: { runRoot: string; summaryJsonPath: string; summaryMdPath: string };
+    artifact: { gradingJsonPath: string | null; runRoot: string; summaryJsonPath: string; summaryMdPath: string };
     base: string | null;
     durationMs: number;
     runGroupId: string;
@@ -386,6 +387,7 @@ function gateResultEntries(
     const durationMs = Math.max(0, Date.now() - Date.parse(summary.startedAt));
     return {
       artifact: {
+        gradingJsonPath: summary.gradingJsonPath,
         runRoot: summary.runRoot,
         summaryJsonPath: summary.summaryJsonPath,
         summaryMdPath: summary.summaryMdPath,
@@ -394,7 +396,9 @@ function gateResultEntries(
       command: "eval:gate",
       costUsd: null,
       durationMs,
-      failures: summary.passed ? [] : [summary.driftNote ?? "gate case failed"],
+      failures: summary.passed
+        ? []
+        : [...gradingFailureMessages(summary.grading), ...(summary.driftNote ? [`drift: ${summary.driftNote}`] : [])],
       git,
       judgeScores: null,
       model: options.model,
@@ -422,6 +426,7 @@ function qualityResultEntries(
     (summary) =>
       ({
         artifact: {
+          gradingJsonPath: null,
           runRoot: summary.runRoot,
           summaryJsonPath: summary.summaryJsonPath,
           summaryMdPath: summary.summaryMdPath,

@@ -21,6 +21,7 @@ function tempPackageRoot(): string {
 function entry(overrides: Partial<ResultStoreEntry> = {}): ResultStoreEntry {
   return {
     artifact: {
+      gradingJsonPath: "/tmp/run/grading.json",
       runRoot: "/tmp/run",
       summaryJsonPath: "/tmp/run/summary.json",
       summaryMdPath: "/tmp/run/summary.md",
@@ -59,6 +60,7 @@ describe("result store", () => {
       const entries = readResultStore(packageRoot);
       expect(entries).toHaveLength(1);
       expect(entries[0]?.caseId).toBe("durable-source-writes");
+      expect(entries[0]?.artifact.gradingJsonPath).toBe("/tmp/run/grading.json");
       expect(entries[0]?.artifact.summaryJsonPath).toBe("/tmp/run/summary.json");
     } finally {
       rmSync(packageRoot, { force: true, recursive: true });

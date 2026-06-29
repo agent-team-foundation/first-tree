@@ -1,5 +1,7 @@
 import { writeFileSync } from "node:fs";
 
+import { evidence, gradingMarkdownRows, riskFlag, writeGradingJson } from "../../core/grading.js";
+import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { BatchSummary, CaseRunSummary, EvalMetrics, FixtureValidation } from "./types.js";
 
 const HELP_ARGV = ["tree", "tree", "--help"];
@@ -85,6 +87,73 @@ export function driftNote(metrics: EvalMetrics, expectedTrigger: boolean): strin
   return notes.length > 0 ? notes.join(" ") : null;
 }
 
+export function buildGrading(
+  caseId: string,
+  metrics: EvalMetrics,
+  expectedTrigger: boolean,
+  passed: boolean,
+): SkillCaseGrading {
+  const unexpectedReadUse =
+    metrics.skillHit || metrics.firstTreeCalls > 0 || metrics.firstTreeCommandResults.length > 0;
+  const routingPass = expectedTrigger ? metrics.skillFileReadObserved : !unexpectedReadUse;
+  const processPass = expectedTrigger
+    ? metrics.fixtureValidationOk &&
+      metrics.runnerExitCode === 0 &&
+      metrics.helpSucceeded &&
+      metrics.selectionSucceeded &&
+      metrics.modelFirstTreeCommandsOk
+    : metrics.fixtureValidationOk &&
+      metrics.runnerExitCode === 0 &&
+      metrics.firstTreeCalls === 0 &&
+      metrics.firstTreeCommandResults.length === 0 &&
+      metrics.modelFirstTreeCommandsOk;
+  const outcomePass = expectedTrigger ? metrics.expectedFactsObserved : metrics.expectedFactHits.length === 0;
+  const riskPass = metrics.modelFirstTreeCommandsOk;
+  const failedCommands = metrics.firstTreeCommandResults.filter((result) => result.exitCode !== 0);
+
+  return {
+    caseId,
+    evidence: [
+      evidence(
+        "routing_pass",
+        expectedTrigger
+          ? `trigger case skill file read observed=${metrics.skillFileReadObserved}`
+          : `non-trigger case unexpected skill/tree usage observed=${unexpectedReadUse}`,
+      ),
+      evidence(
+        "process_pass",
+        expectedTrigger
+          ? `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; help succeeded=${metrics.helpSucceeded}; selector succeeded=${metrics.selectionSucceeded}; first-tree commands ok=${metrics.modelFirstTreeCommandsOk}`
+          : `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; model first-tree calls=${metrics.firstTreeCalls}; first-tree results=${metrics.firstTreeCommandResults.length}`,
+      ),
+      evidence(
+        "outcome_pass",
+        expectedTrigger
+          ? `expected facts observed=${metrics.expectedFactsObserved}; hits=${metrics.expectedFactHits.join(" | ") || "none"}`
+          : `off-topic expected fact hits=${metrics.expectedFactHits.join(" | ") || "none"}`,
+      ),
+      evidence(
+        "risk_pass",
+        failedCommands.length === 0
+          ? "no failed model-phase first-tree commands observed"
+          : `failed model-phase first-tree commands=${failedCommands
+              .map((result) => `${formatCommand(result.argv)} => ${result.exitCode}`)
+              .join("; ")}`,
+      ),
+    ],
+    passed,
+    riskFlags: failedCommands.map((result) =>
+      riskFlag("failed_first_tree_command", `first-tree ${formatCommand(result.argv)} exited ${result.exitCode}`),
+    ),
+    scores: {
+      outcome_pass: outcomePass,
+      process_pass: processPass,
+      risk_pass: riskPass,
+      routing_pass: routingPass,
+    },
+  };
+}
+
 function validationRows(validation: FixtureValidation): string {
   return [
     `- ok: ${markdownBool(validation.ok)}`,
@@ -109,6 +178,7 @@ function expectedFactRows(metrics: EvalMetrics): string {
 }
 
 export function writeCaseSummaries(summary: CaseRunSummary): void {
+  writeGradingJson(summary.gradingJsonPath, summary.grading);
   writeFileSync(summary.summaryJsonPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
 
   const drift = summary.driftNote ? `\n## Drift Evidence\n\n${summary.driftNote}\n` : "";
@@ -126,6 +196,11 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - modelFirstTreeCommandsOk: ${markdownBool(summary.metrics.modelFirstTreeCommandsOk)}
 - firstTreeCalls: ${summary.metrics.firstTreeCalls}
 - runnerExitCode: ${summary.metrics.runnerExitCode === null ? "n/a" : summary.metrics.runnerExitCode}
+- gradingJsonPath: \`${summary.gradingJsonPath}\`
+
+## Grading
+
+${gradingMarkdownRows(summary.grading)}
 
 ## Prompt
 

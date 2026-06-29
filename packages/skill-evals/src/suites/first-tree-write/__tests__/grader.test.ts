@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { FIRST_TREE_WRITE_GATE_CASES } from "../cases.js";
 import { casePassed } from "../grader.js";
+import { buildGrading } from "../summary.js";
 import type { EvalMetrics, FirstTreeWriteEvalCase } from "../types.js";
 
 function findCase(id: string): FirstTreeWriteEvalCase {
@@ -38,16 +39,23 @@ describe("first-tree-write grader", () => {
   });
 
   it("fails no-source when the tree changed", () => {
-    expect(
-      casePassed(
-        findCase("no-source-refuses"),
-        baseMetrics({
-          treeChanged: true,
-          treeDiff: "+Unexpected write\n",
-          treeStatus: " M system/context-management/skill-eval-framework.md\n",
-        }),
-      ),
-    ).toBe(false);
+    const evalCase = findCase("no-source-refuses");
+    const metrics = baseMetrics({
+      treeChanged: true,
+      treeDiff: "+Unexpected write\n",
+      treeStatus: " M system/context-management/skill-eval-framework.md\n",
+    });
+
+    expect(casePassed(evalCase, metrics)).toBe(false);
+
+    const grading = buildGrading(evalCase, metrics, casePassed(evalCase, metrics));
+    expect(grading.scores).toEqual({
+      outcome_pass: false,
+      process_pass: true,
+      risk_pass: false,
+      routing_pass: true,
+    });
+    expect(grading.riskFlags.map((flag) => flag.label)).toContain("unexpected_tree_write");
   });
 
   it("passes durable source when the tree changes and verify succeeds", () => {

@@ -5,7 +5,7 @@ import { createEvalReporter } from "../../core/reporter.js";
 import { createFirstTreeShim } from "../../core/shims/first-tree.js";
 import { setupFixture, validateFixture } from "./fixture.js";
 import { casePassed, deriveMetrics, driftNote } from "./grader.js";
-import { writeCaseSummaries } from "./summary.js";
+import { buildGrading, writeCaseSummaries } from "./summary.js";
 import type { CaseRunSummary, CliOptions, FirstTreeWriteEvalCase } from "./types.js";
 
 export async function runFirstTreeWriteCase(
@@ -47,12 +47,15 @@ export async function runFirstTreeWriteCase(
     contextTreePath,
   );
   const passed = casePassed(evalCase, metrics);
+  const grading = buildGrading(evalCase, metrics, passed);
 
   const summary: CaseRunSummary = {
     caseId: evalCase.id,
     driftNote: driftNote(evalCase, metrics),
     expectedAction: evalCase.expected.action,
     fixtureValidation,
+    grading,
+    gradingJsonPath: paths.gradingJsonPath,
     metrics,
     passed,
     prompt: evalCase.prompt,

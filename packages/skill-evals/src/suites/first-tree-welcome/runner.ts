@@ -7,7 +7,7 @@ import { createFirstTreeStagingShim } from "../../core/shims/first-tree-staging.
 import { createGhShim } from "../../core/shims/gh.js";
 import { setupFixture, validateFixture } from "./fixture.js";
 import { casePassed, deriveMetrics, driftNote } from "./grader.js";
-import { writeCaseSummaries } from "./summary.js";
+import { buildGrading, writeCaseSummaries } from "./summary.js";
 import type { CaseRunSummary, CliOptions, FirstTreeWelcomeEvalCase } from "./types.js";
 
 export async function runFirstTreeWelcomeCase(
@@ -51,12 +51,15 @@ export async function runFirstTreeWelcomeCase(
     contextTreePath,
   );
   const passed = casePassed(evalCase, metrics);
+  const grading = buildGrading(evalCase, metrics, passed);
 
   const summary: CaseRunSummary = {
     caseId: evalCase.id,
     driftNote: driftNote(evalCase, metrics),
     expectedAction: evalCase.expected.action,
     fixtureValidation,
+    grading,
+    gradingJsonPath: paths.gradingJsonPath,
     metrics,
     passed,
     prompt: evalCase.prompt,

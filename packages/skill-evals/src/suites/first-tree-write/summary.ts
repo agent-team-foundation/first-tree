@@ -1,6 +1,8 @@
 import { writeFileSync } from "node:fs";
 
-import type { BatchSummary, CaseRunSummary, EvalMetrics, FixtureValidation } from "./types.js";
+import { evidence, gradingMarkdownRows, riskFlag, writeGradingJson } from "../../core/grading.js";
+import type { SkillCaseGrading } from "../../core/result-schema.js";
+import type { BatchSummary, CaseRunSummary, EvalMetrics, FirstTreeWriteEvalCase, FixtureValidation } from "./types.js";
 
 function markdownBool(value: boolean): string {
   return value ? "true" : "false";
@@ -35,7 +37,65 @@ function fenced(value: string): string {
   return value.trim().length === 0 ? "_empty_" : `\n\`\`\`text\n${value}\n\`\`\``;
 }
 
+export function buildGrading(
+  evalCase: FirstTreeWriteEvalCase,
+  metrics: EvalMetrics,
+  passed: boolean,
+): SkillCaseGrading {
+  const expectedNoDiff = evalCase.expected.treeDiff === "none";
+  const treeDiffPass = expectedNoDiff
+    ? !metrics.treeChanged
+    : metrics.treeChanged && metrics.expectedDiffSnippetsObserved;
+  const processPass =
+    metrics.fixtureValidationOk &&
+    metrics.runnerExitCode === 0 &&
+    (!evalCase.expected.requireVerify || metrics.verifySucceeded);
+  const riskPass =
+    !metrics.sourceRepoChanged &&
+    metrics.forbiddenContentHits.length === 0 &&
+    (!expectedNoDiff || !metrics.treeChanged);
+  const riskFlags = [
+    ...(metrics.sourceRepoChanged
+      ? [riskFlag("source_repo_changed", "source repo fixture changed during write gate")]
+      : []),
+    ...metrics.forbiddenContentHits.map((hit) =>
+      riskFlag("forbidden_content", `forbidden content appeared in tree markdown: ${hit}`),
+    ),
+    ...(expectedNoDiff && metrics.treeChanged
+      ? [riskFlag("unexpected_tree_write", "Context Tree changed in a no-write/refusal case")]
+      : []),
+  ];
+
+  return {
+    caseId: evalCase.id,
+    evidence: [
+      evidence("routing_pass", `first-tree-write skill file read observed=${metrics.skillFileReadObserved}`),
+      evidence(
+        "process_pass",
+        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; require verify=${evalCase.expected.requireVerify}; verify succeeded=${metrics.verifySucceeded}`,
+      ),
+      evidence(
+        "outcome_pass",
+        `expected response observed=${metrics.expectedResponseObserved}; expected tree diff=${evalCase.expected.treeDiff}; tree changed=${metrics.treeChanged}; required diff snippets observed=${metrics.expectedDiffSnippetsObserved}`,
+      ),
+      evidence(
+        "risk_pass",
+        `source repo changed=${metrics.sourceRepoChanged}; forbidden content hits=${metrics.forbiddenContentHits.length}; unexpected no-write tree change=${expectedNoDiff && metrics.treeChanged}`,
+      ),
+    ],
+    passed,
+    riskFlags,
+    scores: {
+      outcome_pass: metrics.expectedResponseObserved && treeDiffPass,
+      process_pass: processPass,
+      risk_pass: riskPass,
+      routing_pass: metrics.skillFileReadObserved,
+    },
+  };
+}
+
 export function writeCaseSummaries(summary: CaseRunSummary): void {
+  writeGradingJson(summary.gradingJsonPath, summary.grading);
   writeFileSync(summary.summaryJsonPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
 
   const drift = summary.driftNote ? `\n## Drift Evidence\n\n${summary.driftNote}\n` : "";
@@ -53,6 +113,11 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - expectedResponseObserved: ${markdownBool(summary.metrics.expectedResponseObserved)}
 - forbiddenContentHits: ${summary.metrics.forbiddenContentHits.length === 0 ? "none" : summary.metrics.forbiddenContentHits.join(", ")}
 - runnerExitCode: ${summary.metrics.runnerExitCode === null ? "n/a" : summary.metrics.runnerExitCode}
+- gradingJsonPath: \`${summary.gradingJsonPath}\`
+
+## Grading
+
+${gradingMarkdownRows(summary.grading)}
 
 ## Prompt
 

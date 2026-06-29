@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
+import { gradingFailureMessages } from "../../../core/grading.js";
 import { casePassed, deriveMetrics } from "../metrics.js";
+import { buildGrading } from "../summary.js";
 import type { EvalMetrics, FixtureValidation } from "../types.js";
 
 const HELP_ARGV = ["tree", "tree", "--help"];
@@ -184,6 +186,25 @@ describe("first-tree-read metrics pass criteria", () => {
     expect(result.helpSucceeded).toBe(true);
     expect(result.selectionSucceeded).toBe(false);
     expect(casePassed(true, result)).toBe(false);
+  });
+
+  it("maps trigger process failures into deterministic grading output", () => {
+    const result = metrics([
+      skillReadEvent(),
+      firstTreeCall(HELP_ARGV),
+      firstTreeResult(HELP_ARGV, 0),
+      assistantTextEvent(`The tree says ${EXPECTED_FACT}.`),
+    ]);
+    const grading = buildGrading("read-grading-test", result, true, casePassed(true, result));
+
+    expect(grading.passed).toBe(false);
+    expect(grading.scores).toEqual({
+      outcome_pass: true,
+      process_pass: false,
+      risk_pass: true,
+      routing_pass: true,
+    });
+    expect(gradingFailureMessages(grading)[0]).toContain("process_pass=false");
   });
 
   it("keeps non-trigger cases green when no skill hit, facts, or commands occur", () => {

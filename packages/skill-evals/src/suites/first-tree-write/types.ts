@@ -1,3 +1,4 @@
+import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
 export type SourceArtifactKind = "absent" | "durable-decision-note" | "implementation-only-diff";
@@ -82,6 +83,8 @@ export type CaseRunSummary = {
   driftNote: string | null;
   expectedAction: ExpectedAction;
   fixtureValidation: FixtureValidation;
+  grading: SkillCaseGrading;
+  gradingJsonPath: string;
   metrics: EvalMetrics;
   passed: boolean;
   prompt: string;

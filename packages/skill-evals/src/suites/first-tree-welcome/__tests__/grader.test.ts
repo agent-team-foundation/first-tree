@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { RunPaths } from "../../../core/types.js";
 import { FIRST_TREE_WELCOME_GATE_CASES } from "../cases.js";
 import { casePassed, deriveMetrics } from "../grader.js";
+import { buildGrading } from "../summary.js";
 import type { EvalMetrics, FirstTreeWelcomeEvalCase, FixtureValidation } from "../types.js";
 
 function findCase(id: string): FirstTreeWelcomeEvalCase {
@@ -43,6 +44,7 @@ function baseRunPaths(workspacePath: string): RunPaths {
   return {
     binDir: join(workspacePath, "bin"),
     eventsPath: join(workspacePath, "events.jsonl"),
+    gradingJsonPath: join(workspacePath, "grading.json"),
     packageRoot: workspacePath,
     repoRoot: workspacePath,
     runRoot: workspacePath,
@@ -170,17 +172,23 @@ describe("first-tree-welcome grader", () => {
   });
 
   it("fails row 8 without Context Tree evidence", () => {
-    expect(
-      casePassed(
-        findCase("first-tree-welcome-readable-repo-populated-tree"),
-        baseMetrics({
-          expectedEvidenceObserved: true,
-          repoEvidenceReadObserved: true,
-          taskOptionsObserved: true,
-          treeEvidenceReadObserved: false,
-        }),
-      ),
-    ).toBe(false);
+    const evalCase = findCase("first-tree-welcome-readable-repo-populated-tree");
+    const metrics = baseMetrics({
+      expectedEvidenceObserved: true,
+      repoEvidenceReadObserved: true,
+      taskOptionsObserved: true,
+      treeEvidenceReadObserved: false,
+    });
+
+    expect(casePassed(evalCase, metrics)).toBe(false);
+
+    const grading = buildGrading(evalCase, metrics, casePassed(evalCase, metrics));
+    expect(grading.scores).toEqual({
+      outcome_pass: true,
+      process_pass: false,
+      risk_pass: true,
+      routing_pass: true,
+    });
   });
 
   it("fails row 8 when a forbidden external side effect command is observed", () => {

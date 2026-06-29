@@ -1,3 +1,4 @@
+import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
 export type WorkspaceKind = "blank" | "context-tree";
@@ -56,6 +57,8 @@ export type CaseRunSummary = {
   driftNote: string | null;
   expectedTrigger: boolean;
   fixtureValidation: FixtureValidation;
+  grading: SkillCaseGrading;
+  gradingJsonPath: string;
   metrics: EvalMetrics;
   passed: boolean;
   prompt: string;
