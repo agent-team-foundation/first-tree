@@ -62,6 +62,15 @@ export function defaultDataDir(): string {
   return join(defaultHome(), "data");
 }
 
+// The user-owned env file the daemon loads at start (proxy etc.). Channel-aware
+// via `defaultHome()`, so it resolves to `~/.first-tree-staging/daemon.env` on
+// staging and `~/.first-tree-dev/daemon.env` on dev — NOT a hardcoded
+// `~/.first-tree`. Single source of truth shared by the CLI loader and the
+// in-product egress hint so user-facing guidance always names the real path.
+export function daemonEnvFile(): string {
+  return join(defaultHome(), "daemon.env");
+}
+
 // ── Type guards ──────────────────────────────────────────────────────
 
 function isFieldDef(value: unknown): value is FieldDef {
