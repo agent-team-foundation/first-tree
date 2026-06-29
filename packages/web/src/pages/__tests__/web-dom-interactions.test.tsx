@@ -1878,6 +1878,34 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
+  it("skips the create-agent step when the member already has a personal agent", async () => {
+    authMock.value = { ...authMock.value, currentOrgHasPersonalAgent: true };
+    const { StepCreateAgent } = await import("../onboarding/steps/step-create-agent.js");
+    const { flow, root } = await renderOnboardingDom(<StepCreateAgent />, {
+      activeStep: "create-agent",
+      agentPhase: "idle",
+    });
+    await flush();
+    // A fresh re-entry (refresh / new tab) after the agent already came online
+    // but before start-chat lands back here; advancing past the form keeps the
+    // member from creating a duplicate agent.
+    expect(flow.goNext).toHaveBeenCalledTimes(1);
+    expect(flow.createAgent).not.toHaveBeenCalled();
+    await unmountRoot(root);
+  });
+
+  it("shows the create-agent form when the member has no personal agent yet", async () => {
+    authMock.value = { ...authMock.value, currentOrgHasPersonalAgent: false };
+    const { StepCreateAgent } = await import("../onboarding/steps/step-create-agent.js");
+    const { flow, root } = await renderOnboardingDom(<StepCreateAgent />, {
+      activeStep: "create-agent",
+      agentPhase: "idle",
+    });
+    await flush();
+    expect(flow.goNext).not.toHaveBeenCalled();
+    await unmountRoot(root);
+  });
+
   it("drives StepStartChat admin and invitee start flows", async () => {
     const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     const findButton = (container: ParentNode, text: string): HTMLButtonElement | null =>

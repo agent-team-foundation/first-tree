@@ -1,6 +1,7 @@
 import type { AgentVisibility } from "@first-tree/shared";
 import { ArrowRight } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { useAuth } from "../../../auth/auth-context.js";
 import { Button } from "../../../components/ui/button.js";
 import { Input } from "../../../components/ui/input.js";
 import { OptionCard } from "../../../components/ui/option-card.js";
@@ -44,9 +45,27 @@ export function StepCreateAgent() {
     finishLater,
     agentPhase,
     agentError,
+    goNext,
     goTo,
     sequence,
   } = useOnboardingFlow();
+  const { currentOrgHasPersonalAgent } = useAuth();
+
+  // Fresh onboarding entry always lands on the opening step and walks forward
+  // (inferInitialStepIndex ignores server readiness), so a member who already
+  // created their personal agent in this org — e.g. a refresh / new tab after
+  // the agent came online but before start-chat — can reach this step again.
+  // Creating here would make a duplicate agent, so skip straight past the form.
+  // Gated on `idle` + the one-shot ref so it never double-advances the normal
+  // create path, which advances itself via the flow's onAgentOnline -> goNext.
+  const skippedExistingAgent = useRef(false);
+  useEffect(() => {
+    if (skippedExistingAgent.current) return;
+    if (currentOrgHasPersonalAgent && agentPhase === "idle") {
+      skippedExistingAgent.current = true;
+      goNext();
+    }
+  }, [currentOrgHasPersonalAgent, agentPhase, goNext]);
 
   const trimmed = agentDisplayName.trim();
   const canCreate =
