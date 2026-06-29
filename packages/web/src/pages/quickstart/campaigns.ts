@@ -17,7 +17,8 @@
  */
 export const QUICKSTART_AGENT_NAME = "Cedar";
 
-export type CampaignSlug = "production-scan" | "agent-readiness";
+export const CAMPAIGN_SLUGS = ["production-scan", "agent-readiness"] as const;
+export type CampaignSlug = (typeof CAMPAIGN_SLUGS)[number];
 
 export type CampaignBootstrapArgs = {
   agentDisplayName: string;
@@ -69,7 +70,7 @@ const CAMPAIGNS: Record<CampaignSlug, CampaignConfig> = {
 };
 
 export function isKnownCampaign(slug: unknown): slug is CampaignSlug {
-  return typeof slug === "string" && Object.hasOwn(CAMPAIGNS, slug);
+  return typeof slug === "string" && CAMPAIGN_SLUGS.some((known) => known === slug);
 }
 
 export function getCampaign(slug: string | null | undefined): CampaignConfig | null {

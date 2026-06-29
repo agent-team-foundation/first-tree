@@ -20,6 +20,7 @@ import { LoginPage } from "./pages/login.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
+import { QuickstartPage } from "./pages/quickstart/quickstart-page.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsContextTreePage } from "./pages/settings/context-tree.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
@@ -321,6 +322,10 @@ export function App() {
                 /onboarding route (below); the workspace root redirects users
                 who haven't finished setup into it. */}
               <Route element={<RequireAuth />}>
+                {/* Reusable growth quickstart — full-screen, outside the
+                    workspace chrome. Login guard only; it owns its own campaign
+                    completion semantics and never writes onboarding stamps. */}
+                <Route path="/quickstart" element={<QuickstartPage />} />
                 {/* Standalone onboarding — full-screen, outside the workspace
                     chrome. The workspace root redirects incomplete users
                     here; this route redirects back once setup is complete. */}
