@@ -80,12 +80,17 @@ type AuthContextValue = {
    * `true` when the currently selected org holds a non-human agent this
    * member can use — one they manage themselves OR one set to
    * `visibility="organization"`. Sourced from `/me`'s per-membership
-   * `hasUsableAgent`. This is the org-scoped readiness the onboarding gate
-   * uses for the create-agent step, replacing the account-level
-   * `onboardingCompletedAt` short-circuit (which wrongly skipped onboarding
-   * for a returning user joining a brand-new / all-private org).
+   * `hasUsableAgent`. This is the general product availability bit for team
+   * and chat surfaces; onboarding uses `currentOrgHasPersonalAgent` instead.
    */
   currentOrgHasUsableAgent: boolean;
+  /**
+   * `true` when the currently selected membership manages at least one active
+   * non-human agent in the org. This is onboarding's create-agent readiness
+   * bit; a team-shared org-visible agent owned by another member does not
+   * satisfy it.
+   */
+  currentOrgHasPersonalAgent: boolean;
   onboardingStep: "connect" | "create_agent" | "completed" | null;
   /**
    * ISO timestamp when the user dismissed onboarding ("finish later").
@@ -506,6 +511,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         teamDisplayName: currentMembership?.organizationName ?? null,
         orgHasOtherMembers: currentMembership?.orgHasOtherMembers ?? false,
         currentOrgHasUsableAgent: currentMembership?.hasUsableAgent ?? false,
+        currentOrgHasPersonalAgent: currentMembership?.hasPersonalAgent ?? false,
         onboardingStep,
         onboardingDismissedAt: currentOnboardingDismissedAt,
         onboardingCompletedAt: currentOnboardingCompletedAt,

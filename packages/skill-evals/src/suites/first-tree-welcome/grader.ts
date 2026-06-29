@@ -1,0 +1,535 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+
+import { runCommand } from "../../core/commands.js";
+import { findStringValue, isRecord, isStringArray } from "../../core/events.js";
+import type { RunPaths } from "../../core/types.js";
+import type { EvalMetrics, FirstTreeWelcomeEvalCase, FixtureValidation } from "./types.js";
+
+const TEXT_KEYS = ["content", "message", "output_text", "text"];
+
+function eventType(event: Record<string, unknown>): string | null {
+  return typeof event.type === "string" ? event.type : null;
+}
+
+function isModelPhase(event: Record<string, unknown>): boolean {
+  return event.phase === "model";
+}
+
+function containsSkillFileRead(event: unknown): boolean {
+  if (!isRecord(event)) return false;
+  if (eventType(event) !== "codex_event") return false;
+
+  const nestedEvent = event.event;
+  if (!findStringValue(nestedEvent, (value) => value.includes("first-tree-welcome/SKILL.md"))) {
+    return false;
+  }
+
+  const serialized = JSON.stringify(nestedEvent) ?? "";
+  if (serialized.includes("Available Skills")) return false;
+  return /tool|exec|command|cmd|read|cat|sed/iu.test(serialized);
+}
+
+function containsPathAccess(event: unknown, patterns: readonly string[]): boolean {
+  if (!isRecord(event)) return false;
+  if (eventType(event) !== "codex_event") return false;
+  const serialized = JSON.stringify(event.event) ?? "";
+  if (!/tool|exec|command|cmd|read|cat|sed|rg|ls/iu.test(serialized)) return false;
+  return patterns.some((pattern) => serialized.includes(pattern));
+}
+
+function isAssistantMessageRecord(record: Record<string, unknown>): boolean {
+  const type = eventType(record);
+  const role = typeof record.role === "string" ? record.role : null;
+
+  if (type === "agent_message" || type === "assistant_message") return true;
+  if (type === "message" && (role === null || role === "assistant")) return true;
+  if (type === "output_text" || type === "response.output_text.done") return true;
+
+  return false;
+}
+
+function collectTextValue(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) {
+    const texts: string[] = [];
+    for (const item of value) {
+      texts.push(...collectTextValue(item));
+    }
+    return texts;
+  }
+  if (!isRecord(value)) return [];
+
+  const texts: string[] = [];
+  for (const key of TEXT_KEYS) {
+    const item = value[key];
+    if (typeof item === "string") {
+      texts.push(item);
+    } else if (Array.isArray(item)) {
+      texts.push(...collectTextValue(item));
+    }
+  }
+  return texts;
+}
+
+function collectAssistantText(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    const texts: string[] = [];
+    for (const item of value) {
+      texts.push(...collectAssistantText(item));
+    }
+    return texts;
+  }
+  if (!isRecord(value)) return [];
+
+  const texts: string[] = [];
+  if (isAssistantMessageRecord(value)) {
+    texts.push(...collectTextValue(value));
+  }
+
+  const item = value.item;
+  if (isRecord(item)) {
+    texts.push(...collectAssistantText(item));
+  }
+
+  const message = value.message;
+  if (isRecord(message)) {
+    texts.push(...collectAssistantText(message));
+  }
+
+  const response = value.response;
+  if (isRecord(response) || Array.isArray(response)) {
+    texts.push(...collectAssistantText(response));
+  }
+
+  const output = value.output;
+  if (Array.isArray(output)) {
+    texts.push(...collectAssistantText(output));
+  }
+
+  return texts;
+}
+
+function collectModelOutputText(event: unknown): string[] {
+  if (!isRecord(event)) return [];
+  if (eventType(event) !== "codex_event") return [];
+  return collectAssistantText(event.event);
+}
+
+function collectCommandStrings(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    const commands: string[] = [];
+    for (const item of value) {
+      commands.push(...collectCommandStrings(item));
+    }
+    return commands;
+  }
+  if (!isRecord(value)) return [];
+
+  const commands: string[] = [];
+  const command = value.command;
+  if (typeof command === "string") commands.push(command);
+  const cmd = value.cmd;
+  if (typeof cmd === "string") commands.push(cmd);
+
+  for (const item of Object.values(value)) {
+    if (isRecord(item) || Array.isArray(item)) {
+      commands.push(...collectCommandStrings(item));
+    }
+  }
+  return commands;
+}
+
+function normalizeForMatch(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function containsAny(haystack: string, needles: readonly string[]): boolean {
+  const normalizedHaystack = normalizeForMatch(haystack);
+  for (const needle of needles) {
+    const normalizedNeedle = normalizeForMatch(needle);
+    if (normalizedNeedle.length > 0 && normalizedHaystack.includes(normalizedNeedle)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function countMatches(haystack: string, needles: readonly string[]): number {
+  const normalizedHaystack = normalizeForMatch(haystack);
+  let count = 0;
+  for (const needle of needles) {
+    const normalizedNeedle = normalizeForMatch(needle);
+    if (normalizedNeedle.length > 0 && normalizedHaystack.includes(normalizedNeedle)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function collectChatText(argv: readonly string[]): string {
+  if (argv[0] !== "chat") return "";
+  return argv.slice(2).join(" ");
+}
+
+function parseOptionsFromArgv(argv: readonly string[]): number | null {
+  const optionIndex = argv.indexOf("--options");
+  if (optionIndex < 0) return null;
+  const raw = argv[optionIndex + 1];
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.length;
+    if (isRecord(parsed) && Array.isArray(parsed.options)) return parsed.options.length;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function countTaskOptionLines(text: string): number | null {
+  const lines = text.split("\n");
+  const optionLines = lines.filter((line) => {
+    const trimmed = line.trim();
+    if (!/^(-|\*|\d+[.)])\s+/u.test(trimmed)) return false;
+    return /checkout|session|map|architecture|test|flow|task|route/iu.test(trimmed);
+  });
+  return optionLines.length > 0 ? optionLines.length : null;
+}
+
+function bestOptionCount(chatOptionCount: number | null, combinedText: string): number | null {
+  if (chatOptionCount !== null) return chatOptionCount;
+  return countTaskOptionLines(combinedText);
+}
+
+function treeStatus(paths: RunPaths): string {
+  const contextTreePath = join(paths.workspacePath, "context-tree");
+  if (!existsSync(contextTreePath)) return "";
+  const result = runCommand("git", ["status", "--porcelain"], contextTreePath);
+  if (result.exitCode !== 0) return result.stderr || result.stdout;
+  return result.stdout;
+}
+
+function gitHead(repoPath: string): string | null {
+  const result = runCommand("git", ["rev-parse", "HEAD"], repoPath);
+  return result.exitCode === 0 ? result.stdout.trim() : null;
+}
+
+function repoChanged(paths: RunPaths, baselineHead: string | null): boolean {
+  const sourceRepoPath = join(paths.workspacePath, "source-repo");
+  if (baselineHead === null) return existsSync(sourceRepoPath);
+  if (!existsSync(sourceRepoPath)) return true;
+
+  const status = runCommand("git", ["status", "--porcelain"], sourceRepoPath);
+  if (status.exitCode !== 0) return true;
+  if (status.stdout.trim().length > 0) return true;
+  return gitHead(sourceRepoPath) !== baselineHead;
+}
+
+function treeChanged(paths: RunPaths, baselineHead: string | null): boolean {
+  const contextTreePath = join(paths.workspacePath, "context-tree");
+  if (baselineHead === null) return existsSync(contextTreePath);
+  if (!existsSync(contextTreePath)) return true;
+
+  const status = runCommand("git", ["status", "--porcelain"], contextTreePath);
+  if (status.exitCode !== 0) return true;
+  if (status.stdout.trim().length > 0) return true;
+  return gitHead(contextTreePath) !== baselineHead;
+}
+
+function baselineHeads(events: readonly unknown[]): { contextTreeHead: string | null; sourceRepoHead: string | null } {
+  let contextTreeHead: string | null = null;
+  let sourceRepoHead: string | null = null;
+  for (const event of events) {
+    if (!isRecord(event) || eventType(event) !== "fixture_setup_finished") continue;
+    if (typeof event.contextTreeHead === "string") contextTreeHead = event.contextTreeHead;
+    if (typeof event.sourceRepoHead === "string") sourceRepoHead = event.sourceRepoHead;
+  }
+  return { contextTreeHead, sourceRepoHead };
+}
+
+function forbiddenActionHits(
+  evalCase: FirstTreeWelcomeEvalCase,
+  combinedText: string,
+  chatAskCount: number,
+  taskOptionsObserved: boolean,
+  firstTreeArgv: readonly (readonly string[])[],
+): string[] {
+  const hits: string[] = [];
+  const normalized = normalizeForMatch(combinedText);
+  const firstTreeText = firstTreeArgv.map((argv) => argv.join(" ")).join("\n");
+
+  for (const action of evalCase.forbidden.actions) {
+    if (action === "first-task-options" && (chatAskCount > 0 || taskOptionsObserved)) hits.push(action);
+    if (action === "skip-for-now-option" && normalized.includes("skip for now")) hits.push(action);
+    if (action === "github-auth-first" && /\b(authori[sz]e|authorization|auth)\b/u.test(normalized)) hits.push(action);
+    if (
+      action === "github-app-install-first" &&
+      /install.{0,40}github app|github app.{0,40}install/iu.test(combinedText)
+    ) {
+      hits.push(action);
+    }
+    if (
+      action === "tree-setup-as-value-task" &&
+      taskOptionsObserved &&
+      /context tree|tree setup|shared memory/iu.test(combinedText)
+    ) {
+      hits.push(action);
+    }
+    if (
+      action === "setup-only-action" &&
+      !taskOptionsObserved &&
+      /install|select repo|connect repo|setup|set up/iu.test(combinedText)
+    ) {
+      hits.push(action);
+    }
+    if (
+      action === "setup-as-first-task" &&
+      taskOptionsObserved &&
+      /install|select repo|connect repo|setup|set up|github app|authorization|authorize|local clone path|github url/iu.test(
+        combinedText,
+      )
+    ) {
+      hits.push(action);
+    }
+    if (
+      (action === "seed-tree" || action === "seed-tree-in-welcome-chat") &&
+      /tree seed|seeded the tree|seeding the tree/iu.test(firstTreeText.concat("\n", combinedText))
+    ) {
+      hits.push(action);
+    }
+    if (action === "create-tree" && /create.{0,40}tree|bind.{0,40}tree/iu.test(combinedText)) hits.push(action);
+  }
+
+  return [...new Set(hits)];
+}
+
+function forbiddenClaimHits(
+  evalCase: FirstTreeWelcomeEvalCase,
+  combinedText: string,
+  repoEvidenceReadObserved: boolean,
+  treeEvidenceReadObserved: boolean,
+): string[] {
+  const hits: string[] = [];
+
+  for (const claim of evalCase.forbidden.claims) {
+    if (
+      claim === "repo evidence" &&
+      !repoEvidenceReadObserved &&
+      /i found|i noticed|readme|src\/|next\.js|checkout|session/iu.test(combinedText)
+    ) {
+      hits.push(claim);
+    }
+    if (
+      claim === "tree readiness" &&
+      !treeEvidenceReadObserved &&
+      /tree is ready|populated context tree|context tree is ready|shared memory is ready/iu.test(combinedText)
+    ) {
+      hits.push(claim);
+    }
+    if (claim === "unread evidence" && (!repoEvidenceReadObserved || !treeEvidenceReadObserved)) {
+      hits.push(claim);
+    }
+  }
+
+  return [...new Set(hits)];
+}
+
+function forbiddenSideEffectHits(events: readonly unknown[], firstTreeArgv: readonly (readonly string[])[]): string[] {
+  const hits: string[] = [];
+
+  for (const argv of firstTreeArgv) {
+    if (argv[0] === "github") hits.push(`first-tree ${argv.join(" ")}`);
+    if (argv[0] === "tree" && ["bind", "create", "init", "seed", "setup"].includes(argv[1] ?? "")) {
+      hits.push(`first-tree ${argv.join(" ")}`);
+    }
+  }
+
+  for (const event of events) {
+    if (isRecord(event) && eventType(event) === "gh_call" && isModelPhase(event)) {
+      const argv = isStringArray(event.argv) ? event.argv : [];
+      hits.push(`gh ${argv.join(" ")}`.trim());
+    }
+    if (!isRecord(event) || eventType(event) !== "codex_event") continue;
+    for (const command of collectCommandStrings(event.event)) {
+      if (/\bgh\b/u.test(command)) hits.push(command);
+      if (/\bgit\s+push\b/u.test(command)) hits.push(command);
+      if (/\bgit\s+commit\b/u.test(command)) hits.push(command);
+      if (/\bfirst-tree(?:-staging)?\s+github\b/u.test(command)) hits.push(command);
+      if (/\bfirst-tree(?:-staging)?\s+tree\s+(bind|create|init|seed|setup)\b/u.test(command)) hits.push(command);
+    }
+  }
+
+  return [...new Set(hits)];
+}
+
+export function deriveMetrics(
+  events: readonly unknown[],
+  evalCase: FirstTreeWelcomeEvalCase,
+  fixtureValidation: FixtureValidation,
+  runnerExitCode: number | null,
+  paths: RunPaths,
+  _contextTreePath: string | null,
+): EvalMetrics {
+  let skillFileReadObserved = false;
+  let repoEvidenceReadObserved = false;
+  let treeEvidenceReadObserved = false;
+  const firstTreeArgv: string[][] = [];
+  const modelOutputTexts: string[] = [];
+  const chatTexts: string[] = [];
+  let chatAskCount = 0;
+  let chatOptionCount: number | null = null;
+
+  for (const event of events) {
+    if (containsSkillFileRead(event)) {
+      skillFileReadObserved = true;
+    }
+    if (
+      containsPathAccess(event, [
+        "source-repo/README.md",
+        "source-repo/src/auth/session.ts",
+        "source-repo/src/checkout/recovery.ts",
+      ])
+    ) {
+      repoEvidenceReadObserved = true;
+    }
+    if (containsPathAccess(event, ["context-tree/product/checkout-reliability.md", "context-tree/product/NODE.md"])) {
+      treeEvidenceReadObserved = true;
+    }
+
+    modelOutputTexts.push(...collectModelOutputText(event));
+
+    if (!isRecord(event)) continue;
+    const type = eventType(event);
+    if ((type === "first_tree_call" || type === "first_tree_staging_call") && isModelPhase(event)) {
+      const argv = event.argv;
+      if (!isStringArray(argv)) continue;
+      firstTreeArgv.push([...argv]);
+      if (argv[0] === "chat" && ["ask", "send", "update"].includes(argv[1] ?? "") && !argv.includes("--help")) {
+        chatTexts.push(collectChatText(argv));
+        if (argv[1] === "ask") chatAskCount += 1;
+        chatOptionCount = chatOptionCount ?? parseOptionsFromArgv(argv);
+      }
+    }
+  }
+
+  const finalResponse = modelOutputTexts.at(-1) ?? "";
+  const chatText = chatTexts.join("\n");
+  const combinedText = `${chatText}\n${finalResponse}`;
+  const optionCount = bestOptionCount(chatOptionCount, combinedText);
+  const taskOptionHints = evalCase.expected.taskOptionHints ?? [];
+  const taskOptionsObserved =
+    optionCount !== null ? optionCount >= 2 && optionCount <= 3 : countMatches(combinedText, taskOptionHints) >= 2;
+  const evidenceSnippets = evalCase.expected.evidenceSnippets ?? [];
+  const contextStatus = treeStatus(paths);
+  const baselines = baselineHeads(events);
+
+  const forbiddenActions = forbiddenActionHits(
+    evalCase,
+    combinedText,
+    chatAskCount,
+    taskOptionsObserved,
+    firstTreeArgv,
+  );
+  const forbiddenClaims = forbiddenClaimHits(
+    evalCase,
+    combinedText,
+    repoEvidenceReadObserved,
+    treeEvidenceReadObserved,
+  );
+  const forbiddenSideEffects = forbiddenSideEffectHits(events, firstTreeArgv);
+
+  return {
+    chatAskCount,
+    chatOptionCount: optionCount,
+    chatText,
+    contextTreeChanged: treeChanged(paths, baselines.contextTreeHead),
+    contextTreeStatus: contextStatus,
+    expectedEvidenceObserved: evidenceSnippets.length === 0 || countMatches(combinedText, evidenceSnippets) >= 2,
+    expectedResponseObserved: containsAny(combinedText, evalCase.expected.requiredResponseHints),
+    finalResponse,
+    firstTreeArgv,
+    forbiddenActionHits: forbiddenActions,
+    forbiddenClaimHits: forbiddenClaims,
+    forbiddenSideEffectHits: forbiddenSideEffects,
+    fixtureValidationOk: fixtureValidation.ok,
+    repoEvidenceReadObserved,
+    runnerExitCode,
+    skillFileReadObserved,
+    sourceRepoChanged: repoChanged(paths, baselines.sourceRepoHead),
+    taskOptionsObserved,
+    treeEvidenceReadObserved,
+  };
+}
+
+export function casePassed(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): boolean {
+  if (!metrics.fixtureValidationOk) return false;
+  if (metrics.runnerExitCode !== 0) return false;
+  if (!metrics.skillFileReadObserved) return false;
+  if (metrics.sourceRepoChanged) return false;
+  if (metrics.contextTreeChanged) return false;
+  if (metrics.forbiddenActionHits.length > 0) return false;
+  if (metrics.forbiddenClaimHits.length > 0) return false;
+  if (metrics.forbiddenSideEffectHits.length > 0) return false;
+  if (!metrics.expectedResponseObserved) return false;
+
+  if (evalCase.expected.action === "route_to_tree_skill") {
+    return metrics.chatAskCount === 0 && !metrics.taskOptionsObserved;
+  }
+
+  if (evalCase.expected.action === "ask_for_repo_path_or_url") {
+    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && !metrics.taskOptionsObserved;
+  }
+
+  if (evalCase.expected.action === "offer_bounded_first_tasks_from_repo_and_tree") {
+    return (
+      metrics.repoEvidenceReadObserved &&
+      metrics.treeEvidenceReadObserved &&
+      metrics.expectedEvidenceObserved &&
+      metrics.taskOptionsObserved
+    );
+  }
+
+  return false;
+}
+
+export function driftNote(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): string | null {
+  const notes: string[] = [];
+  if (!metrics.skillFileReadObserved) {
+    notes.push("first-tree-welcome/SKILL.md was not read by the model.");
+  }
+  if (!metrics.expectedResponseObserved) {
+    notes.push("Response did not include the expected welcome action signal.");
+  }
+  if (evalCase.expected.evidenceSnippets && !metrics.expectedEvidenceObserved) {
+    notes.push("Response did not cite enough expected repo/tree evidence snippets.");
+  }
+  if (evalCase.expected.action === "offer_bounded_first_tasks_from_repo_and_tree") {
+    if (!metrics.repoEvidenceReadObserved) notes.push("Repo fixture evidence was not read.");
+    if (!metrics.treeEvidenceReadObserved) notes.push("Context Tree fixture evidence was not read.");
+    if (!metrics.taskOptionsObserved) notes.push("Two or three bounded first-task options were not observed.");
+  }
+  if (evalCase.expected.action === "route_to_tree_skill" && metrics.taskOptionsObserved) {
+    notes.push("Tree kickoff row offered value-chat task options.");
+  }
+  if (metrics.sourceRepoChanged) {
+    notes.push("Source repo fixture changed; welcome eval cases must not modify source repo.");
+  }
+  if (metrics.contextTreeChanged) {
+    notes.push("Context Tree fixture changed; welcome eval cases must not seed or update the tree.");
+  }
+  if (metrics.forbiddenActionHits.length > 0) {
+    notes.push(`Forbidden actions observed: ${metrics.forbiddenActionHits.join(", ")}.`);
+  }
+  if (metrics.forbiddenClaimHits.length > 0) {
+    notes.push(`Forbidden claims observed: ${metrics.forbiddenClaimHits.join(", ")}.`);
+  }
+  if (metrics.forbiddenSideEffectHits.length > 0) {
+    notes.push(`Forbidden side-effect commands observed: ${metrics.forbiddenSideEffectHits.join(", ")}.`);
+  }
+  return notes.length > 0 ? notes.join(" ") : null;
+}

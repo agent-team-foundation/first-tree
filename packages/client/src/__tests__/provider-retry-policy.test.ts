@@ -107,6 +107,42 @@ describe("classifyProviderFailure", () => {
     }
   });
 
+  it("a transient codex --version verify flake is retried at session start, NOT a terminal capability failure", () => {
+    const err = new Error(
+      "codex --version smoke check did not complete (transient host condition); will retry. Detail: `codex --version` timed out",
+    );
+    err.name = "CodexBinaryVerifyTransientError";
+    const c = classifyProviderFailure(err, { provider: "codex", scope: "session_start", source: "session" });
+    // The regression: this used to land in `capability` → needs_operator →
+    // terminal. It must now be transient_transport so the bring-up retries.
+    expect(c.category).toBe("transient_transport");
+    expect(c.reasonCode).toBe("codex_verify_transient");
+    expect(
+      decideProviderRetry({ classification: c, scope: "session_start", attempt: 1, replaySafety: "pre_provider" }),
+    ).toMatchObject({ action: "retry" });
+  });
+
+  it("a codex backend AbortSignal.timeout is transient_transport and retried", () => {
+    const err = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    const c = classifyProviderFailure(err, { provider: "codex", scope: "provider_turn", source: "sdk" });
+    expect(c.category).toBe("transient_transport");
+    expect(c.reasonCode).toBe("operation_timeout");
+    expect(
+      decideProviderRetry({ classification: c, scope: "provider_turn", attempt: 1, replaySafety: "pre_provider" }),
+    ).toMatchObject({ action: "retry" });
+  });
+
+  it("a genuinely missing codex binary stays terminal needs_operator (no false retry)", () => {
+    const err = new Error(
+      "Codex runtime binary is missing on this machine. First Tree does not bundle the native Codex engine by default.",
+    );
+    const c = classifyProviderFailure(err, { provider: "codex", scope: "session_start", source: "session" });
+    expect(c.category).toBe("capability");
+    expect(
+      decideProviderRetry({ classification: c, scope: "session_start", attempt: 1, replaySafety: "pre_provider" }),
+    ).toMatchObject({ action: "stop", terminalKind: "needs_operator" });
+  });
+
   it("maps deterministic and operator-actionable failures to stop categories", () => {
     const cases: Array<[unknown, ProviderFailureClassification["category"]]> = [
       [Object.assign(new Error("401 Unauthorized"), { status: 401 }), "credential"],

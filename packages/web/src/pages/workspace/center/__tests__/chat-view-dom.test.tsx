@@ -21,6 +21,8 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const activityMocks = vi.hoisted(() => ({
   listClients: vi.fn(),
+  getClient: vi.fn(),
+  startRuntimeAuth: vi.fn(),
 }));
 
 const markdownMocks = vi.hoisted(() => ({
@@ -82,6 +84,8 @@ const authMock = vi.hoisted(() => ({
 vi.mock("../../../../api/activity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../api/activity.js")>()),
   listClients: activityMocks.listClients,
+  getClient: activityMocks.getClient,
+  startRuntimeAuth: activityMocks.startRuntimeAuth,
 }));
 
 vi.mock("../../../../api/agent-status.js", () => ({
@@ -210,6 +214,15 @@ const ORG_AGENTS = [
   agent({ uuid: "human-agent-self", name: "gandy", displayName: "Gandy", type: "human", clientId: null }),
   agent(),
   agent({ uuid: "agent-2", name: "design", displayName: "Design Critique", managerId: "member-alice" }),
+  // A teammate's agent pinned to a computer the caller does NOT own — its
+  // `clientId` is absent from `listClients()` (the caller's `/me/clients`).
+  agent({
+    uuid: "agent-teammate",
+    name: "teammate",
+    displayName: "Teammate Agent",
+    managerId: "member-alice",
+    clientId: "client-teammate",
+  }),
 ];
 
 function participant(overrides: Partial<ChatParticipantDetail> & { agentId: string }): ChatParticipantDetail {
@@ -639,6 +652,21 @@ beforeEach(() => {
       capabilities: {},
     } satisfies HubClient,
   ]);
+  activityMocks.getClient.mockResolvedValue({
+    id: "client-1",
+    userId: "user-self",
+    status: "connected",
+    authState: "ok",
+    binName: "first-tree-dev",
+    sdkVersion: "0.5.0",
+    hostname: "gandy-macbook",
+    os: "darwin",
+    agentCount: 1,
+    connectedAt: NOW,
+    lastSeenAt: NOW,
+    capabilities: {},
+  } satisfies HubClient);
+  activityMocks.startRuntimeAuth.mockResolvedValue({ ref: "auth-ref", started: true });
   agentStatusMocks.fetchChatAgentStatuses.mockResolvedValue([
     {
       agentId: "agent-1",
@@ -832,6 +860,358 @@ describe("ChatView", () => {
     expect(container.textContent).toContain("fetch failed");
     expect(container.querySelector("[data-error-agent]")).toBeNull();
     await act(async () => root.unmount());
+  });
+
+  // The in-chat "needs login" entry point: a terminal credential failure means
+  // the provider is installed but logged out, so the error row offers an inline
+  // "Connect <provider>" that starts the in-product login for the failing
+  // agent's client. Keyed strictly on `category === "credential"` + a resolvable
+  // client id.
+  describe("in-chat login entry point", () => {
+    function credentialErrorEvents(agentId: string): { items: SessionEventRow[]; nextCursor: number | null } {
+      return {
+        items: [
+          {
+            id: "cred-fail",
+            agentId,
+            chatId: "chat-1",
+            seq: 1,
+            kind: "error",
+            payload: {
+              source: "runtime",
+              message: encodeProviderRetryEventMessage({
+                event: "provider_failure_terminal",
+                provider: "claude-code",
+                scope: "session_start",
+                category: "credential",
+                reasonCode: "provider_credential_invalid",
+                userSeverity: "error",
+                messagePreview: "not logged in",
+              }),
+            },
+            createdAt: "2026-05-28T11:56:30.000Z",
+          },
+        ] satisfies SessionEventRow[],
+        nextCursor: null,
+      };
+    }
+
+    function capacityErrorEvents(agentId: string): { items: SessionEventRow[]; nextCursor: number | null } {
+      return {
+        items: [
+          {
+            id: "capacity-wait",
+            agentId,
+            chatId: "chat-1",
+            seq: 1,
+            kind: "error",
+            payload: {
+              source: "runtime",
+              message: encodeProviderRetryEventMessage({
+                event: "provider_retry_scheduled",
+                provider: "claude-code",
+                scope: "provider_turn",
+                category: "provider_capacity",
+                reasonCode: "capacity_wait_required",
+                retryMode: "background",
+                userSeverity: "warning",
+                messagePreview: "at capacity",
+              }),
+            },
+            createdAt: "2026-05-28T11:56:30.000Z",
+          },
+        ] satisfies SessionEventRow[],
+        nextCursor: null,
+      };
+    }
+
+    it("renders a Connect button on a credential failure when the agent's client resolves", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        // agent-1 has clientId "client-1" in ORG_AGENTS.
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+      });
+
+      await waitForText(container, "not logged in");
+      await waitForCondition(
+        () => buttonByText(container, "Connect Claude Code") !== null,
+        "Expected the in-chat login button for a credential failure",
+      );
+
+      // Clicking starts the in-product login for the resolved client + provider.
+      await click(buttonByText(container, "Connect Claude Code"));
+      await waitForCondition(
+        () => activityMocks.startRuntimeAuth.mock.calls.length > 0,
+        "Expected the login click to start runtime auth",
+      );
+      expect(activityMocks.startRuntimeAuth).toHaveBeenCalledWith("client-1", { provider: "claude-code" });
+
+      await act(async () => root.unmount());
+    });
+
+    it("does NOT render a Connect button for a non-credential failure (provider capacity)", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], capacityErrorEvents("agent-1"));
+      });
+
+      await waitForText(container, "at capacity");
+      await flush();
+      expect(buttonByText(container, "Connect Claude Code")).toBeNull();
+
+      await act(async () => root.unmount());
+    });
+
+    it("does NOT render a Connect button when the failing agent has no client (clientId null)", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        // The failing agent is not in the org roster, so clientIdForAgent → null.
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-unbound"));
+      });
+
+      await waitForText(container, "not logged in");
+      await flush();
+      expect(buttonByText(container, "Connect Claude Code")).toBeNull();
+
+      await act(async () => root.unmount());
+    });
+
+    // Fix 1: ownership gate. The button mirrors the server's `assertClientOwner`
+    // — it renders only when the failing agent's resolved client is in the
+    // caller's own `/me/clients` set, so a teammate's agent on a computer the
+    // caller does not own gets the error WITHOUT a button.
+    it("does NOT render a Connect button when the failing agent's client is not owned by the caller", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      // `listClients()` (the caller's own computers) returns only client-1, so
+      // agent-teammate's client-teammate is resolvable but unowned.
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-teammate"));
+      });
+
+      await waitForText(container, "not logged in");
+      await flush();
+      expect(buttonByText(container, "Connect Claude Code")).toBeNull();
+
+      await act(async () => root.unmount());
+    });
+
+    it("renders a Connect button when the caller owns the failing agent's client (positive ownership case)", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      // agent-1 → client-1, and listClients() returns client-1 → owned.
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+      });
+
+      await waitForText(container, "not logged in");
+      await waitForCondition(
+        () => buttonByText(container, "Connect Claude Code") !== null,
+        "Expected the in-chat login button when the caller owns the client",
+      );
+
+      await act(async () => root.unmount());
+    });
+
+    // Fix 2: a `claude-code-tui` credential failure shares the Claude Code
+    // keychain, so it maps to the `claude-code` login target — the button is
+    // labeled "Connect Claude Code" and the click starts a `claude-code` login.
+    it("maps a claude-code-tui credential failure to the claude-code login target", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      function tuiCredentialErrorEvents(agentId: string): {
+        items: SessionEventRow[];
+        nextCursor: number | null;
+      } {
+        return {
+          items: [
+            {
+              id: "tui-cred-fail",
+              agentId,
+              chatId: "chat-1",
+              seq: 1,
+              kind: "error",
+              payload: {
+                source: "runtime",
+                message: encodeProviderRetryEventMessage({
+                  event: "provider_failure_terminal",
+                  provider: "claude-code-tui",
+                  scope: "session_start",
+                  category: "credential",
+                  reasonCode: "provider_credential_invalid",
+                  userSeverity: "error",
+                  messagePreview: "not logged in",
+                }),
+              },
+              createdAt: "2026-05-28T11:56:30.000Z",
+            },
+          ] satisfies SessionEventRow[],
+          nextCursor: null,
+        };
+      }
+
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], tuiCredentialErrorEvents("agent-1"));
+      });
+
+      await waitForText(container, "not logged in");
+      await waitForCondition(
+        () => buttonByText(container, "Connect Claude Code") !== null,
+        "Expected a Claude Code login button for a claude-code-tui credential failure",
+      );
+
+      await click(buttonByText(container, "Connect Claude Code"));
+      await waitForCondition(
+        () => activityMocks.startRuntimeAuth.mock.calls.length > 0,
+        "Expected the login click to start runtime auth",
+      );
+      // The TUI failure is normalized to the claude-code Connect target.
+      expect(activityMocks.startRuntimeAuth).toHaveBeenCalledWith("client-1", { provider: "claude-code" });
+
+      await act(async () => root.unmount());
+    });
+
+    // Fix 3: the single-client poll must disarm once the attempt resolves. After
+    // the click arms the poll, a terminal `lastAuthError` recorded at/after the
+    // click resolves it — `getClient` must stop being re-polled.
+    it("stops polling the single client once a terminal login failure is observed", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const clientBase = {
+        id: "client-1",
+        userId: "user-self",
+        status: "connected",
+        authState: "ok",
+        binName: "first-tree-dev",
+        sdkVersion: "0.5.0",
+        hostname: "gandy-macbook",
+        os: "darwin",
+        agentCount: 1,
+        connectedAt: NOW,
+        lastSeenAt: NOW,
+      } as const;
+      // Mount fetch: clean entry (no pending / no error) so the button reads
+      // "Connect Claude Code". After the first poll the client reports a terminal
+      // failure stamped now, which the poll predicate treats as resolved.
+      const cleanClient: HubClient = { ...clientBase, capabilities: {} };
+      const failedClient: HubClient = {
+        ...clientBase,
+        capabilities: {
+          "claude-code": {
+            state: "ok",
+            available: true,
+            detectedAt: NOW,
+            lastAuthError: { reason: "timeout", at: new Date().toISOString() },
+          },
+        },
+      };
+      let getClientCalls = 0;
+      activityMocks.getClient.mockImplementation(() => {
+        getClientCalls += 1;
+        // First fetch (mount): clean; every fetch after the click: terminal failure.
+        return Promise.resolve(getClientCalls <= 1 ? cleanClient : failedClient);
+      });
+
+      const { container, root } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (queryClient) => {
+        queryClient.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+      });
+
+      await waitForCondition(
+        () => buttonByText(container, "Connect Claude Code") !== null,
+        "Expected the in-chat login button",
+      );
+      await click(buttonByText(container, "Connect Claude Code"));
+
+      // Let the post-click refetch + any disarm settle, then snapshot the call
+      // count and confirm it does not keep climbing (the poll disarmed).
+      await flush();
+      await flush();
+      const settledCalls = activityMocks.getClient.mock.calls.length;
+      await flush();
+      await flush();
+      expect(activityMocks.getClient.mock.calls.length).toBe(settledCalls);
+
+      await act(async () => root.unmount());
+    });
+
+    // Fix (Bug 2): the ErrorRow is a persistent timeline event, so after a
+    // SUCCESSFUL in-chat login the control must stop re-inviting login. Drive a
+    // real success transition — pending appears, then clears with `state: "ok"`
+    // and no `lastAuthError` — and assert the row flips to a terminal "Signed in"
+    // affordance with NO live Connect button.
+    it("shows a terminal signed-in state (not a Connect button) after a successful in-chat login", async () => {
+      const { ChatView } = await import("../chat-view.js");
+      const clientBase = {
+        id: "client-1",
+        userId: "user-self",
+        status: "connected",
+        authState: "ok",
+        binName: "first-tree-dev",
+        sdkVersion: "0.5.0",
+        hostname: "gandy-macbook",
+        os: "darwin",
+        agentCount: 1,
+        connectedAt: NOW,
+        lastSeenAt: NOW,
+      } as const;
+      // Mount: clean (Connect). The click's refetch delivers a live pending login
+      // (the daemon launched browser sign-in); the next single-row refetch
+      // delivers the resolved entry — pending cleared, still installed
+      // (`state: "ok"`), no `lastAuthError` — a successful resolution. The mock is
+      // phase-driven and we drive the resolving refetch by invalidating the
+      // single-row query, so the transition is deterministic (no dependence on the
+      // wall-clock poll cadence).
+      const cleanClient: HubClient = { ...clientBase, capabilities: {} };
+      const pendingClient: HubClient = {
+        ...clientBase,
+        capabilities: {
+          "claude-code": {
+            state: "ok",
+            available: true,
+            detectedAt: NOW,
+            pendingAuth: { method: "browser", expiresAt: new Date(Date.now() + 60_000).toISOString() },
+          },
+        },
+      };
+      const signedInClient: HubClient = {
+        ...clientBase,
+        capabilities: { "claude-code": { state: "ok", available: true, detectedAt: NOW } },
+      };
+      let phase: "clean" | "pending" | "signed-in" = "clean";
+      activityMocks.getClient.mockImplementation(() => {
+        if (phase === "clean") return Promise.resolve(cleanClient);
+        if (phase === "pending") return Promise.resolve(pendingClient);
+        return Promise.resolve(signedInClient);
+      });
+
+      const { container, root, queryClient } = await renderDom(<ChatView agentId="agent-1" chatId="chat-1" />, (qc) => {
+        qc.setQueryData(["session-events", "agent-1", "chat-1"], credentialErrorEvents("agent-1"));
+      });
+
+      await waitForCondition(
+        () => buttonByText(container, "Connect Claude Code") !== null,
+        "Expected the in-chat login button before sign-in",
+      );
+      // The click's refetch picks up the launched (pending) login.
+      phase = "pending";
+      await click(buttonByText(container, "Connect Claude Code"));
+      await waitForCondition(
+        () => container.textContent?.includes("sign-in page is opening") ?? false,
+        "Expected the in-flight (pending) login state while the daemon drives sign-in",
+      );
+
+      // The daemon completes the login and re-probes: the resolving refetch
+      // delivers the signed-in entry. Drive it deterministically by invalidating
+      // the single-row query the button reads from.
+      phase = "signed-in";
+      await act(async () => {
+        await queryClient.invalidateQueries({ queryKey: ["clients", "single", "client-1"] });
+      });
+      await waitForCondition(
+        () => container.textContent?.includes("Signed in to Claude Code") ?? false,
+        "Expected the terminal signed-in affordance after a successful login",
+      );
+      // And the Connect button must be gone — no re-invitation to log in.
+      expect(buttonByText(container, "Connect Claude Code")).toBeNull();
+
+      await act(async () => root.unmount());
+    });
   });
 
   it("does not re-render old message markdown when the composer draft changes", async () => {

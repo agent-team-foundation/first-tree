@@ -61,6 +61,7 @@ const authMock = vi.hoisted(() => ({
     orgHasOtherMembers: true,
     onboardingStep: "connect" as ServerOnboardingStep,
     currentOrgHasUsableAgent: false,
+    currentOrgHasPersonalAgent: false,
     onboardingDismissedAt: null,
     onboardingCompletedAt: null,
     dismissOnboarding: vi.fn(async () => undefined),
@@ -124,6 +125,8 @@ beforeEach(() => {
     ...authMock.value,
     role: "admin",
     onboardingStep: "connect",
+    currentOrgHasUsableAgent: false,
+    currentOrgHasPersonalAgent: false,
     dismissOnboarding: vi.fn(async () => undefined),
     markOnboardingCompleted: vi.fn(async () => undefined),
     refreshMe: vi.fn(async () => undefined),
@@ -480,6 +483,33 @@ describe("onboarding hooks and flow", () => {
     };
     await renderProbe(<Probe />);
     expect(expectHookValue(latest.current).activeStep).toBe("create-team");
+  });
+
+  it("lands on create-agent when the org only has another member's shared agent", async () => {
+    const latest = { current: null as OnboardingFlowValue | null };
+
+    function Probe() {
+      function Inner() {
+        latest.current = useOnboardingFlow();
+        return <div>{latest.current.activeStep}</div>;
+      }
+      return (
+        <OnboardingFlowProvider path="invitee">
+          <Inner />
+        </OnboardingFlowProvider>
+      );
+    }
+
+    authMock.value = {
+      ...authMock.value,
+      role: "member",
+      organizationId: "joined-org",
+      onboardingStep: "completed",
+      currentOrgHasUsableAgent: true,
+      currentOrgHasPersonalAgent: false,
+    };
+    await renderProbe(<Probe />);
+    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
   });
 
   it("re-derives the step when the org changes on a still-mounted provider", async () => {

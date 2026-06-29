@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
-import { listOrgsWithUsableNonHumanAgent } from "../services/access-control.js";
+import { listOrgsWithPersonalAgent, listOrgsWithUsableNonHumanAgent } from "../services/access-control.js";
 import { ensureMembership } from "../services/membership.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -120,5 +120,48 @@ describe("listOrgsWithUsableNonHumanAgent", () => {
     const app = getApp();
     const set = await listOrgsWithUsableNonHumanAgent(app.db, []);
     expect(set.size).toBe(0);
+  });
+});
+
+describe("listOrgsWithPersonalAgent", () => {
+  const getApp = useTestApp();
+
+  it("counts only active non-human agents managed by the current membership", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const set = await listOrgsWithPersonalAgent(app.db, [
+      { memberId: admin.memberId, organizationId: admin.organizationId },
+    ]);
+    expect(set.has(admin.organizationId)).toBe(false);
+
+    await insertAgent(app.db, { orgId: admin.organizationId, managerId: admin.memberId, visibility: "private" });
+    const afterOwnAgent = await listOrgsWithPersonalAgent(app.db, [
+      { memberId: admin.memberId, organizationId: admin.organizationId },
+    ]);
+    expect(afterOwnAgent.has(admin.organizationId)).toBe(true);
+  });
+
+  it("does NOT count another member's organization-visible agent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const other = await createTestAdmin(app);
+    const memberB = await ensureMembership(app.db, {
+      userId: other.userId,
+      organizationId: admin.organizationId,
+      role: "member",
+      displayName: "Member B",
+      username: `b-${crypto.randomUUID().slice(0, 6)}`,
+    });
+    await insertAgent(app.db, { orgId: admin.organizationId, managerId: memberB.id, visibility: "organization" });
+
+    const usable = await listOrgsWithUsableNonHumanAgent(app.db, [
+      { memberId: admin.memberId, organizationId: admin.organizationId },
+    ]);
+    expect(usable.has(admin.organizationId)).toBe(true);
+
+    const personal = await listOrgsWithPersonalAgent(app.db, [
+      { memberId: admin.memberId, organizationId: admin.organizationId },
+    ]);
+    expect(personal.has(admin.organizationId)).toBe(false);
   });
 });

@@ -1,8 +1,9 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CodexBinaryVerifyTransientError,
   createCodexClientWithBinaryFallback,
   findCodexExecutableOnPath,
   formatCodexBinaryMissingMessage,
@@ -70,10 +71,33 @@ describe("codex binary resolution", () => {
         },
         {
           resolvePath: () => "/usr/local/bin/codex",
-          verifyPath: () => ({ ok: false, reason: "`codex --version` exited 1: broken shim" }),
+          verifyPath: () => ({ ok: false, transient: false, reason: "`codex --version` exited 1: broken shim" }),
         },
       ),
     ).toThrow(/PATH codex failed validation: `codex --version` exited 1: broken shim/);
+  });
+
+  it("treats a transient PATH-codex verify flake as retryable, NOT a missing binary", () => {
+    let thrown: unknown;
+    try {
+      createCodexClientWithBinaryFallback(
+        { env: { PATH: "/usr/local/bin" } },
+        () => {
+          throw new Error("Unable to locate Codex CLI binaries for x86_64-apple-darwin");
+        },
+        {
+          resolvePath: () => "/usr/local/bin/codex",
+          verifyPath: () => ({ ok: false, transient: true, reason: "`codex --version` timed out" }),
+        },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    // A present-but-flaky binary must surface as the transient error the
+    // taxonomy retries — never as a permanent "binary missing".
+    expect(thrown).toBeInstanceOf(CodexBinaryVerifyTransientError);
+    expect((thrown as Error).message).not.toMatch(/binary is missing/i);
+    expect(isCodexBinaryMissingError(thrown)).toBe(false);
   });
 
   it("throws an actionable error when neither bundled nor PATH codex exists", () => {
@@ -108,7 +132,85 @@ describe("codex binary resolution", () => {
     writeFileSync(executable, "#!/bin/sh\nexit 0\n");
     chmodSync(executable, 0o755);
 
-    expect(findCodexExecutableOnPath({ PATH: `${tmp}${delimiter}/bin` })).toBe(executable);
+    expect(findCodexExecutableOnPath({ PATH: `${tmp}${delimiter}/bin` }, { loginShellPathDirs: () => [] })).toBe(
+      executable,
+    );
+  });
+
+  it("verifyCodexExecutable: a deterministic crash signal is NOT transient (broken binary surfaces, no infinite retry)", () => {
+    tmp = mkdtempSync(join(tmpdir(), "ft-codex-crash-"));
+    const executable = join(tmp, "codex");
+    // Self-terminate with SIGSEGV: a binary that always faults on `--version`.
+    writeFileSync(executable, "#!/bin/sh\nkill -SEGV $$\n");
+    chmodSync(executable, 0o755);
+
+    const v = verifyCodexExecutable(executable, { PATH: "" });
+    expect(v.ok).toBe(false);
+    if (!v.ok) {
+      expect(v.transient).toBe(false);
+      expect(v.reason).toMatch(/SEGV/);
+    }
+  });
+
+  it("verifyCodexExecutable: a termination kill (timeout-equivalent) IS transient", () => {
+    tmp = mkdtempSync(join(tmpdir(), "ft-codex-term-"));
+    const executable = join(tmp, "codex");
+    // SIGTERM is how a spawnSync timeout enforces its deadline — a host
+    // condition, not a broken binary.
+    writeFileSync(executable, "#!/bin/sh\nkill -TERM $$\n");
+    chmodSync(executable, 0o755);
+
+    const v = verifyCodexExecutable(executable, { PATH: "" });
+    expect(v.ok).toBe(false);
+    if (!v.ok) expect(v.transient).toBe(true);
+  });
+
+  it("finds an executable codex via a login-shell-only PATH dir", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ft-codex-login-"));
+    tmp = dir;
+    const executable = join(dir, "codex");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    chmodSync(executable, 0o755);
+
+    const found = findCodexExecutableOnPath(
+      { PATH: "", HOME: mkdtempSync(join(tmpdir(), "ft-codex-home-")) },
+      // wellKnownDirs:[] isolates from a real host codex (e.g. /opt/homebrew/bin)
+      // which is now searched before the login-shell PATH.
+      { loginShellPathDirs: () => [dir], wellKnownDirs: () => [] },
+    );
+    expect(found).toBe(executable);
+  });
+
+  it("finds an executable codex via a Part-A well-known dir (~/.bun/bin)", () => {
+    const home = mkdtempSync(join(tmpdir(), "ft-codex-bun-"));
+    tmp = home;
+    const bunBin = join(home, ".bun", "bin");
+    mkdirSync(bunBin, { recursive: true });
+    const executable = join(bunBin, "codex");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    chmodSync(executable, 0o755);
+
+    expect(findCodexExecutableOnPath({ PATH: "", HOME: home }, { loginShellPathDirs: () => [] })).toBe(executable);
+  });
+
+  it("does not throw when the login-shell probe yields nothing (graceful fallback)", () => {
+    const home = mkdtempSync(join(tmpdir(), "ft-codex-none-"));
+    tmp = home;
+    // Empty PATH + login-shell []; resolution then falls through to the curated
+    // well-known dirs without throwing (the dev machine may or may not have a
+    // codex in an absolute well-known dir, so only assert no-throw here).
+    expect(() => findCodexExecutableOnPath({ PATH: "", HOME: home }, { loginShellPathDirs: () => [] })).not.toThrow();
+  });
+
+  it("does not consult the login-shell probe when the daemon PATH already resolves codex", () => {
+    tmp = mkdtempSync(join(tmpdir(), "ft-codex-daemon-"));
+    const executable = join(tmp, "codex");
+    writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+    chmodSync(executable, 0o755);
+    const loginShellPathDirs = vi.fn(() => []);
+
+    expect(findCodexExecutableOnPath({ PATH: tmp }, { loginShellPathDirs })).toBe(executable);
+    expect(loginShellPathDirs).not.toHaveBeenCalled();
   });
 
   it("verifies a candidate codex executable by launching --version", () => {

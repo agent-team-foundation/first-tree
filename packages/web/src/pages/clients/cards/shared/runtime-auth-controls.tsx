@@ -35,20 +35,29 @@ const STARTING_LATCH_MS = 30_000;
  * `onStarted` lets a host that does NOT use the `["clients"]` react-query cache
  * (the new-agent dialog polls capabilities into local state) refresh on the same
  * cadence; card surfaces omit it and rely on the query invalidation.
+ *
+ * `forceConnectable` is the in-chat "needs login" entry point's trigger: the
+ * install-only probe no longer keys a logged-out "Connect" affordance off
+ * capability `state`, so the chat sets this after a session credential failure
+ * to force-render the Connect button (still riding `startRuntimeAuth` + the same
+ * `pendingAuth` / `lastAuthError` polling). Honoured only for providers the
+ * daemon can drive in-product.
  */
 export function RuntimeAuthControls({
   clientId,
   provider,
   entry,
   onStarted,
+  forceConnectable = false,
 }: {
   clientId: string;
   provider: RuntimeProvider;
   entry: CapabilityEntry | null;
   onStarted?: () => void;
+  forceConnectable?: boolean;
 }) {
   const queryClient = useQueryClient();
-  const view = deriveRuntimeAuthView(provider, entry, Date.now());
+  const view = deriveRuntimeAuthView(provider, entry, Date.now(), forceConnectable);
 
   // Stable handle to the latest `onStarted` so the poll effect doesn't resubscribe
   // when a host passes a fresh inline callback each render.

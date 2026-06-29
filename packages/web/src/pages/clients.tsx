@@ -31,12 +31,7 @@ import { UppercaseLabel } from "../components/ui/section-header.js";
 import { useAgentNameMap } from "../lib/use-agent-name-map.js";
 import { formatDate, formatRelative } from "../lib/utils.js";
 import { ComputerCard } from "./clients/cards/computer-card.js";
-import {
-  PROVIDER_LABEL,
-  PROVIDER_ORDER,
-  providerInstallHint,
-  providerUnauthHint,
-} from "./clients/cards/shared/providers.js";
+import { PROVIDER_LABEL, PROVIDER_ORDER, providerInstallHint } from "./clients/cards/shared/providers.js";
 import { ComputerStatusPill } from "./clients/computer-status-pill.js";
 import { DemoNavigator, useDemoScenarioParam } from "./clients/demo-navigator.js";
 import { compareByPillPriority, deriveComputerStatus } from "./clients/derive-status.js";
@@ -779,19 +774,7 @@ function ProviderRow({
             {label}
           </span>
           <span className="text-caption" style={{ color: "var(--success)" }}>
-            ✓{entry.sdkVersion ? ` v${entry.sdkVersion}` : " authenticated"}
-          </span>
-        </div>
-      );
-    case "unauthenticated":
-      return (
-        <div className="flex items-center gap-2.5 text-body">
-          <span className="font-medium" style={{ minWidth: "var(--sp-35)" }}>
-            {label}
-          </span>
-          <span className="text-caption" style={{ color: "var(--state-blocked)" }}>
-            ⚠ installed{entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}, not authenticated ·{" "}
-            {providerUnauthHint(provider, os)}
+            ✓ installed{entry.sdkVersion ? ` v${entry.sdkVersion}` : ""}
           </span>
         </div>
       );

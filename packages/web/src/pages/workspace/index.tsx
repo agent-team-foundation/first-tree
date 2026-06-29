@@ -108,7 +108,7 @@ export function parseParticipantList(params: URLSearchParams): string[] {
 
 export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt, currentOrgHasUsableAgent } =
+  const { meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt, currentOrgHasPersonalAgent } =
     useAuth();
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
@@ -268,9 +268,10 @@ export function WorkspacePage() {
       meLoaded,
       onboardingStep,
       onboardingSuppressedAt: onboardingDismissedAt,
-      currentOrgReady: currentOrgHasUsableAgent,
+      currentOrgHasPersonalAgent,
       // Not read by the entry gate (auto-entry keys off connect + org
-      // readiness only); supplied because both gates share OnboardingGateFacts.
+      // personal-agent readiness only); supplied because both gates share
+      // OnboardingGateFacts.
       onboardingCompletedAt,
     })
   ) {

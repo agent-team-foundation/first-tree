@@ -160,7 +160,7 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
     teamDisplayName,
     orgHasOtherMembers,
     onboardingStep,
-    currentOrgHasUsableAgent,
+    currentOrgHasPersonalAgent,
     refreshMe,
     dismissOnboarding,
     markOnboardingCompleted,
@@ -170,12 +170,13 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
   // `create_agent` / `completed` value reflects whether the user has set up
   // an agent in *any* org. For step selection we care about the *current*
   // org, so once past the account-level `connect` stage we recompute
-  // create_agent vs completed from this org's readiness — otherwise a
-  // returning user joining an empty org would skip straight to start-chat.
+  // create_agent vs completed from this membership's personal-agent readiness
+  // — otherwise a returning user joining a team with only another member's
+  // shared agent would skip straight to start-chat without their own agent.
   const orgStep: ServerOnboardingStep =
     onboardingStep === "connect" || onboardingStep === null
       ? onboardingStep
-      : currentOrgHasUsableAgent
+      : currentOrgHasPersonalAgent
         ? "completed"
         : "create_agent";
 

@@ -1,8 +1,11 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveClaudeCodeExecutable } from "../handlers/claude-executable.js";
+
+/** No login-shell dirs — keeps the existing cases hermetic (no real shell spawn). */
+const noLoginShell = () => [];
 
 let binDir: string;
 let fakeClaude: string;
@@ -41,6 +44,56 @@ describe("resolveClaudeCodeExecutable", () => {
     expect(resolution).toEqual({ path: fakeClaude, source: "path" });
   });
 
+  it("ignores an override that is a directory (not an executable file) and falls through to PATH", () => {
+    const dirOverride = mkdtempSync(join(tmpdir(), "ftt-claude-dirovr-"));
+    try {
+      const resolution = resolveClaudeCodeExecutable({
+        env: { CLAUDE_CODE_EXECUTABLE: dirOverride, PATH: binDir },
+      });
+      // A bare existsSync() would have accepted the directory; isExecutableFile rejects it.
+      expect(resolution).toEqual({ path: fakeClaude, source: "path" });
+    } finally {
+      rmSync(dirOverride, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a non-executable override file and falls through to PATH", () => {
+    const nonExec = join(binDir, "claude-nonexec");
+    writeFileSync(nonExec, "#!/bin/sh\nexit 0\n");
+    chmodSync(nonExec, 0o644); // readable, NOT executable
+    try {
+      const resolution = resolveClaudeCodeExecutable({
+        env: { CLAUDE_CODE_EXECUTABLE: nonExec, PATH: binDir },
+      });
+      expect(resolution).toEqual({ path: fakeClaude, source: "path" });
+    } finally {
+      rmSync(nonExec, { force: true });
+    }
+  });
+
+  it("surfaces overrideError on the default resolution when an unusable override and nothing else resolves", () => {
+    const badOverride = join(binDir, "nonexistent-override");
+    const resolution = resolveClaudeCodeExecutable({
+      env: {
+        CLAUDE_CODE_EXECUTABLE: badOverride,
+        PATH: join(tmpdir(), "definitely-not-a-real-bin-dir-xyz"),
+        HOME: emptyHome,
+      },
+      loginShellPathDirs: noLoginShell,
+    });
+    expect(resolution.path).toBeUndefined();
+    expect(resolution.source).toBe("default");
+    expect(resolution.overrideError).toContain(badOverride);
+  });
+
+  it("does NOT attach overrideError when the override is unusable but PATH resolves a claude", () => {
+    const resolution = resolveClaudeCodeExecutable({
+      env: { CLAUDE_CODE_EXECUTABLE: join(binDir, "nonexistent"), PATH: binDir },
+    });
+    expect(resolution).toEqual({ path: fakeClaude, source: "path" });
+    expect(resolution.overrideError).toBeUndefined();
+  });
+
   it("finds `claude` on PATH when the env override is absent", () => {
     const resolution = resolveClaudeCodeExecutable({
       env: { PATH: `${join(binDir, "missing")}${delimiter}${binDir}` },
@@ -59,12 +112,13 @@ describe("resolveClaudeCodeExecutable", () => {
   it("returns the default sentinel when nothing is found", () => {
     const resolution = resolveClaudeCodeExecutable({
       env: { PATH: join(tmpdir(), "definitely-not-a-real-bin-dir-xyz"), HOME: emptyHome },
+      loginShellPathDirs: noLoginShell,
     });
     expect(resolution).toEqual({ path: undefined, source: "default" });
   });
 
   it("returns the default sentinel when PATH is empty", () => {
-    const resolution = resolveClaudeCodeExecutable({ env: { HOME: emptyHome } });
+    const resolution = resolveClaudeCodeExecutable({ env: { HOME: emptyHome }, loginShellPathDirs: noLoginShell });
     expect(resolution).toEqual({ path: undefined, source: "default" });
   });
 
@@ -76,7 +130,10 @@ describe("resolveClaudeCodeExecutable", () => {
       writeFileSync(wkClaude, "#!/bin/sh\nexit 0\n");
       chmodSync(wkClaude, 0o755);
 
-      const resolution = resolveClaudeCodeExecutable({ env: { PATH: "", HOME: home } });
+      const resolution = resolveClaudeCodeExecutable({
+        env: { PATH: "", HOME: home },
+        loginShellPathDirs: noLoginShell,
+      });
 
       expect(resolution).toEqual({ path: wkClaude, source: "well-known" });
     } finally {
@@ -104,8 +161,12 @@ describe("resolveClaudeCodeExecutable", () => {
       const migrated = join(home, ".claude", "local", "claude");
       mkdirSync(join(home, ".claude", "local"), { recursive: true });
       writeFileSync(migrated, "#!/bin/sh\nexit 0\n");
+      chmodSync(migrated, 0o755);
 
-      const resolution = resolveClaudeCodeExecutable({ env: { PATH: "", HOME: home } });
+      const resolution = resolveClaudeCodeExecutable({
+        env: { PATH: "", HOME: home },
+        loginShellPathDirs: noLoginShell,
+      });
 
       expect(resolution).toEqual({ path: migrated, source: "well-known" });
     } finally {
@@ -144,6 +205,67 @@ describe("resolveClaudeCodeExecutable", () => {
       env: { PATH: binDir, PATHEXT: ";" },
     });
 
+    expect(resolution).toEqual({ path: fakeClaude, source: "path" });
+  });
+
+  it("finds `claude` via a login-shell-only PATH dir (source: path)", () => {
+    const resolution = resolveClaudeCodeExecutable({
+      env: { PATH: "", HOME: emptyHome },
+      loginShellPathDirs: () => [join(tmpdir(), "missing-xyz"), binDir],
+      // isolate from any real host claude in an absolute well-known dir, which is
+      // now searched before the login-shell PATH.
+      wellKnownDirs: () => [],
+    });
+    expect(resolution).toEqual({ path: fakeClaude, source: "path" });
+  });
+
+  it("does not spawn the login-shell probe when the daemon PATH already resolves `claude`", () => {
+    const loginShellPathDirs = vi.fn(() => []);
+    const resolution = resolveClaudeCodeExecutable({ env: { PATH: binDir }, loginShellPathDirs });
+    expect(resolution).toEqual({ path: fakeClaude, source: "path" });
+    expect(loginShellPathDirs).not.toHaveBeenCalled();
+  });
+
+  it("skips the login-shell probe entirely on the pre-connect path (includeLoginShell: false)", () => {
+    // The daemon's handler-registration path must never block on a login shell.
+    // With includeLoginShell:false, a `claude` that lives ONLY on the login-shell
+    // PATH is NOT resolved (falls through to the SDK bundle) and the probe fn is
+    // never called — the handler re-resolves it lazily at session start instead.
+    const loginShellPathDirs = vi.fn(() => [binDir]);
+    const resolution = resolveClaudeCodeExecutable({
+      env: { PATH: "", HOME: emptyHome },
+      loginShellPathDirs,
+      wellKnownDirs: () => [],
+      includeLoginShell: false,
+    });
+    expect(resolution).toEqual({ path: undefined, source: "default" });
+    expect(loginShellPathDirs).not.toHaveBeenCalled();
+  });
+
+  it("finds `claude` via a new Part-A well-known dir (~/.npm-global/bin)", () => {
+    const home = mkdtempSync(join(tmpdir(), "ftt-claude-npmg-"));
+    try {
+      const wk = join(home, ".npm-global", "bin", "claude");
+      mkdirSync(join(home, ".npm-global", "bin"), { recursive: true });
+      writeFileSync(wk, "#!/bin/sh\nexit 0\n");
+      chmodSync(wk, 0o755);
+
+      const resolution = resolveClaudeCodeExecutable({
+        env: { PATH: "", HOME: home },
+        loginShellPathDirs: noLoginShell,
+      });
+
+      expect(resolution).toEqual({ path: wk, source: "well-known" });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers the daemon PATH over a login-shell dir that also has `claude`", () => {
+    const resolution = resolveClaudeCodeExecutable({
+      env: { PATH: binDir },
+      loginShellPathDirs: () => [binDir],
+    });
     expect(resolution).toEqual({ path: fakeClaude, source: "path" });
   });
 });

@@ -1,7 +1,8 @@
 import { type Agent, extractMentions, type MentionParticipant } from "@first-tree/shared";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, Check, Menu, Paperclip, Plus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getNewChatDefaultCandidates } from "../../../api/agents.js";
 import { uploadImageAttachment } from "../../../api/attachments.js";
 import { type ImageRefContent, readFileAsBase64 } from "../../../api/chats.js";
 import { putImage } from "../../../api/image-store.js";
@@ -31,10 +32,10 @@ import { cn } from "../../../lib/utils.js";
  *   - Chip row at the top of the composer is the participants list for
  *     the chat being created. Independent of the textarea — adding a
  *     chip never injects text, removing one never strips an `@<name>`.
- *     Default state seeds a single chip (the caller's personal assistant
- *     or any of their managed agents — see `pickDefault`) so the common
- *     "ask my PA something" case is zero-step. Stable across clicks —
- *     no runtime-presence MRU here, see issue 342.
+ *     Default state seeds a single chip from explicit participants, the
+ *     caller's browser-local last successful manual starter agent after
+ *     server validation, or a server-resolved active/addressable fallback.
+ *     Runtime presence is deliberately not a signal.
  *
  *   - Textarea carries the message content. Server's explicit-recipient enforcement
  *     contract requires an explicit recipient on every send — for 1:1
@@ -76,7 +77,7 @@ export function NewChatDraft({
   onShowConversations?: (() => void) | null;
   /** Initial participant uuids to seed as chips (from the `?with=` param —
    *  e.g. the Team page "Chat" action). Takes precedence over the default
-   *  delegate seed; only applied once, on first mount of an empty draft. */
+   *  agent seed; only applied once, on first mount of an empty draft. */
   initialParticipantIds?: string[];
 }) {
   const queryClient = useQueryClient();
@@ -96,6 +97,10 @@ export function NewChatDraft({
     initialDraftRef.current = loadDraft(draftScope);
   }
   const restoredDraft = initialDraftRef.current;
+  const cachedDefaultAgentId = useMemo(
+    () => loadNewChatDefaultAgentId(user?.id ?? null, organizationId),
+    [user?.id, organizationId],
+  );
 
   const [chips, setChips] = useState<string[]>(() => restoredDraft?.participantIds ?? []);
   const [draft, setDraft] = useState(() => restoredDraft?.text ?? "");
@@ -105,7 +110,7 @@ export function NewChatDraft({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSearch, setPickerSearch] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // Skip the default-delegate seed when a stored draft was restored — its
+  // Skip the default agent seed when a stored draft was restored — its
   // chips (if any) are the user's own choice and must not be overwritten.
   const seededDefaultRef = useRef(restoredDraft != null);
   const pickerContainerRef = useRef<HTMLDivElement>(null);
@@ -125,13 +130,21 @@ export function NewChatDraft({
   useAutoResizeTextarea(textareaRef, draft);
 
   /** First-page baseline of org-wide addressable agents (humans + AI),
-   *  backed by `GET /orgs/:orgId/agents` via `useOrgAgents`. Used to
-   *  seed the default chip and feed `extractMentions` for raw-typed
-   *  `@name` resolution on the small-org fast path. Picker dropdown and
-   *  `@`-autocomplete results come from the server-search hook below so
-   *  orgs above the 100-row cap can still reach every addable agent
-   *  (issue 494). */
+   *  backed by `GET /orgs/:orgId/agents` via `useOrgAgents`. Used to feed
+   *  `extractMentions` for raw-typed `@name` resolution on the small-org fast
+   *  path. Picker dropdown, `@`-autocomplete results, and the default-chip
+   *  candidate check all use server lookups so orgs above the 100-row cap can
+   *  still reach every addable agent (issue 494). */
   const { data: orgAgentsPage } = useOrgAgents({ addressableOnly: true });
+  const {
+    data: defaultCandidates,
+    isFetched: defaultCandidatesFetched,
+    isError: defaultCandidatesError,
+  } = useQuery({
+    queryKey: ["agents", "new-chat-default-candidates", user?.id ?? null, organizationId, cachedDefaultAgentId],
+    queryFn: () => getNewChatDefaultCandidates({ cachedAgentId: cachedDefaultAgentId }),
+    enabled: Boolean(myAgentId && organizationId && user?.id),
+  });
 
   /** Map of every uuid we have ever shown to the user this session —
    *  seeded from the first page and grown with each search round-trip
@@ -139,8 +152,21 @@ export function NewChatDraft({
    *  `extractMentions` stable after the user opens then clears a
    *  search input. */
   const [knownAgents, setKnownAgents] = useState<Map<string, MentionCandidate>>(() => new Map());
+  const [knownAgentRows, setKnownAgentRows] = useState<Map<string, StarterAgentCacheCandidate>>(() => new Map());
   const mergeKnown = useCallback(
-    (rows: ReadonlyArray<Agent>) => {
+    (rows: ReadonlyArray<KnownAgentRow>) => {
+      setKnownAgentRows((prev) => {
+        let changed = false;
+        const next = new Map(prev);
+        for (const a of rows) {
+          const entry: StarterAgentCacheCandidate = { uuid: a.uuid, type: a.type, status: a.status };
+          const existing = next.get(a.uuid);
+          if (existing && existing.type === entry.type && existing.status === entry.status) continue;
+          next.set(a.uuid, entry);
+          changed = true;
+        }
+        return changed ? next : prev;
+      });
       setKnownAgents((prev) => {
         let changed = false;
         const next = new Map(prev);
@@ -186,6 +212,10 @@ export function NewChatDraft({
     if (!orgAgentsPage?.items) return;
     mergeKnown(orgAgentsPage.items);
   }, [orgAgentsPage?.items, mergeKnown]);
+  useEffect(() => {
+    if (!defaultCandidates?.agent) return;
+    mergeKnown([defaultCandidates.agent]);
+  }, [defaultCandidates?.agent, mergeKnown]);
 
   /** Active `@<query>` trigger derived from the textarea's text +
    *  cursor. Drives a server-side search so the autocomplete popover
@@ -280,7 +310,7 @@ export function NewChatDraft({
     if (seededDefaultRef.current) return;
     if (chips.length > 0) return;
     // Explicit `?with=` participants (e.g. the Team page "Chat" action)
-    // take precedence over the default-delegate seed and don't need to
+    // take precedence over the default agent seed and don't need to
     // wait for the org list — the uuids come from a trusted caller and
     // chip labels resolve once knownAgents catches up.
     if (initialParticipantIds && initialParticipantIds.length > 0) {
@@ -288,15 +318,23 @@ export function NewChatDraft({
       setChips([...initialParticipantIds]);
       return;
     }
-    // Wait for the org-list query to settle before picking — without
-    // this guard the pre-fetch render would always pick `null` and
-    // arm `seededDefaultRef`, locking out the real default once the
-    // data arrives.
-    if (!orgAgentsPage?.items) return;
-    const defaultId = pickDefault(orgAgentsPage.items, myAgentId);
+    if (!myAgentId) return;
+    // Wait for the dedicated default-candidate lookup. It validates the
+    // browser-local starter-agent cache by uuid and resolves a deterministic
+    // active/addressable fallback server-side, so large orgs do not lose
+    // defaults past the 100-row roster cap.
+    if (!defaultCandidatesFetched && !defaultCandidatesError) return;
+    const defaultId = defaultCandidates?.agent?.uuid ?? null;
     seededDefaultRef.current = true;
     if (defaultId) setChips([defaultId]);
-  }, [orgAgentsPage?.items, myAgentId, chips.length, initialParticipantIds]);
+  }, [
+    defaultCandidates,
+    defaultCandidatesFetched,
+    defaultCandidatesError,
+    myAgentId,
+    chips.length,
+    initialParticipantIds,
+  ]);
 
   // Persist unsent body + chosen participants for this compose context so
   // navigating away and back (or a reload) restores the draft. saveDraft gates
@@ -419,7 +457,10 @@ export function NewChatDraft({
             source: "web",
           },
         });
-        return created.chatId;
+        return {
+          chatId: created.chatId,
+          cacheableStarterAgentId: await resolveCacheableStarterAgentId(participantIds, knownAgentRows),
+        };
       }
 
       const created = await createMeTaskChat({
@@ -434,9 +475,13 @@ export function NewChatDraft({
           source: "web",
         },
       });
-      return created.chatId;
+      return {
+        chatId: created.chatId,
+        cacheableStarterAgentId: await resolveCacheableStarterAgentId(participantIds, knownAgentRows),
+      };
     },
-    onSuccess: (chatId) => {
+    onSuccess: ({ chatId, cacheableStarterAgentId }) => {
+      saveNewChatDefaultAgentId(user?.id ?? null, organizationId, cacheableStarterAgentId);
       clearDraft(draftScope);
       setDraft("");
       setChips([]);
@@ -686,6 +731,11 @@ export function NewChatDraft({
                     inset: 0,
                     padding: "var(--sp-2) var(--sp-3)",
                     margin: 0,
+                    // Tracks the textarea, which the mobile zoom guard
+                    // (index.css) raises to the iOS no-zoom floor on phone
+                    // widths; reading the same var keeps this ghost hint
+                    // aligned with typed text.
+                    fontSize: "var(--composer-font-size)",
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
                     pointerEvents: "none",
@@ -1067,38 +1117,67 @@ function ParticipantChips({
   );
 }
 
-/** Pick a default seed chip when the user opens an empty draft.
- *
- *  Single rule: the caller's own human agent's `delegateMention` — i.e.
- *  the agent the user has explicitly designated as their stand-in. When
- *  it's unset (or the target was suspended / deleted) we return `null`
- *  and let the user pick.
- *
- *  Pre-issue 494 the default walked the caller's managed agents
- *  (personal_assistant first, then any) — which seeded a chip even when
- *  the user had no opinion about who that should be. Defaulting to the
- *  caller-declared delegate is a more deliberate signal: if the user
- *  hasn't set one, no chip is the right starting state.
- *
- *  Validation: we still need to confirm the delegate is in the org list
- *  and not suspended, so a delegate set months ago but since deleted
- *  doesn't seed a dangling uuid. When the user's own row is past the
- *  100-row first-page cap of `useOrgAgents()` we can't validate — in
- *  that rare case we return null rather than seed a chip we can't
- *  confirm. */
+type KnownAgentRow = Pick<Agent, "uuid" | "type" | "status" | "name" | "displayName" | "managerId">;
+export type StarterAgentCacheCandidate = Pick<KnownAgentRow, "uuid" | "type" | "status">;
 
-/** Exported for `__tests__/pick-default.test.ts`. The signature accepts
- *  a `Pick<Agent, ...>` slice rather than `Agent` so callers (and tests)
- *  can pass minimal fixtures without inventing inboxIds, metadata, etc. */
-export type PickDefaultAgent = Pick<Agent, "uuid" | "type" | "managerId" | "status" | "delegateMention">;
+export function newChatDefaultAgentCacheKey(userId: string | null, organizationId: string | null): string | null {
+  if (!userId || !organizationId) return null;
+  return `first-tree:new-chat-default-agent:${userId}:${organizationId}`;
+}
 
-export function pickDefault(orgAgents: ReadonlyArray<PickDefaultAgent>, myAgentId: string | null): string | null {
-  if (!myAgentId) return null;
-  const myHuman = orgAgents.find((a) => a.uuid === myAgentId);
-  const delegateUuid = myHuman?.delegateMention ?? null;
-  if (!delegateUuid) return null;
-  const delegate = orgAgents.find((a) => a.uuid === delegateUuid);
-  if (!delegate) return null;
-  if (delegate.status === "suspended") return null;
-  return delegate.uuid;
+function loadNewChatDefaultAgentId(userId: string | null, organizationId: string | null): string | null {
+  const key = newChatDefaultAgentCacheKey(userId, organizationId);
+  if (!key || typeof window === "undefined") return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function saveNewChatDefaultAgentId(userId: string | null, organizationId: string | null, agentId: string | null): void {
+  const key = newChatDefaultAgentCacheKey(userId, organizationId);
+  if (!key || typeof window === "undefined") return;
+  try {
+    if (agentId) {
+      window.localStorage.setItem(key, agentId);
+    } else {
+      window.localStorage.removeItem(key);
+    }
+  } catch {
+    // Best-effort local preference; sending the chat already succeeded.
+  }
+}
+
+export function firstCacheableStarterAgentId(
+  participantIds: ReadonlyArray<string>,
+  agentsById: ReadonlyMap<string, StarterAgentCacheCandidate>,
+): string | null {
+  for (const id of participantIds) {
+    const agent = agentsById.get(id);
+    if (agent?.type === "agent" && agent.status === "active") return id;
+  }
+  return null;
+}
+
+async function resolveCacheableStarterAgentId(
+  participantIds: ReadonlyArray<string>,
+  agentsById: ReadonlyMap<string, StarterAgentCacheCandidate>,
+): Promise<string | null> {
+  for (const id of participantIds) {
+    const agent = agentsById.get(id);
+    if (agent) {
+      if (agent.type === "agent" && agent.status === "active") return id;
+      continue;
+    }
+    try {
+      const resolved = await getNewChatDefaultCandidates({ cachedAgentId: id });
+      if (resolved.agent?.uuid === id && resolved.agent.type === "agent" && resolved.agent.status === "active") {
+        return id;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }

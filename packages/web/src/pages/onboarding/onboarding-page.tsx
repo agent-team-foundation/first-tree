@@ -19,8 +19,8 @@ import { resolveOnboardingPath, shouldLeaveOnboarding } from "./steps.js";
  * The "bounce back" is an ENTRY-time guard, decided ONCE when `/me` first
  * loads — not a live leash re-checked every render. Both admin and invitee
  * have start-chat AFTER create-agent, and creating the agent flips
- * `currentOrgHasUsableAgent` true (the
- * flow's own `refreshMe` surfaces it the moment the agent comes online). A
+ * `currentOrgHasPersonalAgent` true (the flow's own `refreshMe` surfaces it the
+ * moment the agent comes online). A
  * per-render check therefore ejected an actively-onboarding user the instant
  * they made their agent, skipping those steps. Freezing the decision at entry
  * lets them finish; they leave via the explicit `completeAndEnterChat`
@@ -35,7 +35,7 @@ import { resolveOnboardingPath, shouldLeaveOnboarding } from "./steps.js";
  * so a reload mid-flow resumes the remaining step instead of leaving.
  */
 export function OnboardingPage() {
-  const { meLoaded, role, onboardingStep, onboardingDismissedAt, onboardingCompletedAt, currentOrgHasUsableAgent } =
+  const { meLoaded, role, onboardingStep, onboardingDismissedAt, onboardingCompletedAt, currentOrgHasPersonalAgent } =
     useAuth();
   const leaveDecision = useRef<boolean | null>(null);
 
@@ -47,7 +47,7 @@ export function OnboardingPage() {
       meLoaded,
       onboardingStep,
       onboardingSuppressedAt: onboardingDismissedAt,
-      currentOrgReady: currentOrgHasUsableAgent,
+      currentOrgHasPersonalAgent,
       onboardingCompletedAt,
     });
   }

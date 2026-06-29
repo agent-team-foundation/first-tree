@@ -42,17 +42,15 @@ describe("runtimeProviderSchema", () => {
 });
 
 describe("capabilityEntrySchema", () => {
-  it("CAPABILITY_STATES enumerates the four documented states", () => {
-    expect(Object.values(CAPABILITY_STATES).sort()).toEqual(["error", "missing", "ok", "unauthenticated"].sort());
+  it("CAPABILITY_STATES enumerates the three documented states", () => {
+    expect(Object.values(CAPABILITY_STATES).sort()).toEqual(["error", "missing", "ok"].sort());
   });
 
   it("accepts a fully-formed `ok` entry", () => {
     const parsed = capabilityEntrySchema.parse({
       state: "ok",
       available: true,
-      authenticated: true,
       sdkVersion: "0.2.84",
-      authMethod: "oauth",
       runtimeSource: "path",
       runtimePath: "/usr/local/bin/codex",
       detectedAt: new Date().toISOString(),
@@ -63,13 +61,11 @@ describe("capabilityEntrySchema", () => {
     expect(parsed.runtimePath).toBe("/usr/local/bin/codex");
   });
 
-  it("accepts `missing` with null sdkVersion + auth_method=none", () => {
+  it("accepts `missing` with null sdkVersion", () => {
     const parsed = capabilityEntrySchema.parse({
       state: "missing",
       available: false,
-      authenticated: false,
       sdkVersion: null,
-      authMethod: "none",
       detectedAt: new Date().toISOString(),
     });
     expect(parsed.state).toBe("missing");
@@ -81,23 +77,65 @@ describe("capabilityEntrySchema", () => {
       capabilityEntrySchema.parse({
         state: "pending",
         available: true,
-        authenticated: false,
-        authMethod: "none",
         detectedAt: new Date().toISOString(),
       }),
     ).toThrow();
   });
+  // Dropped "rejects an invalid authMethod value": authMethod was removed from
+  // the capability schema (detection is install-only, no auth probe).
+});
 
-  it("rejects an invalid authMethod value", () => {
-    expect(() =>
-      capabilityEntrySchema.parse({
-        state: "ok",
+describe("capabilityEntrySchema — cross-version wire compat (rolling upgrade)", () => {
+  it("coerces a legacy `unauthenticated` state from an older daemon to `ok` (not rejected)", () => {
+    // Reject-on-one-bad-entry would drop a client's whole snapshot; an old
+    // daemon's `unauthenticated` (installed-but-logged-out, available:true) must
+    // be accepted and normalized to the canonical install-only `ok`.
+    const parsed = capabilityEntrySchema.parse({
+      state: "unauthenticated",
+      available: true,
+      authenticated: false,
+      authMethod: "none",
+      detectedAt: new Date().toISOString(),
+    });
+    expect(parsed.state).toBe("ok");
+  });
+
+  it("accepts (and keeps) the deprecated `authenticated` / `authMethod` an older server requires", () => {
+    const parsed = capabilityEntrySchema.parse({
+      state: "ok",
+      available: true,
+      authenticated: true,
+      authMethod: "oauth",
+      detectedAt: new Date().toISOString(),
+    });
+    expect(parsed.authenticated).toBe(true);
+    expect(parsed.authMethod).toBe("oauth");
+  });
+
+  it("accepts a new-shape entry that omits the deprecated auth fields", () => {
+    const parsed = capabilityEntrySchema.parse({
+      state: "ok",
+      available: true,
+      detectedAt: new Date().toISOString(),
+    });
+    expect(parsed.authenticated).toBeUndefined();
+    expect(parsed.authMethod).toBeUndefined();
+  });
+
+  it("a legacy `unauthenticated` entry does not poison the rest of the snapshot", () => {
+    const parsed = clientCapabilitiesSchema.parse({
+      "claude-code": { state: "ok", available: true, detectedAt: new Date().toISOString() },
+      codex: {
+        state: "unauthenticated",
         available: true,
-        authenticated: true,
-        authMethod: "magic-link", // <- not in the enum
+        authenticated: false,
+        authMethod: "none",
         detectedAt: new Date().toISOString(),
-      }),
-    ).toThrow();
+      },
+    });
+    // Both entries survive; the legacy one is normalized to `ok`.
+    expect(parsed["claude-code"]?.state).toBe("ok");
+    expect(parsed.codex?.state).toBe("ok");
   });
 });
 
@@ -110,17 +148,13 @@ describe("clientCapabilitiesSchema + updateClientCapabilitiesSchema", () => {
       "claude-code": {
         state: "ok",
         available: true,
-        authenticated: true,
         sdkVersion: "0.2.84",
-        authMethod: "oauth",
         detectedAt: new Date().toISOString(),
       },
       "future-provider": {
         state: "missing",
         available: false,
-        authenticated: false,
         sdkVersion: null,
-        authMethod: "none",
         detectedAt: new Date().toISOString(),
       },
     });

@@ -26,8 +26,8 @@ import type { GithubCreatedRepo, GithubRepo } from "./github-oauth.js";
  *   - `refreshAppUserToken`           — slide an expiring access token by
  *                                       trading in its refresh token.
  *
- * Design context: `docs/github-app-design-zh.md` §3 ("one installation,
- * three capabilities") + §5.4 ("services/github-app.ts").
+ * Design context: the GitHub App design in the First Tree context tree —
+ * `system/cloud/github/github-app.md` ("one installation, three capabilities").
  *
  * Stateless by construction: no DB / config singletons. Callers thread
  * credentials in explicitly so the module is trivially safe under

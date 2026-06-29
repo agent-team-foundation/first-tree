@@ -18,9 +18,7 @@ describe("PATCH /clients/:clientId/capabilities", () => {
     return {
       state,
       available: state === "ok",
-      authenticated: state === "ok",
       sdkVersion: state === "ok" ? "1.2.3" : null,
-      authMethod: state === "ok" ? "api_key" : "none",
       detectedAt: new Date().toISOString(),
     };
   }

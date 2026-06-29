@@ -18,8 +18,6 @@ import {
 const ok = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
   state: "ok",
   available: true,
-  authenticated: true,
-  authMethod: "oauth",
   sdkVersion: "1.0.0",
   detectedAt: "2026-06-17T00:00:00.000Z",
   ...over,
@@ -28,8 +26,6 @@ const ok = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
 const missing = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
   state: "missing",
   available: false,
-  authenticated: false,
-  authMethod: "none",
   detectedAt: "2026-06-17T00:00:00.000Z",
   ...over,
 });
@@ -46,11 +42,12 @@ const codexMissing = (): ClientCapabilities => ({
   codex: missing(),
 });
 
+// Detection is install-only, so a provider mid-login is one whose binary is not
+// yet resolvable (`missing`) — that non-`ok` state keeps the background poll
+// running while the interactive login drives its `pendingAuth` marker.
 const codexUnauth = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
-  state: "unauthenticated",
-  available: true,
-  authenticated: false,
-  authMethod: "none",
+  state: "missing",
+  available: false,
   detectedAt: "2026-06-17T00:00:00.000Z",
   ...over,
 });
@@ -64,14 +61,14 @@ const codexPending = (): CapabilityEntry =>
     },
   });
 
-/** Snapshot with codex mid-browser-auth (unauthenticated + a pending login). */
+/** Snapshot with codex mid-browser-auth (not-yet-installed + a pending login). */
 const codexPendingSnapshot = (): ClientCapabilities => ({
   "claude-code": ok(),
   "claude-code-tui": ok(),
   codex: codexPending(),
 });
 
-/** What a re-probe sees while the login is still in flight: plain unauth. */
+/** What a re-probe sees while the login is still in flight: still not installed. */
 const codexUnauthSnapshot = (): ClientCapabilities => ({
   "claude-code": ok(),
   "claude-code-tui": ok(),
@@ -424,13 +421,14 @@ describe("CapabilityRefresher", () => {
     gate.resolve({ capabilities: codexUnauthSnapshot(), mode: "full" });
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(refresher.currentEntry("codex")).toMatchObject({ state: "ok", authenticated: true });
+    expect(refresher.currentEntry("codex")).toMatchObject({ state: "ok" });
     const uploadedSnapshots = upload.mock.calls.map(([snapshot]) => snapshot as ClientCapabilities);
     expect(uploadedSnapshots).toHaveLength(3);
-    expect(uploadedSnapshots.some(({ codex }) => codex?.state === "unauthenticated" && !codex.pendingAuth)).toBe(false);
+    // The stale aggregate probe (codex still not installed, no pending marker)
+    // must never overwrite the completed install entry.
+    expect(uploadedSnapshots.some(({ codex }) => codex?.state === "missing" && !codex.pendingAuth)).toBe(false);
     expect(uploadedSnapshots[uploadedSnapshots.length - 1]?.codex).toMatchObject({
       state: "ok",
-      authenticated: true,
     });
     refresher.stop();
   });

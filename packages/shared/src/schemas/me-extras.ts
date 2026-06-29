@@ -135,13 +135,16 @@ export type OnboardingEvent = z.infer<typeof onboardingEventSchema>;
  * team-of-teammates" without relying on the per-tab `joinPath` flag, which
  * can be lost on a different tab / device mid-onboarding.
  *
- * `hasUsableAgent` is true when this member can actually use a non-human
- * agent in that org — one they manage themselves OR one another member set
- * to `visibility="organization"`. It is the org-scoped "is this team set up
- * for me" signal that gates onboarding's create-agent step: onboarding
- * completion is otherwise account-level (a returning user who set up an
- * agent in any prior org), which would wrongly skip create-agent when they
- * join a brand-new / all-private org where they have nothing to use.
+ * `hasUsableAgent` is true when this member can use a non-human agent in
+ * that org — one they manage themselves OR one another member set to
+ * `visibility="organization"`. This is the general product availability bit
+ * for team/chat surfaces; it is not sufficient to complete onboarding because
+ * a joining member still needs their own personal agent.
+ *
+ * `hasPersonalAgent` is true when this membership manages at least one active
+ * non-human agent in the org. Onboarding uses this own-agent readiness bit for
+ * the create-agent step so a returning user who joins a mature team with a
+ * shared org-visible agent still creates their own teammate before kickoff.
  */
 export const meMembershipSchema = z.object({
   id: z.string(),
@@ -151,6 +154,7 @@ export const meMembershipSchema = z.object({
   agentId: z.string(),
   orgHasOtherMembers: z.boolean(),
   hasUsableAgent: z.boolean(),
+  hasPersonalAgent: z.boolean(),
   onboardingSuppressedAt: z.string().nullable(),
   onboardingSuppressedReason: z.enum(["finish_later", "completed", "invitee_skip"]).nullable(),
   onboardingCompletedAt: z.string().nullable(),

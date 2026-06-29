@@ -16,6 +16,7 @@ const authMock = vi.hoisted(() => ({
     onboardingDismissedAt: null as string | null,
     onboardingCompletedAt: null as string | null,
     currentOrgHasUsableAgent: false,
+    currentOrgHasPersonalAgent: false,
   },
 }));
 
@@ -95,6 +96,7 @@ beforeEach(() => {
     onboardingDismissedAt: null,
     onboardingCompletedAt: null,
     currentOrgHasUsableAgent: false,
+    currentOrgHasPersonalAgent: false,
   };
   flowMock.activeStep = "create-team";
   document.body.innerHTML = "";
@@ -120,6 +122,7 @@ describe("OnboardingPage", () => {
       onboardingStep: "completed",
       onboardingCompletedAt: "2026-05-31T00:00:00.000Z",
       currentOrgHasUsableAgent: true,
+      currentOrgHasPersonalAgent: true,
     };
 
     const container = await renderRoute(<OnboardingPage />);
@@ -130,13 +133,14 @@ describe("OnboardingPage", () => {
   it("keeps a user in the flow on a hard reload after create-agent (no completion stamp yet)", async () => {
     // A full page reload builds a fresh OnboardingPage whose leave-decision ref
     // starts null and recomputes from /me. Post-create-agent the server reports
-    // onboardingStep "completed" + a ready org, but this membership's completion
+    // onboardingStep "completed" + a personal agent, but this membership's completion
     // stamp is still null (start-chat hasn't run). The route must
     // resume the remaining step, NOT bounce to the workspace.
     authMock.value = {
       ...authMock.value,
       onboardingStep: "completed",
       currentOrgHasUsableAgent: true,
+      currentOrgHasPersonalAgent: true,
       onboardingCompletedAt: null,
     };
     flowMock.activeStep = "start-chat";
@@ -147,9 +151,14 @@ describe("OnboardingPage", () => {
     expect(container.textContent).toContain("Start Chat Step");
   });
 
-  it("does NOT eject a user whose org gains a usable agent mid-flow (created at create-agent)", async () => {
-    // Entry: actively onboarding, no usable agent yet → on the create-agent step.
-    authMock.value = { ...authMock.value, onboardingStep: "create_agent", currentOrgHasUsableAgent: false };
+  it("does NOT eject a user whose org gains a personal agent mid-flow (created at create-agent)", async () => {
+    // Entry: actively onboarding, no personal agent yet → on the create-agent step.
+    authMock.value = {
+      ...authMock.value,
+      onboardingStep: "create_agent",
+      currentOrgHasUsableAgent: false,
+      currentOrgHasPersonalAgent: false,
+    };
     flowMock.activeStep = "create-agent";
 
     // Fresh element each render so React actually reconciles on the flip
@@ -170,12 +179,17 @@ describe("OnboardingPage", () => {
     await flush();
     expect(container.textContent).toContain("Create Agent Step");
 
-    // Mid-flow: the just-created agent comes online → currentOrgHasUsableAgent
+    // Mid-flow: the just-created agent comes online → currentOrgHasPersonalAgent
     // flips true and the flow advances to start-chat. The route must NOT
     // bounce to the workspace — start-chat is still ahead of create-agent in
     // the admin sequence. (Regression: the leave-gate used to re-evaluate
     // every render and eject here.)
-    authMock.value = { ...authMock.value, onboardingStep: "completed", currentOrgHasUsableAgent: true };
+    authMock.value = {
+      ...authMock.value,
+      onboardingStep: "completed",
+      currentOrgHasUsableAgent: true,
+      currentOrgHasPersonalAgent: true,
+    };
     flowMock.activeStep = "start-chat";
     await act(async () => root?.render(renderTree()));
     await flush();

@@ -1,5 +1,7 @@
 -- GitHub App installation registry. See packages/server/src/db/schema/github-app-installations.ts
--- for the Drizzle types, and docs/github-app-design-zh.md for the design rationale.
+-- for the Drizzle types, and the GitHub App design in the First Tree context
+-- tree — system/cloud/github/github-app.md (raw record:
+-- raw-context/proposals/github-app-design.20260610.md) for the design rationale.
 --
 -- One row per (GitHub account ↔ Hub team) binding. Replaces the per-repo
 -- OAuth + webhook-secret model that lived in

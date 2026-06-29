@@ -1,6 +1,6 @@
 {
   "name": "first-tree-dev",
-  "version": "0.5.9",
+  "version": "0.5.10",
   "type": "module",
   "description": "First Tree — unified CLI for Context Tree onboarding, agent management, and team messaging. (Source-tree dev build; CI rewrites `name` and `bin` for prod / staging publishes — see docs/local-dev-isolation.md.)",
   "keywords": [
@@ -29,6 +29,8 @@
     "dist",
     "skills",
     "scripts/prune-codex-runtime-binary.mjs",
+    "scripts/prune-claude-runtime-binary.mjs",
+    "scripts/prune-claude-sdk-deps.mjs",
     "README.md",
     "LICENSE"
   ],
@@ -43,7 +45,7 @@
     "coverage": "pnpm run build && vitest run --coverage --passWithNoTests",
     "prepack": "rm -rf skills && cp -R ../../skills .",
     "postpack": "rm -rf skills",
-    "postinstall": "node scripts/prune-codex-runtime-binary.mjs"
+    "postinstall": "node scripts/prune-codex-runtime-binary.mjs && node scripts/prune-claude-runtime-binary.mjs && node scripts/prune-claude-sdk-deps.mjs"
   },
   "license": "Apache-2.0",
   "repository": {

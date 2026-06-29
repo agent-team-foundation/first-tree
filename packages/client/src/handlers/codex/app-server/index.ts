@@ -15,7 +15,7 @@ import {
 } from "../../../runtime/bootstrap.js";
 import { type CodexBinaryResolution, resolveCodexRuntimeBinary } from "../../../runtime/capabilities/codex.js";
 import { type ChatContext, fetchChatContext } from "../../../runtime/chat-context.js";
-import { renderChatContextPrompt } from "../../../runtime/chat-context-section.js";
+import { renderChatContextPrompt, renderRuntimeOutputContract } from "../../../runtime/chat-context-section.js";
 import {
   type ContextTreeAttribution,
   resolveContextTreeRelativePath,
@@ -1015,8 +1015,14 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   function consumePendingChatContext(inputText: string): string {
     const chatPrompt = pendingChatContextPrompt;
     pendingChatContextPrompt = null;
-    if (!chatPrompt) return inputText;
-    return `${chatPrompt}\n\n${inputText}`;
+    // Codex has no persistent system-prompt channel (unlike the Claude path's
+    // `systemPrompt.append`), so the same provider-neutral runtime contract
+    // rides every turn input — keeping the console/outbox boundary in the
+    // immediate context tail where a "discuss only / hold off" instruction also
+    // lands. Prepended ahead of any chat-context block.
+    const contract = renderRuntimeOutputContract();
+    const prefix = chatPrompt ? `${contract}\n\n${chatPrompt}` : contract;
+    return `${prefix}\n\n${inputText}`;
   }
 
   async function createCurrentTurn(

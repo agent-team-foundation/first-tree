@@ -1,4 +1,11 @@
-import type { Agent, AgentSkills, CreateAgent, UpdateAgent } from "@first-tree/shared";
+import type {
+  Agent,
+  AgentSkills,
+  CreateAgent,
+  NewChatDefaultCandidatesRequest,
+  NewChatDefaultCandidatesResponse,
+  UpdateAgent,
+} from "@first-tree/shared";
 import { ApiError, api, getStoredTokens, withOrg } from "./client.js";
 
 type PaginatedAgents = {
@@ -38,6 +45,12 @@ export function listAllAgents(params?: { limit?: number; cursor?: string }): Pro
   if (params?.cursor) qs.set("cursor", params.cursor);
   const query = qs.toString();
   return api.get<PaginatedAgents>(withOrg(`/agents/all${query ? `?${query}` : ""}`));
+}
+
+export function getNewChatDefaultCandidates(
+  data: NewChatDefaultCandidatesRequest,
+): Promise<NewChatDefaultCandidatesResponse> {
+  return api.post<NewChatDefaultCandidatesResponse>(withOrg("/agents/new-chat-default-candidates"), data);
 }
 
 /**

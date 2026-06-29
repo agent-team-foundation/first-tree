@@ -94,8 +94,8 @@ Create or update a GitHub App in GitHub, then set:
 - Enable "Request user authorization (OAuth) during installation".
 
 Permissions and events are declared in the GitHub App settings page. The install
-and authorize URLs do not carry these values. See
-[../github-app-design-zh.md](../github-app-design-zh.md) for the design
+and authorize URLs do not carry these values. See the GitHub App design in the
+First Tree context tree (`system/cloud/github/github-app.md`) for the design
 contract.
 
 ### Permissions
