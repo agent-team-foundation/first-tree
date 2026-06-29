@@ -1,11 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { assertCommandOk, runCommand, writeText } from "../../core/commands.js";
 import { appendEvent, previewText } from "../../core/events.js";
+import { runFixtureVerify } from "../../core/fixture-verify.js";
 import type { EvalReporter } from "../../core/reporter.js";
-import { stripShimTraceLines } from "../../core/reporter.js";
 import { installRepoSkill, parseSkillDescription } from "../../core/skills/install.js";
 import type { CommandResult, RunPaths } from "../../core/types.js";
 import type { FirstTreeReadEvalCase, FixtureValidation } from "./types.js";
@@ -460,7 +459,7 @@ export function validateFixture(
     errors.push(`missing ${missing.reason}: ${missing.path}`);
   }
 
-  const verifyResult = runFixtureVerify(paths, contextTreePath, caseId, verbose, reporter);
+  const verifyResult = runFixtureVerify({ caseId, contextTreePath, paths, reporter, verbose });
   if (verifyResult.exitCode !== 0) {
     errors.push(
       `tree verify failed with exit ${verifyResult.exitCode}: ${previewText(verifyResult.stderr || verifyResult.stdout)}`,
@@ -475,56 +474,4 @@ export function validateFixture(
     requiredFilesOk,
     verifyResult,
   };
-}
-
-function runFixtureVerify(
-  paths: RunPaths,
-  contextTreePath: string,
-  caseId: string,
-  verbose: boolean,
-  reporter: EvalReporter,
-): CommandResult {
-  const args = ["tree", "verify", "--tree-path", contextTreePath];
-  appendEvent(paths.eventsPath, {
-    contextTreePath,
-    type: "fixture_validation_started",
-  });
-  reporter.fixtureValidationStarted(args, contextTreePath);
-
-  const env = {
-    ...process.env,
-    FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
-    FIRST_TREE_EVAL_CASE_ID: caseId,
-    FIRST_TREE_EVAL_PHASE: "fixture_validation",
-    FIRST_TREE_EVAL_VERBOSE: verbose ? "1" : "0",
-    PATH: `${paths.binDir}:${process.env.PATH ?? ""}`,
-  };
-  const result = spawnSync("first-tree", args, {
-    cwd: paths.workspacePath,
-    encoding: "utf8",
-    env,
-    maxBuffer: 20 * 1024 * 1024,
-  });
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
-  reporter.shimTraceLines(stderr);
-
-  const commandResult: CommandResult = {
-    args,
-    command: "first-tree",
-    cwd: paths.workspacePath,
-    exitCode: result.status ?? 1,
-    stderr: stripShimTraceLines(stderr),
-    stdout,
-  };
-
-  appendEvent(paths.eventsPath, {
-    exitCode: commandResult.exitCode,
-    stderrPreview: previewText(commandResult.stderr),
-    stdoutPreview: previewText(commandResult.stdout),
-    type: "fixture_validation_finished",
-  });
-  reporter.fixtureValidationFinished(commandResult);
-
-  return commandResult;
 }

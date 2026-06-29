@@ -110,6 +110,10 @@ The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs
 the relevant skill, prepends command shims such as `first-tree` to `PATH`, and
 runs `codex exec --json` from the case workspace for live eval commands.
+Fixture validation runs `tree verify` through the per-run `first-tree` shim by
+default. To validate fixtures with an installed channel binary instead, set
+`FIRST_TREE_EVAL_VERIFY_BIN` to the desired executable, for example
+`FIRST_TREE_EVAL_VERIFY_BIN=first-tree-staging`.
 Live gate runs do not inherit the operator's full environment. The Codex
 process receives an allowlisted environment plus an isolated `HOME`, temp
 directory, and XDG cache/config directories under the case run root. The model
