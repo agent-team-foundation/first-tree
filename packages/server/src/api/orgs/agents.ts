@@ -3,6 +3,7 @@ import {
   agentPinnedMessageSchema,
   createAgentSchema,
   listAgentsQuerySchema,
+  newChatDefaultCandidatesRequestSchema,
   paginationQuerySchema,
 } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
@@ -11,6 +12,10 @@ import { requireOrgMembership } from "../../scope/require-org.js";
 import * as agentService from "../../services/agent.js";
 import { resolveAvatarImageUrl } from "../../services/agent.js";
 import { sendToClient } from "../../services/connection-manager.js";
+
+function serializeNewChatDefaultCandidate(agent: agentService.NewChatDefaultCandidateAgent) {
+  return { ...agent, createdAt: agent.createdAt.toISOString() };
+}
 
 /**
  * Class B — org-scoped agent collection routes.
@@ -107,6 +112,15 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
         }),
       })),
       nextCursor: result.nextCursor,
+    };
+  });
+
+  app.post<{ Params: { orgId: string } }>("/new-chat-default-candidates", async (request) => {
+    const scope = await requireOrgMembership(request, app.db);
+    const body = newChatDefaultCandidatesRequestSchema.parse(request.body ?? {});
+    const result = await agentService.getNewChatDefaultCandidate(app.db, scope, body.cachedAgentId);
+    return {
+      agent: result.agent ? serializeNewChatDefaultCandidate(result.agent) : null,
     };
   });
 

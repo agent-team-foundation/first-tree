@@ -296,23 +296,24 @@ const RUNTIME_PROVIDER_ORDER = ["claude-code", "claude-code-tui", "codex"];
 
 function formatCapabilityDetail(entry: CapabilityEntry): string {
   if (entry.state === "ok") {
-    const bits: string[] = [];
-    if (entry.authMethod && entry.authMethod !== "none") bits.push(entry.authMethod);
+    // Install-only detection: `ok` means the runtime binary is installed, not
+    // that it is authenticated or end-to-end usable (that is discovered at
+    // session run time). Show the resolved artifact provenance, not auth.
+    const bits: string[] = ["installed"];
     if (entry.runtimeSource) bits.push(entry.runtimeSource);
     if (entry.sdkVersion) bits.push(`v${entry.sdkVersion}`);
-    if (entry.degraded) bits.push("degraded");
     if (typeof entry.latencyMs === "number") bits.push(`${entry.latencyMs}ms`);
-    return bits.length > 0 ? `ok — ${bits.join(", ")}` : "ok";
+    return `ok — ${bits.join(", ")}`;
   }
-  // Launch-verified probes always carry the provider's own message for every
-  // non-ok state — surface it verbatim instead of a generic label.
+  // `missing` / `error` carry the resolver's own reason — surface it verbatim.
   const reason = entry.error?.trim();
   return reason ? `${entry.state} — ${reason}` : entry.state;
 }
 
 /**
- * Render one capability entry as a doctor CheckResult. `ok` ⟺ the launch-
- * verified probe reached `ok` (a real provider launch succeeded).
+ * Render one capability entry as a doctor CheckResult. `ok` ⟺ the install-only
+ * probe resolved the runtime binary (installed); authentication and usability
+ * are not probed (they surface at session run time).
  */
 export function runtimeProviderCheck(provider: string, entry: CapabilityEntry): CheckResult {
   return { label: provider, ok: entry.state === "ok", detail: formatCapabilityDetail(entry) };

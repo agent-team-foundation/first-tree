@@ -1,51 +1,53 @@
 ---
 name: first-tree-welcome
 version: 1.0.0
-description: Use only when a First Tree onboarding system kickoff explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup kickoffs, ordinary chats, PR reviews, tree writes, or maintenance.
+description: Use only when a First Tree onboarding start-chat system message explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup chats, ordinary chats, PR reviews, tree writes, or maintenance.
 ---
 
 # First Tree Welcome
 
 ## Scope
 
-Use this skill only when a First Tree system onboarding message explicitly asks
-you to use `first-tree-welcome`, or when the chat is clearly the onboarding
-welcome / intro / first work chat created by First Tree. Do not use it for tree
-setup kickoffs, ordinary chats, PR reviews, tree writes, or maintenance work.
+Use this skill only when a First Tree onboarding start-chat system message
+explicitly asks you to use `first-tree-welcome`, or when the chat is clearly
+the onboarding welcome / intro / first work chat created by First Tree. Do not
+use it for tree setup chats, ordinary chats, PR reviews, tree writes, or
+maintenance work.
 
 ## Goal
 
-Help the user feel First Tree's core value: an agent can work from their GitHub
-code repo and their team's Context Tree. Guide any missing setup just enough to
-unlock that value, then steer the welcome chat toward one small, useful,
+Help the user feel First Tree's core value: an agent can work from a local
+folder, a GitHub URL via host `gh`, an already-connected repo, and when
+available the team's Context Tree. Guide any missing setup just enough to
+unlock current value, then steer the welcome chat toward one small, useful,
 verifiable task. Heavy Context Tree setup runs in a separate chat.
 
 ## Priority Order
 
 1. **Show real value from evidence.** Read available repo, local path, GitHub
    URL, or Context Tree context before claiming understanding.
-2. **Complete only the setup needed for value.** GitHub App install, repo
-   selection, and Context Tree binding are paths to useful work, not task
-   options.
+2. **Complete only the setup needed for value.** Prefer local path and host
+   `gh` for ordinary GitHub work. GitHub App install, repo authorization, and
+   Context Tree binding are platform setup paths, not task options.
 3. **Land on a small task.** When evidence supports it, ask the user to choose a
    bounded first task that can produce a clear result quickly.
 4. **Keep tree work in its lane.** Mention tree setup briefly, then use or point
    to the separate tree setup chat for seeding or updating the Context Tree.
 
-Do not pretend the user sent the kickoff. First Tree sent it.
+Do not pretend the user sent the start-chat system message. First Tree sent it.
 
 ## Read Setup State First
 
-Before your first substantive reply, infer the onboarding state from the kickoff
-message, runtime briefing, repo resources, Context Tree binding, and available
-local files:
+Before your first substantive reply, infer the onboarding state from the
+start-chat system message, runtime briefing, repo resources, Context Tree
+binding, and available local files:
 
 - role: admin, invitee, or unclear;
-- kickoff kind: `intro`, `work`, or `tree`;
+- start-chat kind: `intro`, `work`, or `tree`;
 - GitHub App: missing, installed, or unknown;
 - code repo: selected/recommended, local path/URL provided, or none;
 - Context Tree: no binding, newly bound empty tree, bound populated tree, or unknown;
-- tree setup chat: already exists, explicitly promised by kickoff, or absent.
+- tree setup chat: already exists, explicitly promised by start-chat, or absent.
 
 If state is unknown, say what is missing and ask for the smallest useful input.
 Do not invent repo access, GitHub authorization, or tree readiness.
@@ -58,11 +60,11 @@ evidence to read and which first-task options to offer.
 
 | Priority | State | What to do |
 | --- | --- | --- |
-| 1 | Tree kickoff chat | This is the heavy tree lane. Use `first-tree-seed`, `first-tree-read`, or `first-tree-write` as appropriate instead of this value-chat flow. |
+| 1 | Tree setup chat | This is the heavy tree lane. Use `first-tree-seed`, `first-tree-read`, or `first-tree-write` as appropriate instead of this value-chat flow. |
 | 2 | Invitee on a not-ready team | Do not show admin setup, select repos, or create a duplicate tree. Offer a meet-the-agent / local-path path now and note that an admin finishes team setup. |
-| 3 | No repo connected / intro chat | Ask for one local clone path or GitHub URL. Do not ask for GitHub authorization first. |
+| 3 | No repo connected / intro chat | Ask for one local clone path or GitHub URL. For GitHub URLs, try host `gh` / local credentials first. Do not ask for GitHub authorization first. |
 | 4 | Team repo/resource exists but local credentials cannot read it | State the exact read failure. Do not claim private repo contents. Ask for a local clone path, accessible URL, or credential setup. |
-| 5 | Admin missing GitHub App for durable code access after local path/URL or repo evidence exists | Give value from available local path or accessible URL first. When durable team access is the blocker, use Setup Handoff to provide a stable deep link or durable fallback. |
+| 5 | Admin missing GitHub App for durable platform access after local path/URL or repo evidence exists | Give value from available local path or accessible URL first. When follow, webhook events, team repo resources, or Context Tree setup is the blocker, use Setup Handoff to provide a stable deep link or durable fallback. |
 | 6 | Admin has GitHub App but no selected/recommended repo | Explain that repo selection lets the agent work with code long-term. If any local path or URL is available, inspect it now; otherwise point to the product repo-selection surface using Setup Handoff. |
 | 7 | Repo readable but Context Tree missing or empty | Give code-based value in this chat. Mention that the separate tree chat will build the team's shared memory; do not make tree setup a first-task option. |
 | 8 | Repo readable and populated Context Tree readable | Read both, cite concrete evidence, then offer first-task options. Do not seed the tree. |
@@ -87,7 +89,7 @@ Before handing off:
    admin and ask who should be involved.
 2. Look for stable target data: console base URL, org/team slug, product deep
    link, GitHub App install URL, or GitHub App slug. Sources may include the
-   kickoff message, runtime briefing, non-secret local config, product context,
+   start-chat system message, runtime briefing, non-secret local config, product context,
    or `first-tree agent status` output. Use the channel-correct binary name from
    the runtime briefing. Do not expose tokens, secrets, or private keys.
 3. If the human is an admin, give the most specific stable target available:
@@ -104,7 +106,7 @@ Before handing off:
 After a setup handoff completes or new access appears, re-read setup state and
 continue this value chat from the first matching Setup State Matrix row. Do not
 treat setup handoff as a mode switch: heavy tree seeding or updating stays in a
-separate tree kickoff chat, while this chat uses newly readable repo or tree
+separate tree setup chat, while this chat uses newly readable repo or tree
 context to offer or continue useful first-task work.
 
 Do not hardcode exact button labels, avatar menus, tab names, or step-by-step
@@ -114,7 +116,18 @@ that can drift.
 
 ## First Response Contract
 
-Your first substantive reply in a welcome / intro / work chat must:
+Your first substantive reply depends on whether you already have evidence to
+read:
+
+**A. No project yet** — the default onboarding first chat: no repo connected,
+no local path, and no GitHub URL given. Your first result is to ask the user
+for the project — a local folder path or a GitHub URL — without faking
+understanding. If they share a GitHub URL, use host `gh` first. This ask is a
+legitimate first result, not a failure; the evidence-backed contract in B
+applies to your next reply, once a project exists.
+
+**B. Evidence available** — a repo is connected, or the user has given a local
+path or URL. Your first substantive reply must:
 
 1. State specific understanding from evidence: stack, entry points, important
    modules, tests, TODOs, conventions, risks, repo shape, or team context you
@@ -192,10 +205,15 @@ If First Tree says no repo is connected:
 1. Do not ask for GitHub App authorization first.
 2. Ask for either a local clone path or a GitHub URL.
 3. If they provide a local path, inspect it on the machine and give the same evidence-backed task request.
-4. If they provide a GitHub URL, use local git/gh credentials when available; if access fails, explain the exact next step.
-5. Only after giving value should you ask whether this should become long-term team code.
+4. If they provide a GitHub URL, use host `gh` or local git credentials when available.
+5. If `gh` is missing, unauthenticated, or lacks access, explain that exact gap and ask for the narrowest recovery: local clone path, GitHub CLI install, or `gh auth login` / account access.
+6. Only after giving value should you ask whether this should become long-term team code.
 
-Long-term team setup, GitHub App authorization, or `gh repo create` all require explicit user confirmation. Use a tracked ask for those confirmations.
+Long-term team setup, GitHub App authorization, repo authorization, Context
+Tree creation/binding, or `gh repo create` all require explicit user
+confirmation. Use a tracked ask for those confirmations. If the user is not an
+admin, explain that those are admin-owned setup actions and continue with local
+path / host `gh` when possible.
 
 ## Tree Chat Handoff
 
@@ -213,9 +231,12 @@ setup chat. In a tree setup chat, use `first-tree-seed`, `first-tree-read`, or
 ## Role Guardrails
 
 - Admins may be guided through GitHub App, repo selection, and Context Tree
-  setup surfaces.
+  setup surfaces only after the current task needs durable First Tree platform
+  capability.
 - Invitees must not be asked to select team repos, install the team's GitHub
   App, create a duplicate Context Tree, or mutate org-wide setup.
+- A GitHub URL alone is not a reason to ask for First Tree GitHub App
+  installation. Try host `gh` first.
 - Private repo access depends on the member's local host credentials. Do not
   promise access to named private repos until reads actually succeed.
 - Authorization, repo creation, pushes, PR creation, and destructive actions
@@ -230,5 +251,7 @@ setup chat. In a tree setup chat, use `first-tree-seed`, `first-tree-read`, or
 - Do not put `Skip for now` in request options; rely on the web ask footer Skip.
 - Keep the menu as a request when the user is choosing between real tasks.
 - Do not block the value chat on Context Tree setup.
+- Do not ask for GitHub App installation or repo authorization when host `gh`
+  can complete the current GitHub task.
 - Do not perform authorization, repo creation, pushes, or PR creation without explicit consent.
 - Do not use retired onboarding skill names such as `first-tree-guide`, `first-tree-onboarding`, or `first-tree-kickoff`.

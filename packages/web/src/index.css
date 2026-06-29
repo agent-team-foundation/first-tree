@@ -1983,3 +1983,38 @@ body:has(#onboarding-preview-root) hearback-widget {
   padding: var(--sp-2) var(--sp-2_5);
   text-transform: uppercase;
 }
+
+/* ============================================================================
+   Mobile form-control zoom guard
+   ----------------------------------------------------------------------------
+   iOS Safari auto-zooms the viewport when a focused <input>/<textarea>/<select>
+   resolves to a font-size below 16px. Our dense type scale puts most controls
+   at 12–13px (text-body / text-subtitle), so every tap on the composer zoomed
+   the page. On phone-width viewports, raise every form control to the 16px
+   threshold so focusing one never triggers the zoom.
+
+   This rule is intentionally UNLAYERED: it sits outside Tailwind's
+   `@layer utilities`, so it beats the inlined `.text-body` / `.text-subtitle`
+   font-size utilities (cascade layers lose to unlayered rules) without needing
+   `!important`.
+
+   The composer / new-chat / ask-takeover surfaces paint a mention-highlight
+   *mirror* layer (a sibling <div>, not a form control) that must stay
+   glyph-aligned with its textarea. The rule above can't reach those divs, so
+   each mirror reads `--composer-font-size` instead — defined here as the
+   resting subtitle size and bumped to the same 16px under the SAME breakpoint,
+   so textarea and mirror flip together and never drift. */
+:root {
+  --composer-font-size: var(--text-subtitle);
+}
+
+@media (max-width: 47.999rem) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+  :root {
+    --composer-font-size: 16px;
+  }
+}

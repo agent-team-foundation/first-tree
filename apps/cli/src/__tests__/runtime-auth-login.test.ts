@@ -5,25 +5,19 @@ import { runRuntimeAuthLogin } from "../core/runtime-auth-login.js";
 
 const NOW = Date.parse("2026-06-22T12:00:00.000Z");
 
+// Detection is install-only: a re-probed installed provider is always `ok`
+// (no auth state). Both helpers build that install entry; `installedEntry` is
+// the marker-free re-probe result, and tests override `state`/`available` for
+// the binary-vanished (`missing`) case.
 const okEntry = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
   state: "ok",
   available: true,
-  authenticated: true,
-  authMethod: "auth_json",
   sdkVersion: "0.130.0",
   detectedAt: "2026-06-22T12:00:01.000Z",
   ...over,
 });
 
-const unauthEntry = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => ({
-  state: "unauthenticated",
-  available: true,
-  authenticated: false,
-  authMethod: "none",
-  sdkVersion: "0.130.0",
-  detectedAt: "2026-06-22T12:00:01.000Z",
-  ...over,
-});
+const installedEntry = (over: Partial<CapabilityEntry> = {}): CapabilityEntry => okEntry(over);
 
 type Recorded = { provider: string; entry: CapabilityEntry };
 
@@ -60,7 +54,7 @@ function harness(opts: {
       await new Promise((r) => setTimeout(r, 0));
       return opts.outcome ?? ({ ok: true } as const);
     },
-    probeCodex: async (): Promise<CapabilityEntry> => opts.probeResult ?? unauthEntry(),
+    probeCodex: async (): Promise<CapabilityEntry> => opts.probeResult ?? installedEntry(),
   };
   return { calls, logs, deps };
 }
@@ -71,13 +65,14 @@ describe("runRuntimeAuthLogin — primary browser OAuth", () => {
     await runRuntimeAuthLogin({ provider: "codex", ref: "r1" }, h.deps);
 
     expect(h.calls).toHaveLength(2);
-    // First: a browser pending, so the web shows "finish in browser".
-    expect(h.calls[0]?.entry.state).toBe("unauthenticated");
+    // First: the install entry (no prior entry → minimal `ok`) with a browser
+    // pending marker layered on, so the web shows "finish in browser".
+    expect(h.calls[0]?.entry.state).toBe("ok");
     expect(h.calls[0]?.entry.pendingAuth).toEqual({
       method: "browser",
       expiresAt: new Date(NOW + BROWSER_LOGIN_TIMEOUT_MS).toISOString(),
     });
-    // Then: the cleared, authenticated entry from the re-probe.
+    // Then: the cleared (marker-free) install entry from the re-probe.
     expect(h.calls[1]?.entry.state).toBe("ok");
     expect(h.calls[1]?.entry.pendingAuth).toBeUndefined();
   });
@@ -94,7 +89,7 @@ describe("runRuntimeAuthLogin — primary browser OAuth", () => {
     const h = harness({
       outcome: { ok: true },
       probeResult: okEntry(),
-      current: okEntry({ state: "unauthenticated", authenticated: false, runtimeSource: "bundled" }),
+      current: okEntry({ runtimeSource: "bundled" }),
     });
     await runRuntimeAuthLogin({ provider: "codex", ref: "r2" }, h.deps);
     expect(h.calls[0]?.entry.runtimeSource).toBe("bundled");
@@ -102,7 +97,7 @@ describe("runRuntimeAuthLogin — primary browser OAuth", () => {
   });
 
   it("on unresolved binary, reflects the real (missing) state and never logs in", async () => {
-    const h = harness({ resolveOk: false, probeResult: { ...unauthEntry(), state: "missing", available: false } });
+    const h = harness({ resolveOk: false, probeResult: { ...installedEntry(), state: "missing", available: false } });
     await runRuntimeAuthLogin({ provider: "codex", ref: "r3" }, h.deps);
 
     expect(h.calls).toHaveLength(1);
@@ -120,12 +115,14 @@ describe("runRuntimeAuthLogin — primary browser OAuth", () => {
   it("stamps lastAuthError on the re-probed entry when the login fails (so the web shows 'retry')", async () => {
     const h = harness({
       outcome: { ok: false, reason: "exit-nonzero", error: "account not authorized" },
-      probeResult: unauthEntry(),
+      probeResult: installedEntry(),
     });
     await runRuntimeAuthLogin({ provider: "codex", ref: "f1" }, h.deps);
 
     const last = h.calls.at(-1)?.entry;
-    expect(last?.state).toBe("unauthenticated");
+    // The re-probed install entry stays `ok` (install-only detection); the
+    // failure stamps `lastAuthError` so the web shows "sign-in failed — retry".
+    expect(last?.state).toBe("ok");
     expect(last?.pendingAuth).toBeUndefined();
     expect(last?.lastAuthError).toMatchObject({ reason: "exit-nonzero", message: "account not authorized" });
     expect(last?.lastAuthError?.at).toBe(new Date(NOW).toISOString());
@@ -137,13 +134,14 @@ describe("runRuntimeAuthLogin — primary browser OAuth", () => {
     expect(h.calls.at(-1)?.entry.lastAuthError).toBeUndefined();
   });
 
-  it("does not stamp lastAuthError when the re-probe is non-unauthenticated (install box covers it)", async () => {
-    // Binary vanished mid-flight → re-probe lands `missing`, which already
-    // renders an install box; a duplicate error record there would be noise.
-    const h = harness({ resolveOk: false, probeResult: { ...unauthEntry(), state: "missing", available: false } });
+  it("stamps lastAuthError even when the re-probe lands `missing` (failure is no longer state-gated)", async () => {
+    // Binary vanished mid-flight → re-probe lands `missing`. `attachAuthError`
+    // now stamps the failure whenever one is present, independent of state (the
+    // old "only when unauthenticated" gate is gone with install-only detection).
+    const h = harness({ resolveOk: false, probeResult: { ...installedEntry(), state: "missing", available: false } });
     await runRuntimeAuthLogin({ provider: "codex", ref: "f3" }, h.deps);
     expect(h.calls.at(-1)?.entry.state).toBe("missing");
-    expect(h.calls.at(-1)?.entry.lastAuthError).toBeUndefined();
+    expect(h.calls.at(-1)?.entry.lastAuthError).toMatchObject({ reason: "spawn-error" });
   });
 });
 
@@ -154,7 +152,7 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
     // Spy so a test can assert the TUI probe is NOT spawned while claude-code-tui
     // is disabled (it shares the Claude keychain, but "stop probing it" must hold
     // on this login-reflection path too).
-    const probeClaudeTui = vi.fn(async (): Promise<CapabilityEntry> => opts.probeResult ?? unauthEntry());
+    const probeClaudeTui = vi.fn(async (): Promise<CapabilityEntry> => opts.probeResult ?? installedEntry());
     const deps = {
       currentEntry: (): CapabilityEntry | undefined => undefined,
       setProviderEntry: async (provider: string, entry: CapabilityEntry): Promise<void> => {
@@ -169,7 +167,7 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
           ? ({ ok: false, error: "no claude CLI" } as const)
           : ({ ok: true, command: "/usr/local/bin/claude", baseArgs: [] as string[] } as const),
       runClaudeBrowser: async (): Promise<LoginOutcome> => opts.outcome ?? ({ ok: true } as const),
-      probeClaude: async (): Promise<CapabilityEntry> => opts.probeResult ?? unauthEntry(),
+      probeClaude: async (): Promise<CapabilityEntry> => opts.probeResult ?? installedEntry(),
       probeClaudeTui,
     };
     return { calls, logs, deps, probeClaudeTui };
@@ -200,7 +198,7 @@ describe("runRuntimeAuthLogin — claude-code browser OAuth (cc/codex parity)", 
   it("on unresolved CLI, reflects claude-code real state and never logs in (TUI untouched)", async () => {
     const h = claudeHarness({
       resolveOk: false,
-      probeResult: { ...unauthEntry(), state: "missing", available: false },
+      probeResult: { ...installedEntry(), state: "missing", available: false },
     });
     await runRuntimeAuthLogin({ provider: "claude-code", ref: "c2" }, h.deps);
 

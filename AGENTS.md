@@ -56,7 +56,6 @@ Operator-only flows such as `login`, `daemon install`, and `agent create` belong
 - `packages/server/` — `@first-tree/server` Fastify API server
 - `packages/client/` — `@first-tree/client` SDK and AgentRuntime
 - `packages/web/` — `@first-tree/web` React workspace
-- `packages/e2e/` — black-box e2e harness
 - `packages/skill-evals/` — eval tooling for repo-local skills
 - `docs/` — user, operator, development, migration, and troubleshooting docs
 - `skills/` — repo-local skill payloads

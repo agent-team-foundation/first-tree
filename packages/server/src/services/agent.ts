@@ -17,7 +17,7 @@ import {
   runtimeProviderSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
@@ -41,6 +41,15 @@ import { recomputeWatchersForAgent } from "./watcher.js";
  */
 const RESERVED_AGENT_NAME_PREFIX = "__";
 type SelectDbLike = Pick<PostgresJsDatabase<Record<string, never>>, "select">;
+export type NewChatDefaultCandidateAgent = {
+  uuid: string;
+  name: string | null;
+  displayName: string;
+  type: string;
+  status: string;
+  managerId: string | null;
+  createdAt: Date;
+};
 
 /**
  * Derive the relative URL clients should use to fetch a manager-uploaded
@@ -123,11 +132,13 @@ function clientCapabilitiesReported(metadata: unknown): boolean {
  * subkey (Option C); the column is unstructured at the DB layer, so we
  * defensively narrow before key access.
  *
- * "Supports" requires the entry's SDK to be **available** — `state: "ok"` or
- * `state: "unauthenticated"`. A `missing` or `error` entry is *reported* but
- * not usable, so we explicitly reject those rather than treating mere key
- * presence as support. Auth state is left to the user to fix at runtime
- * (the new-agent dialog surfaces an `unauthenticated` hint).
+ * "Supports" requires the entry to be **available** — i.e. `available === true`,
+ * which under install-only detection means `state: "ok"` (the binary is
+ * installed). A `missing` or `error` entry is *reported* but not installed, so
+ * we explicitly reject those rather than treating mere key presence as support.
+ * Authentication is no longer probed; a logged-out provider is still `available`
+ * (installed) and the login is resolved at session run time via the in-chat
+ * needs-login entry, not gated here.
  */
 function clientSupportsRuntimeProvider(metadata: unknown, provider: RuntimeProvider): boolean {
   if (!metadata || typeof metadata !== "object") return false;
@@ -204,8 +215,7 @@ export function legacyWireAgentType(type: string): "human" | "personal_assistant
  *   - empty / absent — client hasn't probed yet (newly registered or pre-P2
  *     install). Treat as "unknown" and allow; the in-band repair path
  *     (RUNTIME_PROVIDER_MISMATCH on bind) catches actual incompatibility.
- *   - reported, entry shows `state: ok | unauthenticated` (i.e. `available:
- *     true`) — allow.
+ *   - reported, entry shows `available: true` (install-only `state: ok`) — allow.
  *   - reported, entry missing OR `state: missing | error` — block unless
  *     `force` is set. We deliberately do NOT treat mere key presence as
  *     support: probeCapabilities() always emits an entry per built-in
@@ -899,6 +909,72 @@ export async function listAgentsForMember(
   const nextCursor = hasMore && last ? last.createdAt.toISOString() : null;
 
   return { items, nextCursor };
+}
+
+export async function getNewChatDefaultCandidate(
+  db: Database,
+  scope: OrgScope,
+  cachedAgentId: string | null | undefined,
+): Promise<{
+  agent: NewChatDefaultCandidateAgent | null;
+}> {
+  const projection = {
+    uuid: agents.uuid,
+    name: agents.name,
+    displayName: agents.displayName,
+    type: agents.type,
+    status: agents.status,
+    managerId: agents.managerId,
+    createdAt: agents.createdAt,
+  };
+
+  if (cachedAgentId && cachedAgentId !== scope.humanAgentId) {
+    const [cachedAgent] = await db
+      .select(projection)
+      .from(agents)
+      .leftJoin(members, eq(members.agentId, agents.uuid))
+      .where(
+        and(
+          eq(agents.uuid, cachedAgentId),
+          eq(agents.type, AGENT_TYPES.AGENT),
+          agentVisibilityCondition(scope.organizationId, scope.memberId),
+          agentAddressableCondition(),
+        ),
+      )
+      .limit(1);
+    if (cachedAgent) return { agent: cachedAgent };
+  }
+
+  const [ownedFallback] = await db
+    .select(projection)
+    .from(agents)
+    .where(
+      and(
+        eq(agents.organizationId, scope.organizationId),
+        eq(agents.managerId, scope.memberId),
+        eq(agents.type, AGENT_TYPES.AGENT),
+        eq(agents.status, AGENT_STATUSES.ACTIVE),
+      ),
+    )
+    .orderBy(asc(agents.createdAt))
+    .limit(1);
+  if (ownedFallback) return { agent: ownedFallback };
+
+  const [orgFallback] = await db
+    .select(projection)
+    .from(agents)
+    .leftJoin(members, eq(members.agentId, agents.uuid))
+    .where(
+      and(
+        eq(agents.type, AGENT_TYPES.AGENT),
+        agentVisibilityCondition(scope.organizationId, scope.memberId),
+        agentAddressableCondition(),
+      ),
+    )
+    .orderBy(asc(agents.createdAt))
+    .limit(1);
+
+  return { agent: orgFallback ?? null };
 }
 
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {

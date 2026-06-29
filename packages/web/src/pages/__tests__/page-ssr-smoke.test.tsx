@@ -42,9 +42,10 @@ const authMock = vi.hoisted(() => {
       agentId: nullableString("human-agent-self"),
       teamDisplayName: nullableString("Acme"),
       orgHasOtherMembers: true,
-      // Fully set-up user: connected + the selected org has a usable agent,
+      // Fully set-up user: connected + the selected org has a personal agent,
       // so the workspace renders rather than redirecting to onboarding.
       currentOrgHasUsableAgent: true,
+      currentOrgHasPersonalAgent: true,
       onboardingStep: onboardingStep("completed"),
       onboardingDismissedAt: nullableString(null),
       onboardingCompletedAt: nullableString("2026-05-01T00:00:00.000Z"),
@@ -180,17 +181,13 @@ const CLIENTS: HubClient[] = [
       "claude-code": {
         state: "ok",
         available: true,
-        authenticated: true,
         sdkVersion: "0.2.84",
-        authMethod: "oauth",
         detectedAt: NOW,
       },
       codex: {
-        state: "unauthenticated",
+        state: "ok",
         available: true,
-        authenticated: false,
         sdkVersion: "0.134.0",
-        authMethod: "none",
         detectedAt: NOW,
       },
     },
@@ -720,15 +717,21 @@ function renderPage(element: ReactElement, route = "/"): string {
   return renderWithClient(element, createClient(), route);
 }
 
-function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): OnboardingFlowValue {
+type FlowOverrides = Partial<Omit<OnboardingFlowValue, "activeStep">> & {
+  activeStep?: StepId | "connect-code";
+};
+
+function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
   const path: OnboardingPath = overrides.path ?? "admin";
   const sequence: readonly StepId[] = path === "admin" ? ADMIN_STEPS : INVITEE_STEPS;
-  const fallbackStep: StepId = path === "admin" ? "team" : "welcome";
+  const fallbackStep: StepId = path === "admin" ? "create-team" : "join-team";
   const requestedActiveStep = overrides.activeStep;
   const activeStep: StepId =
-    requestedActiveStep && sequence.some((step) => step === requestedActiveStep) ? requestedActiveStep : fallbackStep;
+    requestedActiveStep && (sequence as readonly string[]).includes(requestedActiveStep)
+      ? (requestedActiveStep as StepId)
+      : fallbackStep;
   const activeIndex = sequence.indexOf(activeStep);
-  return {
+  const base: OnboardingFlowValue = {
     path,
     sequence,
     activeIndex: overrides.activeIndex ?? Math.max(0, activeIndex),
@@ -772,13 +775,19 @@ function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): Onboardi
     markTreeAutoDetectDone: () => undefined,
     completeAndEnterChat: async () => undefined,
     finishLater: async () => undefined,
+  };
+  return {
+    ...base,
     ...overrides,
+    sequence,
+    activeIndex: overrides.activeIndex ?? Math.max(0, activeIndex),
+    activeStep,
   };
 }
 
 async function renderOnboardingStep(
   element: ReactElement,
-  overrides: Partial<OnboardingFlowValue> = {},
+  overrides: FlowOverrides = {},
   queryClient = createClient(),
 ): Promise<string> {
   const { OnboardingFlowContext } = await import("../onboarding/onboarding-flow.js");
@@ -1224,9 +1233,9 @@ describe("page SSR smoke coverage", () => {
     const { StepConnectCode } = await import("../onboarding/steps/step-connect-code.js");
     const { StepConnectComputer } = await import("../onboarding/steps/step-connect-computer.js");
     const { StepCreateAgent } = await import("../onboarding/steps/step-create-agent.js");
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     const { StepTeam } = await import("../onboarding/steps/step-team.js");
-    const { StepWelcome } = await import("../onboarding/steps/step-welcome.js");
+    const { StepJoinTeam } = await import("../onboarding/steps/step-join-team.js");
 
     const html = renderPage(
       <>
@@ -1258,10 +1267,12 @@ describe("page SSR smoke coverage", () => {
     expect(connectedHtml).toContain("close this tab");
     expect(connectedHtml).toContain('role="status"');
 
-    expect(await renderOnboardingStep(<StepTeam />, { activeStep: "team" })).toContain(
+    expect(await renderOnboardingStep(<StepTeam />, { activeStep: "create-team" })).toContain(
       "What should we call your team?",
     );
-    expect(await renderOnboardingStep(<StepWelcome />, { path: "invitee", activeStep: "welcome" })).toContain("Acme");
+    expect(await renderOnboardingStep(<StepJoinTeam />, { path: "invitee", activeStep: "join-team" })).toContain(
+      "Acme",
+    );
     expect(await renderOnboardingStep(<StepConnectComputer />, { activeStep: "connect-computer" })).toContain(
       "gandy-macbook",
     );
@@ -1277,24 +1288,24 @@ describe("page SSR smoke coverage", () => {
     expect(await renderOnboardingStep(<StepConnectCode />, { activeStep: "connect-code" })).toContain(
       "Loading your repos",
     );
-    expect(await renderOnboardingStep(<StepKickoff />, { activeStep: "kickoff" })).toContain(
-      "Your agent&#x27;s ready to get to work",
+    expect(await renderOnboardingStep(<StepStartChat />, { activeStep: "start-chat" })).toContain(
+      "Start working with your agent",
     );
     expect(
-      await renderOnboardingStep(<StepKickoff />, {
-        activeStep: "kickoff",
+      await renderOnboardingStep(<StepStartChat />, {
+        activeStep: "start-chat",
         selectedRepoUrls: [],
         treeBindingPlan: "createBinding",
         treeUrl: "",
       }),
-    ).toContain("No repo connected");
+    ).toContain("Start working with your agent");
     expect(
-      await renderOnboardingStep(<StepKickoff />, {
+      await renderOnboardingStep(<StepStartChat />, {
         path: "invitee",
-        activeStep: "kickoff",
+        activeStep: "start-chat",
         selectedRepoUrls: [],
       }),
-    ).toContain("Your agent&#x27;s ready to go");
+    ).toContain("Start working with your agent");
   });
 
   it("renders invite, GitHub App, settings, and layout surfaces", async () => {

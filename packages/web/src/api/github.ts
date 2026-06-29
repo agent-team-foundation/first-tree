@@ -13,7 +13,7 @@ export type GithubRepo = {
  * Fetch the caller's accessible GitHub repos. Server-side proxy that
  * decrypts the OAuth token captured at sign-in and calls
  * `https://api.github.com/user/repos`. Personal + every org the user
- * belongs to. Used by the invitee kickoff picker ("pick your own project").
+ * belongs to. Used by the invitee start-chat picker ("pick your own project").
  */
 export async function listGithubRepos(): Promise<GithubRepo[]> {
   const res = await api.get<{ repos: GithubRepo[] }>("/me/github/repos");

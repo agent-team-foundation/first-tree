@@ -8,36 +8,37 @@
  * tested without a DOM (matching this package's `.test.ts` convention).
  *
  * Two paths:
- *   - "admin"   — the team creator (org admin). Walks the full ceremony:
- *                 name the team, connect code, connect a computer, create
- *                 the agent, and kick off the first task.
- *   - "invitee" — joining a team an admin has already set up. Skips the
- *                 team + code steps (the team already owns those) and just
- *                 connects a computer, creates their teammate, and starts.
+ *   - "admin"   — the team creator (org admin). Creates/confirms the team,
+ *                 connects a computer, creates the agent, and starts chat.
+ *   - "invitee" — joining an existing team. Skips team-wide GitHub / Context
+ *                 Tree setup, connects a computer, creates their teammate, and
+ *                 starts chat.
  *
  * Step ids are deliberately product-facing, jargon-free concepts — never
  * "tree" / "binding" / "runtime" / "installation". The user-facing strings
  * live in copy.ts.
  */
 
-export const ADMIN_STEPS = ["team", "connect-computer", "create-agent", "connect-code", "kickoff"] as const;
-export const INVITEE_STEPS = ["welcome", "connect-computer", "create-agent", "kickoff"] as const;
+// There is intentionally no GitHub-connect ("connect-code") step in either
+// sequence: the value-first redesign moved code connection off the onboarding
+// critical path so the user reaches their agent first (GitHub access happens
+// later, from Settings or when a task needs it). The `StepConnectCode` component
+// is KEPT (preview + Context-tab tree build entry) and may be re-added to a
+// sequence here later — see its retention note. Until then nothing in the live
+// flow populates `selectedRepoUrls`, so the repo-aware branches downstream
+// (e.g. the `hasRepos` path in step-start-chat.tsx) stay dormant by design.
+export const ADMIN_STEPS = ["create-team", "connect-computer", "create-agent", "start-chat"] as const;
+export const INVITEE_STEPS = ["join-team", "connect-computer", "create-agent", "start-chat"] as const;
 
 /**
- * The subset of steps the progress indicator actually tracks: the real
- * hands-on configuration work. The opening step (`team` / `welcome`) and the
- * closing `kickoff` are journey *bookends* — an orientation page and a
- * completion celebration, not tasks — so they're deliberately excluded.
- *
- * Why this matters for the indicator: counting "name your team" or "say hello
- * and start" as steps reads them as chores and reinflates the task-list
- * pressure the wizard is trying to shed. With the bookends dropped the bar
- * shows admin 3 / invitee 2 — small enough that "how much is left" stops being
- * a source of anxiety. The bookends still render full screens; they just don't
- * carry a progress bar (the opening page previews the journey in prose
- * instead, the celebration page stays rail-free for a cleaner finish).
+ * Prominent setup progress intentionally stops at agent readiness. `start-chat`
+ * remains a real flow state because it creates the first chat and stamps
+ * completion, but it is the payoff screen after setup rather than a fourth
+ * configuration chore in the progress bar.
  */
-export const ADMIN_CONFIG_STEPS = ["connect-computer", "create-agent", "connect-code"] as const;
+export const ADMIN_PROGRESS_STEPS = ["create-team", "connect-computer", "create-agent"] as const;
+export const INVITEE_PROGRESS_STEPS = ["join-team", "connect-computer", "create-agent"] as const;
+export const ADMIN_CONFIG_STEPS = ["connect-computer", "create-agent"] as const;
 export const INVITEE_CONFIG_STEPS = ["connect-computer", "create-agent"] as const;
 
 export type AdminStepId = (typeof ADMIN_STEPS)[number];
@@ -69,40 +70,28 @@ export type InitialStepFacts = {
   onboardingStep: ServerOnboardingStep;
   /**
    * `true` when the team no longer carries its auto-generated default name,
-   * OR the user already confirmed the team step this session. Lets a
-   * returning admin skip straight past "name your team".
+   * OR the user already confirmed the team step this session. Retained for
+   * callers and tests only — `inferInitialStepIndex` no longer consults it:
+   * a fresh entry always lands on the opening step regardless of readiness.
    */
   teamSettled: boolean;
 };
 
 /**
  * Pick the step to land on when the page first mounts (or the user reloads
- * mid-flow). Driven by the few facts the server can vouch for:
+ * mid-flow). Fresh entries always start at the opening product step:
  *
- *   - `completed` (client + agent both exist) → admin resumes at connect-code
- *     (connect-code + kickoff are still ahead of create-agent); invitee at kickoff
- *   - `create_agent` (client exists, no agent) → create the teammate
- *   - `connect` / null (no client yet) → the earliest unfinished setup step
+ *   - admin   → create-team
+ *   - invitee → join-team
  *
- * Finer progress (did they finish connect-code? connect-computer?) isn't
- * server-observable, so the wizard advances those locally via Continue;
- * this only needs to avoid dropping a returning user *behind* where the
- * server proves they already are.
+ * Server facts still decide whether `/` enters onboarding at all, but once the
+ * user is in the standalone flow the prominent setup journey should begin at
+ * the first milestone. Same-tab progress is restored separately from the
+ * per-org persisted step index in onboarding-flow.tsx.
  */
 export function inferInitialStepIndex(path: OnboardingPath, facts: InitialStepFacts): number {
-  const seq = getStepSequence(path);
-  if (facts.onboardingStep === "completed") {
-    // Server proves client + agent exist (through create-agent). For admins,
-    // connect-code + kickoff are still ahead and aren't server-tracked, so
-    // resume at connect-code. For invitees, kickoff is the only step left.
-    return path === "admin" ? seq.indexOf("connect-code") : seq.indexOf("kickoff");
-  }
-  if (facts.onboardingStep === "create_agent") return seq.indexOf("create-agent");
-  // "connect" or null — no computer connected yet.
-  if (path === "admin") {
-    return facts.teamSettled ? seq.indexOf("connect-computer") : 0;
-  }
-  return 0; // invitee → welcome
+  void facts;
+  return path === "admin" ? ADMIN_STEPS.indexOf("create-team") : INVITEE_STEPS.indexOf("join-team");
 }
 
 /** Clamp an arbitrary index into the path's valid range. */
@@ -113,26 +102,30 @@ export function clampStepIndex(path: OnboardingPath, index: number): number {
   return index;
 }
 
-/** The config-step subset for a path (the steps the progress bar tracks). */
+/** The setup-only subset, kept for analytics/copy that needs chore counts. */
 export function getConfigSteps(path: OnboardingPath): readonly StepId[] {
   return path === "admin" ? ADMIN_CONFIG_STEPS : INVITEE_CONFIG_STEPS;
 }
 
+/** The steps shown in the prominent setup progress bar. */
+export function getProgressSteps(path: OnboardingPath): readonly StepId[] {
+  return path === "admin" ? ADMIN_PROGRESS_STEPS : INVITEE_PROGRESS_STEPS;
+}
+
 export type StepProgress = {
-  /** 0-based position of the active step among the config steps. */
+  /** 0-based position of the active step among the visible journey steps. */
   index: number;
-  /** How many config steps this path has (3 for admin, 2 for invitee). */
+  /** How many visible journey steps this path has. */
   total: number;
 };
 
 /**
- * Where `step` sits in the progress bar, or `null` when it's a bookend
- * (`team` / `welcome` / `kickoff`) the bar doesn't track — the indicator
- * renders nothing on those screens. Pure so the React layer stays a thin map
- * from this result to segments + a "Step N of M" label.
+ * Where `step` sits in the prominent setup progress bar. `start-chat` returns
+ * null so the final launch screen reads as the result of setup, not another
+ * setup chore.
  */
 export function resolveStepProgress(path: OnboardingPath, step: StepId): StepProgress | null {
-  const steps = getConfigSteps(path);
+  const steps = getProgressSteps(path);
   const index = steps.indexOf(step);
   if (index < 0) return null;
   return { index, total: steps.length };
@@ -145,25 +138,25 @@ export type OnboardingGateFacts = {
    * Account-level server step from `/me`. Only its `connect` / `null` value
    * is consulted here — it tells us whether the user has connected a runtime
    * client yet (a once-per-account step). The `create_agent` / `completed`
-   * distinction is org-specific and comes from `currentOrgReady` instead.
+   * distinction is org-specific and comes from `currentOrgHasPersonalAgent`
+   * instead.
    */
   onboardingStep: ServerOnboardingStep;
   /**
-   * Whether the *currently selected* org has a non-human agent this member
-   * can use (own or org-visible) — `auth.currentOrgHasUsableAgent`. Replaces
-   * the old account-level `onboardingCompletedAt` short-circuit so a
-   * returning user joining a brand-new / all-private org is still routed
-   * through create-agent for that org.
+   * Whether the *currently selected* membership manages an active non-human
+   * agent in this org — `auth.currentOrgHasPersonalAgent`. Replaces the old
+   * "usable" readiness so a returning user joining a mature team with another
+   * member's shared org-visible agent still creates their own personal agent.
    */
-  currentOrgReady: boolean;
+  currentOrgHasPersonalAgent: boolean;
   onboardingSuppressedAt: string | null;
   /**
    * The *currently selected* membership's completion stamp
    * (`auth.onboardingCompletedAt`, resolved per-membership) — non-null only
-   * once the kickoff/completion path has run for THIS org. `shouldLeaveOnboarding`
+   * once the start-chat/completion path has run for THIS org. `shouldLeaveOnboarding`
    * gates the `/onboarding` → `/` bounce on it; `shouldEnterOnboarding` ignores
    * it (the `/` auto-entry gate keys off connect + org readiness only, never
-   * completion — connect-code and kickoff are not auto-entry predicates).
+   * completion — start-chat is not an auto-entry predicate).
    */
   onboardingCompletedAt: string | null;
 };
@@ -176,10 +169,11 @@ export type OnboardingGateFacts = {
  *   1. Account-level — the user hasn't connected a runtime client yet
  *      (server step `connect` / null). Connecting a computer is a
  *      once-per-account step, so this is judged user-wide.
- *   2. Org-level — they're connected, but the *selected* org has no agent
- *      they can use (`!currentOrgReady`). This is what makes a returning,
- *      already-onboarded user still get walked through create-agent when
- *      they join a brand-new or all-private org.
+ *   2. Membership-level — they're connected, but the selected membership has
+ *      no personal agent in this org (`!currentOrgHasPersonalAgent`). This is
+ *      what makes a returning, already-onboarded user still get walked through
+ *      create-agent when they join another team, even if that team has shared
+ *      org-visible agents.
  *
  * A membership that already suppressed auto-open (finish later, invitee skip,
  * or normal completion) is never bounced. Note there is deliberately no
@@ -194,8 +188,8 @@ export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
   if (facts.onboardingStep === null) return false;
   // (1) No runtime client connected yet → start at "connect a computer".
   if (facts.onboardingStep === "connect") return true;
-  // (2) Connected, but this org has no usable agent → "create an agent" here.
-  if (!facts.currentOrgReady) return true;
+  // (2) Connected, but this membership has no personal agent → create one here.
+  if (!facts.currentOrgHasPersonalAgent) return true;
   return false;
 }
 
@@ -203,19 +197,19 @@ export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
  * Should the `/onboarding` route bounce the user back to the workspace?
  *
  * Only once the selected org's onboarding is terminally done: the user is
- * connected, the org has a usable agent, AND this membership carries its
+ * connected, the org has a personal agent, AND this membership carries its
  * completion stamp (`onboardingCompletedAt`). The stamp is the load-bearing
- * gate. Creating the agent flips `currentOrgReady` true and makes the server
- * infer `onboardingStep="completed"` the instant the agent comes online, but
- * the admin still has connect-code + kickoff ahead (the invitee, kickoff).
+ * gate. Creating the agent flips `currentOrgHasPersonalAgent` true and makes
+ * the server infer `onboardingStep="completed"` the instant the agent comes
+ * online, but both paths still have start-chat ahead.
  * The in-page leave decision is frozen in a ref so an active session isn't
  * ejected mid-flow, yet a full page reload builds a fresh component that
  * recomputes from `/me`; without the completion gate that reload bounces the
- * user out before those steps finish. Only the kickoff/completion path writes
+ * user out before those steps finish. Only the start-chat/completion path writes
  * the stamp, so gating on it keeps a reloaded user in the flow until setup is
  * genuinely finished.
  *
- * A user still on `connect`, in an org without a usable agent, or in an org
+ * A user still on `connect`, in an org without a personal agent, or in an org
  * whose membership has not been stamped complete is allowed to stay and work
  * through the wizard (including a "finish later"-dismissed user who returned
  * via "Resume"). They leave via the explicit completion / finish-later
@@ -224,19 +218,19 @@ export function shouldEnterOnboarding(facts: OnboardingGateFacts): boolean {
 export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
   if (!facts.meLoaded) return false;
   if (facts.onboardingStep === "connect" || facts.onboardingStep === null) return false;
-  if (!facts.currentOrgReady) return false;
+  if (!facts.currentOrgHasPersonalAgent) return false;
   return facts.onboardingCompletedAt !== null;
 }
 
 /**
- * Which invitee kickoff state to show, given what the team has set up. Just two:
+ * Which invitee start-chat state to show, given what the team has set up. Just two:
  *   - "ready"     → the team has BOTH a Context Tree and a GitHub connection;
  *                   the agent can do real work, so launch.
  *   - "not-ready" → either is missing. We don't distinguish "no tree" from "no
  *                   GitHub": in both cases the invitee is blocked on the admin
  *                   and can't act on it, so a single screen ("your team is still
  *                   setting up" + a "Meet your agent" bailout) covers both. The
- *                   kickoff query keeps polling, so this flips to "ready" on its
+ *                   start-chat query keeps polling, so this flips to "ready" on its
  *                   own the moment the admin finishes whichever half was missing.
  *
  * Pure so it's unit-testable (the React component just maps the result to a
@@ -244,8 +238,11 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
  * team's `recommended` repo resources automatically (enabled for every org
  * agent), so there was never anything to pick here.
  */
-export type InviteeKickoffState = "ready" | "not-ready";
+export type InviteeStartChatState = "ready" | "not-ready";
 
-export function resolveInviteeKickoffState(args: { treeUrl: string; hasInstallation: boolean }): InviteeKickoffState {
+export function resolveInviteeStartChatState(args: {
+  treeUrl: string;
+  hasInstallation: boolean;
+}): InviteeStartChatState {
   return args.treeUrl && args.hasInstallation ? "ready" : "not-ready";
 }

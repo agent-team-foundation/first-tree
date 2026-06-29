@@ -4,64 +4,83 @@ import {
   buildNoRepoBootstrap,
   buildTreeSetupBootstrap,
   buildValueFirstBootstrap,
-  FIRST_TREE_REFERENCE_URL,
 } from "../bootstrap-prose.js";
 
-describe("kickoff bootstrap prose", () => {
-  it("builds a value-first kickoff that asks for evidence-backed task options before tree work", () => {
+// These kickoff bodies are rendered verbatim to the user as a "First Tree"
+// chat bubble (the first thing a new user sees), so they must read as a plain
+// user welcome. The reliable first-tree-welcome activation is appended for the
+// agent client-side (see packages/client agent-io `onboardingSkillDirective`),
+// so the bubble itself carries no skill name or operational note.
+describe("start-chat bootstrap prose", () => {
+  it("builds a value-first first chat that reads as a user welcome, not an operational note", () => {
     const message = buildValueFirstBootstrap(["https://github.com/acme/app"], {
       agentDisplayName: "Nova",
       treeSetup: "pending",
     });
 
-    expect(message).toContain("First Tree is getting Nova up to speed on https://github.com/acme/app");
-    expect(message).toContain("Use the first-tree-welcome skill");
-    expect(message).toContain("evidence-backed");
-    expect(message).toContain("2–3");
-    expect(message).toContain("tracked request primitive");
-    expect(message).toContain("chat ask");
+    expect(message).toContain("Welcome to First Tree — this is your first chat with Nova.");
+    expect(message).toContain("It's already connected to your code:");
+    expect(message).toContain("https://github.com/acme/app");
+    expect(message).toContain("Nova will get oriented and then suggest a few small tasks you could start with");
+    expect(message).toContain("or just tell it what you have in mind");
+    expect(message).not.toContain("Operational note");
+    expect(message).not.toContain("first-tree-welcome");
+    expect(message).not.toContain("host gh");
+    expect(message).not.toContain("First response requirements:");
     expect(message).not.toContain("Skip for now");
-    expect(message).toContain("free-text accepted");
-    expect(message).toContain("separate Context Tree setup chat");
-    expect(message).not.toContain("My team's Context Tree");
-    expect(message).not.toContain("Build tree");
   });
 
-  it("builds a no-repo kickoff that asks for local code before authorization", () => {
+  it("mentions team context only when a bound tree is available", () => {
+    const none = buildValueFirstBootstrap(["https://github.com/acme/app"], {
+      agentDisplayName: "Nova",
+      treeSetup: "none",
+    });
+    expect(none).not.toContain("shared context");
+
+    const bound = buildValueFirstBootstrap(["https://github.com/acme/app"], {
+      agentDisplayName: "Nova",
+      treeSetup: "bound",
+    });
+    expect(bound).toContain("Nova can also draw on your team's shared context");
+  });
+
+  it("builds a no-repo first chat that asks for a project as a user welcome", () => {
     const message = buildNoRepoBootstrap("Nova");
 
-    expect(message).toContain("First Tree is introducing Nova before a repo is connected");
-    expect(message).toContain("Use the first-tree-welcome skill");
-    expect(message).toContain("local clone path or a GitHub URL");
-    expect(message).toContain("before any long-term team setup");
-    expect(message).toContain("tracked request primitive");
-    expect(message).toContain("chat ask");
-    expect(message).not.toContain("Skip for now");
-    expect(message).toContain("free-text");
-    expect(message).toContain("broad GitHub authorization before the user has seen repo-specific value");
+    expect(message).toContain("Welcome to First Tree — this is your first chat with Nova.");
+    expect(message).toContain("point it at a folder on your computer or paste a GitHub URL");
+    expect(message).toContain("No GitHub connection needed to begin");
+    expect(message).toContain("connect First Tree to GitHub later, only if a task needs it");
+    expect(message).not.toContain("Operational note");
+    expect(message).not.toContain("first-tree-welcome");
+    expect(message).not.toContain("Ask the user for the project");
+    expect(message).not.toContain("host gh");
   });
 
-  it("builds tree setup instructions that inspect a bound tree before choosing seed or write", () => {
+  it("builds slim tree setup instructions that inspect a bound tree before choosing seed or write", () => {
     const message = buildTreeSetupBootstrap(["https://github.com/acme/app"], {
       treeBindingPlan: "useBoundTree",
       treeUrl: "https://github.com/acme/context",
     });
 
-    expect(message).toContain("separate Context Tree setup chat");
-    expect(message).toContain("Source repo: https://github.com/acme/app");
-    expect(message).toContain("Bound Context Tree: https://github.com/acme/context");
-    expect(message).toContain("existing org Context Tree binding");
-    expect(message).toContain("Read the bound Context Tree first");
-    expect(message).toContain("If the tree is still empty");
+    expect(message).toContain("This chat sets up team context for future agent work.");
+    expect(message).toContain("Source code:");
+    expect(message).toContain("- https://github.com/acme/app");
+    expect(message).toContain("Context Tree: https://github.com/acme/context");
+    expect(message).toContain("This setup helps future agents understand the team's code, decisions, and conventions.");
+    expect(message).toContain("The first task chat stays separate.");
+    expect(message).toContain("Operational note: after reading the bound tree");
     expect(message).toContain("first-tree-seed");
     expect(message).toContain("first-tree-read");
     expect(message).toContain("first-tree-write");
+    expect(message).not.toContain("First Tree opened");
+    expect(message).not.toContain("First response requirements:");
+    expect(message).not.toContain("Do not impersonate");
     expect(message).not.toContain("first-tree-context");
     expect(message).not.toContain("bind the repo to that existing tree");
     expect(message).not.toContain("PR back to the source");
     expect(message).not.toContain("My source repo");
     expect(message).not.toContain("My team's Context Tree");
-    expect(message).toContain(FIRST_TREE_REFERENCE_URL);
   });
 
   it("builds plural create-binding tree setup instructions without a tree URL", () => {
@@ -70,11 +89,10 @@ describe("kickoff bootstrap prose", () => {
       treeUrl: null,
     });
 
-    expect(message).toContain("Source repos:");
+    expect(message).toContain("Source code:");
     expect(message).toContain("- https://github.com/acme/web");
     expect(message).toContain("- https://github.com/acme/api");
     expect(message).toContain("resolved by First Tree Cloud");
-    expect(message).toContain("created or adopted");
     expect(message).toContain("first-tree-seed");
     expect(message).not.toContain("Host the new tree");
     expect(message).not.toContain("record its URL");
@@ -82,22 +100,18 @@ describe("kickoff bootstrap prose", () => {
     expect(message).not.toContain("ask me which owner");
   });
 
-  it("builds a value-first joining-teammate invitee message", () => {
-    const message = buildInviteeReadyBootstrap("Nova", "https://github.com/acme/context");
+  it("builds a value-first joining-teammate welcome without a raw tree URL or jargon", () => {
+    const message = buildInviteeReadyBootstrap("Nova");
 
-    expect(message).toContain("welcoming Nova");
-    expect(message).toContain("Use the first-tree-welcome skill");
-    expect(message).toContain("Team Context Tree: https://github.com/acme/context");
-    expect(message).toContain("Read the team's Context Tree first");
-    expect(message).toContain("Briefly introduce");
-    expect(message).toContain("2–3");
-    expect(message).toContain("tracked request primitive");
-    expect(message).toContain("chat ask");
-    expect(message).toContain(FIRST_TREE_REFERENCE_URL);
-    // A brand-new teammate is NOT asked to write to the tree or seed it, and the
-    // admin's "my repos are now connected" voice must not leak in.
+    expect(message).toContain("Welcome to First Tree — this is your first chat with Nova.");
+    expect(message).toContain("Your team's shared context is already set up");
+    expect(message).toContain("Nova can get oriented from the team's work");
+    expect(message).toContain("Tell it what you'd like to dig into");
+    expect(message).not.toContain("Operational note");
+    expect(message).not.toContain("first-tree-welcome");
+    expect(message).not.toContain("Team context:");
+    // A brand-new teammate is NOT asked to write to or seed the tree.
     expect(message).not.toContain("first-tree-seed");
     expect(message).not.toContain("reflect them into the tree");
-    expect(message).not.toContain("are now connected");
   });
 });

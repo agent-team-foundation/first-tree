@@ -289,7 +289,7 @@ beforeEach(() => {
   onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
     needsTreeSetup: false,
     hasTreeBinding: true,
-    hasTreeSetupKickoff: true,
+    hasTreeSetupStartChat: true,
   });
 });
 

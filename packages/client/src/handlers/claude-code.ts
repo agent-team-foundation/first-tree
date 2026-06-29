@@ -73,6 +73,7 @@ import {
   claudeFailureFromAssistantMessage,
   claudeFailureFromSdkResult,
   formatClaudeProviderFailureNotice,
+  isEgressForbiddenText,
   mergeClaudeProviderFailures,
 } from "./claude-provider-error.js";
 import { consumedErrorOutcome } from "./turn-settlement.js";
@@ -1501,6 +1502,11 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // Hoisted out of the try block so the outer catch's reentry preserves it
     // across the resume boundary.
     let authHintEmitted = false;
+    // A typed auth signal whose hint is deferred until the result reveals
+    // whether it is a genuine credential failure or a network-egress 403
+    // ("Request not allowed") that only looks like auth. Held across the
+    // result boundary; flushed (emitted) for genuine auth, dropped for egress.
+    let pendingAuthHint: string | null = null;
     let pendingAssistantProviderFailure: ClaudeProviderFailure | null = null;
     const currentTurnReplaySafety = (): ReplaySafety => (turnHadUserVisibleOutput ? "user_visible" : "pre_visible");
     const resetTurnReplaySafety = (): void => {
@@ -1517,17 +1523,20 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
 
             toolCallProcessor.onMessage(message);
 
-            // Detect typed auth failure BEFORE result-message handling so the
-            // user sees the actionable hint before any redundant result error.
-            // The SDK's auth state lives in claude's own credential store —
-            // we only translate the surface error, we don't manage tokens.
+            // Capture a typed auth failure, but DEFER the hint. A typed
+            // `authentication_failed` can be the visible face of a network-egress
+            // 403 ("Request not allowed") whose detail only arrives in the later
+            // result; emitting "run claude auth login" now would mislead before
+            // the result can reveal the true cause. Decide at result settlement
+            // (or stream end). If the raw signal already shows egress (the
+            // auth_status path carries the message text), suppress it outright.
+            // The SDK's auth state lives in claude's own credential store — we
+            // only translate the surface error, we don't manage tokens.
             const authFailure = detectClaudeAuthFailure(message);
-            if (authFailure && !authHintEmitted) {
-              authHintEmitted = true;
-              sessionCtx.emitEvent({
-                kind: "error",
-                payload: { source: "sdk", message: formatAuthHint("claude-code", authFailure.rawMessage) },
-              });
+            if (authFailure && !authHintEmitted && pendingAuthHint === null) {
+              if (!isEgressForbiddenText(authFailure.rawMessage)) {
+                pendingAuthHint = authFailure.rawMessage;
+              }
             }
             const assistantProviderFailure = claudeFailureFromAssistantMessage(message);
             if (assistantProviderFailure) pendingAssistantProviderFailure = assistantProviderFailure;
@@ -1574,7 +1583,28 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
                   }
 
                   emitProviderTurnSettlementEvent(sessionCtx, settlement);
-                  if (!(authHintEmitted && settlement.classification.category === "credential")) {
+                  // The result now reveals whether a deferred auth signal is a
+                  // genuine credential failure or a network-egress 403 that only
+                  // looks like auth. Flush the auth hint for the former; for
+                  // egress, suppress it — the chat notice below carries the
+                  // correct proxy-first guidance.
+                  const settledEgressForbidden = isEgressForbiddenText(settlement.messagePreview);
+                  if (pendingAuthHint !== null) {
+                    if (!settledEgressForbidden && settlement.classification.category === "credential") {
+                      authHintEmitted = true;
+                      sessionCtx.emitEvent({
+                        kind: "error",
+                        payload: { source: "sdk", message: formatAuthHint("claude-code", pendingAuthHint) },
+                      });
+                    }
+                    pendingAuthHint = null;
+                  }
+                  if (
+                    !(
+                      (authHintEmitted || settledEgressForbidden) &&
+                      settlement.classification.category === "credential"
+                    )
+                  ) {
                     sessionCtx.emitEvent({
                       kind: "error",
                       payload: {
@@ -1672,8 +1702,30 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
               }
             }
           }
+          // Stream ended cleanly without a result to settle a deferred auth
+          // signal — emit the hint now (no result means no egress detail to
+          // suppress it).
+          if (pendingAuthHint !== null) {
+            authHintEmitted = true;
+            sessionCtx.emitEvent({
+              kind: "error",
+              payload: { source: "sdk", message: formatAuthHint("claude-code", pendingAuthHint) },
+            });
+            pendingAuthHint = null;
+          }
           return;
         } catch (err) {
+          // A deferred auth signal that never reached a result still deserves to
+          // surface — the stream-error path below reports the crash, not the
+          // auth cause.
+          if (pendingAuthHint !== null) {
+            authHintEmitted = true;
+            sessionCtx.emitEvent({
+              kind: "error",
+              payload: { source: "sdk", message: formatAuthHint("claude-code", pendingAuthHint) },
+            });
+            pendingAuthHint = null;
+          }
           // Process crash, OOM, or unexpected termination
           const errMsg = err instanceof Error ? err.message : String(err);
           sessionCtx.log(`Query error: ${errMsg}`);

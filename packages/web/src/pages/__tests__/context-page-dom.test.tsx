@@ -26,7 +26,6 @@ const resourceApiMocks = vi.hoisted(() => ({
 
 const onboardingEventMocks = vi.hoisted(() => ({
   getTreeSetupStatus: vi.fn(),
-  kickoffOnboarding: vi.fn(),
   reportOnboardingEvent: vi.fn(),
 }));
 
@@ -194,7 +193,6 @@ beforeEach(() => {
   resourceApiMocks.listTeamResourcesForOrg.mockReset();
   resourceApiMocks.createTeamResourceForOrg.mockReset();
   onboardingEventMocks.getTreeSetupStatus.mockReset();
-  onboardingEventMocks.kickoffOnboarding.mockReset();
   onboardingEventMocks.reportOnboardingEvent.mockReset();
   orgSettingsMocks.getContextTreeSetting.mockReset();
   agentApiMocks.listManagedAgents.mockResolvedValue([]);
@@ -212,9 +210,8 @@ beforeEach(() => {
   onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
     needsTreeSetup: false,
     hasTreeBinding: true,
-    hasTreeSetupKickoff: true,
+    hasTreeSetupStartChat: true,
   });
-  onboardingEventMocks.kickoffOnboarding.mockResolvedValue({ chatId: "chat-tree-setup" });
   githubAppMocks.getGithubAppInstallation.mockReset();
   githubAppMocks.getGithubAppInstallationExists.mockReset();
   githubAppMocks.getGithubAppInstallUrl.mockReset();
@@ -548,7 +545,6 @@ describe("ContextPage DOM behavior", () => {
     expect(githubMocks.listOrgGithubRepos).toHaveBeenCalledWith("org-1");
     expect(githubMocks.listOrgGithubRepos.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(resourceApiMocks.createTeamResourceForOrg).not.toHaveBeenCalled();
-    expect(onboardingEventMocks.kickoffOnboarding).not.toHaveBeenCalled();
     expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/");
 
     await act(async () => root.unmount());
@@ -602,12 +598,12 @@ describe("ContextPage DOM behavior", () => {
     await act(async () => root.unmount());
   });
 
-  it("recovers a bound tree whose setup kickoff was never sent", async () => {
+  it("does not show setup recovery on a live tree even when setup kickoff was never sent", async () => {
     authMock.value = { organizationId: "org-1", role: "admin" };
     onboardingEventMocks.getTreeSetupStatus.mockResolvedValueOnce({
       needsTreeSetup: true,
       hasTreeBinding: true,
-      hasTreeSetupKickoff: false,
+      hasTreeSetupStartChat: false,
     });
     agentApiMocks.listManagedAgents.mockResolvedValue([
       {
@@ -636,19 +632,51 @@ describe("ContextPage DOM behavior", () => {
     );
 
     const { container, root } = await renderDom(<ContextPage />);
-    await waitForText(container, "Finish Context Tree setup");
-    await click(buttonByText(container, "Build your Context Tree"));
+    await waitForText(container, "LIVE");
+    expect(container.textContent).not.toContain("Finish Context Tree setup");
+    expect(container.textContent).not.toContain("Build your Context Tree");
 
-    expect(contextApiMocks.initializeContextTree).not.toHaveBeenCalled();
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("First Tree Cloud found an existing org Context Tree binding"),
-        kind: "tree",
-        complete: true,
+    await act(async () => root.unmount());
+  });
+
+  it("does not show setup recovery on a bootstrap-only live tree", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    onboardingEventMocks.getTreeSetupStatus.mockResolvedValueOnce({
+      needsTreeSetup: true,
+      hasTreeBinding: true,
+      hasTreeSetupStartChat: false,
+    });
+    const { ContextPage } = await import("../context.js");
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
+      snapshot({
+        repo: "https://github.com/acme/context-tree",
+        branch: "main",
+        snapshotStatus: "active",
+        contextStatus: { label: "Live", detail: null, severity: "ok" },
+        nodes: [
+          {
+            id: "root",
+            parentId: null,
+            path: "",
+            sourcePath: "NODE.md",
+            title: "Context Tree",
+            kind: "root",
+            owners: [],
+            preview: null,
+            relatedNodeIds: [],
+            affectedContextArea: "root",
+            changeType: null,
+            changedAtCommit: null,
+          },
+        ],
+        edges: [],
       }),
     );
-    expect(container.querySelector('[data-testid="location"]')?.textContent).toBe("/?c=chat-tree-setup");
+
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "LIVE");
+    expect(container.textContent).not.toContain("Finish Context Tree setup");
+    expect(container.textContent).not.toContain("Build your Context Tree");
 
     await act(async () => root.unmount());
   });

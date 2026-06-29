@@ -1,0 +1,44 @@
+import { describe, expect, it } from "vitest";
+import {
+  firstCacheableStarterAgentId,
+  newChatDefaultAgentCacheKey,
+  type StarterAgentCacheCandidate,
+} from "../new-chat-draft.js";
+
+function candidate(partial: Partial<StarterAgentCacheCandidate> & Pick<StarterAgentCacheCandidate, "uuid">) {
+  return {
+    type: "agent",
+    status: "active",
+    ...partial,
+  } satisfies StarterAgentCacheCandidate;
+}
+
+describe("new chat default cache helpers", () => {
+  it("scopes the cached starter agent by user and organization", () => {
+    expect(newChatDefaultAgentCacheKey("user-1", "org-1")).toBe("first-tree:new-chat-default-agent:user-1:org-1");
+    expect(newChatDefaultAgentCacheKey(null, "org-1")).toBeNull();
+    expect(newChatDefaultAgentCacheKey("user-1", null)).toBeNull();
+  });
+
+  it("caches the first active agent chip from the successful manual New Chat participant order", () => {
+    const agents = new Map([
+      ["human-peer", candidate({ uuid: "human-peer", type: "human" })],
+      ["suspended-agent", candidate({ uuid: "suspended-agent", status: "suspended" })],
+      ["starter-agent", candidate({ uuid: "starter-agent" })],
+      ["later-agent", candidate({ uuid: "later-agent" })],
+    ]);
+
+    expect(
+      firstCacheableStarterAgentId(["human-peer", "suspended-agent", "starter-agent", "later-agent"], agents),
+    ).toBe("starter-agent");
+  });
+
+  it("returns null when the successful New Chat has no cacheable agent chip", () => {
+    const agents = new Map([
+      ["human-peer", candidate({ uuid: "human-peer", type: "human" })],
+      ["suspended-agent", candidate({ uuid: "suspended-agent", status: "suspended" })],
+    ]);
+
+    expect(firstCacheableStarterAgentId(["human-peer", "suspended-agent"], agents)).toBeNull();
+  });
+});

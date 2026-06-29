@@ -56,14 +56,17 @@ describe("DemoNavigator", () => {
     );
     expect(dom.textContent).not.toContain("What to check");
 
+    // Prev/next nav buttons render `title.slice(0, 28)`. Several scenario titles
+    // now share a long common prefix (e.g. "Ready · both …"), so a 12-char prefix
+    // would collide; mirror the source's 28-char slice to disambiguate.
     await click(
-      [...dom.querySelectorAll("button")].find((button) => button.textContent?.includes(firstTitle.slice(0, 12))) ??
+      [...dom.querySelectorAll("button")].find((button) => button.textContent?.includes(firstTitle.slice(0, 28))) ??
         null,
     );
     expect(onSelect).toHaveBeenCalledWith(DEMO_SCENARIOS[0]?.key);
 
     await click(
-      [...dom.querySelectorAll("button")].find((button) => button.textContent?.includes(thirdTitle.slice(0, 12))) ??
+      [...dom.querySelectorAll("button")].find((button) => button.textContent?.includes(thirdTitle.slice(0, 28))) ??
         null,
     );
     expect(onSelect).toHaveBeenCalledWith(DEMO_SCENARIOS[2]?.key);

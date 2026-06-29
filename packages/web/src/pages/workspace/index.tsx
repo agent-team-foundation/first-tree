@@ -108,7 +108,7 @@ export function parseParticipantList(params: URLSearchParams): string[] {
 
 export function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt, currentOrgHasUsableAgent } =
+  const { meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt, currentOrgHasPersonalAgent } =
     useAuth();
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
@@ -260,7 +260,7 @@ export function WorkspacePage() {
   }, [searchParams, setSearchParams]);
 
   // Users who haven't finished setup go through the standalone /onboarding
-  // flow — including the server-`completed`-but-no-kickoff case. Only
+  // flow — including the server-`completed`-but-no-start-chat case. Only
   // terminally completed or dismissed users fall through to the normal
   // workspace; the old inline center-panel onboarding has been retired.
   if (
@@ -268,9 +268,10 @@ export function WorkspacePage() {
       meLoaded,
       onboardingStep,
       onboardingSuppressedAt: onboardingDismissedAt,
-      currentOrgReady: currentOrgHasUsableAgent,
+      currentOrgHasPersonalAgent,
       // Not read by the entry gate (auto-entry keys off connect + org
-      // readiness only); supplied because both gates share OnboardingGateFacts.
+      // personal-agent readiness only); supplied because both gates share
+      // OnboardingGateFacts.
       onboardingCompletedAt,
     })
   ) {

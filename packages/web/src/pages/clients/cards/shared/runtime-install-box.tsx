@@ -9,7 +9,6 @@ type RuntimeInstallBoxProps = {
    * Current capability state for this provider, or null if the client
    * has never reported any. Drives the command + headline:
    *   - null / missing → "install + login" two-liner
-   *   - unauthenticated → "login only" one-liner
    *   - error → "reinstall — last probe error: ..." + install command
    *   - ok → no install box rendered (caller suppresses)
    */
@@ -101,12 +100,6 @@ export function installBoxView(
         ? `Install ${PROVIDER_LABEL[provider]} (the \`claude\` CLI + tmux >= 3.0) and run \`${PROVIDER_LOGIN_COMMAND[provider]}\` on ${hostname}.`
         : `Install ${PROVIDER_LABEL[provider]} and run \`${PROVIDER_LOGIN_COMMAND[provider]}\` on ${hostname}.`;
     return { headline, command: buildInstallCommand(provider, os) };
-  }
-  if (entry.state === "unauthenticated") {
-    return {
-      headline: `${PROVIDER_LABEL[provider]} is installed${entry.sdkVersion ? ` (v${entry.sdkVersion})` : ""} but not logged in. Run on ${hostname}:`,
-      command: PROVIDER_LOGIN_COMMAND[provider],
-    };
   }
   if (entry.state === "error") {
     return {

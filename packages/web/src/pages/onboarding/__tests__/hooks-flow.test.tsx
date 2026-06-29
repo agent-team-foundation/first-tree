@@ -6,11 +6,11 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAgentCreation } from "../../../features/agent-setup/use-agent-creation.js";
+import type { ComputerConnection } from "../../../features/agent-setup/use-computer-connection.js";
+import { useComputerConnection } from "../../../features/agent-setup/use-computer-connection.js";
 import { OnboardingFlowProvider, type OnboardingFlowValue, useOnboardingFlow } from "../onboarding-flow.js";
 import type { ServerOnboardingStep } from "../steps.js";
-import { useAgentCreation } from "../use-agent-creation.js";
-import type { ComputerConnection } from "../use-computer-connection.js";
-import { useComputerConnection } from "../use-computer-connection.js";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -61,6 +61,7 @@ const authMock = vi.hoisted(() => ({
     orgHasOtherMembers: true,
     onboardingStep: "connect" as ServerOnboardingStep,
     currentOrgHasUsableAgent: false,
+    currentOrgHasPersonalAgent: false,
     onboardingDismissedAt: null,
     onboardingCompletedAt: null,
     dismissOnboarding: vi.fn(async () => undefined),
@@ -124,6 +125,8 @@ beforeEach(() => {
     ...authMock.value,
     role: "admin",
     onboardingStep: "connect",
+    currentOrgHasUsableAgent: false,
+    currentOrgHasPersonalAgent: false,
     dismissOnboarding: vi.fn(async () => undefined),
     markOnboardingCompleted: vi.fn(async () => undefined),
     refreshMe: vi.fn(async () => undefined),
@@ -229,9 +232,12 @@ describe("onboarding hooks and flow", () => {
     expect(expectHookValue(latest.current).tokenError).toBe("token failed");
   }, 10_000);
 
-  it("creates an agent, stores its uuid, reports onboarding, and reaches online", async () => {
+  it("creates an agent, supports caller side effects, and reaches online", async () => {
     const latest = { current: null as ReturnType<typeof useAgentCreation> | null };
     const onOnline = vi.fn();
+    const onCreated = vi.fn(({ agentUuid }: { agentUuid: string }) => {
+      window.sessionStorage.setItem("test:created-agent", agentUuid);
+    });
     const queryClient = testQueryClient();
     const rosterKey = ["agents", "org-list", { addressableOnly: true }] as const;
     queryClient.setQueryData(rosterKey, {
@@ -244,7 +250,7 @@ describe("onboarding hooks and flow", () => {
       .mockResolvedValueOnce({ online: true });
 
     function Probe() {
-      latest.current = useAgentCreation(onOnline);
+      latest.current = useAgentCreation({ onCreated, onOnline });
       return <div>{latest.current.phase}</div>;
     }
 
@@ -268,8 +274,13 @@ describe("onboarding hooks and flow", () => {
         runtimeProvider: "claude-code",
       }),
     );
-    expect(sessionStorage.getItem("onboarding:agentUuid")).toBe("agent-created");
-    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("agent_created", { runtimeProvider: "claude-code" });
+    expect(onCreated).toHaveBeenCalledWith({
+      agentUuid: "agent-created",
+      args: expect.objectContaining({ runtimeProvider: "claude-code" }),
+    });
+    expect(sessionStorage.getItem("test:created-agent")).toBe("agent-created");
+    expect(sessionStorage.getItem("onboarding:agentUuid")).toBeNull();
+    expect(eventMocks.reportOnboardingEvent).not.toHaveBeenCalled();
     expect(queryClient.getQueryState(rosterKey)?.isInvalidated).toBe(true);
     expect(onOnline).toHaveBeenCalledWith("agent-created");
     expect(expectHookValue(latest.current).phase).toBe("online");
@@ -284,7 +295,7 @@ describe("onboarding hooks and flow", () => {
     agentConfigMocks.getAgentClientStatus.mockResolvedValue({ online: false });
 
     function Probe() {
-      latest.current = useAgentCreation(() => undefined);
+      latest.current = useAgentCreation();
       return <div>{latest.current.phase}</div>;
     }
 
@@ -337,6 +348,42 @@ describe("onboarding hooks and flow", () => {
     expect(expectHookValue(latest.current).phase).toBe("timeout");
   });
 
+  it("wires onboarding-specific agent side effects in the onboarding provider", async () => {
+    const latest = { current: null as OnboardingFlowValue | null };
+    clientMocks.api.post.mockResolvedValueOnce({ uuid: "agent-onboarding" });
+    agentConfigMocks.getAgentClientStatus
+      .mockResolvedValueOnce({ online: false })
+      .mockResolvedValueOnce({ online: true });
+
+    function Probe() {
+      function Inner() {
+        latest.current = useOnboardingFlow();
+        return <div>{latest.current.activeStep}</div>;
+      }
+      return (
+        <OnboardingFlowProvider path="admin">
+          <Inner />
+        </OnboardingFlowProvider>
+      );
+    }
+
+    await renderProbe(<Probe />);
+    await act(async () => {
+      await expectHookValue(latest.current).createAgent({
+        displayName: "Onboarding Bot",
+        clientId: "client-1",
+        runtimeProvider: "codex",
+        visibility: "organization",
+        organizationId: "org-1",
+      });
+    });
+
+    expect(sessionStorage.getItem("onboarding:agentUuid")).toBe("agent-onboarding");
+    expect(eventMocks.reportOnboardingEvent).toHaveBeenCalledWith("agent_created", { runtimeProvider: "codex" });
+    expect(authMock.value.refreshMe).toHaveBeenCalled();
+    expect(expectHookValue(latest.current).activeStep).toBe("connect-computer");
+  });
+
   it("persists flow progress and navigates on finish actions", async () => {
     const latest = { current: null as OnboardingFlowValue | null };
 
@@ -356,7 +403,7 @@ describe("onboarding hooks and flow", () => {
     expect(host.textContent).toContain("team");
     await act(async () => expectHookValue(latest.current).goTo(1));
     expect(expectHookValue(latest.current).activeStep).toBe("connect-computer");
-    expect(sessionStorage.getItem("onboarding:stepIndex:admin:org-1")).toBe("1");
+    expect(sessionStorage.getItem("onboarding:v2:stepIndex:admin:org-1")).toBe("1");
 
     await act(async () => expectHookValue(latest.current).finishLater());
     expect(authMock.value.dismissOnboarding).toHaveBeenCalled();
@@ -367,7 +414,29 @@ describe("onboarding hooks and flow", () => {
     // forever, so only the explicit finishLater above may have called it.
     expect(authMock.value.dismissOnboarding).toHaveBeenCalledTimes(1);
     expect(authMock.value.markOnboardingCompleted).toHaveBeenCalled();
-    expect(sessionStorage.getItem("onboarding:stepIndex:admin:org-1")).toBeNull();
+    expect(sessionStorage.getItem("onboarding:v2:stepIndex:admin:org-1")).toBeNull();
+  });
+
+  it("ignores legacy saved steps so the redesigned flow defaults to the opening step", async () => {
+    const latest = { current: null as OnboardingFlowValue | null };
+    sessionStorage.setItem("onboarding:stepIndex:admin:org-1", "1");
+
+    function Probe() {
+      function Inner() {
+        latest.current = useOnboardingFlow();
+        return <div>{latest.current.activeStep}</div>;
+      }
+      return (
+        <OnboardingFlowProvider path="admin">
+          <Inner />
+        </OnboardingFlowProvider>
+      );
+    }
+
+    await renderProbe(<Probe />);
+
+    expect(expectHookValue(latest.current).activeStep).toBe("create-team");
+    expect(sessionStorage.getItem("onboarding:v2:stepIndex:admin:org-1")).toBe("0");
   });
 
   it("does not carry a previous team's saved step into a newly created team", async () => {
@@ -386,9 +455,9 @@ describe("onboarding hooks and flow", () => {
     }
 
     // A returning admin (already has an agent in another team, so the account
-    // step is "completed") sets up team A. The org has no usable agent yet, so
-    // they land on create-agent; they advance to connect-code, persisting team
-    // A's position for the GitHub-redirect round-trip.
+    // step is "completed") sets up team A. Fresh entry still starts at the
+    // opening step; they advance to start-chat, persisting team A's final
+    // in-flow position.
     authMock.value = {
       ...authMock.value,
       organizationId: "org-A",
@@ -396,16 +465,16 @@ describe("onboarding hooks and flow", () => {
       currentOrgHasUsableAgent: false,
     };
     await renderProbe(<Probe />);
-    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
+    expect(expectHookValue(latest.current).activeStep).toBe("create-team");
     await act(async () => expectHookValue(latest.current).goTo(3));
-    expect(expectHookValue(latest.current).activeStep).toBe("connect-code");
+    expect(expectHookValue(latest.current).activeStep).toBe("start-chat");
 
     await act(async () => root?.unmount());
     root = null;
 
     // Same tab: the admin now creates a brand-new team B (no agent yet). The
-    // saved position is scoped per org, so team A's connect-code marker must
-    // NOT skip team B past create-agent — they must land on create-agent.
+    // saved position is scoped per org, so team A's start-chat marker must
+    // NOT skip team B past the opening step.
     authMock.value = {
       ...authMock.value,
       organizationId: "org-B",
@@ -413,7 +482,38 @@ describe("onboarding hooks and flow", () => {
       currentOrgHasUsableAgent: false,
     };
     await renderProbe(<Probe />);
-    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
+    expect(expectHookValue(latest.current).activeStep).toBe("create-team");
+  });
+
+  it("lands on the opening join-team step for a returning invitee without a personal agent", async () => {
+    const latest = { current: null as OnboardingFlowValue | null };
+
+    function Probe() {
+      function Inner() {
+        latest.current = useOnboardingFlow();
+        return <div>{latest.current.activeStep}</div>;
+      }
+      return (
+        <OnboardingFlowProvider path="invitee">
+          <Inner />
+        </OnboardingFlowProvider>
+      );
+    }
+
+    authMock.value = {
+      ...authMock.value,
+      role: "member",
+      organizationId: "joined-org",
+      onboardingStep: "completed",
+      currentOrgHasUsableAgent: true,
+      currentOrgHasPersonalAgent: false,
+    };
+    await renderProbe(<Probe />);
+    // Redesign: fresh onboarding entry always starts at the opening step
+    // (`inferInitialStepIndex` ignores server readiness), so this invitee — who
+    // has no personal agent yet — starts at join-team and walks forward to
+    // create-agent, rather than being dropped straight onto create-agent.
+    expect(expectHookValue(latest.current).activeStep).toBe("join-team");
   });
 
   it("re-derives the step when the org changes on a still-mounted provider", async () => {
@@ -454,8 +554,8 @@ describe("onboarding hooks and flow", () => {
     document.body.appendChild(container);
     root = createRoot(container);
 
-    // Team A: returning admin, no agent in this org yet → create-agent; advance
-    // to connect-code, persisting team A's position.
+    // Team A: returning admin, no agent in this org yet → opening step; advance
+    // to start-chat, persisting team A's position.
     authMock.value = {
       ...authMock.value,
       organizationId: "org-A",
@@ -463,16 +563,16 @@ describe("onboarding hooks and flow", () => {
       currentOrgHasUsableAgent: false,
     };
     await rerender();
-    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
+    expect(expectHookValue(latest.current).activeStep).toBe("create-team");
     await act(async () => expectHookValue(latest.current).goTo(3));
-    expect(expectHookValue(latest.current).activeStep).toBe("connect-code");
+    expect(expectHookValue(latest.current).activeStep).toBe("start-chat");
 
     // Switch to a brand-new team B (no agent) without leaving the route. The
-    // flow must re-derive for team B and land on create-agent — and must not
-    // write team A's connect-code index under team B's key.
+    // flow must re-derive for team B and land on the opening step — and must
+    // not write team A's start-chat index under team B's key.
     authMock.value = { ...authMock.value, organizationId: "org-B" };
     await rerender();
-    expect(expectHookValue(latest.current).activeStep).toBe("create-agent");
-    expect(sessionStorage.getItem("onboarding:stepIndex:admin:org-B")).not.toBe("3");
+    expect(expectHookValue(latest.current).activeStep).toBe("create-team");
+    expect(sessionStorage.getItem("onboarding:v2:stepIndex:admin:org-B")).not.toBe("3");
   });
 });

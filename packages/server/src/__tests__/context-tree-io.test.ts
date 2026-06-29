@@ -3,7 +3,9 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { chats } from "../db/schema/chats.js";
 import { contextTreeIoEvents } from "../db/schema/context-tree-io-events.js";
+import { sessionEvents } from "../db/schema/session-events.js";
 import {
+  buildContextTreeIoSummary,
   explainContextTreeIoDecision,
   reconcileContextTreeWrites,
   recordFromSessionEvent,
@@ -16,6 +18,7 @@ import { createTestAgent, useTestApp } from "./helpers.js";
 
 const TREE_REPO = "https://github.com/acme/first-tree-context.git";
 const TREE_REPO_SSH = "git@github.com:acme/first-tree-context.git";
+const ALT_TREE_REPO = "https://github.com/acme/alternate-context.git";
 
 const getApp = useTestApp();
 
@@ -673,6 +676,226 @@ describe("context-tree IO service", () => {
     expect(io.skipped).toEqual(skipped);
   });
 
+  it("skips diagnostics scan for already-recorded IO events", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: Array<{ name: string; fields?: Record<string, unknown> }> = [];
+
+    const recorded = await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-recorded",
+        name: "Read",
+        args: {},
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-skipped",
+        name: "Bash",
+        args: { command: "echo x > /tmp/context-tree/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+    await recordFromSessionEvent(app.db, {
+      organizationId: seed.organizationId,
+      agentId: seed.agent.uuid,
+      chatId: seed.chatId,
+      runtimeProvider: "claude-code",
+      sessionEvent: recorded,
+    });
+
+    const skipped = await summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7, {
+      timing: (name, _ms, fields) => timings.push({ name, fields }),
+    });
+
+    expect(skipped.totalEventCount).toBe(1);
+    expect(timings.find((timing) => timing.name === "io_skipped_rows")?.fields).toMatchObject({ rowCount: 1 });
+  });
+
+  it("prefilters skipped diagnostics by organization agents before scanning session events", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: Array<{ name: string; fields?: Record<string, unknown> }> = [];
+
+    await summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7, {
+      timing: (name, _ms, fields) => timings.push({ name, fields }),
+    });
+
+    const agentRows = timings.find((timing) => timing.name === "io_skipped_agents_rows")?.fields;
+    expect(agentRows).toBeDefined();
+    expect(Number(agentRows?.agentCount)).toBeGreaterThanOrEqual(1);
+  });
+
+  it("filters unrelated tool calls out of skipped diagnostics candidates", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: Array<{ name: string; fields?: Record<string, unknown> }> = [];
+
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-unrelated",
+        name: "TodoWrite",
+        args: {},
+        status: "ok",
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-candidate",
+        name: "Bash",
+        args: { command: "cat /tmp/context-tree/NODE.md" },
+        status: "ok",
+      },
+    });
+
+    const skipped = await summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7, {
+      timing: (name, _ms, fields) => timings.push({ name, fields }),
+    });
+
+    expect(skipped.totalEventCount).toBe(1);
+    expect(skipped.reasons).toEqual([
+      {
+        reason: "no_tool_file_refs",
+        eventCount: 1,
+        agentCount: 1,
+        runtimeProviders: [{ runtimeProvider: "claude-code", eventCount: 1 }],
+        toolNames: [{ toolName: "Bash", eventCount: 1 }],
+      },
+    ]);
+    expect(timings.find((timing) => timing.name === "io_skipped_rows")?.fields).toMatchObject({ rowCount: 1 });
+  });
+
+  it("fast-paths skipped diagnostics decisions for no-ref candidates", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: Array<{ name: string; fields?: Record<string, unknown> }> = [];
+
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-read-no-refs",
+        name: "Read",
+        args: {},
+        status: "ok",
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-shell-read-no-refs",
+        name: "Bash",
+        args: { command: "cat /tmp/context-tree/NODE.md" },
+        status: "ok",
+      },
+    });
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-shell-write-no-refs",
+        name: "Bash",
+        args: { command: "echo x > /tmp/context-tree/NODE.md" },
+        status: "ok",
+      },
+    });
+
+    const skipped = await summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7, {
+      timing: (name, _ms, fields) => timings.push({ name, fields }),
+    });
+
+    expect(skipped.totalEventCount).toBe(3);
+    expect(skipped.reasons.map((row) => ({ reason: row.reason, eventCount: row.eventCount }))).toEqual([
+      { reason: "no_tool_file_refs", eventCount: 2 },
+      { reason: "unsupported_shell_command", eventCount: 1 },
+    ]);
+    expect(timings.find((timing) => timing.name === "io_skipped_decide_fast_rows")?.fields).toMatchObject({
+      rowCount: 3,
+    });
+    expect(timings.find((timing) => timing.name === "io_skipped_decide_slow_rows")?.fields).toMatchObject({
+      rowCount: 0,
+    });
+  });
+
+  it("keeps no-binding skipped diagnostics off the no-ref fast path", async () => {
+    const app = getApp();
+    const seed = await createTestAgent(app);
+    const chatId = `chat-${crypto.randomUUID()}`;
+    const timings: Array<{ name: string; fields?: Record<string, unknown> }> = [];
+    await app.db.insert(chats).values({ id: chatId, organizationId: seed.organizationId, type: "direct", topic: "io" });
+    await appendEvent(app.db, seed.agent.uuid, chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-read-no-binding",
+        name: "Read",
+        args: {},
+        status: "ok",
+      },
+    });
+
+    const skipped = await summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7, {
+      timing: (name, _ms, fields) => timings.push({ name, fields }),
+    });
+
+    expect(skipped.reasons.map((row) => ({ reason: row.reason, eventCount: row.eventCount }))).toEqual([
+      { reason: "no_org_context_tree_binding", eventCount: 1 },
+    ]);
+    expect(timings.find((timing) => timing.name === "io_skipped_decide_fast_rows")?.fields).toMatchObject({
+      rowCount: 0,
+    });
+    expect(timings.find((timing) => timing.name === "io_skipped_decide_slow_rows")?.fields).toMatchObject({
+      rowCount: 1,
+    });
+  });
+
+  it("ignores malformed toolFileRefs while filtering skipped diagnostics candidates", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+
+    await app.db.insert(sessionEvents).values({
+      id: `ev-${crypto.randomUUID()}`,
+      agentId: seed.agent.uuid,
+      chatId: seed.chatId,
+      seq: 1,
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-malformed-refs",
+        name: "TodoWrite",
+        args: {},
+        status: "ok",
+        toolFileRefs: { repoUrl: TREE_REPO, repoRelativePath: "NODE.md" },
+      },
+      createdAt: new Date(),
+    });
+
+    await expect(summarizeContextTreeIoSkippedEvents(app.db, seed.organizationId, 7)).resolves.toEqual({
+      windowDays: 7,
+      totalEventCount: 0,
+      reasons: [],
+    });
+  });
+
   it("records git status delta refs as synthetic writes for unsupported shell commands", async () => {
     const app = getApp();
     const seed = await seedContextTreeChat();
@@ -739,6 +962,88 @@ describe("context-tree IO service", () => {
     expect(summary.recentEvents.some((event) => event.source === "git_status_delta")).toBe(false);
     expect(summary.recentEvents.every((event) => event.action === "read")).toBe(true);
     expect(summary.summary.write.eventCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("builds full IO summary with a single session-event backfill pass", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: string[] = [];
+
+    const summary = await buildContextTreeIoSummary(app.db, seed.organizationId, 7, [], undefined, {
+      timing: (name) => timings.push(name),
+    });
+
+    expect(summary.writes).toEqual([]);
+    expect(timings.filter((name) => name === "io_backfill_scan")).toHaveLength(1);
+  });
+
+  it("includes skipped diagnostics in the snapshot aggregate path", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: string[] = [];
+
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-skipped",
+        name: "Bash",
+        args: { command: "echo x > /tmp/context-tree/NODE.md" },
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+
+    const summary = await buildContextTreeIoSummary(app.db, seed.organizationId, 7, [], undefined, {
+      timing: (name) => timings.push(name),
+    });
+
+    expect(summary.skipped.totalEventCount).toBe(1);
+    expect(summary.skipped.reasons.map((row) => ({ reason: row.reason, eventCount: row.eventCount }))).toEqual([
+      { reason: "unsupported_shell_command", eventCount: 1 },
+    ]);
+    expect(timings).toContain("io_skipped_scan");
+  });
+
+  it("reuses snapshot binding for skipped diagnostics in the aggregate path", async () => {
+    const app = getApp();
+    const seed = await seedContextTreeChat();
+    const timings: string[] = [];
+
+    await appendEvent(app.db, seed.agent.uuid, seed.chatId, {
+      kind: "tool_call",
+      payload: {
+        toolUseId: "tu-reused-binding",
+        name: "Read",
+        args: {},
+        status: "ok",
+        toolFileRefs: [
+          {
+            origin: "tool_arg",
+            repoUrl: ALT_TREE_REPO,
+            repoBranch: "main",
+            repoRelativePath: "NODE.md",
+            pathKind: "file",
+          },
+        ],
+      },
+    });
+
+    const summary = await buildContextTreeIoSummary(app.db, seed.organizationId, 7, [], undefined, {
+      contextTreeBinding: { repo: ALT_TREE_REPO, branch: "main" },
+      timing: (name) => timings.push(name),
+    });
+
+    expect(summary.skipped.totalEventCount).toBe(0);
+    expect(timings).toContain("io_skipped_scan");
+    expect(timings).not.toContain("io_skipped_binding");
   });
 
   it("reconciles git writes with telemetry: attributes the agent, keeps unmatched git authors, surfaces telemetry-only writes", async () => {

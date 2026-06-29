@@ -64,6 +64,7 @@ describe("POST /me/onboarding/kickoff", () => {
     // Chat carries the kind-scoped kickoff key.
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(chat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:tree`);
+    expect(chat?.topic).toBe("Set up team context");
 
     // Bootstrap message landed.
     const msgs = await app.db.select().from(messages).where(eq(messages.chatId, chatId));
@@ -98,6 +99,7 @@ describe("POST /me/onboarding/kickoff", () => {
 
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
     expect(chat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work`);
+    expect(chat?.topic).toBe("First task chat");
 
     const [msg] = await app.db.select().from(messages).where(eq(messages.chatId, chatId)).limit(1);
     expect(msg?.senderId).toBe(admin.humanAgentUuid);
@@ -186,6 +188,7 @@ describe("POST /me/onboarding/kickoff", () => {
       payload,
     });
     const firstChatId = first.json<{ chatId: string }>().chatId;
+    await app.db.update(chats).set({ topic: "Custom kickoff title" }).where(eq(chats.id, firstChatId));
     const [firstMember] = await app.db.select().from(members).where(eq(members.id, admin.memberId)).limit(1);
     const firstStamp = firstMember?.onboardingCompletedAt;
 
@@ -207,6 +210,7 @@ describe("POST /me/onboarding/kickoff", () => {
       .from(chats)
       .where(eq(chats.onboardingKickoffKey, `${admin.humanAgentUuid}:${agent.uuid}:tree`));
     expect(kickoffChats).toHaveLength(1);
+    expect(kickoffChats[0]?.topic).toBe("Custom kickoff title");
 
     // No duplicate bootstrap.
     const msgs = await app.db.select().from(messages).where(eq(messages.chatId, firstChatId));
@@ -266,6 +270,8 @@ describe("POST /me/onboarding/kickoff", () => {
       payload: { ...base, bootstrap: "Meet your agent.", kind: "intro" },
     });
     const introChatId = intro.json<{ chatId: string }>().chatId;
+    const [introChat] = await app.db.select().from(chats).where(eq(chats.id, introChatId)).limit(1);
+    expect(introChat?.topic).toBe("Meet your agent");
 
     // 2) Later, /build-tree with the SAME agent → tree kickoff. Must be a NEW
     //    chat carrying the tree-seeding bootstrap, not the intro chat (regression
@@ -277,6 +283,8 @@ describe("POST /me/onboarding/kickoff", () => {
       payload: { ...base, bootstrap: "Seed the team tree.", kind: "tree" },
     });
     const treeChatId = tree.json<{ chatId: string }>().chatId;
+    const [treeChat] = await app.db.select().from(chats).where(eq(chats.id, treeChatId)).limit(1);
+    expect(treeChat?.topic).toBe("Set up team context");
 
     expect(treeChatId).not.toBe(introChatId);
     const treeMsgs = await app.db.select().from(messages).where(eq(messages.chatId, treeChatId));
@@ -395,6 +403,62 @@ describe("GET /me/onboarding/tree-setup-status", () => {
       needsTreeSetup: false,
       hasTreeBinding: true,
       hasTreeSetupKickoff: true,
+    });
+  });
+
+  it("returns the same org-level recovery status for admins with different completion times", async () => {
+    const app = getApp();
+    const firstAdmin = await createTestAdmin(app);
+    const laterAdmin = await createTestAdmin(app);
+    expect(laterAdmin.organizationId).toBe(firstAdmin.organizationId);
+
+    await stampCompleted(app, firstAdmin, new Date("2026-06-23T10:00:00Z"));
+    await stampCompleted(app, laterAdmin, new Date("2026-06-23T11:00:00Z"));
+    await putTreeBinding(app, firstAdmin, new Date("2026-06-23T10:30:00Z"));
+
+    const first = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${firstAdmin.organizationId}`,
+      headers: { authorization: `Bearer ${firstAdmin.accessToken}` },
+    });
+    const later = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${firstAdmin.organizationId}`,
+      headers: { authorization: `Bearer ${laterAdmin.accessToken}` },
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(later.statusCode).toBe(200);
+    expect(first.json()).toEqual({
+      needsTreeSetup: true,
+      hasTreeBinding: true,
+      hasTreeSetupKickoff: false,
+    });
+    expect(later.json()).toEqual(first.json());
+  });
+
+  it("keeps org-level recovery stable when the earliest completed admin is no longer active admin", async () => {
+    const app = getApp();
+    const firstAdmin = await createTestAdmin(app);
+    const laterAdmin = await createTestAdmin(app);
+    expect(laterAdmin.organizationId).toBe(firstAdmin.organizationId);
+
+    await stampCompleted(app, firstAdmin, new Date("2026-06-23T10:00:00Z"));
+    await stampCompleted(app, laterAdmin, new Date("2026-06-23T11:00:00Z"));
+    await putTreeBinding(app, firstAdmin, new Date("2026-06-23T10:30:00Z"));
+    await app.db.update(members).set({ role: "member", status: "left" }).where(eq(members.id, firstAdmin.memberId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: `${TREE_STATUS_URL}?organizationId=${firstAdmin.organizationId}`,
+      headers: { authorization: `Bearer ${laterAdmin.accessToken}` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      needsTreeSetup: true,
+      hasTreeBinding: true,
+      hasTreeSetupKickoff: false,
     });
   });
 

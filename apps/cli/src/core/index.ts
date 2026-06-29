@@ -23,6 +23,8 @@ export { handleClientOrgMismatch } from "./client-reidentify.js";
 export type { ClientRuntimeOptions } from "./client-runtime.js";
 // Client runtime
 export { ClientRuntime } from "./client-runtime.js";
+// User-owned daemon environment (proxy etc.) — read, never written by us
+export { daemonEnvPath, loadDaemonEnv, parseDaemonEnv } from "./daemon-env.js";
 // Diagnostics (doctor)
 export type { CheckResult } from "./doctor.js";
 export {
@@ -37,6 +39,10 @@ export {
   runtimeProviderCheck,
   runtimeProviderChecks,
 } from "./doctor.js";
+export type { InstallClaudeResult } from "./install-claude-runtime.js";
+export { installClaudeRuntime } from "./install-claude-runtime.js";
+export type { InstallCodexResult } from "./install-codex-runtime.js";
+export { installCodexRuntime } from "./install-codex-runtime.js";
 // Phase 3 of the agent-naming refactor — renames local agent dirs whose
 // name drifted from the server-authoritative `agent.name` slug.
 export type { AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";

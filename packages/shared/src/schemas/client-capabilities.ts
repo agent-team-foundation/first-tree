@@ -1,38 +1,57 @@
 import { z } from "zod";
 import { runtimeAuthLastErrorSchema } from "./runtime-auth.js";
 
+/**
+ * Capability detection is install-only: a provider is `ok` when the binary the
+ * runtime would spawn is resolvable on this host, `missing` when it is not, and
+ * `error` when detection itself threw. Whether the provider is *authenticated*
+ * or end-to-end *usable* is deliberately NOT probed here — that is discovered at
+ * session run time and surfaced as an in-chat credential failure (see the
+ * provider-retry policy + the in-chat "needs login" entry point). This replaced
+ * the older launch-verified probe whose mandatory auth precheck + real-session
+ * smoke were the main source of false negatives and token/latency cost.
+ */
 export const CAPABILITY_STATES = {
   OK: "ok",
   MISSING: "missing",
-  UNAUTHENTICATED: "unauthenticated",
   ERROR: "error",
 } as const;
 
-export const capabilityStateSchema = z.enum(["ok", "missing", "unauthenticated", "error"]);
+export const capabilityStateSchema = z.enum(["ok", "missing", "error"]);
 export type CapabilityState = z.infer<typeof capabilityStateSchema>;
 
+/**
+ * The capabilities map is a client↔server WIRE CONTRACT that versions
+ * independently (a daemon can upgrade before/after the server). This block
+ * keeps the contract a tolerant superset across a rolling upgrade — remove it
+ * only once the minimum supported daemon AND server both ship install-only.
+ *
+ * Parse-side tolerance: an OLDER daemon still emits the now-removed
+ * `state: "unauthenticated"`. Reject-on-one-bad-entry (`z.record`) would drop a
+ * client's WHOLE snapshot, so coerce it to `ok` (it carried `available: true` =
+ * installed) instead. The new daemon never emits `unauthenticated`.
+ */
+const wireCompatStateSchema = z.preprocess(
+  (value) => (value === "unauthenticated" ? "ok" : value),
+  capabilityStateSchema,
+);
+
+/**
+ * Deprecated wire-compat: the auth method an OLDER server still REQUIRES on
+ * every entry. The new daemon no longer detects auth but keeps emitting
+ * `authMethod`/`authenticated` (see below) so an older server accepts its PATCH.
+ */
 export const capabilityAuthMethodSchema = z.enum(["api_key", "oauth", "auth_json", "none"]);
 export type CapabilityAuthMethod = z.infer<typeof capabilityAuthMethodSchema>;
 
 /**
  * Which on-disk artifact backs the runtime:
  *   - "bundled": the SDK-bundled binary (the default the runtime spawns).
- *   - "path":    a system `codex` found on PATH, used as a validated fallback
- *     when the bundled binary is missing.
+ *   - "path":    a system `claude` / `codex` found on PATH (or a well-known
+ *     install dir), used when no bundled binary is present.
  */
 export const capabilityRuntimeSourceSchema = z.enum(["bundled", "path"]);
 export type CapabilityRuntimeSource = z.infer<typeof capabilityRuntimeSourceSchema>;
-
-/**
- * How the entry was produced.
- *   - "launch": launch-verified probe — the provider binary was really spawned
- *     and `ok` means a real end-to-end session/handshake succeeded.
- *   - "static": legacy heuristic probe (import/marker-file checks only). Old
- *     daemons upload entries without `probeKind`; consumers treat absent as
- *     "static".
- */
-export const capabilityProbeKindSchema = z.enum(["launch", "static"]);
-export type CapabilityProbeKind = z.infer<typeof capabilityProbeKindSchema>;
 
 export const pendingAuthMethodSchema = z.enum(["browser"]);
 export type PendingAuthMethod = z.infer<typeof pendingAuthMethodSchema>;
@@ -62,33 +81,38 @@ export const pendingAuthSchema = z.object({
 export type PendingAuth = z.infer<typeof pendingAuthSchema>;
 
 export const capabilityEntrySchema = z.object({
-  state: capabilityStateSchema,
+  // Tolerant on input (coerces a legacy `unauthenticated` → `ok`); the inferred
+  // type stays the canonical `ok | missing | error`.
+  state: wireCompatStateSchema,
+  /** Derived: the provider binary is installed/resolvable (`state === "ok"`). */
   available: z.boolean(),
-  authenticated: z.boolean(),
+  /**
+   * Deprecated wire-compat fields — kept OPTIONAL so the map stays a tolerant
+   * superset during a rolling upgrade. An OLDER server requires both, so the new
+   * daemon still emits them (`authenticated = state==="ok"`, `authMethod = "none"`);
+   * the new server ignores them and gates on `available`/`state`. An OLDER
+   * daemon's values are accepted and ignored. Remove once the version floor rises.
+   */
+  authenticated: z.boolean().optional(),
+  authMethod: capabilityAuthMethodSchema.optional(),
+  /**
+   * Provider version, when cheaply known from the resolved package/binary.
+   * Install-only detection does not launch the binary, so this is often absent.
+   */
   sdkVersion: z.string().nullable().optional(),
-  authMethod: capabilityAuthMethodSchema,
   /** Which artifact backs the runtime (bundled binary vs system-PATH fallback). */
   runtimeSource: capabilityRuntimeSourceSchema.optional(),
-  /** Absolute path of the system fallback binary, when `runtimeSource: "path"`. */
+  /** Absolute path of the resolved binary, when `runtimeSource: "path"`. */
   runtimePath: z.string().nullable().optional(),
   /**
-   * Human-readable failure reason. Launch-verified probes always set this for
-   * every non-`ok` state, carrying the provider's own output verbatim
-   * (truncated) so the web UI can render the real error instead of a generic
-   * label. Optional in the schema for backward compatibility with entries
-   * uploaded by older daemons.
+   * Human-readable failure reason for a non-`ok` state — for `missing`, which
+   * artifacts were checked and not found; for `error`, the exception message.
+   * Optional for backward compatibility with entries uploaded by older daemons.
    */
   error: z.string().nullable().optional(),
   detectedAt: z.string(),
-  probeKind: capabilityProbeKindSchema.optional(),
-  /** Wall-clock duration of the whole probe (all stages), milliseconds. */
+  /** Wall-clock duration of the detection, milliseconds. */
   latencyMs: z.number().nonnegative().optional(),
-  /**
-   * True when the probe could not run its full verification and fell back to
-   * a weaker check (e.g. codex without a `doctor` subcommand) — `ok` then
-   * means "launchable + credentials present", not "end-to-end verified".
-   */
-  degraded: z.boolean().optional(),
   /**
    * Present while the daemon is driving an in-product browser-OAuth login for
    * this provider. Absent in steady state. See `pendingAuthSchema`.

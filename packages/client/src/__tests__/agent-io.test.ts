@@ -89,6 +89,38 @@ describe("formatInboundContent", () => {
     expect(await formatInboundContent(msg, cache)).toBe("[From: alice · type=agent]\n\nhello");
   });
 
+  it("appends the onboarding skill directive for a First Tree onboarding kickoff", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "markdown",
+      content: "Welcome to First Tree.",
+      metadata: { systemSender: "first_tree_onboarding" },
+    };
+    const out = await formatInboundContent(msg, cache);
+    // The user-facing body stays intact; the agent-only directive is appended.
+    expect(out.startsWith("[From: alice · type=agent]\n\nWelcome to First Tree.")).toBe(true);
+    expect(out).toContain("<first-tree-onboarding>");
+    expect(out).toContain("load and follow the `first-tree-welcome` skill");
+  });
+
+  it("does not append the onboarding directive for other system senders", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "markdown",
+      content: "PR opened",
+      metadata: { systemSender: "github" },
+    };
+    expect(await formatInboundContent(msg, cache)).toBe("[From: alice · type=agent]\n\nPR opened");
+  });
+
   it("annotates the header with the sender type and send time when both are known", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});

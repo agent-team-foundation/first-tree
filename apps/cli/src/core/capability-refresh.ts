@@ -71,10 +71,9 @@ export type CapabilityRefresherDeps = {
  *      the daemon stays connected* — the gap this fixes. A capability snapshot
  *      goes stale the moment the operator installs / logs into a provider; with
  *      no reconnect there was previously no refresh until a restart or a manual
- *      `daemon probe`. The poll re-probes with {@link revalidateCapabilities}
- *      (a real smoke for each non-`ok` provider so a freshly-installed one can
- *      flip to `ok`; already-`ok` providers stay on the free cached path), and
- *      stops itself once every built-in provider is `ok`.
+ *      `daemon probe`. The poll re-detects with {@link revalidateCapabilities}
+ *      (install-only, so a freshly-installed provider flips to `ok`), and stops
+ *      itself once every built-in provider is `ok`.
  *
  * Both triggers share one in-flight guard, so a reconnect re-probe and a poll
  * can never launch providers concurrently, and uploads are deduped against the
@@ -260,7 +259,7 @@ export class CapabilityRefresher {
         }
         probed = true;
         // Re-read at merge time: runtime-auth may have published provider state
-        // while this aggregate probe was awaiting a slow smoke.
+        // while this aggregate probe was running.
         const current = this.snapshot ?? previous;
         // Preserve providers still owned by an interactive login, plus provider
         // entries written after this refresh started. The latter covers the

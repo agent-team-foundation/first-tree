@@ -28,6 +28,7 @@ const agentApiMocks = vi.hoisted(() => ({
   checkAgentNameAvailability: vi.fn(),
   createAgent: vi.fn(),
   getAgent: vi.fn(),
+  getNewChatDefaultCandidates: vi.fn(),
   listAgents: vi.fn(),
   listManagedAgents: vi.fn(),
 }));
@@ -79,16 +80,21 @@ const resourceMocks = vi.hoisted(() => ({
   listTeamResourcesForOrg: vi.fn(),
 }));
 
-const onboardingEventMocks = vi.hoisted(() => ({
-  reportOnboardingEvent: vi.fn(),
-  kickoffOnboarding: vi.fn(),
-  getTreeSetupStatus: vi.fn(),
-}));
+const onboardingEventMocks = vi.hoisted(() => {
+  const startOnboardingChat = vi.fn();
+  return {
+    reportOnboardingEvent: vi.fn(),
+    startOnboardingChat,
+    postOnboardingStartChat: startOnboardingChat,
+    getTreeSetupStatus: vi.fn(),
+  };
+});
 
 const meChatMocks = vi.hoisted(() => ({
   addMeChatParticipants: vi.fn(),
   createMeChat: vi.fn(),
   createMeTaskChat: vi.fn(),
+  listMeChats: vi.fn(),
 }));
 
 const clientApiMocks = vi.hoisted(() => ({
@@ -118,6 +124,7 @@ const authMock = vi.hoisted(() => {
       teamDisplayName: nullableString("Acme"),
       orgHasOtherMembers: true,
       currentOrgHasUsableAgent: true,
+      currentOrgHasPersonalAgent: true,
       onboardingStep: onboardingStep("completed"),
       onboardingDismissedAt: nullableString(null),
       onboardingCompletedAt: nullableString("2026-05-01T00:00:00.000Z"),
@@ -252,17 +259,13 @@ const CLIENTS: HubClient[] = [
       "claude-code": {
         state: "ok",
         available: true,
-        authenticated: true,
         sdkVersion: "0.2.84",
-        authMethod: "oauth",
         detectedAt: NOW,
       },
       codex: {
-        state: "unauthenticated",
+        state: "ok",
         available: true,
-        authenticated: false,
         sdkVersion: "0.134.0",
-        authMethod: "none",
         detectedAt: NOW,
       },
     },
@@ -434,15 +437,21 @@ async function unmountRoot(root: Root): Promise<void> {
   await act(async () => root.unmount());
 }
 
-function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): OnboardingFlowValue {
+type FlowOverrides = Partial<Omit<OnboardingFlowValue, "activeStep">> & {
+  activeStep?: StepId | "connect-code";
+};
+
+function createFlowValue(overrides: FlowOverrides = {}): OnboardingFlowValue {
   const path: OnboardingPath = overrides.path ?? "admin";
   const sequence: readonly StepId[] = path === "admin" ? ADMIN_STEPS : INVITEE_STEPS;
-  const fallbackStep: StepId = path === "admin" ? "team" : "welcome";
+  const fallbackStep: StepId = path === "admin" ? "create-team" : "join-team";
   const requestedActiveStep = overrides.activeStep;
   const activeStep: StepId =
-    requestedActiveStep && sequence.some((step) => step === requestedActiveStep) ? requestedActiveStep : fallbackStep;
+    requestedActiveStep && (sequence as readonly string[]).includes(requestedActiveStep)
+      ? (requestedActiveStep as StepId)
+      : fallbackStep;
   const activeIndex = sequence.indexOf(activeStep);
-  return {
+  const base: OnboardingFlowValue = {
     path,
     sequence,
     activeIndex: overrides.activeIndex ?? Math.max(0, activeIndex),
@@ -486,13 +495,19 @@ function createFlowValue(overrides: Partial<OnboardingFlowValue> = {}): Onboardi
     markTreeAutoDetectDone: vi.fn(),
     completeAndEnterChat: vi.fn(async () => undefined),
     finishLater: vi.fn(async () => undefined),
+  };
+  return {
+    ...base,
     ...overrides,
+    sequence,
+    activeIndex: overrides.activeIndex ?? Math.max(0, activeIndex),
+    activeStep,
   };
 }
 
 async function renderOnboardingDom(
   element: ReactElement,
-  overrides: Partial<OnboardingFlowValue> = {},
+  overrides: FlowOverrides = {},
   seed?: (queryClient: QueryClient) => void,
 ): Promise<{ container: HTMLElement; root: Root; flow: OnboardingFlowValue }> {
   const { OnboardingFlowContext } = await import("../onboarding/onboarding-flow.js");
@@ -620,6 +635,9 @@ beforeEach(() => {
     agent({ uuid: "agent-created", name: "deploy-bot", displayName: "Deploy Bot" }),
   );
   agentApiMocks.getAgent.mockResolvedValue(agent({ clientId: "client-bound" }));
+  agentApiMocks.getNewChatDefaultCandidates.mockResolvedValue({
+    agent: agent({ uuid: "agent-1" }),
+  });
   agentApiMocks.listAgents.mockResolvedValue({ items: ORG_AGENTS, nextCursor: null });
   agentApiMocks.listManagedAgents.mockResolvedValue([
     {
@@ -696,12 +714,13 @@ beforeEach(() => {
   meChatMocks.addMeChatParticipants.mockResolvedValue({ ok: true });
   meChatMocks.createMeChat.mockResolvedValue({ chatId: "chat-created" });
   meChatMocks.createMeTaskChat.mockResolvedValue({ chatId: "chat-created" });
+  meChatMocks.listMeChats.mockResolvedValue({ rows: [], nextCursor: null });
   onboardingEventMocks.reportOnboardingEvent.mockResolvedValue(undefined);
-  onboardingEventMocks.kickoffOnboarding.mockResolvedValue({ chatId: "chat-onboarding" });
+  onboardingEventMocks.startOnboardingChat.mockResolvedValue({ chatId: "chat-onboarding" });
   onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
     needsTreeSetup: false,
     hasTreeBinding: true,
-    hasTreeSetupKickoff: true,
+    hasTreeSetupStartChat: true,
   });
   contextTreeMocks.initializeContextTree.mockResolvedValue({
     repo: "https://github.com/acme/context-tree",
@@ -872,9 +891,11 @@ describe("web DOM interaction coverage", () => {
 
   it("creates one-on-one and group chats from NewChatDraft", async () => {
     const { NewChatDraft } = await import("../workspace/conversations/new-chat-draft.js");
+    const cacheKey = "first-tree:new-chat-default-agent:user-self:org-1";
     const onCreated = vi.fn();
     const first = await renderDom(<NewChatDraft onCreated={onCreated} onShowConversations={() => undefined} />);
     await waitForText("Nova", first.container);
+    expect(agentApiMocks.getNewChatDefaultCandidates).toHaveBeenLastCalledWith({ cachedAgentId: null });
     const textarea = first.container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Draft textarea missing");
     await setValue(textarea, "hello");
@@ -894,12 +915,14 @@ describe("web DOM interaction coverage", () => {
     });
     expect(chatApiMocks.sendChatMessage).not.toHaveBeenCalled();
     expect(onCreated).toHaveBeenCalledWith("chat-created");
+    expect(window.localStorage.getItem(cacheKey)).toBe("agent-1");
     await unmountRoot(first.root);
 
     meChatMocks.createMeTaskChat.mockClear();
     chatApiMocks.sendChatMessage.mockClear();
     const second = await renderDom(<NewChatDraft onCreated={() => undefined} />);
     await waitForText("Nova", second.container);
+    expect(agentApiMocks.getNewChatDefaultCandidates).toHaveBeenLastCalledWith({ cachedAgentId: "agent-1" });
     await click(second.container.querySelector('button[aria-label="Add participant"]'));
     await waitForText("Design Critique", second.container);
     await click(
@@ -926,6 +949,75 @@ describe("web DOM interaction coverage", () => {
       },
     });
     expect(chatApiMocks.sendChatMessage).not.toHaveBeenCalled();
+    await unmountRoot(second.root);
+
+    meChatMocks.createMeTaskChat.mockClear();
+    const humanOnly = await renderDom(
+      <NewChatDraft onCreated={() => undefined} initialParticipantIds={["human-agent-self"]} />,
+    );
+    await waitForText("human-agent-self", humanOnly.container);
+    const humanTextarea = humanOnly.container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!humanTextarea) throw new Error("Human-only draft textarea missing");
+    await setValue(humanTextarea, "hello human");
+    await click(humanOnly.container.querySelector('button[aria-label="Send"]'));
+
+    expect(meChatMocks.createMeTaskChat).toHaveBeenCalledWith({
+      mode: "task",
+      initialRecipientAgentIds: ["human-agent-self"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      initialMessage: {
+        format: "text",
+        content: "hello human",
+        source: "web",
+      },
+    });
+    expect(window.localStorage.getItem(cacheKey)).toBeNull();
+    await unmountRoot(humanOnly.root);
+
+    const afterHumanOnly = await renderDom(<NewChatDraft onCreated={() => undefined} />);
+    await waitForText("Nova", afterHumanOnly.container);
+    expect(agentApiMocks.getNewChatDefaultCandidates).toHaveBeenLastCalledWith({ cachedAgentId: null });
+    await unmountRoot(afterHumanOnly.root);
+
+    agentApiMocks.getNewChatDefaultCandidates.mockImplementation(
+      async ({ cachedAgentId }: { cachedAgentId?: string | null }) => ({
+        agent:
+          cachedAgentId === "agent-off-page"
+            ? agent({ uuid: "agent-off-page", name: "off-page", displayName: "Off Page" })
+            : agent({ uuid: "agent-1" }),
+      }),
+    );
+    meChatMocks.createMeTaskChat.mockClear();
+    const offPage = await renderDom(
+      <NewChatDraft onCreated={() => undefined} initialParticipantIds={["agent-off-page"]} />,
+    );
+    await waitForText("agent-off-page", offPage.container);
+    const offPageTextarea = offPage.container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!offPageTextarea) throw new Error("Off-page draft textarea missing");
+    await setValue(offPageTextarea, "hello off page");
+    await click(offPage.container.querySelector('button[aria-label="Send"]'));
+
+    expect(meChatMocks.createMeTaskChat).toHaveBeenCalledWith({
+      mode: "task",
+      initialRecipientAgentIds: ["agent-off-page"],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      initialMessage: {
+        format: "text",
+        content: "hello off page",
+        source: "web",
+      },
+    });
+    expect(window.localStorage.getItem(cacheKey)).toBe("agent-off-page");
+    await unmountRoot(offPage.root);
+
+    const afterOffPage = await renderDom(<NewChatDraft onCreated={() => undefined} />);
+    await waitForText("Off Page", afterOffPage.container);
+    expect(agentApiMocks.getNewChatDefaultCandidates).toHaveBeenLastCalledWith({ cachedAgentId: "agent-off-page" });
+    await unmountRoot(afterOffPage.root);
   });
 
   it("drives NewChatDraft participants, mention autocomplete, image send, and error paths", async () => {
@@ -1203,7 +1295,7 @@ describe("web DOM interaction coverage", () => {
     expect(back?.getAttribute("href")).toBe("/settings/github");
     await unmountRoot(expired.root);
 
-    // Install refused: kickoff admin's authority no longer holds.
+    // Install refused: start-chat admin's authority no longer holds.
     Object.defineProperty(window, "location", {
       configurable: true,
       value: { ...window.location, hash: "#error=install-not-admin", pathname: "/auth/github/complete" },
@@ -1691,7 +1783,7 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(noDraft.root);
 
     // Resumed draft (user narrowed to just one repo earlier, then bailed before
-    // kickoff) → no auto-select; the saved selection is left untouched instead
+    // start-chat) → no auto-select; the saved selection is left untouched instead
     // of being clobbered back to "all granted".
     const resumedSet = vi.fn();
     const withDraft = await renderOnboardingDom(<StepConnectCode />, {
@@ -1707,7 +1799,7 @@ describe("web DOM interaction coverage", () => {
 
     // Resumed draft carrying a repo the GitHub App no longer grants (uninstall /
     // changed grant between bailout and resume) → prune it against the current
-    // grant list so a stale URL can't ride into kickoff. acme/web is still
+    // grant list so a stale URL can't ride into start-chat. acme/web is still
     // granted; the gone repo is dropped.
     const prunedSet = vi.fn();
     const staleDraft = await renderOnboardingDom(<StepConnectCode />, {
@@ -1786,8 +1878,8 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
-  it("drives StepKickoff admin and invitee start flows", async () => {
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+  it("drives StepStartChat admin and invitee start flows", async () => {
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     const findButton = (container: ParentNode, text: string): HTMLButtonElement | null =>
       ([...container.querySelectorAll("button")].find((button) => button.textContent?.includes(text)) ??
         null) as HTMLButtonElement | null;
@@ -1797,8 +1889,8 @@ describe("web DOM interaction coverage", () => {
     const setTreeBindingPlan = vi.fn();
     const setTreeUrl = vi.fn();
     const markTreeAutoDetectDone = vi.fn();
-    const adminAutoDetect = await renderOnboardingDom(<StepKickoff />, {
-      activeStep: "kickoff",
+    const adminAutoDetect = await renderOnboardingDom(<StepStartChat />, {
+      activeStep: "start-chat",
       selectedRepoUrls: ["https://github.com/acme/web.git"],
       treeBindingPlan: "createBinding",
       treeUrl: "",
@@ -1807,50 +1899,35 @@ describe("web DOM interaction coverage", () => {
       setTreeUrl,
       markTreeAutoDetectDone,
     });
-    await waitForText("Your agent's ready to get to work", adminAutoDetect.container);
+    await waitForText("Start working with your agent", adminAutoDetect.container);
     expect(markTreeAutoDetectDone).toHaveBeenCalled();
     expect(setTreeBindingPlan).toHaveBeenCalledWith("useBoundTree");
     expect(setTreeUrl).toHaveBeenCalledWith("https://github.com/acme/context-tree");
     await unmountRoot(adminAutoDetect.root);
 
-    // Admin · bound tree → Start enters the value-first work chat first, while a
-    // separate tree setup chat starts in the background.
-    const adminExisting = await renderOnboardingDom(<StepKickoff />, {
-      activeStep: "kickoff",
+    // Admin · bound tree → Start enters the value-first work chat. It does not
+    // start tree setup automatically; that now requires a later explicit user
+    // consent flow or Settings/Context entry.
+    const adminExisting = await renderOnboardingDom(<StepStartChat />, {
+      activeStep: "start-chat",
       selectedRepoUrls: ["https://github.com/acme/web.git"],
       treeBindingPlan: "useBoundTree",
       treeUrl: "https://github.com/acme/context-tree",
     });
-    await waitForText("Your agent's ready to get to work", adminExisting.container);
-    await click(findButton(adminExisting.container, "Start with your agent"));
+    await waitForText("Start working with your agent", adminExisting.container);
+    await click(findButton(adminExisting.container, "Start chat"));
     await waitForText("Starting your agent", adminExisting.container);
     expect(agentApiMocks.listManagedAgents).toHaveBeenCalled();
-    // Repo kickoff now creates a value-first work chat for the user, then a
-    // separate Context Tree setup chat in the background.
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenNthCalledWith(
-      1,
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
       expect.objectContaining({
         organizationId: "org-1",
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("getting Nova up to speed"),
+        bootstrap: expect.stringContaining("Welcome to First Tree — this is your first chat with Nova."),
         kind: "work",
         complete: true,
       }),
     );
-    await waitForCondition(
-      () => onboardingEventMocks.kickoffOnboarding.mock.calls.length >= 2,
-      "Expected the background tree setup chat to start",
-    );
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        organizationId: "org-1",
-        agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("Read the bound Context Tree first"),
-        kind: "tree",
-        complete: false,
-      }),
-    );
+    expect(onboardingEventMocks.startOnboardingChat.mock.calls.some(([body]) => body.kind === "tree")).toBe(false);
     expect(resourceMocks.createTeamResourceForOrg).toHaveBeenCalledWith("org-1", {
       type: "repo",
       name: "acme/web",
@@ -1861,26 +1938,26 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(adminExisting.root);
 
     // Admin · no repo → honestly just "meet your agent" (intro), no provisioning.
-    const adminNoProject = await renderOnboardingDom(<StepKickoff />, {
-      activeStep: "kickoff",
+    const adminNoProject = await renderOnboardingDom(<StepStartChat />, {
+      activeStep: "start-chat",
       selectedRepoUrls: [],
       treeBindingPlan: "createBinding",
       treeUrl: "",
     });
-    await waitForText("No repo connected", adminNoProject.container);
-    await click(findButton(adminNoProject.container, "Meet your agent"));
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenLastCalledWith(
+    await waitForText("Start working with your agent", adminNoProject.container);
+    await click(findButton(adminNoProject.container, "Start chat"));
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenLastCalledWith(
       expect.objectContaining({ agentUuid: "agent-1", kind: "intro" }),
     );
     expect(adminNoProject.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
     await unmountRoot(adminNoProject.root);
 
     // Invitee · not-ready via no team tree → "Meet your agent" lands in a real
-    // chat (runKickoff → completeAndEnterChat), not finishLater.
+    // chat (runStartChat → completeAndEnterChat), not finishLater.
     orgSettingsMocks.getContextTreeSetting.mockResolvedValueOnce({ repo: "", branch: null });
-    const inviteeNoTree = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
-    await waitForText("Your team is still setting up", inviteeNoTree.container);
-    await click(findButton(inviteeNoTree.container, "Meet your agent"));
+    const inviteeNoTree = await renderOnboardingDom(<StepStartChat />, { path: "invitee", activeStep: "start-chat" });
+    await waitForText("Start working with your agent", inviteeNoTree.container);
+    await click(findButton(inviteeNoTree.container, "Start chat"));
     await waitForText("Starting your agent", inviteeNoTree.container);
     expect(inviteeNoTree.flow.completeAndEnterChat).toHaveBeenCalled();
     await unmountRoot(inviteeNoTree.root);
@@ -1888,33 +1965,39 @@ describe("web DOM interaction coverage", () => {
     // Invitee · not-ready via no installation (tree set, GitHub not connected) →
     // the same single not-ready screen + "meet your agent" bailout.
     githubAppMocks.getGithubAppInstallationExists.mockResolvedValueOnce(false);
-    const inviteeNoInstall = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
-    await waitForText("Your team is still setting up", inviteeNoInstall.container);
-    await click(findButton(inviteeNoInstall.container, "Meet your agent"));
+    const inviteeNoInstall = await renderOnboardingDom(<StepStartChat />, {
+      path: "invitee",
+      activeStep: "start-chat",
+    });
+    await waitForText("Start working with your agent", inviteeNoInstall.container);
+    await click(findButton(inviteeNoInstall.container, "Start chat"));
     expect(inviteeNoInstall.flow.completeAndEnterChat).toHaveBeenCalled();
     await unmountRoot(inviteeNoInstall.root);
 
     // Invitee · tree present but the install probe FAILS (unknown) → hold in
-    // not-ready, never render "ready"/Start with your agent. An optimistic hasInstallation
+    // not-ready, never render the ready action state. An optimistic hasInstallation
     // (null → true) must not launch tree-reading without an authoritative
     // install=true, or the agent would 403 on its first git op.
     githubAppMocks.getGithubAppInstallationExists.mockRejectedValueOnce(new Error("probe failed"));
-    const inviteeProbeFail = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
-    await waitForText("Your team is still setting up", inviteeProbeFail.container);
-    expect(findButton(inviteeProbeFail.container, "Start with your agent")).toBeNull();
+    const inviteeProbeFail = await renderOnboardingDom(<StepStartChat />, {
+      path: "invitee",
+      activeStep: "start-chat",
+    });
+    await waitForText("Start working with your agent", inviteeProbeFail.container);
+    expect(findButton(inviteeProbeFail.container, "Start working with your agent")).toBeNull();
     await unmountRoot(inviteeProbeFail.root);
 
     // Invitee · ready (tree + install) → a single launch, no repo selection. The
     // agent already inherits the team's recommended repos.
-    const inviteeReady = await renderOnboardingDom(<StepKickoff />, { path: "invitee", activeStep: "kickoff" });
-    await waitForText("Your agent's ready to go", inviteeReady.container);
-    await click(findButton(inviteeReady.container, "Start with your agent"));
+    const inviteeReady = await renderOnboardingDom(<StepStartChat />, { path: "invitee", activeStep: "start-chat" });
+    await waitForText("Start working with your agent", inviteeReady.container);
+    await click(findButton(inviteeReady.container, "Start chat"));
     // Ready invitee also lands in a value-first work chat, not the tree setup
     // chat. The inherited team tree is context for orientation.
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("welcoming Nova"),
+        bootstrap: expect.stringContaining("Welcome to First Tree — this is your first chat with Nova."),
         kind: "work",
       }),
     );
@@ -1926,43 +2009,34 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(inviteeReady.root);
   });
 
-  it("lets the admin enter the work chat when background tree initialization fails", async () => {
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("does not start background tree setup from onboarding start-chat", async () => {
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     orgSettingsMocks.getContextTreeSetting.mockResolvedValue({ repo: "", branch: null });
-    contextTreeMocks.initializeContextTree.mockRejectedValueOnce(new Error("initializer down"));
 
-    try {
-      const view = await renderOnboardingDom(<StepKickoff />, {
-        activeStep: "kickoff",
-        selectedRepoUrls: ["https://github.com/acme/web.git"],
-        treeBindingPlan: "createBinding",
-        treeUrl: "",
-      });
-      await waitForText("Your agent's ready to get to work", view.container);
-      await click(
-        ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
-          null) as HTMLButtonElement | null,
-      );
-      await waitForText("Starting your agent", view.container);
+    const view = await renderOnboardingDom(<StepStartChat />, {
+      activeStep: "start-chat",
+      selectedRepoUrls: ["https://github.com/acme/web.git"],
+      treeBindingPlan: "createBinding",
+      treeUrl: "",
+    });
+    await waitForText("Start working with your agent", view.container);
+    await click(
+      ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
+        null) as HTMLButtonElement | null,
+    );
+    await waitForText("Starting your agent", view.container);
 
-      expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentUuid: "agent-1",
-          kind: "work",
-          complete: true,
-        }),
-      );
-      expect(view.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
-      await waitForCondition(
-        () => contextTreeMocks.initializeContextTree.mock.calls.length > 0,
-        "Expected the background tree initializer to run",
-      );
-      expect(onboardingEventMocks.kickoffOnboarding.mock.calls.some(([body]) => body.kind === "tree")).toBe(false);
-      await unmountRoot(view.root);
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentUuid: "agent-1",
+        kind: "work",
+        complete: true,
+      }),
+    );
+    expect(contextTreeMocks.initializeContextTree).not.toHaveBeenCalled();
+    expect(onboardingEventMocks.startOnboardingChat.mock.calls.some(([body]) => body.kind === "tree")).toBe(false);
+    expect(view.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
+    await unmountRoot(view.root);
   });
 
   it("builds a missing tree from the Context page entry via the tree setup chat", async () => {
@@ -1980,36 +2054,38 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Building", view.container);
 
     expect(contextTreeMocks.initializeContextTree).toHaveBeenCalledWith("org-1");
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledTimes(1);
-    expect(onboardingEventMocks.kickoffOnboarding).toHaveBeenCalledWith(
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledTimes(1);
+    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("Read the bound Context Tree first"),
+        bootstrap: expect.stringContaining("This chat sets up team context for future agent work."),
         kind: "tree",
         complete: true,
       }),
     );
-    expect(onboardingEventMocks.kickoffOnboarding).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "work" }));
+    expect(onboardingEventMocks.startOnboardingChat).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "work" }),
+    );
     await unmountRoot(view.root);
   });
 
-  it("prunes a no-longer-granted repo at kickoff before writing team resources", async () => {
-    // A flow can resume directly at kickoff (persisted step index) without ever
+  it("prunes a no-longer-granted repo at start-chat before writing team resources", async () => {
+    // A flow can resume directly at start-chat (persisted step index) without ever
     // mounting StepConnectCode, so connect-code's grant prune never runs. The
-    // kickoff handler must re-validate the (possibly stale) selection against the
+    // start-chat handler must re-validate the (possibly stale) selection against the
     // current grant list, so a repo removed from the installation since the user
     // picked it is never registered as a team repo resource.
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     // Current grants are web + api (GITHUB_REPOS); the draft also carries a repo
     // the app no longer grants.
     githubMocks.listOrgGithubRepos.mockResolvedValue(GITHUB_REPOS);
-    const view = await renderOnboardingDom(<StepKickoff />, {
-      activeStep: "kickoff",
+    const view = await renderOnboardingDom(<StepStartChat />, {
+      activeStep: "start-chat",
       selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
       treeBindingPlan: "useBoundTree",
       treeUrl: "https://github.com/acme/context-tree",
     });
-    await waitForText("Your agent's ready to get to work", view.container);
+    await waitForText("Start working with your agent", view.container);
     await click(
       ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
         null) as HTMLButtonElement | null,
@@ -2027,20 +2103,20 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
-  it("fails closed at kickoff when the grant list can't be read (no stale write)", async () => {
+  it("fails closed at start-chat when the grant list can't be read (no stale write)", async () => {
     // If the current-grant read fails we can't prove the selected repos are still
-    // accessible and nothing downstream re-checks grants, so kickoff must NOT
+    // accessible and nothing downstream re-checks grants, so start-chat must NOT
     // write the (possibly stale) selection — it surfaces a retryable error and
     // stays on the form instead.
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     githubMocks.listOrgGithubRepos.mockRejectedValue(new Error("github unavailable"));
-    const view = await renderOnboardingDom(<StepKickoff />, {
-      activeStep: "kickoff",
+    const view = await renderOnboardingDom(<StepStartChat />, {
+      activeStep: "start-chat",
       selectedRepoUrls: ["https://github.com/acme/web.git"],
       treeBindingPlan: "useBoundTree",
       treeUrl: "https://github.com/acme/context-tree",
     });
-    await waitForText("Your agent's ready to get to work", view.container);
+    await waitForText("Start working with your agent", view.container);
     await click(
       ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
         null) as HTMLButtonElement | null,
@@ -2052,20 +2128,20 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
-  it("kickoff grant check is authoritative — ignores a stale cached grant list", async () => {
+  it("start-chat grant check is authoritative — ignores a stale cached grant list", async () => {
     // The QueryClient is an app-level singleton and finishLater is SPA nav, so a
     // grant list connect-code cached earlier can still be in the cache when the
-    // user resumes at kickoff — possibly minutes stale. The write-path check
+    // user resumes at start-chat — possibly minutes stale. The write-path check
     // must read CURRENT grants, not trust the cache (guards against re-adding a
     // staleTime). Seed the cache with a stale list that still contains a repo
     // that has since been removed; assert the live read prunes it anyway.
-    const { StepKickoff } = await import("../onboarding/steps/step-kickoff.js");
+    const { StepStartChat } = await import("../onboarding/steps/step-start-chat.js");
     // Current grants (live) are web + api; the stale cache still has `gone`.
     githubMocks.listOrgGithubRepos.mockResolvedValue(GITHUB_REPOS);
     const view = await renderOnboardingDom(
-      <StepKickoff />,
+      <StepStartChat />,
       {
-        activeStep: "kickoff",
+        activeStep: "start-chat",
         selectedRepoUrls: ["https://github.com/acme/web.git", "https://github.com/acme/gone.git"],
         treeBindingPlan: "useBoundTree",
         treeUrl: "https://github.com/acme/context-tree",
@@ -2094,7 +2170,7 @@ describe("web DOM interaction coverage", () => {
         );
       },
     );
-    await waitForText("Your agent's ready to get to work", view.container);
+    await waitForText("Start working with your agent", view.container);
     await click(
       ([...view.container.querySelectorAll("button")].find((b) => b.textContent?.includes("Start")) ??
         null) as HTMLButtonElement | null,

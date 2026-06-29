@@ -13,8 +13,8 @@ import { Select } from "../components/ui/select.js";
 import { COPY } from "./onboarding/copy.js";
 import { FlowHint, RepoTokenPicker, StatusRow } from "./onboarding/flow-ui.js";
 import type { TreeBindingPlan } from "./onboarding/onboarding-flow.js";
-import { kickoffErrorMessage } from "./onboarding/provision-tree.js";
-import { ensureKickoffRepos, startTreeSetupKickoff } from "./onboarding/tree-kickoff.js";
+import { startChatErrorMessage } from "./onboarding/provision-tree.js";
+import { ensureStartChatRepos, startTreeSetupChat } from "./onboarding/tree-setup-chat.js";
 
 /**
  * Per-tab marker set when the user kicks off a GitHub App install from this
@@ -103,9 +103,9 @@ export function ContextTreeBuildEntry({
     try {
       // New-tree setup registers the chosen repos before Cloud one-click creates
       // the binding; a bound-tree recovery passes no repos and only re-sends the
-      // idempotent tree kickoff.
-      if (sourceRepos.length > 0) await ensureKickoffRepos(organizationId, sourceRepos);
-      const chatId = await startTreeSetupKickoff({
+      // idempotent tree setup chat.
+      if (sourceRepos.length > 0) await ensureStartChatRepos(organizationId, sourceRepos);
+      const chatId = await startTreeSetupChat({
         agent: chosenAgent,
         organizationId,
         sourceRepos,
@@ -116,7 +116,7 @@ export function ContextTreeBuildEntry({
       });
       navigate(`/?c=${encodeURIComponent(chatId)}`);
     } catch (err) {
-      setError(kickoffErrorMessage(err, "Couldn't start building your Context Tree. Try again."));
+      setError(startChatErrorMessage(err, "Couldn't start building your Context Tree. Try again."));
       setPhase("idle");
     }
   };
@@ -150,7 +150,7 @@ export function ContextTreeBuildEntry({
 
   // No repo resource yet (and not a bound-tree recovery) → connect the GitHub App
   // and pick a repo INLINE, then build. A bound-tree recovery skips this and
-  // re-sends the kickoff for the existing binding (no repo pick needed).
+  // re-sends the tree setup message for the existing binding (no repo pick needed).
   if (!usesBoundTree && repoUrls.length === 0) {
     return (
       <ConnectAndPickRepos
@@ -288,7 +288,7 @@ function ConnectAndPickRepos({
     try {
       // This is the write-path guard. The picker above is a UX cache; GitHub App
       // grants can change in another tab between render and Build, and
-      // ensureKickoffRepos only validates resource creation, not current App
+      // ensureStartChatRepos only validates resource creation, not current App
       // access. Re-read GitHub directly here and fail closed before writing a
       // stale team repo resource.
       const granted = await listOrgGithubRepos(organizationId);

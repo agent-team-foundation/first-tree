@@ -1,12 +1,55 @@
-import { existsSync } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import { wellKnownBinDirs } from "../runtime/install-locations.js";
+import { getLoginShellPathDirs } from "../runtime/login-shell-path.js";
+
+/**
+ * A resolved `claude` candidate is usable only if it is a regular file that is
+ * executable. Bare `existsSync` matches a directory named `claude` or a
+ * non-executable shim, which would yield a false `ok` the runtime then can't
+ * spawn (mirrors codex's executability gate, plus a regular-file check so a
+ * directory entry named `claude` doesn't pass via the dir search bit).
+ */
+export function isExecutableFile(filePath: string): boolean {
+  try {
+    if (!statSync(filePath).isFile()) return false;
+    accessSync(filePath, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export type ClaudeExecutableSource = "env" | "path" | "well-known" | "default";
 
 export type ClaudeExecutableResolution = {
   path: string | undefined;
   source: ClaudeExecutableSource;
+  /**
+   * Set only when `CLAUDE_CODE_EXECUTABLE` was provided but did not resolve to an
+   * executable regular file. The override is still soft (we fall through to PATH /
+   * well-known / login-shell), so this is populated only on the final `default`
+   * resolution — i.e. when nothing else resolved either — letting the probe name
+   * the misconfigured override precisely instead of the generic missing text.
+   */
+  overrideError?: string;
+};
+
+/** Injectable seams so probe tests stay hermetic (no real shell spawn / no host install dirs). */
+export type ResolveClaudeExecutableDeps = {
+  /** Returns the user's interactive-login-shell PATH dirs; defaults to the memoized probe. */
+  loginShellPathDirs?: () => string[];
+  /** Returns the curated well-known bin dirs; defaults to the real host list. */
+  wellKnownDirs?: () => string[];
+  /**
+   * Whether to consult the login-shell PATH (which may `spawnSync` a shell).
+   * Default `true`. Set `false` on the daemon's pre-connect handler-registration
+   * path so startup never blocks on a login shell — the capability probe and the
+   * session-start handler resolution still pass `true`, finding a shell-only
+   * `claude` lazily, after the WS is connected.
+   */
+  includeLoginShell?: boolean;
 };
 
 /**
@@ -14,29 +57,32 @@ export type ClaudeExecutableResolution = {
  *
  * The daemon runs under launchd/systemd with a PATH baked at service-install
  * time, which does NOT include `~/.local/bin` — the Claude Code native
- * installer's default target. A user who installed via the official installer
- * therefore has a perfectly working `claude` the daemon cannot see, and the
- * capability probe used to report it as "not installed" (false negative).
- * Checking the known install dirs directly removes the PATH dependency.
+ * installer's default target — nor the node-version-manager / global-npm bins a
+ * user installs into. A user who installed via the official installer (or
+ * `npm i -g`) therefore has a perfectly working `claude` the daemon cannot see,
+ * and the capability probe used to report it as "not installed" (false
+ * negative). Checking the known install dirs directly removes the PATH
+ * dependency.
  */
-function wellKnownClaudeCandidates(env: NodeJS.ProcessEnv): string[] {
-  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+function wellKnownClaudeCandidates(dirs: readonly string[]): string[] {
   const name = process.platform === "win32" ? "claude.exe" : "claude";
-  return [
-    join(home, ".local", "bin", name), // official native installer default
-    join(home, ".claude", "local", name), // `claude migrate-installer` target
-  ];
+  return dirs.map((dir) => join(dir, name));
 }
 
 /**
  * Resolve which Claude Code binary the SDK should spawn.
  *
- * Priority:
+ * Priority — cheap (no-spawn) checks first, the login-shell probe last:
  *   1. `CLAUDE_CODE_EXECUTABLE` env var — explicit operator override
- *   2. `claude` on PATH — reuses whatever the user has already installed
- *   3. well-known install dirs (`~/.local/bin`, …) — covers binaries the
- *      daemon's service PATH cannot see
- *   4. undefined — fall back to the SDK's bundled native binary
+ *   2. `claude` on the daemon PATH — reuses whatever the user has installed
+ *   3. well-known install dirs (`~/.local/bin`, Homebrew, npm-global, …) —
+ *      covers binaries the daemon's service PATH cannot see, with no shell spawn
+ *   4. `claude` on the user's interactive **login-shell** PATH — catches bins
+ *      the daemon's frozen service PATH never sees (nvm / fnm / volta / mise /
+ *      asdf, custom `export PATH=`). This step may `spawnSync` a shell, so it is
+ *      consulted last (only when 2–3 miss) and is skipped entirely when
+ *      `includeLoginShell: false` (the pre-connect handler-registration path).
+ *   5. undefined — fall back to the SDK's bundled native binary
  *
  * The SDK's bundled binary ships as a per-platform **optional** npm dep
  * (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`). Any of: a proxy that
@@ -45,34 +91,76 @@ function wellKnownClaudeCandidates(env: NodeJS.ProcessEnv): string[] {
  * throws "Native CLI binary for <platform>-<arch> not found". Returning a PATH
  * or well-known hit here bypasses the missing bundle entirely.
  */
-export function resolveClaudeCodeExecutable(opts: { env?: NodeJS.ProcessEnv } = {}): ClaudeExecutableResolution {
+export function resolveClaudeCodeExecutable(
+  opts: { env?: NodeJS.ProcessEnv } & ResolveClaudeExecutableDeps = {},
+): ClaudeExecutableResolution {
   const env = opts.env ?? process.env;
+  const includeLoginShell = opts.includeLoginShell ?? true;
+  const loginShellPathDirs = opts.loginShellPathDirs ?? getLoginShellPathDirs;
+  const home = env.HOME && env.HOME.length > 0 ? env.HOME : homedir();
+  const wellKnownDirs = opts.wellKnownDirs ?? (() => wellKnownBinDirs(home));
 
+  // Explicit operator override. Accept it ONLY when it is an executable regular
+  // file — the same isFile + X_OK gate the PATH / well-known search applies. A
+  // bare existsSync() also matched a directory named `claude` or a non-executable
+  // shim, yielding a false `env` hit the SDK then can't spawn. A set-but-unusable
+  // override stays non-fatal (First Tree's soft-override contract: fall through to
+  // PATH / well-known / login-shell), but the reason is captured so the probe can
+  // name it precisely if nothing else resolves.
   const override = env.CLAUDE_CODE_EXECUTABLE;
-  if (override && override.length > 0 && existsSync(override)) {
-    return { path: override, source: "env" };
+  let overrideError: string | undefined;
+  if (override && override.length > 0) {
+    if (isExecutableFile(override)) return { path: override, source: "env" };
+    overrideError = `CLAUDE_CODE_EXECUTABLE is set to "${override}" but is not an executable file; searching PATH and well-known install dirs instead`;
   }
 
-  const found = findOnPath("claude", env);
-  if (found) return { path: found, source: "path" };
+  // Daemon PATH first, then cheap well-known dirs — both pure existence checks,
+  // no subprocess. Only if those miss do we consult the login-shell PATH, which
+  // may spawn a shell.
+  const seen = new Set<string>();
+  const fromDaemon = findInDirs("claude", env, pathDirs(env), seen);
+  if (fromDaemon) return { path: fromDaemon, source: "path" };
 
-  for (const candidate of wellKnownClaudeCandidates(env)) {
-    if (existsSync(candidate)) return { path: candidate, source: "well-known" };
+  for (const candidate of wellKnownClaudeCandidates(wellKnownDirs())) {
+    if (isExecutableFile(candidate)) return { path: candidate, source: "well-known" };
   }
 
-  return { path: undefined, source: "default" };
+  // Login-shell PATH last — catches binaries on the user's interactive PATH
+  // only (nvm / fnm / volta / mise / asdf, custom exports). Skipped on the
+  // pre-connect registration path so daemon startup never blocks on a shell.
+  if (includeLoginShell) {
+    const fromLogin = findInDirs("claude", env, loginShellPathDirs(), seen);
+    if (fromLogin) return { path: fromLogin, source: "path" };
+  }
+
+  return { path: undefined, source: "default", ...(overrideError ? { overrideError } : {}) };
 }
 
-function findOnPath(name: string, env: NodeJS.ProcessEnv): string | undefined {
+function pathDirs(env: NodeJS.ProcessEnv): string[] {
   const rawPath = env.PATH ?? env.Path ?? env.path ?? "";
-  if (!rawPath) return undefined;
+  if (!rawPath) return [];
+  return rawPath.split(delimiter);
+}
+
+/**
+ * Search `dirs` (in priority order, may contain dupes) for `name`. `seen` is
+ * shared across calls so dirs already searched in an earlier (higher-priority)
+ * group are not re-checked.
+ */
+function findInDirs(
+  name: string,
+  env: NodeJS.ProcessEnv,
+  dirs: readonly string[],
+  seen: Set<string>,
+): string | undefined {
   const isWin = process.platform === "win32";
   const exts = isWin ? splitPathExt(env.PATHEXT) : [""];
-  for (const dir of rawPath.split(delimiter)) {
-    if (!dir) continue;
+  for (const dir of dirs) {
+    if (!dir || seen.has(dir)) continue;
+    seen.add(dir);
     for (const ext of exts) {
       const full = join(dir, name + ext);
-      if (existsSync(full)) return full;
+      if (isExecutableFile(full)) return full;
     }
   }
   return undefined;

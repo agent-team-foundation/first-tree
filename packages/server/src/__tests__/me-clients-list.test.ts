@@ -132,17 +132,13 @@ describe("GET /me/clients", () => {
       "claude-code": {
         state: "ok",
         available: true,
-        authenticated: true,
         sdkVersion: "0.8.1",
-        authMethod: "oauth",
         detectedAt: new Date().toISOString(),
       },
       codex: {
         state: "missing",
         available: false,
-        authenticated: false,
         sdkVersion: null,
-        authMethod: "none",
         detectedAt: new Date().toISOString(),
       },
     } as const;
@@ -233,11 +229,9 @@ describe("GET /orgs/:orgId/clients (admin team view)", () => {
 
     const capabilities = {
       "claude-code": {
-        state: "unauthenticated",
+        state: "ok",
         available: true,
-        authenticated: false,
         sdkVersion: "0.8.1",
-        authMethod: "none",
         detectedAt: new Date().toISOString(),
       },
     } as const;
@@ -256,7 +250,7 @@ describe("GET /orgs/:orgId/clients (admin team view)", () => {
     }>;
     const row = body.find((c) => c.id === admin.clientId);
     expect(row).toBeDefined();
-    expect(row?.capabilities["claude-code"]?.state).toBe("unauthenticated");
+    expect(row?.capabilities["claude-code"]?.state).toBe("ok");
     expect(row?.capabilities["claude-code"]?.sdkVersion).toBe("0.8.1");
   });
 

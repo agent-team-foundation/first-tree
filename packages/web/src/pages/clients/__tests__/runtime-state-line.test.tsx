@@ -33,13 +33,11 @@ afterEach(async () => {
 });
 
 describe("RuntimeStateLine", () => {
-  it("shows when Codex is running through the system CLI fallback", async () => {
+  it("shows a system-PATH codex as plainly installed (no `fallback` copy)", async () => {
     const entry: CapabilityEntry = {
       available: true,
       state: "ok",
-      authenticated: true,
       sdkVersion: "0.139.0",
-      authMethod: "auth_json",
       runtimeSource: "path",
       runtimePath: "/usr/local/bin/codex",
       detectedAt: "2026-06-12T12:00:00.000Z",
@@ -47,40 +45,21 @@ describe("RuntimeStateLine", () => {
 
     const dom = await render(<RuntimeStateLine provider="codex" entry={entry} os="darwin" />);
 
-    expect(dom.textContent).toContain("Codex v0.139.0");
-    expect(dom.textContent).toContain("system CLI fallback");
+    // Under install-only, a system `codex` on PATH is the normal case, not a
+    // "fallback" — the state line just reads "installed".
+    expect(dom.textContent).toContain("Codex installed v0.139.0");
+    expect(dom.textContent).not.toContain("fallback");
   });
 
-  it("drops the manual login hint for an in-product provider (codex), even via the system CLI fallback", async () => {
-    // codex auth is obtained in-product via the adjacent Connect button (which
-    // drives `codex login` on the resolved binary, bundled OR system PATH), so
-    // the state line must not also print a manual "Run `codex login`" command —
-    // that would contradict the no-separate-CLI onboarding.
-    const entry: CapabilityEntry = {
-      available: true,
-      state: "unauthenticated",
-      authenticated: false,
-      sdkVersion: "0.139.0",
-      authMethod: "none",
-      runtimeSource: "path",
-      runtimePath: "/usr/local/bin/codex",
-      detectedAt: "2026-06-12T12:00:00.000Z",
-    };
-
-    const dom = await render(<RuntimeStateLine provider="codex" entry={entry} os="darwin" />);
-
-    expect(dom.textContent).toContain("system CLI fallback");
-    expect(dom.textContent).toContain("needs login");
-    expect(dom.textContent).not.toContain("codex login");
-  });
+  // Dropped "drops the manual login hint for an in-product provider (codex)":
+  // detection is install-only now — there is no `unauthenticated`/"needs login"
+  // state line to render, so this case no longer exists.
 
   it("gives a concrete install command when a runtime is missing", async () => {
     const entry: CapabilityEntry = {
       available: false,
       state: "missing",
-      authenticated: false,
       sdkVersion: null,
-      authMethod: "none",
       error: "@anthropic-ai/claude-agent-sdk bundled Claude binary could not be located",
       detectedAt: "2026-06-12T12:00:00.000Z",
     };
@@ -100,9 +79,7 @@ describe("RuntimeStateLine", () => {
     const entry: CapabilityEntry = {
       available: false,
       state: "missing",
-      authenticated: false,
       sdkVersion: "2.1.84",
-      authMethod: "none",
       error: "tmux not found",
       detectedAt: "2026-06-12T12:00:00.000Z",
     };
@@ -119,9 +96,7 @@ describe("RuntimeStateLine", () => {
     const entry: CapabilityEntry = {
       available: false,
       state: "missing",
-      authenticated: false,
       sdkVersion: "2.1.84",
-      authMethod: "none",
       error: "tmux not found",
       detectedAt: "2026-06-12T12:00:00.000Z",
     };
@@ -136,9 +111,7 @@ describe("RuntimeStateLine", () => {
     const entry: CapabilityEntry = {
       available: false,
       state: "missing",
-      authenticated: false,
       sdkVersion: "2.1.84",
-      authMethod: "none",
       error: "tmux not found",
       detectedAt: "2026-06-12T12:00:00.000Z",
     };
@@ -156,9 +129,7 @@ describe("RuntimeStateLine", () => {
     const entry: CapabilityEntry = {
       available: false,
       state: "missing",
-      authenticated: false,
       sdkVersion: null,
-      authMethod: "none",
       error: "`claude` not found (checked CLAUDE_CODE_EXECUTABLE, PATH, …); tmux not found",
       detectedAt: "2026-06-12T12:00:00.000Z",
     };
