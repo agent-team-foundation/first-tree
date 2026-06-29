@@ -61,6 +61,7 @@ const onboardingMocks = vi.hoisted(() => ({
   reportOnboardingEvent: vi.fn(async () => undefined),
 }));
 const agentsListMock = vi.hoisted(() => vi.fn(async () => [] as unknown[]));
+const updateAgentMock = vi.hoisted(() => vi.fn(async () => ({})));
 
 vi.mock("react-router", async () => {
   const actual = await vi.importActual<typeof import("react-router")>("react-router");
@@ -83,7 +84,7 @@ vi.mock("../../../features/agent-setup/use-agent-creation.js", () => ({
   },
 }));
 vi.mock("../../../api/onboarding-events.js", () => onboardingMocks);
-vi.mock("../../../api/agents.js", () => ({ listManagedAgents: agentsListMock }));
+vi.mock("../../../api/agents.js", () => ({ listManagedAgents: agentsListMock, updateAgent: updateAgentMock }));
 
 function createStorage(): Storage {
   const data = new Map<string, string>();
@@ -149,6 +150,8 @@ beforeEach(() => {
   };
   agentsListMock.mockReset();
   agentsListMock.mockResolvedValue([]);
+  updateAgentMock.mockReset();
+  updateAgentMock.mockResolvedValue({});
 });
 
 afterEach(async () => {
@@ -396,13 +399,15 @@ describe("QuickstartPage — full flow (e2e)", () => {
     expect(onboardingMocks.postOnboardingStartChat).not.toHaveBeenCalled();
   });
 
-  it("campaign B after a successful campaign A reuses the existing personal agent (no duplicate-create collision)", async () => {
-    // Returning user: campaign A already created Cedar, so /me reports a personal
-    // agent and there is no per-tab stash (it was cleared on A's success). A
-    // second create of "Cedar" would slugify to "cedar" and hit the
-    // (org, name) unique constraint, so the page must reuse the existing agent.
+  it("campaign B after campaign A reuses the existing agent: names it (not Cedar), rebinds it, no duplicate create", async () => {
+    // Returning user: campaign A already created their agent, so /me reports a
+    // personal agent and there is no per-tab stash (cleared on A's success). A
+    // second create of "Cedar" would slugify to "cedar" and hit the (org, name)
+    // unique constraint, so the page reuses the existing agent — the dual-reader
+    // bootstrap must name THAT agent, not "Cedar", and the agent is rebound to
+    // the just-connected client (it was on another machine).
     seedIntent("agent-readiness");
-    connectedWith("claude-code");
+    connectedWith("claude-code"); // connected client id = "client-1"
     authMock.value = {
       organizationId: "org-1",
       user: { username: "gandy" },
@@ -410,21 +415,33 @@ describe("QuickstartPage — full flow (e2e)", () => {
       currentOrgHasPersonalAgent: true,
     };
     agentsListMock.mockResolvedValue([
-      { uuid: "existing-cedar", type: "agent", status: "active", organizationId: "org-1" },
+      {
+        uuid: "existing-cedar",
+        displayName: "Gandy assistant",
+        type: "agent",
+        status: "active",
+        organizationId: "org-1",
+        clientId: "old-client",
+      },
     ]);
 
     await renderPage();
     await act(async () => {
-      for (let i = 0; i < 6; i++) await Promise.resolve();
+      for (let i = 0; i < 8; i++) await Promise.resolve();
     });
 
     // Reuses the existing agent; never POSTs a second "cedar" (which would 409).
     expect(agentCreationMock.create).not.toHaveBeenCalled();
+    // Rebinds the reused agent to the just-connected client (it was elsewhere).
+    expect(updateAgentMock).toHaveBeenCalledWith("existing-cedar", { clientId: "client-1" });
     expect(onboardingMocks.postOnboardingStartChat).toHaveBeenCalledTimes(1);
     const arg = onboardingMocks.postOnboardingStartChat.mock.calls[0]?.[0];
     if (!arg) throw new Error("expected a start-chat call");
     expect(arg.agentUuid).toBe("existing-cedar");
     expect(arg.campaign).toBe("agent-readiness");
+    // Dual-reader copy names the REUSED agent, not Cedar.
+    expect(arg.bootstrap).toContain("Gandy assistant");
+    expect(arg.bootstrap).not.toContain("Cedar");
     expect(navigateMock).toHaveBeenCalledWith("/?c=chat-1");
   });
 });

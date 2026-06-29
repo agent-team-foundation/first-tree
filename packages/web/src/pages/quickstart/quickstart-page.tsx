@@ -1,7 +1,7 @@
 import { ArrowRight } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
-import { listManagedAgents } from "../../api/agents.js";
+import { listManagedAgents, updateAgent } from "../../api/agents.js";
 import { postOnboardingStartChat } from "../../api/onboarding-events.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
@@ -52,7 +52,7 @@ export function QuickstartPage() {
   const computer = useComputerConnection(Boolean(intent && campaign));
   const setupStartedRef = useRef(false);
   const startChatStartedRef = useRef(false);
-  const onlineAgentRef = useRef<string | null>(null);
+  const onlineAgentRef = useRef<{ uuid: string; displayName: string } | null>(null);
   const resumeStartedRef = useRef(false);
   // Read once on mount: an agent created in a prior attempt this tab (it
   // survives a remount). When present we resume with it rather than create a
@@ -64,16 +64,16 @@ export function QuickstartPage() {
   const [startChatError, setStartChatError] = useState<string | null>(null);
 
   const startChat = useCallback(
-    async (agentUuid: string) => {
+    async (agentUuid: string, agentDisplayName: string) => {
       if (!intent || !campaign || startChatStartedRef.current) return;
-      onlineAgentRef.current = agentUuid;
+      onlineAgentRef.current = { uuid: agentUuid, displayName: agentDisplayName };
       startChatStartedRef.current = true;
       setStartChatError(null);
       try {
         const { chatId } = await postOnboardingStartChat({
           ...(organizationId ? { organizationId } : {}),
           agentUuid,
-          bootstrap: campaign.buildBootstrap({ agentDisplayName: QUICKSTART_AGENT_NAME, repoUrl: intent.url }),
+          bootstrap: campaign.buildBootstrap({ agentDisplayName, repoUrl: intent.url }),
           kind: "work",
           campaign: intent.campaign,
           complete: false,
@@ -110,10 +110,13 @@ export function QuickstartPage() {
     onCreated: (info) => {
       if (intent) writeQuickstartAgent({ campaign: intent.campaign, organizationId, uuid: info.agentUuid });
     },
-    onOnline: startChat,
+    onOnline: (uuid) => void startChat(uuid, QUICKSTART_AGENT_NAME),
   });
 
   // Create a fresh private Cedar — only for a brand-new user with no agent yet.
+  // (Edge: a *suspended* agent named "cedar" still holds the unique (org, name),
+  // so a user whose only agent is a suspended cedar would 409 here — rare enough
+  // to accept for v0, since the reuse path filters to active agents.)
   const createCedar = useCallback(() => {
     if (!computer.connectedClient || !computer.selectedRuntime) return;
     void create({
@@ -134,14 +137,28 @@ export function QuickstartPage() {
     if (currentOrgHasPersonalAgent) {
       try {
         const agents = await listManagedAgents();
-        const existing = agents
-          .filter(
-            (a) =>
-              a.type !== "human" && a.status === "active" && (!organizationId || a.organizationId === organizationId),
-          )
-          .sort((a, b) => b.uuid.localeCompare(a.uuid))[0];
+        const usable = agents.filter(
+          (a) =>
+            a.type !== "human" && a.status === "active" && (!organizationId || a.organizationId === organizationId),
+        );
+        const clientId = computer.connectedClient?.id ?? null;
+        // Prefer an agent already on the just-connected client (same machine);
+        // otherwise the newest one.
+        const existing =
+          (clientId ? usable.find((a) => a.clientId === clientId) : undefined) ??
+          [...usable].sort((a, b) => b.uuid.localeCompare(a.uuid))[0];
         if (existing) {
-          void startChat(existing.uuid);
+          // Rebind the reused agent to the connected client so it runs on the
+          // machine the user connected for this campaign — a no-op when already
+          // there, best-effort if it fails (it still runs on its current client).
+          if (clientId && existing.clientId !== clientId) {
+            try {
+              await updateAgent(existing.uuid, { clientId });
+            } catch {
+              // best-effort rebind
+            }
+          }
+          void startChat(existing.uuid, existing.displayName);
           return;
         }
       } catch {
@@ -149,7 +166,7 @@ export function QuickstartPage() {
       }
     }
     createCedar();
-  }, [currentOrgHasPersonalAgent, organizationId, startChat, createCedar]);
+  }, [currentOrgHasPersonalAgent, organizationId, startChat, createCedar, computer.connectedClient]);
 
   // Set up the agent once a computer is connected with a usable runtime — no
   // button, no picker. Fires once; skipped when an agent was already created
@@ -166,11 +183,12 @@ export function QuickstartPage() {
   useEffect(() => {
     if (resumeStartedRef.current || !stashedAgentUuid || !intent || !campaign) return;
     resumeStartedRef.current = true;
-    void startChat(stashedAgentUuid);
+    void startChat(stashedAgentUuid, QUICKSTART_AGENT_NAME);
   }, [stashedAgentUuid, intent, campaign, startChat]);
 
   const retryStartChat = useCallback(() => {
-    if (onlineAgentRef.current) void startChat(onlineAgentRef.current);
+    const a = onlineAgentRef.current;
+    if (a) void startChat(a.uuid, a.displayName);
   }, [startChat]);
 
   const retryAgentSetup = useCallback(() => {
