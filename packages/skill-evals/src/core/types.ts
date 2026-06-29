@@ -10,6 +10,7 @@ export type CommandResult = {
 export type RunPaths = {
   binDir: string;
   eventsPath: string;
+  gradingJsonPath: string;
   packageRoot: string;
   repoRoot: string;
   runRoot: string;

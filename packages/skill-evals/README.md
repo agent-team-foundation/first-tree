@@ -110,20 +110,30 @@ The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs
 the relevant skill, prepends command shims such as `first-tree` to `PATH`, and
 runs `codex exec --json` from the case workspace for live eval commands.
+Live gate runs do not inherit the operator's full environment. The Codex
+process receives an allowlisted environment plus an isolated `HOME`, temp
+directory, and XDG cache/config directories under the case run root. The model
+shell runs with `shell_environment_policy.inherit=none`, only the eval shims and
+isolated paths are set explicitly, and Codex is invoked with
+`--ignore-user-config`, `--ignore-rules`, and `--sandbox workspace-write`.
 
 Each case writes:
 
 - `events.jsonl` with harness events, Codex JSONL events, and shimmed
   `first-tree` invocations.
+- `grading.json` with deterministic four-axis gate grading:
+  `routing_pass`, `process_pass`, `outcome_pass`, and `risk_pass`, plus
+  evidence and risk flags.
 - `summary.json` with derived metrics.
-- `summary.md` with a human-readable case report.
+- `summary.md` with a human-readable case report and grading summary.
 
 The top-level `eval:floor`, `eval:gate`, and `eval:quality` commands also append
 a lightweight local result-store entry to
 `packages/skill-evals/.runs/index.jsonl`. Entries record the run group, suite,
 tier, case, pass/fail state, git branch/sha, model/provider where available,
-artifact paths, duration, cost, and judge scores when present. The `.runs`
-directory is gitignored local eval state.
+artifact paths, duration, cost, and judge scores when present. Gate failures use
+the deterministic grading evidence first and link the `grading.json` artifact
+path in the result store. The `.runs` directory is gitignored local eval state.
 
 Use `eval:compare` to compare the latest result-store run group with the
 previous one:

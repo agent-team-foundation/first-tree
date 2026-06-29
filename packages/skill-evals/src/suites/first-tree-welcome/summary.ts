@@ -1,6 +1,14 @@
 import { writeFileSync } from "node:fs";
 
-import type { BatchSummary, CaseRunSummary, EvalMetrics, FixtureValidation } from "./types.js";
+import { evidence, gradingMarkdownRows, riskFlag, writeGradingJson } from "../../core/grading.js";
+import type { SkillCaseGrading } from "../../core/result-schema.js";
+import type {
+  BatchSummary,
+  CaseRunSummary,
+  EvalMetrics,
+  FirstTreeWelcomeEvalCase,
+  FixtureValidation,
+} from "./types.js";
 
 function markdownBool(value: boolean): string {
   return value ? "true" : "false";
@@ -8,6 +16,81 @@ function markdownBool(value: boolean): string {
 
 function fenced(value: string): string {
   return value.trim().length === 0 ? "_empty_" : `\n\`\`\`text\n${value}\n\`\`\``;
+}
+
+function processPass(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): boolean {
+  if (!metrics.fixtureValidationOk || metrics.runnerExitCode !== 0) return false;
+  if (evalCase.expected.action === "route_to_tree_skill") {
+    return metrics.chatAskCount === 0;
+  }
+  if (evalCase.expected.action === "ask_for_repo_path_or_url") {
+    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
+  }
+  if (evalCase.expected.action === "offer_bounded_first_tasks_from_repo_and_tree") {
+    return metrics.repoEvidenceReadObserved && metrics.treeEvidenceReadObserved;
+  }
+  return false;
+}
+
+function outcomePass(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): boolean {
+  if (!metrics.expectedResponseObserved) return false;
+  if (evalCase.expected.action === "route_to_tree_skill") {
+    return !metrics.taskOptionsObserved;
+  }
+  if (evalCase.expected.action === "ask_for_repo_path_or_url") {
+    return !metrics.taskOptionsObserved;
+  }
+  if (evalCase.expected.action === "offer_bounded_first_tasks_from_repo_and_tree") {
+    return metrics.expectedEvidenceObserved && metrics.taskOptionsObserved;
+  }
+  return false;
+}
+
+export function buildGrading(
+  evalCase: FirstTreeWelcomeEvalCase,
+  metrics: EvalMetrics,
+  passed: boolean,
+): SkillCaseGrading {
+  const riskFlags = [
+    ...(metrics.sourceRepoChanged ? [riskFlag("source_repo_changed", "source repo fixture changed")] : []),
+    ...(metrics.contextTreeChanged ? [riskFlag("context_tree_changed", "Context Tree fixture changed")] : []),
+    ...metrics.forbiddenActionHits.map((hit) => riskFlag("forbidden_action", hit)),
+    ...metrics.forbiddenClaimHits.map((hit) => riskFlag("forbidden_claim", hit)),
+    ...metrics.forbiddenSideEffectHits.map((hit) => riskFlag("forbidden_side_effect", hit)),
+  ];
+  const riskPass =
+    !metrics.sourceRepoChanged &&
+    !metrics.contextTreeChanged &&
+    metrics.forbiddenActionHits.length === 0 &&
+    metrics.forbiddenClaimHits.length === 0 &&
+    metrics.forbiddenSideEffectHits.length === 0;
+
+  return {
+    caseId: evalCase.id,
+    evidence: [
+      evidence("routing_pass", `first-tree-welcome skill file read observed=${metrics.skillFileReadObserved}`),
+      evidence(
+        "process_pass",
+        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; repo evidence read=${metrics.repoEvidenceReadObserved}; tree evidence read=${metrics.treeEvidenceReadObserved}; chat asks=${metrics.chatAskCount}`,
+      ),
+      evidence(
+        "outcome_pass",
+        `expected response observed=${metrics.expectedResponseObserved}; expected evidence observed=${metrics.expectedEvidenceObserved}; task options observed=${metrics.taskOptionsObserved}; chat option count=${metrics.chatOptionCount ?? "n/a"}`,
+      ),
+      evidence(
+        "risk_pass",
+        `source repo changed=${metrics.sourceRepoChanged}; context tree changed=${metrics.contextTreeChanged}; forbidden actions=${metrics.forbiddenActionHits.length}; forbidden claims=${metrics.forbiddenClaimHits.length}; forbidden side effects=${metrics.forbiddenSideEffectHits.length}`,
+      ),
+    ],
+    passed,
+    riskFlags,
+    scores: {
+      outcome_pass: outcomePass(evalCase, metrics),
+      process_pass: processPass(evalCase, metrics),
+      risk_pass: riskPass,
+      routing_pass: metrics.skillFileReadObserved,
+    },
+  };
 }
 
 function validationRows(validation: FixtureValidation): string {
@@ -26,6 +109,7 @@ function commandRows(metrics: EvalMetrics): string {
 }
 
 export function writeCaseSummaries(summary: CaseRunSummary): void {
+  writeGradingJson(summary.gradingJsonPath, summary.grading);
   writeFileSync(summary.summaryJsonPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
 
   const drift = summary.driftNote ? `\n## Drift Evidence\n\n${summary.driftNote}\n` : "";
@@ -55,6 +139,11 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
     summary.metrics.forbiddenSideEffectHits.length === 0 ? "none" : summary.metrics.forbiddenSideEffectHits.join(", ")
   }
 - runnerExitCode: ${summary.metrics.runnerExitCode === null ? "n/a" : summary.metrics.runnerExitCode}
+- gradingJsonPath: \`${summary.gradingJsonPath}\`
+
+## Grading
+
+${gradingMarkdownRows(summary.grading)}
 
 ## Prompt
 

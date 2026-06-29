@@ -25,6 +25,7 @@ export function createRunPaths(options: CreateRunPathsOptions): RunPaths {
   return {
     binDir,
     eventsPath: join(runRoot, "events.jsonl"),
+    gradingJsonPath: join(runRoot, "grading.json"),
     packageRoot: options.packageRoot,
     repoRoot,
     runRoot,

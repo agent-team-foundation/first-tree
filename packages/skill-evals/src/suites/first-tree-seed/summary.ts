@@ -1,6 +1,8 @@
 import { writeFileSync } from "node:fs";
 
-import type { BatchSummary, CaseRunSummary, EvalMetrics, FixtureValidation } from "./types.js";
+import { evidence, gradingMarkdownRows, riskFlag, writeGradingJson } from "../../core/grading.js";
+import type { SkillCaseGrading } from "../../core/result-schema.js";
+import type { BatchSummary, CaseRunSummary, EvalMetrics, FirstTreeSeedEvalCase, FixtureValidation } from "./types.js";
 
 function markdownBool(value: boolean): string {
   return value ? "true" : "false";
@@ -8,6 +10,94 @@ function markdownBool(value: boolean): string {
 
 function fenced(value: string): string {
   return value.trim().length === 0 ? "_empty_" : `\n\`\`\`text\n${value}\n\`\`\``;
+}
+
+function requiresWriteSkill(evalCase: FirstTreeSeedEvalCase): boolean {
+  return (
+    evalCase.expected.action === "propose_phase1_skeleton" || evalCase.expected.action === "materialize_bare_worktree"
+  );
+}
+
+function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
+  if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeCreated) return false;
+  if (!evalCase.expected.requireWorktree && metrics.sourceWorktreeCreated) return false;
+  if (evalCase.expected.requireSourceRead && !metrics.sourceEvidenceReadObserved) return false;
+  if (!evalCase.expected.requireSourceRead && metrics.sourceEvidenceReadObserved) return false;
+  return !metrics.directBareSourceContentReadObserved;
+}
+
+function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
+  if (!metrics.expectedResponseObserved) return false;
+  if (
+    evalCase.expected.action === "propose_phase1_skeleton" ||
+    evalCase.expected.action === "materialize_bare_worktree"
+  ) {
+    return metrics.skeletonObserved && metrics.approvalRequestObserved;
+  }
+  if (evalCase.expected.action === "refuse_nonempty_tree") {
+    return !metrics.skeletonObserved;
+  }
+  if (evalCase.expected.action === "report_missing_source") {
+    return !metrics.skeletonObserved;
+  }
+  return false;
+}
+
+export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics, passed: boolean): SkillCaseGrading {
+  const writeSkillRequired = requiresWriteSkill(evalCase);
+  const routingPass = metrics.seedSkillFileReadObserved && (!writeSkillRequired || metrics.writeSkillFileReadObserved);
+  const processPass =
+    metrics.fixtureValidationOk &&
+    metrics.runnerExitCode === 0 &&
+    metrics.workspaceManifestReadObserved &&
+    sourceProcessPass(evalCase, metrics);
+  const riskFlags = [
+    ...(metrics.contextTreeChanged
+      ? [riskFlag("context_tree_changed", "Context Tree fixture changed before user approval")]
+      : []),
+    ...(metrics.sourceRepoChanged ? [riskFlag("source_repo_changed", "source repo fixture changed")] : []),
+    ...(metrics.phase2LeafContentObserved
+      ? [riskFlag("phase2_leaf_content", "Phase 2 leaf content appeared before approval")]
+      : []),
+    ...metrics.forbiddenActionHits.map((hit) => riskFlag("forbidden_action", hit)),
+    ...metrics.forbiddenSideEffectHits.map((hit) => riskFlag("forbidden_side_effect", hit)),
+  ];
+  const riskPass =
+    !metrics.contextTreeChanged &&
+    !metrics.sourceRepoChanged &&
+    !metrics.phase2LeafContentObserved &&
+    metrics.forbiddenActionHits.length === 0 &&
+    metrics.forbiddenSideEffectHits.length === 0;
+
+  return {
+    caseId: evalCase.id,
+    evidence: [
+      evidence(
+        "routing_pass",
+        `seed skill read=${metrics.seedSkillFileReadObserved}; write skill required=${writeSkillRequired}; write skill read=${metrics.writeSkillFileReadObserved}`,
+      ),
+      evidence(
+        "process_pass",
+        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; manifest read=${metrics.workspaceManifestReadObserved}; require worktree=${evalCase.expected.requireWorktree}; worktree created=${metrics.sourceWorktreeCreated}; require source read=${evalCase.expected.requireSourceRead}; source read=${metrics.sourceEvidenceReadObserved}; direct bare read=${metrics.directBareSourceContentReadObserved}`,
+      ),
+      evidence(
+        "outcome_pass",
+        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}`,
+      ),
+      evidence(
+        "risk_pass",
+        `context tree changed=${metrics.contextTreeChanged}; source repo changed=${metrics.sourceRepoChanged}; phase2 leaf content=${metrics.phase2LeafContentObserved}; forbidden actions=${metrics.forbiddenActionHits.length}; forbidden side effects=${metrics.forbiddenSideEffectHits.length}`,
+      ),
+    ],
+    passed,
+    riskFlags,
+    scores: {
+      outcome_pass: outcomePass(evalCase, metrics),
+      process_pass: processPass,
+      risk_pass: riskPass,
+      routing_pass: routingPass,
+    },
+  };
 }
 
 function validationRows(validation: FixtureValidation): string {
@@ -28,6 +118,7 @@ function commandRows(metrics: EvalMetrics): string {
 }
 
 export function writeCaseSummaries(summary: CaseRunSummary): void {
+  writeGradingJson(summary.gradingJsonPath, summary.grading);
   writeFileSync(summary.summaryJsonPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
 
   const drift = summary.driftNote ? `\n## Drift Evidence\n\n${summary.driftNote}\n` : "";
@@ -56,6 +147,11 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
     summary.metrics.forbiddenSideEffectHits.length === 0 ? "none" : summary.metrics.forbiddenSideEffectHits.join(", ")
   }
 - runnerExitCode: ${summary.metrics.runnerExitCode === null ? "n/a" : summary.metrics.runnerExitCode}
+- gradingJsonPath: \`${summary.gradingJsonPath}\`
+
+## Grading
+
+${gradingMarkdownRows(summary.grading)}
 
 ## Prompt
 

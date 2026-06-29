@@ -16,6 +16,7 @@ export type ResultStoreGitInfo = {
 };
 
 export type ResultStoreArtifact = {
+  gradingJsonPath: string | null;
   runRoot: string | null;
   summaryJsonPath: string | null;
   summaryMdPath: string | null;
@@ -182,7 +183,7 @@ function numericDelta(current: number | null, previous: number | null): number |
 
 function entryDelta(current: ResultStoreEntry, previous: ResultStoreEntry | null): CompareEntryDelta {
   return {
-    artifactPath: current.artifact.summaryJsonPath ?? current.artifact.runRoot,
+    artifactPath: current.artifact.gradingJsonPath ?? current.artifact.summaryJsonPath ?? current.artifact.runRoot,
     caseKey: caseKey(current),
     costDeltaUsd: numericDelta(current.costUsd, previous?.costUsd ?? null),
     currentPassed: current.passed,

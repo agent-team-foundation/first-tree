@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { RunPaths } from "../../../core/types.js";
 import { FIRST_TREE_SEED_GATE_CASES } from "../cases.js";
 import { casePassed, deriveMetrics } from "../grader.js";
+import { buildGrading } from "../summary.js";
 import type { EvalMetrics, FirstTreeSeedEvalCase, FixtureValidation } from "../types.js";
 
 function findCase(id: string): FirstTreeSeedEvalCase {
@@ -43,6 +44,7 @@ function baseRunPaths(workspacePath: string): RunPaths {
   return {
     binDir: join(workspacePath, "bin"),
     eventsPath: join(workspacePath, "events.jsonl"),
+    gradingJsonPath: join(workspacePath, "grading.json"),
     packageRoot: workspacePath,
     repoRoot: workspacePath,
     runRoot: workspacePath,
@@ -90,14 +92,20 @@ describe("first-tree-seed grader", () => {
   });
 
   it("fails empty-tree source-present when first-tree-write required reading was not loaded", () => {
-    expect(
-      casePassed(
-        findCase("empty-tree-source-present"),
-        baseMetrics({
-          writeSkillFileReadObserved: false,
-        }),
-      ),
-    ).toBe(false);
+    const evalCase = findCase("empty-tree-source-present");
+    const metrics = baseMetrics({
+      writeSkillFileReadObserved: false,
+    });
+
+    expect(casePassed(evalCase, metrics)).toBe(false);
+
+    const grading = buildGrading(evalCase, metrics, casePassed(evalCase, metrics));
+    expect(grading.scores).toEqual({
+      outcome_pass: true,
+      process_pass: true,
+      risk_pass: true,
+      routing_pass: false,
+    });
   });
 
   it("does not count first-tree-write mentions in first-tree-seed skill output as write-skill reads", () => {

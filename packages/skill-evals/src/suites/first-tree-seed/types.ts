@@ -1,3 +1,4 @@
+import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
 export type SeedTreeState = "empty" | "nonempty";
@@ -85,6 +86,8 @@ export type CaseRunSummary = {
   driftNote: string | null;
   expectedAction: SeedExpectedAction;
   fixtureValidation: FixtureValidation;
+  grading: SkillCaseGrading;
+  gradingJsonPath: string;
   metrics: EvalMetrics;
   passed: boolean;
   prompt: string;
