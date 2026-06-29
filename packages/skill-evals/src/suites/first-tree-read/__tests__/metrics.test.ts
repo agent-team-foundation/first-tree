@@ -6,6 +6,11 @@ import type { EvalMetrics, FixtureValidation } from "../types.js";
 const HELP_ARGV = ["tree", "tree", "--help"];
 const SELECTOR_ARGV = ["tree", "tree", "/domains/payments"];
 const EXPECTED_FACT = "payments runbook anchor";
+const JWT_EXPECTED_FACTS = [
+  "User JWT auth is the unified authorization surface.",
+  "Route scopes must be checked against live organization membership before cross-org actions.",
+  "HTTP routes must follow the repo path conventions document before auth or multi-org changes.",
+] as const;
 
 const VALID_FIXTURE: FixtureValidation = {
   domainNodeCount: 2,
@@ -121,6 +126,49 @@ describe("first-tree-read metrics pass criteria", () => {
     expect(result.helpSucceeded).toBe(true);
     expect(result.selectionSucceeded).toBe(true);
     expect(result.modelFirstTreeCommandsOk).toBe(false);
+    expect(casePassed(true, result)).toBe(false);
+  });
+
+  it("recognizes strict expected fact concepts in translated or paraphrased final answers", () => {
+    const result = deriveMetrics(
+      [
+        skillReadEvent(),
+        firstTreeCall(HELP_ARGV),
+        firstTreeResult(HELP_ARGV, 0),
+        firstTreeCall(["tree", "tree", "systems/server/auth"]),
+        firstTreeResult(["tree", "tree", "systems/server/auth"], 0),
+        assistantTextEvent(`JWT auth routes 要遵守这些约束：
+- User JWT 是统一授权面。
+- Route scopes 必须结合当前 live organization membership checks。
+- HTTP routes 和 multi-org 改动必须遵循 docs/development/http-path-conventions.md。`),
+      ],
+      VALID_FIXTURE,
+      0,
+      JWT_EXPECTED_FACTS,
+    );
+
+    expect(result.expectedFactHits).toEqual([...JWT_EXPECTED_FACTS]);
+    expect(result.expectedFactsObserved).toBe(true);
+    expect(casePassed(true, result)).toBe(true);
+  });
+
+  it("does not count isolated terms as expected fact concepts", () => {
+    const result = deriveMetrics(
+      [
+        skillReadEvent(),
+        firstTreeCall(HELP_ARGV),
+        firstTreeResult(HELP_ARGV, 0),
+        firstTreeCall(["tree", "tree", "systems/server/auth"]),
+        firstTreeResult(["tree", "tree", "systems/server/auth"], 0),
+        assistantTextEvent("This only mentions User JWT, route scopes, and path conventions as loose keywords."),
+      ],
+      VALID_FIXTURE,
+      0,
+      JWT_EXPECTED_FACTS,
+    );
+
+    expect(result.expectedFactHits).toEqual([]);
+    expect(result.expectedFactsObserved).toBe(false);
     expect(casePassed(true, result)).toBe(false);
   });
 

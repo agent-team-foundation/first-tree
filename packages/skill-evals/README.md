@@ -62,6 +62,11 @@ The quality runner calls Codex as the judge by default. Use `--judge-model` or
 `JUDGE_MODEL` to select the judge model, and `--judge-bin` or `JUDGE_CODEX_BIN`
 to select the Codex binary. Judge output must be strict JSON; invalid JSON or a
 schema mismatch fails the quality case rather than being treated as a pass.
+The Codex judge runs with a read-only sandbox, ignored user config/rules, an
+isolated `HOME` / temp directory, an environment allowlist, and failing command
+guards for common external side-effect commands such as `git`, `gh`,
+`first-tree`, `curl`, and `wget`. This is a guardrail for the text judge; it is
+not a substitute for a future direct no-tools judge API.
 
 `eval:gate -- --suite first-tree-write` runs the live Codex gate for
 `first-tree-write`. It covers the minimum source-boundary cases:

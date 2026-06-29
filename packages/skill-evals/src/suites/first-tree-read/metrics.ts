@@ -4,6 +4,32 @@ import type { EvalMetrics, FixtureValidation } from "./types.js";
 const HELP_ARGV = ["tree", "tree", "--help"];
 const TEXT_KEYS = ["content", "message", "output_text", "text"];
 
+type FactMatcher = {
+  all: readonly RegExp[];
+  fact: string;
+};
+
+const FACT_MATCHERS: readonly FactMatcher[] = [
+  {
+    all: [/user\s+jwt/iu, /(unified authorization surface|统一[^。\n]*授权|统一[^。\n]*身份模型)/iu],
+    fact: "User JWT auth is the unified authorization surface.",
+  },
+  {
+    all: [
+      /(route scopes?|scope rules?|scopes?)/iu,
+      /(live organization membership|live org(?:anization)? membership|当前[^。\n]*membership|membership checks?)/iu,
+    ],
+    fact: "Route scopes must be checked against live organization membership before cross-org actions.",
+  },
+  {
+    all: [
+      /(http[^。\n]*routes?|auth[^。\n]*routes?|multi-org|jwt auth)/iu,
+      /(docs\/development\/http-path-conventions\.md|path conventions?|路径约定)/iu,
+    ],
+    fact: "HTTP routes must follow the repo path conventions document before auth or multi-org changes.",
+  },
+];
+
 function argvEquals(left: readonly string[], right: readonly string[]): boolean {
   if (left.length !== right.length) return false;
   for (let index = 0; index < left.length; index += 1) {
@@ -146,7 +172,10 @@ function expectedFactHits(modelOutputText: string, expectedFacts: readonly strin
 
   for (const fact of uniqueStrings(expectedFacts)) {
     const normalizedFact = normalizeForMatch(fact);
-    if (normalizedFact.length > 0 && normalizedOutput.includes(normalizedFact)) {
+    const factMatcher = FACT_MATCHERS.find((matcher) => matcher.fact === fact);
+    const matchedByConcept = factMatcher?.all.every((pattern) => pattern.test(modelOutputText)) ?? false;
+    const matchedByExactNormalized = normalizedFact.length > 0 && normalizedOutput.includes(normalizedFact);
+    if (matchedByExactNormalized || matchedByConcept) {
       hits.push(fact);
     }
   }
