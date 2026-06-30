@@ -181,6 +181,32 @@ describe("Resources Phase 1", () => {
     expect(bindings).toHaveLength(0);
   });
 
+  it("an agent-private scan skill binding round-trips through replaceAgentResources", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "member");
+    const agent = await createRuntimeAgent(app, owner);
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+
+    // The web resource/prompt editors re-submit the FULL binding array on every
+    // save — which now includes the agent-private scan-skill binding. A normal
+    // save must accept it (not reject it as a non-repo agent-scoped resource)
+    // and preserve it, so a later edit (enable an MCP/skill, edit a prompt, add
+    // a repo) doesn't break.
+    const current = await app.resourcesService.getAgentResources(agent.uuid);
+    expect(current.bindings.some((b) => b.type === "skill")).toBe(true);
+    await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      { expectedVersion: current.version, bindings: current.bindings },
+      owner.memberId,
+    );
+
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
+    expect(bindings).toHaveLength(1);
+  });
+
   it("ensureAndBindCampaignScanSkill is a no-op for an unknown campaign slug", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "member");

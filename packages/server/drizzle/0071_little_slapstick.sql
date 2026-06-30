@@ -1,1 +1,0 @@
-CREATE UNIQUE INDEX "uq_resources_agent_skill_name_active" ON "resources" USING btree ("organization_id","owner_agent_id","name") WHERE "resources"."type" = 'skill' AND "resources"."scope" = 'agent' AND "resources"."status" IN ('active', 'stale');

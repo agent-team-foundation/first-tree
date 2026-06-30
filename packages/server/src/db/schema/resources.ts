@@ -44,11 +44,5 @@ export const resources = pgTable(
       .where(
         sql`${table.type} = 'repo' AND ${table.scope} = 'agent' AND ${table.status} IN ('active', 'stale') AND ${table.repoCanonicalKey} IS NOT NULL`,
       ),
-    // One active/stale agent-private skill per name per owning agent. Lets the
-    // server-side managed scan-skill ensure be race-safe: a concurrent create
-    // loses with a 23505 and re-reads the winner instead of duplicating.
-    uniqueIndex("uq_resources_agent_skill_name_active")
-      .on(table.organizationId, table.ownerAgentId, table.name)
-      .where(sql`${table.type} = 'skill' AND ${table.scope} = 'agent' AND ${table.status} IN ('active', 'stale')`),
   ],
 );

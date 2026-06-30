@@ -312,8 +312,13 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
       if (resource.scope === "agent" && resource.ownerAgentId !== agentId) {
         throw new BadRequestError(`Agent-scoped resource "${id}" is not owned by this agent`);
       }
-      if (resource.scope === "agent" && resource.type !== "repo") {
-        throw new BadRequestError("Only repo resources may be agent-scoped in Phase 1");
+      // Agent-scoped resources are repos (agent-extra repos) and skills (the
+      // quickstart managed campaign scan skill, owned by this agent — ownership
+      // already enforced just above). Admitting owned agent-scoped skills lets
+      // their binding round-trip through ordinary resource saves: the web
+      // editors re-submit the full binding array, which includes it.
+      if (resource.scope === "agent" && resource.type !== "repo" && resource.type !== "skill") {
+        throw new BadRequestError("Only repo and skill resources may be agent-scoped");
       }
     }
   }
@@ -1149,8 +1154,8 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
       const isOrgAdmin = !!actor && actor.organizationId === organizationId && actor.role === "admin";
       if (!isManager && !isOrgAdmin) throw new NotFoundError(`Agent "${agentId}" not found`);
 
-      const findSkillResourceId = async (): Promise<string | null> => {
-        const [row] = await db
+      const findSkillResourceId = async (database: Database): Promise<string | null> => {
+        const [row] = await database
           .select({ id: resources.id })
           .from(resources)
           .where(
@@ -1167,17 +1172,25 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         return row?.id ?? null;
       };
 
-      // 1. Ensure the managed scan skill exists as an AGENT-PRIVATE resource
-      //    (scope=agent, owned by this agent) — not an org team resource, so it
-      //    needs no org-admin and never lands in the org catalogue. Idempotent by
-      //    (org, ownerAgent, name); the partial unique index makes a concurrent
-      //    create race-safe — the loser sees 23505 and reads the winner.
-      let resourceId = await findSkillResourceId();
-      if (!resourceId) {
-        const id = uuidv7();
-        try {
-          await db.insert(resources).values({
-            id,
+      // Provision the AGENT-PRIVATE scan skill (scope=agent, owned by this agent
+      // — never an org team resource, so it needs no org-admin and never lands
+      // in the org catalogue) and bind it, all under a row lock on the agent.
+      // Concurrent kickoffs (two tabs / a retry) serialize on the lock: the
+      // second waits, then re-reads inside the lock and sees the first run's
+      // resource + binding, so it duplicates neither — which is why no DB unique
+      // index is needed (no prod schema change). Bump the config version +
+      // notify (mirroring replaceAgentResources) so the client re-fetches and
+      // materializes the skill before the kickoff chat dispatches.
+      let didBind = false;
+      await db.transaction(async (tx) => {
+        const targetDb = tx as unknown as Database;
+        await targetDb.select({ uuid: agents.uuid }).from(agents).where(eq(agents.uuid, agentId)).for("update");
+
+        let resourceId = await findSkillResourceId(targetDb);
+        if (!resourceId) {
+          resourceId = uuidv7();
+          await targetDb.insert(resources).values({
+            id: resourceId,
             organizationId,
             type: "skill",
             scope: "agent",
@@ -1190,25 +1203,8 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
             createdBy: actorId,
             updatedBy: actorId,
           });
-          resourceId = id;
-        } catch (err) {
-          if (postgresErrorCode(err) === "23505") resourceId = await findSkillResourceId();
-          if (!resourceId) throw err;
         }
-      }
-      if (!resourceId) return;
 
-      // 2. Bind it to the agent (mode "include") unless already bound. Do the
-      //    check-and-insert under a row lock on the agent so concurrent kickoffs
-      //    (two tabs / a retry) serialize: the second waits, re-reads, and skips
-      //    — no duplicate binding (the resource index dedupes the resource; this
-      //    dedupes the binding). Bump the config version + notify (mirroring
-      //    replaceAgentResources) so the client re-fetches and materializes the
-      //    skill before the kickoff chat dispatches.
-      let didBind = false;
-      await db.transaction(async (tx) => {
-        const targetDb = tx as unknown as Database;
-        await targetDb.select({ uuid: agents.uuid }).from(agents).where(eq(agents.uuid, agentId)).for("update");
         const [already] = await targetDb
           .select({ id: agentResourceBindings.id })
           .from(agentResourceBindings)
