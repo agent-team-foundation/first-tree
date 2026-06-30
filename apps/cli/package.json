@@ -39,7 +39,7 @@
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @openai/codex-sdk",
+    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @openai/codex-sdk && node ../../scripts/copy-client-runtime-templates.mjs apps/cli",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "coverage": "pnpm run build && vitest run --coverage --passWithNoTests",
@@ -61,6 +61,7 @@
     "@inquirer/prompts": "^8.3.0",
     "@openai/codex-sdk": "^0.140.0",
     "commander": "^13.1.0",
+    "ejs": "^6.0.1",
     "gray-matter": "^4.0.3",
     "jose": "^6.0.0",
     "semver": "^7.6.3",

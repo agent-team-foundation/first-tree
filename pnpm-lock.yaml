@@ -35,6 +35,9 @@ importers:
       commander:
         specifier: ^13.1.0
         version: 13.1.0
+      ejs:
+        specifier: ^6.0.1
+        version: 6.0.1
       gray-matter:
         specifier: ^4.0.3
         version: 4.0.3
@@ -99,6 +102,9 @@ importers:
       '@sentry/node':
         specifier: ^10.62.0
         version: 10.62.0(@opentelemetry/core@2.7.1(@opentelemetry/api@1.9.1))(@opentelemetry/exporter-trace-otlp-http@0.215.0(@opentelemetry/api@1.9.1))
+      ejs:
+        specifier: ^6.0.1
+        version: 6.0.1
       pino:
         specifier: ^9.5.0
         version: 9.14.0
@@ -118,6 +124,9 @@ importers:
       '@first-tree/shared':
         specifier: workspace:*
         version: link:../shared
+      '@types/ejs':
+        specifier: ^3.1.5
+        version: 3.1.5
       '@types/node':
         specifier: ^22.16.0
         version: 22.19.15

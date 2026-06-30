@@ -1,12 +1,35 @@
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import {
   AGENT_BRIEFING_GENERATED_MARKER,
   type AgentRuntimeConfigPayload,
   type PromptSection,
 } from "@first-tree/shared";
+import type * as ejs from "ejs";
 import type { PredeclaredSourceRepo } from "./bootstrap.js";
 import { getCliBinding } from "./cli-binding.js";
 import type { AgentIdentity } from "./handler.js";
 import { buildResourceSkillsBriefing } from "./resource-skills.js";
+
+const require = createRequire(import.meta.url);
+// EJS is published as CommonJS at runtime even though its types expose named
+// exports, so native ESM cannot import `render` directly.
+const ejsRuntime: typeof ejs = require("ejs");
+const AGENT_BRIEFING_TEMPLATE_FILENAME = "agent-briefing.ejs";
+const TEMPLATE_CANDIDATE_URLS = [
+  // Source execution: packages/client/src/runtime/agent-briefing.ts
+  new URL(`./templates/${AGENT_BRIEFING_TEMPLATE_FILENAME}`, import.meta.url),
+  // Bundled execution: packages/client/dist/index.mjs or apps/cli/dist/<chunk>.mjs
+  new URL(`../templates/${AGENT_BRIEFING_TEMPLATE_FILENAME}`, import.meta.url),
+] as const;
+
+type CachedTemplate = {
+  filename: string;
+  source: string;
+};
+
+let templateCache: CachedTemplate | null = null;
 
 /**
  * Wrap an arbitrary string in POSIX-safe single quotes so it can be pasted
@@ -35,6 +58,19 @@ export type BuildAgentBriefingOptions = {
    */
   contextTreeRepoUrl?: string | null;
   contextTreeBranch?: string | null;
+};
+
+type AgentBriefingRenderModel = {
+  generatedBannerBlock: string;
+  identityBlock: string;
+  teamPromptBlock: string | null;
+  agentPromptBlock: string | null;
+  agentPromptOverridesBlock: string | null;
+  legacyPromptBlock: string | null;
+  workingInFirstTreeBlock: string;
+  requiredReadingBlock: string | null;
+  contextTreeBlock: string;
+  skillsBlock: string | null;
 };
 
 /**
@@ -75,32 +111,32 @@ export type BuildAgentBriefingOptions = {
  *   7. `# Skills (First Tree Managed)`         — Team Skills (if any) + First Tree Family
  */
 export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
-  const sections: string[] = [];
+  return renderAgentBriefingTemplate(buildAgentBriefingRenderModel(opts));
+}
 
-  sections.push(generatedBannerSection(getCliBinding().binName));
-  sections.push(identitySection(opts.identity));
+function buildAgentBriefingRenderModel(opts: BuildAgentBriefingOptions): AgentBriefingRenderModel {
+  const bin = getCliBinding().binName;
 
   const promptSections = opts.payload?.prompt.sections ?? [];
   const teamPromptBlock = teamPromptSection(promptSections);
-  if (teamPromptBlock) sections.push(teamPromptBlock);
-  const agentPromptBlock = agentPromptSection(promptSections, opts.identity, getCliBinding().binName);
-  if (agentPromptBlock) sections.push(agentPromptBlock);
+  const agentPromptBlock = agentPromptSection(promptSections, opts.identity, bin);
   const overridesBlock = agentPromptOverridesSection(promptSections);
-  if (overridesBlock) sections.push(overridesBlock);
+  let legacyPromptBlock: string | null = null;
   if (!teamPromptBlock && !agentPromptBlock && !overridesBlock) {
     // Legacy server without structured sections — keep the old single-blob
     // rendering. The blob may mix team and agent content, so it must NOT be
     // presented under the editable `# Agent Prompt` heading.
     const legacyPrompt = opts.payload?.prompt.append?.trim() ?? "";
-    if (legacyPrompt) sections.push(`## Agent-Specific Prompt\n\n${legacyPrompt}`);
+    if (legacyPrompt) legacyPromptBlock = `## Agent-Specific Prompt\n\n${legacyPrompt}`;
   }
 
-  sections.push(
-    workingInFirstTreeSection({
+  const workingInFirstTreeBlock = workingInFirstTreeSection(
+    {
       agentHome: opts.workspacePath,
       sourceRepos: opts.sourceRepos,
       contextTreePath: opts.contextTreePath,
-    }),
+    },
+    bin,
   );
 
   // `# Required Reading` — sits AFTER `# Working in First Tree` so the
@@ -116,16 +152,51 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   // is short-circuited in `agent-bootstrap.ts`), so mandating a load
   // would point at files that don't exist.
   const requiredReading = requiredReadingSection(opts.contextTreePath, opts.workspacePath);
-  if (requiredReading) sections.push(requiredReading);
-
-  sections.push(
-    contextTreeSection(opts.contextTreePath, opts.contextTreeRepoUrl ?? null, opts.contextTreeBranch ?? null),
+  const contextTreeBlock = contextTreeSection(
+    opts.contextTreePath,
+    opts.contextTreeRepoUrl ?? null,
+    opts.contextTreeBranch ?? null,
   );
 
   const skillsBlock = skillsSection(opts.workspacePath, opts.payload, opts.contextTreePath);
-  if (skillsBlock) sections.push(skillsBlock);
 
-  return `${sections.join("\n\n")}\n`;
+  return {
+    generatedBannerBlock: generatedBannerSection(bin),
+    identityBlock: identitySection(opts.identity),
+    teamPromptBlock,
+    agentPromptBlock,
+    agentPromptOverridesBlock: overridesBlock,
+    legacyPromptBlock,
+    workingInFirstTreeBlock,
+    requiredReadingBlock: requiredReading,
+    contextTreeBlock,
+    skillsBlock,
+  };
+}
+
+function renderAgentBriefingTemplate(model: AgentBriefingRenderModel): string {
+  const template = readAgentBriefingTemplate();
+  return ejsRuntime.render(template.source, model, { filename: template.filename });
+}
+
+function readAgentBriefingTemplate(): CachedTemplate {
+  if (templateCache) return templateCache;
+  const filename = resolveAgentBriefingTemplatePath();
+  templateCache = {
+    filename,
+    source: readFileSync(filename, "utf8"),
+  };
+  return templateCache;
+}
+
+export function resolveAgentBriefingTemplatePath(): string {
+  for (const url of TEMPLATE_CANDIDATE_URLS) {
+    const filename = fileURLToPath(url);
+    if (existsSync(filename)) return filename;
+  }
+  throw new Error(
+    `Agent briefing EJS template is missing. Expected ${AGENT_BRIEFING_TEMPLATE_FILENAME} in the client runtime templates assets.`,
+  );
 }
 
 function identitySection(identity: AgentIdentity): string {
@@ -305,8 +376,7 @@ type WorkingInFirstTreeOpts = {
   contextTreePath: string | null;
 };
 
-function workingInFirstTreeSection(opts: WorkingInFirstTreeOpts): string {
-  const bin = getCliBinding().binName;
+function workingInFirstTreeSection(opts: WorkingInFirstTreeOpts, bin: string): string {
   const blocks: string[] = [];
 
   blocks.push(`# Working in First Tree (First Tree Managed)
@@ -360,7 +430,7 @@ You are running inside **First Tree**, a messaging platform for agent teams.
   blocks.push(workspaceCollaborationBlock(bin));
   blocks.push(githubWorkingPostureBlock());
   blocks.push(githubAttentionBlock(bin, opts.contextTreePath !== null));
-  blocks.push(askingHumansBlock());
+  blocks.push(askingHumansBlock(bin));
   blocks.push(chatTopicBlock(bin));
   blocks.push(cliOverviewBlock(bin));
 
@@ -752,8 +822,7 @@ For the full flag surface, upstream-dependency follows, \`409\` /
 \`${bin} github follow --help\` / \`${bin} github unfollow --help\`.`;
 }
 
-function askingHumansBlock(): string {
-  const bin = getCliBinding().binName;
+function askingHumansBlock(bin: string): string {
   return `## Asking Humans
 
 When you need something only a human can give — a decision, sign-off, or an
