@@ -362,8 +362,22 @@ const FIRST_TREE_ONBOARDING_SYSTEM_SENDER = "first_tree_onboarding";
  */
 function onboardingSkillDirective(metadata: SessionMessage["metadata"]): string | null {
   if (!metadata || typeof metadata !== "object") return null;
-  if ((metadata as { systemSender?: unknown }).systemSender !== FIRST_TREE_ONBOARDING_SYSTEM_SENDER) {
+  const stamp = metadata as { systemSender?: unknown; campaign?: unknown };
+  if (stamp.systemSender !== FIRST_TREE_ONBOARDING_SYSTEM_SENDER) {
     return null;
+  }
+  // A reusable quickstart growth chat stamps `campaign` (a kebab-case slug that
+  // is ALSO the materialized scan skill's name, listed under "## Team Skills" in
+  // the briefing). Point the agent at that scan skill instead of the onboarding
+  // welcome. The slug guard is defence-in-depth: the stamp is server-trusted,
+  // but never interpolate an unvalidated string into the directive.
+  const campaign = typeof stamp.campaign === "string" ? stamp.campaign : "";
+  if (/^[a-z0-9][a-z0-9-]*$/.test(campaign)) {
+    return [
+      "<first-tree-onboarding>",
+      `This is a First Tree repo scan first chat. Before your first reply, load and follow the \`${campaign}\` skill (listed under "## Team Skills") and run it on the repository in your workspace, then share the report with the user.`,
+      "</first-tree-onboarding>",
+    ].join("\n");
   }
   return [
     "<first-tree-onboarding>",

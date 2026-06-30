@@ -137,7 +137,16 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
       format: "text",
       content: args.bootstrap,
       source: "api",
-      metadata: { systemSender: "first_tree_onboarding" },
+      // `systemSender` marks this as a trusted onboarding kickoff (the server
+      // strips it from untrusted sends). `campaign`, when present, is an
+      // agent-only signal: the client's `onboardingSkillDirective` reads it to
+      // load and run the matching campaign scan skill, while the web bubble
+      // reader keys only on `systemSender` and ignores it — so it never leaks
+      // into the user-visible body.
+      metadata: {
+        systemSender: "first_tree_onboarding",
+        ...(args.campaign ? { campaign: args.campaign } : {}),
+      },
     };
     // tx → Database: drizzle transaction handles aren't structurally Database;
     // the `as unknown as` bridge is the same pattern used in member.ts /
