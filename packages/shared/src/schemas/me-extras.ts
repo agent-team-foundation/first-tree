@@ -83,6 +83,15 @@ export const kickoffOnboardingSchema = z.object({
   bootstrap: z.string().min(1),
   kind: kickoffKindSchema,
   complete: z.boolean().optional(),
+  // Optional campaign slug (reusable quickstart growth entries). Appended to the
+  // kickoff idempotency key so two campaigns for the same (human, agent, kind)
+  // get distinct chats; onboarding omits it so the key is byte-identical. Slug
+  // form keeps the colon-delimited key unambiguous.
+  campaign: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]*$/)
+    .max(50)
+    .optional(),
 });
 export type KickoffOnboarding = z.infer<typeof kickoffOnboardingSchema>;
 

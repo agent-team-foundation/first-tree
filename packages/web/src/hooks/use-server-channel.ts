@@ -22,19 +22,35 @@ async function fetchServerChannel(): Promise<ChannelName | null> {
 }
 
 /**
- * The release channel this server speaks (`dev` | `staging` | `prod`), or null
- * while loading / when the server does not report one. Server-wide and fixed
- * for the life of a deploy, so it is fetched once from the public bootstrap
- * `/config` endpoint and cached for the session. Gates channel-scoped UI such
- * as the staging-only "hide agent final text" view toggle.
+ * The release channel this server speaks (`dev` | `staging` | `prod`) plus
+ * whether the fetch has settled. A caller that *gates* on the channel
+ * (redirects rather than just hides) needs to tell "still loading" (channel is
+ * null because the fetch is in flight — render neutral, take no action) apart
+ * from "resolved to unknown/prod" (null because the server reported nothing
+ * usable — apply the prod-safe default). Server-wide and fixed for the life of
+ * a deploy, so it is fetched once from the public bootstrap `/config` endpoint
+ * and cached for the session.
  */
-export function useServerChannel(): ChannelName | null {
-  const { data } = useQuery({
+export function useServerChannelState(): { channel: ChannelName | null; settled: boolean } {
+  const { data, status } = useQuery({
     queryKey: ["server-channel"],
     queryFn: fetchServerChannel,
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
   });
-  return data ?? null;
+  // With infinite staleTime `pending` is the only not-yet-resolved status;
+  // `success` (a channel or an unrecognised body → null) and `error` both
+  // count as settled, so the prod-safe default applies the moment we know.
+  return { channel: data ?? null, settled: status !== "pending" };
+}
+
+/**
+ * The release channel this server speaks (`dev` | `staging` | `prod`), or null
+ * while loading / when the server does not report one. Gates channel-scoped UI
+ * such as the staging-only "hide agent final text" view toggle; for a gate that
+ * must distinguish loading from unknown, use {@link useServerChannelState}.
+ */
+export function useServerChannel(): ChannelName | null {
+  return useServerChannelState().channel;
 }

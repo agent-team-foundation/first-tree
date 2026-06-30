@@ -251,6 +251,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       bootstrap: body.bootstrap,
       kind: body.kind,
       complete: body.complete ?? true,
+      ...(body.campaign ? { campaign: body.campaign } : {}),
     });
     if (result.sent) {
       notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
