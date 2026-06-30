@@ -118,6 +118,7 @@ type PendingMessage = {
 type SlotDeliveryKind = "fresh" | "recovery" | "control";
 
 type SessionCommandType = "session:suspend" | "session:resume" | "session:terminate";
+type RuntimeSyncActiveSet = ReadonlySet<string> | null;
 
 /**
  * Resolve the directory the runtime reads markdown doc snapshots against —
@@ -686,11 +687,15 @@ export class SessionManager {
     }
   }
 
-  /** Chat IDs this client still holds locally (sessions + evictedMappings). */
-  getHeldChatIds(): string[] {
+  /** Chat IDs this client still holds locally and should report to runtime sync. */
+  getHeldChatIds(activeChatIds: RuntimeSyncActiveSet = null): string[] {
     const ids = new Set<string>();
-    for (const id of this.sessions.keys()) ids.add(id);
-    for (const id of this.evictedMappings.keys()) ids.add(id);
+    for (const id of this.sessions.keys()) {
+      if (this.shouldIncludeInRuntimeSync(id, activeChatIds)) ids.add(id);
+    }
+    for (const id of this.evictedMappings.keys()) {
+      if (this.shouldIncludeInRuntimeSync(id, activeChatIds)) ids.add(id);
+    }
     return [...ids];
   }
 
@@ -778,11 +783,13 @@ export class SessionManager {
   }
 
   /** Return all current session states for full state sync after reconnect. */
-  getSessionStates(): Array<{ chatId: string; state: SessionState }> {
-    return [...this.sessions.entries()].map(([chatId, entry]) => ({
-      chatId,
-      state: entry.status,
-    }));
+  getSessionStates(activeChatIds: RuntimeSyncActiveSet = null): Array<{ chatId: string; state: SessionState }> {
+    return [...this.sessions.entries()]
+      .filter(([chatId]) => this.shouldIncludeInRuntimeSync(chatId, activeChatIds))
+      .map(([chatId, entry]) => ({
+        chatId,
+        state: entry.status,
+      }));
   }
 
   /**
@@ -793,8 +800,8 @@ export class SessionManager {
    * stuck on a pre-restart "active" snapshot when the in-memory handler is
    * actually gone.
    */
-  getEvictedChatIds(): string[] {
-    return [...this.evictedMappings.keys()];
+  getEvictedChatIds(activeChatIds: RuntimeSyncActiveSet = null): string[] {
+    return [...this.evictedMappings.keys()].filter((chatId) => this.shouldIncludeInRuntimeSync(chatId, activeChatIds));
   }
 
   /**
@@ -820,6 +827,18 @@ export class SessionManager {
 
   private hasLocalRecoveryRisk(chatId: string): boolean {
     return this.evictedMappings.has(chatId) || this.sessions.get(chatId)?.status === "evicted";
+  }
+
+  private shouldIncludeInRuntimeSync(chatId: string, activeChatIds: RuntimeSyncActiveSet): boolean {
+    if (activeChatIds === null) return true;
+    if (activeChatIds.has(chatId)) return true;
+    return this.hasRuntimeSyncForceKeep(chatId);
+  }
+
+  private hasRuntimeSyncForceKeep(chatId: string): boolean {
+    if (this.pendingQueue.some((queued) => queued.chatId === chatId)) return true;
+    if (this.hasPendingTransientRetry(chatId)) return true;
+    return this.inboxDelivery.hasUnsettledWork(chatId);
   }
 
   private clearRetryState(entry: SessionEntry): void {
@@ -2154,9 +2173,12 @@ export class SessionManager {
    * idling. Only `status === 'active'` sessions are returned; a session
    * with no recorded runtime defaults to `idle`.
    */
-  getSessionRuntimeStates(): Array<{ chatId: string; runtimeState: RuntimeState }> {
+  getSessionRuntimeStates(
+    activeChatIds: RuntimeSyncActiveSet = null,
+  ): Array<{ chatId: string; runtimeState: RuntimeState }> {
     const out: Array<{ chatId: string; runtimeState: RuntimeState }> = [];
     for (const [chatId, session] of this.sessions) {
+      if (!this.shouldIncludeInRuntimeSync(chatId, activeChatIds)) continue;
       const runtimeState = this.projectedRuntimeState(chatId, session);
       if (!runtimeState) continue;
       out.push({ chatId, runtimeState });

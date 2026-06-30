@@ -1,4 +1,5 @@
 import {
+  type ActiveRuntimeChatIdsResponse,
   AGENT_SELECTOR_HEADER,
   type Agent,
   type AgentRuntimeConfig,
@@ -316,6 +317,10 @@ export class FirstTreeHubSDK {
 
   async listChats(options?: { limit?: number; cursor?: string }): Promise<PaginatedResult<Chat>> {
     return this.requestJson(`/api/v1/agent/chats${this.queryString(options)}`);
+  }
+
+  async listActiveRuntimeChatIds(): Promise<ActiveRuntimeChatIdsResponse> {
+    return this.requestJson<ActiveRuntimeChatIdsResponse>("/api/v1/agent/chats/active-runtime-ids");
   }
 
   /**

@@ -3,6 +3,7 @@ import {
   type AddParticipant,
   AGENT_STATUSES,
   AGENT_TYPES,
+  CHAT_ENGAGEMENT_STATUSES,
   type LegacyCreateChat,
   type SendMessage,
 } from "@first-tree/shared";
@@ -10,6 +11,7 @@ import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
+import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
@@ -657,6 +659,39 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
   const viewerMembershipKind = await resolveViewerMembershipKind(db, chatId, selfAgentId);
 
   return { ...chat, participants, title, firstMessagePreview, viewerMembershipKind };
+}
+
+/**
+ * Runtime active-set projection for one agent and the human user operating the
+ * current client. This is intentionally smaller than "all chats where the
+ * agent is a speaker": archived/deleted rows are not part of the user's active
+ * working set, so clean idle local sessions for those chats do not need
+ * periodic runtime projection.
+ */
+export async function listActiveRuntimeChatIds(
+  db: Database,
+  agentId: string,
+  humanAgentId: string,
+  organizationId: string,
+): Promise<string[]> {
+  const rows = await db.execute<{ chat_id: string }>(sql`
+    SELECT DISTINCT agent_membership.chat_id
+      FROM ${chatMembership} AS agent_membership
+      JOIN ${chats}
+        ON ${chats.id} = agent_membership.chat_id
+      JOIN ${chatMembership} AS viewer_membership
+        ON viewer_membership.chat_id = agent_membership.chat_id
+       AND viewer_membership.agent_id = ${humanAgentId}
+      LEFT JOIN ${chatUserState}
+        ON ${chatUserState.chatId} = agent_membership.chat_id
+       AND ${chatUserState.agentId} = ${humanAgentId}
+     WHERE agent_membership.agent_id = ${agentId}
+       AND agent_membership.access_mode = 'speaker'
+       AND ${chats.organizationId} = ${organizationId}
+       AND COALESCE(${chatUserState.engagementStatus}, ${CHAT_ENGAGEMENT_STATUSES.ACTIVE}) = ${CHAT_ENGAGEMENT_STATUSES.ACTIVE}
+     ORDER BY agent_membership.chat_id ASC
+  `);
+  return rows.map((row) => row.chat_id);
 }
 
 async function resolveViewerMembershipKind(

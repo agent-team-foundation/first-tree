@@ -7,7 +7,7 @@ import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { suspendAgent } from "../services/agent.js";
 import { resolveTargetChat } from "../services/github-entity-chat.js";
-import { createMeChat, leaveMeChat } from "../services/me-chat.js";
+import { createMeChat, leaveMeChat, setChatEngagement } from "../services/me-chat.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 describe("Agent Chats API", () => {
@@ -32,6 +32,30 @@ describe("Agent Chats API", () => {
     const getRes = await a.request("GET", `/api/v1/agent/chats/${chat.id}`);
     expect(getRes.statusCode).toBe(200);
     expect(getRes.json().id).toBe(chat.id);
+  });
+
+  it("lists active runtime chat ids for the current human scope", async () => {
+    const app = getApp();
+    const runtime = await createTestAgent(app, { name: "active-runtime-route" });
+    const active = await createMeChat(app.db, runtime.humanAgentUuid, runtime.organizationId, {
+      participantIds: [runtime.agent.uuid],
+    });
+    const archived = await createMeChat(app.db, runtime.humanAgentUuid, runtime.organizationId, {
+      participantIds: [runtime.agent.uuid],
+    });
+    const deleted = await createMeChat(app.db, runtime.humanAgentUuid, runtime.organizationId, {
+      participantIds: [runtime.agent.uuid],
+    });
+    await setChatEngagement(app.db, archived.chatId, runtime.humanAgentUuid, "archived");
+    await setChatEngagement(app.db, deleted.chatId, runtime.humanAgentUuid, "deleted");
+
+    const res = await runtime.request("GET", "/api/v1/agent/chats/active-runtime-ids");
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ chatIds: string[] }>();
+    expect(body.chatIds).toContain(active.chatId);
+    expect(body.chatIds).not.toContain(archived.chatId);
+    expect(body.chatIds).not.toContain(deleted.chatId);
   });
 
   it("creates a task chat with an initial message, woken recipients, and silent context participants", async () => {

@@ -81,6 +81,8 @@ function makeSdk(options?: {
   configError?: unknown;
   /** Throw `error` on the first `times` config fetches, then succeed — models a transient blip. */
   configErrorsThenSucceed?: { error: unknown; times: number };
+  activeRuntimeChatIds?: string[];
+  activeRuntimeChatIdsError?: unknown;
 }): FirstTreeHubSDK {
   const agent = options?.agent ?? makeAgent();
   let configCalls = 0;
@@ -107,6 +109,10 @@ function makeSdk(options?: {
         updatedAt: "2026-01-01T00:00:00.000Z",
         updatedBy: "user-1",
       };
+    }),
+    listActiveRuntimeChatIds: vi.fn(async () => {
+      if (options?.activeRuntimeChatIdsError) throw options.activeRuntimeChatIdsError;
+      return { chatIds: options?.activeRuntimeChatIds ?? ["chat-1", "chat-2", "chat-evicted"] };
     }),
   };
   // AgentSlot only uses this SDK subset; the concrete SDK type has many HTTP methods irrelevant here.
@@ -188,16 +194,19 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
         return { activeCount: this.state.activeCount, lastActivityMs: this.state.lastActivityMs };
       }
 
-      getSessionStates(): FakeSessionState["sessionStates"] {
-        return this.state.sessionStates;
+      getSessionStates(activeChatIds?: ReadonlySet<string> | null): FakeSessionState["sessionStates"] {
+        if (!activeChatIds) return this.state.sessionStates;
+        return this.state.sessionStates.filter(({ chatId }) => activeChatIds.has(chatId));
       }
 
-      getEvictedChatIds(): string[] {
-        return this.state.evictedChatIds;
+      getEvictedChatIds(activeChatIds?: ReadonlySet<string> | null): string[] {
+        if (!activeChatIds) return this.state.evictedChatIds;
+        return this.state.evictedChatIds.filter((chatId) => activeChatIds.has(chatId));
       }
 
-      getSessionRuntimeStates(): FakeSessionState["runtimeStates"] {
-        return this.state.runtimeStates;
+      getSessionRuntimeStates(activeChatIds?: ReadonlySet<string> | null): FakeSessionState["runtimeStates"] {
+        if (!activeChatIds) return this.state.runtimeStates;
+        return this.state.runtimeStates.filter(({ chatId }) => activeChatIds.has(chatId));
       }
 
       getAggregateRuntimeState(): FakeSessionState["aggregateRuntimeState"] {
@@ -216,8 +225,9 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
         this.state.applyStaleChatIds(chatIds);
       }
 
-      getHeldChatIds(): string[] {
-        return this.state.heldChatIds;
+      getHeldChatIds(activeChatIds?: ReadonlySet<string> | null): string[] {
+        if (!activeChatIds) return this.state.heldChatIds;
+        return this.state.heldChatIds.filter((chatId) => activeChatIds.has(chatId));
       }
 
       shutdown(): Promise<void> {
@@ -233,6 +243,8 @@ async function makeSlot(options?: {
   agent?: RegisterResult;
   configError?: unknown;
   configErrorsThenSucceed?: { error: unknown; times: number };
+  activeRuntimeChatIds?: string[];
+  activeRuntimeChatIdsError?: unknown;
   runtimeType?: string;
   syncResult?: MockState["syncResult"];
   syncDelayMs?: number;
@@ -248,6 +260,8 @@ async function makeSlot(options?: {
     agent: options?.agent,
     configError: options?.configError,
     configErrorsThenSucceed: options?.configErrorsThenSucceed,
+    activeRuntimeChatIds: options?.activeRuntimeChatIds,
+    activeRuntimeChatIdsError: options?.activeRuntimeChatIdsError,
   });
   const connection = new FakeClientConnection(sdk);
   const { AgentSlot } = await import("../runtime/agent-slot.js");
@@ -521,6 +535,57 @@ describe("AgentSlot", () => {
 
     connection.emit("inbox:deliver", "inbox-1", makeFrame({ entryId: 99 }));
     expect(session.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the active runtime chat set for full-state sync and optimistic-adds delivered chats", async () => {
+    const { slot, connection, sdk, state } = await makeSlot({ activeRuntimeChatIds: ["chat-1"] });
+
+    await slot.start();
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+
+    expect(vi.mocked(sdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(1);
+    expect(connection.reportSessionState).toHaveBeenCalledWith("agent-1", "chat-1", "active");
+    expect(connection.reportSessionState).not.toHaveBeenCalledWith("agent-1", "chat-evicted", "suspended");
+
+    const reconcile = Reflect.get(slot, "reconcileNow");
+    if (typeof reconcile !== "function") throw new Error("private method missing");
+
+    connection.sendSessionReconcile.mockClear();
+    session.heldChatIds = ["chat-1", "chat-2"];
+    reconcile.call(slot);
+    expect(connection.sendSessionReconcile).toHaveBeenCalledWith("agent-1", ["chat-1"]);
+
+    connection.emit("inbox:deliver", "inbox-1", makeFrame({ chatId: "chat-2" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    connection.sendSessionReconcile.mockClear();
+    reconcile.call(slot);
+    expect(connection.sendSessionReconcile).toHaveBeenCalledWith("agent-1", ["chat-1", "chat-2"]);
+
+    await slot.stop();
+  });
+
+  it("chunks reconcile frames so a large held set never exceeds the wire schema limit", async () => {
+    const chatIds = Array.from({ length: 501 }, (_, i) => `chat-${i}`);
+    const { slot, connection, state } = await makeSlot({ activeRuntimeChatIds: chatIds });
+
+    await slot.start();
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+    session.heldChatIds = chatIds;
+
+    const reconcile = Reflect.get(slot, "reconcileNow");
+    if (typeof reconcile !== "function") throw new Error("private method missing");
+    connection.sendSessionReconcile.mockClear();
+    reconcile.call(slot);
+
+    expect(connection.sendSessionReconcile).toHaveBeenCalledTimes(2);
+    expect(connection.sendSessionReconcile).toHaveBeenNthCalledWith(1, "agent-1", chatIds.slice(0, 500));
+    expect(connection.sendSessionReconcile).toHaveBeenNthCalledWith(2, "agent-1", chatIds.slice(500));
+
+    await slot.stop();
   });
 
   it("starts the bind-time reconcile grace window after startup full state sync", async () => {
