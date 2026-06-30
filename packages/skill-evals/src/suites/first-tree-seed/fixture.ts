@@ -291,11 +291,12 @@ function writeRealFirstTreeBareSourceFixture(paths: RunPaths): string {
   const sourceOriginPath = writeRealFirstTreeSourceOriginFixture(paths);
   const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
   mkdirSync(join(paths.workspacePath, "source-repos"), { recursive: true });
-  assertCommandOk(runCommand("git", ["clone", "--bare", sourceOriginPath, sourceRepoPath], paths.workspacePath));
+  assertCommandOk(runCommand("git", ["init", "--bare", sourceRepoPath], paths.workspacePath));
+  assertCommandOk(runCommand("git", ["remote", "add", "origin", sourceOriginPath], sourceRepoPath));
   assertCommandOk(
     runCommand("git", ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], sourceRepoPath),
   );
-  assertCommandOk(runCommand("git", ["fetch", "origin"], sourceRepoPath));
+  assertCommandOk(runCommand("git", ["fetch", "origin", "+refs/heads/*:refs/remotes/origin/*"], sourceRepoPath));
   return sourceRepoPath;
 }
 
