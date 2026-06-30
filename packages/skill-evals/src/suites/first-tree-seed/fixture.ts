@@ -297,6 +297,12 @@ function writeRealFirstTreeBareSourceFixture(paths: RunPaths): string {
     runCommand("git", ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], sourceRepoPath),
   );
   assertCommandOk(runCommand("git", ["fetch", "origin", "+refs/heads/*:refs/remotes/origin/*"], sourceRepoPath));
+  const sourceMain = gitHead(sourceOriginPath, "refs/heads/main");
+  if (sourceMain === null) {
+    throw new Error(`real first-tree source origin is missing refs/heads/main: ${sourceOriginPath}`);
+  }
+  assertCommandOk(runCommand("git", ["update-ref", "refs/remotes/origin/main", sourceMain], sourceRepoPath));
+  assertCommandOk(runCommand("git", ["rev-parse", "refs/remotes/origin/main"], sourceRepoPath));
   return sourceRepoPath;
 }
 
@@ -307,6 +313,7 @@ function writeRealFirstTreeSourceOriginFixture(paths: RunPaths): string {
   assertCommandOk(runCommand("git", ["fetch", "source", "HEAD:refs/heads/main"], sourceOriginPath));
   assertCommandOk(runCommand("git", ["symbolic-ref", "HEAD", "refs/heads/main"], sourceOriginPath));
   assertCommandOk(runCommand("git", ["remote", "remove", "source"], sourceOriginPath));
+  assertCommandOk(runCommand("git", ["rev-parse", "refs/heads/main"], sourceOriginPath));
   return sourceOriginPath;
 }
 
