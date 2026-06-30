@@ -238,6 +238,28 @@ afterEach(() => {
 });
 
 describe("SessionManager edge coverage", () => {
+  it("filters runtime sync by active set while force-keeping queued work", async () => {
+    const sm = makeManager();
+    const i = internals(sm);
+    i.sessions.set("chat-active", makeSessionRecord("chat-active"));
+    i.sessions.set("chat-archived", makeSessionRecord("chat-archived"));
+    i.sessions.set("chat-pending", makeSessionRecord("chat-pending"));
+    i.evictedMappings.set("chat-evicted-active", { claudeSessionId: "evicted-active", lastActivity: 1 });
+    i.evictedMappings.set("chat-evicted-archived", { claudeSessionId: "evicted-archived", lastActivity: 2 });
+    i.pendingQueue.push({ chatId: "chat-pending", message: makeMessage("chat-pending"), deliveryKind: "fresh" });
+
+    const activeSet = new Set(["chat-active", "chat-evicted-active"]);
+
+    expect(sm.getHeldChatIds(activeSet)).toEqual(["chat-active", "chat-pending", "chat-evicted-active"]);
+    expect(sm.getSessionStates(activeSet)).toEqual([
+      { chatId: "chat-active", state: "suspended" },
+      { chatId: "chat-pending", state: "suspended" },
+    ]);
+    expect(sm.getEvictedChatIds(activeSet)).toEqual(["chat-evicted-active"]);
+
+    await sm.shutdown();
+  });
+
   it("refreshes newer config before dispatch and logs refresh failures without blocking delivery", async () => {
     const okCache = makeCache();
     const okHandler = handler();

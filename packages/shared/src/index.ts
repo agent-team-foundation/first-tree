@@ -30,6 +30,10 @@ export {
 // -- OAuth-callback open-redirect guard --
 export { DEFAULT_SAFE_REDIRECT, safeRedirectPath } from "./safe-redirect.js";
 export {
+  type ActiveRuntimeChatIdsResponse,
+  activeRuntimeChatIdsResponseSchema,
+} from "./schemas/active-runtime-chats.js";
+export {
   AGENT_NAME_MAX_LENGTH,
   AGENT_NAME_REGEX,
   AGENT_SOURCES,
