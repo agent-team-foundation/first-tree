@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.0.3
+version: 1.0.4
 description: Use only when a First Tree onboarding start-chat system message explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup chats, ordinary chats, PR reviews, tree writes, or maintenance.
 ---
 
@@ -171,6 +171,28 @@ path or URL. Your first substantive reply must:
 4. Accept free text as another valid answer.
 5. Mention Context Tree at most once, with a plain gloss such as "your team's
    shared memory", unless this is the tree setup chat.
+
+## Talking to the User
+
+Lead with the result, be brief, and say only what helps the user act next. Do not
+narrate process, and do not surface this skill's internals (the state matrix,
+"lane", `first-tree-*` skill names, "binding"/"runtime") — say it in plain product
+terms or not at all. Do not claim; show.
+
+A good first reply, end to end:
+
+> **You** *(connected to acme-dashboard)*
+>
+> **Agent:** Your `acme-dashboard` is a Next.js app. `app/checkout/recovery.ts`
+> has a TODO for expired-session re-auth and no nearby test. Want to start there,
+> or with a checkout test? Or tell me what you have in mind.
+
+Avoid:
+
+- **The audit dump** — listing everything you read instead of the 1–3 things that matter.
+- **The tour** — narrating UI steps ("go to the console, then Settings…") instead of a link or one concrete input.
+- **The greeting-about-greeting** — "Welcome! I'm excited to help on your journey…" before any substance.
+- **"Should work"** — calling it done without showing the check.
 
 ## Choosing Fast-Value Tasks
 
