@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type { ShippedSkillName, SkillEvalTier } from "./case-schema.js";
 import { isRecord } from "./events.js";
 
-export type ResultStoreCommand = "eval:floor" | "eval:gate" | "eval:quality";
+export type ResultStoreCommand = "eval:floor" | "eval:gate" | "eval:periodic" | "eval:quality";
 
 export type ResultStoreStatus = "passed" | "failed" | "skipped";
 

@@ -14,6 +14,8 @@ pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --include-quality
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
+pnpm --filter @first-tree/skill-evals eval:periodic
+pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:quality
 pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-welcome --judge-model <model>
@@ -43,6 +45,17 @@ implemented deterministic gates, and judge-core changes also recommend quality.
 Suite or skill changes recommend that suite's floor/gate/quality coverage where
 implemented. The command only recommends; live gate and quality evals remain
 opt-in and are not part of `pnpm test`.
+
+`eval:periodic` is the opt-in tier for broader, more expensive coverage that is
+not suitable for default gates or ordinary CI. It accepts the same basic live
+eval controls as gates, including `--suite`, `--case`, `--model`,
+`--codex-bin`, `--json`, and `--verbose`. This command currently provides the
+stable command and summary surface; no implemented periodic live cases are
+registered yet, so selecting periodic coverage prints a clear no-op summary and
+exits 0. Future PRs will add welcome full-matrix coverage, seed quality and
+realism cases, and multi-provider/runtime-generated periodic coverage. The
+default `eval:select` recommendations do not include periodic for ordinary
+skill changes; maintainers trigger periodic manually or via future scheduling.
 
 `eval:quality` is an opt-in LLM-as-judge layer. It does not replace
 deterministic gates and is not called by `eval:gate` by default. Each quality
@@ -137,15 +150,18 @@ Each case writes:
 - `summary.json` with derived metrics.
 - `summary.md` with a human-readable case report and grading summary.
 
-The top-level `eval:floor`, `eval:gate`, and `eval:quality` commands also append
-a lightweight local result-store entry to
+The top-level `eval:floor`, `eval:gate`, and `eval:quality` commands append a
+lightweight local result-store entry to
 `packages/skill-evals/.runs/index.jsonl`. Entries record the run group, suite,
 tier, case, pass/fail state, git branch/sha, model/provider where available,
 artifact paths, duration, turns and first-response latency when derivable, cost,
 and judge scores when present. Gate failures use the deterministic grading
 evidence first and link the `grading.json` artifact path in the result store.
 Unknown turn or latency values are recorded as `null`. The `.runs` directory is
-gitignored local eval state.
+gitignored local eval state. The current `eval:periodic` no-op path does not
+append result-store entries; implemented periodic cases added later will use
+`command: "eval:periodic"` and `tier: "periodic"` entries so summary and compare
+can report them alongside floor, gate, and quality runs.
 
 Use `eval:summary` to summarize the latest result-store run group, or pass a
 specific run group id:

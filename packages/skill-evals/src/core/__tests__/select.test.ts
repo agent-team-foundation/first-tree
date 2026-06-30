@@ -48,6 +48,19 @@ describe("skill eval selection", () => {
     ]);
   });
 
+  it("selects only periodic for shared periodic framework changes", () => {
+    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/core/periodic.ts"]);
+
+    expect(summary.recommendations).toEqual([
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:periodic",
+        kind: "periodic",
+        reason: "packages/skill-evals/src/core/periodic.ts touches periodic eval framework",
+        suite: "all",
+      },
+    ]);
+  });
+
   it("does not recommend live eval for unrelated files", () => {
     const summary = selectSkillEvalRecommendations(["packages/client/src/runtime/agent-slot.ts"]);
 
