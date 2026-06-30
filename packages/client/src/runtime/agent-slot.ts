@@ -98,6 +98,7 @@ export class AgentSlot {
   private activeRuntimeChatIds: Set<string> | null = null;
   private activeRuntimeChatIdsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private activeRuntimeChatIdsRefreshInFlight: Promise<void> | null = null;
+  private activeRuntimeChatIdsRefreshGeneration = 0;
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private postBindReconcileTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners: ConnectionListener[] = [];
@@ -227,6 +228,7 @@ export class AgentSlot {
       bindSucceeded = true;
       const sdk = bound.sdk;
       this.sdk = sdk;
+      this.activeRuntimeChatIdsRefreshGeneration++;
       const agent = await sdk.register();
 
       this.logger.info({ displayName: agent.displayName }, "agent bound");
@@ -437,6 +439,7 @@ export class AgentSlot {
 
   private async stopOnce(): Promise<void> {
     this.bringupAbort?.abort();
+    this.activeRuntimeChatIdsRefreshGeneration++;
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
@@ -466,6 +469,7 @@ export class AgentSlot {
 
   private async cleanupFailedStart(opts: { unbind: boolean }): Promise<void> {
     this.bringupAbort?.abort();
+    this.activeRuntimeChatIdsRefreshGeneration++;
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
@@ -598,27 +602,35 @@ export class AgentSlot {
   }
 
   private scheduleActiveRuntimeChatIdsRefresh(): void {
+    if (!this.sdk) return;
+    const generation = this.activeRuntimeChatIdsRefreshGeneration;
     if (this.activeRuntimeChatIdsRefreshTimer) clearTimeout(this.activeRuntimeChatIdsRefreshTimer);
     this.activeRuntimeChatIdsRefreshTimer = setTimeout(() => {
+      if (!this.isActiveRuntimeChatIdsRefreshLive(generation)) return;
       this.activeRuntimeChatIdsRefreshTimer = null;
-      void this.refreshActiveRuntimeChatIds("periodic").finally(() => this.scheduleActiveRuntimeChatIdsRefresh());
+      void this.refreshActiveRuntimeChatIds("periodic").finally(() => {
+        if (this.isActiveRuntimeChatIdsRefreshLive(generation)) {
+          this.scheduleActiveRuntimeChatIdsRefresh();
+        }
+      });
     }, jitteredActiveRuntimeChatIdsRefreshDelay());
   }
 
   private async refreshActiveRuntimeChatIds(reason: "startup" | "bind" | "periodic"): Promise<void> {
     const sdk = this.sdk;
     if (!sdk) return;
+    const generation = this.activeRuntimeChatIdsRefreshGeneration;
     if (this.activeRuntimeChatIdsRefreshInFlight) return this.activeRuntimeChatIdsRefreshInFlight;
 
     const refresh = sdk
       .listActiveRuntimeChatIds()
       .then(({ chatIds }) => {
-        if (this.sdk !== sdk) return;
+        if (this.sdk !== sdk || !this.isActiveRuntimeChatIdsRefreshLive(generation)) return;
         this.activeRuntimeChatIds = new Set(chatIds);
         this.logger.info({ count: chatIds.length, reason }, "active runtime chat ids refreshed");
       })
       .catch((err) => {
-        if (this.sdk !== sdk) return;
+        if (this.sdk !== sdk || !this.isActiveRuntimeChatIdsRefreshLive(generation)) return;
         this.logger.warn({ err, reason }, "active runtime chat ids refresh failed; keeping previous snapshot");
       })
       .finally(() => {
@@ -628,6 +640,10 @@ export class AgentSlot {
       });
     this.activeRuntimeChatIdsRefreshInFlight = refresh;
     await refresh;
+  }
+
+  private isActiveRuntimeChatIdsRefreshLive(generation: number): boolean {
+    return this.sdk !== null && this.activeRuntimeChatIdsRefreshGeneration === generation;
   }
 
   private schedulePostBindReconcile(): void {

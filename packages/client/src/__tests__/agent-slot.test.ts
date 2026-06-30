@@ -36,6 +36,12 @@ type MockState = {
   sessionConfigs: unknown[];
 };
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+};
+
 class FakeClientConnection extends EventEmitter {
   bindAgent = vi.fn(async () => ({ sdk: this.sdk }));
   unbindAgent = vi.fn(async () => {});
@@ -60,6 +66,16 @@ function makeLogger(): FakeLogger {
   };
   logger.child.mockReturnValue(logger);
   return logger;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 function makeAgent(overrides: Partial<RegisterResult> = {}): RegisterResult {
@@ -586,6 +602,35 @@ describe("AgentSlot", () => {
     expect(connection.sendSessionReconcile).toHaveBeenNthCalledWith(2, "agent-1", chatIds.slice(500));
 
     await slot.stop();
+  });
+
+  it("does not resurrect the active runtime chat refresh timer after stop", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const { slot, connection, sdk } = await makeSlot({ omitReconcileInterval: true });
+
+    await slot.start();
+    expect(vi.mocked(sdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(1);
+
+    const refresh = deferred<{ chatIds: string[] }>();
+    vi.mocked(sdk.listActiveRuntimeChatIds).mockImplementationOnce(() => refresh.promise);
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(vi.mocked(sdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(2);
+
+    const unbind = deferred<void>();
+    connection.unbindAgent.mockImplementationOnce(() => unbind.promise);
+    const stopPromise = slot.stop();
+    await Promise.resolve();
+
+    refresh.resolve({ chatIds: ["chat-1"] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000);
+    expect(vi.mocked(sdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(2);
+
+    unbind.resolve();
+    await stopPromise;
   });
 
   it("starts the bind-time reconcile grace window after startup full state sync", async () => {
