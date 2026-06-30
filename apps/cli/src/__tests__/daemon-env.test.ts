@@ -57,6 +57,16 @@ describe("loadDaemonEnv", () => {
     expect(env.HTTPS_PROXY).toBe("http://proxy:2");
   });
 
+  it("loads client sentry operator overrides before daemon startup", () => {
+    writeFileSync(envPath, "FIRST_TREE_CLIENT_SENTRY_ENABLED=false\nFIRST_TREE_CLIENT_SENTRY_ENVIRONMENT=production\n");
+    const env: NodeJS.ProcessEnv = {};
+    expect(loadDaemonEnv(envPath, env).sort()).toEqual(
+      ["FIRST_TREE_CLIENT_SENTRY_ENABLED", "FIRST_TREE_CLIENT_SENTRY_ENVIRONMENT"].sort(),
+    );
+    expect(env.FIRST_TREE_CLIENT_SENTRY_ENABLED).toBe("false");
+    expect(env.FIRST_TREE_CLIENT_SENTRY_ENVIRONMENT).toBe("production");
+  });
+
   it("never clobbers a value already present in the environment", () => {
     writeFileSync(envPath, "HTTP_PROXY=http://from-file\n");
     const env: NodeJS.ProcessEnv = { HTTP_PROXY: "http://live-value" };

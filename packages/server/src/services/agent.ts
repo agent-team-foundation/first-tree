@@ -508,6 +508,32 @@ export async function createAgent(
     // Wrap both inserts in a transaction so the agent row is never visible
     // without its companion `agent_configs` row.
     const agent = await db.transaction(async (tx) => {
+      // Close the leave/remove race for non-human agents: lock the manager's
+      // member row and re-confirm it is still active inside the same
+      // transaction that inserts the agent. `deactivateMembership` (leave) and
+      // `deleteMember` (admin removal) both lock the departing member
+      // `FOR UPDATE` before scanning and reassigning the agents it manages, so
+      // taking the same lock here makes the two paths mutually exclusive: a
+      // create that began while the member was still active either (a) commits
+      // first, so the departure's scan sees this agent and reassigns/unpins it,
+      // or (b) blocks until the departure commits and then sees the member is no
+      // longer active and aborts — instead of stranding a freshly-created agent
+      // on a left/removed manager (which would re-create the pinned-and-orphaned
+      // state issue #1353 fixes). Human mirrors are skipped: they are created in
+      // the member-bootstrap transaction before the member row exists, so there
+      // is nothing to lock and the deferred FK validates them at commit.
+      if (data.type !== AGENT_TYPES.HUMAN) {
+        const [stillActive] = await tx
+          .select({ id: members.id })
+          .from(members)
+          .where(and(eq(members.id, managerId), eq(members.status, "active")))
+          .for("update")
+          .limit(1);
+        if (!stillActive) {
+          throw new BadRequestError(`Manager "${managerId}" not found`);
+        }
+      }
+
       const [row] = await tx
         .insert(agents)
         .values({
@@ -1014,6 +1040,7 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   // Omitting the field leaves the column untouched.
   if (data.avatarColorToken !== undefined) updates.avatarColorToken = data.avatarColorToken;
 
+  let newManagerId: string | undefined;
   if (data.managerId !== undefined) {
     if (data.managerId === null) {
       throw new BadRequestError("managerId cannot be cleared — every agent must have a manager");
@@ -1030,46 +1057,79 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
       throw new BadRequestError("Manager must belong to the same organization as the agent");
     }
     updates.managerId = data.managerId;
+    newManagerId = data.managerId;
   }
 
-  // First-set clientId (NULL → ID): validate ownership against the agent's
-  // current manager. Reuses the resolveAgentClient ownership check so the
-  // semantics match agent creation.
-  //
-  // With re-bind removed, this first bind is the ONLY path an unbound agent
-  // gets a computer, so it must also run the runtime-provider capability gate
-  // — createAgent runs it on the create-with-client path. Without it an agent
-  // could be bound to a client that does not report its provider (e.g. create
-  // an unbound `codex` agent, then bind it to a client reporting codex
-  // missing/error).
-  if (data.clientId !== undefined && data.clientId !== null && agent.clientId === null) {
-    const resolvedClientId = await resolveAgentClient(db, {
-      clientId: data.clientId,
-      managerId: updates.managerId ?? agent.managerId,
-      type: agent.type,
-    });
-    if (resolvedClientId !== null) {
-      // `agents.runtime_provider` is a text column (typed `string`); narrow it
-      // back to the RuntimeProvider union before the capability check.
-      await ensureClientSupportsRuntimeProvider(
-        db,
-        resolvedClientId,
-        runtimeProviderSchema.parse(agent.runtimeProvider),
-      );
-      updates.clientId = resolvedClientId;
+  const reassigningManager = newManagerId !== undefined && newManagerId !== agent.managerId;
+  // First-set clientId (NULL → ID): with re-bind removed, this first bind is the
+  // ONLY path an unbound agent gets a computer. Its ownership is validated
+  // against the manager (reused from createAgent), and it must run the
+  // runtime-provider capability gate. Both the resolution and the write happen
+  // under lock inside the mutation transaction below so they are departure-safe.
+  // `undefined` means "not a first-bind"; a non-null id means "bind to this".
+  const bindClientId =
+    data.clientId !== undefined && data.clientId !== null && agent.clientId === null ? data.clientId : undefined;
+  // The membership whose active state gates this write: the new manager when
+  // reassigning, otherwise the agent's current manager (whose user must own the
+  // client a first-bind pins to).
+  const gatingManagerId = reassigningManager && newManagerId !== undefined ? newManagerId : agent.managerId;
+
+  await db.transaction(async (tx) => {
+    // Close the reassignment/leave and first-bind/leave races. When this update
+    // reassigns the manager or first-binds a client, lock the gating member row
+    // FOR UPDATE and re-confirm it is active — in the SAME member→agent lock
+    // order `deactivateMembership` (leave) and `deleteMember` (admin removal)
+    // use (member row first, then the agent rows they scan/transfer), so the
+    // paths serialize without deadlocking. A departure of the gating member is
+    // then mutually exclusive with this write: it either commits first (and the
+    // departure's scan transfers/unpins the agent) or blocks until the departure
+    // commits and aborts here on the now-inactive manager. This prevents both a
+    // reassignment landing on a departed member and a stale first-bind re-pinning
+    // the departed owner's client onto an agent leave just transferred + unpinned
+    // (which would revive the retireClient deadlock issue #1353 removes).
+    if (reassigningManager || bindClientId !== undefined) {
+      const [activeManager] = await tx
+        .select({ id: members.id })
+        .from(members)
+        .where(and(eq(members.id, gatingManagerId), eq(members.status, "active")))
+        .for("update")
+        .limit(1);
+      if (!activeManager) {
+        throw new BadRequestError(`Manager "${gatingManagerId}" not found`);
+      }
     }
-  }
 
-  const [updated] = await db.update(agents).set(updates).where(eq(agents.uuid, agent.uuid)).returning();
+    if (bindClientId !== undefined) {
+      const resolvedClientId = await resolveAgentClient(tx, {
+        clientId: bindClientId,
+        managerId: gatingManagerId,
+        type: agent.type,
+      });
+      if (resolvedClientId !== null) {
+        // `agents.runtime_provider` is a text column (typed `string`); narrow it
+        // back to the RuntimeProvider union before the capability check.
+        await ensureClientSupportsRuntimeProvider(
+          tx,
+          resolvedClientId,
+          runtimeProviderSchema.parse(agent.runtimeProvider),
+        );
+        updates.clientId = resolvedClientId;
+      }
+    }
 
-  if (!updated) throw new Error("Unexpected: UPDATE RETURNING produced no row");
-  // If the manager was reassigned, watcher rows anchored on the old
-  // manager need to drop and the new manager's rows need to appear.
-  // Recompute is keyed by agent (not chat) since this single agent may
-  // participate in many chats.
-  if (data.managerId !== undefined && data.managerId !== agent.managerId) {
-    await recomputeWatchersForAgent(db, agent.uuid);
-  }
+    const [row] = await tx.update(agents).set(updates).where(eq(agents.uuid, agent.uuid)).returning();
+    if (!row) throw new Error("Unexpected: UPDATE RETURNING produced no row");
+
+    // If the manager was reassigned, watcher rows anchored on the old manager
+    // need to drop and the new manager's rows need to appear. Recompute is
+    // keyed by agent (not chat) since this single agent may participate in many
+    // chats. Inside the transaction so the manager change and its watcher
+    // fan-out commit atomically.
+    if (reassigningManager) {
+      await recomputeWatchersForAgent(tx, agent.uuid);
+    }
+    return row;
+  });
   // Re-fetch via the unified projection so the wire response carries
   // `runtimeState` like every other single-agent endpoint.
   const refreshed = await selectAgentRowWithRuntime(db, agent.uuid);

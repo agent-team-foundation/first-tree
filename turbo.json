@@ -4,7 +4,16 @@
     "build": {
       "dependsOn": ["^build"],
       "outputs": ["dist/**"],
-      "inputs": ["$TURBO_DEFAULT$"]
+      "inputs": ["$TURBO_DEFAULT$"],
+      "passThroughEnv": [
+        "FIRST_TREE_GIT_SHA",
+        "FIRST_TREE_WEB_BUILD_ID",
+        "SENTRY_AUTH_TOKEN",
+        "SENTRY_ORG",
+        "SENTRY_PROJECT_WEB",
+        "SENTRY_RELEASE",
+        "VITE_SENTRY_*"
+      ]
     },
     "dev": {
       "cache": false,

@@ -196,6 +196,8 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - modelFirstTreeCommandsOk: ${markdownBool(summary.metrics.modelFirstTreeCommandsOk)}
 - firstTreeCalls: ${summary.metrics.firstTreeCalls}
 - runnerExitCode: ${summary.metrics.runnerExitCode === null ? "n/a" : summary.metrics.runnerExitCode}
+- turns: ${summary.turns ?? "n/a"}
+- firstResponseLatencyMs: ${summary.firstResponseLatencyMs ?? "n/a"}
 - gradingJsonPath: \`${summary.gradingJsonPath}\`
 
 ## Grading

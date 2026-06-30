@@ -11,6 +11,7 @@ export type RunPaths = {
   binDir: string;
   eventsPath: string;
   gradingJsonPath: string;
+  modelEventsPath: string;
   packageRoot: string;
   repoRoot: string;
   runRoot: string;

@@ -10,7 +10,7 @@ export function createGhShim(paths: RunPaths): void {
   const script = `#!/usr/bin/env node
 import { appendFileSync } from "node:fs";
 
-const EVENTS_PATH = ${JSON.stringify(paths.eventsPath)};
+const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
 
 function preview(value) {
   if (!value) return "";

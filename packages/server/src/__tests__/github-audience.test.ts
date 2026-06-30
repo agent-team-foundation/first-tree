@@ -5,10 +5,17 @@ import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
-import { identifyActor, resolveAudience } from "../services/github-audience.js";
+import { resolveActorHumanId, resolveAudience as resolveAudienceResolution } from "../services/github-audience.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 type App = ReturnType<ReturnType<typeof useTestApp>>;
+
+async function resolveAudience(
+  db: Parameters<typeof resolveAudienceResolution>[0],
+  event: Parameters<typeof resolveAudienceResolution>[1],
+) {
+  return (await resolveAudienceResolution(db, event)).targets;
+}
 
 async function seedAgent(
   app: App,
@@ -135,69 +142,45 @@ function makeEvent(opts: {
   };
 }
 
-describe("identifyActor", () => {
+describe("resolveActorHumanId", () => {
   const getApp = useTestApp();
 
-  it("returns our-app-bot when the sender login matches `<slug>[bot]` (case-insensitive)", async () => {
+  it("returns the human agent id when the sender login matches an org human (case-insensitive)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const id = await identifyActor(
-      app.db,
-      admin.organizationId,
-      { githubLogin: "First-Tree[bot]", isBot: true },
-      "first-tree",
-    );
-    expect(id).toEqual({ kind: "our-app-bot" });
+    const humanId = await seedAgent(app, {
+      orgId: admin.organizationId,
+      memberId: admin.memberId,
+      name: `alice-${randomUUID().slice(0, 6)}`,
+      type: "human",
+    });
+    const [row] = await app.db.select({ name: agents.name }).from(agents).where(eq(agents.uuid, humanId)).limit(1);
+    if (!row?.name) throw new Error("seeded agent has no name");
+    const id = await resolveActorHumanId(app.db, admin.organizationId, { githubLogin: row.name.toUpperCase() });
+    expect(id).toBe(humanId);
   });
 
-  it("falls through to external when isBot is true but the slug does NOT match", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const id = await identifyActor(
-      app.db,
-      admin.organizationId,
-      { githubLogin: "dependabot[bot]", isBot: true },
-      "first-tree",
-    );
-    expect(id).toEqual({ kind: "external" });
-  });
-
-  it("returns external when appSlug is null even for bot senders", async () => {
-    const app = getApp();
-    const admin = await createTestAdmin(app);
-    const id = await identifyActor(app.db, admin.organizationId, { githubLogin: "first-tree[bot]", isBot: true }, null);
-    expect(id).toEqual({ kind: "external" });
-  });
-
-  it("returns agent identity when the sender login matches an org agent (case-insensitive)", async () => {
+  it("returns null when the sender login matches a non-human agent", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const agentId = await seedAgent(app, {
       orgId: admin.organizationId,
       memberId: admin.memberId,
-      name: `alice-${randomUUID().slice(0, 6)}`,
+      name: `agent-${randomUUID().slice(0, 6)}`,
     });
     const [row] = await app.db.select({ name: agents.name }).from(agents).where(eq(agents.uuid, agentId)).limit(1);
     if (!row?.name) throw new Error("seeded agent has no name");
-    const id = await identifyActor(
-      app.db,
-      admin.organizationId,
-      { githubLogin: row.name.toUpperCase(), isBot: false },
-      "first-tree",
-    );
-    expect(id).toEqual({ kind: "agent", agentId });
+    const id = await resolveActorHumanId(app.db, admin.organizationId, { githubLogin: row.name });
+    expect(id).toBeNull();
   });
 
-  it("returns external for unknown senders", async () => {
+  it("returns null for unknown senders and bots", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
-    const id = await identifyActor(
-      app.db,
-      admin.organizationId,
-      { githubLogin: "stranger", isBot: false },
-      "first-tree",
-    );
-    expect(id).toEqual({ kind: "external" });
+    await expect(resolveActorHumanId(app.db, admin.organizationId, { githubLogin: "stranger" })).resolves.toBeNull();
+    await expect(
+      resolveActorHumanId(app.db, admin.organizationId, { githubLogin: "first-tree[bot]" }),
+    ).resolves.toBeNull();
   });
 });
 
@@ -217,6 +200,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: `human-a-${randomUUID().slice(0, 6)}`,
       delegateMention: delegateA,
+      type: "human",
     });
     const chatId = await seedChat(app, admin.organizationId, humanA);
     await seedMapping(app, {
@@ -237,7 +221,6 @@ describe("resolveAudience", () => {
         actorLogin: "outsider",
         kind: "synchronized",
       }),
-      "first-tree",
     );
 
     expect(audience).toEqual([
@@ -248,7 +231,6 @@ describe("resolveAudience", () => {
         chatId,
         involveReason: null,
         involveLogin: null,
-        actorAgentId: null,
       },
     ]);
   });
@@ -266,6 +248,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: `human-a-${randomUUID().slice(0, 6)}`,
       delegateMention: delegateA,
+      type: "human",
     });
     const chatId = await seedChat(app, admin.organizationId, humanA);
     await seedMapping(app, {
@@ -287,7 +270,6 @@ describe("resolveAudience", () => {
         kind: "commented",
         rawEventType: "discussion_comment",
       }),
-      "first-tree",
     );
 
     expect(audience).toEqual([
@@ -298,7 +280,6 @@ describe("resolveAudience", () => {
         chatId,
         involveReason: null,
         involveLogin: null,
-        actorAgentId: null,
       },
     ]);
   });
@@ -317,6 +298,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegate,
+      type: "human",
     });
 
     const audience = await resolveAudience(
@@ -329,7 +311,6 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "review_requested" }],
         kind: "review_requested",
       }),
-      "first-tree",
     );
 
     expect(audience).toEqual([
@@ -340,12 +321,11 @@ describe("resolveAudience", () => {
         chatId: null,
         involveReason: "review_requested",
         involveLogin: humanName.toLowerCase(),
-        actorAgentId: null,
       },
     ]);
   });
 
-  it("subscribed + involved union; subscribed wins de-dup (existing kept over new)", async () => {
+  it("target human reuses an existing mapping instead of creating a new delegate route", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -359,6 +339,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = await seedChat(app, admin.organizationId, human);
     await seedMapping(app, {
@@ -380,12 +361,14 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
-      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
     expect(audience[0]?.kind).toBe("existing");
     expect(audience[0]?.chatId).toBe(chatId);
+    expect(audience[0]?.delegateAgentId).toBe(delegate);
+    expect(audience[0]?.involveReason).toBe("mentioned");
+    expect(audience[0]?.involveLogin).toBe(humanName.toLowerCase());
   });
 
   it("collapses subscribed rows by human (sibling mappings on same chat → one audience target)", async () => {
@@ -445,7 +428,6 @@ describe("resolveAudience", () => {
         actorLogin: "outsider",
         kind: "commented",
       }),
-      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
@@ -507,7 +489,6 @@ describe("resolveAudience", () => {
         actorLogin: "outsider",
         kind: "commented",
       }),
-      "first-tree",
     );
 
     expect(audience).toHaveLength(2);
@@ -540,6 +521,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegateB,
+      type: "human",
     });
     const chatId = await seedChat(app, admin.organizationId, human);
     await seedMapping(app, {
@@ -561,24 +543,17 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "assigned" }],
         kind: "assigned",
       }),
-      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
     expect(audience[0]?.kind).toBe("existing");
     expect(audience[0]?.delegateAgentId).toBe(delegateA);
     expect(audience[0]?.chatId).toBe(chatId);
+    expect(audience[0]?.involveReason).toBe("assigned");
+    expect(audience[0]?.involveLogin).toBe(humanName.toLowerCase());
   });
 
-  it("keeps subscribed targets when actor is our-app-bot (route First Tree's own writes back to existing chats)", async () => {
-    // Background: when an agent creates a PR via First Tree's GitHub App token, the
-    // resulting `pull_request.opened` webhook arrives with `sender = <app>[bot]`.
-    // Pre-agent-binding behaviour silenced the whole audience here, which
-    // meant PR comments / CI changes on bot-authored entities never reached
-    // the chat the agent worked in. The new behaviour keeps `kind: "existing"`
-    // rows so subscribed chats still get the event; `kind: "new"` rows are
-    // dropped because minting a fresh chat just to echo our own write is
-    // never useful.
+  it("keeps subscribed targets when actor is an unresolved app bot", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -591,6 +566,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = await seedChat(app, admin.organizationId, human);
     await seedMapping(app, {
@@ -612,7 +588,6 @@ describe("resolveAudience", () => {
         actorIsBot: true,
         kind: "synchronized",
       }),
-      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
@@ -620,7 +595,7 @@ describe("resolveAudience", () => {
     expect(audience[0]?.chatId).toBe(chatId);
   });
 
-  it("drops mention-only targets when actor is our-app-bot (no fresh chat for our own write)", async () => {
+  it("keeps target deliveries when actor is an unresolved app bot", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -634,6 +609,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegate,
+      type: "human",
     });
 
     const audience = await resolveAudience(
@@ -647,13 +623,17 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "opened",
       }),
-      "first-tree",
     );
 
-    expect(audience).toEqual([]);
+    expect(audience).toHaveLength(1);
+    expect(audience[0]).toMatchObject({
+      kind: "new",
+      involveReason: "mentioned",
+      involveLogin: humanName.toLowerCase(),
+    });
   });
 
-  it("echo (#942): keeps every mapping but annotates actorAgentId (notification-layer suppression)", async () => {
+  it("resolves actorHumanId separately while keeping every audience target", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -671,12 +651,14 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: `human-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const otherHuman = await seedAgent(app, {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: `human-other-${randomUUID().slice(0, 6)}`,
       delegateMention: otherDelegate,
+      type: "human",
     });
     const chatHuman = await seedChat(app, admin.organizationId, human);
     const chatOther = await seedChat(app, admin.organizationId, otherHuman);
@@ -697,13 +679,10 @@ describe("resolveAudience", () => {
       chatId: chatOther,
     });
 
-    // Actor is the human-side agent. The previous behaviour DROPPED the
-    // actor's own row, which silently killed delivery to that chat (the
-    // multi-human-not-pushed bug). Now no row is dropped — every target is
-    // annotated with `actorAgentId` so Stage 3 excludes the actor from the
-    // notification addressing while the card still lands in every chat.
+    // Actor identity is carried as a separate human id. Audience construction
+    // still returns every route; delivery prunes the actor's own entry later.
     const [humanRow] = await app.db.select({ name: agents.name }).from(agents).where(eq(agents.uuid, human)).limit(1);
-    const audience = await resolveAudience(
+    const resolution = await resolveAudienceResolution(
       app.db,
       makeEvent({
         orgId: admin.organizationId,
@@ -712,21 +691,14 @@ describe("resolveAudience", () => {
         actorLogin: humanRow?.name ?? "",
         kind: "synchronized",
       }),
-      "first-tree",
     );
+    const audience = resolution.targets;
     expect(audience).toHaveLength(2);
     expect(new Set(audience.map((a) => a.humanAgentId))).toEqual(new Set([human, otherHuman]));
-    for (const target of audience) {
-      expect(target.actorAgentId).toBe(human);
-    }
+    expect(resolution.actorHumanId).toBe(human);
   });
 
-  it("keeps an involved-new row when actor self-mentions (explicit intent, not echo)", async () => {
-    // Regression test for #345: the legacy mention-driven webhook routed
-    // self-mentions to the actor's own delegate. The normalize → audience
-    // pipeline accidentally suppressed this because `identifyActor` classifies
-    // any actor with an agents-row as `kind: "agent"`, and the echo filter
-    // dropped all rows touching that agent — including the brand-new mention.
+  it("keeps a self target as an audience candidate for delivery pruning", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -740,6 +712,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegate,
+      type: "human",
     });
 
     const audience = await resolveAudience(
@@ -752,7 +725,6 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
-      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
@@ -765,16 +737,7 @@ describe("resolveAudience", () => {
     });
   });
 
-  it("self-mention in an already-subscribed entity keeps the existing row, annotated (no fork, #942)", async () => {
-    // Actor self-targets an entity they already subscribe to:
-    //   - the `subscribedKeys` short-circuit (resolveAudience) skips adding a
-    //     `kind: "new"` row because (human, delegate) is already subscribed
-    //   - the surviving `kind: "existing"` row is NOT dropped (#942): it is
-    //     annotated with `actorAgentId` so Stage 3 excludes the actor from
-    //     addressing. The card still lands; the delegate (≠ actor) is woken
-    //     normally — activity on a subscribed entity is real signal.
-    // Previously the actor-agent echo filter dropped this row, leaving an
-    // empty audience and silently swallowing the event.
+  it("self target on an already-subscribed entity reuses the existing row", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -788,6 +751,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = await seedChat(app, admin.organizationId, human);
     await seedMapping(app, {
@@ -809,7 +773,6 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "commented",
       }),
-      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
@@ -818,21 +781,12 @@ describe("resolveAudience", () => {
       delegateAgentId: delegate,
       kind: "existing",
       chatId,
-      actorAgentId: human,
+      involveReason: "mentioned",
+      involveLogin: humanName.toLowerCase(),
     });
   });
 
-  it("creator carve-out: drops the actor's own kind:new involvement on a creation (opened) event", async () => {
-    // Regression for the dispatcher-mints-a-second-chat bug. An agent opens a
-    // PR under its own GitHub identity and self-assigns (or self-@mentions) in
-    // the opened payload, so its login lands in `involves`. The creator binds
-    // the PR through `github follow`; the dispatcher must NOT *also* mint a
-    // separate chat for the same creator. Once #942 stopped echo-dropping the
-    // actor's audience row, that fresh `kind: "new"` row survived and forked a
-    // duplicate chat. The creator carve-out drops it before delivery, leaving
-    // an empty audience (nothing else is involved) — equivalent to the
-    // already-accepted "opened with nobody else involved → confirmation card
-    // is lost, the creator already knows it opened" outcome.
+  it("creation self target remains a candidate and is identified by actorHumanId", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -841,14 +795,15 @@ describe("resolveAudience", () => {
       name: `dlg-${randomUUID().slice(0, 6)}`,
     });
     const creatorName = `creator-${randomUUID().slice(0, 6)}`;
-    await seedAgent(app, {
+    const creator = await seedAgent(app, {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: creatorName,
       delegateMention: delegate,
+      type: "human",
     });
 
-    const audience = await resolveAudience(
+    const resolution = await resolveAudienceResolution(
       app.db,
       makeEvent({
         orgId: admin.organizationId,
@@ -858,18 +813,18 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: creatorName, reason: "assigned" }],
         kind: "opened",
       }),
-      "first-tree",
     );
 
-    expect(audience).toEqual([]);
+    expect(resolution.actorHumanId).toBe(creator);
+    expect(resolution.targets).toHaveLength(1);
+    expect(resolution.targets[0]).toMatchObject({
+      humanAgentId: creator,
+      kind: "new",
+      involveReason: "assigned",
+    });
   });
 
-  it("creator carve-out: keeps a DIFFERENT involved human's fresh chat when the creator also self-targets on opened", async () => {
-    // Only the *creator's own* fresh involvement is dropped. A genuinely
-    // different human named in the same opened payload (assignee / @mention)
-    // is a real directed signal and still gets its `kind: "new"` chat, carrying
-    // the creator's id as `actorAgentId` so Stage 3 keeps the actor out of the
-    // notification wake-set.
+  it("creation with self and another target keeps both candidates for delivery pruning", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const creatorDelegate = await seedAgent(app, {
@@ -883,6 +838,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: creatorName,
       delegateMention: creatorDelegate,
+      type: "human",
     });
     const otherDelegate = await seedAgent(app, {
       orgId: admin.organizationId,
@@ -895,9 +851,10 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: otherName,
       delegateMention: otherDelegate,
+      type: "human",
     });
 
-    const audience = await resolveAudience(
+    const resolution = await resolveAudienceResolution(
       app.db,
       makeEvent({
         orgId: admin.organizationId,
@@ -910,21 +867,15 @@ describe("resolveAudience", () => {
         ],
         kind: "opened",
       }),
-      "first-tree",
     );
+    const audience = resolution.targets;
 
-    expect(audience).toHaveLength(1);
-    expect(audience[0]?.humanAgentId).toBe(other);
-    expect(audience[0]?.kind).toBe("new");
-    expect(audience[0]?.actorAgentId).toBe(creator);
+    expect(resolution.actorHumanId).toBe(creator);
+    expect(audience).toHaveLength(2);
+    expect(new Set(audience.map((target) => target.humanAgentId))).toEqual(new Set([creator, other]));
   });
 
-  it("creator carve-out: keeps the creator's own declared follow chat on opened, drops only the duplicate", async () => {
-    // The real-world shape: the creator followed the PR (`agent_declared`)
-    // AND self-assigned in the opened payload. The existing followed chat must
-    // survive (the #766 declared carve-out keeps its opened confirmation card,
-    // annotated with the actor for notify suppression); only the would-be
-    // second `kind: "new"` chat for the same creator is dropped.
+  it("creation self target reuses the creator's declared follow chat", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const delegate = await seedAgent(app, {
@@ -938,6 +889,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: creatorName,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = await seedChat(app, admin.organizationId, creator);
     await seedMapping(app, {
@@ -950,7 +902,7 @@ describe("resolveAudience", () => {
       boundVia: "agent_declared",
     });
 
-    const audience = await resolveAudience(
+    const resolution = await resolveAudienceResolution(
       app.db,
       makeEvent({
         orgId: admin.organizationId,
@@ -960,13 +912,14 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: creatorName, reason: "assigned" }],
         kind: "opened",
       }),
-      "first-tree",
     );
+    const audience = resolution.targets;
 
+    expect(resolution.actorHumanId).toBe(creator);
     expect(audience).toHaveLength(1);
     expect(audience[0]?.kind).toBe("existing");
     expect(audience[0]?.chatId).toBe(chatId);
-    expect(audience[0]?.actorAgentId).toBe(creator);
+    expect(audience[0]?.involveReason).toBe("assigned");
   });
 
   it("skips an involve whose delegate target is inactive (suspended/deleted)", async () => {
@@ -985,6 +938,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: humanInactiveName,
       delegateMention: inactiveDelegate,
+      type: "human",
     });
 
     const audience = await resolveAudience(
@@ -997,7 +951,6 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanInactiveName, reason: "mentioned" }],
         kind: "opened",
       }),
-      "first-tree",
     );
 
     expect(audience).toEqual([]);
@@ -1011,6 +964,7 @@ describe("resolveAudience", () => {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: humanName,
+      type: "human",
     });
 
     const audience = await resolveAudience(
@@ -1023,7 +977,6 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "mentioned" }],
         kind: "opened",
       }),
-      "first-tree",
     );
 
     expect(audience).toEqual([]);
@@ -1049,12 +1002,14 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: bobName,
       delegateMention: delegateBob,
+      type: "human",
     });
     const carol = await seedAgent(app, {
       orgId: admin.organizationId,
       memberId: admin.memberId,
       name: carolName,
       delegateMention: delegateCarol,
+      type: "human",
     });
 
     const audience = await resolveAudience(
@@ -1070,7 +1025,6 @@ describe("resolveAudience", () => {
         ],
         kind: "opened",
       }),
-      "first-tree",
     );
 
     expect(audience).toHaveLength(2);
@@ -1101,6 +1055,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: `reviewer-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = await seedChat(app, admin.organizationId, human);
     await seedMapping(app, {
@@ -1122,7 +1077,6 @@ describe("resolveAudience", () => {
         actorLogin: "outsider",
         kind: "opened",
       }),
-      "first-tree",
     );
 
     expect(audience).toEqual([]);
@@ -1146,6 +1100,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: `author-${randomUUID().slice(0, 6)}`,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = await seedChat(app, admin.organizationId, human);
     await seedMapping(app, {
@@ -1168,7 +1123,6 @@ describe("resolveAudience", () => {
         actorIsBot: true,
         kind: "opened",
       }),
-      "first-tree",
     );
 
     expect(audience).toHaveLength(1);
@@ -1193,6 +1147,7 @@ describe("resolveAudience", () => {
       memberId: admin.memberId,
       name: humanName,
       delegateMention: delegate,
+      type: "human",
     });
     const chatId = await seedChat(app, admin.organizationId, human);
     await seedMapping(app, {
@@ -1215,7 +1170,6 @@ describe("resolveAudience", () => {
         involves: [{ githubLogin: humanName, reason: "assigned" }],
         kind: "opened",
       }),
-      "first-tree",
     );
 
     expect(audience).toHaveLength(1);

@@ -69,6 +69,9 @@ export type EvalMetrics = {
   }[];
   fixtureValidationOk: boolean;
   forbiddenContentHits: readonly string[];
+  modelVerifySucceeded: boolean;
+  postModelVerifyResult: CommandResult | null;
+  postModelVerifySucceeded: boolean | null;
   runnerExitCode: number | null;
   skillFileReadObserved: boolean;
   sourceRepoChanged: boolean;
@@ -82,6 +85,7 @@ export type CaseRunSummary = {
   caseId: string;
   driftNote: string | null;
   expectedAction: ExpectedAction;
+  firstResponseLatencyMs: number | null;
   fixtureValidation: FixtureValidation;
   grading: SkillCaseGrading;
   gradingJsonPath: string;
@@ -92,6 +96,7 @@ export type CaseRunSummary = {
   startedAt: string;
   summaryJsonPath: string;
   summaryMdPath: string;
+  turns: number | null;
   workspacePath: string;
 };
 

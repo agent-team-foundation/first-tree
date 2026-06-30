@@ -11,12 +11,14 @@ pnpm --filter @first-tree/skill-evals eval:floor
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read --case tree-software-trigger
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --include-quality
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
 pnpm --filter @first-tree/skill-evals eval:quality
 pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-welcome --judge-model <model>
 pnpm --filter @first-tree/skill-evals eval:select -- --base main
+pnpm --filter @first-tree/skill-evals eval:summary
 pnpm --filter @first-tree/skill-evals eval:compare
 ```
 
@@ -43,9 +45,13 @@ implemented. The command only recommends; live gate and quality evals remain
 opt-in and are not part of `pnpm test`.
 
 `eval:quality` is an opt-in LLM-as-judge layer. It does not replace
-deterministic gates and is not called by `eval:gate`. Each quality case first
-runs the corresponding live gate case and requires that deterministic gate to
-pass; only then does it send the actual produced artifact to the judge. The
+deterministic gates and is not called by `eval:gate` by default. Each quality
+case first runs the corresponding live gate case and requires that deterministic
+gate to pass; only then does it send the actual produced artifact to the judge.
+For write and welcome gates, `eval:gate -- --include-quality` runs the
+deterministic gate first and then reuses that same gate artifact for the
+supported quality case. If the deterministic gate fails, the judge is not run.
+`--include-quality` is intentionally rejected for read and seed suites. The
 first quality cases judge:
 
 - `first-tree-write` node quality from the actual `durable-source-writes` tree
@@ -110,6 +116,10 @@ The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs
 the relevant skill, prepends command shims such as `first-tree` to `PATH`, and
 runs `codex exec --json` from the case workspace for live eval commands.
+Fixture validation runs `tree verify` through the per-run `first-tree` shim by
+default. To validate fixtures with an installed channel binary instead, set
+`FIRST_TREE_EVAL_VERIFY_BIN` to the desired executable, for example
+`FIRST_TREE_EVAL_VERIFY_BIN=first-tree-staging`.
 Live gate runs do not inherit the operator's full environment. The Codex
 process receives an allowlisted environment plus an isolated `HOME`, temp
 directory, and XDG cache/config directories under the case run root. The model
@@ -131,9 +141,25 @@ The top-level `eval:floor`, `eval:gate`, and `eval:quality` commands also append
 a lightweight local result-store entry to
 `packages/skill-evals/.runs/index.jsonl`. Entries record the run group, suite,
 tier, case, pass/fail state, git branch/sha, model/provider where available,
-artifact paths, duration, cost, and judge scores when present. Gate failures use
-the deterministic grading evidence first and link the `grading.json` artifact
-path in the result store. The `.runs` directory is gitignored local eval state.
+artifact paths, duration, turns and first-response latency when derivable, cost,
+and judge scores when present. Gate failures use the deterministic grading
+evidence first and link the `grading.json` artifact path in the result store.
+Unknown turn or latency values are recorded as `null`. The `.runs` directory is
+gitignored local eval state.
+
+Use `eval:summary` to summarize the latest result-store run group, or pass a
+specific run group id:
+
+```bash
+pnpm --filter @first-tree/skill-evals eval:summary
+pnpm --filter @first-tree/skill-evals eval:summary -- --json
+pnpm --filter @first-tree/skill-evals eval:summary -- --current <run-group-id>
+```
+
+The summary is read-only. It reports pass/fail counts, failures, artifact
+paths, derived turns and first-response latency, and a lightweight flaky status:
+either "not enough comparable history", "stable", or status flips based on the
+previous comparable run group.
 
 Use `eval:compare` to compare the latest result-store run group with the
 previous one:

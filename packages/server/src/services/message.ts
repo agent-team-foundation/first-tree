@@ -169,9 +169,8 @@ export type SendMessageOptions = {
   normalizeMentionsInContent?: boolean;
   /**
    * Agent IDs that this message is **addressed to** by construction — used
-   * for system-routed messages whose recipient is fixed at write time
-   * (today: `github-delivery.deliverNormalizedEvent`). Within the
-   * non-silenced fan-out branch, addressed agents always receive
+   * for trusted system-routed messages whose recipient is fixed at write time.
+   * Within the non-silenced fan-out branch, addressed agents always receive
    * `notify=true` regardless of `metadata.mentions`.
    *
    * `purpose === "agent-final-text"` still takes precedence (it forces
@@ -186,13 +185,10 @@ export type SendMessageOptions = {
    * suppressed agent still receives a `notify=false` inbox row (the message
    * still lands in history / replays as context), it is simply not woken.
    *
-   * Today's caller is `github-delivery.deliverNormalizedEvent`, which passes
-   * the event's actor agent so an agent is never woken by its own GitHub
-   * action (echo suppression) — without binding that exclusion to `senderId`
-   * (the actor is frequently not a speaker of the target chat, so it must not
-   * be the chat-local sender). See `system/cloud/github/github-entity-chat-binding.md`
-   * S2. `purpose === "agent-final-text"` still forces silent for everyone;
-   * this only narrows the notify set within the non-silenced branch.
+   * This is intentionally generic and decoupled from `senderId`; a trusted
+   * dispatcher can keep attribution chat-local while excluding specific agents
+   * from wake. `purpose === "agent-final-text"` still forces silent for
+   * everyone; this only narrows the notify set within the non-silenced branch.
    */
   suppressNotifyAgentIds?: readonly string[];
   /**
@@ -583,10 +579,8 @@ async function sendMessageInner(
     //      nobody is woken.
     const mentionSet = new Set(mergedMentions);
     const addressedSet = new Set(options.addressedToAgentIds ?? []);
-    // Generic echo / wake-exclusion: agents here still get a `notify=false`
-    // inbox row (message lands), they are just not woken. Decoupled from
-    // `senderId` so a non-member actor can be excluded without being made the
-    // chat-local sender. See SendMessageOptions.suppressNotifyAgentIds.
+    // Generic wake-exclusion: agents here still get a `notify=false` inbox
+    // row (message lands), they are just not woken. Decoupled from `senderId`.
     const suppressNotifySet = new Set(options.suppressNotifyAgentIds ?? []);
     // Build a single fan-out structure that carries agentId alongside the
     // inbox row. agentId is needed by the post-tx session-activation step

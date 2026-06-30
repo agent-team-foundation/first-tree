@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.0.2
+version: 1.0.3
 description: Use only when a First Tree onboarding start-chat system message explicitly names first-tree-welcome, or for First Tree onboarding welcome, intro, or value-first first-work chats. Do not use for tree setup chats, ordinary chats, PR reviews, tree writes, or maintenance.
 ---
 
@@ -63,19 +63,28 @@ Do not invent repo access, GitHub authorization, or tree readiness.
 
 Apply rows from top to bottom; the first matching row wins. Earlier rows
 protect lane, role, and executable setup boundaries. Later rows refine what
-evidence to read and which first-task options to offer.
+evidence to read and which first-task options to offer. The last row is an
+explicit catch-all, so every state has a defined action — never fall through
+silently.
+
+Role gates only admin-only setup, not value. If the role is unclear, give value
+from whatever evidence is readable, but do not assume admin: for any admin-only
+setup step, say it may require an organization admin and ask who should be
+involved (see Setup Handoff) rather than walking the user into an admin surface.
 
 | Priority | State | What to do |
 | --- | --- | --- |
 | 1 | Tree setup chat | This is the heavy tree lane. Use `first-tree-seed`, `first-tree-read`, or `first-tree-write` as appropriate instead of this value-chat flow. |
 | 2 | Invitee on a not-ready team | Do not show admin setup, select repos, or create a duplicate tree. Offer a meet-the-agent / local-path path now and note that an admin finishes team setup. |
-| 3 | No repo connected / intro chat | Ask for one local clone path or GitHub URL. For GitHub URLs, try host `gh` / local credentials first. Do not ask for GitHub authorization first. |
-| 4 | Team repo/resource exists but local credentials cannot read it | State the exact read failure. Do not claim private repo contents. Ask for a local clone path, accessible URL, or credential setup. |
-| 5 | Admin missing GitHub App for durable platform access after local path/URL or repo evidence exists | Give value from available local path or accessible URL first. When follow, webhook events, team repo resources, or Context Tree setup is the blocker, use Setup Handoff to provide a stable deep link or durable fallback. |
-| 6 | Admin has GitHub App but no selected/recommended repo | Explain that repo selection lets the agent work with code long-term. If any local path or URL is available, inspect it now; otherwise point to the product repo-selection surface using Setup Handoff. |
-| 7 | Repo readable but Context Tree missing or empty | Give code-based value in this chat. Mention that the separate tree chat will build the team's shared memory; do not make tree setup a first-task option. |
-| 8 | Repo readable and populated Context Tree readable | Read both, cite concrete evidence, then offer first-task options. Do not seed the tree. |
-| 9 | Repo readable but tree state unknown | Give repo-based value; do not invent tree readiness. Mention the missing tree signal only if it affects durable value. |
+| 3 | Invitee on a ready team — both a readable team repo and a populated Context Tree are available | Give value from the team's repo and tree like a normal work chat, citing only evidence you actually read, and offer bounded first-task options. Keep invitee guardrails: do not push admin-only setup (GitHub App, repo selection, tree build); an admin owns those. An invitee with only one of the two readable falls to the matching evidence row below, still under these invitee guardrails. |
+| 4 | No repo connected / intro chat | Ask for one local clone path or GitHub URL. For GitHub URLs, try host `gh` / local credentials first. Do not ask for GitHub authorization first. |
+| 5 | Team repo/resource exists but local credentials cannot read it | State the exact read failure. Do not claim private repo contents. Ask for a local clone path, accessible URL, or credential setup. |
+| 6 | Admin missing GitHub App for durable platform access after local path/URL or repo evidence exists | Give value from available local path or accessible URL first. When follow, webhook events, team repo resources, or Context Tree setup is the blocker, use Setup Handoff to provide a stable deep link or durable fallback. |
+| 7 | Admin has GitHub App but no selected/recommended repo | Explain that repo selection lets the agent work with code long-term. If any local path or URL is available, inspect it now; otherwise point to the product repo-selection surface using Setup Handoff. |
+| 8 | Repo readable but Context Tree missing or empty | Give code-based value in this chat. Mention that the separate tree chat will build the team's shared memory; do not make tree setup a first-task option. |
+| 9 | Repo readable and populated Context Tree readable | Read both, cite concrete evidence, then offer first-task options. Do not seed the tree. |
+| 10 | Repo readable but tree state unknown | Give repo-based value; do not invent tree readiness. Mention the missing tree signal only if it affects durable value. |
+| 11 | Any other state (catch-all) | Give evidence-backed value from whatever is readable; do not invent repo access or tree readiness. If nothing is actionable yet, ask for the smallest useful input (local path, accessible URL, or the one missing signal). |
 
 Cloud onboarding owns one-click Context Tree repo bootstrap and org binding.
 Agents may seed an empty bound tree or update a populated bound tree in the
@@ -176,6 +185,7 @@ Pick tasks that help the user feel value quickly. A good welcome task is:
 
 Prefer tasks like:
 
+- Verify or explain recent changes when the repo is on a feature branch or has uncommitted / unpushed work — often the most relevant first value.
 - Add or repair a narrow test around a visible untested flow.
 - Explain the architecture around a concrete entry point.
 - Trace one user flow end-to-end.

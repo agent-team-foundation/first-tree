@@ -1,4 +1,5 @@
 import { appendEvent, readEvents } from "../../core/events.js";
+import { deriveRunObservability } from "../../core/observability.js";
 import { createRunPaths } from "../../core/paths.js";
 import { runCodexProvider } from "../../core/provider/codex.js";
 import { createEvalReporter } from "../../core/reporter.js";
@@ -39,21 +40,19 @@ export async function runFirstTreeReadCase(
         },
         { paths, reporter },
       );
-  const metrics = deriveMetrics(
-    readEvents(paths.eventsPath),
-    fixtureValidation,
-    runnerExitCode,
-    evalCase.expectedFacts,
-  );
+  const events = readEvents(paths.eventsPath);
+  const metrics = deriveMetrics(events, fixtureValidation, runnerExitCode, evalCase.expectedFacts);
   const passed = options.validateFixtures
     ? fixtureOnlyPassed(fixtureValidation)
     : casePassed(evalCase.expectedTrigger, metrics);
   const grading = buildGrading(evalCase.id, metrics, evalCase.expectedTrigger, passed);
+  const observability = deriveRunObservability(events);
 
   const summary: CaseRunSummary = {
     caseId: evalCase.id,
     driftNote: driftNote(metrics, evalCase.expectedTrigger),
     expectedTrigger: evalCase.expectedTrigger,
+    firstResponseLatencyMs: observability.firstResponseLatencyMs,
     fixtureValidation,
     grading,
     gradingJsonPath: paths.gradingJsonPath,
@@ -64,6 +63,7 @@ export async function runFirstTreeReadCase(
     startedAt,
     summaryJsonPath: paths.summaryJsonPath,
     summaryMdPath: paths.summaryMdPath,
+    turns: observability.turns,
     workspacePath: paths.workspacePath,
   };
 

@@ -45,6 +45,7 @@ function baseRunPaths(workspacePath: string): RunPaths {
     binDir: join(workspacePath, "bin"),
     eventsPath: join(workspacePath, "events.jsonl"),
     gradingJsonPath: join(workspacePath, "grading.json"),
+    modelEventsPath: join(workspacePath, ".first-tree-eval", "events.jsonl"),
     packageRoot: workspacePath,
     repoRoot: workspacePath,
     runRoot: workspacePath,
@@ -61,6 +62,19 @@ function fixtureValidation(): FixtureValidation {
     errors: [],
     ok: true,
     requiredFilesOk: true,
+  };
+}
+
+function skillReadEvent(): unknown {
+  return {
+    event: {
+      item: {
+        command: "sed -n '1,220p' .agents/skills/first-tree-welcome/SKILL.md",
+        type: "command_execution",
+      },
+      type: "item.completed",
+    },
+    type: "codex_event",
   };
 }
 
@@ -116,23 +130,104 @@ describe("first-tree-welcome grader", () => {
     ).toBe(false);
   });
 
-  it("detects setup-as-first-task from chat ask options", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-row3-options-"));
+  it("does not treat repo-entry input options as first-task options", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-row3-entry-options-"));
     try {
+      const evalCase = findCase("first-tree-welcome-no-repo-intro");
       const metrics = deriveMetrics(
         [
+          skillReadEvent(),
           {
             argv: [
               "chat",
               "ask",
               "baixiaohang",
-              "Choose a setup task: local clone path, GitHub URL, or install GitHub App.",
+              "请发我一个项目入口：本地 clone 路径或 GitHub 仓库 URL。",
+              "--options",
+              JSON.stringify([
+                { description: "我可以直接读取本机代码，最快开始给出基于证据的帮助。", label: "本地路径" },
+                { description: "我会优先使用本机 gh/已有凭据读取，不先要求安装 GitHub App。", label: "GitHub URL" },
+              ]),
+            ],
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.chatOptionCount).toBe(2);
+      expect(metrics.taskOptionsObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).not.toContain("setup-as-first-task");
+      expect(metrics.forbiddenSideEffectHits).toEqual([]);
+      expect(casePassed(evalCase, metrics)).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("detects setup-as-first-task when setup is mixed into repo-entry input options", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-row3-mixed-setup-option-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-no-repo-intro");
+      const metrics = deriveMetrics(
+        [
+          skillReadEvent(),
+          {
+            argv: [
+              "chat",
+              "ask",
+              "baixiaohang",
+              "请发我一个项目入口，或者先建 Context Tree。",
+              "--options",
+              JSON.stringify([
+                { description: "我可以直接读取本机代码。", label: "本地路径" },
+                { description: "我可以读取 GitHub 仓库 URL。", label: "GitHub URL" },
+                { description: "Create and bind a new Context Tree.", label: "Create Context Tree" },
+              ]),
+            ],
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.chatOptionCount).toBe(3);
+      expect(metrics.taskOptionsObserved).toBe(false);
+      expect(metrics.forbiddenActionHits).toContain("setup-as-first-task");
+      expect(casePassed(evalCase, metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("detects setup-as-first-task from actual setup task options", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-row3-setup-tasks-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          skillReadEvent(),
+          {
+            argv: [
+              "chat",
+              "ask",
+              "baixiaohang",
+              "Choose the first setup task.",
               "--options",
               JSON.stringify({
                 options: [
-                  { description: "Provide a local clone path.", label: "Local path" },
-                  { description: "Provide a GitHub URL.", label: "GitHub URL" },
-                  { description: "Install the GitHub App.", label: "Install app" },
+                  { description: "Create and bind a new Context Tree.", label: "Create Context Tree" },
+                  { description: "Install the GitHub App authorization flow first.", label: "Install GitHub App" },
+                  { description: "Seed the tree before doing product work.", label: "Seed Context Tree" },
                 ],
               }),
             ],

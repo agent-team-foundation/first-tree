@@ -1,4 +1,6 @@
 import { appendEvent, readEvents } from "../../core/events.js";
+import { runFixtureVerify } from "../../core/fixture-verify.js";
+import { deriveRunObservability } from "../../core/observability.js";
 import { createRunPaths } from "../../core/paths.js";
 import { runCodexProvider } from "../../core/provider/codex.js";
 import { createEvalReporter } from "../../core/reporter.js";
@@ -37,22 +39,37 @@ export async function runFirstTreeWriteCase(
     },
     { paths, reporter },
   );
+  const postModelVerifyResult = evalCase.expected.requireVerify
+    ? runFixtureVerify({
+        caseId: evalCase.id,
+        contextTreePath,
+        eventTypePrefix: "post_model_validation",
+        paths,
+        phase: "post_model_validation",
+        reporter,
+        verbose: options.verbose,
+      })
+    : null;
 
+  const events = readEvents(paths.eventsPath);
   const metrics = deriveMetrics(
-    readEvents(paths.eventsPath),
+    events,
     evalCase,
     fixtureValidation,
     runnerExitCode,
+    postModelVerifyResult,
     paths,
     contextTreePath,
   );
   const passed = casePassed(evalCase, metrics);
   const grading = buildGrading(evalCase, metrics, passed);
+  const observability = deriveRunObservability(events);
 
   const summary: CaseRunSummary = {
     caseId: evalCase.id,
     driftNote: driftNote(evalCase, metrics),
     expectedAction: evalCase.expected.action,
+    firstResponseLatencyMs: observability.firstResponseLatencyMs,
     fixtureValidation,
     grading,
     gradingJsonPath: paths.gradingJsonPath,
@@ -63,6 +80,7 @@ export async function runFirstTreeWriteCase(
     startedAt,
     summaryJsonPath: paths.summaryJsonPath,
     summaryMdPath: paths.summaryMdPath,
+    turns: observability.turns,
     workspacePath: paths.workspacePath,
   };
 

@@ -606,11 +606,12 @@ Most environment variables use the `FIRST_TREE_` prefix.
 ### Daemon environment file (`daemon.env`) — user-owned
 
 A launchd / systemd daemon does **not** inherit your interactive login-shell
-environment, so anything your shell exports (most commonly an `HTTP_PROXY` /
-`HTTPS_PROXY` for users behind a network proxy) is invisible to the background
-daemon and the agent runtimes it spawns. That is why an interactive `claude` /
-`git` can work while the daemon's calls to `api.anthropic.com` / `github.com`
-fail.
+environment, so anything your shell exports (commonly an `HTTP_PROXY` /
+`HTTPS_PROXY` for users behind a network proxy, or
+`FIRST_TREE_CLIENT_SENTRY_ENABLED=false` for Client Sentry opt-out) is invisible
+to the background daemon and the agent runtimes it spawns. That is why an
+interactive `claude` / `git` can work while the daemon's calls to
+`api.anthropic.com` / `github.com` fail.
 
 To supply that environment, create `daemon.env` under your channel's
 `FIRST_TREE_HOME` with simple `KEY=VALUE` lines. **The path is channel-specific**
@@ -622,6 +623,7 @@ the daemon that reads it:
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
 NO_PROXY=localhost,127.0.0.1
+FIRST_TREE_CLIENT_SENTRY_ENABLED=false
 ```
 
 The daemon loads this file on start and passes the values to every child it
@@ -758,6 +760,15 @@ source=github chats with no mapping use the same idle threshold.
 | `FIRST_TREE_OTEL_HEADERS` | OTLP headers as `key1=val1,key2=val2`. Typically holds the write token. | `""` |
 | `FIRST_TREE_OTEL_ENVIRONMENT` | Deployment label emitted as `deployment.environment.name`. | `development` |
 | `FIRST_TREE_OTEL_CAPTURE_CLIENT_IP` | Capture client IP attribute on traces. | `false` |
+| `VITE_SENTRY_DSN` | Public browser DSN for Web Console errors in the `first-tree-web` Sentry project. | unset |
+| `VITE_SENTRY_ENABLED` | Explicit Web Sentry switch; `false` / `0` / `off` disables even when a DSN is present. | enabled when DSN exists |
+| `VITE_SENTRY_ENVIRONMENT` | Web Sentry environment label. | host/mode-derived |
+| `VITE_SENTRY_TRACES_SAMPLE_RATE` | Web Sentry trace sample rate (`0.0–1.0`). | `0.1` |
+| `FIRST_TREE_CLIENT_SENTRY_DSN` | Client daemon/runtime DSN for the `first-tree-client` Sentry project. | unset |
+| `FIRST_TREE_CLIENT_SENTRY_ENABLED` | Explicit Client Sentry operator switch; `false` / `0` / `off` disables even when a DSN is present. | enabled when DSN exists |
+| `FIRST_TREE_CLIENT_SENTRY_ENVIRONMENT` | Client Sentry environment label. | `NODE_ENV` or `development` |
+| `FIRST_TREE_CLIENT_SENTRY_TRACES_SAMPLE_RATE` | Client Sentry trace sample rate (`0.0–1.0`). | `0.05` |
+| `FIRST_TREE_GIT_SHA` | Git SHA stamped onto Web/Client Sentry releases and tags when provided by CI. | `unknown` |
 
 See [observability.md](observability.md) for the full config reference, backend cheat sheet, and troubleshooting recipes.
 

@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
+import { readEvents } from "../events.js";
 import { createRunPaths } from "../paths.js";
-import { codexProviderArgs, codexProviderCommand, codexProviderEnv } from "../provider/codex.js";
+import { codexProviderArgs, codexProviderCommand, codexProviderEnv, runCodexProvider } from "../provider/codex.js";
 import type { ProviderRunContext, ProviderRunOptions } from "../provider/types.js";
 import { createEvalReporter } from "../reporter.js";
+import { createFirstTreeShim } from "../shims/first-tree.js";
 
 function tempPackageRoot(): string {
   return mkdtempSync(join(tmpdir(), "skill-evals-provider-test-"));
@@ -75,6 +77,7 @@ describe("codex provider runner hardening", () => {
       expect(env.HOME).toBe(`${context.paths.runRoot}/provider-home`);
       expect(env.TMPDIR).toBe(`${context.paths.runRoot}/provider-tmp`);
       expect(env.XDG_CACHE_HOME).toBe(`${context.paths.runRoot}/provider-xdg-cache`);
+      expect(env.FIRST_TREE_EVAL_EVENTS).toBe(context.paths.modelEventsPath);
       expect(env.CODEX_HOME).toBe("/codex-auth-home");
       expect(env.OPENAI_API_KEY).toBe("allowed");
       expect(env.FIRST_TREE_SERVER_URL).toBeUndefined();
@@ -88,7 +91,66 @@ describe("codex provider runner hardening", () => {
       expect(args).toContain(`shell_environment_policy.set.HOME=${JSON.stringify(env.HOME)}`);
       expect(args).toContain(`shell_environment_policy.set.TMPDIR=${JSON.stringify(env.TMPDIR)}`);
       expect(args).toContain(
+        `shell_environment_policy.set.FIRST_TREE_EVAL_EVENTS=${JSON.stringify(context.paths.modelEventsPath)}`,
+      );
+      expect(args).toContain(
         `shell_environment_policy.set.FIRST_TREE_EVAL_VERBOSE=${JSON.stringify(env.FIRST_TREE_EVAL_VERBOSE)}`,
+      );
+    } finally {
+      rmSync(packageRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("merges model-writable shim events back into the run event log", async () => {
+    const packageRoot = tempPackageRoot();
+    try {
+      const codexBinDir = join(packageRoot, "operator-codex-bin");
+      mkdirSync(codexBinDir, { recursive: true });
+      const codexBin = join(codexBinDir, "codex");
+      writeFileSync(
+        codexBin,
+        [
+          "#!/bin/sh",
+          "first-tree github issue list >/dev/null 2>/dev/null",
+          "printf '%s\\n' '{\"type\":\"turn.completed\"}'",
+          "exit 0",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      chmodSync(codexBin, 0o755);
+
+      const context = fakeContext(packageRoot);
+      createFirstTreeShim(context.paths);
+
+      const exitCode = await runCodexProvider(
+        {
+          bin: codexBin,
+          caseId: "provider-hardening-test",
+          model: null,
+          prompt: "Run the eval case.",
+          verbose: false,
+        },
+        context,
+      );
+
+      expect(exitCode).toBe(0);
+      const events = readEvents(context.paths.eventsPath);
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            argv: ["github", "issue", "list"],
+            phase: "model",
+            type: "first_tree_call",
+          }),
+          expect.objectContaining({
+            argv: ["github", "issue", "list"],
+            blockedByEval: true,
+            exitCode: 1,
+            phase: "model",
+            type: "first_tree_result",
+          }),
+        ]),
       );
     } finally {
       rmSync(packageRoot, { force: true, recursive: true });

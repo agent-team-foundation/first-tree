@@ -53,6 +53,69 @@ in the startup log.
 | `observability.tracing.environment` | — | `development` | `deployment.environment.name` OTel attr |
 | `observability.tracing.sampleRate` | — | `1.0` | `0.0–1.0`, ratio applied at root |
 
+## Sentry error monitoring
+
+First Tree uses Sentry for product-side error monitoring on the Web Console
+and local Client runtime. These are separate Sentry projects because the Web
+Console is a hosted browser surface while the Client daemon runs on
+operator-owned machines.
+
+| Surface | Sentry project | Default behavior | Disable path |
+|---|---|---|---|
+| Web Console | `first-tree-web` | Enabled when `VITE_SENTRY_DSN` is configured in the web build. | Omit `VITE_SENTRY_DSN` or set `VITE_SENTRY_ENABLED=false` for local/dev builds. |
+| Client daemon/runtime | `first-tree-client` | Enabled when `FIRST_TREE_CLIENT_SENTRY_DSN` is configured. | Set `FIRST_TREE_CLIENT_SENTRY_ENABLED=false`. |
+
+Both surfaces tag events with the git SHA used to build the artifact:
+
+- Web reads `FIRST_TREE_WEB_BUILD_ID` at build time, falling back to `git rev-parse HEAD`.
+- Client reads the git SHA baked into the published CLI package, or
+  `FIRST_TREE_GIT_SHA`, `FIRST_TREE_CLIENT_GIT_SHA`, or `GITHUB_SHA` when an
+  operator override is needed.
+
+### Web configuration
+
+```bash
+VITE_SENTRY_DSN=https://public@example.ingest.sentry.io/1
+VITE_SENTRY_ENVIRONMENT=production
+VITE_SENTRY_TRACES_SAMPLE_RATE=0.1
+FIRST_TREE_WEB_BUILD_ID=$GITHUB_SHA
+```
+
+The Vite build generates hidden source maps and uploads them through
+`@sentry/vite-plugin` when `SENTRY_AUTH_TOKEN` and `SENTRY_ORG` are present.
+The upload target defaults to `first-tree-web`; override with
+`SENTRY_PROJECT_WEB` only for a temporary diagnostic build. Missing upload
+credentials or upload failures emit warnings and do not fail the deployable
+artifact.
+
+The Docker release workflow passes `VITE_SENTRY_DSN` and
+`VITE_SENTRY_ENVIRONMENT` from GitHub repository/environment variables into
+the Web build, which makes Sentry enabled by default for the managed release
+path without committing the public DSN to the repo.
+
+### Client configuration
+
+```bash
+FIRST_TREE_CLIENT_SENTRY_DSN=https://public@example.ingest.sentry.io/2
+FIRST_TREE_CLIENT_SENTRY_ENVIRONMENT=production
+FIRST_TREE_CLIENT_SENTRY_ENABLED=true
+FIRST_TREE_GIT_SHA=$GITHUB_SHA
+```
+
+The npm publish workflow bakes `FIRST_TREE_CLIENT_SENTRY_DSN` from GitHub
+repository/environment variables into the published CLI package. Local operator
+env still wins at runtime, so a machine can override the DSN or set
+`FIRST_TREE_CLIENT_SENTRY_ENABLED=false` to disable Client events explicitly.
+For background services, put `FIRST_TREE_CLIENT_SENTRY_*` overrides in the
+user-owned `daemon.env` file under `FIRST_TREE_HOME`. The daemon loads that file
+before Sentry initialization, so the operator's choice survives daemon restarts
+without baking observability settings into the launchd/systemd unit.
+
+The Client scrubber drops user identity, request bodies, cookies, query
+strings, breadcrumbs, bearer tokens, OAuth/token-like fields, and local home /
+workspace path prefixes before sending events. Runtime content fields such as
+provider prompts, model output, tool output, stdout, and stderr are redacted.
+
 ## Multi-environment setup (one backend, many environments)
 
 A common deployment pattern is to point **all** environments (dev, staging,
