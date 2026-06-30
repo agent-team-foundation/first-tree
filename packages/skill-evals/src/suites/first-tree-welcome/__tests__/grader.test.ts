@@ -45,6 +45,7 @@ function baseRunPaths(workspacePath: string): RunPaths {
     binDir: join(workspacePath, "bin"),
     eventsPath: join(workspacePath, "events.jsonl"),
     gradingJsonPath: join(workspacePath, "grading.json"),
+    modelEventsPath: join(workspacePath, ".first-tree-eval", "events.jsonl"),
     packageRoot: workspacePath,
     repoRoot: workspacePath,
     runRoot: workspacePath,

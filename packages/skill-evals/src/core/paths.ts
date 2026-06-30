@@ -14,11 +14,13 @@ export function createRunPaths(options: CreateRunPathsOptions): RunPaths {
   const stamp = options.startedAt.replace(/[-:.]/gu, "");
   const runRoot = join(options.packageRoot, ".runs", `${stamp}-${options.caseId}`);
   const workspacePath = join(runRoot, "workspace");
+  const modelEventDir = join(workspacePath, ".first-tree-eval");
   const binDir = join(runRoot, "bin");
   const shellEnvDir = join(runRoot, "shell-env");
 
   rmSync(runRoot, { force: true, recursive: true });
   mkdirSync(workspacePath, { recursive: true });
+  mkdirSync(modelEventDir, { recursive: true });
   mkdirSync(binDir, { recursive: true });
   mkdirSync(shellEnvDir, { recursive: true });
 
@@ -26,6 +28,7 @@ export function createRunPaths(options: CreateRunPathsOptions): RunPaths {
     binDir,
     eventsPath: join(runRoot, "events.jsonl"),
     gradingJsonPath: join(runRoot, "grading.json"),
+    modelEventsPath: join(modelEventDir, "events.jsonl"),
     packageRoot: options.packageRoot,
     repoRoot,
     runRoot,

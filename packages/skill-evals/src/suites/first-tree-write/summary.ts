@@ -26,6 +26,15 @@ function validationRows(validation: FixtureValidation): string {
   ].join("\n");
 }
 
+function postModelVerifyRows(metrics: EvalMetrics): string {
+  if (metrics.postModelVerifyResult === null) return "- not run";
+  return [
+    `- ok: ${markdownBool(metrics.postModelVerifySucceeded === true)}`,
+    `- exitCode: ${metrics.postModelVerifyResult.exitCode}`,
+    `- command: ${metrics.postModelVerifyResult.command} ${formatCommand(metrics.postModelVerifyResult.args)}`,
+  ].join("\n");
+}
+
 function commandResultRows(metrics: EvalMetrics): string {
   if (metrics.firstTreeCommandResults.length === 0) return "- none";
   return metrics.firstTreeCommandResults
@@ -72,7 +81,7 @@ export function buildGrading(
       evidence("routing_pass", `first-tree-write skill file read observed=${metrics.skillFileReadObserved}`),
       evidence(
         "process_pass",
-        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; require verify=${evalCase.expected.requireVerify}; verify succeeded=${metrics.verifySucceeded}`,
+        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; require verify=${evalCase.expected.requireVerify}; model verify succeeded=${metrics.modelVerifySucceeded}; post-model verify succeeded=${metrics.postModelVerifySucceeded}; verify succeeded=${metrics.verifySucceeded}`,
       ),
       evidence(
         "outcome_pass",
@@ -108,6 +117,8 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - skillFileReadObserved: ${markdownBool(summary.metrics.skillFileReadObserved)}
 - treeChanged: ${markdownBool(summary.metrics.treeChanged)}
 - expectedDiffSnippetsObserved: ${markdownBool(summary.metrics.expectedDiffSnippetsObserved)}
+- modelVerifySucceeded: ${markdownBool(summary.metrics.modelVerifySucceeded)}
+- postModelVerifySucceeded: ${summary.metrics.postModelVerifySucceeded === null ? "n/a" : markdownBool(summary.metrics.postModelVerifySucceeded)}
 - verifySucceeded: ${markdownBool(summary.metrics.verifySucceeded)}
 - sourceRepoChanged: ${markdownBool(summary.metrics.sourceRepoChanged)}
 - expectedResponseObserved: ${markdownBool(summary.metrics.expectedResponseObserved)}
@@ -130,6 +141,10 @@ ${summary.prompt}
 ## Fixture Validation
 
 ${validationRows(summary.fixtureValidation)}
+
+## Post-model Verification
+
+${postModelVerifyRows(summary.metrics)}
 
 ## first-tree Command Results
 

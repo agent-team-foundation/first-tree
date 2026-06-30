@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -149,7 +149,7 @@ export function codexProviderEnv(
   env.BASH_ENV = join(context.paths.shellEnvDir, "bash-env");
   env.ENV = join(context.paths.shellEnvDir, "sh-env");
   env.FIRST_TREE_EVAL_CASE_ID = options.caseId;
-  env.FIRST_TREE_EVAL_EVENTS = context.paths.eventsPath;
+  env.FIRST_TREE_EVAL_EVENTS = context.paths.modelEventsPath;
   env.FIRST_TREE_EVAL_PHASE = "model";
   env.FIRST_TREE_EVAL_VERBOSE = options.verbose ? "1" : "0";
   env.HOME = providerHome;
@@ -238,6 +238,13 @@ async function waitForChildExit(child: ReturnType<typeof spawn>, context: Provid
   });
 }
 
+function appendModelEvents(context: ProviderRunContext): void {
+  if (!existsSync(context.paths.modelEventsPath)) return;
+  const modelEvents = readFileSync(context.paths.modelEventsPath, "utf8");
+  if (!modelEvents.trim()) return;
+  appendFileSync(context.paths.eventsPath, modelEvents.endsWith("\n") ? modelEvents : `${modelEvents}\n`, "utf8");
+}
+
 export async function runCodexProvider(options: ProviderRunOptions, context: ProviderRunContext): Promise<number> {
   const command = codexProviderCommand(options);
   const env = codexProviderEnv(options, context);
@@ -264,6 +271,7 @@ export async function runCodexProvider(options: ProviderRunOptions, context: Pro
 
   const exitCode = await waitForChildExit(child, context);
   await Promise.all(streamTasks);
+  appendModelEvents(context);
 
   appendEvent(context.paths.eventsPath, {
     caseId: options.caseId,

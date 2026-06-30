@@ -154,6 +154,28 @@ describe("first-tree-read metrics pass criteria", () => {
     expect(casePassed(true, result)).toBe(true);
   });
 
+  it("recognizes the user JWT authorization surface when phrased as single authorization surface", () => {
+    const result = deriveMetrics(
+      [
+        skillReadEvent(),
+        firstTreeCall(HELP_ARGV),
+        firstTreeResult(HELP_ARGV, 0),
+        firstTreeCall(["tree", "tree", "systems/server/auth"]),
+        firstTreeResult(["tree", "tree", "systems/server/auth"], 0),
+        assistantTextEvent(`JWT auth routes should:
+- Use user JWT auth as the single authorization surface.
+- Check route scopes against live organization membership before cross-org actions.
+- Follow docs/development/http-path-conventions.md before auth or multi-org route changes.`),
+      ],
+      VALID_FIXTURE,
+      0,
+      JWT_EXPECTED_FACTS,
+    );
+
+    expect(result.expectedFactHits).toEqual([...JWT_EXPECTED_FACTS]);
+    expect(result.expectedFactsObserved).toBe(true);
+  });
+
   it("does not count isolated terms as expected fact concepts", () => {
     const result = deriveMetrics(
       [
