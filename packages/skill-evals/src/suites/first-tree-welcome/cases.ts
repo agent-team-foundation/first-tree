@@ -1,5 +1,6 @@
 import type { SkillEvalCase } from "../../core/case-schema.js";
 import type { SkillEvalSuiteDefinition } from "../types.js";
+import { GRADED_ACTIONS } from "./grader.js";
 import { FIRST_TREE_WELCOME_QUALITY_CASE } from "./quality.js";
 import type { FirstTreeWelcomeEvalCase, WelcomeExpectedAction } from "./types.js";
 
@@ -53,6 +54,21 @@ Use first-tree-welcome only to classify the setup state from its matrix. Reply w
     role: "invitee",
     tags: ["welcome-row-2", "planned"],
     treeState: "none",
+  },
+  {
+    action: "offer_invitee_value_without_admin_setup",
+    forbiddenActions: ["admin-setup", "repo-selection", "tree-setup-as-first-task", "seed-tree"],
+    forbiddenClaims: ["unread evidence"],
+    id: "first-tree-welcome-invitee-ready",
+    kickoffKind: "work",
+    prompt:
+      "Welcome an invited teammate whose team is already set up, using the team's readable repo and populated Context Tree.",
+    repoState: "selected-readable",
+    requiredResponseHints: ["task", "repo"],
+    role: "invitee",
+    tags: ["welcome-row-3b", "invitee-ready", "planned"],
+    taskOptionHints: ["test", "trace", "map"],
+    treeState: "populated",
   },
   {
     action: "ask_for_repo_path_or_url",
@@ -150,6 +166,20 @@ A readable source repo is available at ./source-repo and a populated Context Tre
     tags: ["welcome-row-9", "planned"],
     treeState: "unknown",
   },
+  {
+    action: "give_evidence_value_or_ask_for_input",
+    forbiddenActions: ["invent-repo-evidence", "claim-tree-ready"],
+    forbiddenClaims: ["tree readiness"],
+    id: "first-tree-welcome-catch-all",
+    kickoffKind: "intro",
+    prompt:
+      "No earlier matrix row matches; give value from whatever evidence is readable, or ask for the smallest useful input.",
+    repoState: "unknown",
+    requiredResponseHints: ["value", "smallest"],
+    role: "admin",
+    tags: ["welcome-row-catch-all", "catch-all", "planned"],
+    treeState: "unknown",
+  },
 ];
 
 function githubAppState(row: WelcomeRow): FirstTreeWelcomeEvalCase["fixture"]["githubAppState"] {
@@ -204,7 +234,7 @@ export const FIRST_TREE_WELCOME_EVAL_CASES: readonly SkillEvalCase[] = [
     expected: {
       implementedGateRows: FIRST_TREE_WELCOME_LIVE_GATE_CASES.map((evalCase) => evalCase.id),
       matrixRows: WELCOME_ROWS.length,
-      validator: "9-row onboarding setup matrix",
+      validator: "onboarding setup matrix (unique state tuples + explicit catch-all + no orphan actions)",
     },
     fixture: {
       kickoffKinds: ["intro", "work", "tree"],
@@ -224,14 +254,45 @@ export const FIRST_TREE_WELCOME_EVAL_CASES: readonly SkillEvalCase[] = [
 function validateFirstTreeWelcomeFloor(cases: readonly SkillEvalCase[]): readonly string[] {
   const errors: string[] = [];
   const gateRows = cases.filter((evalCase) => evalCase.skill === "first-tree-welcome" && evalCase.tier === "gate");
-  if (gateRows.length !== 9) {
-    errors.push(`welcome matrix must declare 9 gate rows, found ${gateRows.length}.`);
-  }
+  const rowTags = (evalCase: SkillEvalCase): readonly string[] => {
+    const tags = (evalCase as { tags?: unknown }).tags;
+    return Array.isArray(tags) ? (tags as readonly string[]) : [];
+  };
 
+  // Live-gate contract: exactly the three implemented rows run against a model.
   const implementedGateRows = gateRows.filter((evalCase) => evalCase.status === "implemented");
   if (implementedGateRows.length !== 3) {
-    errors.push(`welcome matrix must implement 3 live gate rows in PR4, found ${implementedGateRows.length}.`);
+    errors.push(`welcome matrix must implement exactly 3 live gate rows, found ${implementedGateRows.length}.`);
   }
+
+  // Orphan-action: an implemented row whose action has no `casePassed` branch
+  // would silently fail the gate regardless of model behavior. Lock it out.
+  for (const evalCase of implementedGateRows) {
+    const action = (evalCase.expected as { action?: unknown }).action;
+    if (typeof action !== "string" || !GRADED_ACTIONS.has(action as WelcomeExpectedAction)) {
+      errors.push(`${evalCase.id}: implemented action "${String(action)}" has no casePassed branch (orphan).`);
+    }
+  }
+
+  // Coverage: exactly one explicit catch-all row, so no state falls through silently.
+  const catchAllRows = gateRows.filter((evalCase) => rowTags(evalCase).includes("catch-all"));
+  if (catchAllRows.length !== 1) {
+    errors.push(`welcome matrix must declare exactly one catch-all gate row, found ${catchAllRows.length}.`);
+  }
+
+  // The catch-all must be the LAST gate row: under first-match-wins, any specific
+  // row placed after it would be unreachable (shadowed). The skill prose relies
+  // on this ("the last row is an explicit catch-all"), so lock it here too.
+  const lastGateRow = gateRows.at(-1);
+  if (lastGateRow && !rowTags(lastGateRow).includes("catch-all")) {
+    errors.push(`the catch-all gate row must be last; found "${lastGateRow.id}" in the last position.`);
+  }
+
+  // Uniqueness: every non-catch-all row maps a distinct (role, kickoffKind,
+  // repoState, treeState) tuple, so first-match-wins is unambiguous. This
+  // replaces the old fixed row-count assertion — rows can be added freely as
+  // long as they don't overlap an existing state.
+  const seenTuples = new Map<string, string>();
 
   for (const evalCase of gateRows) {
     if (typeof evalCase.fixture !== "object" || evalCase.fixture === null || Array.isArray(evalCase.fixture)) {
@@ -260,6 +321,18 @@ function validateFirstTreeWelcomeFloor(cases: readonly SkillEvalCase[]): readonl
     if (!Array.isArray(forbidden?.actions) || forbidden.actions.length === 0) {
       errors.push(`${evalCase.id}: forbidden must declare at least one action.`);
     }
+
+    if (!rowTags(evalCase).includes("catch-all")) {
+      const tuple = `${String(fixture.role)}|${String(fixture.kickoffKind)}|${String(fixture.repoState)}|${String(fixture.treeState)}`;
+      const prior = seenTuples.get(tuple);
+      if (prior) {
+        errors.push(
+          `overlapping state tuple "${tuple}" in rows ${prior} and ${evalCase.id} — first-match-wins is ambiguous.`,
+        );
+      } else {
+        seenTuples.set(tuple, evalCase.id);
+      }
+    }
   }
 
   return errors;
@@ -272,13 +345,15 @@ export const FIRST_TREE_WELCOME_SUITE: SkillEvalSuiteDefinition = {
     tiers: [
       {
         caseIds: [FLOOR_CASE_ID],
-        description: "Validate the 9-row onboarding setup matrix schema.",
+        description:
+          "Validate the onboarding setup matrix schema: unique state tuples, one explicit catch-all, no orphan implemented actions.",
         status: "implemented",
         tier: "floor",
       },
       {
         caseIds: GATE_CASES.map((evalCase) => evalCase.id),
-        description: "Welcome onboarding matrix gate rows; row 1, row 3, and row 8 run as live gate cases.",
+        description:
+          "Welcome onboarding matrix gate rows; tree-kickoff-chat, no-repo-intro, and readable-repo-populated-tree run as live gate cases.",
         status: "implemented",
         tier: "gate",
       },

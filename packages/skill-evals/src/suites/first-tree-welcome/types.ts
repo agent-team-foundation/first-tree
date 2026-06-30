@@ -17,7 +17,9 @@ export type WelcomeExpectedAction =
   | "guide_repo_selection_without_claiming_repo_read"
   | "offer_code_value_without_tree_setup_task"
   | "offer_bounded_first_tasks_from_repo_and_tree"
-  | "offer_repo_value_without_claiming_tree_ready";
+  | "offer_repo_value_without_claiming_tree_ready"
+  | "offer_invitee_value_without_admin_setup"
+  | "give_evidence_value_or_ask_for_input";
 
 export type FirstTreeWelcomeFixture = {
   githubAppState: WelcomeGithubAppState;
