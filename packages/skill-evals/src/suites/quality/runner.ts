@@ -232,9 +232,11 @@ async function collectLiveQualityInput(
   if (definition.evalCase.skill === "first-tree-write") {
     const batch = await runFirstTreeWriteGate(packageRoot, {
       caseId: definition.gateCaseId,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       json: false,
       model: options.model,
+      provider: options.provider,
       verbose: options.verbose,
     });
     const summary = batch.cases[0];
@@ -247,9 +249,11 @@ async function collectLiveQualityInput(
   if (definition.evalCase.skill === "first-tree-seed") {
     const batch = await runFirstTreeSeedGate(packageRoot, {
       caseId: definition.gateCaseId,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       json: false,
       model: options.model,
+      provider: options.provider,
       verbose: options.verbose,
     });
     const summary = batch.cases[0];
@@ -262,9 +266,11 @@ async function collectLiveQualityInput(
   if (definition.evalCase.skill === "first-tree-welcome") {
     const batch = await runFirstTreeWelcomeGate(packageRoot, {
       caseId: definition.gateCaseId,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       json: false,
       model: options.model,
+      provider: options.provider,
       verbose: options.verbose,
     });
     const summary = batch.cases[0];

@@ -67,7 +67,10 @@ function isAssistantResponseEvent(value: unknown): boolean {
 }
 
 export function deriveRunObservability(events: readonly unknown[]): RunObservability {
-  const runStartedAt = events.find((event) => isRecord(event) && event.type === "codex_run_started") ?? null;
+  const runStartedAt =
+    events.find(
+      (event) => isRecord(event) && (event.type === "codex_run_started" || event.type === "claude_run_started"),
+    ) ?? null;
   const startedAtMs = timestampMs(runStartedAt);
   const responseTimes = events.filter(isAssistantResponseEvent).map(timestampMs).filter(isNumber);
   const firstResponseAtMs = responseTimes[0] ?? null;

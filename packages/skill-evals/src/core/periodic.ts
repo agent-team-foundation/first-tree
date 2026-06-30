@@ -91,7 +91,7 @@ export function formatPeriodicSummary(summary: PeriodicSummary): string {
 
   lines.push(
     "",
-    "Periodic is an opt-in tier for broader, more expensive coverage. Future PRs will add implemented periodic cases.",
+    "Periodic is an opt-in tier for broader, more expensive coverage. Additional suites may add implemented periodic cases later.",
   );
   return lines.join("\n");
 }

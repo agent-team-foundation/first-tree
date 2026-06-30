@@ -59,6 +59,19 @@ describe("skill eval selection", () => {
     ]);
   });
 
+  it("selects provider-sensitive gate and read periodic coverage for provider runner changes", () => {
+    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/core/provider/claude.ts"]);
+
+    expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
+      "pnpm --filter @first-tree/skill-evals eval:floor",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome",
+      "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read",
+    ]);
+  });
+
   it("selects only periodic for shared periodic framework changes", () => {
     const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/core/periodic.ts"]);
 
@@ -81,6 +94,19 @@ describe("skill eval selection", () => {
         kind: "periodic",
         reason: "packages/skill-evals/src/suites/first-tree-welcome/periodic.ts touches periodic eval framework",
         suite: "first-tree-welcome",
+      },
+    ]);
+  });
+
+  it("selects suite-scoped periodic for read periodic runner changes", () => {
+    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/suites/first-tree-read/periodic.ts"]);
+
+    expect(summary.recommendations).toEqual([
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read",
+        kind: "periodic",
+        reason: "packages/skill-evals/src/suites/first-tree-read/periodic.ts touches periodic eval framework",
+        suite: "first-tree-read",
       },
     ]);
   });

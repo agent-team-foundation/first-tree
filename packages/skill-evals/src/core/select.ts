@@ -127,6 +127,16 @@ function addQualityRecommendations(recommendations: Map<string, EvalRecommendati
   }
 }
 
+function addProviderRecommendations(recommendations: Map<string, EvalRecommendation>, reason: string): void {
+  addAllImplementedGateRecommendations(recommendations, reason);
+  addRecommendation(recommendations, {
+    command: periodicCommand("first-tree-read"),
+    kind: "periodic",
+    reason,
+    suite: "first-tree-read",
+  });
+}
+
 function matchingSkill(path: string): ShippedSkillName | null {
   for (const entry of SKILL_BY_PATH) {
     if (entry.paths.some((prefix) => path.startsWith(prefix))) {
@@ -192,6 +202,11 @@ export function selectSkillEvalRecommendations(
     const skill = matchingSkill(path);
     if (skill !== null) {
       addSuiteRecommendations(recommendations, skill, `${path} touches ${skill}`);
+      continue;
+    }
+
+    if (path.startsWith("packages/skill-evals/src/core/provider/")) {
+      addProviderRecommendations(recommendations, `${path} touches tested-agent provider infrastructure`);
       continue;
     }
 

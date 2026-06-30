@@ -36,8 +36,29 @@ export const FIRST_TREE_READ_CASES: readonly FirstTreeReadEvalCase[] = [
   },
 ];
 
+export const FIRST_TREE_READ_PERIODIC_CASES: readonly FirstTreeReadEvalCase[] = [
+  {
+    briefingMode: "runtime-generated",
+    description: "Context Tree workspace with runtime-generated briefing and installed First Tree family skills.",
+    expectedFacts: JWT_AUTH_EXPECTED_FACTS,
+    expectedTrigger: true,
+    id: "first-tree-read-runtime-generated-briefing-periodic",
+    prompt:
+      "Use this workspace's current Context Tree to answer: what constraints should JWT auth routes follow for this project?",
+    promptAlternates: ["Use the current Context Tree before answering: how should multi-org JWT route scopes work?"],
+    workspaceKind: "context-tree",
+  },
+];
+
 export function findFirstTreeReadCase(id: string): FirstTreeReadEvalCase | null {
   for (const evalCase of FIRST_TREE_READ_CASES) {
+    if (evalCase.id === id) return evalCase;
+  }
+  return null;
+}
+
+export function findFirstTreeReadPeriodicCase(id: string): FirstTreeReadEvalCase | null {
+  for (const evalCase of FIRST_TREE_READ_PERIODIC_CASES) {
     if (evalCase.id === id) return evalCase;
   }
   return null;

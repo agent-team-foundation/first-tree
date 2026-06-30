@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 import {
@@ -38,6 +39,10 @@ const DIMENSIONS: readonly JudgeRubricDimension[] = [
 
 function tempPackageRoot(): string {
   return mkdtempSync(join(tmpdir(), "skill-evals-quality-test-"));
+}
+
+function repoPackageRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 }
 
 function fakeArtifactInput(): ReadonlyMap<string, QualityArtifactInput> {
@@ -222,11 +227,13 @@ describe("quality runner with fake judge", () => {
         packageRoot,
         {
           caseId: "first-tree-write-node-quality",
+          claudeBin: "unused",
           codexBin: "unused",
           judgeBin: "unused",
           judgeModel: null,
           json: false,
           model: null,
+          provider: "codex",
           suite: "first-tree-write",
           verbose: false,
         },
@@ -255,11 +262,13 @@ describe("quality runner with fake judge", () => {
         packageRoot,
         {
           caseId: "first-tree-write-node-quality",
+          claudeBin: "unused",
           codexBin: "unused",
           judgeBin: "unused",
           judgeModel: null,
           json: false,
           model: null,
+          provider: "codex",
           suite: "first-tree-write",
           verbose: false,
         },
@@ -285,11 +294,13 @@ describe("quality runner with fake judge", () => {
         packageRoot,
         {
           caseId: "first-tree-write-node-quality",
+          claudeBin: "unused",
           codexBin: "unused",
           judgeBin: "unused",
           judgeModel: null,
           json: false,
           model: null,
+          provider: "codex",
           suite: "first-tree-write",
           verbose: false,
         },
@@ -330,11 +341,13 @@ describe("quality runner with fake judge", () => {
         packageRoot,
         {
           caseId: "first-tree-seed-skeleton-quality",
+          claudeBin: "unused",
           codexBin: "unused",
           judgeBin: "unused",
           judgeModel: null,
           json: false,
           model: null,
+          provider: "codex",
           suite: "first-tree-seed",
           verbose: false,
         },
@@ -350,6 +363,46 @@ describe("quality runner with fake judge", () => {
       });
     } finally {
       rmSync(packageRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the selected tested-agent provider for standalone quality prerequisite gates", async () => {
+    const packageRoot = repoPackageRoot();
+    const batch = await runQualityEval(
+      packageRoot,
+      {
+        caseId: "first-tree-seed-skeleton-quality",
+        claudeBin: "/bin/false",
+        codexBin: "/bin/false",
+        judgeBin: "unused",
+        judgeModel: null,
+        json: false,
+        model: "claude-test",
+        provider: "claude",
+        suite: "first-tree-seed",
+        verbose: false,
+      },
+      createFakeJudgeProvider(new Map()),
+    );
+
+    const qualityRunRoot = batch.cases[0]?.runRoot;
+    const gateRunRoot = batch.cases[0]?.gateRunRoot;
+    try {
+      expect(batch.failed).toBe(1);
+      expect(batch.cases[0]?.judge_model).toBe("not-run");
+      if (gateRunRoot === null || gateRunRoot === undefined) {
+        throw new Error("quality run did not record gate run root");
+      }
+      const gateEvents = readFileSync(join(gateRunRoot, "events.jsonl"), "utf8");
+      expect(gateEvents).toContain('"type":"claude_run_started"');
+      expect(gateEvents).not.toContain('"type":"codex_run_started"');
+    } finally {
+      if (qualityRunRoot !== null && qualityRunRoot !== undefined) {
+        rmSync(qualityRunRoot, { force: true, recursive: true });
+      }
+      if (gateRunRoot !== null && gateRunRoot !== undefined) {
+        rmSync(gateRunRoot, { force: true, recursive: true });
+      }
     }
   });
 });

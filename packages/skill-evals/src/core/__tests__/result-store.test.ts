@@ -223,6 +223,7 @@ describe("result store", () => {
       bounded: 4,
       useful: 3,
     });
+    expect(summary?.entries.find((candidate) => candidate.tier === "periodic")?.provider).toBe("codex");
     expect(summary?.flaky).toMatchObject({
       newFailures: 1,
       previousRunGroupId: "20260629T010000000Z-eval-gate",
@@ -235,6 +236,7 @@ describe("result store", () => {
     expect(formatted).toContain("Counts by skill: first-tree-welcome=2, first-tree-write=1");
     expect(formatted).toContain("First response latency: 350 ms");
     expect(formatted).toContain("first-tree-welcome:periodic:welcome-full-matrix command=eval:periodic");
+    expect(formatted).toContain("provider=codex");
     expect(formatted).toContain("judge_scores: bounded=4, useful=3");
   });
 

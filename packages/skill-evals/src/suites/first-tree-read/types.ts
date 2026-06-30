@@ -1,9 +1,12 @@
+import type { AgentProviderName } from "../../core/provider/types.js";
 import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
 export type WorkspaceKind = "blank" | "context-tree";
+export type BriefingMode = "minimal" | "runtime-generated";
 
 export type FirstTreeReadEvalCase = {
+  briefingMode?: BriefingMode;
   description: string;
   expectedFacts: readonly string[];
   expectedTrigger: boolean;
@@ -24,9 +27,11 @@ export type FixtureValidation = {
 
 export type CliOptions = {
   caseId: string | null;
+  claudeBin: string;
   codexBin: string;
   json: boolean;
   model: string | null;
+  provider: AgentProviderName;
   verbose: boolean;
 };
 
