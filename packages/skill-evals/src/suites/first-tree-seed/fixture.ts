@@ -20,9 +20,11 @@ function workspaceAgentsMarkdown(
   const sourceRepoPath = join(workspacePath, "source-repos", "source-repo");
   const sourceWorktreePath = join(workspacePath, "worktrees", "seed-source-repo");
   const sourceLine =
-    evalCase.fixture.sourceRepoState === "bare-readable"
-      ? `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`.`
-      : `The manifest source \`source-repo\` is intentionally missing from \`${sourceRepoPath}\`.`;
+    evalCase.fixture.sourceRepoState === "missing"
+      ? `The manifest source \`source-repo\` is intentionally missing from \`${sourceRepoPath}\`.`
+      : evalCase.fixture.sourceRepoState === "real-first-tree-bare-readable"
+        ? `The manifest source \`source-repo\` exists as a bare clone of the current first-tree repo at \`${sourceRepoPath}\`.`
+        : `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`.`;
   const treeLine =
     evalCase.fixture.treeState === "empty"
       ? "The Context Tree at `./context-tree` is newly provisioned and empty."
@@ -270,6 +272,10 @@ function writeBareSourceFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase
     return null;
   }
 
+  if (evalCase.fixture.sourceRepoState === "real-first-tree-bare-readable") {
+    return writeRealFirstTreeBareSourceFixture(paths);
+  }
+
   const sourceOriginPath = writeSourceOriginFixture(paths);
   const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
   mkdirSync(join(paths.workspacePath, "source-repos"), { recursive: true });
@@ -279,6 +285,47 @@ function writeBareSourceFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase
   );
   assertCommandOk(runCommand("git", ["fetch", "origin"], sourceRepoPath));
   return sourceRepoPath;
+}
+
+function writeRealFirstTreeBareSourceFixture(paths: RunPaths): string {
+  const sourceOriginPath = writeRealFirstTreeSourceOriginFixture(paths);
+  const sourceRepoPath = join(paths.workspacePath, "source-repos", "source-repo");
+  mkdirSync(join(paths.workspacePath, "source-repos"), { recursive: true });
+  assertCommandOk(runCommand("git", ["init", "--bare", sourceRepoPath], paths.workspacePath));
+  assertCommandOk(runCommand("git", ["remote", "add", "origin", sourceOriginPath], sourceRepoPath));
+  assertCommandOk(
+    runCommand("git", ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], sourceRepoPath),
+  );
+  assertCommandOk(runCommand("git", ["fetch", "origin", "+refs/heads/*:refs/remotes/origin/*"], sourceRepoPath));
+  const sourceMain = gitHead(sourceOriginPath, "refs/heads/main");
+  if (sourceMain === null) {
+    throw new Error(`real first-tree source origin is missing refs/heads/main: ${sourceOriginPath}`);
+  }
+  assertCommandOk(runCommand("git", ["update-ref", "refs/remotes/origin/main", sourceMain], sourceRepoPath));
+  assertCommandOk(runCommand("git", ["rev-parse", "refs/remotes/origin/main"], sourceRepoPath));
+  return sourceRepoPath;
+}
+
+function writeRealFirstTreeSourceOriginFixture(paths: RunPaths): string {
+  const sourceOriginPath = join(paths.workspacePath, ".first-tree-eval", "source-origin");
+  const repoHead = gitHead(paths.repoRoot);
+  if (repoHead === null) {
+    throw new Error(`real first-tree repo is missing HEAD: ${paths.repoRoot}`);
+  }
+  assertCommandOk(
+    runCommand("git", ["clone", "--bare", "--no-local", paths.repoRoot, sourceOriginPath], paths.workspacePath),
+  );
+  assertCommandOk(runCommand("git", ["update-ref", "refs/heads/main", repoHead], sourceOriginPath));
+  assertCommandOk(runCommand("git", ["symbolic-ref", "HEAD", "refs/heads/main"], sourceOriginPath));
+  const removeOrigin = runCommand("git", ["remote", "remove", "origin"], sourceOriginPath);
+  if (removeOrigin.exitCode !== 0 && !removeOrigin.stderr.includes("No such remote")) {
+    assertCommandOk(removeOrigin);
+  }
+  const sourceMain = gitHead(sourceOriginPath, "refs/heads/main");
+  if (sourceMain !== repoHead) {
+    throw new Error(`real first-tree source origin main ${sourceMain ?? "missing"} does not match ${repoHead}`);
+  }
+  return sourceOriginPath;
 }
 
 function gitHead(repoPath: string, ref = "HEAD"): string | null {

@@ -24,9 +24,17 @@ import { changedFilesFromGit, formatSelectionSummary, selectSkillEvalRecommendat
 import { readSkillFrontmatter } from "./core/skills/frontmatter.js";
 import { formatFirstTreeReadGateSummary, runFirstTreeReadGate } from "./suites/first-tree-read/index.js";
 import type { BatchSummary as ReadBatchSummary } from "./suites/first-tree-read/types.js";
-import { formatFirstTreeSeedGateSummary, runFirstTreeSeedGate } from "./suites/first-tree-seed/index.js";
+import {
+  findFirstTreeSeedPeriodicCase,
+  formatFirstTreeSeedGateSummary,
+  formatFirstTreeSeedPeriodicSummary,
+  runFirstTreeSeedGate,
+  runFirstTreeSeedPeriodic,
+} from "./suites/first-tree-seed/index.js";
+import { FIRST_TREE_SEED_QUALITY_DEFINITION } from "./suites/first-tree-seed/quality.js";
 import type { BatchSummary as SeedBatchSummary } from "./suites/first-tree-seed/types.js";
 import {
+  findFirstTreeWelcomePeriodicCase,
   formatFirstTreeWelcomeGateSummary,
   formatFirstTreeWelcomePeriodicSummary,
   runFirstTreeWelcomeGate,
@@ -38,6 +46,7 @@ import { formatFirstTreeWriteGateSummary, runFirstTreeWriteGate } from "./suites
 import { FIRST_TREE_WRITE_QUALITY_DEFINITION } from "./suites/first-tree-write/quality.js";
 import type { BatchSummary as WriteBatchSummary } from "./suites/first-tree-write/types.js";
 import {
+  buildSeedQualityInput,
   buildWelcomeQualityInput,
   buildWriteQualityInput,
   formatQualitySummaryTable,
@@ -86,9 +95,12 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --include-quality
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
+  pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed --include-quality
   pnpm --filter @first-tree/skill-evals eval:periodic
+  pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-seed
   pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-welcome
   pnpm --filter @first-tree/skill-evals eval:quality
+  pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-seed
   pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write
   pnpm --filter @first-tree/skill-evals eval:select -- --base main
   pnpm --filter @first-tree/skill-evals eval:summary
@@ -249,19 +261,29 @@ function parseArgs(args: readonly string[]): CliOptions {
 
 function qualitySuite(options: CliOptions): QualitySkillName | null {
   if (options.suite === null) return null;
-  if (options.suite === "first-tree-write" || options.suite === "first-tree-welcome") {
+  if (
+    options.suite === "first-tree-write" ||
+    options.suite === "first-tree-seed" ||
+    options.suite === "first-tree-welcome"
+  ) {
     return options.suite;
   }
-  throw new Error("eval:quality currently supports --suite first-tree-write or --suite first-tree-welcome.");
+  throw new Error(
+    "eval:quality currently supports --suite first-tree-write, --suite first-tree-seed, or --suite first-tree-welcome.",
+  );
 }
 
 function includeQualitySuite(options: CliOptions): QualitySkillName {
-  if (options.suite === "first-tree-write" || options.suite === "first-tree-welcome") {
+  if (
+    options.suite === "first-tree-write" ||
+    options.suite === "first-tree-seed" ||
+    options.suite === "first-tree-welcome"
+  ) {
     return options.suite;
   }
   const suiteText = options.suite === null ? "no suite" : options.suite;
   throw new Error(
-    `eval:gate --include-quality is only supported for --suite first-tree-write or --suite first-tree-welcome; got ${suiteText}.`,
+    `eval:gate --include-quality is only supported for --suite first-tree-write, --suite first-tree-seed, or --suite first-tree-welcome; got ${suiteText}.`,
   );
 }
 
@@ -471,8 +493,8 @@ function gateResultEntries(
 
 function periodicResultEntries(
   packageRootPath: string,
-  batch: WelcomeBatchSummary,
-  suite: Extract<ShippedSkillName, "first-tree-welcome">,
+  batch: SeedBatchSummary | WelcomeBatchSummary,
+  suite: Extract<ShippedSkillName, "first-tree-seed" | "first-tree-welcome">,
   options: CliOptions,
   runGroupId = createRunGroupId(batch.runStartedAt, `eval-periodic-${suite}`),
 ): readonly ResultStoreEntry[] {
@@ -626,6 +648,38 @@ async function runIncludedWelcomeQuality(
   return { batch: qualityBatch, skippedReason: null };
 }
 
+async function runIncludedSeedQuality(
+  packageRootPath: string,
+  batch: SeedBatchSummary,
+  options: CliOptions,
+): Promise<IncludedQualityResult> {
+  const skippedReason = includedQualityGateFailureReason(batch);
+  if (skippedReason !== null) return { batch: null, skippedReason };
+  const gateSummary = batch.cases.find((summary) => summary.caseId === FIRST_TREE_SEED_QUALITY_DEFINITION.gateCaseId);
+  if (gateSummary === undefined) {
+    return {
+      batch: null,
+      skippedReason: `quality was not run because gate case ${FIRST_TREE_SEED_QUALITY_DEFINITION.gateCaseId} was not included`,
+    };
+  }
+  const qualityBatch = await runQualityEval(
+    packageRootPath,
+    {
+      caseId: FIRST_TREE_SEED_QUALITY_DEFINITION.evalCase.id,
+      codexBin: options.codexBin,
+      judgeBin: options.judgeBin,
+      judgeModel: options.judgeModel,
+      json: options.json,
+      model: options.model,
+      suite: "first-tree-seed",
+      verbose: options.verbose,
+    },
+    undefined,
+    new Map([[FIRST_TREE_SEED_QUALITY_DEFINITION.evalCase.id, buildSeedQualityInput(gateSummary)]]),
+  );
+  return { batch: qualityBatch, skippedReason: null };
+}
+
 function printGateWithOptionalQuality(
   gateText: string,
   gateBatch: GateBatchSummary,
@@ -716,6 +770,9 @@ async function runGate(options: CliOptions): Promise<void> {
   }
 
   if (options.suite === "first-tree-seed") {
+    if (options.includeQuality) {
+      assertIncludedQualityCase(options, FIRST_TREE_SEED_QUALITY_DEFINITION.gateCaseId);
+    }
     const batch = await runFirstTreeSeedGate(packageRootPath, {
       caseId: options.caseId,
       codexBin: options.codexBin,
@@ -723,9 +780,23 @@ async function runGate(options: CliOptions): Promise<void> {
       model: options.model,
       verbose: options.verbose,
     });
-    appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
-    printGateWithOptionalQuality(formatFirstTreeSeedGateSummary(batch), batch, null, options.json);
-    if (batch.failed > 0) {
+    const runGroupId = createRunGroupId(
+      batch.runStartedAt,
+      `eval-gate-${options.suite}${options.includeQuality ? "-include-quality" : ""}`,
+    );
+    appendResultStoreEntries(
+      packageRootPath,
+      gateResultEntries(packageRootPath, batch, options.suite, options, runGroupId),
+    );
+    const quality = options.includeQuality ? await runIncludedSeedQuality(packageRootPath, batch, options) : null;
+    if (quality?.batch !== null && quality?.batch !== undefined) {
+      appendResultStoreEntries(
+        packageRootPath,
+        qualityResultEntries(packageRootPath, quality.batch, options, runGroupId),
+      );
+    }
+    printGateWithOptionalQuality(formatFirstTreeSeedGateSummary(batch), batch, quality, options.json);
+    if (gateCommandFailed(batch, quality)) {
       process.exitCode = 1;
     }
     return;
@@ -807,7 +878,30 @@ function runSelect(options: CliOptions): void {
 
 async function runPeriodic(options: CliOptions): Promise<void> {
   const packageRootPath = packageRoot();
-  if (options.suite === null || options.suite === "first-tree-welcome") {
+  if (options.suite === "first-tree-seed") {
+    const batch = await runFirstTreeSeedPeriodic(packageRootPath, {
+      caseId: options.caseId,
+      codexBin: options.codexBin,
+      json: options.json,
+      model: options.model,
+      verbose: options.verbose,
+    });
+    appendResultStoreEntries(
+      packageRootPath,
+      periodicResultEntries(packageRootPath, batch, "first-tree-seed", options),
+    );
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
+    } else {
+      process.stdout.write(`${formatFirstTreeSeedPeriodicSummary(batch)}\n`);
+    }
+    if (batch.failed > 0) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (options.suite === "first-tree-welcome") {
     const batch = await runFirstTreeWelcomePeriodic(packageRootPath, {
       caseId: options.caseId,
       codexBin: options.codexBin,
@@ -825,6 +919,77 @@ async function runPeriodic(options: CliOptions): Promise<void> {
       process.stdout.write(`${formatFirstTreeWelcomePeriodicSummary(batch)}\n`);
     }
     if (batch.failed > 0) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (options.suite === null) {
+    const runGroupStartedAt = new Date().toISOString();
+    const runGroupId = createRunGroupId(runGroupStartedAt, "eval-periodic-all");
+    const runSeed = options.caseId === null || findFirstTreeSeedPeriodicCase(options.caseId) !== null;
+    const runWelcome = options.caseId === null || findFirstTreeWelcomePeriodicCase(options.caseId) !== null;
+    if (!runSeed && !runWelcome) {
+      throw new Error(
+        `No periodic case '${options.caseId}' found for implemented periodic suites first-tree-seed or first-tree-welcome.`,
+      );
+    }
+    const seedBatch = runSeed
+      ? await runFirstTreeSeedPeriodic(packageRootPath, {
+          caseId: options.caseId,
+          codexBin: options.codexBin,
+          json: options.json,
+          model: options.model,
+          verbose: options.verbose,
+        })
+      : null;
+    if (seedBatch !== null) {
+      appendResultStoreEntries(
+        packageRootPath,
+        periodicResultEntries(packageRootPath, seedBatch, "first-tree-seed", options, runGroupId),
+      );
+    }
+    const welcomeBatch = runWelcome
+      ? await runFirstTreeWelcomePeriodic(packageRootPath, {
+          caseId: options.caseId,
+          codexBin: options.codexBin,
+          json: options.json,
+          model: options.model,
+          verbose: options.verbose,
+        })
+      : null;
+    if (welcomeBatch !== null) {
+      appendResultStoreEntries(
+        packageRootPath,
+        periodicResultEntries(packageRootPath, welcomeBatch, "first-tree-welcome", options, runGroupId),
+      );
+    }
+    if (options.json) {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            "first-tree-seed": seedBatch,
+            "first-tree-welcome": welcomeBatch,
+            runStartedAt: runGroupStartedAt,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      process.stdout.write(
+        [
+          ...(seedBatch === null
+            ? []
+            : ["first-tree-seed periodic", "", formatFirstTreeSeedPeriodicSummary(seedBatch), ""]),
+          ...(welcomeBatch === null
+            ? []
+            : ["first-tree-welcome periodic", "", formatFirstTreeWelcomePeriodicSummary(welcomeBatch)]),
+        ].join("\n"),
+      );
+      process.stdout.write("\n");
+    }
+    if ((seedBatch?.failed ?? 0) > 0 || (welcomeBatch?.failed ?? 0) > 0) {
       process.exitCode = 1;
     }
     return;

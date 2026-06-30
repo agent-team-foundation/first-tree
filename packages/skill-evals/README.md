@@ -14,9 +14,12 @@ pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --include-quality
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
+pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed --include-quality
 pnpm --filter @first-tree/skill-evals eval:periodic
+pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-seed
 pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-welcome
 pnpm --filter @first-tree/skill-evals eval:quality
+pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-seed
 pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write
 pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-welcome --judge-model <model>
 pnpm --filter @first-tree/skill-evals eval:select -- --base main
@@ -51,26 +54,32 @@ not suitable for default gates or ordinary CI. It accepts the same basic live
 eval controls as gates, including `--suite`, `--case`, `--model`,
 `--codex-bin`, `--json`, and `--verbose`. `first-tree-welcome` periodic now
 runs the concrete setup-state matrix rows as live eval cases while keeping the
-default welcome gate limited to its three high-risk rows. Other suites still
-print a clear no-op summary and exit 0 until they register implemented periodic
-cases. Future PRs will add seed quality and realism cases, plus
-multi-provider/runtime-generated periodic coverage. The default `eval:select`
-recommendations do not include periodic for ordinary skill changes; maintainers
-trigger periodic manually or via future scheduling.
+default welcome gate limited to its three high-risk rows. `first-tree-seed`
+periodic runs a real-repo realism case that builds a per-run bare source
+fixture from the current `first-tree` repo `HEAD` and still requires the seed
+bare-source worktree protocol. `eval:periodic` with no `--suite` runs all
+implemented periodic suites in one result-store run group. Suites without
+implemented periodic cases still print a clear no-op summary and exit 0. Future
+PRs will add multi-provider/runtime-generated periodic coverage. The default
+`eval:select` recommendations do not include periodic for ordinary skill
+changes; maintainers trigger periodic manually or via future scheduling.
 
 `eval:quality` is an opt-in LLM-as-judge layer. It does not replace
 deterministic gates and is not called by `eval:gate` by default. Each quality
 case first runs the corresponding live gate case and requires that deterministic
 gate to pass; only then does it send the actual produced artifact to the judge.
-For write and welcome gates, `eval:gate -- --include-quality` runs the
+For write, seed, and welcome gates, `eval:gate -- --include-quality` runs the
 deterministic gate first and then reuses that same gate artifact for the
 supported quality case. If the deterministic gate fails, the judge is not run.
-`--include-quality` is intentionally rejected for read and seed suites. The
-first quality cases judge:
+`--include-quality` is intentionally rejected for read. The quality cases
+judge:
 
 - `first-tree-write` node quality from the actual `durable-source-writes` tree
   diff, with scores for durability, source-boundary discipline, rationale
   quality, and conciseness;
+- `first-tree-seed` skeleton quality from the actual `empty-tree-source-present`
+  Phase 1 proposal, with scores for source grounding, structure fit,
+  phase-boundary discipline, coverage calibration, and conciseness;
 - `first-tree-welcome` first-task quality from the actual readable-repo +
   populated-tree row output, with scores for evidence grounding, boundedness,
   usefulness, verifiability, and avoiding setup-as-task.
@@ -136,6 +145,21 @@ accepts the source row id as an alias.
 - bare source repos are read through a materialized read worktree, not as
   checkouts.
 
+`eval:quality -- --suite first-tree-seed` runs the `empty-tree-source-present`
+deterministic gate first. If that hard-rule gate passes, the quality judge
+scores the actual Phase 1 skeleton proposal and source evidence. This judge is
+opt-in and does not replace the deterministic seed gate: empty-tree self-check,
+source boundary, bare worktree protocol, no tree/source/GitHub side effects, and
+no Phase 2 leaf content before approval remain hard-rule oracle conditions.
+
+`eval:periodic -- --suite first-tree-seed` runs
+`first-tree-seed-real-first-tree-source-periodic`. The fixture creates an empty
+Context Tree plus a per-run bare source repo cloned from the current
+`first-tree` repo `HEAD`. The model must still materialize
+`worktrees/seed-source-repo`, read source evidence from that checkout, propose
+only a Phase 1 skeleton, and ask for approval. This realism case stays in the
+periodic tier and is not part of the default seed gate.
+
 The runner creates isolated temporary workspaces under
 `packages/skill-evals/.runs/<timestamp>-<case-id>/`, installs
 the relevant skill, prepends command shims such as `first-tree` to `PATH`, and
@@ -169,10 +193,11 @@ artifact paths, duration, turns and first-response latency when derivable, cost,
 and judge scores when present. Gate failures use the deterministic grading
 evidence first and link the `grading.json` artifact path in the result store.
 Unknown turn or latency values are recorded as `null`. The `.runs` directory is
-gitignored local eval state. Periodic live cases use `command:
-"eval:periodic"` and `tier: "periodic"` entries so summary and compare can
-report them alongside floor, gate, and quality runs. Periodic no-op paths for
-suites with no implemented periodic cases do not append result-store entries.
+gitignored local eval state. Periodic live cases use
+`command: "eval:periodic"` and `tier: "periodic"` entries so summary and compare
+can report them alongside floor, gate, and quality runs. Periodic no-op paths
+for suites with no implemented periodic cases do not append result-store
+entries.
 
 Use `eval:summary` to summarize the latest result-store run group, or pass a
 specific run group id:

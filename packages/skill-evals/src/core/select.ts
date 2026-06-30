@@ -59,7 +59,9 @@ function gateCommand(skill: ShippedSkillName): string {
   return `pnpm --filter @first-tree/skill-evals eval:gate -- --suite ${skill}`;
 }
 
-function qualityCommand(skill: Extract<ShippedSkillName, "first-tree-write" | "first-tree-welcome">): string {
+function qualityCommand(
+  skill: Extract<ShippedSkillName, "first-tree-write" | "first-tree-seed" | "first-tree-welcome">,
+): string {
   return `pnpm --filter @first-tree/skill-evals eval:quality -- --suite ${skill}`;
 }
 
@@ -87,7 +89,7 @@ function addSuiteRecommendations(
     suite: skill,
   });
 
-  if (skill === "first-tree-write" || skill === "first-tree-welcome") {
+  if (skill === "first-tree-write" || skill === "first-tree-seed" || skill === "first-tree-welcome") {
     addRecommendation(recommendations, {
       command: qualityCommand(skill),
       kind: "quality",
@@ -115,7 +117,7 @@ function addAllImplementedGateRecommendations(recommendations: Map<string, EvalR
 }
 
 function addQualityRecommendations(recommendations: Map<string, EvalRecommendation>, reason: string): void {
-  for (const skill of ["first-tree-write", "first-tree-welcome"] as const) {
+  for (const skill of ["first-tree-write", "first-tree-seed", "first-tree-welcome"] as const) {
     addRecommendation(recommendations, {
       command: qualityCommand(skill),
       kind: "quality",

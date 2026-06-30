@@ -33,6 +33,20 @@ const SKILL_READ_OUTPUT_KEYS = new Set([
   "stdout",
   "text",
 ]);
+const PROTECTED_BARE_SOURCE_REPO_PATTERN =
+  /(?:^|[\s"'=])(?:\.\/|\/[^\s"']*\/)?(?:source-repos\/source-repo|\.first-tree-eval\/source-origin)(?:[\s"'/:]|$)/u;
+const PROTECTED_BARE_SOURCE_CONTENT_PATHS = [
+  "source-repos/source-repo/README.md",
+  "source-repos/source-repo/package.json",
+  "source-repos/source-repo/apps/",
+  "source-repos/source-repo/docs/",
+  "source-repos/source-repo/packages/",
+  "source-repos/source-repo/raw-context/",
+  "source-repos/source-repo/skills/",
+  ".first-tree-eval/source-origin/objects/",
+  ".first-tree-eval/source-origin/packed-refs",
+  ".first-tree-eval/source-origin/refs/",
+];
 
 function eventType(event: Record<string, unknown>): string | null {
   return typeof event.type === "string" ? event.type : null;
@@ -338,9 +352,7 @@ function forbiddenSideEffectHits(events: readonly unknown[], firstTreeArgv: read
 
 function commandReadsBareSourceContent(command: string): boolean {
   if (!/\bgit\b/u.test(command)) return false;
-  if (!/(?:^|[\s"'=])(?:\.\/|\/[^\s"']*\/)?source-repos\/source-repo(?:[\s"'/:]|$)/u.test(command)) {
-    return false;
-  }
+  if (!PROTECTED_BARE_SOURCE_REPO_PATTERN.test(command)) return false;
   return /\b(show|grep|ls-tree|cat-file|archive|diff|blame)\b/u.test(command);
 }
 
@@ -351,15 +363,7 @@ function directBareSourceContentRead(events: readonly unknown[]): boolean {
         if (commandReadsBareSourceContent(command)) return true;
       }
     }
-    if (
-      containsPathAccess(event, [
-        "source-repos/source-repo/README.md",
-        "source-repos/source-repo/package.json",
-        "source-repos/source-repo/apps/",
-        "source-repos/source-repo/docs/",
-        "source-repos/source-repo/packages/",
-      ])
-    ) {
+    if (containsPathAccess(event, PROTECTED_BARE_SOURCE_CONTENT_PATHS)) {
       return true;
     }
   }
@@ -444,8 +448,12 @@ export function deriveMetrics(
     if (
       containsPathAccess(event, [
         "worktrees/seed-source-repo/README.md",
+        "worktrees/seed-source-repo/package.json",
         "worktrees/seed-source-repo/apps/cli/README.md",
         "worktrees/seed-source-repo/apps/web/README.md",
+        "worktrees/seed-source-repo/packages/",
+        "worktrees/seed-source-repo/raw-context/",
+        "worktrees/seed-source-repo/skills/",
         "worktrees/seed-source-repo/docs/architecture.md",
         "worktrees/seed-source-repo/docs/team-practice.md",
       ])

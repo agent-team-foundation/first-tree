@@ -34,6 +34,16 @@ describe("skill eval selection", () => {
     ]);
   });
 
+  it("selects seed floor, gate, and quality for seed skill changes", () => {
+    const summary = selectSkillEvalRecommendations(["skills/first-tree-seed/SKILL.md"]);
+
+    expect(summary.recommendations.map((recommendation) => recommendation.command)).toEqual([
+      "pnpm --filter @first-tree/skill-evals eval:floor -- --suite first-tree-seed",
+      "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
+      "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-seed",
+    ]);
+  });
+
   it("selects all implemented gates and quality when shared judge core changes", () => {
     const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/core/judge/schema.ts"]);
 
@@ -44,6 +54,7 @@ describe("skill eval selection", () => {
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed",
       "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome",
       "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write",
+      "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-seed",
       "pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-welcome",
     ]);
   });
@@ -70,6 +81,19 @@ describe("skill eval selection", () => {
         kind: "periodic",
         reason: "packages/skill-evals/src/suites/first-tree-welcome/periodic.ts touches periodic eval framework",
         suite: "first-tree-welcome",
+      },
+    ]);
+  });
+
+  it("selects suite-scoped periodic for seed periodic runner changes", () => {
+    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/suites/first-tree-seed/periodic.ts"]);
+
+    expect(summary.recommendations).toEqual([
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-seed",
+        kind: "periodic",
+        reason: "packages/skill-evals/src/suites/first-tree-seed/periodic.ts touches periodic eval framework",
+        suite: "first-tree-seed",
       },
     ]);
   });

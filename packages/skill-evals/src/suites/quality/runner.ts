@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { appendEvent } from "../../core/events.js";
@@ -7,6 +7,9 @@ import { evaluateJudgeOutput, parseJudgeJson } from "../../core/judge/schema.js"
 import type { JudgeEvaluation, JudgeProvider, JudgeProviderResponse } from "../../core/judge/types.js";
 import { createRunPaths } from "../../core/paths.js";
 import type { QualityJudgeRunResult } from "../../core/result-schema.js";
+import { runFirstTreeSeedGate } from "../first-tree-seed/index.js";
+import { FIRST_TREE_SEED_QUALITY_DEFINITION } from "../first-tree-seed/quality.js";
+import type { CaseRunSummary as SeedCaseRunSummary } from "../first-tree-seed/types.js";
 import { runFirstTreeWelcomeGate } from "../first-tree-welcome/index.js";
 import { FIRST_TREE_WELCOME_QUALITY_DEFINITION } from "../first-tree-welcome/quality.js";
 import type { CaseRunSummary as WelcomeCaseRunSummary } from "../first-tree-welcome/types.js";
@@ -24,6 +27,7 @@ import type {
 
 const QUALITY_DEFINITIONS: readonly QualityCaseDefinition[] = [
   FIRST_TREE_WRITE_QUALITY_DEFINITION,
+  FIRST_TREE_SEED_QUALITY_DEFINITION,
   FIRST_TREE_WELCOME_QUALITY_DEFINITION,
 ];
 
@@ -119,6 +123,10 @@ function readFixtureFile(path: string): string {
   return readFileSync(path, "utf8");
 }
 
+function readFixtureFileIfExists(path: string): string | null {
+  return existsSync(path) ? readFileSync(path, "utf8") : null;
+}
+
 export function buildWriteQualityInput(gateSummary: WriteCaseRunSummary): QualityArtifactInput {
   return {
     artifact:
@@ -131,6 +139,53 @@ export function buildWriteQualityInput(gateSummary: WriteCaseRunSummary): Qualit
     gateSummaryJsonPath: gateSummary.summaryJsonPath,
     gateSummaryMdPath: gateSummary.summaryMdPath,
     source: readFixtureFile(join(gateSummary.workspacePath, "source-artifacts", "durable-decision-note.md")),
+  };
+}
+
+function seedEvidenceSource(gateSummary: SeedCaseRunSummary): string {
+  const worktreePath = join(gateSummary.workspacePath, "worktrees", "seed-source-repo");
+  const sourceOriginPath = join(gateSummary.runRoot, "source-origin");
+  const chunks = [
+    "Setup state: empty Context Tree and bare source repo.",
+    "",
+    "Source README:",
+    readFixtureFileIfExists(join(worktreePath, "README.md")) ??
+      readFixtureFileIfExists(join(sourceOriginPath, "README.md")) ??
+      "_not read or unavailable_",
+    "",
+    "CLI evidence:",
+    readFixtureFileIfExists(join(worktreePath, "apps", "cli", "README.md")) ??
+      readFixtureFileIfExists(join(sourceOriginPath, "apps", "cli", "README.md")) ??
+      "_not read or unavailable_",
+    "",
+    "Architecture evidence:",
+    readFixtureFileIfExists(join(worktreePath, "docs", "architecture.md")) ??
+      readFixtureFileIfExists(join(sourceOriginPath, "docs", "architecture.md")) ??
+      "_not read or unavailable_",
+    "",
+    "Team-practice evidence:",
+    readFixtureFileIfExists(join(worktreePath, "docs", "team-practice.md")) ??
+      readFixtureFileIfExists(join(sourceOriginPath, "docs", "team-practice.md")) ??
+      "_not read or unavailable_",
+  ];
+  return chunks.join("\n");
+}
+
+export function buildSeedQualityInput(gateSummary: SeedCaseRunSummary): QualityArtifactInput {
+  return {
+    artifact: [
+      "Final seed response:",
+      gateSummary.metrics.finalResponse.trim() || "_none_",
+      "",
+      "Observed first-tree commands:",
+      gateSummary.metrics.firstTreeArgv.map((argv) => `first-tree ${argv.join(" ")}`).join("\n") || "_none_",
+    ].join("\n"),
+    deterministicGatePassed: gateSummary.passed,
+    gateCaseId: gateSummary.caseId,
+    gateRunRoot: gateSummary.runRoot,
+    gateSummaryJsonPath: gateSummary.summaryJsonPath,
+    gateSummaryMdPath: gateSummary.summaryMdPath,
+    source: seedEvidenceSource(gateSummary),
   };
 }
 
@@ -187,6 +242,21 @@ async function collectLiveQualityInput(
       throw new Error(`No gate summary produced for ${definition.gateCaseId}.`);
     }
     return buildWriteQualityInput(summary);
+  }
+
+  if (definition.evalCase.skill === "first-tree-seed") {
+    const batch = await runFirstTreeSeedGate(packageRoot, {
+      caseId: definition.gateCaseId,
+      codexBin: options.codexBin,
+      json: false,
+      model: options.model,
+      verbose: options.verbose,
+    });
+    const summary = batch.cases[0];
+    if (summary === undefined) {
+      throw new Error(`No gate summary produced for ${definition.gateCaseId}.`);
+    }
+    return buildSeedQualityInput(summary);
   }
 
   if (definition.evalCase.skill === "first-tree-welcome") {
