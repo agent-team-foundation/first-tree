@@ -46,15 +46,17 @@ import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
  * Data-source split (admin vs member):
  *   - **member** mode reads `/me/clients` only — single block, no Owner column,
  *     identical layout to pre-admin-view.
- *   - **admin** mode reads `/orgs/:orgId/clients` as the *single source of truth*
- *     and splits client-side into "Your computers" + "Team computers". The
- *     admin happy path deliberately does NOT call `/me/clients` (the two
- *     endpoints poll on a 10s cadence and a dual-source approach would let
- *     the user's own rows briefly disagree between the blocks on each tick).
- *     `/me/clients` is only resurrected as a *fallback* when the org-scoped
- *     listing errors out, so admins still see something instead of an empty
- *     page. Owner lookup uses `/orgs/:orgId/members` with `staleTime: 60s`
- *     and no polling to keep the Owner cell from flickering.
+ *   - **admin** mode reads `/orgs/:orgId/clients` for the "Team computers"
+ *     block and splits client-side into "Your computers" + "Team computers".
+ *     `/me/clients` is *also* fetched and unioned (deduped by id) into the
+ *     viewer's own block only — so a client the viewer owns that the
+ *     org-scoped view omits (e.g. after leaving the team that minted its
+ *     agents, issue 1353) still surfaces and stays retirable. The union is
+ *     one-directional (own block only) and dedups by id, so no row is shown
+ *     twice and the per-tick block-disagreement the single-source design
+ *     guarded against cannot occur. Owner lookup uses `/orgs/:orgId/members`
+ *     with `staleTime: 60s` and no polling to keep the Owner cell from
+ *     flickering.
  */
 export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const queryClient = useQueryClient();
@@ -130,13 +132,16 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
     refetchInterval: 10_000,
   });
 
-  // member mode → primary data source. admin mode → only enabled as a
-  // fallback when `/orgs/:orgId/clients` errors out (see §6 of the design
-  // doc), so the admin happy path stays single-source.
+  // member mode → primary data source. admin mode → always fetched too and
+  // unioned into the viewer's *own* block (see `mineList`). `/me/clients` is
+  // the authoritative cross-org "my computers" list, so a client the viewer
+  // owns that the org-scoped admin view omits (e.g. after leaving the team
+  // that minted its agents — issue 1353) still surfaces and stays retirable.
+  // The Team block stays org-scoped, so no row is shown twice.
   const meClientsQuery = useQuery({
     queryKey: ["clients", "me"],
     queryFn: listClients,
-    enabled: !isAdmin || orgClientsQuery.isError,
+    enabled: true,
     refetchInterval: 10_000,
   });
 
@@ -217,9 +222,18 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   // churn reshuffle same-state computers. `userId === null` (legacy clients
   // that pre-date user binding) lands in the team block.
   const mineList = useMemo<HubClient[]>(() => {
-    if (!grouped || !orgClientsData || !viewerUserId) return [];
-    return [...orgClientsData].filter((c) => c.userId === viewerUserId).sort(compareByPillPriority);
-  }, [grouped, orgClientsData, viewerUserId]);
+    if (!grouped || !viewerUserId) return [];
+    // Seed from `/me/clients` so a viewer-owned client the org-scoped admin
+    // view omits still appears in "Your computers" (issue 1353). Org-scoped
+    // rows win on overlap — they carry the same owner-resolution context as
+    // the Team block, keeping fields consistent across the page.
+    const byId = new Map<string, HubClient>();
+    for (const c of meClientsData ?? []) byId.set(c.id, c);
+    for (const c of orgClientsData ?? []) {
+      if (c.userId === viewerUserId) byId.set(c.id, c);
+    }
+    return [...byId.values()].sort(compareByPillPriority);
+  }, [grouped, orgClientsData, meClientsData, viewerUserId]);
 
   const teamList = useMemo<HubClient[]>(() => {
     if (!grouped || !orgClientsData || !viewerUserId) return [];
@@ -268,22 +282,27 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   };
 
   // Single source of truth for "what the user is looking at right now": admin
-  // grouped mode → the org-scoped list (covers both mineList + teamList);
-  // member mode → the pill-sorted memberList. Driving the subtitle and the
-  // empty-state branch off this list keeps the two display modes in sync.
-  const clients = grouped ? orgClientsData : memberList;
+  // grouped mode → the viewer's own block (which now unions `/me/clients`)
+  // plus the team block; member mode → the pill-sorted memberList. Driving the
+  // empty-state branch off this keeps a viewer with only `/me`-sourced
+  // computers from falling through to the "no computers" CTA (issue 1353).
+  const clients = grouped ? [...mineList, ...teamList] : memberList;
 
   // "Are we still waiting on the primary listing?" — distinct from `!clients`
   // because once a query resolves with an empty array we want to drop out of
   // loading and show the empty state. Without this gate, admins see the empty
-  // CTA flash before the org-scoped query lands on first paint. Demo mode
-  // short-circuits since fixtures are synchronous.
+  // CTA flash before the org-scoped query lands on first paint. The admin
+  // happy path now also waits on `/me/clients`, since `mineList` unions it —
+  // otherwise an admin whose org view resolves empty *before* `/me` lands
+  // would flash the "no computers" CTA for one tick before their own
+  // `/me`-sourced rows pop in (issue 1353). Demo mode short-circuits since
+  // fixtures are synchronous.
   const clientsLoading = demoScenario
     ? false
     : isAdmin
       ? orgClientsQuery.isError
         ? meClientsQuery.isLoading
-        : orgClientsQuery.isLoading
+        : orgClientsQuery.isLoading || meClientsQuery.isLoading
       : meClientsQuery.isLoading;
 
   // Subtitle is a short static description matching the rest of

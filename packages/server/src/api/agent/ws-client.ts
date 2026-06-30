@@ -977,6 +977,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   inboxId: agents.inboxId,
                   status: agents.status,
                   clientId: agents.clientId,
+                  managerId: agents.managerId,
                   runtimeProvider: agents.runtimeProvider,
                   clientUserId: clients.userId,
                   managerUserId: members.userId,
@@ -1026,11 +1027,21 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // the operator brought up a client, or migrated from pre-M1 with
               // no presence record). The race-safe UPDATE returns 0 rows if
               // another bind claimed it first — surface as WRONG_CLIENT.
+              //
+              // The claim is also pinned to the `managerId` read above. A
+              // concurrent leave/remove transfers a departing member's managed
+              // agents by *changing* their `managerId` and clearing the pin, so
+              // requiring the manager to be unchanged closes the departure race:
+              // if the transfer already landed, the claim matches 0 rows and is
+              // rejected instead of re-pinning the departed owner's client onto a
+              // now-transferred agent (which would revive the retireClient
+              // deadlock); if this claim lands first, the departure's
+              // managerId-keyed transfer still re-scans and unpins it.
               if (agent.clientId === null) {
                 const claim = await app.db
                   .update(agents)
                   .set({ clientId, updatedAt: new Date() })
-                  .where(and(eq(agents.uuid, agent.id), isNull(agents.clientId)))
+                  .where(and(eq(agents.uuid, agent.id), isNull(agents.clientId), eq(agents.managerId, agent.managerId)))
                   .returning({ uuid: agents.uuid });
                 if (claim.length === 0) {
                   sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
