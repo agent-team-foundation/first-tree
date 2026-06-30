@@ -23,11 +23,7 @@ const SKILL_BY_PATH: readonly {
   paths: readonly string[];
 }[] = [
   {
-    paths: [
-      "skills/first-tree-read/",
-      "packages/skill-evals/src/first-tree-read/",
-      "packages/skill-evals/src/suites/first-tree-read/",
-    ],
+    paths: ["skills/first-tree-read/", "packages/skill-evals/src/suites/first-tree-read/"],
     skill: "first-tree-read",
   },
   {

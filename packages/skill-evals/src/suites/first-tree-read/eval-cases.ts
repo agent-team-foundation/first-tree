@@ -2,20 +2,14 @@ import type { SkillEvalCase } from "../../core/case-schema.js";
 import type { SkillEvalSuiteDefinition } from "../types.js";
 import { FIRST_TREE_READ_CASES } from "./cases.js";
 
-const FLOOR_CASE_ID = "first-tree-read-fixture-validation";
+const FLOOR_CASE_ID = "first-tree-read-floor-coverage";
 
 export const FIRST_TREE_READ_EVAL_CASES: readonly SkillEvalCase[] = [
   {
     briefingMode: "minimal",
     expected: {
-      command: "validate:first-tree-read-fixtures",
-      hardOracle: [
-        "skill file read",
-        "first-tree tree tree --help",
-        "selector success",
-        "expected facts",
-        "non-trigger no first-tree usage",
-      ],
+      command: "eval:floor -- --suite first-tree-read",
+      hardOracle: ["coverage matrix", "skill file frontmatter", "read case declarations"],
     },
     fixture: {
       caseIds: FIRST_TREE_READ_CASES.map((evalCase) => evalCase.id),
@@ -72,7 +66,7 @@ export const FIRST_TREE_READ_SUITE: SkillEvalSuiteDefinition = {
     tiers: [
       {
         caseIds: [FLOOR_CASE_ID],
-        description: "Validate skill file and existing read fixture coverage without model calls.",
+        description: "Validate read skill file metadata and case coverage without model calls.",
         status: "implemented",
         tier: "floor",
       },
