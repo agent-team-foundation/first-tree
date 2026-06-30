@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { AGENT_STATUSES, AGENT_TYPES } from "@first-tree/shared";
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -9,7 +9,9 @@ import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
-import { recomputeWatchersForMember } from "./watcher.js";
+import { forceDisconnect } from "./connection-manager.js";
+import * as presenceService from "./presence.js";
+import { recomputeWatchersForAgent, recomputeWatchersForMember } from "./watcher.js";
 
 /**
  * Helpers used by the SaaS onboarding flow to create / reuse / leave a
@@ -230,26 +232,109 @@ function appendAgentNameSuffix(base: string, suffix: string): string {
  * The human mirror becomes suspended, not deleted, so names and historical
  * attribution remain intact and a future explicit restore can reactivate the
  * same member+agent pair.
+ *
+ * The non-human agents this member manages are reassigned to a fallback active
+ * admin and unpinned (`clientId = null`), mirroring the admin removal path in
+ * `member.ts::deleteMember`. Without this, a self-service leave would strand
+ * those agents `active` and pinned to the user's client, and `retireClient`'s
+ * guard would later deadlock the user out of retiring their own computer
+ * (issue #1353). The whole reassignment + lifecycle flip runs in one
+ * transaction so a concurrent `createAgent`/`deleteMember` cannot interleave;
+ * the runtime force-disconnect/unbind happens after commit.
+ *
+ * Scope is deliberately narrow: leave is blocked only when the member actually
+ * manages non-human agents AND no other active admin exists to inherit them.
+ * A member with no managed non-human agents may still leave even as the sole
+ * admin — the broader "an org should keep an admin" concern is a separate org
+ * lifecycle question this function does not take on.
  */
 export async function deactivateMembership(
-  db: DbLike,
+  db: Database,
   memberId: string,
   status: typeof MEMBER_STATUSES.LEFT | typeof MEMBER_STATUSES.REMOVED,
 ) {
-  const [existing] = await db.select().from(members).where(eq(members.id, memberId)).limit(1);
-  if (!existing) throw new NotFoundError(`Membership "${memberId}" not found`);
-  if (existing.status !== MEMBER_STATUSES.ACTIVE && existing.status !== status) {
-    throw new ConflictError(`Membership "${memberId}" is not active`);
+  const { existing, transferredAgentIds } = await db.transaction(async (tx) => {
+    // Read the org up-front (unlocked) so the admin lock below is scoped to it,
+    // then lock the active-admin set in a deterministic order — identical lock
+    // ordering to `deleteMember` so concurrent removals/leaves in the same org
+    // serialize instead of deadlocking on the admin selection.
+    const [targetRef] = await tx
+      .select({ organizationId: members.organizationId })
+      .from(members)
+      .where(eq(members.id, memberId))
+      .limit(1);
+    if (!targetRef) throw new NotFoundError(`Membership "${memberId}" not found`);
+
+    const activeAdmins = await tx
+      .select({ id: members.id })
+      .from(members)
+      .where(
+        and(
+          eq(members.organizationId, targetRef.organizationId),
+          eq(members.role, "admin"),
+          eq(members.status, MEMBER_STATUSES.ACTIVE),
+        ),
+      )
+      .orderBy(asc(members.id))
+      .for("update");
+
+    const [existing] = await tx.select().from(members).where(eq(members.id, memberId)).for("update").limit(1);
+    if (!existing) throw new NotFoundError(`Membership "${memberId}" not found`);
+    if (existing.status !== MEMBER_STATUSES.ACTIVE && existing.status !== status) {
+      throw new ConflictError(`Membership "${memberId}" is not active`);
+    }
+
+    // Reassign the member's non-human agents to a sibling admin and unpin them.
+    // The human mirror (a HUMAN-typed self-managed agent) is excluded here and
+    // suspended separately below. Scope is strictly `managerId = memberId`:
+    // agents the same user still manages via other active memberships keep
+    // their `clientId`, so a client shared across the user's orgs may still
+    // (correctly) hold pinned agents the user can reach — only the agents
+    // stranded by THIS departure are unpinned.
+    const managed = await tx
+      .select({ uuid: agents.uuid })
+      .from(agents)
+      .where(and(eq(agents.managerId, memberId), ne(agents.type, AGENT_TYPES.HUMAN)));
+
+    let transferredAgentIds: string[] = [];
+    if (managed.length > 0) {
+      const fallback = activeAdmins.find((admin) => admin.id !== memberId);
+      if (!fallback) {
+        throw new ConflictError(
+          `Cannot leave the organization — you manage ${managed.length} agent(s) here and there is no other ` +
+            "active admin to take them over. Add another admin, or delete these agents, before leaving.",
+        );
+      }
+      const transferred = await tx
+        .update(agents)
+        .set({ managerId: fallback.id, clientId: null, updatedAt: new Date() })
+        .where(and(eq(agents.managerId, memberId), ne(agents.type, AGENT_TYPES.HUMAN)))
+        .returning({ uuid: agents.uuid });
+      for (const { uuid } of transferred) {
+        await recomputeWatchersForAgent(tx, uuid);
+      }
+      transferredAgentIds = transferred.map((agent) => agent.uuid);
+    }
+
+    if (existing.status !== status) {
+      await tx.update(members).set({ status }).where(eq(members.id, memberId));
+    }
+    await tx
+      .update(agents)
+      .set({ status: AGENT_STATUSES.SUSPENDED, clientId: null, updatedAt: new Date() })
+      .where(eq(agents.uuid, existing.agentId));
+    await recomputeWatchersForMember(tx, memberId);
+    return { existing, transferredAgentIds };
+  });
+
+  // After commit: drop any live runtime presence for the reassigned agents so
+  // they re-evaluate binding under their new manager instead of the departed
+  // member's client.
+  for (const agentId of transferredAgentIds) {
+    forceDisconnect(agentId, "member_left");
+    await presenceService.unbindAgent(db, agentId);
   }
 
-  if (existing.status !== status) {
-    await db.update(members).set({ status }).where(eq(members.id, memberId));
-  }
-  await db
-    .update(agents)
-    .set({ status: AGENT_STATUSES.SUSPENDED, clientId: null, updatedAt: new Date() })
-    .where(eq(agents.uuid, existing.agentId));
-  await recomputeWatchersForMember(db, memberId);
   return { ...existing, status };
 }
 

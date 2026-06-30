@@ -489,8 +489,26 @@ describe("ClientsPage computer cards", () => {
     await waitForText(fallback.container, "gandy-macbook");
     await act(async () => fallback.root.unmount());
 
-    activityMocks.listOrgClients.mockResolvedValueOnce([]);
-    activityMocks.listClients.mockResolvedValueOnce([
+    // issue 1353: an admin whose org-scoped view omits a client they own — e.g. the
+    // computer whose agents lived in a team they just left — still sees it
+    // under "Your computers" via the `/me/clients` union, so it stays
+    // retirable instead of becoming invisible and undeletable.
+    activityMocks.listOrgClients.mockResolvedValue([]);
+    activityMocks.listClients.mockResolvedValue([client({ id: "client-mine", hostname: "my-leftover" })]);
+    const ownVisible = await renderDom(<ClientsPage />);
+    await waitForText(ownVisible.container, "Your computers");
+    await waitForText(ownVisible.container, "my-leftover");
+    await act(async () => ownVisible.root.unmount());
+
+    // Truly-empty admin (no org rows, no own rows) still gets the empty-state
+    // CTA, and a freshly-connected machine is detected and announced. The
+    // dialog's one-shot poll reads `/me/clients`, so the arrival row is staged
+    // before the connect click.
+    activityMocks.listOrgClients.mockResolvedValue([]);
+    activityMocks.listClients.mockResolvedValue([]);
+    const emptyAdmin = await renderDom(<ClientsPage />);
+    await waitForText(emptyAdmin.container, "No computers connected yet.");
+    activityMocks.listClients.mockResolvedValue([
       client({
         id: "client-new",
         hostname: "new-machine",
@@ -498,8 +516,6 @@ describe("ClientsPage computer cards", () => {
         connectedAt: new Date(Date.now() + 1000).toISOString(),
       }),
     ]);
-    const emptyAdmin = await renderDom(<ClientsPage />);
-    await waitForText(emptyAdmin.container, "No computers connected yet.");
     await click(exactButton(emptyAdmin.container, "Connect your first computer"));
     await waitForText(document.body, "new-machine");
     await waitForText(document.body, "connected. Closing");

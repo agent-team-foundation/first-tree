@@ -501,13 +501,18 @@ export function TeamSwitcher({
           <DialogHeader>
             <DialogTitle>Leave {currentOrg.displayName}?</DialogTitle>
             <DialogDescription style={{ color: "var(--fg-2)" }}>
-              This removes only your membership from this team. The team, agents, settings, and historical work stay
-              intact.
+              This removes only your membership from this team. The team, its settings, and its history stay intact.
             </DialogDescription>
           </DialogHeader>
-          <div className="rounded-[var(--radius-panel)] border p-3 text-body" style={{ borderColor: "var(--border)" }}>
-            You will need an invite to join this team again. If you are the last admin, the team may be left without an
-            active administrator.
+          <div
+            className="flex flex-col gap-2 rounded-[var(--radius-panel)] border p-3 text-body"
+            style={{ borderColor: "var(--border)" }}
+          >
+            <span>You will need an invite to join this team again.</span>
+            <span>
+              Any agents you manage here will be transferred to another admin and unpinned from your computers. If you
+              are the only admin and still manage agents, leaving is blocked until another admin can take them over.
+            </span>
           </div>
           {leaveMutation.error instanceof Error && (
             <p className="text-body" style={{ color: "var(--state-error)" }}>

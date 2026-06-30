@@ -375,6 +375,10 @@ describe("TeamSwitcher", () => {
 
     expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain("Leave Acme Robotics?");
     expect(document.body.textContent).toContain("This removes only your membership");
+    // issue 1353: the modal warns up-front that managed agents are transferred and
+    // unpinned, and that leaving is blocked if no other admin can inherit them.
+    expect(document.body.textContent).toContain("transferred to another admin and unpinned from your computers");
+    expect(document.body.textContent).toContain("leaving is blocked until another admin can take them over");
 
     await click(buttonByText(document.body, "Leave team"));
 
