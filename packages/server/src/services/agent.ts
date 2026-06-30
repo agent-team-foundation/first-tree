@@ -508,6 +508,32 @@ export async function createAgent(
     // Wrap both inserts in a transaction so the agent row is never visible
     // without its companion `agent_configs` row.
     const agent = await db.transaction(async (tx) => {
+      // Close the leave/remove race for non-human agents: lock the manager's
+      // member row and re-confirm it is still active inside the same
+      // transaction that inserts the agent. `deactivateMembership` (leave) and
+      // `deleteMember` (admin removal) both lock the departing member
+      // `FOR UPDATE` before scanning and reassigning the agents it manages, so
+      // taking the same lock here makes the two paths mutually exclusive: a
+      // create that began while the member was still active either (a) commits
+      // first, so the departure's scan sees this agent and reassigns/unpins it,
+      // or (b) blocks until the departure commits and then sees the member is no
+      // longer active and aborts — instead of stranding a freshly-created agent
+      // on a left/removed manager (which would re-create the pinned-and-orphaned
+      // state issue #1353 fixes). Human mirrors are skipped: they are created in
+      // the member-bootstrap transaction before the member row exists, so there
+      // is nothing to lock and the deferred FK validates them at commit.
+      if (data.type !== AGENT_TYPES.HUMAN) {
+        const [stillActive] = await tx
+          .select({ id: members.id })
+          .from(members)
+          .where(and(eq(members.id, managerId), eq(members.status, "active")))
+          .for("update")
+          .limit(1);
+        if (!stillActive) {
+          throw new BadRequestError(`Manager "${managerId}" not found`);
+        }
+      }
+
       const [row] = await tx
         .insert(agents)
         .values({

@@ -286,15 +286,22 @@ export async function deactivateMembership(
 
     // Reassign the member's non-human agents to a sibling admin and unpin them.
     // The human mirror (a HUMAN-typed self-managed agent) is excluded here and
-    // suspended separately below. Scope is strictly `managerId = memberId`:
-    // agents the same user still manages via other active memberships keep
-    // their `clientId`, so a client shared across the user's orgs may still
-    // (correctly) hold pinned agents the user can reach — only the agents
-    // stranded by THIS departure are unpinned.
-    const managed = await tx
-      .select({ uuid: agents.uuid })
-      .from(agents)
-      .where(and(eq(agents.managerId, memberId), ne(agents.type, AGENT_TYPES.HUMAN)));
+    // suspended separately below. Scope is strictly `managerId = memberId` and
+    // non-deleted: agents the same user still manages via other active
+    // memberships keep their `clientId` (a client shared across the user's orgs
+    // may still correctly hold pinned agents the user can reach), and deleted
+    // tombstones are skipped entirely — `retireClient` already treats them as
+    // non-blocking, and counting them would trap a sole admin who followed the
+    // 409's "delete these agents first" guidance: the tombstone keeps its
+    // `managerId`, so an unfiltered count would still see managed agents with
+    // no fallback admin and 409 forever. Suspended agents still count — they
+    // remain live, manageable, and may still carry a `clientId`.
+    const managedFilter = and(
+      eq(agents.managerId, memberId),
+      ne(agents.type, AGENT_TYPES.HUMAN),
+      ne(agents.status, AGENT_STATUSES.DELETED),
+    );
+    const managed = await tx.select({ uuid: agents.uuid }).from(agents).where(managedFilter);
 
     let transferredAgentIds: string[] = [];
     if (managed.length > 0) {
@@ -308,7 +315,7 @@ export async function deactivateMembership(
       const transferred = await tx
         .update(agents)
         .set({ managerId: fallback.id, clientId: null, updatedAt: new Date() })
-        .where(and(eq(agents.managerId, memberId), ne(agents.type, AGENT_TYPES.HUMAN)))
+        .where(managedFilter)
         .returning({ uuid: agents.uuid });
       for (const { uuid } of transferred) {
         await recomputeWatchersForAgent(tx, uuid);
