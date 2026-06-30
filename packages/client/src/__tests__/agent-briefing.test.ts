@@ -8,6 +8,7 @@ import {
   type BuildAgentBriefingOptions,
   buildAgentBriefing,
   FIRST_TREE_FAMILY_SKILL_NAMES,
+  resolveAgentBriefingTemplatePath,
 } from "../runtime/agent-briefing.js";
 import type { PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
@@ -46,6 +47,18 @@ function makeOpts(overrides?: Partial<BuildAgentBriefingOptions>): BuildAgentBri
 }
 
 describe("buildAgentBriefing — top-level structure & section order", () => {
+  it("resolves the checked-in source EJS template and renders through it", () => {
+    const templatePath = resolveAgentBriefingTemplatePath();
+
+    expect(templatePath).toBe(
+      resolve(dirname(fileURLToPath(import.meta.url)), "..", "runtime", "templates", "agent-briefing.ejs"),
+    );
+
+    const briefing = buildAgentBriefing(makeOpts());
+    expect(briefing).toContain("# Identity\n\nYou are Test Agent, an autonomous agent.");
+    expect(briefing.endsWith("\n")).toBe(true);
+  });
+
   it("emits stable shared sections without per-chat Current Chat Context", () => {
     // Tree-bound case so every shared header in the expected order list is
     // present; tree-less cases are exercised in their dedicated describe
