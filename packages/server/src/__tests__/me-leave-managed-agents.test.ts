@@ -4,7 +4,7 @@ import postgres from "postgres";
 import { describe, expect, it } from "vitest";
 import { agents as agentsTable } from "../db/schema/agents.js";
 import { members as membersTable } from "../db/schema/members.js";
-import { createAgent } from "../services/agent.js";
+import { createAgent, updateAgent } from "../services/agent.js";
 import { retireClient } from "../services/client.js";
 import { createMember } from "../services/member.js";
 import { leaveOrganization } from "../services/membership.js";
@@ -240,6 +240,106 @@ describe("self-service leave: managed non-human agents", () => {
         .from(agentsTable)
         .where(and(eq(agentsTable.managerId, leaver.id), ne(agentsTable.type, "human")));
       expect(stranded).toHaveLength(0);
+    } finally {
+      await raw.end();
+    }
+  });
+
+  it("does not reassign an agent onto a manager who is concurrently leaving (updateAgent managerId)", async () => {
+    const app = getApp();
+    const org = await freshOrg("reassign-race");
+    const owner = await createMember(app.db, org.id, {
+      username: `ra-own-${randomUUID().slice(0, 8)}`,
+      displayName: "Owner",
+      role: "admin",
+    });
+    const leaver = await createMember(app.db, org.id, {
+      username: `ra-lv-${randomUUID().slice(0, 8)}`,
+      displayName: "Reassign Target",
+      role: "admin",
+    });
+    const agent = await createAgent(app.db, {
+      name: `reassign-${randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Reassign Me",
+      managerId: owner.id,
+    });
+
+    const raw = postgres(process.env.DATABASE_URL ?? "", { max: 1 });
+    try {
+      await raw`BEGIN`;
+      await raw`UPDATE members SET status = 'left' WHERE id = ${leaver.id}`;
+
+      // updateAgent's in-transaction FOR UPDATE on the target member blocks on
+      // the raw connection's uncommitted row lock; release it so the re-check
+      // observes the now-inactive target. Outcome is lock-driven, not timing.
+      const pending = updateAgent(app.db, agent.uuid, { managerId: leaver.id })
+        .then(() => "updated" as const)
+        .catch((err: unknown) => err);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await raw`COMMIT`;
+      const outcome = await pending;
+
+      expect(outcome).not.toBe("updated");
+      expect((outcome as Error)?.message ?? "").toMatch(/not found/i);
+
+      // The agent stays with its original active manager.
+      const [row] = await app.db
+        .select({ managerId: agentsTable.managerId })
+        .from(agentsTable)
+        .where(eq(agentsTable.uuid, agent.uuid))
+        .limit(1);
+      expect(row?.managerId).toBe(owner.id);
+    } finally {
+      await raw.end();
+    }
+  });
+
+  it("does not first-bind a client onto an agent whose manager is concurrently leaving (updateAgent clientId)", async () => {
+    const app = getApp();
+    const org = await freshOrg("bind-race");
+    await createMember(app.db, org.id, {
+      username: `br-fb-${randomUUID().slice(0, 8)}`,
+      displayName: "Fallback Admin",
+      role: "admin",
+    });
+    const owner = await createMember(app.db, org.id, {
+      username: `br-own-${randomUUID().slice(0, 8)}`,
+      displayName: "Owner",
+      role: "admin",
+    });
+    // Unbound agent managed by `owner`; a client owned by owner's user is the
+    // first-bind target.
+    const agent = await createAgent(app.db, {
+      name: `bind-${randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Bind Me",
+      managerId: owner.id,
+    });
+    const clientId = await seedClient(app, owner.userId, org.id);
+
+    const raw = postgres(process.env.DATABASE_URL ?? "", { max: 1 });
+    try {
+      await raw`BEGIN`;
+      await raw`UPDATE members SET status = 'left' WHERE id = ${owner.id}`;
+
+      const pending = updateAgent(app.db, agent.uuid, { clientId })
+        .then(() => "bound" as const)
+        .catch((err: unknown) => err);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await raw`COMMIT`;
+      const outcome = await pending;
+
+      expect(outcome).not.toBe("bound");
+      expect((outcome as Error)?.message ?? "").toMatch(/not found/i);
+
+      // The agent was not pinned to the departing owner's client.
+      const [row] = await app.db
+        .select({ clientId: agentsTable.clientId })
+        .from(agentsTable)
+        .where(eq(agentsTable.uuid, agent.uuid))
+        .limit(1);
+      expect(row?.clientId).toBeNull();
     } finally {
       await raw.end();
     }
