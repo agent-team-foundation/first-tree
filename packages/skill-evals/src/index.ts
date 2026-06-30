@@ -8,6 +8,7 @@ import { isRecord } from "./core/events.js";
 import { gateCommandFailed } from "./core/gate-exit.js";
 import { gradingFailureMessages } from "./core/grading.js";
 import { buildPeriodicSummary, formatPeriodicSummary } from "./core/periodic.js";
+import type { AgentProviderName } from "./core/provider/types.js";
 import {
   appendResultStoreEntries,
   compareResultGroups,
@@ -22,7 +23,13 @@ import {
 } from "./core/result-store.js";
 import { changedFilesFromGit, formatSelectionSummary, selectSkillEvalRecommendations } from "./core/select.js";
 import { readSkillFrontmatter } from "./core/skills/frontmatter.js";
-import { formatFirstTreeReadGateSummary, runFirstTreeReadGate } from "./suites/first-tree-read/index.js";
+import {
+  findFirstTreeReadPeriodicCase,
+  formatFirstTreeReadGateSummary,
+  formatFirstTreeReadPeriodicSummary,
+  runFirstTreeReadGate,
+  runFirstTreeReadPeriodic,
+} from "./suites/first-tree-read/index.js";
 import type { BatchSummary as ReadBatchSummary } from "./suites/first-tree-read/types.js";
 import {
   findFirstTreeSeedPeriodicCase,
@@ -59,6 +66,7 @@ type CliOptions = {
   base: string | null;
   caseId: string | null;
   changedFiles: readonly string[];
+  claudeBin: string;
   codexBin: string;
   command: "compare" | "floor" | "gate" | "periodic" | "quality" | "select" | "summary";
   currentRunGroupId: string | null;
@@ -68,6 +76,7 @@ type CliOptions = {
   json: boolean;
   model: string | null;
   previousRunGroupId: string | null;
+  provider: AgentProviderName;
   suite: ShippedSkillName | null;
   verbose: boolean;
 };
@@ -97,6 +106,7 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed --include-quality
   pnpm --filter @first-tree/skill-evals eval:periodic
+  pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read
   pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-seed
   pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-welcome
   pnpm --filter @first-tree/skill-evals eval:quality
@@ -124,8 +134,10 @@ Options:
   --current <run-id>     Current run group for eval:summary/compare. Defaults to latest.
   --previous <run-id>    Previous run group for eval:compare. Defaults to previous.
   --json                 Print summary as JSON.
-  --model <model>        Pass a model override to codex exec.
+  --provider <name>      Tested-agent provider: codex or claude. Defaults to codex.
+  --model <model>        Pass a model override to the selected tested-agent provider.
   --codex-bin <path>     Codex binary to execute. Defaults to CODEX_BIN or codex.
+  --claude-bin <path>    Claude binary to execute. Defaults to CLAUDE_BIN, CLAUDE_CODE_EXECUTABLE, or claude.
   --judge-model <model>  Judge model override. Defaults to JUDGE_MODEL, CODEX_MODEL, or provider default.
   --judge-bin <path>     Judge Codex binary. Defaults to JUDGE_CODEX_BIN, CODEX_BIN, or codex.
   --verbose              Print live readable progress to stderr.
@@ -164,6 +176,7 @@ function parseArgs(args: readonly string[]): CliOptions {
     base: null,
     caseId: null,
     changedFiles: [],
+    claudeBin: process.env.CLAUDE_BIN ?? process.env.CLAUDE_CODE_EXECUTABLE ?? "claude",
     codexBin: process.env.CODEX_BIN ?? "codex",
     command,
     currentRunGroupId: null,
@@ -173,10 +186,12 @@ function parseArgs(args: readonly string[]): CliOptions {
     json: false,
     model: process.env.CODEX_MODEL ?? null,
     previousRunGroupId: null,
+    provider: "codex",
     suite: null,
     verbose: false,
   };
 
+  let modelProvided = false;
   for (let index = 1; index < normalized.length; index += 1) {
     const arg = normalized[index];
     if (arg === "--json") {
@@ -223,11 +238,26 @@ function parseArgs(args: readonly string[]): CliOptions {
     }
     if (arg === "--model") {
       options.model = readOptionValue(normalized, index, "--model");
+      modelProvided = true;
+      index += 1;
+      continue;
+    }
+    if (arg === "--provider") {
+      const provider = readOptionValue(normalized, index, "--provider");
+      if (provider !== "codex" && provider !== "claude") {
+        throw new Error("--provider must be codex or claude.");
+      }
+      options.provider = provider;
       index += 1;
       continue;
     }
     if (arg === "--codex-bin") {
       options.codexBin = readOptionValue(normalized, index, "--codex-bin");
+      index += 1;
+      continue;
+    }
+    if (arg === "--claude-bin") {
+      options.claudeBin = readOptionValue(normalized, index, "--claude-bin");
       index += 1;
       continue;
     }
@@ -254,6 +284,9 @@ function parseArgs(args: readonly string[]): CliOptions {
 
   if (options.includeQuality && options.command !== "gate") {
     throw new Error("--include-quality is only valid with eval:gate.");
+  }
+  if (!modelProvided && options.provider === "claude") {
+    options.model = process.env.CLAUDE_MODEL ?? null;
   }
 
   return options;
@@ -479,7 +512,7 @@ function gateResultEntries(
       judgeScores: null,
       model: options.model,
       passed: summary.passed,
-      provider: "codex",
+      provider: options.provider,
       runGroupId,
       schemaVersion: 1,
       skill: suite,
@@ -493,8 +526,8 @@ function gateResultEntries(
 
 function periodicResultEntries(
   packageRootPath: string,
-  batch: SeedBatchSummary | WelcomeBatchSummary,
-  suite: Extract<ShippedSkillName, "first-tree-seed" | "first-tree-welcome">,
+  batch: ReadBatchSummary | SeedBatchSummary | WelcomeBatchSummary,
+  suite: Extract<ShippedSkillName, "first-tree-read" | "first-tree-seed" | "first-tree-welcome">,
   options: CliOptions,
   runGroupId = createRunGroupId(batch.runStartedAt, `eval-periodic-${suite}`),
 ): readonly ResultStoreEntry[] {
@@ -520,7 +553,7 @@ function periodicResultEntries(
       judgeScores: null,
       model: options.model,
       passed: summary.passed,
-      provider: "codex",
+      provider: options.provider,
       runGroupId,
       schemaVersion: 1,
       skill: suite,
@@ -600,11 +633,13 @@ async function runIncludedWriteQuality(
     packageRootPath,
     {
       caseId: FIRST_TREE_WRITE_QUALITY_DEFINITION.evalCase.id,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       judgeBin: options.judgeBin,
       judgeModel: options.judgeModel,
       json: options.json,
       model: options.model,
+      provider: options.provider,
       suite: "first-tree-write",
       verbose: options.verbose,
     },
@@ -634,11 +669,13 @@ async function runIncludedWelcomeQuality(
     packageRootPath,
     {
       caseId: FIRST_TREE_WELCOME_QUALITY_DEFINITION.evalCase.id,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       judgeBin: options.judgeBin,
       judgeModel: options.judgeModel,
       json: options.json,
       model: options.model,
+      provider: options.provider,
       suite: "first-tree-welcome",
       verbose: options.verbose,
     },
@@ -666,11 +703,13 @@ async function runIncludedSeedQuality(
     packageRootPath,
     {
       caseId: FIRST_TREE_SEED_QUALITY_DEFINITION.evalCase.id,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       judgeBin: options.judgeBin,
       judgeModel: options.judgeModel,
       json: options.json,
       model: options.model,
+      provider: options.provider,
       suite: "first-tree-seed",
       verbose: options.verbose,
     },
@@ -723,9 +762,11 @@ async function runGate(options: CliOptions): Promise<void> {
   if (options.suite === "first-tree-read") {
     const batch = await runFirstTreeReadGate(packageRootPath, {
       caseId: options.caseId,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       json: options.json,
       model: options.model,
+      provider: options.provider,
       verbose: options.verbose,
     });
     appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
@@ -742,9 +783,11 @@ async function runGate(options: CliOptions): Promise<void> {
     }
     const batch = await runFirstTreeWriteGate(packageRootPath, {
       caseId: options.caseId,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       json: options.json,
       model: options.model,
+      provider: options.provider,
       verbose: options.verbose,
     });
     const runGroupId = createRunGroupId(
@@ -775,9 +818,11 @@ async function runGate(options: CliOptions): Promise<void> {
     }
     const batch = await runFirstTreeSeedGate(packageRootPath, {
       caseId: options.caseId,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       json: options.json,
       model: options.model,
+      provider: options.provider,
       verbose: options.verbose,
     });
     const runGroupId = createRunGroupId(
@@ -808,9 +853,11 @@ async function runGate(options: CliOptions): Promise<void> {
     }
     const batch = await runFirstTreeWelcomeGate(packageRootPath, {
       caseId: options.caseId,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       json: options.json,
       model: options.model,
+      provider: options.provider,
       verbose: options.verbose,
     });
     const runGroupId = createRunGroupId(
@@ -844,11 +891,13 @@ async function runQuality(options: CliOptions): Promise<void> {
   const packageRootPath = packageRoot();
   const batch = await runQualityEval(packageRootPath, {
     caseId: options.caseId,
+    claudeBin: options.claudeBin,
     codexBin: options.codexBin,
     judgeBin: options.judgeBin,
     judgeModel: options.judgeModel,
     json: options.json,
     model: options.model,
+    provider: options.provider,
     suite: qualitySuite(options),
     verbose: options.verbose,
   });
@@ -878,12 +927,39 @@ function runSelect(options: CliOptions): void {
 
 async function runPeriodic(options: CliOptions): Promise<void> {
   const packageRootPath = packageRoot();
-  if (options.suite === "first-tree-seed") {
-    const batch = await runFirstTreeSeedPeriodic(packageRootPath, {
+  if (options.suite === "first-tree-read") {
+    const batch = await runFirstTreeReadPeriodic(packageRootPath, {
       caseId: options.caseId,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       json: options.json,
       model: options.model,
+      provider: options.provider,
+      verbose: options.verbose,
+    });
+    appendResultStoreEntries(
+      packageRootPath,
+      periodicResultEntries(packageRootPath, batch, "first-tree-read", options),
+    );
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
+    } else {
+      process.stdout.write(`${formatFirstTreeReadPeriodicSummary(batch)}\n`);
+    }
+    if (batch.failed > 0) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (options.suite === "first-tree-seed") {
+    const batch = await runFirstTreeSeedPeriodic(packageRootPath, {
+      caseId: options.caseId,
+      claudeBin: options.claudeBin,
+      codexBin: options.codexBin,
+      json: options.json,
+      model: options.model,
+      provider: options.provider,
       verbose: options.verbose,
     });
     appendResultStoreEntries(
@@ -904,9 +980,11 @@ async function runPeriodic(options: CliOptions): Promise<void> {
   if (options.suite === "first-tree-welcome") {
     const batch = await runFirstTreeWelcomePeriodic(packageRootPath, {
       caseId: options.caseId,
+      claudeBin: options.claudeBin,
       codexBin: options.codexBin,
       json: options.json,
       model: options.model,
+      provider: options.provider,
       verbose: options.verbose,
     });
     appendResultStoreEntries(
@@ -927,19 +1005,39 @@ async function runPeriodic(options: CliOptions): Promise<void> {
   if (options.suite === null) {
     const runGroupStartedAt = new Date().toISOString();
     const runGroupId = createRunGroupId(runGroupStartedAt, "eval-periodic-all");
+    const runRead = options.caseId === null || findFirstTreeReadPeriodicCase(options.caseId) !== null;
     const runSeed = options.caseId === null || findFirstTreeSeedPeriodicCase(options.caseId) !== null;
     const runWelcome = options.caseId === null || findFirstTreeWelcomePeriodicCase(options.caseId) !== null;
-    if (!runSeed && !runWelcome) {
+    if (!runRead && !runSeed && !runWelcome) {
       throw new Error(
-        `No periodic case '${options.caseId}' found for implemented periodic suites first-tree-seed or first-tree-welcome.`,
+        `No periodic case '${options.caseId}' found for implemented periodic suites first-tree-read, first-tree-seed, or first-tree-welcome.`,
+      );
+    }
+    const readBatch = runRead
+      ? await runFirstTreeReadPeriodic(packageRootPath, {
+          caseId: options.caseId,
+          claudeBin: options.claudeBin,
+          codexBin: options.codexBin,
+          json: options.json,
+          model: options.model,
+          provider: options.provider,
+          verbose: options.verbose,
+        })
+      : null;
+    if (readBatch !== null) {
+      appendResultStoreEntries(
+        packageRootPath,
+        periodicResultEntries(packageRootPath, readBatch, "first-tree-read", options, runGroupId),
       );
     }
     const seedBatch = runSeed
       ? await runFirstTreeSeedPeriodic(packageRootPath, {
           caseId: options.caseId,
+          claudeBin: options.claudeBin,
           codexBin: options.codexBin,
           json: options.json,
           model: options.model,
+          provider: options.provider,
           verbose: options.verbose,
         })
       : null;
@@ -952,9 +1050,11 @@ async function runPeriodic(options: CliOptions): Promise<void> {
     const welcomeBatch = runWelcome
       ? await runFirstTreeWelcomePeriodic(packageRootPath, {
           caseId: options.caseId,
+          claudeBin: options.claudeBin,
           codexBin: options.codexBin,
           json: options.json,
           model: options.model,
+          provider: options.provider,
           verbose: options.verbose,
         })
       : null;
@@ -968,6 +1068,7 @@ async function runPeriodic(options: CliOptions): Promise<void> {
       process.stdout.write(
         `${JSON.stringify(
           {
+            "first-tree-read": readBatch,
             "first-tree-seed": seedBatch,
             "first-tree-welcome": welcomeBatch,
             runStartedAt: runGroupStartedAt,
@@ -979,6 +1080,9 @@ async function runPeriodic(options: CliOptions): Promise<void> {
     } else {
       process.stdout.write(
         [
+          ...(readBatch === null
+            ? []
+            : ["first-tree-read periodic", "", formatFirstTreeReadPeriodicSummary(readBatch), ""]),
           ...(seedBatch === null
             ? []
             : ["first-tree-seed periodic", "", formatFirstTreeSeedPeriodicSummary(seedBatch), ""]),
@@ -989,7 +1093,7 @@ async function runPeriodic(options: CliOptions): Promise<void> {
       );
       process.stdout.write("\n");
     }
-    if ((seedBatch?.failed ?? 0) > 0 || (welcomeBatch?.failed ?? 0) > 0) {
+    if ((readBatch?.failed ?? 0) > 0 || (seedBatch?.failed ?? 0) > 0 || (welcomeBatch?.failed ?? 0) > 0) {
       process.exitCode = 1;
     }
     return;

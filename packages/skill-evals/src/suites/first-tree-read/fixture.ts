@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { assertCommandOk, runCommand, writeText } from "../../core/commands.js";
@@ -12,6 +12,7 @@ import type { FirstTreeReadEvalCase, FixtureValidation } from "./types.js";
 const DOMAIN_NODE_TARGET_COUNT = 100;
 const NAVIGATION_NODE_MARKER = "evalNodeKind: navigation";
 const SKILL_NAME = "first-tree-read";
+const RUNTIME_SKILL_NAMES = ["first-tree-welcome", "first-tree-read", "first-tree-seed", "first-tree-write"] as const;
 
 type DomainNode = {
   facts: readonly string[];
@@ -127,6 +128,101 @@ skill workflow exactly. In particular, if the skill instructs you to inspect a
 function installFirstTreeReadSkill(repoRoot: string, workspacePath: string): void {
   const skillMarkdown = installRepoSkill(repoRoot, workspacePath, SKILL_NAME);
   writeText(join(workspacePath, "AGENTS.md"), workspaceAgentsMarkdown(parseSkillDescription(skillMarkdown)));
+}
+
+function runtimeGeneratedWorkspaceAgentsMarkdown(
+  workspacePath: string,
+  contextTreePath: string,
+  descriptions: ReadonlyMap<string, string>,
+): string {
+  const sourceRepoPath = join(workspacePath, "source-repo");
+  const skillRows = RUNTIME_SKILL_NAMES.map(
+    (skill) => `| \`${skill}\` | ${descriptions.get(skill) ?? "Use when this skill applies."} |`,
+  ).join("\n");
+
+  return `<!-- ======================================================================
+  first-tree:generated — this file is rebuilt by the First Tree runtime at
+  every session start. This eval fixture covers generated briefing shape and
+  First Tree skill topology only; it is not a live First Tree Cloud E2E.
+====================================================================== -->
+
+# Identity
+
+You are First Tree Read Eval Agent, a personal assistant agent.
+
+# Working in First Tree (First Tree Managed)
+
+Your fixed working directory is \`${workspacePath}\`. The runtime marker
+\`.first-tree-workspace\` is the project-root boundary for provider sessions.
+
+## Source Repositories
+
+- \`${sourceRepoPath}\` (fixture source repo)
+
+# Required Reading (First Tree Managed)
+
+Before changing a Context Tree, load \`.agents/skills/first-tree-write/SKILL.md\`.
+
+# Context Tree (First Tree Managed)
+
+The current Context Tree checkout is \`${contextTreePath}\`.
+
+Read task-scoped tree context before acting on software project questions:
+
+1. Read \`.agents/skills/first-tree-read/SKILL.md\`.
+2. Inspect \`first-tree tree tree --help\`.
+3. Use \`first-tree tree tree\` selectors before answering.
+
+# Skills (First Tree Managed)
+
+## First Tree Family
+
+| Skill | Load when |
+|---|---|
+${skillRows}
+
+\`first-tree-welcome\` is the core onboarding skill. Tree-bound workspaces
+additionally install \`first-tree-read\`, \`first-tree-seed\`, and
+\`first-tree-write\`. Runtime metadata can activate skills, but visible
+instructions still define when the agent should load them.
+`;
+}
+
+function writeClaudeBriefingSymlink(workspacePath: string): void {
+  const claudeMdPath = join(workspacePath, "CLAUDE.md");
+  rmSync(claudeMdPath, { force: true });
+  symlinkSync("AGENTS.md", claudeMdPath);
+}
+
+function installRuntimeGeneratedBriefing(repoRoot: string, workspacePath: string, contextTreePath: string): void {
+  const descriptions = new Map<string, string>();
+  for (const skill of RUNTIME_SKILL_NAMES) {
+    const skillMarkdown = installRepoSkill(repoRoot, workspacePath, skill);
+    descriptions.set(skill, parseSkillDescription(skillMarkdown));
+  }
+
+  writeText(
+    join(workspacePath, ".first-tree-workspace", "identity.json"),
+    `${JSON.stringify(
+      {
+        agentId: "first-tree-read-eval-agent",
+        contextTreePath,
+        delegateMention: null,
+        displayName: "First Tree Read Eval Agent",
+        metadata: {},
+        serverUrl: "https://example.invalid",
+        type: "agent",
+        visibility: "private",
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  writeText(
+    join(workspacePath, "AGENTS.md"),
+    runtimeGeneratedWorkspaceAgentsMarkdown(workspacePath, contextTreePath, descriptions),
+  );
+  writeClaudeBriefingSymlink(workspacePath);
 }
 
 function systemNodes(): DomainNode[] {
@@ -356,8 +452,15 @@ export function setupFixture(evalCase: FirstTreeReadEvalCase, paths: RunPaths, r
   });
   reporter.fixtureSetupStarted(evalCase.workspaceKind);
 
-  installFirstTreeReadSkill(paths.repoRoot, paths.workspacePath);
   const contextTreePath = evalCase.workspaceKind === "context-tree" ? writeContextTreeFixture(paths) : null;
+  if (evalCase.briefingMode === "runtime-generated") {
+    if (contextTreePath === null) {
+      throw new Error("runtime-generated first-tree-read fixture requires a context-tree workspace.");
+    }
+    installRuntimeGeneratedBriefing(paths.repoRoot, paths.workspacePath, contextTreePath);
+  } else {
+    installFirstTreeReadSkill(paths.repoRoot, paths.workspacePath);
+  }
 
   appendEvent(paths.eventsPath, {
     caseId: evalCase.id,

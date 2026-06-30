@@ -1,9 +1,19 @@
 import { FIRST_TREE_READ_CASES, findFirstTreeReadCase } from "./cases.js";
+import {
+  findFirstTreeReadPeriodicCase,
+  formatFirstTreeReadPeriodicSummary,
+  runFirstTreeReadPeriodic,
+} from "./periodic.js";
 import { runFirstTreeReadCase } from "./runner.js";
 import { buildBatchSummary, formatSummaryTable } from "./summary.js";
 import type { BatchSummary, CliOptions, FirstTreeReadEvalCase } from "./types.js";
 
-export { findFirstTreeReadCase };
+export {
+  findFirstTreeReadCase,
+  findFirstTreeReadPeriodicCase,
+  formatFirstTreeReadPeriodicSummary,
+  runFirstTreeReadPeriodic,
+};
 
 export type FirstTreeReadGateOptions = CliOptions;
 

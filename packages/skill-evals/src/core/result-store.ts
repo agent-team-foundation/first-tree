@@ -93,6 +93,7 @@ export type ResultRunEntrySummary = {
   git: ResultStoreGitInfo;
   judgeScores: Record<string, number> | null;
   passed: boolean;
+  provider: string | null;
   skill: ShippedSkillName | "framework";
   status: ResultStoreStatus;
   tier: SkillEvalTier;
@@ -392,6 +393,7 @@ export function summarizeResultRunGroup(
       git: entry.git,
       judgeScores: entry.judgeScores,
       passed: entry.passed,
+      provider: entry.provider ?? null,
       skill: entry.skill,
       status: entry.status,
       tier: entry.tier,
@@ -483,7 +485,9 @@ export function formatResultRunSummary(summary: ResultRunSummary | null): string
     return [
       `- ${entry.status.toUpperCase()} ${entry.caseKey} command=${entry.command} tier=${entry.tier} skill=${
         entry.skill
-      } duration_ms=${formatNullableNumber(entry.durationMs)} turns=${formatNullableNumber(
+      } provider=${formatNullableText(entry.provider)} duration_ms=${formatNullableNumber(
+        entry.durationMs,
+      )} turns=${formatNullableNumber(
         entry.turns,
       )} first_response_latency_ms=${formatNullableNumber(entry.firstResponseLatencyMs)}${artifact}`,
       ...(scores === null ? [] : [`  judge_scores: ${scores}`]),
