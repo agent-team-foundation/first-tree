@@ -17,9 +17,25 @@ RUN pnpm install --frozen-lockfile \
 # --- Build stage ---
 FROM deps AS build
 COPY . .
+ARG FIRST_TREE_GIT_SHA=unknown
+ENV FIRST_TREE_WEB_BUILD_ID=$FIRST_TREE_GIT_SHA
+ENV FIRST_TREE_GIT_SHA=$FIRST_TREE_GIT_SHA
+ARG SENTRY_ORG
+ARG SENTRY_PROJECT_WEB=first-tree-web
+ENV SENTRY_ORG=$SENTRY_ORG
+ENV SENTRY_PROJECT_WEB=$SENTRY_PROJECT_WEB
+ARG VITE_SENTRY_DSN
+ARG VITE_SENTRY_ENVIRONMENT=production
+ARG VITE_SENTRY_TRACES_SAMPLE_RATE=0.1
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
+ENV VITE_SENTRY_ENVIRONMENT=$VITE_SENTRY_ENVIRONMENT
+ENV VITE_SENTRY_TRACES_SAMPLE_RATE=$VITE_SENTRY_TRACES_SAMPLE_RATE
 RUN pnpm --filter @first-tree/shared build
 RUN pnpm --filter @first-tree/server build
-RUN pnpm --filter @first-tree/web build
+RUN --mount=type=secret,id=SENTRY_AUTH_TOKEN,required=false \
+    SENTRY_AUTH_TOKEN="$(cat /run/secrets/SENTRY_AUTH_TOKEN 2>/dev/null || true)" \
+    SENTRY_RELEASE="first-tree-web@${FIRST_TREE_GIT_SHA}" \
+    pnpm --filter @first-tree/web build
 
 # --- Production dependencies (no devDependencies) ---
 FROM deps AS prod-deps

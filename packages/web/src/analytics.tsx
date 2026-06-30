@@ -21,7 +21,7 @@ import { useLocation } from "react-router";
  *     paths, before anything is sent.
  */
 
-const PROD_HOST = "cloud.first-tree.ai";
+export const PROD_HOST = "cloud.first-tree.ai";
 
 /** Only the production cloud host reports to the shared GA property. */
 export function analyticsEnabled(): boolean {
