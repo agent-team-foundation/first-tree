@@ -5,7 +5,7 @@ import { runCodexProvider } from "../../core/provider/codex.js";
 import { createEvalReporter } from "../../core/reporter.js";
 import { createFirstTreeShim } from "../../core/shims/first-tree.js";
 import { setupFixture, validateFixture } from "./fixture.js";
-import { casePassed, deriveMetrics, fixtureOnlyPassed } from "./metrics.js";
+import { casePassed, deriveMetrics } from "./metrics.js";
 import { buildGrading, driftNote, writeCaseSummaries } from "./summary.js";
 import type { CaseRunSummary, CliOptions, FirstTreeReadEvalCase } from "./types.js";
 
@@ -28,23 +28,19 @@ export async function runFirstTreeReadCase(
   createFirstTreeShim(paths);
   const contextTreePath = setupFixture(evalCase, paths, reporter);
   const fixtureValidation = validateFixture(paths, contextTreePath, evalCase.id, options.verbose, reporter);
-  const runnerExitCode = options.validateFixtures
-    ? 0
-    : await runCodexProvider(
-        {
-          bin: options.codexBin,
-          caseId: evalCase.id,
-          model: options.model,
-          prompt: evalCase.prompt,
-          verbose: options.verbose,
-        },
-        { paths, reporter },
-      );
+  const runnerExitCode = await runCodexProvider(
+    {
+      bin: options.codexBin,
+      caseId: evalCase.id,
+      model: options.model,
+      prompt: evalCase.prompt,
+      verbose: options.verbose,
+    },
+    { paths, reporter },
+  );
   const events = readEvents(paths.eventsPath);
   const metrics = deriveMetrics(events, fixtureValidation, runnerExitCode, evalCase.expectedFacts);
-  const passed = options.validateFixtures
-    ? fixtureOnlyPassed(fixtureValidation)
-    : casePassed(evalCase.expectedTrigger, metrics);
+  const passed = casePassed(evalCase.expectedTrigger, metrics);
   const grading = buildGrading(evalCase.id, metrics, evalCase.expectedTrigger, passed);
   const observability = deriveRunObservability(events);
 

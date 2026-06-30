@@ -279,7 +279,3 @@ export function casePassed(expectedTrigger: boolean, metrics: EvalMetrics): bool
     metrics.modelFirstTreeCommandsOk
   );
 }
-
-export function fixtureOnlyPassed(fixtureValidation: FixtureValidation): boolean {
-  return fixtureValidation.ok;
-}

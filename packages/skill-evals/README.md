@@ -180,20 +180,5 @@ case run directory, and include `judge_scores`, `judge_reasoning`,
 `judge_model`, duration, thresholds, and failure reasons in `summary.json`.
 
 Use `--verbose` to print live, human-readable progress to stderr. It can be
-combined with `--case`, `--validate-fixtures`, and `--json`; stdout remains the
-final summary table or aggregate JSON.
-
-Fixture-only validation is available without model calls:
-
-```bash
-pnpm --filter @first-tree/skill-evals validate:first-tree-read-fixtures
-```
-
-Legacy read eval aliases are retained for compatibility, but the shared gate
-command is the primary live path:
-
-```bash
-pnpm --filter @first-tree/skill-evals eval:first-tree-read
-pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger
-pnpm --filter @first-tree/skill-evals eval:first-tree-read -- --case tree-software-trigger --validate-fixtures --verbose
-```
+combined with `--case` and `--json`; stdout remains the final summary table or
+aggregate JSON.

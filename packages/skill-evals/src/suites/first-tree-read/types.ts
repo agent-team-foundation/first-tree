@@ -27,7 +27,6 @@ export type CliOptions = {
   codexBin: string;
   json: boolean;
   model: string | null;
-  validateFixtures: boolean;
   verbose: boolean;
 };
 
