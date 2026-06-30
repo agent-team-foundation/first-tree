@@ -1,5 +1,6 @@
 import type { SkillEvalCase } from "../../core/case-schema.js";
 import type { SkillEvalSuiteDefinition } from "../types.js";
+import { FIRST_TREE_SEED_QUALITY_CASE } from "./quality.js";
 import type { FirstTreeSeedEvalCase } from "./types.js";
 
 const FLOOR_CASE_ID = "first-tree-seed-static-coverage";
@@ -111,6 +112,36 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
   },
 ];
 
+export const FIRST_TREE_SEED_PERIODIC_CASES: readonly FirstTreeSeedEvalCase[] = [
+  {
+    briefingMode: "generated-fixture",
+    expected: {
+      action: "propose_phase1_skeleton",
+      approvalHints: ["approve", "reply", "confirm", "ON"],
+      requireSourceRead: true,
+      requireWorktree: true,
+      responseHints: ["Phase 1", "skeleton", "approval"],
+      skeletonHints: ["system", "context-management", "cloud", "team-practice", "members"],
+    },
+    fixture: {
+      sourceRepoState: "real-first-tree-bare-readable",
+      treeState: "empty",
+    },
+    forbidden: {
+      actions: ["direct_bare_source_read", "phase2_leaf_content_before_approval", "skip_user_confirmation"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "first-tree-seed-real-first-tree-source-periodic",
+    prompt:
+      "Use first-tree-seed to bootstrap the newly provisioned empty Context Tree from the bound first-tree source repo. Follow the bare-source worktree protocol, inspect source evidence, and stop after proposing only the Phase 1 top + second-level skeleton for user approval.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["periodic", "real-repo", "bare-source", "phase-boundary"],
+    tier: "periodic",
+  },
+];
+
 export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
   {
     briefingMode: "generated-fixture",
@@ -119,7 +150,7 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
       validator: "case schema and lifecycle fixture shape",
     },
     fixture: {
-      sourceRepoStates: ["bare-readable", "missing"],
+      sourceRepoStates: ["bare-readable", "missing", "real-first-tree-bare-readable"],
       treeStates: ["empty", "nonempty"],
     },
     id: FLOOR_CASE_ID,
@@ -128,6 +159,8 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
     tier: "floor",
   },
   ...FIRST_TREE_SEED_GATE_CASES,
+  ...FIRST_TREE_SEED_PERIODIC_CASES,
+  FIRST_TREE_SEED_QUALITY_CASE,
 ];
 
 function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly string[] {
@@ -136,6 +169,12 @@ function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly s
   if (gateCases.length !== 4) {
     errors.push(`seed suite must declare 4 gate cases, found ${gateCases.length}.`);
   }
+  const periodicCases = cases.filter(
+    (evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "periodic",
+  );
+  if (periodicCases.length !== 1) {
+    errors.push(`seed suite must declare 1 periodic realism case, found ${periodicCases.length}.`);
+  }
 
   for (const evalCase of cases.filter((candidate) => candidate.skill === "first-tree-seed")) {
     if (typeof evalCase.fixture !== "object" || evalCase.fixture === null || Array.isArray(evalCase.fixture)) {
@@ -143,11 +182,11 @@ function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly s
       continue;
     }
     const fixture = evalCase.fixture as { sourceRepoState?: unknown; treeState?: unknown };
-    if (evalCase.tier === "gate" && typeof fixture.sourceRepoState !== "string") {
-      errors.push(`${evalCase.id}: gate fixture must declare sourceRepoState.`);
+    if ((evalCase.tier === "gate" || evalCase.tier === "periodic") && typeof fixture.sourceRepoState !== "string") {
+      errors.push(`${evalCase.id}: live fixture must declare sourceRepoState.`);
     }
-    if (evalCase.tier === "gate" && typeof fixture.treeState !== "string") {
-      errors.push(`${evalCase.id}: gate fixture must declare treeState.`);
+    if ((evalCase.tier === "gate" || evalCase.tier === "periodic") && typeof fixture.treeState !== "string") {
+      errors.push(`${evalCase.id}: live fixture must declare treeState.`);
     }
   }
   return errors;
@@ -169,6 +208,20 @@ export const FIRST_TREE_SEED_SUITE: SkillEvalSuiteDefinition = {
         description: "Implemented seed lifecycle, source, and bare-worktree protocol live gate cases.",
         status: "implemented",
         tier: "gate",
+      },
+      {
+        caseIds: FIRST_TREE_SEED_PERIODIC_CASES.map((evalCase) => evalCase.id),
+        description:
+          "Opt-in seed realism periodic case using a per-run bare source fixture cloned from the current first-tree repo HEAD.",
+        status: "implemented",
+        tier: "periodic",
+      },
+      {
+        caseIds: [FIRST_TREE_SEED_QUALITY_CASE.id],
+        description:
+          "LLM-as-judge seed skeleton quality case from the empty-tree-source-present deterministic gate artifact.",
+        status: "implemented",
+        tier: "quality",
       },
     ],
   },

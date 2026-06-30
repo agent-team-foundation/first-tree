@@ -1,4 +1,11 @@
 import { FIRST_TREE_SEED_GATE_CASES } from "./cases.js";
+
+export {
+  findFirstTreeSeedPeriodicCase,
+  formatFirstTreeSeedPeriodicSummary,
+  runFirstTreeSeedPeriodic,
+} from "./periodic.js";
+
 import { runFirstTreeSeedCase } from "./runner.js";
 import { buildBatchSummary, formatSummaryTable } from "./summary.js";
 import type { BatchSummary, CliOptions, FirstTreeSeedEvalCase } from "./types.js";

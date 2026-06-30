@@ -1,4 +1,5 @@
 export {
+  buildSeedQualityInput,
   buildWelcomeQualityInput,
   buildWriteQualityInput,
   formatQualitySummaryTable,

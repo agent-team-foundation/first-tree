@@ -2,7 +2,7 @@ import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
 export type SeedTreeState = "empty" | "nonempty";
-export type SeedSourceRepoState = "bare-readable" | "missing";
+export type SeedSourceRepoState = "bare-readable" | "missing" | "real-first-tree-bare-readable";
 export type SeedExpectedAction =
   | "propose_phase1_skeleton"
   | "refuse_nonempty_tree"
@@ -39,7 +39,7 @@ export type FirstTreeSeedEvalCase = {
   skill: "first-tree-seed";
   status: "implemented";
   tags: readonly string[];
-  tier: "gate";
+  tier: "gate" | "periodic";
 };
 
 export type CliOptions = {

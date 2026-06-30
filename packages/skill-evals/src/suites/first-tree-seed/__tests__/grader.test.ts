@@ -4,13 +4,15 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 import type { RunPaths } from "../../../core/types.js";
-import { FIRST_TREE_SEED_GATE_CASES } from "../cases.js";
+import { FIRST_TREE_SEED_GATE_CASES, FIRST_TREE_SEED_PERIODIC_CASES } from "../cases.js";
 import { casePassed, deriveMetrics } from "../grader.js";
 import { buildGrading } from "../summary.js";
 import type { EvalMetrics, FirstTreeSeedEvalCase, FixtureValidation } from "../types.js";
 
 function findCase(id: string): FirstTreeSeedEvalCase {
-  const evalCase = FIRST_TREE_SEED_GATE_CASES.find((candidate) => candidate.id === id);
+  const evalCase = [...FIRST_TREE_SEED_GATE_CASES, ...FIRST_TREE_SEED_PERIODIC_CASES].find(
+    (candidate) => candidate.id === id,
+  );
   if (!evalCase) throw new Error(`Missing test case ${id}`);
   return evalCase;
 }
@@ -273,6 +275,45 @@ describe("first-tree-seed grader", () => {
     ).toBe(true);
   });
 
+  it("passes real first-tree periodic case when source evidence is read through a worktree", () => {
+    expect(
+      casePassed(
+        findCase("first-tree-seed-real-first-tree-source-periodic"),
+        baseMetrics({
+          finalResponse:
+            "Proposed Phase 1 skeleton: system, context-management, cloud, team-practice, members. Reply to approve.",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("detects real first-tree source evidence read from the materialized worktree", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-real-source-read-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              command: "cat worktrees/seed-source-repo/package.json && ls worktrees/seed-source-repo/packages",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("first-tree-seed-real-first-tree-source-periodic"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceEvidenceReadObserved).toBe(true);
+      expect(metrics.directBareSourceContentReadObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("fails bare-source protocol when first-tree-write required reading was not loaded", () => {
     expect(
       casePassed(
@@ -333,6 +374,34 @@ describe("first-tree-seed grader", () => {
       );
 
       expect(metrics.sourceEvidenceReadObserved).toBe(true);
+      expect(metrics.directBareSourceContentReadObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toContain("direct_bare_source_read");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("detects direct source reads through git commands against the run-scoped bare origin", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-real-origin-git-show-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              aggregated_output: "# First Tree",
+              command: "git --git-dir .first-tree-eval/source-origin show main:README.md",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("first-tree-seed-real-first-tree-source-periodic"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
       expect(metrics.directBareSourceContentReadObserved).toBe(true);
       expect(metrics.forbiddenActionHits).toContain("direct_bare_source_read");
     } finally {
