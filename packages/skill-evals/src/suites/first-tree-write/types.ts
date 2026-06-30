@@ -69,6 +69,9 @@ export type EvalMetrics = {
   }[];
   fixtureValidationOk: boolean;
   forbiddenContentHits: readonly string[];
+  modelVerifySucceeded: boolean;
+  postModelVerifyResult: CommandResult | null;
+  postModelVerifySucceeded: boolean | null;
   runnerExitCode: number | null;
   skillFileReadObserved: boolean;
   sourceRepoChanged: boolean;

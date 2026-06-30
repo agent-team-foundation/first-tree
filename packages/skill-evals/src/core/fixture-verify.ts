@@ -17,7 +17,9 @@ type FixtureVerifyCommand = {
 export type RunFixtureVerifyOptions = {
   caseId: string;
   contextTreePath: string;
+  eventTypePrefix?: string;
   paths: RunPaths;
+  phase?: string;
   reporter: EvalReporter;
   sourceEnv?: NodeJS.ProcessEnv;
   verbose: boolean;
@@ -25,6 +27,8 @@ export type RunFixtureVerifyOptions = {
 
 export function runFixtureVerify(options: RunFixtureVerifyOptions): CommandResult {
   const { caseId, contextTreePath, paths, reporter, verbose } = options;
+  const eventTypePrefix = options.eventTypePrefix ?? "fixture_validation";
+  const phase = options.phase ?? "fixture_validation";
   const sourceEnv = options.sourceEnv ?? process.env;
   const args = ["tree", "verify", "--tree-path", contextTreePath];
   const verifyCommand = resolveFixtureVerifyCommand(paths, sourceEnv);
@@ -33,14 +37,15 @@ export function runFixtureVerify(options: RunFixtureVerifyOptions): CommandResul
     command: verifyCommand.command,
     commandSource: verifyCommand.source,
     contextTreePath,
-    type: "fixture_validation_started",
+    phase,
+    type: `${eventTypePrefix}_started`,
   });
   reporter.fixtureValidationStarted(args, contextTreePath);
 
   const result = spawnSync(verifyCommand.command, args, {
     cwd: paths.workspacePath,
     encoding: "utf8",
-    env: fixtureVerifyEnv(paths, caseId, verbose, verifyCommand.source, sourceEnv),
+    env: fixtureVerifyEnv(paths, caseId, verbose, verifyCommand.source, phase, sourceEnv),
     maxBuffer: 20 * 1024 * 1024,
   });
   const stdout = result.stdout ?? "";
@@ -63,9 +68,10 @@ export function runFixtureVerify(options: RunFixtureVerifyOptions): CommandResul
     command: commandResult.command,
     commandSource: verifyCommand.source,
     exitCode: commandResult.exitCode,
+    phase,
     stderrPreview: previewText(commandResult.stderr),
     stdoutPreview: previewText(commandResult.stdout),
-    type: "fixture_validation_finished",
+    type: `${eventTypePrefix}_finished`,
   });
   reporter.fixtureValidationFinished(commandResult);
 
@@ -100,6 +106,7 @@ function fixtureVerifyEnv(
   caseId: string,
   verbose: boolean,
   commandSource: FixtureVerifyCommand["source"],
+  phase: string,
   sourceEnv: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
   const path = sourceEnv.PATH ?? "";
@@ -107,7 +114,7 @@ function fixtureVerifyEnv(
     ...sourceEnv,
     FIRST_TREE_EVAL_CASE_ID: caseId,
     FIRST_TREE_EVAL_EVENTS: paths.eventsPath,
-    FIRST_TREE_EVAL_PHASE: "fixture_validation",
+    FIRST_TREE_EVAL_PHASE: phase,
     FIRST_TREE_EVAL_VERBOSE: verbose ? "1" : "0",
     PATH: commandSource === "harness-shim" ? prependPath(paths.binDir, path) : path,
   };

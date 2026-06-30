@@ -20,6 +20,9 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     firstTreeCommandResults: [],
     fixtureValidationOk: true,
     forbiddenContentHits: [],
+    modelVerifySucceeded: false,
+    postModelVerifyResult: null,
+    postModelVerifySucceeded: null,
     runnerExitCode: 0,
     skillFileReadObserved: true,
     sourceRepoChanged: false,
@@ -67,9 +70,44 @@ describe("first-tree-write grader", () => {
           treeChanged: true,
           treeDiff: "+Deterministic gates are separate from quality judges.\n",
           treeStatus: " M system/context-management/skill-eval-framework.md\n",
+          modelVerifySucceeded: true,
+          postModelVerifyResult: {
+            args: ["tree", "verify", "--tree-path", "/tmp/context-tree"],
+            command: "first-tree",
+            cwd: "/tmp/workspace",
+            exitCode: 0,
+            stderr: "",
+            stdout: "All checks passed.\n",
+          },
+          postModelVerifySucceeded: true,
           verifySucceeded: true,
         }),
       ),
     ).toBe(true);
+  });
+
+  it("fails durable source when the model verify command succeeds but post-model verify fails", () => {
+    expect(
+      casePassed(
+        findCase("durable-source-writes"),
+        baseMetrics({
+          finalResponse: "Updated the tree and verify passed.",
+          treeChanged: true,
+          treeDiff: "+Deterministic gates are separate from quality judges.\n",
+          treeStatus: " M system/context-management/skill-eval-framework.md\n",
+          modelVerifySucceeded: true,
+          postModelVerifyResult: {
+            args: ["tree", "verify", "--tree-path", "/tmp/context-tree"],
+            command: "first-tree",
+            cwd: "/tmp/workspace",
+            exitCode: 1,
+            stderr: "",
+            stdout: "Some checks failed.\n",
+          },
+          postModelVerifySucceeded: false,
+          verifySucceeded: false,
+        }),
+      ),
+    ).toBe(false);
   });
 });

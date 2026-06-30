@@ -1,4 +1,5 @@
 import { appendEvent, readEvents } from "../../core/events.js";
+import { runFixtureVerify } from "../../core/fixture-verify.js";
 import { deriveRunObservability } from "../../core/observability.js";
 import { createRunPaths } from "../../core/paths.js";
 import { runCodexProvider } from "../../core/provider/codex.js";
@@ -38,9 +39,28 @@ export async function runFirstTreeWriteCase(
     },
     { paths, reporter },
   );
+  const postModelVerifyResult = evalCase.expected.requireVerify
+    ? runFixtureVerify({
+        caseId: evalCase.id,
+        contextTreePath,
+        eventTypePrefix: "post_model_validation",
+        paths,
+        phase: "post_model_validation",
+        reporter,
+        verbose: options.verbose,
+      })
+    : null;
 
   const events = readEvents(paths.eventsPath);
-  const metrics = deriveMetrics(events, evalCase, fixtureValidation, runnerExitCode, paths, contextTreePath);
+  const metrics = deriveMetrics(
+    events,
+    evalCase,
+    fixtureValidation,
+    runnerExitCode,
+    postModelVerifyResult,
+    paths,
+    contextTreePath,
+  );
   const passed = casePassed(evalCase, metrics);
   const grading = buildGrading(evalCase, metrics, passed);
   const observability = deriveRunObservability(events);
