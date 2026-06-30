@@ -69,6 +69,163 @@ describe("Resources Phase 1", () => {
     expect(allowed.json()).toMatchObject({ id: agentRepo?.id, scope: "agent", ownerAgentId: agent.uuid });
   });
 
+  it("ensureAndBindCampaignScanSkill provisions an agent-private scan skill + binds it for the agent's manager, idempotently", async () => {
+    const app = getApp();
+    // The quickstart actor manages their own personal agent (createRuntimeAgent
+    // sets managerId = owner). A non-admin member who manages the agent passes
+    // the ownership gate — the funnel stays open without requiring org-admin.
+    const owner = await createOrgUser(app, "member");
+    const agent = await createRuntimeAgent(app, owner);
+
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+
+    // Agent-PRIVATE resource (scope=agent, owned by this agent) — not an org
+    // team resource, so it never lands in the org catalogue.
+    const skills = await app.db
+      .select()
+      .from(resources)
+      .where(
+        and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill"), eq(resources.name, "production-scan")),
+      );
+    expect(skills).toHaveLength(1);
+    expect(skills[0]?.scope).toBe("agent");
+    expect(skills[0]?.organizationId).toBe(owner.organizationId);
+    expect((skills[0]?.payload as { body?: string })?.body ?? "").toContain("ps-1");
+
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.resourceId).toBe(skills[0]?.id);
+    expect(bindings[0]?.mode).toBe("include");
+
+    // Config version bumped so the client re-fetches + materializes the skill
+    // before the kickoff chat dispatches.
+    const [config] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, agent.uuid));
+    expect(config?.version).toBe(2);
+
+    // Idempotent: a returning user's second campaign / a retry neither
+    // duplicates the resource nor the binding, and does not re-bump the version.
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+    const skillsAfter = await app.db
+      .select()
+      .from(resources)
+      .where(
+        and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill"), eq(resources.name, "production-scan")),
+      );
+    expect(skillsAfter).toHaveLength(1);
+    const bindingsAfter = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
+    expect(bindingsAfter).toHaveLength(1);
+    const [configAfter] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, agent.uuid));
+    expect(configAfter?.version).toBe(2);
+  });
+
+  it("ensureAndBindCampaignScanSkill binds an already-provisioned skill the agent is not yet bound to", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "member");
+    const agent = await createRuntimeAgent(app, owner);
+    // Simulate a prior run that created the agent-private resource but failed
+    // before binding. Re-running must find the existing resource and bind it,
+    // not duplicate.
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+    await app.db.delete(agentResourceBindings).where(eq(agentResourceBindings.agentId, agent.uuid));
+
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+    const skills = await app.db
+      .select()
+      .from(resources)
+      .where(
+        and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill"), eq(resources.name, "production-scan")),
+      );
+    expect(skills).toHaveLength(1);
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.resourceId).toBe(skills[0]?.id);
+  });
+
+  it("ensureAndBindCampaignScanSkill rejects a caller who cannot manage the target agent (cross-org IDOR)", async () => {
+    const app = getApp();
+    const victimOwner = await createOrgUser(app, "admin");
+    const victimAgent = await createRuntimeAgent(app, victimOwner);
+    // A member of a DIFFERENT org — neither the agent's manager nor an admin in
+    // the agent's org. They must NOT be able to provision/bind onto the victim's
+    // agent (the IDOR vector): it throws, and leaves zero side effects.
+    const attacker = await createOrgUser(app, "admin");
+
+    await expect(
+      app.resourcesService.ensureAndBindCampaignScanSkill(victimAgent.uuid, "production-scan", attacker.memberId),
+    ).rejects.toThrow();
+
+    const skills = await app.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.ownerAgentId, victimAgent.uuid), eq(resources.type, "skill")));
+    expect(skills).toHaveLength(0);
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(eq(agentResourceBindings.agentId, victimAgent.uuid));
+    expect(bindings).toHaveLength(0);
+  });
+
+  it("an agent-private scan skill binding round-trips through replaceAgentResources", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "member");
+    const agent = await createRuntimeAgent(app, owner);
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+
+    // The web resource/prompt editors re-submit the FULL binding array on every
+    // save — which now includes the agent-private scan-skill binding. A normal
+    // save must accept it (not reject it as a non-repo agent-scoped resource)
+    // and preserve it, so a later edit (enable an MCP/skill, edit a prompt, add
+    // a repo) doesn't break.
+    const current = await app.resourcesService.getAgentResources(agent.uuid);
+    expect(current.bindings.some((b) => b.type === "skill")).toBe(true);
+    await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      { expectedVersion: current.version, bindings: current.bindings },
+      owner.memberId,
+    );
+
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
+    expect(bindings).toHaveLength(1);
+  });
+
+  it("ensureAndBindCampaignScanSkill is a no-op for an unknown campaign slug", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "member");
+    const agent = await createRuntimeAgent(app, owner);
+
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "not-a-real-campaign", owner.memberId);
+
+    const skills = await app.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill")));
+    expect(skills).toHaveLength(0);
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(eq(agentResourceBindings.agentId, agent.uuid));
+    expect(bindings).toHaveLength(0);
+  });
+
   it("resolves inline prompt replace as resourceId=null plus replacesResourceId", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "admin");

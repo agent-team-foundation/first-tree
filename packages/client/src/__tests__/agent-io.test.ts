@@ -107,6 +107,40 @@ describe("formatInboundContent", () => {
     expect(out).toContain("load and follow the `first-tree-welcome` skill");
   });
 
+  it("points the agent at the campaign scan skill when the kickoff carries a campaign", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "markdown",
+      content: "Welcome to First Tree.",
+      metadata: { systemSender: "first_tree_onboarding", campaign: "production-scan" },
+    };
+    const out = await formatInboundContent(msg, cache);
+    expect(out.startsWith("[From: alice · type=agent]\n\nWelcome to First Tree.")).toBe(true);
+    // Campaign kickoff → load the matching scan skill, not the onboarding welcome.
+    expect(out).toContain("<first-tree-onboarding>");
+    expect(out).toContain("load and follow the `production-scan` skill");
+    expect(out).not.toContain("first-tree-welcome");
+  });
+
+  it("ignores a malformed campaign slug and falls back to the welcome directive", async () => {
+    const sdk = mkSdk(async () => participants);
+    const cache = createParticipantCache(sdk, "chat-1", () => {});
+    const msg: SessionMessage = {
+      id: "m1",
+      chatId: "chat-1",
+      senderId: "agent-a",
+      format: "markdown",
+      content: "Welcome to First Tree.",
+      metadata: { systemSender: "first_tree_onboarding", campaign: "../etc/passwd" },
+    };
+    const out = await formatInboundContent(msg, cache);
+    expect(out).toContain("load and follow the `first-tree-welcome` skill");
+  });
+
   it("does not append the onboarding directive for other system senders", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});

@@ -20,7 +20,6 @@ import {
   writeCampaignIntent,
   writeQuickstartAgent,
 } from "./intent.js";
-
 /**
  * Reusable quickstart growth entry (`/quickstart?campaign=<slug>&repo=...`).
  *
@@ -81,6 +80,10 @@ export function QuickstartPage() {
       startChatStartedRef.current = true;
       setStartChatError(null);
       try {
+        // The kickoff (server-side) provisions + binds the campaign's managed
+        // scan skill before dispatching the chat, so the campaign onboarding
+        // directive can have the agent load and run it. Works for non-admin
+        // quickstart actors (the team-resource HTTP create is admin-only).
         const { chatId } = await postOnboardingStartChat({
           ...(organizationId ? { organizationId } : {}),
           agentUuid,

@@ -34,9 +34,11 @@ import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentResourceBindings } from "../db/schema/agent-resource-bindings.js";
 import { agents } from "../db/schema/agents.js";
+import { members } from "../db/schema/members.js";
 import { resources } from "../db/schema/resources.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
+import { getCampaignScanSkill } from "./campaign-scan-skill.js";
 import type { Notifier } from "./notifier.js";
 
 type ResourceDbRow = typeof resources.$inferSelect;
@@ -56,6 +58,13 @@ export type ResourcesService = {
   previewResourceImpact(resourceId: string, input: ResourceImpactPreview): Promise<ResourceImpactPreviewOutput>;
   getAgentResources(agentId: string): Promise<AgentResourcesOutput>;
   replaceAgentResources(agentId: string, input: UpdateAgentResources, actorId: string): Promise<AgentResourcesOutput>;
+  /**
+   * Idempotently provision a campaign's managed scan skill (server-owned
+   * content) into the agent's org and bind it to the agent. Server-side so it
+   * works for non-admin quickstart actors (the team-resource HTTP route is
+   * admin-only); no-op for an unknown campaign slug.
+   */
+  ensureAndBindCampaignScanSkill(agentId: string, campaign: string, actorId: string): Promise<void>;
   resolveRuntimeConfig(config: AgentRuntimeConfig): Promise<AgentRuntimeConfig>;
   resolveEffectiveResources(agentId: string): Promise<EffectiveAgentResources>;
 };
@@ -303,8 +312,13 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
       if (resource.scope === "agent" && resource.ownerAgentId !== agentId) {
         throw new BadRequestError(`Agent-scoped resource "${id}" is not owned by this agent`);
       }
-      if (resource.scope === "agent" && resource.type !== "repo") {
-        throw new BadRequestError("Only repo resources may be agent-scoped in Phase 1");
+      // Agent-scoped resources are repos (agent-extra repos) and skills (the
+      // quickstart managed campaign scan skill, owned by this agent — ownership
+      // already enforced just above). Admitting owned agent-scoped skills lets
+      // their binding round-trip through ordinary resource saves: the web
+      // editors re-submit the full binding array, which includes it.
+      if (resource.scope === "agent" && resource.type !== "repo" && resource.type !== "skill") {
+        throw new BadRequestError("Only repo and skill resources may be agent-scoped");
       }
     }
   }
@@ -1111,6 +1125,118 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         bindings: bindingRows.map(bindingToInput),
         availableTeamResources: availableTeamResources.map(rowToResource),
       };
+    },
+
+    async ensureAndBindCampaignScanSkill(agentId, campaign, actorId) {
+      const skill = getCampaignScanSkill(campaign);
+      if (!skill) return;
+      const [agent] = await db
+        .select({ organizationId: agents.organizationId, managerId: agents.managerId, status: agents.status })
+        .from(agents)
+        .where(eq(agents.uuid, agentId))
+        .limit(1);
+      if (!agent || agent.status === "deleted") return;
+      const organizationId = agent.organizationId;
+
+      // Ownership gate (IDOR defense). Only someone who may MANAGE this agent —
+      // its manager, or an admin in the agent's org — may provision a skill onto
+      // it. Mirrors `requireAgentAccess(…, "manage")`. The kickoff route already
+      // runs this AFTER createChat validates the chat, but guarding here keeps
+      // the mutation safe regardless of caller. A caller from another org (the
+      // IDOR vector) is neither manager nor admin-in-that-org, so they're
+      // rejected — 404 like the route, to avoid agent-id enumeration.
+      const [actor] = await db
+        .select({ organizationId: members.organizationId, role: members.role })
+        .from(members)
+        .where(eq(members.id, actorId))
+        .limit(1);
+      const isManager = agent.managerId === actorId;
+      const isOrgAdmin = !!actor && actor.organizationId === organizationId && actor.role === "admin";
+      if (!isManager && !isOrgAdmin) throw new NotFoundError(`Agent "${agentId}" not found`);
+
+      const findSkillResourceId = async (database: Database): Promise<string | null> => {
+        const [row] = await database
+          .select({ id: resources.id })
+          .from(resources)
+          .where(
+            and(
+              eq(resources.organizationId, organizationId),
+              eq(resources.type, "skill"),
+              eq(resources.scope, "agent"),
+              eq(resources.ownerAgentId, agentId),
+              eq(resources.name, skill.name),
+              inArray(resources.status, ["active", "stale"]),
+            ),
+          )
+          .limit(1);
+        return row?.id ?? null;
+      };
+
+      // Provision the AGENT-PRIVATE scan skill (scope=agent, owned by this agent
+      // — never an org team resource, so it needs no org-admin and never lands
+      // in the org catalogue) and bind it, all under a row lock on the agent.
+      // Concurrent kickoffs (two tabs / a retry) serialize on the lock: the
+      // second waits, then re-reads inside the lock and sees the first run's
+      // resource + binding, so it duplicates neither — which is why no DB unique
+      // index is needed (no prod schema change). Bump the config version +
+      // notify (mirroring replaceAgentResources) so the client re-fetches and
+      // materializes the skill before the kickoff chat dispatches.
+      let didBind = false;
+      await db.transaction(async (tx) => {
+        const targetDb = tx as unknown as Database;
+        await targetDb.select({ uuid: agents.uuid }).from(agents).where(eq(agents.uuid, agentId)).for("update");
+
+        let resourceId = await findSkillResourceId(targetDb);
+        if (!resourceId) {
+          resourceId = uuidv7();
+          await targetDb.insert(resources).values({
+            id: resourceId,
+            organizationId,
+            type: "skill",
+            scope: "agent",
+            ownerAgentId: agentId,
+            name: skill.name,
+            repoCanonicalKey: null,
+            defaultEnabled: null,
+            status: "active",
+            payload: { name: skill.name, description: skill.description, body: skill.body, metadata: {} },
+            createdBy: actorId,
+            updatedBy: actorId,
+          });
+        }
+
+        const [already] = await targetDb
+          .select({ id: agentResourceBindings.id })
+          .from(agentResourceBindings)
+          .where(and(eq(agentResourceBindings.agentId, agentId), eq(agentResourceBindings.resourceId, resourceId)))
+          .limit(1);
+        if (already) return;
+        const existing = await targetDb
+          .select({ id: agentResourceBindings.id })
+          .from(agentResourceBindings)
+          .where(eq(agentResourceBindings.agentId, agentId));
+        await targetDb
+          .update(agentConfigs)
+          .set({ version: sql`${agentConfigs.version} + 1`, updatedAt: new Date(), updatedBy: actorId })
+          .where(eq(agentConfigs.agentId, agentId));
+        await targetDb.insert(agentResourceBindings).values({
+          id: uuidv7(),
+          organizationId,
+          agentId,
+          type: "skill",
+          mode: "include",
+          resourceId,
+          replacesResourceId: null,
+          inlinePromptBody: null,
+          repoRef: null,
+          repoLocalPath: null,
+          order: existing.length,
+          createdBy: actorId,
+          updatedBy: actorId,
+        });
+        didBind = true;
+      });
+      if (didBind) await notifyAgents([agentId]);
     },
 
     resolveRuntimeConfig,

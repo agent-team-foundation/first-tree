@@ -270,6 +270,9 @@ describe("QuickstartPage — full flow (e2e)", () => {
     expect(arg.bootstrap).toContain("github.com/acme/backend");
     // dual-reader: the bootstrap renders verbatim to the user, so no jargon.
     expect(arg.bootstrap.toLowerCase()).not.toContain("skill");
+    // The campaign's scan skill is provisioned + bound server-side by the
+    // kickoff (see the server kickoff test), so the client only sends the
+    // campaign on the start-chat call — no resource mounting from the browser.
     expect(navigateMock).toHaveBeenCalledWith("/?c=chat-1");
   });
 

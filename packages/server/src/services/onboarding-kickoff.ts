@@ -34,6 +34,16 @@ export type KickoffOnboardingArgs = {
    * key stays `<human>:<target>:<kind>` and onboarding is unaffected.
    */
   campaign?: string;
+  /**
+   * Optional side effect to run once the kickoff chat exists AND its
+   * participants are validated — createChat enforces the cross-org / active /
+   * private-target checks on first creation; an existing chat was validated
+   * when it was created — but BEFORE the bootstrap is sent. Quickstart uses it
+   * to provision + bind the campaign scan skill onto the target agent. Running
+   * it earlier would let an unauthorized kickoff mutate another org/agent's
+   * resources before the chat is rejected.
+   */
+  onChatReady?: () => Promise<void>;
 };
 
 export type KickoffOnboardingResult = {
@@ -118,6 +128,15 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
     chatId = created.id;
   }
 
+  // The chat now exists and its participants are validated (createChat enforces
+  // the cross-org / active / private-target checks on first creation; an
+  // existing chat was validated when it was created). Run any caller-supplied
+  // side effect that mutates the target agent — e.g. binding the campaign scan
+  // skill — only now, BEFORE the bootstrap that triggers the agent. Earlier
+  // would let an unauthorized kickoff mutate another org/agent's resources
+  // before the chat is rejected.
+  if (args.onChatReady) await args.onChatReady();
+
   // 2. Send the bootstrap only if the chat is still empty — under a row lock on
   //    the chat so concurrent kickoffs (double-click, two tabs, retry mid-flight)
   //    serialize: the second waits for the first to commit, then sees the message
@@ -137,7 +156,16 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
       format: "text",
       content: args.bootstrap,
       source: "api",
-      metadata: { systemSender: "first_tree_onboarding" },
+      // `systemSender` marks this as a trusted onboarding kickoff (the server
+      // strips it from untrusted sends). `campaign`, when present, is an
+      // agent-only signal: the client's `onboardingSkillDirective` reads it to
+      // load and run the matching campaign scan skill, while the web bubble
+      // reader keys only on `systemSender` and ignores it — so it never leaks
+      // into the user-visible body.
+      metadata: {
+        systemSender: "first_tree_onboarding",
+        ...(args.campaign ? { campaign: args.campaign } : {}),
+      },
     };
     // tx → Database: drizzle transaction handles aren't structurally Database;
     // the `as unknown as` bridge is the same pattern used in member.ts /
