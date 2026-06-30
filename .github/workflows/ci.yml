@@ -52,6 +52,7 @@ jobs:
             code:
               - 'packages/**'
               - 'apps/**'
+              - 'scripts/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'tsconfig.json'
@@ -159,6 +160,39 @@ jobs:
       # heavy work outside the worker IPC window.
       - run: pnpm build
       - run: pnpm test
+
+  portable-smoke:
+    name: Portable CLI Smoke
+    needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @first-tree/shared build
+      - run: pnpm --filter @first-tree/client build
+      - run: pnpm --filter first-tree-dev build
+      - name: Build linux-x64 portable artifact
+        run: |
+          node scripts/portable/build-portable.mjs \
+            --channel prod \
+            --version 0.0.0 \
+            --git-sha "$GITHUB_SHA" \
+            --node-version latest-v24.x \
+            --download-base-url "https://downloads.first-tree.ai" \
+            --out-dir .portable-smoke \
+            --platform linux-x64
+      - name: Verify linux-x64 portable artifact
+        run: |
+          node scripts/portable/verify-portable-artifact.mjs \
+            --manifest .portable-smoke/prod/0.0.0/manifest.json \
+            --platform linux-x64 \
+            --tarball .portable-smoke/prod/0.0.0/first-tree-0.0.0-linux-x64.tar.gz
 
   check-migrations:
     name: Migrations

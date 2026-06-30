@@ -108,6 +108,24 @@ describe("server config", () => {
     expect(config.rateLimit).toEqual({ max: 1234 });
   });
 
+  it("resolves connect bootstrap portable env overrides", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_CONNECT_BOOTSTRAP_METHOD", "portable");
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", "https://downloads.example.test");
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.connectBootstrap).toEqual({
+      method: "portable",
+      portableDownloadBaseUrl: "https://downloads.example.test",
+    });
+  });
+
   it("uses inbox delivery fairness defaults when the inbox group is active", () => {
     expect(serverConfigSchema.inbox.shape.maxInFlightPerAgent.schema.parse(undefined)).toBe(8192);
     expect(serverConfigSchema.inbox.shape.maxInFlightPerAgentChat.schema.parse(undefined)).toBe(8);

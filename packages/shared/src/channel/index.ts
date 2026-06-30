@@ -2,6 +2,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { getConfig } from "../config/singleton.js";
 
+export const DEFAULT_PORTABLE_DOWNLOAD_BASE_URL = "https://downloads.first-tree.ai";
+
 /**
  * Release channel identity. Single source of truth for which environment
  * a binary / server belongs to. CLI side: written to `apps/cli/src/build-info.ts`
@@ -33,6 +35,14 @@ type ChannelDef = {
    * distinguishable in System Settings → Login Items & Extensions.
    */
   displayName: string;
+  portable: {
+    /** Path segment under the portable download base URL. `null` for dev. */
+    channelPrefix: string | null;
+    /** Public installer path under the channel prefix. `null` for dev. */
+    publicInstallerPath: string | null;
+    /** Default immutable-manifest / installer base URL. `null` for dev. */
+    downloadBaseUrl: string | null;
+  };
 };
 
 const TABLE = {
@@ -45,6 +55,11 @@ const TABLE = {
     serviceUnitName: "first-tree-dev",
     launchdLabel: "first-tree-dev",
     displayName: "First Tree (Dev)",
+    portable: {
+      channelPrefix: null,
+      publicInstallerPath: null,
+      downloadBaseUrl: null,
+    },
   },
   staging: {
     binName: "first-tree-staging",
@@ -55,6 +70,11 @@ const TABLE = {
     serviceUnitName: "first-tree-staging",
     launchdLabel: "first-tree-staging",
     displayName: "First Tree (Staging)",
+    portable: {
+      channelPrefix: "staging",
+      publicInstallerPath: "staging/install.sh",
+      downloadBaseUrl: DEFAULT_PORTABLE_DOWNLOAD_BASE_URL,
+    },
   },
   prod: {
     binName: "first-tree",
@@ -65,6 +85,11 @@ const TABLE = {
     serviceUnitName: "first-tree",
     launchdLabel: "first-tree",
     displayName: "First Tree",
+    portable: {
+      channelPrefix: "prod",
+      publicInstallerPath: "prod/install.sh",
+      downloadBaseUrl: DEFAULT_PORTABLE_DOWNLOAD_BASE_URL,
+    },
   },
 } as const satisfies Record<ChannelName, ChannelDef>;
 
@@ -79,6 +104,11 @@ export type ChannelConfig = {
   launchdLabel: string;
   launchdPlistFile: string;
   displayName: string;
+  portable: {
+    channelPrefix: string | null;
+    publicInstallerPath: string | null;
+    downloadBaseUrl: string | null;
+  };
 };
 
 export function getChannelConfig(channel: ChannelName): ChannelConfig {
@@ -94,6 +124,7 @@ export function getChannelConfig(channel: ChannelName): ChannelConfig {
     launchdLabel: def.launchdLabel,
     launchdPlistFile: `${def.launchdLabel}.plist`,
     displayName: def.displayName,
+    portable: def.portable,
   };
 }
 

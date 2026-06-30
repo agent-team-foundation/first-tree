@@ -60,6 +60,7 @@ export type CreateTestAppOptions = {
   channel?: Config["channel"];
   commandVersion?: string;
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
+  connectBootstrap?: Config["connectBootstrap"];
   inbox?: Partial<NonNullable<Config["inbox"]>>;
   allowedOrganizationId?: string;
   /**
@@ -129,6 +130,11 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       },
     },
     trustProxy: false,
+    connectBootstrap: {
+      method: "npm",
+      portableDownloadBaseUrl: "https://downloads.first-tree.ai",
+      ...opts.connectBootstrap,
+    },
     rateLimit: { ...baseRateLimit, ...opts.rateLimit },
     ...(opts.inbox !== undefined
       ? { inbox: { maxInFlightPerAgent: 8192, maxInFlightPerAgentChat: 8, ...opts.inbox } }

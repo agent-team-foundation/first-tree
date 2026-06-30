@@ -18,6 +18,11 @@ describe("getChannelConfig", () => {
       launchdLabel: "first-tree",
       launchdPlistFile: "first-tree.plist",
       displayName: "First Tree",
+      portable: {
+        channelPrefix: "prod",
+        publicInstallerPath: "prod/install.sh",
+        downloadBaseUrl: "https://downloads.first-tree.ai",
+      },
     });
   });
 
@@ -32,6 +37,11 @@ describe("getChannelConfig", () => {
     expect(c.launchdLabel).toBe("first-tree-staging");
     expect(c.launchdPlistFile).toBe("first-tree-staging.plist");
     expect(c.displayName).toBe("First Tree (Staging)");
+    expect(c.portable).toEqual({
+      channelPrefix: "staging",
+      publicInstallerPath: "staging/install.sh",
+      downloadBaseUrl: "https://downloads.first-tree.ai",
+    });
   });
 
   it("maps dev to packageName=null + 127.0.0.1 server", () => {
@@ -44,6 +54,11 @@ describe("getChannelConfig", () => {
     expect(c.serviceUnitFile).toBe("first-tree-dev.service");
     expect(c.launchdLabel).toBe("first-tree-dev");
     expect(c.displayName).toBe("First Tree (Dev)");
+    expect(c.portable).toEqual({
+      channelPrefix: null,
+      publicInstallerPath: null,
+      downloadBaseUrl: null,
+    });
   });
 
   it("never returns the same defaultHome for two distinct channels", () => {

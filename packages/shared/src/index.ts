@@ -612,6 +612,23 @@ export {
   updateOrganizationSchema,
 } from "./schemas/organization.js";
 export {
+  PORTABLE_PLATFORMS,
+  type PortableAsset,
+  type PortableChannel,
+  type PortableInstallMetadata,
+  type PortableInstallMethod,
+  type PortableLatest,
+  type PortableManifest,
+  type PortablePlatform,
+  portableAssetSchema,
+  portableChannelSchema,
+  portableInstallMetadataSchema,
+  portableInstallMethodSchema,
+  portableLatestSchema,
+  portableManifestSchema,
+  portablePlatformSchema,
+} from "./schemas/portable.js";
+export {
   type ActivityOverview,
   AGENT_BIND_REJECT_REASONS,
   AGENT_SELECTOR_HEADER,
