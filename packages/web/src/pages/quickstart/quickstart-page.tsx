@@ -1,8 +1,10 @@
 import { ArrowRight } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
+import { getAgentResources, updateAgentResources } from "../../api/agent-resources.js";
 import { listManagedAgents } from "../../api/agents.js";
 import { postOnboardingStartChat } from "../../api/onboarding-events.js";
+import { createTeamResource, createTeamResourceForOrg } from "../../api/resources.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { useAgentCreation } from "../../features/agent-setup/use-agent-creation.js";
@@ -10,7 +12,7 @@ import { useComputerConnection } from "../../features/agent-setup/use-computer-c
 import { useServerChannelState } from "../../hooks/use-server-channel.js";
 import { runtimeProviderLabel } from "../clients/cards/shared/providers.js";
 import { CommandBox, FlowHint, StatusRow, WorkingState } from "../onboarding/flow-ui.js";
-import { getCampaign, QUICKSTART_AGENT_NAME } from "./campaigns.js";
+import { type CampaignSlug, getCampaign, QUICKSTART_AGENT_NAME } from "./campaigns.js";
 import {
   type CampaignIntent,
   clearCampaignIntent,
@@ -20,6 +22,45 @@ import {
   writeCampaignIntent,
   writeQuickstartAgent,
 } from "./intent.js";
+import { getScanSkill } from "./scan-skills.js";
+
+/**
+ * Mount the campaign's scan skill on the agent so it can run the scan on the
+ * first chat. Find-or-create the skill as a team resource in the user's org
+ * (idempotent by name — a returning user's second campaign reuses it rather
+ * than duplicating), then bind it to the agent, preserving existing bindings
+ * and skipping if it's already bound.
+ *
+ * Awaited BEFORE start-chat so the binding is committed before the agent
+ * dispatches the kickoff: the runtime resolves the agent config per dispatch
+ * (resolving + materializing the bound skill under "## Team Skills"), and the
+ * campaign-aware onboarding directive then has the agent load and run it.
+ */
+async function mountScanSkill(campaign: CampaignSlug, organizationId: string | null, agentUuid: string): Promise<void> {
+  const skill = getScanSkill(campaign);
+  const current = await getAgentResources(agentUuid);
+  let resourceId = current.availableTeamResources.find((r) => r.type === "skill" && r.name === skill.name)?.id;
+  if (!resourceId) {
+    const input = {
+      type: "skill" as const,
+      name: skill.name,
+      defaultEnabled: "available" as const,
+      payload: { name: skill.name, description: skill.description, body: skill.body, metadata: {} },
+    };
+    const created = organizationId
+      ? await createTeamResourceForOrg(organizationId, input)
+      : await createTeamResource(input);
+    resourceId = created.id;
+  }
+  const alreadyBound = current.bindings.some(
+    (b) => b.type === "skill" && b.mode === "include" && b.resourceId === resourceId,
+  );
+  if (alreadyBound) return;
+  await updateAgentResources(agentUuid, {
+    expectedVersion: current.version,
+    bindings: [...current.bindings, { type: "skill", mode: "include", resourceId }],
+  });
+}
 
 /**
  * Reusable quickstart growth entry (`/quickstart?campaign=<slug>&repo=...`).
@@ -81,6 +122,10 @@ export function QuickstartPage() {
       startChatStartedRef.current = true;
       setStartChatError(null);
       try {
+        // Mount the campaign's scan skill on the agent BEFORE the kickoff, so it
+        // is materialized when the agent dispatches the first chat and the
+        // campaign-aware onboarding directive can have it load and run the scan.
+        await mountScanSkill(campaign.slug, organizationId, agentUuid);
         const { chatId } = await postOnboardingStartChat({
           ...(organizationId ? { organizationId } : {}),
           agentUuid,
