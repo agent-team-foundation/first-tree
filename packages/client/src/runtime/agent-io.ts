@@ -375,7 +375,7 @@ function onboardingSkillDirective(metadata: SessionMessage["metadata"]): string 
   if (/^[a-z0-9][a-z0-9-]*$/.test(campaign)) {
     return [
       "<first-tree-onboarding>",
-      `This is a First Tree repo scan first chat. Before your first reply, load and follow the \`${campaign}\` skill (listed under "## Team Skills") and run it on the repository in your workspace, then share the report with the user.`,
+      `This is a First Tree repo scan first chat. Before your first reply, load and follow the \`${campaign}\` skill (listed under "## Team Skills") and run the scan, then share the report with the user.`,
       "</first-tree-onboarding>",
     ].join("\n");
   }

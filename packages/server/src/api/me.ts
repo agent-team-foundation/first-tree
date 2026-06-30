@@ -244,6 +244,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const { userId } = requireUser(request);
     const body = kickoffOnboardingSchema.parse(request.body);
     const { memberId, humanAgentId } = await resolveOnboardingMember(app, userId, body.organizationId);
+    // Provision + bind the campaign's managed scan skill BEFORE the kickoff, so
+    // it is materialized when the agent dispatches the chat and the campaign
+    // onboarding directive can load and run it. Server-side so it works for
+    // non-admin quickstart actors (the team-resource HTTP create is admin-only);
+    // idempotent, and a no-op for a non-campaign kickoff.
+    if (body.campaign) {
+      await app.resourcesService.ensureAndBindCampaignScanSkill(body.agentUuid, body.campaign, memberId);
+    }
     const result = await kickoffOnboarding(app.db, {
       memberId,
       humanAgentId,

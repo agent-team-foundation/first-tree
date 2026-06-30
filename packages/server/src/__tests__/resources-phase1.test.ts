@@ -69,6 +69,77 @@ describe("Resources Phase 1", () => {
     expect(allowed.json()).toMatchObject({ id: agentRepo?.id, scope: "agent", ownerAgentId: agent.uuid });
   });
 
+  it("ensureAndBindCampaignScanSkill provisions + binds the managed scan skill for a non-admin member, idempotently", async () => {
+    const app = getApp();
+    // A MEMBER (not org admin) is the R4 case: the team-resource HTTP route is
+    // admin-only, but the server-side ensure must still provision + bind so the
+    // growth funnel works for non-admin quickstart actors.
+    const member = await createOrgUser(app, "member");
+    const agent = await createRuntimeAgent(app, member);
+
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", member.memberId);
+
+    const skills = await app.db
+      .select()
+      .from(resources)
+      .where(
+        and(
+          eq(resources.organizationId, member.organizationId),
+          eq(resources.type, "skill"),
+          eq(resources.name, "production-scan"),
+        ),
+      );
+    expect(skills).toHaveLength(1);
+    expect((skills[0]?.payload as { body?: string })?.body ?? "").toContain("ps-1");
+
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.resourceId).toBe(skills[0]?.id);
+    expect(bindings[0]?.mode).toBe("include");
+
+    // Idempotent: a returning user's second campaign / a retry neither
+    // duplicates the resource nor the binding.
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", member.memberId);
+    const skillsAfter = await app.db
+      .select()
+      .from(resources)
+      .where(
+        and(
+          eq(resources.organizationId, member.organizationId),
+          eq(resources.type, "skill"),
+          eq(resources.name, "production-scan"),
+        ),
+      );
+    expect(skillsAfter).toHaveLength(1);
+    const bindingsAfter = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
+    expect(bindingsAfter).toHaveLength(1);
+  });
+
+  it("ensureAndBindCampaignScanSkill is a no-op for an unknown campaign slug", async () => {
+    const app = getApp();
+    const member = await createOrgUser(app, "member");
+    const agent = await createRuntimeAgent(app, member);
+
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "not-a-real-campaign", member.memberId);
+
+    const skills = await app.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.organizationId, member.organizationId), eq(resources.type, "skill")));
+    expect(skills).toHaveLength(0);
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(eq(agentResourceBindings.agentId, agent.uuid));
+    expect(bindings).toHaveLength(0);
+  });
+
   it("resolves inline prompt replace as resourceId=null plus replacesResourceId", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "admin");

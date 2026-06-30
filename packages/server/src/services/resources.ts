@@ -37,6 +37,7 @@ import { agents } from "../db/schema/agents.js";
 import { resources } from "../db/schema/resources.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
+import { getCampaignScanSkill } from "./campaign-scan-skill.js";
 import type { Notifier } from "./notifier.js";
 
 type ResourceDbRow = typeof resources.$inferSelect;
@@ -56,6 +57,13 @@ export type ResourcesService = {
   previewResourceImpact(resourceId: string, input: ResourceImpactPreview): Promise<ResourceImpactPreviewOutput>;
   getAgentResources(agentId: string): Promise<AgentResourcesOutput>;
   replaceAgentResources(agentId: string, input: UpdateAgentResources, actorId: string): Promise<AgentResourcesOutput>;
+  /**
+   * Idempotently provision a campaign's managed scan skill (server-owned
+   * content) into the agent's org and bind it to the agent. Server-side so it
+   * works for non-admin quickstart actors (the team-resource HTTP route is
+   * admin-only); no-op for an unknown campaign slug.
+   */
+  ensureAndBindCampaignScanSkill(agentId: string, campaign: string, actorId: string): Promise<void>;
   resolveRuntimeConfig(config: AgentRuntimeConfig): Promise<AgentRuntimeConfig>;
   resolveEffectiveResources(agentId: string): Promise<EffectiveAgentResources>;
 };
@@ -1111,6 +1119,101 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         bindings: bindingRows.map(bindingToInput),
         availableTeamResources: availableTeamResources.map(rowToResource),
       };
+    },
+
+    async ensureAndBindCampaignScanSkill(agentId, campaign, actorId) {
+      const skill = getCampaignScanSkill(campaign);
+      if (!skill) return;
+      const [agent] = await db
+        .select({ organizationId: agents.organizationId })
+        .from(agents)
+        .where(eq(agents.uuid, agentId))
+        .limit(1);
+      if (!agent) return;
+      const organizationId = agent.organizationId;
+
+      const findSkillResourceId = async (): Promise<string | null> => {
+        const [row] = await db
+          .select({ id: resources.id })
+          .from(resources)
+          .where(
+            and(
+              eq(resources.organizationId, organizationId),
+              eq(resources.type, "skill"),
+              eq(resources.scope, "team"),
+              eq(resources.name, skill.name),
+              inArray(resources.status, ["active", "stale"]),
+            ),
+          )
+          .limit(1);
+        return row?.id ?? null;
+      };
+
+      // 1. Ensure the managed scan skill exists as a team resource. The HTTP
+      //    create route is admin-only, but this service-layer insert is not
+      //    role-gated, so a non-admin quickstart actor still gets it. Idempotent
+      //    by name; the partial unique index on active team skills (org, name)
+      //    makes a concurrent create race-safe — the loser sees 23505 and reads
+      //    the winner.
+      let resourceId = await findSkillResourceId();
+      if (!resourceId) {
+        const id = uuidv7();
+        try {
+          await db.insert(resources).values({
+            id,
+            organizationId,
+            type: "skill",
+            scope: "team",
+            ownerAgentId: null,
+            name: skill.name,
+            repoCanonicalKey: null,
+            defaultEnabled: "available",
+            status: "active",
+            payload: { name: skill.name, description: skill.description, body: skill.body, metadata: {} },
+            createdBy: actorId,
+            updatedBy: actorId,
+          });
+          resourceId = id;
+        } catch (err) {
+          if (postgresErrorCode(err) === "23505") resourceId = await findSkillResourceId();
+          if (!resourceId) throw err;
+        }
+      }
+      if (!resourceId) return;
+
+      // 2. Bind it to the agent (mode "include") unless already bound. Bump the
+      //    agent config version + notify (mirroring replaceAgentResources) so
+      //    the client re-fetches and materializes the skill before it dispatches
+      //    the kickoff chat.
+      const bindings = await db
+        .select({ resourceId: agentResourceBindings.resourceId })
+        .from(agentResourceBindings)
+        .where(eq(agentResourceBindings.agentId, agentId));
+      if (bindings.some((b) => b.resourceId === resourceId)) return;
+
+      await db.transaction(async (tx) => {
+        const targetDb = tx as unknown as Database;
+        await targetDb
+          .update(agentConfigs)
+          .set({ version: sql`${agentConfigs.version} + 1`, updatedAt: new Date(), updatedBy: actorId })
+          .where(eq(agentConfigs.agentId, agentId));
+        await targetDb.insert(agentResourceBindings).values({
+          id: uuidv7(),
+          organizationId,
+          agentId,
+          type: "skill",
+          mode: "include",
+          resourceId,
+          replacesResourceId: null,
+          inlinePromptBody: null,
+          repoRef: null,
+          repoLocalPath: null,
+          order: bindings.length,
+          createdBy: actorId,
+          updatedBy: actorId,
+        });
+      });
+      await notifyAgents([agentId]);
     },
 
     resolveRuntimeConfig,

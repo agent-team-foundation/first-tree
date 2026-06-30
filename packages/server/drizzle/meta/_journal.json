@@ -498,6 +498,13 @@
       "when": 1782373703621,
       "tag": "0070_cheerful_ken_ellis",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1782817239617,
+      "tag": "0071_right_longshot",
+      "breakpoints": true
     }
   ]
 }

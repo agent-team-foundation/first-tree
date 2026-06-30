@@ -1,0 +1,175 @@
+/**
+ * Server-owned scan-skill catalog for the reusable quickstart growth campaigns.
+ *
+ * The skill body is PRODUCT CONTENT — one canonical version per campaign — so it
+ * lives here on the server, NOT created ad-hoc from the browser. The web
+ * quickstart flow only stamps the campaign slug onto the kickoff; the server
+ * (see `resourcesService.ensureAndBindCampaignScanSkill`) ensures the matching
+ * managed skill resource exists in the agent's org and binds it to the agent.
+ *
+ * Why server-owned: creating a team resource over HTTP is admin-only
+ * (`POST /orgs/:id/resources` requires `role === "admin"`), but a quickstart
+ * actor is not guaranteed to be an org admin (e.g. a member who reused their
+ * personal agent). Provisioning server-side keeps the growth funnel open to
+ * every quickstart user without widening that HTTP boundary, and makes the
+ * skill content trusted (the client never supplies the body).
+ *
+ * The slug is ALSO the skill's resource name, so the client's campaign-aware
+ * onboarding directive can name it ("load and follow the `<campaign>` skill")
+ * and the agent finds it under "## Team Skills" in its briefing.
+ */
+
+export type CampaignScanSkill = {
+  /** Resource name === campaign slug; the directive and briefing key on it. */
+  name: string;
+  description: string;
+  /** SKILL.md body; the runtime materializer re-adds YAML frontmatter. */
+  body: string;
+};
+
+const PRODUCTION_SCAN_BODY = `# Production Readiness Scan
+
+You are a senior staff engineer doing a pre-launch review of the **target
+repository for this chat**. Produce a structured production-readiness report.
+**READ-ONLY**: do not modify, stage, or commit anything.
+
+## Step 0 — get the repo
+Get the target repo before scanning. **Fastest path (preferred):** the repo's
+GitHub URL is in the opening chat message ("connected to your code: …") —
+\`git clone\` it read-only into a temp dir and scan that (one step, no write). If
+a repo is instead already bound into your workspace as a source repo, note it is
+a **bare** clone (no working tree) — you'd \`git worktree add\` to get files; for a
+one-off read-only scan, cloning the URL is simpler. Don't ask the user where the
+repo is; get it from these signals and proceed.
+
+## Hard rules (non-negotiable)
+1. **EVIDENCE FIRST.** Every finding cites concrete evidence from THIS repo — a
+   file path, a config key, a missing file, a failing command. No generic advice.
+2. **NO INVENTED PROBLEMS.** If the repo is healthy on a dimension, score it high
+   and say so. A clean repo should score high — never manufacture blockers.
+3. **SECURITY-WEIGHTED.** Prioritize things that cause a security incident or a
+   failed/risky launch over style or "add more docs".
+4. **SPECIFIC & ACTIONABLE.** Each blocker is fixable by a competent engineer from
+   your description alone.
+
+## Step 1 — gather evidence (read, don't guess)
+Inspect where present: README/docs, package manifests + lockfiles, build/test/lint
+config & scripts, CI workflows, CODEOWNERS, SECURITY.md, .env.example & how
+secrets/config are handled, auth/data-access boundaries, Dockerfile/deploy/runtime
+config, observability (logging/metrics/tracing/error reporting), dependency
+freshness & vuln-scanning, recent high-risk paths. **Prefer running the declared
+test/build/lint if cheap and safe; note failures/flakiness as evidence.** If a
+command can't be run, judge statically and say so.
+
+## Step 2 — score each dimension 0-10 (anchors: 0-3 absent/broken · 4-6 partial · 7-8 solid · 9-10 exemplary)
+- security_secrets (22): secret handling, exposed creds, secret/SAST scanning, security policy
+- auth_data_boundaries (16): authN/authZ correctness, tenant/data isolation, input trust boundaries
+- tests_ci (18): test presence/coverage signal, CI gates, can a change be verified
+- deploy_runtime (14): reproducible build/run, containerization, config, migrations
+- dependencies (12): lockfiles, freshness, automated update/vuln scanning, supply chain
+- observability (10): logging, metrics, tracing, error reporting
+- docs_onboarding (8): can a new engineer/agent set up, run, and understand boundaries
+
+\`headline_score = round(sum(dimension_score/10 * weight))\`  // 0-100
+
+## Step 3 — blockers
+Pick the 3-5 highest-impact issues (fewer if healthy). For each: \`evidence[]\` (path
++ detail), \`why_it_matters\`, \`fix\`, \`first_verification_step\`, \`severity\`
+(critical|high|medium).
+
+## Step 4 — output (schema ps-1), then a short human summary
+Emit strict JSON:
+\`\`\`json
+{ "schema_version":"ps-1", "wedge":"production-scan", "headline_score":0,
+  "dimensions":[{"key":"security_secrets","weight":22,"score":0,"rationale":""}],
+  "blockers":[{"id":"","title":"","dimension":"","severity":"high",
+    "evidence":[{"path":"","detail":""}],"why_it_matters":"","fix":"","first_verification_step":""}],
+  "summary":"" }
+\`\`\`
+Then give the user a short, plain-language summary: the headline score, the
+per-dimension scores in one line each, and the must-fix blockers. Offer to turn
+any blocker into a fix task / PR. The score is a heuristic, not a precise grade —
+present it as such.
+`;
+
+const AGENT_READINESS_BODY = `# Agent Readiness Scan
+
+You assess how well a coding agent (Claude Code / Codex / Cursor) can work in the
+**target repository for this chat** without getting lost. Produce a
+structured agent-readiness report. **READ-ONLY**: do not modify anything.
+
+## Step 0 — get the repo
+Get the target repo before scanning. **Fastest path (preferred):** the repo's
+GitHub URL is in the opening chat message ("connected to your code: …") —
+\`git clone\` it read-only into a temp dir and scan that (one step, no write). If
+a repo is instead already bound into your workspace as a source repo, note it is
+a **bare** clone (no working tree) — you'd \`git worktree add\` to get files; for a
+one-off read-only scan, cloning the URL is simpler. Don't ask the user where the
+repo is; get it from these signals and proceed.
+
+## Hard rules (non-negotiable)
+1. **EVIDENCE FIRST.** Every finding cites concrete evidence from THIS repo (file
+   path, missing file, command). No generic advice.
+2. **NO INVENTED PROBLEMS.** Healthy dimension → score high and say so. A clean
+   repo should score high; never manufacture blockers.
+3. **SPECIFIC & ACTIONABLE.** Each blocker is fixable from your description alone.
+
+## Step 1 — gather evidence (read, don't guess)
+Inspect: AGENTS.md / CLAUDE.md / Cursor rules (presence, length, conflicts,
+whether they include the test command + edit boundaries), README/architecture/
+module docs & "required reading", package scripts (test/build/lint/typecheck),
+how to run/set up (setup steps, .env.example, lockfiles, services like docker),
+CODEOWNERS / "do not edit" / generated-file markers / secrets handling, issue &
+PR templates & recent issue quality. **Prefer running the declared test/build if
+cheap & safe; note flaky/failing as evidence** (flaky tests undermine an agent's
+ability to trust red/green).
+
+## Step 2 — score each dimension 0-10 (anchors: 0-3 absent/broken · 4-6 partial · 7-8 solid · 9-10 exemplary)
+- verifiability (22): can the agent verify its own change — documented & runnable test/build/lint, CI gates, is the run path obvious (e.g. needs \`docker compose up\` first)?
+- agent_instructions (20): AGENTS.md/CLAUDE.md/Cursor rules — present, specific, non-conflicting, not bloated, include test command + edit boundaries?
+- architecture_navigability (16): can the agent find WHERE to change — module/structure docs, entrypoints, required reading?
+- reproducibility (14): can the agent set up & run — setup steps, .env.example, lockfiles, services?
+- ownership_boundaries (16): CODEOWNERS, "do not edit"/generated files, secrets handling?
+- task_handoff (12): issue/PR templates, acceptance-criteria norms — can an issue be handed to an agent as-is?
+
+\`headline_score = round(sum(dimension_score/10 * weight))\`  // 0-100
+
+## Step 3 — blockers
+Pick the 3-5 highest-impact issues (fewer if healthy). For each: \`evidence[]\`,
+\`why_it_matters\` (HOW it makes the agent fail — get lost, edit the wrong place,
+can't verify), \`fix\`, \`first_verification_step\`, \`severity\` (critical|high|medium).
+
+## Step 4 — output (schema ar-1), then a short human summary
+Emit strict JSON:
+\`\`\`json
+{ "schema_version":"ar-1", "wedge":"agent-readiness", "headline_score":0,
+  "dimensions":[{"key":"verifiability","weight":22,"score":0,"rationale":""}],
+  "blockers":[{"id":"","title":"","dimension":"","severity":"medium",
+    "evidence":[{"path":"","detail":""}],"why_it_matters":"","fix":"","first_verification_step":""}],
+  "summary":"" }
+\`\`\`
+Then a short, plain-language summary: headline score, per-dimension one-liners,
+must-fix blockers. Offer to turn any blocker into a fix task / PR (e.g. tighten
+AGENTS.md, add a "how to verify your change" section). The score is a heuristic,
+not a precise grade — present it as such.
+`;
+
+const CAMPAIGN_SCAN_SKILLS: Record<string, CampaignScanSkill> = {
+  "production-scan": {
+    name: "production-scan",
+    description:
+      "Use when asked to run a production-readiness / launch-readiness scan on the target repository for this chat (e.g. a production-scan growth chat). Produces a scored, security-weighted report with the must-fix blockers before shipping.",
+    body: PRODUCTION_SCAN_BODY,
+  },
+  "agent-readiness": {
+    name: "agent-readiness",
+    description:
+      "Use when asked to run an agent-readiness scan on the target repository for this chat (e.g. an agent-readiness growth chat). Assesses how well a coding agent (Claude Code / Codex / Cursor) can work in this repo without getting lost, and names the must-fix blockers.",
+    body: AGENT_READINESS_BODY,
+  },
+};
+
+/** The managed scan skill for a campaign, or null for an unknown slug. */
+export function getCampaignScanSkill(campaign: string): CampaignScanSkill | null {
+  return CAMPAIGN_SCAN_SKILLS[campaign] ?? null;
+}

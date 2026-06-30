@@ -69,19 +69,6 @@ const onboardingMocks = vi.hoisted(() => ({
 }));
 const agentsListMock = vi.hoisted(() => vi.fn(async () => [] as unknown[]));
 const updateAgentMock = vi.hoisted(() => vi.fn(async () => ({})));
-const agentResourcesMock = vi.hoisted(() => ({
-  get: vi.fn(async () => ({
-    version: 1,
-    effective: {},
-    bindings: [] as unknown[],
-    availableTeamResources: [] as unknown[],
-  })),
-  update: vi.fn(async () => ({})),
-}));
-const resourcesMock = vi.hoisted(() => ({
-  createForOrg: vi.fn(async (_orgId: string, _body: unknown) => ({ id: "skill-res-1" })),
-  create: vi.fn(async (_body: unknown) => ({ id: "skill-res-1" })),
-}));
 
 vi.mock("react-router", async () => {
   const actual = await vi.importActual<typeof import("react-router")>("react-router");
@@ -112,14 +99,6 @@ vi.mock("../../../features/agent-setup/use-agent-creation.js", () => ({
 }));
 vi.mock("../../../api/onboarding-events.js", () => onboardingMocks);
 vi.mock("../../../api/agents.js", () => ({ listManagedAgents: agentsListMock, updateAgent: updateAgentMock }));
-vi.mock("../../../api/agent-resources.js", () => ({
-  getAgentResources: agentResourcesMock.get,
-  updateAgentResources: agentResourcesMock.update,
-}));
-vi.mock("../../../api/resources.js", () => ({
-  createTeamResource: resourcesMock.create,
-  createTeamResourceForOrg: resourcesMock.createForOrg,
-}));
 
 function createStorage(): Storage {
   const data = new Map<string, string>();
@@ -187,14 +166,6 @@ beforeEach(() => {
   agentsListMock.mockResolvedValue([]);
   updateAgentMock.mockReset();
   updateAgentMock.mockResolvedValue({});
-  agentResourcesMock.get.mockReset();
-  agentResourcesMock.get.mockResolvedValue({ version: 1, effective: {}, bindings: [], availableTeamResources: [] });
-  agentResourcesMock.update.mockReset();
-  agentResourcesMock.update.mockResolvedValue({});
-  resourcesMock.createForOrg.mockReset();
-  resourcesMock.createForOrg.mockResolvedValue({ id: "skill-res-1" });
-  resourcesMock.create.mockReset();
-  resourcesMock.create.mockResolvedValue({ id: "skill-res-1" });
   // Default to dev (allowed + settled) so existing flow tests run unchanged;
   // the channel-gate tests override this per case.
   channelMock.value = { channel: "dev", settled: true };
@@ -299,21 +270,9 @@ describe("QuickstartPage — full flow (e2e)", () => {
     expect(arg.bootstrap).toContain("github.com/acme/backend");
     // dual-reader: the bootstrap renders verbatim to the user, so no jargon.
     expect(arg.bootstrap.toLowerCase()).not.toContain("skill");
-    // mountScanSkill: the production-scan skill is created in the org + bound to
-    // the agent BEFORE the kickoff, carrying the real rubric body (ps-1 schema)
-    // so the campaign directive can have the agent load + run it.
-    expect(resourcesMock.createForOrg).toHaveBeenCalledTimes(1);
-    const createInput = resourcesMock.createForOrg.mock.calls[0]?.[1] as
-      | { name: string; payload: { body: string } }
-      | undefined;
-    expect(createInput?.name).toBe("production-scan");
-    expect(createInput?.payload.body).toContain("ps-1");
-    expect(agentResourcesMock.update).toHaveBeenCalledWith(
-      "agent-1",
-      expect.objectContaining({
-        bindings: [expect.objectContaining({ type: "skill", mode: "include", resourceId: "skill-res-1" })],
-      }),
-    );
+    // The campaign's scan skill is provisioned + bound server-side by the
+    // kickoff (see the server kickoff test), so the client only sends the
+    // campaign on the start-chat call — no resource mounting from the browser.
     expect(navigateMock).toHaveBeenCalledWith("/?c=chat-1");
   });
 
