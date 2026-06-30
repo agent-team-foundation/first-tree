@@ -35,6 +35,13 @@ const computerMock = vi.hoisted(() => ({
     tokenError: null as string | null,
     retry: vi.fn(),
   },
+  // Captures the `enabled` arg the page passes to useComputerConnection so a
+  // test can assert the channel gate keeps the connection off in prod/loading.
+  lastEnabled: undefined as boolean | undefined,
+}));
+
+const channelMock = vi.hoisted(() => ({
+  value: { channel: "dev" as "dev" | "staging" | "prod" | null, settled: true },
 }));
 
 type CreateAgentArgs = {
@@ -69,7 +76,14 @@ vi.mock("react-router", async () => {
 });
 vi.mock("../../../auth/auth-context.js", () => ({ useAuth: () => authMock.value }));
 vi.mock("../../../features/agent-setup/use-computer-connection.js", () => ({
-  useComputerConnection: () => computerMock.value,
+  useComputerConnection: (enabled: boolean) => {
+    computerMock.lastEnabled = enabled;
+    return computerMock.value;
+  },
+}));
+vi.mock("../../../hooks/use-server-channel.js", () => ({
+  useServerChannelState: () => channelMock.value,
+  useServerChannel: () => channelMock.value.channel,
 }));
 vi.mock("../../../features/agent-setup/use-agent-creation.js", () => ({
   useAgentCreation: (opts?: { onOnline?: (uuid: string) => void }) => {
@@ -152,6 +166,10 @@ beforeEach(() => {
   agentsListMock.mockResolvedValue([]);
   updateAgentMock.mockReset();
   updateAgentMock.mockResolvedValue({});
+  // Default to dev (allowed + settled) so existing flow tests run unchanged;
+  // the channel-gate tests override this per case.
+  channelMock.value = { channel: "dev", settled: true };
+  computerMock.lastEnabled = undefined;
 });
 
 afterEach(async () => {
@@ -448,5 +466,63 @@ describe("QuickstartPage — full flow (e2e)", () => {
     expect(arg.bootstrap).toContain("Gandy assistant");
     expect(arg.bootstrap).not.toContain("Cedar");
     expect(navigateMock).toHaveBeenCalledWith("/?c=chat-1");
+  });
+
+  it("prod channel: redirects home and fires no connect/agent side effects", async () => {
+    // Even a fully connected computer with a usable runtime must not set up in
+    // prod — the gate blocks the whole flow (connection enable + setup effect)
+    // and sends the user home.
+    channelMock.value = { channel: "prod", settled: true };
+    seedIntent("production-scan");
+    connectedWith("claude-code");
+    await renderPage();
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith("/", { replace: true });
+    expect(computerMock.lastEnabled).toBe(false); // connection never enabled in prod
+    expect(agentCreationMock.create).not.toHaveBeenCalled();
+    expect(onboardingMocks.postOnboardingStartChat).not.toHaveBeenCalled();
+  });
+
+  it("unknown channel (old server / unreadable): treated as prod — redirects, creates nothing", async () => {
+    channelMock.value = { channel: null, settled: true };
+    seedIntent("production-scan");
+    connectedWith("claude-code");
+    await renderPage();
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+    });
+
+    expect(navigateMock).toHaveBeenCalledWith("/", { replace: true });
+    expect(agentCreationMock.create).not.toHaveBeenCalled();
+  });
+
+  it("channel still loading: holds a neutral screen, no redirect, no side effects", async () => {
+    channelMock.value = { channel: null, settled: false };
+    seedIntent("production-scan");
+    connectedWith("claude-code");
+    const container = await renderPage();
+    await act(async () => {
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled(); // must NOT bounce a dev/staging user mid-fetch
+    expect(computerMock.lastEnabled).toBe(false); // connection waits until the channel settles
+    expect(agentCreationMock.create).not.toHaveBeenCalled();
+    expect(container.textContent).not.toContain("npx @first-tree/cli login"); // not the connect step
+  });
+
+  it("staging channel: allowed — connection enabled, no redirect", async () => {
+    channelMock.value = { channel: "staging", settled: true };
+    seedIntent("production-scan");
+    await renderPage();
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve();
+    });
+
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(computerMock.lastEnabled).toBe(true);
   });
 });
