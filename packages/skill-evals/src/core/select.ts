@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 
 import type { ShippedSkillName } from "./case-schema.js";
 
-export type EvalRecommendationKind = "floor" | "gate" | "quality";
+export type EvalRecommendationKind = "floor" | "gate" | "periodic" | "quality";
 
 export type EvalRecommendation = {
   command: string;
@@ -61,6 +61,10 @@ function gateCommand(skill: ShippedSkillName): string {
 
 function qualityCommand(skill: Extract<ShippedSkillName, "first-tree-write" | "first-tree-welcome">): string {
   return `pnpm --filter @first-tree/skill-evals eval:quality -- --suite ${skill}`;
+}
+
+function periodicCommand(): string {
+  return "pnpm --filter @first-tree/skill-evals eval:periodic";
 }
 
 function addSuiteRecommendations(
@@ -133,6 +137,14 @@ function isSkillEvalCorePath(path: string): boolean {
   return path.startsWith("packages/skill-evals/src/core/") || path === "packages/skill-evals/src/index.ts";
 }
 
+function isSkillEvalPeriodicFrameworkPath(path: string): boolean {
+  return (
+    path === "packages/skill-evals/src/core/periodic.ts" ||
+    path.startsWith("packages/skill-evals/src/core/periodic/") ||
+    path.startsWith("packages/skill-evals/src/suites/periodic/")
+  );
+}
+
 function isSkillEvalCliOrSchemaPath(path: string): boolean {
   return (
     path === "packages/skill-evals/package.json" ||
@@ -159,6 +171,16 @@ export function selectSkillEvalRecommendations(
     const skill = matchingSkill(path);
     if (skill !== null) {
       addSuiteRecommendations(recommendations, skill, `${path} touches ${skill}`);
+      continue;
+    }
+
+    if (isSkillEvalPeriodicFrameworkPath(path)) {
+      addRecommendation(recommendations, {
+        command: periodicCommand(),
+        kind: "periodic",
+        reason: `${path} touches periodic eval framework`,
+        suite: "all",
+      });
       continue;
     }
 

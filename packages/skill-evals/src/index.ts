@@ -7,6 +7,7 @@ import { type SkillEvalSuiteDefinition, validateCoverageMatrix } from "./core/co
 import { isRecord } from "./core/events.js";
 import { gateCommandFailed } from "./core/gate-exit.js";
 import { gradingFailureMessages } from "./core/grading.js";
+import { buildPeriodicSummary, formatPeriodicSummary } from "./core/periodic.js";
 import {
   appendResultStoreEntries,
   compareResultGroups,
@@ -45,7 +46,7 @@ type CliOptions = {
   caseId: string | null;
   changedFiles: readonly string[];
   codexBin: string;
-  command: "compare" | "floor" | "gate" | "quality" | "select" | "summary";
+  command: "compare" | "floor" | "gate" | "periodic" | "quality" | "select" | "summary";
   currentRunGroupId: string | null;
   includeQuality: boolean;
   judgeBin: string;
@@ -80,6 +81,8 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --include-quality
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
+  pnpm --filter @first-tree/skill-evals eval:periodic
+  pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-welcome
   pnpm --filter @first-tree/skill-evals eval:quality
   pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write
   pnpm --filter @first-tree/skill-evals eval:select -- --base main
@@ -89,6 +92,7 @@ function usage(): string {
 Commands:
   floor                  Run no-model schema, coverage, and skill-file checks.
   gate                   Run a live model gate suite and write grading.json.
+  periodic               Run opt-in broader periodic evals when implemented.
   quality                Run opt-in LLM-as-judge quality cases.
   select                 Recommend eval commands from changed files.
   summary                Summarize one result-store run group.
@@ -96,7 +100,7 @@ Commands:
 
 Options:
   --suite <skill>        Limit per-suite floor checks to one shipped skill.
-  --case <id>            Run one live gate case.
+  --case <id>            Run one live eval case.
   --include-quality      With eval:gate, run supported quality judge cases after deterministic gate passes.
   --base <ref>           Base ref for eval:select git diff. Defaults to main.
   --changed-file <path>  Add an explicit changed file for eval:select.
@@ -130,6 +134,7 @@ function parseArgs(args: readonly string[]): CliOptions {
   if (
     command !== "floor" &&
     command !== "gate" &&
+    command !== "periodic" &&
     command !== "quality" &&
     command !== "select" &&
     command !== "summary" &&
@@ -754,6 +759,18 @@ function runSelect(options: CliOptions): void {
   }
 }
 
+function runPeriodic(options: CliOptions): void {
+  const summary = buildPeriodicSummary(SKILL_EVAL_SUITES, {
+    caseId: options.caseId,
+    suite: options.suite,
+  });
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+  } else {
+    process.stdout.write(`${formatPeriodicSummary(summary)}\n`);
+  }
+}
+
 function runCompare(options: CliOptions): void {
   const packageRootPath = packageRoot();
   const entries = readResultStore(packageRootPath);
@@ -792,6 +809,10 @@ async function main(): Promise<void> {
   }
   if (options.command === "summary") {
     runSummary(options);
+    return;
+  }
+  if (options.command === "periodic") {
+    runPeriodic(options);
     return;
   }
   if (options.command === "gate") {

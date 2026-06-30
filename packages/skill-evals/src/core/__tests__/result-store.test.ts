@@ -176,12 +176,28 @@ describe("result store", () => {
       startedAt: "2026-06-29T02:00:01.000Z",
       tier: "quality",
     });
+    const currentPeriodic = entry({
+      artifact: {
+        gradingJsonPath: null,
+        runRoot: "/tmp/periodic-run",
+        summaryJsonPath: "/tmp/periodic-run/summary.json",
+        summaryMdPath: "/tmp/periodic-run/summary.md",
+      },
+      caseId: "welcome-full-matrix",
+      command: "eval:periodic",
+      durationMs: 300,
+      passed: true,
+      runGroupId: "20260629T020000000Z-eval-gate",
+      skill: "first-tree-welcome",
+      startedAt: "2026-06-29T02:00:02.000Z",
+      tier: "periodic",
+    });
 
-    const summary = summarizeResultRunGroup([previous, currentFailure, currentQuality], null);
+    const summary = summarizeResultRunGroup([previous, currentFailure, currentQuality, currentPeriodic], null);
 
     expect(summary?.runGroupId).toBe("20260629T020000000Z-eval-gate");
     expect(summary?.failed).toBe(1);
-    expect(summary?.totalDurationMs).toBe(1400);
+    expect(summary?.totalDurationMs).toBe(1700);
     expect(summary?.turns).toBe(1);
     expect(summary?.firstResponseLatencyMs).toBe(350);
     expect(summary?.git).toEqual({
@@ -191,14 +207,16 @@ describe("result store", () => {
     });
     expect(summary?.countsByCommand).toEqual({
       "eval:gate": 1,
+      "eval:periodic": 1,
       "eval:quality": 1,
     });
     expect(summary?.countsBySkill).toEqual({
-      "first-tree-welcome": 1,
+      "first-tree-welcome": 2,
       "first-tree-write": 1,
     });
     expect(summary?.countsByTier).toEqual({
       gate: 1,
+      periodic: 1,
       quality: 1,
     });
     expect(summary?.entries.find((candidate) => candidate.tier === "quality")?.judgeScores).toEqual({
@@ -212,11 +230,42 @@ describe("result store", () => {
     });
     const formatted = formatResultRunSummary(summary);
     expect(formatted).toContain("Git: branch=feat/test sha=abc123 base=n/a");
-    expect(formatted).toContain("Counts by command: eval:gate=1, eval:quality=1");
-    expect(formatted).toContain("Counts by tier: gate=1, quality=1");
-    expect(formatted).toContain("Counts by skill: first-tree-welcome=1, first-tree-write=1");
+    expect(formatted).toContain("Counts by command: eval:gate=1, eval:periodic=1, eval:quality=1");
+    expect(formatted).toContain("Counts by tier: gate=1, periodic=1, quality=1");
+    expect(formatted).toContain("Counts by skill: first-tree-welcome=2, first-tree-write=1");
     expect(formatted).toContain("First response latency: 350 ms");
+    expect(formatted).toContain("first-tree-welcome:periodic:welcome-full-matrix command=eval:periodic");
     expect(formatted).toContain("judge_scores: bounded=4, useful=3");
+  });
+
+  it("compares periodic result-store entries by case key", () => {
+    const previousPeriodic = entry({
+      caseId: "welcome-full-matrix",
+      command: "eval:periodic",
+      failures: ["periodic oracle failed"],
+      passed: false,
+      runGroupId: "20260629T010000000Z-eval-periodic",
+      skill: "first-tree-welcome",
+      startedAt: "2026-06-29T01:00:00.000Z",
+      status: "failed",
+      tier: "periodic",
+    });
+    const currentPeriodic = entry({
+      caseId: "welcome-full-matrix",
+      command: "eval:periodic",
+      passed: true,
+      runGroupId: "20260629T020000000Z-eval-periodic",
+      skill: "first-tree-welcome",
+      startedAt: "2026-06-29T02:00:00.000Z",
+      tier: "periodic",
+    });
+
+    const { current, previous } = latestRunGroups([previousPeriodic, currentPeriodic], null, null);
+    const comparison = compareResultGroups(current, previous);
+
+    expect(comparison.recovered.map((delta) => delta.caseKey)).toEqual([
+      "first-tree-welcome:periodic:welcome-full-matrix",
+    ]);
   });
 
   it("returns null when there are no result-store run groups to summarize", () => {
