@@ -1,5 +1,5 @@
 {
-  "id": "80dfda2a-fab8-489d-8c0d-e3d485e885d0",
+  "id": "dc28257f-62bb-4b3c-bb60-51c282308ee0",
   "prevId": "742cd4e7-4515-476b-9f42-10058676ab1d",
   "version": "7",
   "dialect": "postgresql",
@@ -3703,11 +3703,17 @@
           "method": "btree",
           "with": {}
         },
-        "uq_resources_team_skill_name_active": {
-          "name": "uq_resources_team_skill_name_active",
+        "uq_resources_agent_skill_name_active": {
+          "name": "uq_resources_agent_skill_name_active",
           "columns": [
             {
               "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "owner_agent_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -3720,7 +3726,7 @@
             }
           ],
           "isUnique": true,
-          "where": "\"resources\".\"type\" = 'skill' AND \"resources\".\"scope\" = 'team' AND \"resources\".\"status\" IN ('active', 'stale')",
+          "where": "\"resources\".\"type\" = 'skill' AND \"resources\".\"scope\" = 'agent' AND \"resources\".\"status\" IN ('active', 'stale')",
           "concurrently": false,
           "method": "btree",
           "with": {}

@@ -244,14 +244,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const { userId } = requireUser(request);
     const body = kickoffOnboardingSchema.parse(request.body);
     const { memberId, humanAgentId } = await resolveOnboardingMember(app, userId, body.organizationId);
-    // Provision + bind the campaign's managed scan skill BEFORE the kickoff, so
-    // it is materialized when the agent dispatches the chat and the campaign
-    // onboarding directive can load and run it. Server-side so it works for
-    // non-admin quickstart actors (the team-resource HTTP create is admin-only);
-    // idempotent, and a no-op for a non-campaign kickoff.
-    if (body.campaign) {
-      await app.resourcesService.ensureAndBindCampaignScanSkill(body.agentUuid, body.campaign, memberId);
-    }
+    const campaign = body.campaign;
     const result = await kickoffOnboarding(app.db, {
       memberId,
       humanAgentId,
@@ -259,7 +252,17 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       bootstrap: body.bootstrap,
       kind: body.kind,
       complete: body.complete ?? true,
-      ...(body.campaign ? { campaign: body.campaign } : {}),
+      // Provision + bind the campaign's agent-private scan skill via onChatReady
+      // — AFTER createChat validates the target agent (cross-org / active /
+      // private) plus the service's own manage-ownership gate, and BEFORE the
+      // bootstrap is sent. Running it before validation would let an
+      // unauthorized kickoff mutate another org/agent's resources.
+      ...(campaign
+        ? {
+            campaign,
+            onChatReady: () => app.resourcesService.ensureAndBindCampaignScanSkill(body.agentUuid, campaign, memberId),
+          }
+        : {}),
     });
     if (result.sent) {
       notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
