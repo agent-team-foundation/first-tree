@@ -47,8 +47,6 @@ export function buildNoRepoBootstrap(agentDisplayName: string): string {
     `Welcome to First Tree — this is your first chat with ${agentDisplayName}.`,
     "",
     `Tell ${agentDisplayName} what you'd like to work on: point it at a folder on your computer or paste a GitHub URL, and it'll take a look and suggest a few things you could start with.`,
-    "",
-    `No GitHub connection needed to begin — ${agentDisplayName} works right from your machine. You can connect First Tree to GitHub later, only if a task needs it.`,
   ].join("\n");
 }
 
