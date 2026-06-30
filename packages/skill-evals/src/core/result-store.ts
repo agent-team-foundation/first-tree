@@ -28,6 +28,7 @@ export type ResultStoreEntry = {
   command: ResultStoreCommand;
   costUsd: number | null;
   durationMs: number | null;
+  firstResponseLatencyMs: number | null;
   failures: readonly string[];
   git: ResultStoreGitInfo;
   judgeScores: Record<string, number> | null;
@@ -67,6 +68,54 @@ export type ResultCompareSummary = {
   stillFailing: readonly CompareEntryDelta[];
   stillPassing: readonly CompareEntryDelta[];
   unchangedOrNewPassing: readonly CompareEntryDelta[];
+};
+
+export type ResultRunFailure = {
+  artifactPath: string | null;
+  caseKey: string;
+  failures: readonly string[];
+};
+
+export type ResultRunFlakySummary = {
+  newFailures: number;
+  previousRunGroupId: string | null;
+  recovered: number;
+  status: "not-enough-history" | "stable" | "status-flips";
+};
+
+export type ResultRunEntrySummary = {
+  artifactPath: string | null;
+  caseKey: string;
+  command: ResultStoreCommand;
+  durationMs: number | null;
+  failures: readonly string[];
+  firstResponseLatencyMs: number | null;
+  git: ResultStoreGitInfo;
+  judgeScores: Record<string, number> | null;
+  passed: boolean;
+  skill: ShippedSkillName | "framework";
+  status: ResultStoreStatus;
+  tier: SkillEvalTier;
+  turns: number | null;
+};
+
+export type ResultRunSummary = {
+  countsByCommand: Record<string, number>;
+  countsBySkill: Record<string, number>;
+  countsByTier: Record<string, number>;
+  entries: readonly ResultRunEntrySummary[];
+  failed: number;
+  failures: readonly ResultRunFailure[];
+  firstResponseLatencyMs: number | null;
+  flaky: ResultRunFlakySummary;
+  git: ResultStoreGitInfo | null;
+  passed: number;
+  runGroupId: string;
+  skipped: number;
+  startedAt: string;
+  total: number;
+  totalDurationMs: number | null;
+  turns: number | null;
 };
 
 export function resultStorePath(packageRoot: string): string {
@@ -267,6 +316,202 @@ export function latestRunGroups(
 function groupsHaveSharedCaseKeys(left: ResultStoreRunGroup, right: ResultStoreRunGroup): boolean {
   const rightKeys = new Set(right.entries.map(caseKey));
   return left.entries.some((entry) => rightKeys.has(caseKey(entry)));
+}
+
+function artifactPath(entry: ResultStoreEntry): string | null {
+  return entry.artifact.gradingJsonPath ?? entry.artifact.summaryJsonPath ?? entry.artifact.runRoot;
+}
+
+function sumKnown(values: readonly (number | null | undefined)[]): number | null {
+  const known = values.filter((value) => typeof value === "number");
+  if (known.length === 0) return null;
+  return known.reduce((total, value) => total + value, 0);
+}
+
+function minKnown(values: readonly (number | null | undefined)[]): number | null {
+  const known = values.filter((value) => typeof value === "number");
+  if (known.length === 0) return null;
+  return Math.min(...known);
+}
+
+function countBy(
+  entries: readonly ResultStoreEntry[],
+  keyFor: (entry: ResultStoreEntry) => string,
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const entry of entries) {
+    const key = keyFor(entry);
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function previousComparableGroup(
+  current: ResultStoreRunGroup,
+  groups: readonly ResultStoreRunGroup[],
+): ResultStoreRunGroup | null {
+  return (
+    groups
+      .filter((group) => group.runGroupId !== current.runGroupId)
+      .filter((group) => group.startedAt < current.startedAt)
+      .filter((group) => groupsHaveSharedCaseKeys(current, group))
+      .at(-1) ?? null
+  );
+}
+
+export function summarizeResultRunGroup(
+  entries: readonly ResultStoreEntry[],
+  currentRunGroupId: string | null,
+): ResultRunSummary | null {
+  const groups = groupResultEntries(entries);
+  const current =
+    currentRunGroupId === null
+      ? (groups.at(-1) ?? null)
+      : (groups.find((group) => group.runGroupId === currentRunGroupId) ?? null);
+  if (current === null) return null;
+
+  const previous = previousComparableGroup(current, groups);
+  const comparison = compareResultGroups(current, previous);
+  const passed = current.entries.filter((entry) => entry.status === "passed").length;
+  const failed = current.entries.filter((entry) => entry.status === "failed").length;
+  const skipped = current.entries.filter((entry) => entry.status === "skipped").length;
+  const firstResponseLatencyMs = minKnown(current.entries.map((entry) => entry.firstResponseLatencyMs));
+  const turns = sumKnown(current.entries.map((entry) => entry.turns));
+
+  return {
+    countsByCommand: countBy(current.entries, (entry) => entry.command),
+    countsBySkill: countBy(current.entries, (entry) => entry.skill),
+    countsByTier: countBy(current.entries, (entry) => entry.tier),
+    entries: current.entries.map((entry) => ({
+      artifactPath: artifactPath(entry),
+      caseKey: caseKey(entry),
+      command: entry.command,
+      durationMs: entry.durationMs,
+      failures: entry.failures,
+      firstResponseLatencyMs: entry.firstResponseLatencyMs ?? null,
+      git: entry.git,
+      judgeScores: entry.judgeScores,
+      passed: entry.passed,
+      skill: entry.skill,
+      status: entry.status,
+      tier: entry.tier,
+      turns: entry.turns ?? null,
+    })),
+    failed,
+    failures: current.entries
+      .filter((entry) => entry.failures.length > 0)
+      .map((entry) => ({
+        artifactPath: artifactPath(entry),
+        caseKey: caseKey(entry),
+        failures: entry.failures,
+      })),
+    firstResponseLatencyMs,
+    flaky: {
+      newFailures: comparison.newFailures.length,
+      previousRunGroupId: previous?.runGroupId ?? null,
+      recovered: comparison.recovered.length,
+      status:
+        previous === null
+          ? "not-enough-history"
+          : comparison.newFailures.length + comparison.recovered.length > 0
+            ? "status-flips"
+            : "stable",
+    },
+    git: current.entries[0]?.git ?? null,
+    passed,
+    runGroupId: current.runGroupId,
+    skipped,
+    startedAt: current.startedAt,
+    total: current.entries.length,
+    totalDurationMs: sumKnown(current.entries.map((entry) => entry.durationMs)),
+    turns,
+  };
+}
+
+function formatNullableMs(value: number | null): string {
+  return value === null ? "n/a" : `${value} ms`;
+}
+
+function formatNullableNumber(value: number | null): string {
+  return value === null ? "n/a" : String(value);
+}
+
+function formatNullableText(value: string | null): string {
+  return value === null ? "n/a" : value;
+}
+
+function formatCountMap(counts: Record<string, number>): string {
+  const entries = Object.entries(counts);
+  if (entries.length === 0) return "none";
+  return entries.map(([key, value]) => `${key}=${value}`).join(", ");
+}
+
+function formatJudgeScores(scores: Record<string, number> | null): string | null {
+  if (scores === null) return null;
+  return Object.entries(scores)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join(", ");
+}
+
+function formatFlaky(summary: ResultRunFlakySummary): string {
+  if (summary.status === "not-enough-history") {
+    return "not enough comparable history";
+  }
+  const prefix = summary.status === "stable" ? "stable" : "status flips";
+  return `${prefix} vs ${summary.previousRunGroupId}: new_failures=${summary.newFailures}, recovered=${summary.recovered}`;
+}
+
+export function formatResultRunSummary(summary: ResultRunSummary | null): string {
+  if (summary === null) {
+    return ["Skill Eval Summary", "", "No result-store run groups found."].join("\n");
+  }
+
+  const failureLines =
+    summary.failures.length === 0
+      ? ["Failures: 0"]
+      : [
+          `Failures: ${summary.failures.length}`,
+          ...summary.failures.flatMap((failure) => [
+            `- ${failure.caseKey}: ${failure.failures.join("; ")}`,
+            ...(failure.artifactPath === null ? [] : [`  artifact: ${failure.artifactPath}`]),
+          ]),
+        ];
+  const entryLines = summary.entries.flatMap((entry) => {
+    const artifact = entry.artifactPath === null ? "" : ` artifact=${entry.artifactPath}`;
+    const scores = formatJudgeScores(entry.judgeScores);
+    return [
+      `- ${entry.status.toUpperCase()} ${entry.caseKey} command=${entry.command} tier=${entry.tier} skill=${
+        entry.skill
+      } duration_ms=${formatNullableNumber(entry.durationMs)} turns=${formatNullableNumber(
+        entry.turns,
+      )} first_response_latency_ms=${formatNullableNumber(entry.firstResponseLatencyMs)}${artifact}`,
+      ...(scores === null ? [] : [`  judge_scores: ${scores}`]),
+    ];
+  });
+
+  return [
+    "Skill Eval Summary",
+    "",
+    `Run group: ${summary.runGroupId}`,
+    `Started: ${summary.startedAt}`,
+    `Git: branch=${formatNullableText(summary.git?.branch ?? null)} sha=${formatNullableText(
+      summary.git?.sha ?? null,
+    )} base=${formatNullableText(summary.git?.base ?? null)}`,
+    `Entries: ${summary.total} total, ${summary.passed} passed, ${summary.failed} failed, ${summary.skipped} skipped`,
+    `Counts by command: ${formatCountMap(summary.countsByCommand)}`,
+    `Counts by tier: ${formatCountMap(summary.countsByTier)}`,
+    `Counts by skill: ${formatCountMap(summary.countsBySkill)}`,
+    `Total duration: ${formatNullableMs(summary.totalDurationMs)}`,
+    `Turns: ${formatNullableNumber(summary.turns)}`,
+    `First response latency: ${formatNullableMs(summary.firstResponseLatencyMs)}`,
+    `Flaky: ${formatFlaky(summary.flaky)}`,
+    "",
+    ...failureLines,
+    "",
+    "Entries:",
+    ...entryLines,
+  ].join("\n");
 }
 
 function formatDeltaList(title: string, deltas: readonly CompareEntryDelta[]): readonly string[] {

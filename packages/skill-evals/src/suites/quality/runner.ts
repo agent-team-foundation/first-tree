@@ -119,7 +119,7 @@ function readFixtureFile(path: string): string {
   return readFileSync(path, "utf8");
 }
 
-function writeQualityInput(gateSummary: WriteCaseRunSummary): QualityArtifactInput {
+export function buildWriteQualityInput(gateSummary: WriteCaseRunSummary): QualityArtifactInput {
   return {
     artifact:
       gateSummary.metrics.treeDiff.trim().length > 0
@@ -151,7 +151,7 @@ function welcomeEvidenceSource(gateSummary: WelcomeCaseRunSummary): string {
   ].join("\n");
 }
 
-function welcomeQualityInput(gateSummary: WelcomeCaseRunSummary): QualityArtifactInput {
+export function buildWelcomeQualityInput(gateSummary: WelcomeCaseRunSummary): QualityArtifactInput {
   return {
     artifact: [
       "Chat ask/send text:",
@@ -186,7 +186,7 @@ async function collectLiveQualityInput(
     if (summary === undefined) {
       throw new Error(`No gate summary produced for ${definition.gateCaseId}.`);
     }
-    return writeQualityInput(summary);
+    return buildWriteQualityInput(summary);
   }
 
   if (definition.evalCase.skill === "first-tree-welcome") {
@@ -201,7 +201,7 @@ async function collectLiveQualityInput(
     if (summary === undefined) {
       throw new Error(`No gate summary produced for ${definition.gateCaseId}.`);
     }
-    return welcomeQualityInput(summary);
+    return buildWelcomeQualityInput(summary);
   }
 
   throw new Error(`Unsupported quality suite: ${definition.evalCase.skill}.`);

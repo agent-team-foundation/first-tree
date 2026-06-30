@@ -5,16 +5,19 @@ import { fileURLToPath } from "node:url";
 import { SHIPPED_SKILLS, type ShippedSkillName } from "./core/case-schema.js";
 import { type SkillEvalSuiteDefinition, validateCoverageMatrix } from "./core/coverage.js";
 import { isRecord } from "./core/events.js";
+import { gateCommandFailed } from "./core/gate-exit.js";
 import { gradingFailureMessages } from "./core/grading.js";
 import {
   appendResultStoreEntries,
   compareResultGroups,
   createRunGroupId,
   formatCompareSummary,
+  formatResultRunSummary,
   latestRunGroups,
   type ResultStoreEntry,
   readGitInfo,
   readResultStore,
+  summarizeResultRunGroup,
 } from "./core/result-store.js";
 import { changedFilesFromGit, formatSelectionSummary, selectSkillEvalRecommendations } from "./core/select.js";
 import { readSkillFrontmatter } from "./core/skills/frontmatter.js";
@@ -23,10 +26,17 @@ import type { BatchSummary as ReadBatchSummary } from "./suites/first-tree-read/
 import { formatFirstTreeSeedGateSummary, runFirstTreeSeedGate } from "./suites/first-tree-seed/index.js";
 import type { BatchSummary as SeedBatchSummary } from "./suites/first-tree-seed/types.js";
 import { formatFirstTreeWelcomeGateSummary, runFirstTreeWelcomeGate } from "./suites/first-tree-welcome/index.js";
+import { FIRST_TREE_WELCOME_QUALITY_DEFINITION } from "./suites/first-tree-welcome/quality.js";
 import type { BatchSummary as WelcomeBatchSummary } from "./suites/first-tree-welcome/types.js";
 import { formatFirstTreeWriteGateSummary, runFirstTreeWriteGate } from "./suites/first-tree-write/index.js";
+import { FIRST_TREE_WRITE_QUALITY_DEFINITION } from "./suites/first-tree-write/quality.js";
 import type { BatchSummary as WriteBatchSummary } from "./suites/first-tree-write/types.js";
-import { formatQualitySummaryTable, runQualityEval } from "./suites/quality/index.js";
+import {
+  buildWelcomeQualityInput,
+  buildWriteQualityInput,
+  formatQualitySummaryTable,
+  runQualityEval,
+} from "./suites/quality/index.js";
 import type { QualityBatchSummary, QualitySkillName } from "./suites/quality/types.js";
 import { SKILL_EVAL_SUITES } from "./suites/registry.js";
 
@@ -35,8 +45,9 @@ type CliOptions = {
   caseId: string | null;
   changedFiles: readonly string[];
   codexBin: string;
-  command: "compare" | "floor" | "gate" | "quality" | "select";
+  command: "compare" | "floor" | "gate" | "quality" | "select" | "summary";
   currentRunGroupId: string | null;
+  includeQuality: boolean;
   judgeBin: string;
   judgeModel: string | null;
   json: boolean;
@@ -66,11 +77,13 @@ function usage(): string {
   pnpm --filter @first-tree/skill-evals eval:floor -- --suite <skill>
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-read
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write
+  pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write --include-quality
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-welcome
   pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-seed
   pnpm --filter @first-tree/skill-evals eval:quality
   pnpm --filter @first-tree/skill-evals eval:quality -- --suite first-tree-write
   pnpm --filter @first-tree/skill-evals eval:select -- --base main
+  pnpm --filter @first-tree/skill-evals eval:summary
   pnpm --filter @first-tree/skill-evals eval:compare
 
 Commands:
@@ -78,14 +91,16 @@ Commands:
   gate                   Run a live model gate suite and write grading.json.
   quality                Run opt-in LLM-as-judge quality cases.
   select                 Recommend eval commands from changed files.
+  summary                Summarize one result-store run group.
   compare                Compare latest result-store run groups.
 
 Options:
   --suite <skill>        Limit per-suite floor checks to one shipped skill.
   --case <id>            Run one live gate case.
+  --include-quality      With eval:gate, run supported quality judge cases after deterministic gate passes.
   --base <ref>           Base ref for eval:select git diff. Defaults to main.
   --changed-file <path>  Add an explicit changed file for eval:select.
-  --current <run-id>     Current run group for eval:compare. Defaults to latest.
+  --current <run-id>     Current run group for eval:summary/compare. Defaults to latest.
   --previous <run-id>    Previous run group for eval:compare. Defaults to previous.
   --json                 Print summary as JSON.
   --model <model>        Pass a model override to codex exec.
@@ -117,6 +132,7 @@ function parseArgs(args: readonly string[]): CliOptions {
     command !== "gate" &&
     command !== "quality" &&
     command !== "select" &&
+    command !== "summary" &&
     command !== "compare"
   ) {
     throw new Error(`Unknown command: ${command}`);
@@ -129,6 +145,7 @@ function parseArgs(args: readonly string[]): CliOptions {
     codexBin: process.env.CODEX_BIN ?? "codex",
     command,
     currentRunGroupId: null,
+    includeQuality: false,
     judgeBin: process.env.JUDGE_CODEX_BIN ?? process.env.CODEX_BIN ?? "codex",
     judgeModel: process.env.JUDGE_MODEL ?? process.env.CODEX_MODEL ?? null,
     json: false,
@@ -142,6 +159,10 @@ function parseArgs(args: readonly string[]): CliOptions {
     const arg = normalized[index];
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+    if (arg === "--include-quality") {
+      options.includeQuality = true;
       continue;
     }
     if (arg === "--case") {
@@ -209,6 +230,10 @@ function parseArgs(args: readonly string[]): CliOptions {
     throw new Error(`Unknown option: ${arg}`);
   }
 
+  if (options.includeQuality && options.command !== "gate") {
+    throw new Error("--include-quality is only valid with eval:gate.");
+  }
+
   return options;
 }
 
@@ -218,6 +243,23 @@ function qualitySuite(options: CliOptions): QualitySkillName | null {
     return options.suite;
   }
   throw new Error("eval:quality currently supports --suite first-tree-write or --suite first-tree-welcome.");
+}
+
+function includeQualitySuite(options: CliOptions): QualitySkillName {
+  if (options.suite === "first-tree-write" || options.suite === "first-tree-welcome") {
+    return options.suite;
+  }
+  const suiteText = options.suite === null ? "no suite" : options.suite;
+  throw new Error(
+    `eval:gate --include-quality is only supported for --suite first-tree-write or --suite first-tree-welcome; got ${suiteText}.`,
+  );
+}
+
+function assertIncludedQualityCase(options: CliOptions, gateCaseId: string): void {
+  if (options.caseId === null || options.caseId === gateCaseId) return;
+  throw new Error(
+    `eval:gate --include-quality requires gate case ${gateCaseId}; --case ${options.caseId} cannot produce the required quality artifact.`,
+  );
 }
 
 function packageRoot(): string {
@@ -357,6 +399,7 @@ function floorResultEntries(
     command: "eval:floor",
     costUsd: null,
     durationMs: options.durationMs,
+    firstResponseLatencyMs: null,
     failures: check.ok ? [] : [check.detail],
     git,
     judgeScores: null,
@@ -380,8 +423,8 @@ function gateResultEntries(
   batch: GateBatchSummary,
   suite: ShippedSkillName,
   options: CliOptions,
+  runGroupId = createRunGroupId(batch.runStartedAt, `eval-gate-${suite}`),
 ): readonly ResultStoreEntry[] {
-  const runGroupId = createRunGroupId(batch.runStartedAt, `eval-gate-${suite}`);
   const git = readGitInfo(repoRootFromPackage(packageRootPath), options.base);
   return batch.cases.map((summary) => {
     const durationMs = Math.max(0, Date.now() - Date.parse(summary.startedAt));
@@ -396,6 +439,7 @@ function gateResultEntries(
       command: "eval:gate",
       costUsd: null,
       durationMs,
+      firstResponseLatencyMs: summary.firstResponseLatencyMs,
       failures: summary.passed
         ? []
         : [...gradingFailureMessages(summary.grading), ...(summary.driftNote ? [`drift: ${summary.driftNote}`] : [])],
@@ -410,7 +454,7 @@ function gateResultEntries(
       startedAt: summary.startedAt,
       status: summary.passed ? "passed" : "failed",
       tier: "gate",
-      turns: null,
+      turns: summary.turns,
     } satisfies ResultStoreEntry;
   });
 }
@@ -419,8 +463,8 @@ function qualityResultEntries(
   packageRootPath: string,
   batch: QualityBatchSummary,
   options: CliOptions,
+  runGroupId = createRunGroupId(batch.runStartedAt, `eval-quality-${options.suite ?? "all"}`),
 ): readonly ResultStoreEntry[] {
-  const runGroupId = createRunGroupId(batch.runStartedAt, `eval-quality-${options.suite ?? "all"}`);
   const git = readGitInfo(repoRootFromPackage(packageRootPath), options.base);
   return batch.cases.map(
     (summary) =>
@@ -435,6 +479,7 @@ function qualityResultEntries(
         command: "eval:quality",
         costUsd: summary.cost_usd,
         durationMs: summary.duration_ms,
+        firstResponseLatencyMs: null,
         failures: summary.failures,
         git,
         judgeScores: summary.judge_scores,
@@ -452,8 +497,124 @@ function qualityResultEntries(
   );
 }
 
+type IncludedQualityResult = {
+  batch: QualityBatchSummary | null;
+  skippedReason: string | null;
+};
+
+function includedQualityGateFailureReason(batch: GateBatchSummary): string | null {
+  if (batch.failed === 0) return null;
+  return `quality was not run because deterministic gate failed (${batch.failed} failed case${
+    batch.failed === 1 ? "" : "s"
+  })`;
+}
+
+async function runIncludedWriteQuality(
+  packageRootPath: string,
+  batch: WriteBatchSummary,
+  options: CliOptions,
+): Promise<IncludedQualityResult> {
+  const skippedReason = includedQualityGateFailureReason(batch);
+  if (skippedReason !== null) return { batch: null, skippedReason };
+  const gateSummary = batch.cases.find((summary) => summary.caseId === FIRST_TREE_WRITE_QUALITY_DEFINITION.gateCaseId);
+  if (gateSummary === undefined) {
+    return {
+      batch: null,
+      skippedReason: `quality was not run because gate case ${FIRST_TREE_WRITE_QUALITY_DEFINITION.gateCaseId} was not included`,
+    };
+  }
+  const qualityBatch = await runQualityEval(
+    packageRootPath,
+    {
+      caseId: FIRST_TREE_WRITE_QUALITY_DEFINITION.evalCase.id,
+      codexBin: options.codexBin,
+      judgeBin: options.judgeBin,
+      judgeModel: options.judgeModel,
+      json: options.json,
+      model: options.model,
+      suite: "first-tree-write",
+      verbose: options.verbose,
+    },
+    undefined,
+    new Map([[FIRST_TREE_WRITE_QUALITY_DEFINITION.evalCase.id, buildWriteQualityInput(gateSummary)]]),
+  );
+  return { batch: qualityBatch, skippedReason: null };
+}
+
+async function runIncludedWelcomeQuality(
+  packageRootPath: string,
+  batch: WelcomeBatchSummary,
+  options: CliOptions,
+): Promise<IncludedQualityResult> {
+  const skippedReason = includedQualityGateFailureReason(batch);
+  if (skippedReason !== null) return { batch: null, skippedReason };
+  const gateSummary = batch.cases.find(
+    (summary) => summary.caseId === FIRST_TREE_WELCOME_QUALITY_DEFINITION.gateCaseId,
+  );
+  if (gateSummary === undefined) {
+    return {
+      batch: null,
+      skippedReason: `quality was not run because gate case ${FIRST_TREE_WELCOME_QUALITY_DEFINITION.gateCaseId} was not included`,
+    };
+  }
+  const qualityBatch = await runQualityEval(
+    packageRootPath,
+    {
+      caseId: FIRST_TREE_WELCOME_QUALITY_DEFINITION.evalCase.id,
+      codexBin: options.codexBin,
+      judgeBin: options.judgeBin,
+      judgeModel: options.judgeModel,
+      json: options.json,
+      model: options.model,
+      suite: "first-tree-welcome",
+      verbose: options.verbose,
+    },
+    undefined,
+    new Map([[FIRST_TREE_WELCOME_QUALITY_DEFINITION.evalCase.id, buildWelcomeQualityInput(gateSummary)]]),
+  );
+  return { batch: qualityBatch, skippedReason: null };
+}
+
+function printGateWithOptionalQuality(
+  gateText: string,
+  gateBatch: GateBatchSummary,
+  quality: IncludedQualityResult | null,
+  json: boolean,
+): void {
+  if (json) {
+    if (quality === null) {
+      process.stdout.write(`${JSON.stringify(gateBatch, null, 2)}\n`);
+      return;
+    }
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          gate: gateBatch,
+          quality: quality.batch,
+          qualitySkippedReason: quality.skippedReason,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    return;
+  }
+
+  process.stdout.write(`${gateText}\n`);
+  if (quality === null) return;
+  process.stdout.write("\nIncluded Quality\n\n");
+  if (quality.batch === null) {
+    process.stdout.write(`SKIPPED  ${quality.skippedReason ?? "quality was not run"}\n`);
+    return;
+  }
+  process.stdout.write(`${formatQualitySummaryTable(quality.batch)}\n`);
+}
+
 async function runGate(options: CliOptions): Promise<void> {
   const packageRootPath = packageRoot();
+  if (options.includeQuality) {
+    includeQualitySuite(options);
+  }
   if (options.suite === "first-tree-read") {
     const batch = await runFirstTreeReadGate(packageRootPath, {
       caseId: options.caseId,
@@ -463,11 +624,7 @@ async function runGate(options: CliOptions): Promise<void> {
       verbose: options.verbose,
     });
     appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
-    if (options.json) {
-      process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
-    } else {
-      process.stdout.write(`${formatFirstTreeReadGateSummary(batch)}\n`);
-    }
+    printGateWithOptionalQuality(formatFirstTreeReadGateSummary(batch), batch, null, options.json);
     if (batch.failed > 0) {
       process.exitCode = 1;
     }
@@ -475,6 +632,9 @@ async function runGate(options: CliOptions): Promise<void> {
   }
 
   if (options.suite === "first-tree-write") {
+    if (options.includeQuality) {
+      assertIncludedQualityCase(options, FIRST_TREE_WRITE_QUALITY_DEFINITION.gateCaseId);
+    }
     const batch = await runFirstTreeWriteGate(packageRootPath, {
       caseId: options.caseId,
       codexBin: options.codexBin,
@@ -482,13 +642,23 @@ async function runGate(options: CliOptions): Promise<void> {
       model: options.model,
       verbose: options.verbose,
     });
-    appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
-    if (options.json) {
-      process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
-    } else {
-      process.stdout.write(`${formatFirstTreeWriteGateSummary(batch)}\n`);
+    const runGroupId = createRunGroupId(
+      batch.runStartedAt,
+      `eval-gate-${options.suite}${options.includeQuality ? "-include-quality" : ""}`,
+    );
+    appendResultStoreEntries(
+      packageRootPath,
+      gateResultEntries(packageRootPath, batch, options.suite, options, runGroupId),
+    );
+    const quality = options.includeQuality ? await runIncludedWriteQuality(packageRootPath, batch, options) : null;
+    if (quality?.batch !== null && quality?.batch !== undefined) {
+      appendResultStoreEntries(
+        packageRootPath,
+        qualityResultEntries(packageRootPath, quality.batch, options, runGroupId),
+      );
     }
-    if (batch.failed > 0) {
+    printGateWithOptionalQuality(formatFirstTreeWriteGateSummary(batch), batch, quality, options.json);
+    if (gateCommandFailed(batch, quality)) {
       process.exitCode = 1;
     }
     return;
@@ -503,11 +673,7 @@ async function runGate(options: CliOptions): Promise<void> {
       verbose: options.verbose,
     });
     appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
-    if (options.json) {
-      process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
-    } else {
-      process.stdout.write(`${formatFirstTreeSeedGateSummary(batch)}\n`);
-    }
+    printGateWithOptionalQuality(formatFirstTreeSeedGateSummary(batch), batch, null, options.json);
     if (batch.failed > 0) {
       process.exitCode = 1;
     }
@@ -515,6 +681,9 @@ async function runGate(options: CliOptions): Promise<void> {
   }
 
   if (options.suite === "first-tree-welcome") {
+    if (options.includeQuality) {
+      assertIncludedQualityCase(options, FIRST_TREE_WELCOME_QUALITY_DEFINITION.gateCaseId);
+    }
     const batch = await runFirstTreeWelcomeGate(packageRootPath, {
       caseId: options.caseId,
       codexBin: options.codexBin,
@@ -522,13 +691,23 @@ async function runGate(options: CliOptions): Promise<void> {
       model: options.model,
       verbose: options.verbose,
     });
-    appendResultStoreEntries(packageRootPath, gateResultEntries(packageRootPath, batch, options.suite, options));
-    if (options.json) {
-      process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
-    } else {
-      process.stdout.write(`${formatFirstTreeWelcomeGateSummary(batch)}\n`);
+    const runGroupId = createRunGroupId(
+      batch.runStartedAt,
+      `eval-gate-${options.suite}${options.includeQuality ? "-include-quality" : ""}`,
+    );
+    appendResultStoreEntries(
+      packageRootPath,
+      gateResultEntries(packageRootPath, batch, options.suite, options, runGroupId),
+    );
+    const quality = options.includeQuality ? await runIncludedWelcomeQuality(packageRootPath, batch, options) : null;
+    if (quality?.batch !== null && quality?.batch !== undefined) {
+      appendResultStoreEntries(
+        packageRootPath,
+        qualityResultEntries(packageRootPath, quality.batch, options, runGroupId),
+      );
     }
-    if (batch.failed > 0) {
+    printGateWithOptionalQuality(formatFirstTreeWelcomeGateSummary(batch), batch, quality, options.json);
+    if (gateCommandFailed(batch, quality)) {
       process.exitCode = 1;
     }
     return;
@@ -587,6 +766,20 @@ function runCompare(options: CliOptions): void {
   }
 }
 
+function runSummary(options: CliOptions): void {
+  const packageRootPath = packageRoot();
+  const entries = readResultStore(packageRootPath);
+  const summary = summarizeResultRunGroup(entries, options.currentRunGroupId);
+  if (summary === null && options.currentRunGroupId !== null) {
+    throw new Error(`No result-store run group found for --current ${options.currentRunGroupId}.`);
+  }
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
+  } else {
+    process.stdout.write(`${formatResultRunSummary(summary)}\n`);
+  }
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   if (options.command === "select") {
@@ -595,6 +788,10 @@ async function main(): Promise<void> {
   }
   if (options.command === "compare") {
     runCompare(options);
+    return;
+  }
+  if (options.command === "summary") {
+    runSummary(options);
     return;
   }
   if (options.command === "gate") {

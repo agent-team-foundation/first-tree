@@ -1,5 +1,10 @@
 import type { JudgeRubricDimension } from "../../core/judge/types.js";
-import type { QualityArtifactInput, QualityCaseDefinition, QualityEvalCase } from "../quality/types.js";
+import type {
+  QualityArtifactInput,
+  QualityCaseDefinition,
+  QualityEvalCase,
+  QualitySanityFixture,
+} from "../quality/types.js";
 
 const WELCOME_TASK_QUALITY_DIMENSIONS: readonly JudgeRubricDimension[] = [
   {
@@ -87,3 +92,82 @@ export const FIRST_TREE_WELCOME_QUALITY_DEFINITION: QualityCaseDefinition = {
   gateCaseId: "first-tree-welcome-readable-repo-populated-tree",
   title: "first-tree-welcome first-task quality",
 };
+
+function sanityInput(name: QualitySanityFixture["name"], artifact: string): QualityArtifactInput {
+  return {
+    artifact,
+    deterministicGatePassed: true,
+    gateCaseId: FIRST_TREE_WELCOME_QUALITY_DEFINITION.gateCaseId,
+    gateRunRoot: `/tmp/${name}-welcome-gate`,
+    gateSummaryJsonPath: `/tmp/${name}-welcome-gate/summary.json`,
+    gateSummaryMdPath: `/tmp/${name}-welcome-gate/summary.md`,
+    source: [
+      "Repo evidence: checkout sessions expire when JWT refresh is skipped.",
+      "Context Tree evidence: checkout reliability is a current product priority.",
+    ].join("\n"),
+  };
+}
+
+function judgeOutput(scores: Record<string, number>, reasoning: string): string {
+  return JSON.stringify({ reasoning, scores });
+}
+
+export const FIRST_TREE_WELCOME_QUALITY_SANITY_FIXTURES: readonly QualitySanityFixture[] = [
+  {
+    expectedPassed: true,
+    input: sanityInput(
+      "good",
+      [
+        "1. Trace the checkout JWT refresh path and identify the smallest failing test to add.",
+        "2. Compare the Context Tree checkout reliability note with the session refresh implementation and report one concrete fix candidate.",
+      ].join("\n"),
+    ),
+    judgeOutput: judgeOutput(
+      {
+        bounded: 5,
+        evidence_backed: 5,
+        not_setup_as_task: 5,
+        useful: 4,
+        verifiable: 4,
+      },
+      "The options are evidence-backed, bounded, and directly verifiable.",
+    ),
+    name: "good",
+  },
+  {
+    expectedPassed: true,
+    input: sanityInput(
+      "borderline",
+      "Check the checkout session refresh code against the tree note and propose one small verification step.",
+    ),
+    judgeOutput: judgeOutput(
+      {
+        bounded: 4,
+        evidence_backed: 4,
+        not_setup_as_task: 5,
+        useful: 3,
+        verifiable: 3,
+      },
+      "Exactly meets every threshold without drifting into setup work.",
+    ),
+    name: "borderline",
+  },
+  {
+    expectedPassed: false,
+    input: sanityInput(
+      "bad",
+      "First connect GitHub, create a Context Tree, run seed, and then we can think about checkout work.",
+    ),
+    judgeOutput: judgeOutput(
+      {
+        bounded: 2,
+        evidence_backed: 2,
+        not_setup_as_task: 1,
+        useful: 2,
+        verifiable: 2,
+      },
+      "This packages setup as the task and is not grounded in the provided evidence.",
+    ),
+    name: "bad",
+  },
+];
