@@ -63,8 +63,9 @@ function qualityCommand(skill: Extract<ShippedSkillName, "first-tree-write" | "f
   return `pnpm --filter @first-tree/skill-evals eval:quality -- --suite ${skill}`;
 }
 
-function periodicCommand(): string {
-  return "pnpm --filter @first-tree/skill-evals eval:periodic";
+function periodicCommand(skill: ShippedSkillName | null = null): string {
+  if (skill === null) return "pnpm --filter @first-tree/skill-evals eval:periodic";
+  return `pnpm --filter @first-tree/skill-evals eval:periodic -- --suite ${skill}`;
 }
 
 function addSuiteRecommendations(
@@ -137,12 +138,19 @@ function isSkillEvalCorePath(path: string): boolean {
   return path.startsWith("packages/skill-evals/src/core/") || path === "packages/skill-evals/src/index.ts";
 }
 
-function isSkillEvalPeriodicFrameworkPath(path: string): boolean {
-  return (
+function periodicFrameworkSkill(path: string): ShippedSkillName | "all" | null {
+  if (
     path === "packages/skill-evals/src/core/periodic.ts" ||
     path.startsWith("packages/skill-evals/src/core/periodic/") ||
     path.startsWith("packages/skill-evals/src/suites/periodic/")
-  );
+  ) {
+    return "all";
+  }
+  for (const skill of ["first-tree-read", "first-tree-write", "first-tree-seed", "first-tree-welcome"] as const) {
+    if (path === `packages/skill-evals/src/suites/${skill}/periodic.ts`) return skill;
+    if (path.startsWith(`packages/skill-evals/src/suites/${skill}/periodic/`)) return skill;
+  }
+  return null;
 }
 
 function isSkillEvalCliOrSchemaPath(path: string): boolean {
@@ -168,19 +176,20 @@ export function selectSkillEvalRecommendations(
   const notes: string[] = [];
 
   for (const path of changedFiles) {
-    const skill = matchingSkill(path);
-    if (skill !== null) {
-      addSuiteRecommendations(recommendations, skill, `${path} touches ${skill}`);
+    const periodicSkill = periodicFrameworkSkill(path);
+    if (periodicSkill !== null) {
+      addRecommendation(recommendations, {
+        command: periodicCommand(periodicSkill === "all" ? null : periodicSkill),
+        kind: "periodic",
+        reason: `${path} touches periodic eval framework`,
+        suite: periodicSkill,
+      });
       continue;
     }
 
-    if (isSkillEvalPeriodicFrameworkPath(path)) {
-      addRecommendation(recommendations, {
-        command: periodicCommand(),
-        kind: "periodic",
-        reason: `${path} touches periodic eval framework`,
-        suite: "all",
-      });
+    const skill = matchingSkill(path);
+    if (skill !== null) {
+      addSuiteRecommendations(recommendations, skill, `${path} touches ${skill}`);
       continue;
     }
 

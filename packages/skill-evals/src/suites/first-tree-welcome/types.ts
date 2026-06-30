@@ -54,7 +54,7 @@ export type FirstTreeWelcomeEvalCase = {
   skill: "first-tree-welcome";
   status: "implemented" | "planned";
   tags: readonly string[];
-  tier: "gate";
+  tier: "gate" | "periodic";
 };
 
 export type CliOptions = {

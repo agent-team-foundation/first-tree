@@ -49,13 +49,14 @@ opt-in and are not part of `pnpm test`.
 `eval:periodic` is the opt-in tier for broader, more expensive coverage that is
 not suitable for default gates or ordinary CI. It accepts the same basic live
 eval controls as gates, including `--suite`, `--case`, `--model`,
-`--codex-bin`, `--json`, and `--verbose`. This command currently provides the
-stable command and summary surface; no implemented periodic live cases are
-registered yet, so selecting periodic coverage prints a clear no-op summary and
-exits 0. Future PRs will add welcome full-matrix coverage, seed quality and
-realism cases, and multi-provider/runtime-generated periodic coverage. The
-default `eval:select` recommendations do not include periodic for ordinary
-skill changes; maintainers trigger periodic manually or via future scheduling.
+`--codex-bin`, `--json`, and `--verbose`. `first-tree-welcome` periodic now
+runs the concrete setup-state matrix rows as live eval cases while keeping the
+default welcome gate limited to its three high-risk rows. Other suites still
+print a clear no-op summary and exit 0 until they register implemented periodic
+cases. Future PRs will add seed quality and realism cases, plus
+multi-provider/runtime-generated periodic coverage. The default `eval:select`
+recommendations do not include periodic for ordinary skill changes; maintainers
+trigger periodic manually or via future scheduling.
 
 `eval:quality` is an opt-in LLM-as-judge layer. It does not replace
 deterministic gates and is not called by `eval:gate` by default. Each quality
@@ -103,7 +104,7 @@ runner:
 - implementation-only source material means no Context Tree diff.
 
 `eval:gate -- --suite first-tree-welcome` runs the live Codex gate for
-the currently implemented `first-tree-welcome` onboarding rows:
+the currently implemented `first-tree-welcome` gate rows:
 
 - tree kickoff chat routes to the tree setup lane instead of welcome first-task
   options;
@@ -112,6 +113,16 @@ the currently implemented `first-tree-welcome` onboarding rows:
 - readable repo + populated Context Tree reads both evidence sources and offers
   two or three bounded first-task options without seeding or setting up the
   tree.
+
+`eval:periodic -- --suite first-tree-welcome` runs the broader live welcome
+matrix. It covers every concrete setup-state row from the current
+`first-tree-welcome` matrix, including invitee not-ready/ready states, selected
+repo authorization failure, local-readable repo with missing GitHub App,
+installed app with no selected repo, readable repo with empty tree, and
+readable repo with unknown tree. The explicit catch-all row remains a no-model
+floor invariant because it is a structural fallback rather than a stable live
+oracle. Periodic case ids use the gate row id plus `-periodic`; `--case` also
+accepts the source row id as an alias.
 
 `eval:gate -- --suite first-tree-seed` runs the live Codex gate for
 `first-tree-seed`. It covers the minimum bootstrap lifecycle boundaries:
@@ -150,18 +161,18 @@ Each case writes:
 - `summary.json` with derived metrics.
 - `summary.md` with a human-readable case report and grading summary.
 
-The top-level `eval:floor`, `eval:gate`, and `eval:quality` commands append a
-lightweight local result-store entry to
+The top-level `eval:floor`, `eval:gate`, `eval:periodic`, and `eval:quality`
+commands append a lightweight local result-store entry to
 `packages/skill-evals/.runs/index.jsonl`. Entries record the run group, suite,
 tier, case, pass/fail state, git branch/sha, model/provider where available,
 artifact paths, duration, turns and first-response latency when derivable, cost,
 and judge scores when present. Gate failures use the deterministic grading
 evidence first and link the `grading.json` artifact path in the result store.
 Unknown turn or latency values are recorded as `null`. The `.runs` directory is
-gitignored local eval state. The current `eval:periodic` no-op path does not
-append result-store entries; implemented periodic cases added later will use
-`command: "eval:periodic"` and `tier: "periodic"` entries so summary and compare
-can report them alongside floor, gate, and quality runs.
+gitignored local eval state. Periodic live cases use `command:
+"eval:periodic"` and `tier: "periodic"` entries so summary and compare can
+report them alongside floor, gate, and quality runs. Periodic no-op paths for
+suites with no implemented periodic cases do not append result-store entries.
 
 Use `eval:summary` to summarize the latest result-store run group, or pass a
 specific run group id:

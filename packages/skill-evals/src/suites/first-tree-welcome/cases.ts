@@ -1,6 +1,6 @@
 import type { SkillEvalCase } from "../../core/case-schema.js";
 import type { SkillEvalSuiteDefinition } from "../types.js";
-import { GRADED_ACTIONS } from "./grader.js";
+import { GRADED_ACTIONS, HANDLED_FORBIDDEN_ACTIONS } from "./grader.js";
 import { FIRST_TREE_WELCOME_QUALITY_CASE } from "./quality.js";
 import type { FirstTreeWelcomeEvalCase, WelcomeExpectedAction } from "./types.js";
 
@@ -188,13 +188,21 @@ function githubAppState(row: WelcomeRow): FirstTreeWelcomeEvalCase["fixture"]["g
   return "unknown";
 }
 
-const GATE_CASES: readonly FirstTreeWelcomeEvalCase[] = WELCOME_ROWS.map(
-  (row): FirstTreeWelcomeEvalCase => ({
+function caseFromRow(
+  row: WelcomeRow,
+  options: {
+    id: string;
+    status: FirstTreeWelcomeEvalCase["status"];
+    tags: readonly string[];
+    tier: FirstTreeWelcomeEvalCase["tier"];
+  },
+): FirstTreeWelcomeEvalCase {
+  return {
     briefingMode: "generated-fixture",
     expected: {
       action: row.action,
       evidenceSnippets:
-        row.id === "first-tree-welcome-readable-repo-populated-tree"
+        row.repoState === "selected-readable" && row.treeState === "populated"
           ? ["Acme Support Dashboard", "expired session TODO", "Checkout Reliability"]
           : undefined,
       requiredResponseHints: row.requiredResponseHints,
@@ -213,18 +221,42 @@ const GATE_CASES: readonly FirstTreeWelcomeEvalCase[] = WELCOME_ROWS.map(
       claims: row.forbiddenClaims,
       sideEffects: ["github_auth", "repo_create", "tree_create", "tree_seed", "pr_create", "push"],
     },
-    id: row.id,
+    id: options.id,
     prompt: row.prompt,
     provider: "codex",
     skill: "first-tree-welcome",
+    status: options.status,
+    tags: ["onboarding-matrix", ...row.tags, ...options.tags],
+    tier: options.tier,
+  };
+}
+
+const GATE_CASES: readonly FirstTreeWelcomeEvalCase[] = WELCOME_ROWS.map((row) =>
+  caseFromRow(row, {
+    id: row.id,
     status: IMPLEMENTED_GATE_CASE_IDS.has(row.id) ? "implemented" : "planned",
-    tags: ["onboarding-matrix", ...row.tags],
+    tags: [],
     tier: "gate",
+  }),
+);
+
+const PERIODIC_CASES: readonly FirstTreeWelcomeEvalCase[] = WELCOME_ROWS.filter(
+  (row) => !row.tags.includes("catch-all"),
+).map((row) =>
+  caseFromRow(row, {
+    id: `${row.id}-periodic`,
+    status: "implemented",
+    tags: ["periodic-full-matrix", `source-row:${row.id}`],
+    tier: "periodic",
   }),
 );
 
 export const FIRST_TREE_WELCOME_GATE_CASES: readonly FirstTreeWelcomeEvalCase[] = GATE_CASES;
 export const FIRST_TREE_WELCOME_LIVE_GATE_CASES: readonly FirstTreeWelcomeEvalCase[] = GATE_CASES.filter(
+  (evalCase) => evalCase.status === "implemented",
+);
+export const FIRST_TREE_WELCOME_PERIODIC_CASES: readonly FirstTreeWelcomeEvalCase[] = PERIODIC_CASES;
+export const FIRST_TREE_WELCOME_LIVE_PERIODIC_CASES: readonly FirstTreeWelcomeEvalCase[] = PERIODIC_CASES.filter(
   (evalCase) => evalCase.status === "implemented",
 );
 
@@ -248,6 +280,7 @@ export const FIRST_TREE_WELCOME_EVAL_CASES: readonly SkillEvalCase[] = [
     tier: "floor",
   },
   ...GATE_CASES,
+  ...PERIODIC_CASES,
   FIRST_TREE_WELCOME_QUALITY_CASE,
 ];
 
@@ -267,10 +300,42 @@ function validateFirstTreeWelcomeFloor(cases: readonly SkillEvalCase[]): readonl
 
   // Orphan-action: an implemented row whose action has no `casePassed` branch
   // would silently fail the gate regardless of model behavior. Lock it out.
-  for (const evalCase of implementedGateRows) {
+  const implementedLiveRows = cases.filter(
+    (evalCase) =>
+      evalCase.skill === "first-tree-welcome" &&
+      (evalCase.tier === "gate" || evalCase.tier === "periodic") &&
+      evalCase.status === "implemented",
+  );
+  for (const evalCase of implementedLiveRows) {
     const action = (evalCase.expected as { action?: unknown }).action;
     if (typeof action !== "string" || !GRADED_ACTIONS.has(action as WelcomeExpectedAction)) {
       errors.push(`${evalCase.id}: implemented action "${String(action)}" has no casePassed branch (orphan).`);
+    }
+    const forbidden = evalCase.forbidden as { actions?: unknown } | undefined;
+    if (Array.isArray(forbidden?.actions)) {
+      for (const forbiddenAction of forbidden.actions) {
+        if (typeof forbiddenAction !== "string" || !HANDLED_FORBIDDEN_ACTIONS.has(forbiddenAction)) {
+          errors.push(`${evalCase.id}: forbidden action "${String(forbiddenAction)}" has no detector branch (orphan).`);
+        }
+      }
+    }
+  }
+
+  const periodicRows = cases.filter(
+    (evalCase) => evalCase.skill === "first-tree-welcome" && evalCase.tier === "periodic",
+  );
+  const concreteMatrixRows = WELCOME_ROWS.filter((row) => !row.tags.includes("catch-all"));
+  if (periodicRows.length !== concreteMatrixRows.length) {
+    errors.push(
+      `welcome periodic matrix must cover ${concreteMatrixRows.length} concrete rows, found ${periodicRows.length}.`,
+    );
+  }
+  for (const periodicCase of periodicRows) {
+    if (periodicCase.status !== "implemented") {
+      errors.push(`${periodicCase.id}: periodic matrix rows must be implemented.`);
+    }
+    if (rowTags(periodicCase).includes("catch-all")) {
+      errors.push(`${periodicCase.id}: catch-all row must remain floor-only, not live periodic.`);
     }
   }
 
@@ -356,6 +421,13 @@ export const FIRST_TREE_WELCOME_SUITE: SkillEvalSuiteDefinition = {
           "Welcome onboarding matrix gate rows; tree-kickoff-chat, no-repo-intro, and readable-repo-populated-tree run as live gate cases.",
         status: "implemented",
         tier: "gate",
+      },
+      {
+        caseIds: PERIODIC_CASES.map((evalCase) => evalCase.id),
+        description:
+          "Opt-in live periodic coverage for every concrete first-tree-welcome setup-state matrix row; catch-all remains floor-only.",
+        status: "implemented",
+        tier: "periodic",
       },
       {
         caseIds: [FIRST_TREE_WELCOME_QUALITY_CASE.id],

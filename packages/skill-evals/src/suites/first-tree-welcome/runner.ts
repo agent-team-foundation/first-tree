@@ -31,7 +31,7 @@ export async function runFirstTreeWelcomeCase(
   createFirstTreeStagingShim(paths);
   createGhShim(paths);
   const contextTreePath = setupFixture(evalCase, paths, reporter);
-  const fixtureValidation = validateFixture(paths, contextTreePath, evalCase.id, options.verbose, reporter);
+  const fixtureValidation = validateFixture(paths, contextTreePath, evalCase, evalCase.id, options.verbose, reporter);
   const runnerExitCode = await runCodexProvider(
     {
       bin: options.codexBin,
