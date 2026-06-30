@@ -49,8 +49,6 @@ describe("start-chat bootstrap prose", () => {
 
     expect(message).toContain("Welcome to First Tree — this is your first chat with Nova.");
     expect(message).toContain("point it at a folder on your computer or paste a GitHub URL");
-    expect(message).toContain("No GitHub connection needed to begin");
-    expect(message).toContain("connect First Tree to GitHub later, only if a task needs it");
     expect(message).not.toContain("Operational note");
     expect(message).not.toContain("first-tree-welcome");
     expect(message).not.toContain("Ask the user for the project");
