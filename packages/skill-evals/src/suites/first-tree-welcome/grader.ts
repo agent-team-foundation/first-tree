@@ -234,12 +234,54 @@ function countTaskOptionLines(text: string): number | null {
 function withoutNegatedSetupLanguage(text: string): string {
   return text
     .replace(/(?:不先要求|不需要|无需|不用|不要先)\s*安装\s*github app/giu, "")
-    .replace(/\b(?:without|no need to|do not|don't)\s+(?:install|authorize)[^.;\n]*github app\b/giu, "");
+    .replace(/\b(?:without|no need to|do not|don't)\s+(?:install|authorize)[^.;\n]*github app\b/giu, "")
+    .replace(/\bwithout\s+(?:selecting|choosing|connecting)\s+(?:a\s+)?(?:repo|repository)\b/giu, "")
+    .replace(/\b(?:do not|don't|not)\s+(?:select|choose|connect)\s+(?:a\s+)?(?:repo|repository)\b/giu, "");
 }
 
 function containsSetupTaskLanguage(text: string): boolean {
   return /install|create.{0,30}(context\s+)?tree|seed.{0,20}tree|tree.{0,20}setup|setup.{0,20}tree|select.{0,20}repo|connect.{0,20}repo|authori[sz]e|authorization|安装.{0,20}github app|授权/iu.test(
     withoutNegatedSetupLanguage(text),
+  );
+}
+
+function containsTreeSetupLanguage(text: string): boolean {
+  return /create.{0,30}(context\s+)?tree|bind.{0,30}(context\s+)?tree|seed.{0,20}tree|tree.{0,20}setup|setup.{0,20}tree|context tree.{0,40}(setup|set up|create|bind|seed)/iu.test(
+    withoutNegatedSetupLanguage(text),
+  );
+}
+
+function containsRepoSelectionLanguage(text: string): boolean {
+  return /\b(select|choose|connect)\b.{0,30}\b(repo|repository)\b|repo selection|repository selection/iu.test(
+    withoutNegatedSetupLanguage(text),
+  );
+}
+
+function containsAdminSetupAction(text: string): boolean {
+  const checkedText = withoutNegatedSetupLanguage(text)
+    .replace(/\b(?:an?\s+)?admin\s+(?:finishes|handles|owns|will finish|can finish)\s+(?:team\s+)?setup\b/giu, "")
+    .replace(/\b(?:team\s+)?setup\s+(?:is|stays|remains)\s+(?:with|for)\s+(?:an?\s+)?admin\b/giu, "");
+  return /(?:ask|tell|have|route|send).{0,80}(admin|owner).{0,80}(setup|set up|install|authori[sz]e|github app|create|bind|seed)|\b(admin|owner)\b.{0,40}(needs?|must|should|has to).{0,60}(setup|set up|install|authori[sz]e|github app|create|bind|seed)|\b(install|authori[sz]e).{0,40}github app\b/iu.test(
+    checkedText,
+  );
+}
+
+function claimsRepoEvidence(text: string): boolean {
+  const withoutFailure = text.replace(
+    /read failure|failed to read|can't read|cannot read|unable to read|auth(?:entication|orization)? failure|permission denied/giu,
+    "",
+  );
+  return /\b(i (read|found|noticed|inspected|saw)|repo shows|repository shows|readme|src\/|checkout|session|todo)\b/iu.test(
+    withoutFailure,
+  );
+}
+
+function claimsTreeReady(text: string): boolean {
+  const withoutNegation = text
+    .replace(/without assuming (the )?(context )?tree readiness/giu, "")
+    .replace(/do not assume (the )?(context )?tree (is )?ready/giu, "");
+  return /tree is ready|context tree is ready|populated context tree|shared memory is ready|tree already exists|tree has already been set up/iu.test(
+    withoutNegation,
   );
 }
 
@@ -265,6 +307,20 @@ function optionLooksLikeTask(text: string, taskOptionHints: readonly string[]): 
     return true;
   }
   return containsSetupTaskLanguage(text);
+}
+
+function optionLineTexts(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^(-|\*|\d+[.)])\s+/u.test(line));
+}
+
+function setupTaskOptionObserved(chatOptionTexts: readonly string[], combinedText: string): boolean {
+  return (
+    chatOptionTexts.some((text) => containsSetupTaskLanguage(text)) ||
+    optionLineTexts(combinedText).some((line) => containsSetupTaskLanguage(line))
+  );
 }
 
 function bestTaskOptionCount(
@@ -336,10 +392,19 @@ function forbiddenActionHits(
   const hits: string[] = [];
   const normalized = normalizeForMatch(combinedText);
   const firstTreeText = firstTreeArgv.map((argv) => argv.join(" ")).join("\n");
+  const textForSetup = firstTreeText.concat("\n", combinedText);
 
   for (const action of evalCase.forbidden.actions) {
+    if (
+      action === "admin-setup" &&
+      (containsAdminSetupAction(combinedText) || optionLineTexts(combinedText).some(containsTreeSetupLanguage))
+    ) {
+      hits.push(action);
+    }
     if (action === "first-task-options" && (chatAskCount > 0 || taskOptionsObserved)) hits.push(action);
     if (action === "skip-for-now-option" && normalized.includes("skip for now")) hits.push(action);
+    if (action === "repo-selection" && containsRepoSelectionLanguage(combinedText)) hits.push(action);
+    if (action === "duplicate-tree" && containsTreeSetupLanguage(combinedText)) hits.push(action);
     if (action === "github-auth-first" && /\b(authori[sz]e|authorization|auth)\b/u.test(normalized)) hits.push(action);
     if (
       action === "github-app-install-first" &&
@@ -347,6 +412,10 @@ function forbiddenActionHits(
     ) {
       hits.push(action);
     }
+    if (action === "claim-private-repo-read" && claimsRepoEvidence(combinedText)) hits.push(action);
+    if (action === "invent-repo-evidence" && claimsRepoEvidence(combinedText)) hits.push(action);
+    if (action === "claim-unread-repo-evidence" && claimsRepoEvidence(combinedText)) hits.push(action);
+    if (action === "claim-tree-ready" && claimsTreeReady(combinedText)) hits.push(action);
     if (
       action === "tree-setup-as-value-task" &&
       taskOptionsObserved &&
@@ -354,10 +423,26 @@ function forbiddenActionHits(
     ) {
       hits.push(action);
     }
+    if (action === "tree-setup-as-first-task" && setupOptionObserved) {
+      hits.push(action);
+    }
     if (
       action === "setup-only-action" &&
       !taskOptionsObserved &&
       /install|select repo|connect repo|setup|set up/iu.test(combinedText)
+    ) {
+      hits.push(action);
+    }
+    if (
+      action === "setup-before-value" &&
+      containsSetupTaskLanguage(combinedText) &&
+      !/evidence|durable|readme|checkout|session|repo/iu.test(combinedText)
+    ) {
+      hits.push(action);
+    }
+    if (
+      action === "vague-setup-navigation" &&
+      /finish setup|go to settings|settings page|set up first/iu.test(combinedText)
     ) {
       hits.push(action);
     }
@@ -375,7 +460,7 @@ function forbiddenActionHits(
     }
     if (
       (action === "seed-tree" || action === "seed-tree-in-welcome-chat") &&
-      /tree seed|seeded the tree|seeding the tree/iu.test(firstTreeText.concat("\n", combinedText))
+      /tree seed|seed context tree|seeded the tree|seeding the tree/iu.test(textForSetup)
     ) {
       hits.push(action);
     }
@@ -461,7 +546,6 @@ export function deriveMetrics(
   const modelOutputTexts: string[] = [];
   const chatTexts: string[] = [];
   const chatOptionTexts: string[] = [];
-  const setupOptionTexts: string[] = [];
   let chatAskCount = 0;
   let chatOptionCount: number | null = null;
 
@@ -497,7 +581,6 @@ export function deriveMetrics(
         if (parsedOptions !== null) {
           chatOptionCount = chatOptionCount ?? parsedOptions.count;
           chatOptionTexts.push(...parsedOptions.texts);
-          setupOptionTexts.push(...parsedOptions.texts.filter(containsSetupTaskLanguage));
         }
       }
     }
@@ -521,7 +604,7 @@ export function deriveMetrics(
     combinedText,
     chatAskCount,
     taskOptionsObserved,
-    setupOptionTexts.length > 0,
+    setupTaskOptionObserved(chatOptionTexts, combinedText),
     firstTreeArgv,
   );
   const forbiddenClaims = forbiddenClaimHits(
@@ -563,8 +646,43 @@ export function deriveMetrics(
  */
 export const GRADED_ACTIONS: ReadonlySet<WelcomeExpectedAction> = new Set([
   "route_to_tree_skill",
+  "invitee_waits_for_team_readiness",
+  "offer_invitee_value_without_admin_setup",
   "ask_for_repo_path_or_url",
+  "report_auth_failure_without_claiming_repo_read",
+  "value_first_then_setup_handoff",
+  "guide_repo_selection_without_claiming_repo_read",
+  "offer_code_value_without_tree_setup_task",
   "offer_bounded_first_tasks_from_repo_and_tree",
+  "offer_repo_value_without_claiming_tree_ready",
+]);
+
+/**
+ * Forbidden action tokens that `forbiddenActionHits` can detect. Implemented
+ * live rows must not introduce a token outside this set; the floor invariant
+ * catches that before the token silently weakens the row oracle.
+ */
+export const HANDLED_FORBIDDEN_ACTIONS: ReadonlySet<string> = new Set([
+  "admin-setup",
+  "claim-private-repo-read",
+  "claim-tree-ready",
+  "claim-unread-repo-evidence",
+  "create-tree",
+  "duplicate-tree",
+  "first-task-options",
+  "github-app-install-first",
+  "github-auth-first",
+  "invent-repo-evidence",
+  "repo-selection",
+  "seed-tree",
+  "seed-tree-in-welcome-chat",
+  "setup-as-first-task",
+  "setup-before-value",
+  "setup-only-action",
+  "skip-for-now-option",
+  "tree-setup-as-first-task",
+  "tree-setup-as-value-task",
+  "vague-setup-navigation",
 ]);
 
 export function casePassed(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): boolean {
@@ -582,8 +700,37 @@ export function casePassed(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetr
     return metrics.chatAskCount === 0 && !metrics.taskOptionsObserved;
   }
 
+  if (evalCase.expected.action === "invitee_waits_for_team_readiness") {
+    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && !metrics.taskOptionsObserved;
+  }
+
+  if (evalCase.expected.action === "offer_invitee_value_without_admin_setup") {
+    return (
+      metrics.repoEvidenceReadObserved &&
+      metrics.treeEvidenceReadObserved &&
+      metrics.expectedEvidenceObserved &&
+      metrics.taskOptionsObserved
+    );
+  }
+
   if (evalCase.expected.action === "ask_for_repo_path_or_url") {
     return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && !metrics.taskOptionsObserved;
+  }
+
+  if (evalCase.expected.action === "report_auth_failure_without_claiming_repo_read") {
+    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && !metrics.taskOptionsObserved;
+  }
+
+  if (evalCase.expected.action === "value_first_then_setup_handoff") {
+    return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
+  }
+
+  if (evalCase.expected.action === "guide_repo_selection_without_claiming_repo_read") {
+    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && !metrics.taskOptionsObserved;
+  }
+
+  if (evalCase.expected.action === "offer_code_value_without_tree_setup_task") {
+    return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && metrics.taskOptionsObserved;
   }
 
   if (evalCase.expected.action === "offer_bounded_first_tasks_from_repo_and_tree") {
@@ -593,6 +740,10 @@ export function casePassed(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetr
       metrics.expectedEvidenceObserved &&
       metrics.taskOptionsObserved
     );
+  }
+
+  if (evalCase.expected.action === "offer_repo_value_without_claiming_tree_ready") {
+    return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && metrics.taskOptionsObserved;
   }
 
   return false;
@@ -613,6 +764,25 @@ export function driftNote(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetri
     if (!metrics.repoEvidenceReadObserved) notes.push("Repo fixture evidence was not read.");
     if (!metrics.treeEvidenceReadObserved) notes.push("Context Tree fixture evidence was not read.");
     if (!metrics.taskOptionsObserved) notes.push("Two or three bounded first-task options were not observed.");
+  }
+  if (
+    evalCase.expected.action === "offer_invitee_value_without_admin_setup" ||
+    evalCase.expected.action === "offer_code_value_without_tree_setup_task" ||
+    evalCase.expected.action === "offer_repo_value_without_claiming_tree_ready" ||
+    evalCase.expected.action === "value_first_then_setup_handoff"
+  ) {
+    if (!metrics.repoEvidenceReadObserved) notes.push("Repo fixture evidence was not read.");
+  }
+  if (evalCase.expected.action === "offer_invitee_value_without_admin_setup" && !metrics.treeEvidenceReadObserved) {
+    notes.push("Context Tree fixture evidence was not read.");
+  }
+  if (
+    (evalCase.expected.action === "offer_invitee_value_without_admin_setup" ||
+      evalCase.expected.action === "offer_code_value_without_tree_setup_task" ||
+      evalCase.expected.action === "offer_repo_value_without_claiming_tree_ready") &&
+    !metrics.taskOptionsObserved
+  ) {
+    notes.push("Two or three bounded first-task options were not observed.");
   }
   if (evalCase.expected.action === "route_to_tree_skill" && metrics.taskOptionsObserved) {
     notes.push("Tree kickoff row offered value-chat task options.");

@@ -24,6 +24,14 @@ describe("first-tree-welcome floor invariants", () => {
     expect(validateFloor(cases)).toEqual([]);
   });
 
+  it("implements periodic coverage for every concrete non-catch-all matrix row", () => {
+    const periodicCases = cases.filter((evalCase) => evalCase.tier === "periodic");
+
+    expect(periodicCases).toHaveLength(10);
+    expect(periodicCases.every((evalCase) => evalCase.status === "implemented")).toBe(true);
+    expect(periodicCases.some((evalCase) => hasTag(evalCase, "catch-all"))).toBe(false);
+  });
+
   it("flags an implemented row whose action has no casePassed branch (orphan)", () => {
     // Deliberately break one implemented row's action; `expected` is the schema's
     // generic `unknown`, so a plain override is type-safe here.
@@ -34,6 +42,29 @@ describe("first-tree-welcome floor invariants", () => {
           : evalCase,
     );
     expect(validateFloor(broken).some((error) => error.includes("orphan"))).toBe(true);
+  });
+
+  it("flags an implemented periodic row whose action has no casePassed branch (orphan)", () => {
+    const broken = cases.map(
+      (evalCase): SkillEvalCase =>
+        evalCase.tier === "periodic" && evalCase.status === "implemented"
+          ? { ...evalCase, expected: { ...(evalCase.expected as Record<string, unknown>), action: "made_up_action" } }
+          : evalCase,
+    );
+    expect(validateFloor(broken).some((error) => error.includes("orphan"))).toBe(true);
+  });
+
+  it("flags an implemented row whose forbidden action has no detector branch (orphan)", () => {
+    const broken = cases.map(
+      (evalCase): SkillEvalCase =>
+        evalCase.tier === "periodic" && evalCase.status === "implemented"
+          ? {
+              ...evalCase,
+              forbidden: { ...(evalCase.forbidden as Record<string, unknown>), actions: ["made-up-risk"] },
+            }
+          : evalCase,
+    );
+    expect(validateFloor(broken).some((error) => error.includes("forbidden action"))).toBe(true);
   });
 
   it("flags two non-catch-all rows that claim the same state tuple", () => {

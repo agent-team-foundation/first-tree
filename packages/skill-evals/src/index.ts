@@ -26,7 +26,12 @@ import { formatFirstTreeReadGateSummary, runFirstTreeReadGate } from "./suites/f
 import type { BatchSummary as ReadBatchSummary } from "./suites/first-tree-read/types.js";
 import { formatFirstTreeSeedGateSummary, runFirstTreeSeedGate } from "./suites/first-tree-seed/index.js";
 import type { BatchSummary as SeedBatchSummary } from "./suites/first-tree-seed/types.js";
-import { formatFirstTreeWelcomeGateSummary, runFirstTreeWelcomeGate } from "./suites/first-tree-welcome/index.js";
+import {
+  formatFirstTreeWelcomeGateSummary,
+  formatFirstTreeWelcomePeriodicSummary,
+  runFirstTreeWelcomeGate,
+  runFirstTreeWelcomePeriodic,
+} from "./suites/first-tree-welcome/index.js";
 import { FIRST_TREE_WELCOME_QUALITY_DEFINITION } from "./suites/first-tree-welcome/quality.js";
 import type { BatchSummary as WelcomeBatchSummary } from "./suites/first-tree-welcome/types.js";
 import { formatFirstTreeWriteGateSummary, runFirstTreeWriteGate } from "./suites/first-tree-write/index.js";
@@ -464,6 +469,47 @@ function gateResultEntries(
   });
 }
 
+function periodicResultEntries(
+  packageRootPath: string,
+  batch: WelcomeBatchSummary,
+  suite: Extract<ShippedSkillName, "first-tree-welcome">,
+  options: CliOptions,
+  runGroupId = createRunGroupId(batch.runStartedAt, `eval-periodic-${suite}`),
+): readonly ResultStoreEntry[] {
+  const git = readGitInfo(repoRootFromPackage(packageRootPath), options.base);
+  return batch.cases.map((summary) => {
+    const durationMs = Math.max(0, Date.now() - Date.parse(summary.startedAt));
+    return {
+      artifact: {
+        gradingJsonPath: summary.gradingJsonPath,
+        runRoot: summary.runRoot,
+        summaryJsonPath: summary.summaryJsonPath,
+        summaryMdPath: summary.summaryMdPath,
+      },
+      caseId: summary.caseId,
+      command: "eval:periodic",
+      costUsd: null,
+      durationMs,
+      firstResponseLatencyMs: summary.firstResponseLatencyMs,
+      failures: summary.passed
+        ? []
+        : [...gradingFailureMessages(summary.grading), ...(summary.driftNote ? [`drift: ${summary.driftNote}`] : [])],
+      git,
+      judgeScores: null,
+      model: options.model,
+      passed: summary.passed,
+      provider: "codex",
+      runGroupId,
+      schemaVersion: 1,
+      skill: suite,
+      startedAt: summary.startedAt,
+      status: summary.passed ? "passed" : "failed",
+      tier: "periodic",
+      turns: summary.turns,
+    } satisfies ResultStoreEntry;
+  });
+}
+
 function qualityResultEntries(
   packageRootPath: string,
   batch: QualityBatchSummary,
@@ -759,7 +805,31 @@ function runSelect(options: CliOptions): void {
   }
 }
 
-function runPeriodic(options: CliOptions): void {
+async function runPeriodic(options: CliOptions): Promise<void> {
+  const packageRootPath = packageRoot();
+  if (options.suite === null || options.suite === "first-tree-welcome") {
+    const batch = await runFirstTreeWelcomePeriodic(packageRootPath, {
+      caseId: options.caseId,
+      codexBin: options.codexBin,
+      json: options.json,
+      model: options.model,
+      verbose: options.verbose,
+    });
+    appendResultStoreEntries(
+      packageRootPath,
+      periodicResultEntries(packageRootPath, batch, "first-tree-welcome", options),
+    );
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify(batch, null, 2)}\n`);
+    } else {
+      process.stdout.write(`${formatFirstTreeWelcomePeriodicSummary(batch)}\n`);
+    }
+    if (batch.failed > 0) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
   const summary = buildPeriodicSummary(SKILL_EVAL_SUITES, {
     caseId: options.caseId,
     suite: options.suite,
@@ -812,7 +882,7 @@ async function main(): Promise<void> {
     return;
   }
   if (options.command === "periodic") {
-    runPeriodic(options);
+    await runPeriodic(options);
     return;
   }
   if (options.command === "gate") {

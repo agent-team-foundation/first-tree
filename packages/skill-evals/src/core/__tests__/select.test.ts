@@ -61,6 +61,19 @@ describe("skill eval selection", () => {
     ]);
   });
 
+  it("selects suite-scoped periodic for welcome periodic runner changes", () => {
+    const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/suites/first-tree-welcome/periodic.ts"]);
+
+    expect(summary.recommendations).toEqual([
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-welcome",
+        kind: "periodic",
+        reason: "packages/skill-evals/src/suites/first-tree-welcome/periodic.ts touches periodic eval framework",
+        suite: "first-tree-welcome",
+      },
+    ]);
+  });
+
   it("does not recommend live eval for unrelated files", () => {
     const summary = selectSkillEvalRecommendations(["packages/client/src/runtime/agent-slot.ts"]);
 

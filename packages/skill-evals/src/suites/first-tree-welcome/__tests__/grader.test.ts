@@ -4,13 +4,15 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 import type { RunPaths } from "../../../core/types.js";
-import { FIRST_TREE_WELCOME_GATE_CASES } from "../cases.js";
+import { FIRST_TREE_WELCOME_GATE_CASES, FIRST_TREE_WELCOME_PERIODIC_CASES } from "../cases.js";
 import { casePassed, deriveMetrics } from "../grader.js";
 import { buildGrading } from "../summary.js";
 import type { EvalMetrics, FirstTreeWelcomeEvalCase, FixtureValidation } from "../types.js";
 
 function findCase(id: string): FirstTreeWelcomeEvalCase {
-  const evalCase = FIRST_TREE_WELCOME_GATE_CASES.find((candidate) => candidate.id === id);
+  const evalCase = [...FIRST_TREE_WELCOME_GATE_CASES, ...FIRST_TREE_WELCOME_PERIODIC_CASES].find(
+    (candidate) => candidate.id === id,
+  );
   if (!evalCase) throw new Error(`Missing test case ${id}`);
   return evalCase;
 }
@@ -70,6 +72,29 @@ function skillReadEvent(): unknown {
     event: {
       item: {
         command: "sed -n '1,220p' .agents/skills/first-tree-welcome/SKILL.md",
+        type: "command_execution",
+      },
+      type: "item.completed",
+    },
+    type: "codex_event",
+  };
+}
+
+function assistantMessageEvent(text: string): unknown {
+  return {
+    event: {
+      text,
+      type: "agent_message",
+    },
+    type: "codex_event",
+  };
+}
+
+function repoEvidenceReadEvent(): unknown {
+  return {
+    event: {
+      item: {
+        command: "cat source-repo/README.md",
         type: "command_execution",
       },
       type: "item.completed",
@@ -249,6 +274,191 @@ describe("first-tree-welcome grader", () => {
     }
   });
 
+  it("fails invitee-not-ready when admin setup and repo selection are offered", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-invitee-admin-setup-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-invitee-not-ready-periodic");
+      const metrics = deriveMetrics(
+        [
+          skillReadEvent(),
+          assistantMessageEvent(
+            "Ask the admin to install the GitHub App and select a repo before continuing; you can send a local path later.",
+          ),
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.forbiddenActionHits).toContain("admin-setup");
+      expect(metrics.forbiddenActionHits).toContain("repo-selection");
+      expect(casePassed(evalCase, metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("passes invitee-not-ready when admin setup is only a readiness guardrail", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-invitee-guardrail-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-invitee-not-ready-periodic");
+      const metrics = deriveMetrics(
+        [
+          skillReadEvent(),
+          assistantMessageEvent(
+            "An admin finishes team setup; for now send a local clone path and I can help from that without selecting a repo.",
+          ),
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.forbiddenActionHits).toEqual([]);
+      expect(casePassed(evalCase, metrics)).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("fails readable-repo-empty-tree when Context Tree setup is offered as a first task option", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-empty-tree-task-setup-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-readable-repo-empty-tree-periodic");
+      const metrics = deriveMetrics(
+        [
+          skillReadEvent(),
+          repoEvidenceReadEvent(),
+          {
+            argv: [
+              "chat",
+              "ask",
+              "baixiaohang",
+              "Choose the first task from repo evidence.",
+              "--options",
+              JSON.stringify([
+                { description: "Debug the expired session flow.", label: "Fix session" },
+                { description: "Trace checkout reliability failures.", label: "Trace checkout" },
+                { description: "Create and seed a Context Tree first.", label: "Build Context Tree" },
+              ]),
+            ],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          assistantMessageEvent("I read the repo; choose a session, checkout, or Context Tree setup task."),
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.repoEvidenceReadObserved).toBe(true);
+      expect(metrics.taskOptionsObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toContain("tree-setup-as-first-task");
+      expect(casePassed(evalCase, metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("passes readable-repo-empty-tree when tree setup is only a separate handoff note", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-empty-tree-setup-handoff-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-readable-repo-empty-tree-periodic");
+      const metrics = deriveMetrics(
+        [
+          skillReadEvent(),
+          repoEvidenceReadEvent(),
+          {
+            argv: [
+              "chat",
+              "ask",
+              "baixiaohang",
+              "I read the repo; choose a code-first task. The separate tree setup chat can build shared memory later.",
+              "--options",
+              JSON.stringify([
+                { description: "Debug the expired session flow.", label: "Fix session" },
+                { description: "Trace checkout reliability failures.", label: "Trace checkout" },
+              ]),
+            ],
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.taskOptionsObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toEqual([]);
+      expect(casePassed(evalCase, metrics)).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("fails auth-failure row when the model claims private repo evidence", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-auth-failure-claim-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-repo-auth-fails-periodic");
+      const metrics = deriveMetrics(
+        [
+          skillReadEvent(),
+          assistantMessageEvent(
+            "I read the selected private repo README and found checkout TODOs; still send a local clone path.",
+          ),
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.forbiddenActionHits).toEqual(
+        expect.arrayContaining(["claim-private-repo-read", "invent-repo-evidence"]),
+      );
+      expect(casePassed(evalCase, metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("fails tree-unknown row when the model claims the Context Tree is ready", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-tree-ready-claim-"));
+    try {
+      const evalCase = findCase("first-tree-welcome-readable-repo-tree-unknown-periodic");
+      const metrics = deriveMetrics(
+        [
+          skillReadEvent(),
+          repoEvidenceReadEvent(),
+          assistantMessageEvent(
+            "I read repo evidence; the Context Tree is ready, so choose a checkout or session task.",
+          ),
+        ],
+        evalCase,
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        null,
+      );
+
+      expect(metrics.forbiddenActionHits).toContain("claim-tree-ready");
+      expect(casePassed(evalCase, metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("passes row 8 when the model reads repo and tree evidence and offers bounded options", () => {
     expect(
       casePassed(
@@ -264,6 +474,88 @@ describe("first-tree-welcome grader", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  it.each([
+    [
+      "first-tree-welcome-invitee-not-ready-periodic",
+      {
+        finalResponse: "The admin needs to finish team readiness. You can send a local path to get value now.",
+      },
+    ],
+    [
+      "first-tree-welcome-invitee-ready-periodic",
+      {
+        chatAskCount: 1,
+        chatOptionCount: 3,
+        finalResponse: "I read the repo and tree; choose a checkout, session, or map task.",
+        repoEvidenceReadObserved: true,
+        taskOptionsObserved: true,
+        treeEvidenceReadObserved: true,
+      },
+    ],
+    [
+      "first-tree-welcome-repo-auth-fails-periodic",
+      {
+        finalResponse: "The selected repository has a read failure. Send a local clone path or accessible URL.",
+      },
+    ],
+    [
+      "first-tree-welcome-admin-missing-github-app-periodic",
+      {
+        finalResponse:
+          "I read local repo evidence and found durable checkout/session work; GitHub App setup can be a later handoff.",
+        repoEvidenceReadObserved: true,
+      },
+    ],
+    [
+      "first-tree-welcome-app-installed-no-repo-selected-periodic",
+      {
+        finalResponse:
+          "The GitHub App is installed; select a repo for long-term team setup before I claim repo evidence.",
+      },
+    ],
+    [
+      "first-tree-welcome-readable-repo-empty-tree-periodic",
+      {
+        chatAskCount: 1,
+        chatOptionCount: 3,
+        finalResponse: "I read the repo; choose a checkout, session, or map task before tree setup.",
+        repoEvidenceReadObserved: true,
+        taskOptionsObserved: true,
+      },
+    ],
+    [
+      "first-tree-welcome-readable-repo-tree-unknown-periodic",
+      {
+        chatAskCount: 1,
+        chatOptionCount: 3,
+        finalResponse: "I read repo evidence; choose a checkout, session, or map task without assuming tree readiness.",
+        repoEvidenceReadObserved: true,
+        taskOptionsObserved: true,
+      },
+    ],
+  ] as const)("passes periodic action %s", (caseId, metrics) => {
+    expect(casePassed(findCase(caseId), baseMetrics(metrics))).toBe(true);
+  });
+
+  it("grades row 7 periodic as repo-first value without requiring populated tree evidence", () => {
+    const evalCase = findCase("first-tree-welcome-readable-repo-empty-tree-periodic");
+    const metrics = baseMetrics({
+      chatAskCount: 1,
+      chatOptionCount: 2,
+      repoEvidenceReadObserved: true,
+      taskOptionsObserved: true,
+      treeEvidenceReadObserved: false,
+    });
+
+    expect(casePassed(evalCase, metrics)).toBe(true);
+    expect(buildGrading(evalCase, metrics, true).scores).toEqual({
+      outcome_pass: true,
+      process_pass: true,
+      risk_pass: true,
+      routing_pass: true,
+    });
   });
 
   it("fails row 8 without Context Tree evidence", () => {
