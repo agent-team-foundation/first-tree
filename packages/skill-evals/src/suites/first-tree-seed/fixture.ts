@@ -308,12 +308,23 @@ function writeRealFirstTreeBareSourceFixture(paths: RunPaths): string {
 
 function writeRealFirstTreeSourceOriginFixture(paths: RunPaths): string {
   const sourceOriginPath = join(paths.workspacePath, ".first-tree-eval", "source-origin");
-  assertCommandOk(runCommand("git", ["init", "--bare", sourceOriginPath], paths.workspacePath));
-  assertCommandOk(runCommand("git", ["remote", "add", "source", paths.repoRoot], sourceOriginPath));
-  assertCommandOk(runCommand("git", ["fetch", "source", "HEAD:refs/heads/main"], sourceOriginPath));
+  const repoHead = gitHead(paths.repoRoot);
+  if (repoHead === null) {
+    throw new Error(`real first-tree repo is missing HEAD: ${paths.repoRoot}`);
+  }
+  assertCommandOk(
+    runCommand("git", ["clone", "--bare", "--no-local", paths.repoRoot, sourceOriginPath], paths.workspacePath),
+  );
+  assertCommandOk(runCommand("git", ["update-ref", "refs/heads/main", repoHead], sourceOriginPath));
   assertCommandOk(runCommand("git", ["symbolic-ref", "HEAD", "refs/heads/main"], sourceOriginPath));
-  assertCommandOk(runCommand("git", ["remote", "remove", "source"], sourceOriginPath));
-  assertCommandOk(runCommand("git", ["rev-parse", "refs/heads/main"], sourceOriginPath));
+  const removeOrigin = runCommand("git", ["remote", "remove", "origin"], sourceOriginPath);
+  if (removeOrigin.exitCode !== 0 && !removeOrigin.stderr.includes("No such remote")) {
+    assertCommandOk(removeOrigin);
+  }
+  const sourceMain = gitHead(sourceOriginPath, "refs/heads/main");
+  if (sourceMain !== repoHead) {
+    throw new Error(`real first-tree source origin main ${sourceMain ?? "missing"} does not match ${repoHead}`);
+  }
   return sourceOriginPath;
 }
 
