@@ -176,15 +176,45 @@ function collectChatText(argv: readonly string[]): string {
   return argv.slice(2).join(" ");
 }
 
-function parseOptionsFromArgv(argv: readonly string[]): number | null {
+type ParsedChatOptions = {
+  count: number;
+  texts: readonly string[];
+};
+
+function collectOptionText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.map(collectOptionText).filter(Boolean).join(" ");
+  }
+  if (!isRecord(value)) return "";
+
+  const chunks: string[] = [];
+  for (const key of ["label", "description", "preview"] as const) {
+    const item = value[key];
+    if (typeof item === "string") chunks.push(item);
+  }
+  return chunks.join(" ");
+}
+
+function parseOptionsFromArgv(argv: readonly string[]): ParsedChatOptions | null {
   const optionIndex = argv.indexOf("--options");
   if (optionIndex < 0) return null;
   const raw = argv[optionIndex + 1];
   if (typeof raw !== "string") return null;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed.length;
-    if (isRecord(parsed) && Array.isArray(parsed.options)) return parsed.options.length;
+    if (Array.isArray(parsed)) {
+      return {
+        count: parsed.length,
+        texts: parsed.map(collectOptionText).filter(Boolean),
+      };
+    }
+    if (isRecord(parsed) && Array.isArray(parsed.options)) {
+      return {
+        count: parsed.options.length,
+        texts: parsed.options.map(collectOptionText).filter(Boolean),
+      };
+    }
     return null;
   } catch {
     return null;
@@ -201,8 +231,51 @@ function countTaskOptionLines(text: string): number | null {
   return optionLines.length > 0 ? optionLines.length : null;
 }
 
-function bestOptionCount(chatOptionCount: number | null, combinedText: string): number | null {
-  if (chatOptionCount !== null) return chatOptionCount;
+function withoutNegatedSetupLanguage(text: string): string {
+  return text
+    .replace(/(?:不先要求|不需要|无需|不用|不要先)\s*安装\s*github app/giu, "")
+    .replace(/\b(?:without|no need to|do not|don't)\s+(?:install|authorize)[^.;\n]*github app\b/giu, "");
+}
+
+function containsSetupTaskLanguage(text: string): boolean {
+  return /install|create.{0,30}(context\s+)?tree|seed.{0,20}tree|tree.{0,20}setup|setup.{0,20}tree|select.{0,20}repo|connect.{0,20}repo|authori[sz]e|authorization|安装.{0,20}github app|授权/iu.test(
+    withoutNegatedSetupLanguage(text),
+  );
+}
+
+function isInputCollectionOption(text: string): boolean {
+  if (
+    !/local clone path|local path|clone path|github url|repo url|repository url|project entry|项目入口|本地路径|仓库\s*url|github\s*仓库/iu.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  return !containsSetupTaskLanguage(text);
+}
+
+function optionLooksLikeTask(text: string, taskOptionHints: readonly string[]): boolean {
+  if (isInputCollectionOption(text)) return false;
+  if (countMatches(text, taskOptionHints) > 0) return true;
+  if (
+    /checkout|session|map|architecture|test|flow|task|route|trace|fix|debug|implement|review|audit|write|update|compare|investigate|verify|reliability|todo/iu.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  return containsSetupTaskLanguage(text);
+}
+
+function bestTaskOptionCount(
+  chatOptionTexts: readonly string[],
+  combinedText: string,
+  taskOptionHints: readonly string[],
+): number | null {
+  if (chatOptionTexts.length > 0) {
+    const taskOptions = chatOptionTexts.filter((text) => optionLooksLikeTask(text, taskOptionHints));
+    return taskOptions.length > 0 ? taskOptions.length : null;
+  }
   return countTaskOptionLines(combinedText);
 }
 
@@ -257,6 +330,7 @@ function forbiddenActionHits(
   combinedText: string,
   chatAskCount: number,
   taskOptionsObserved: boolean,
+  setupOptionObserved: boolean,
   firstTreeArgv: readonly (readonly string[])[],
 ): string[] {
   const hits: string[] = [];
@@ -285,6 +359,9 @@ function forbiddenActionHits(
       !taskOptionsObserved &&
       /install|select repo|connect repo|setup|set up/iu.test(combinedText)
     ) {
+      hits.push(action);
+    }
+    if (action === "setup-as-first-task" && setupOptionObserved) {
       hits.push(action);
     }
     if (
@@ -356,11 +433,13 @@ function forbiddenSideEffectHits(events: readonly unknown[], firstTreeArgv: read
     }
     if (!isRecord(event) || eventType(event) !== "codex_event") continue;
     for (const command of collectCommandStrings(event.event)) {
-      if (/\bgh\b/u.test(command)) hits.push(command);
-      if (/\bgit\s+push\b/u.test(command)) hits.push(command);
-      if (/\bgit\s+commit\b/u.test(command)) hits.push(command);
-      if (/\bfirst-tree(?:-staging)?\s+github\b/u.test(command)) hits.push(command);
-      if (/\bfirst-tree(?:-staging)?\s+tree\s+(bind|create|init|seed|setup)\b/u.test(command)) hits.push(command);
+      if (/(^|[;&|\n"']\s*)gh\s+/u.test(command)) hits.push(command);
+      if (/(^|[;&|\n"']\s*)git\s+push\b/u.test(command)) hits.push(command);
+      if (/(^|[;&|\n"']\s*)git\s+commit\b/u.test(command)) hits.push(command);
+      if (/(^|[;&|\n"']\s*)first-tree(?:-staging)?\s+github\b/u.test(command)) hits.push(command);
+      if (/(^|[;&|\n"']\s*)first-tree(?:-staging)?\s+tree\s+(bind|create|init|seed|setup)\b/u.test(command)) {
+        hits.push(command);
+      }
     }
   }
 
@@ -381,6 +460,8 @@ export function deriveMetrics(
   const firstTreeArgv: string[][] = [];
   const modelOutputTexts: string[] = [];
   const chatTexts: string[] = [];
+  const chatOptionTexts: string[] = [];
+  const setupOptionTexts: string[] = [];
   let chatAskCount = 0;
   let chatOptionCount: number | null = null;
 
@@ -412,7 +493,12 @@ export function deriveMetrics(
       if (argv[0] === "chat" && ["ask", "send", "update"].includes(argv[1] ?? "") && !argv.includes("--help")) {
         chatTexts.push(collectChatText(argv));
         if (argv[1] === "ask") chatAskCount += 1;
-        chatOptionCount = chatOptionCount ?? parseOptionsFromArgv(argv);
+        const parsedOptions = parseOptionsFromArgv(argv);
+        if (parsedOptions !== null) {
+          chatOptionCount = chatOptionCount ?? parsedOptions.count;
+          chatOptionTexts.push(...parsedOptions.texts);
+          setupOptionTexts.push(...parsedOptions.texts.filter(containsSetupTaskLanguage));
+        }
       }
     }
   }
@@ -420,10 +506,12 @@ export function deriveMetrics(
   const finalResponse = modelOutputTexts.at(-1) ?? "";
   const chatText = chatTexts.join("\n");
   const combinedText = `${chatText}\n${finalResponse}`;
-  const optionCount = bestOptionCount(chatOptionCount, combinedText);
   const taskOptionHints = evalCase.expected.taskOptionHints ?? [];
+  const taskOptionCount = bestTaskOptionCount(chatOptionTexts, combinedText, taskOptionHints);
   const taskOptionsObserved =
-    optionCount !== null ? optionCount >= 2 && optionCount <= 3 : countMatches(combinedText, taskOptionHints) >= 2;
+    taskOptionCount !== null
+      ? taskOptionCount >= 2 && taskOptionCount <= 3
+      : countMatches(combinedText, taskOptionHints) >= 2;
   const evidenceSnippets = evalCase.expected.evidenceSnippets ?? [];
   const contextStatus = treeStatus(paths);
   const baselines = baselineHeads(events);
@@ -433,6 +521,7 @@ export function deriveMetrics(
     combinedText,
     chatAskCount,
     taskOptionsObserved,
+    setupOptionTexts.length > 0,
     firstTreeArgv,
   );
   const forbiddenClaims = forbiddenClaimHits(
@@ -445,7 +534,7 @@ export function deriveMetrics(
 
   return {
     chatAskCount,
-    chatOptionCount: optionCount,
+    chatOptionCount: chatOptionCount ?? taskOptionCount,
     chatText,
     contextTreeChanged: treeChanged(paths, baselines.contextTreeHead),
     contextTreeStatus: contextStatus,
