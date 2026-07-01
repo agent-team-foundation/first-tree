@@ -87,9 +87,27 @@ Emit strict JSON:
   "summary":"" }
 \`\`\`
 Then give the user a short, plain-language summary: the headline score, the
-per-dimension scores in one line each, and the must-fix blockers. Offer to turn
-any blocker into a fix task / PR. The score is a heuristic, not a precise grade —
-present it as such.
+per-dimension scores in one line each, and the must-fix blockers. The score is a
+heuristic, not a precise grade — present it as such.
+
+## Step 5 — turn the top fix into a real deliverable (the payoff)
+Don't stop at advice. Pick the single highest-leverage blocker (prefer a
+security or launch-blocking one) and **produce it as a finished, ready-to-apply
+artifact**, shown in full in the chat (free, no commitment): a concrete diff for
+THIS repo (e.g. the CI workflow that adds secret + dependency scanning, a
+missing \`SECURITY.md\`, the Dockerfile change to drop root), or a ready-to-file
+issue with evidence and repro steps. Tailor it to the repo, not a template.
+
+Then offer to **apply it on the user's behalf using their own GitHub**: e.g.
+"Want me to open a PR with this change to \`<owner>/<repo>\`?" (or file the
+issue). **Stay READ-ONLY until the user explicitly says yes.** On yes, use the
+\`gh\` CLI on this machine to open the PR (or file the issue) on a new branch,
+then share the link. If \`gh\` is not authenticated, hand them the exact command
+to run instead. Never push to their default branch or change anything without
+that explicit go-ahead. Even after a yes, use **only** \`gh pr create\` /
+\`gh issue create\` against a new branch on **the same repo you scanned** — no
+force-push, no deleting or modifying existing branches, no closing or editing
+existing issues or PRs, no other mutating \`gh\` command.
 `;
 
 const AGENT_READINESS_BODY = `# Agent Readiness Scan
@@ -149,9 +167,29 @@ Emit strict JSON:
   "summary":"" }
 \`\`\`
 Then a short, plain-language summary: headline score, per-dimension one-liners,
-must-fix blockers. Offer to turn any blocker into a fix task / PR (e.g. tighten
-AGENTS.md, add a "how to verify your change" section). The score is a heuristic,
-not a precise grade — present it as such.
+must-fix blockers. The score is a heuristic, not a precise grade — present it as
+such.
+
+## Step 5 — turn the top fix into a real deliverable (the payoff)
+Don't stop at advice. Pick the single highest-leverage fix and **produce it as a
+finished, ready-to-apply artifact**, shown in full in the chat (free, no
+commitment). The hero for an agent-readiness scan is a tailored **AGENTS.md**:
+if the repo lacks one or has a weak one, write a complete AGENTS.md **for THIS
+repo** — the real build/test/lint commands, the actual module map, the edit
+boundaries and "don't touch" areas — not a template. For a different top
+finding, produce that concrete artifact instead (a CONTRIBUTING / architecture
+doc, a specific diff, or a ready-to-file issue with repro steps).
+
+Then offer to **apply it on the user's behalf using their own GitHub**: e.g.
+"Want me to open a PR adding this AGENTS.md to \`<owner>/<repo>\`?" **Stay
+READ-ONLY until the user explicitly says yes.** On yes, use the \`gh\` CLI on
+this machine to open the PR (or file the issue) on a new branch, then share the
+link. If \`gh\` is not authenticated, hand them the exact command to run instead.
+Never push to their default branch or change anything without that explicit
+go-ahead. Even after a yes, use **only** \`gh pr create\` / \`gh issue create\`
+against a new branch on **the same repo you scanned** — no force-push, no
+deleting or modifying existing branches, no closing or editing existing issues
+or PRs, no other mutating \`gh\` command.
 `;
 
 const CAMPAIGN_SCAN_SKILLS: Record<string, CampaignScanSkill> = {
