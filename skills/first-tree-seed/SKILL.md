@@ -207,11 +207,14 @@ Aggregate observations across all sources, then abstract:
   organisation are the strongest signals. For `product/` and
   `customer/`, README positioning and marketing-site content are the
   strongest signals.
-- **Supporting structure is automatic, not a candidate.** Always
-  create `members/<owner>/NODE.md` (owner = most-active recent
+- **Supporting structure is automatic, not a candidate.** Ensure
+  `members/<owner>/NODE.md` (owner = most-active recent
   contributor of the largest source) and `raw-context/NODE.md` (the
-  intake bucket for meeting notes and explorations). These are
-  scaffolding, not concern axes; do not put them in the user
+  intake bucket for meeting notes and explorations) exist — Step 0's
+  `tree init` may have already created a `members/` index and the
+  creator's member node, so **extend those rather than recreating
+  them** (add the computed owner if it differs from the creator). These
+  are scaffolding, not concern axes; do not put them in the user
   checklist as toggles — but **do compute the primary owner now**
   (one `git log` per source, seconds) and show the derived name in
   the confirmation message, so the user confirms structure and owner
@@ -664,8 +667,8 @@ explicit scope.
 A user may merge PR1 and then never come back for Phase 2 (life
 happens, the team is busy, the kickoff agent crashed). The tree
 ends up with real structure but zero leaves. **This is not a
-re-seed condition** — the seed self-check sees a populated tree
-(`<tree>/<domain>/NODE.md` files exist) and refuses. Instead:
+re-seed condition** — Step 0 sees an already-seeded tree
+(`<tree>/<domain>/NODE.md` files exist, state C) and refuses. Instead:
 
 - Future writes go through `first-tree-write` one source at a
   time, exactly as they would on any other live tree.
