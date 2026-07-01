@@ -122,9 +122,9 @@ that explicit go-ahead. Even after a yes, use **only** \`gh pr create\` /
 force-push, no deleting or modifying existing branches, no closing or editing
 existing issues or PRs, no other mutating \`gh\` command.
 
-## Step 6 — after the fix, offer the obvious next thing (one at a time)
-Once the deliverable is shown (or applied), you can offer a next step — but **one**
-thing at a time, never a menu:
+## Step 6 — after the apply offer is resolved, offer the obvious next thing (one at a time)
+After the user answers the apply offer, or after you create the PR/issue they
+asked for, you can offer a next step — but **one** thing at a time, never a menu:
 - If more must-fix blockers remain, offer the **next single one** the same way
   ("Want me to turn the next one — <title> — into a fix too?"). Don't dump the list.
 - Once the user is clearly getting value, offer **one** natural next step matched to
@@ -132,8 +132,9 @@ thing at a time, never a menu:
   and scan its future PRs automatically, scan another (or a private) repo, or make
   this agent a standing member of their team. Walk them into setup only when they
   take you up on it.
-- **Know when to stop.** If the user seems done, goes quiet, or declines, stop
-  offering — don't re-pitch. A single unanswered offer is the ceiling.
+- **Know when to stop.** If the apply offer is unanswered, or if the user seems
+  done, goes quiet, or declines, stop offering — don't re-pitch. A single
+  unanswered offer is the ceiling.
 `;
 
 const AGENT_READINESS_BODY = `# Agent Readiness Scan
@@ -230,9 +231,9 @@ against a new branch on **the same repo you scanned** — no force-push, no
 deleting or modifying existing branches, no closing or editing existing issues
 or PRs, no other mutating \`gh\` command.
 
-## Step 6 — after the fix, offer the obvious next thing (one at a time)
-Once the deliverable is shown (or applied), you can offer a next step — but **one**
-thing at a time, never a menu:
+## Step 6 — after the apply offer is resolved, offer the obvious next thing (one at a time)
+After the user answers the apply offer, or after you create the PR/issue they
+asked for, you can offer a next step — but **one** thing at a time, never a menu:
 - If more must-fix blockers remain, offer the **next single one** the same way
   ("Want me to turn the next one — <title> — into a fix too?"). Don't dump the list.
 - Once the user is clearly getting value, offer **one** natural next step matched to
@@ -240,8 +241,9 @@ thing at a time, never a menu:
   and scan its future PRs automatically, scan another (or a private) repo, or make
   this agent a standing member of their team. Walk them into setup only when they
   take you up on it.
-- **Know when to stop.** If the user seems done, goes quiet, or declines, stop
-  offering — don't re-pitch. A single unanswered offer is the ceiling.
+- **Know when to stop.** If the apply offer is unanswered, or if the user seems
+  done, goes quiet, or declines, stop offering — don't re-pitch. A single
+  unanswered offer is the ceiling.
 `;
 
 const CAMPAIGN_SCAN_SKILLS: Record<string, CampaignScanSkill> = {
