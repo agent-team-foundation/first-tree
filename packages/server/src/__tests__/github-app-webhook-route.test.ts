@@ -10,7 +10,7 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { users } from "../db/schema/users.js";
-import { recordInstallIntent } from "../services/github-app-install-intents.js";
+import { recordPendingBind } from "../services/github-app-install-intents.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -229,14 +229,18 @@ describe("POST /webhooks/github-app", () => {
     expect(row?.hubOrganizationId).toBeNull();
   });
 
-  it("installation.created with a matching install-intent → binds to the intent's target org", async () => {
+  it("installation.created with a matching pending bind → binds to the target org", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = 100010;
-    const installerGithubId = 90210;
-    await recordInstallIntent(app.db, {
-      installerGithubId,
+    const kickoffGithubId = 90210;
+    // The callback records the per-install pending bind (installation_id →
+    // target org + kickoff admin + their github id).
+    await recordPendingBind(app.db, {
+      installationId,
       targetOrganizationId: admin.organizationId,
+      kickoffUserId: admin.userId,
+      kickoffGithubId,
     });
 
     const res = await postWebhook(app, "installation", {
@@ -248,7 +252,8 @@ describe("POST /webhooks/github-app", () => {
         events: ["pull_request"],
         suspended_at: null,
       },
-      sender: { id: installerGithubId, login: "acme-admin", type: "User" },
+      // The installer (sender) IS the kickoff admin.
+      sender: { id: kickoffGithubId, login: "acme-admin", type: "User" },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().lifecycle).toBe("created:bound");
@@ -259,20 +264,22 @@ describe("POST /webhooks/github-app", () => {
       .where(eq(githubAppInstallations.installationId, installationId))
       .limit(1);
     expect(row?.hubOrganizationId).toBe(admin.organizationId);
-    expect(row?.installerGithubId).toBe(installerGithubId);
+    expect(row?.installerGithubId).toBe(kickoffGithubId);
   });
 
-  it("installation.created does NOT bind when the sender differs from the intent's installer (forgery guard)", async () => {
+  it("installation.created does NOT bind when the installer differs from the pending bind's kickoff admin (per-install forgery guard)", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const installationId = 100011;
-    // Intent was minted for the kickoff admin (github id 111), but the
-    // install is completed by a different GitHub identity (github id 222).
-    await recordInstallIntent(app.db, {
-      installerGithubId: 111,
+    // Pending bind for this installation names kickoff github id 111...
+    await recordPendingBind(app.db, {
+      installationId,
       targetOrganizationId: admin.organizationId,
+      kickoffUserId: admin.userId,
+      kickoffGithubId: 111,
     });
-
+    // ...but the actual installer (webhook sender) is a different identity —
+    // so this installation was not created by the kickoff admin. No bind.
     const res = await postWebhook(app, "installation", {
       action: "created",
       installation: {
@@ -285,7 +292,43 @@ describe("POST /webhooks/github-app", () => {
       sender: { id: 222, login: "someone-else", type: "User" },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().lifecycle).toBe("created:no-intent");
+    expect(res.json().lifecycle).toBe("created:installer-mismatch");
+
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.hubOrganizationId).toBeNull();
+  });
+
+  it("installation.created does NOT bind when the kickoff admin was revoked before the webhook (mid-flight)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100012;
+    const kickoffGithubId = 90211;
+    await recordPendingBind(app.db, {
+      installationId,
+      targetOrganizationId: admin.organizationId,
+      kickoffUserId: admin.userId,
+      kickoffGithubId,
+    });
+    // Admin downgraded to member between kickoff and the webhook delivery.
+    await app.db.update(members).set({ role: "member" }).where(eq(members.userId, admin.userId));
+
+    const res = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: installationId,
+        account: { id: 4244, login: "acme2", type: "Organization" },
+        permissions: { contents: "read" },
+        events: ["pull_request"],
+        suspended_at: null,
+      },
+      sender: { id: kickoffGithubId, login: "acme-admin", type: "User" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().lifecycle).toBe("created:kickoff-not-admin");
 
     const [row] = await app.db
       .select()

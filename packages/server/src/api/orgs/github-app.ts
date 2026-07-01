@@ -9,7 +9,6 @@ import { authIdentities } from "../../db/schema/auth-identities.js";
 import { ForbiddenError, NotFoundError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
 import { buildAppInstallUrl, listInstallationRepos } from "../../services/github-app.js";
-import { recordInstallIntent } from "../../services/github-app-install-intents.js";
 import {
   bindInstallationToOrg,
   findInstallationByGithubId,
@@ -213,8 +212,9 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   // The SPA fetches this (with its bearer token), gets `{ installUrl }`
   // back plus a `Set-Cookie`, then does `window.location = installUrl`.
   // GitHub shows the install dialog, the user picks repos, GitHub
-  // redirects to `/auth/github/callback?code=…&state=…&installation_id=…`,
-  // and the callback verifies the state cookie + binds the install.
+  // redirects to `/auth/github/callback?code=…&state=…&installation_id=…`.
+  // The callback verifies the state cookie and records a per-install pending
+  // bind; the trusted `installation.created` webhook performs the actual bind.
   app.get<{ Params: { orgId: string }; Querystring: { next?: string } }>("/install-url", async (request, reply) => {
     // Admin-gated: the resolved scope is the org the install binds to.
     const scope = await requireOrgAdmin(request, app.db);
@@ -229,10 +229,10 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: "GitHub App install URL is unavailable — FIRST_TREE_GITHUB_APP_SLUG is not configured." });
     }
 
-    // `targetOrganizationId` rides inside the signed state so the OAuth
-    // callback binds the install to *this* org rather than the caller's
-    // primary org (codex P1-3) — an admin in org B installing the App must
-    // end up bound to org B. `kickoffUserId` rides alongside it so the
+    // `targetOrganizationId` rides inside the signed state so the resulting
+    // installation binds to *this* org rather than the caller's primary org
+    // (codex P1-3) — an admin in org B installing the App must end up bound to
+    // org B. `kickoffUserId` rides alongside it so the
     // callback can rest the bind on THIS admin's (re-checked) authority
     // even when the browser's github.com session resolves to a different
     // GitHub identity — the github.com session and the First Tree session
@@ -255,61 +255,33 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       }),
     );
 
-    // Record the pending install intent so the trusted, HMAC-signed
-    // `installation.created` webhook can bind the resulting installation to
-    // THIS org — matched by the kickoff admin's GitHub id against the
-    // webhook `sender`. Binding is never driven by the browser-supplied URL
-    // `installation_id` (unsigned, forgeable). The `state`/nonce still
-    // guard the callback's CSRF + kickoff identity; this intent is the
-    // separate, trusted binding channel.
-    const [identity] = await app.db
-      .select({ identifier: authIdentities.identifier })
-      .from(authIdentities)
-      .where(and(eq(authIdentities.userId, scope.userId), eq(authIdentities.provider, "github")))
-      .limit(1);
-    const installerGithubId = identity?.identifier ? Number(identity.identifier) : Number.NaN;
-    if (!Number.isNaN(installerGithubId)) {
-      await recordInstallIntent(app.db, {
-        installerGithubId,
-        targetOrganizationId: scope.organizationId,
-      });
-    } else {
-      app.log.warn(
-        { userId: scope.userId, organizationId: scope.organizationId },
-        "install-url: kickoff admin has no GitHub identity on file — install won't auto-bind; recover via POST /claim",
-      );
-    }
-
+    // No DB write here: `installation_id` doesn't exist until the user
+    // completes the install. The signed state carries `targetOrganizationId`
+    // + `kickoffUserId` to the callback, which records the per-install pending
+    // bind (keyed by the concrete `installation_id`) that the trusted
+    // `installation.created` webhook then completes.
     return { installUrl: buildAppInstallUrl({ appSlug: appCfg.slug, state: token }) };
   });
 
   // ── Manual install claim ────────────────────────────────────────────
   //
-  // Recovery hatch for an installation row that ended up unbound — the
-  // OAuth callback's auto-reclaim sweep handles the single-orphan case at
-  // sign-in, but bails when there are several (or when the install is on
-  // an org account, where "the user is an org admin" isn't a strong enough
-  // basis to auto-claim).
+  // Recovery hatch for an installation row that ended up unbound (e.g. the
+  // `installation.created` webhook arrived without a matching pending bind, or
+  // the kickoff callback never completed). Normal binding is webhook-driven;
+  // this is the manual fallback.
   //
   // ⚠ This endpoint is **API-only** — there is no Settings UI that calls
-  // it yet. The orphan-list endpoint and the `Claim install` button per
-  // orphan are tracked in #318. Until #318 ships, multi-orphan recovery
-  // requires the operator to POST to this endpoint directly.
+  // it yet. The orphan-list endpoint and a per-install `Claim install` button
+  // are tracked in #318; until then, recovery requires POSTing here directly.
   //
-  // Authorization mirrors the OAuth callback's `installation_id` check:
-  // being an admin of the target First Tree org isn't sufficient — installation
-  // IDs aren't secrets, so we also confirm the caller can actually
-  // **administer** the install on GitHub. Per-install rules:
-  //   - User-type: caller's GitHub ID must equal the install account's
-  //     GitHub ID (only the account owner counts).
-  //   - Org-type: `GET /user/memberships/orgs/{login}` must return
-  //     `state=active, role=admin`. Plain org membership is NOT enough —
-  //     that's what made the legacy `/user/installations` primitive
-  //     forgeable (it surfaced any install the user had read access to).
-  //
-  // Account metadata comes from the existing DB row (UPSERTed by the
-  // webhook or the OAuth callback). 404 here means there's nothing to
-  // claim at all; the bind step never runs.
+  // Authorization: being a First Tree org admin isn't sufficient — the
+  // browser-supplied installation id isn't a secret. The caller may claim
+  // ONLY an installation THEY installed, matched against the trusted
+  // `installer_github_id` (the `installation.created` webhook `sender`; GitHub
+  // only lets a user install on an account they administer). This replaces the
+  // removed `verifyUserCanAdministerInstallation` probe on this path. The row
+  // (and its `installer_github_id`) is written by the webhook; 404 here means
+  // there's nothing to claim.
   app.post<{ Params: { orgId: string }; Body: unknown }>("/claim", async (request) => {
     const scope = await requireOrgAdmin(request, app.db);
     const { installationId } = githubAppInstallationClaimBodySchema.parse(request.body);

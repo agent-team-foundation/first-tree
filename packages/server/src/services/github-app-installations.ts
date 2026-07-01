@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
+import { and, eq, isNull, lt, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { ConflictError, NotFoundError } from "../errors.js";
@@ -352,36 +352,6 @@ export async function findInstallationByOrg(db: Database, hubOrganizationId: str
     .where(eq(githubAppInstallations.hubOrganizationId, hubOrganizationId))
     .limit(1);
   return row ?? null;
-}
-
-/**
- * List the installations for a GitHub account that aren't bound to any First Tree
- * team yet. Newest-first.
- *
- * The orphan-recovery path (codex P1-5 + H1): if the OAuth callback's
- * `upsertInstallationFromMetadata` lands but the follow-up
- * `bindInstallationToOrg` fails (transient DB error, a racing invite that
- * errors out, …), the row sits unbound forever — GitHub only puts
- * `installation_id` in the redirect on the *initial* install, so a later
- * sign-in never re-attempts the bind. On every subsequent sign-in we sweep
- * for unbound rows whose `accountGithubId` matches the user's own GitHub
- * account and auto-claim the single one (and surface a manual "Claim
- * install" button when there are several).
- */
-export async function findUnboundInstallationsByAccount(
-  db: Database,
-  accountGithubId: number,
-): Promise<InstallationRow[]> {
-  return db
-    .select()
-    .from(githubAppInstallations)
-    .where(
-      and(
-        eq(githubAppInstallations.accountGithubId, accountGithubId),
-        isNull(githubAppInstallations.hubOrganizationId),
-      ),
-    )
-    .orderBy(desc(githubAppInstallations.createdAt));
 }
 
 /**

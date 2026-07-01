@@ -4,7 +4,9 @@ import {
   githubStartQuerySchema,
   safeRedirectPath,
 } from "@first-tree/shared";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { authIdentities } from "../../db/schema/auth-identities.js";
 import { signTokensForUser } from "../../services/auth.js";
 import {
   findOrCreateUserFromGithub,
@@ -13,6 +15,7 @@ import {
 } from "../../services/auth-identity.js";
 import { encryptValue } from "../../services/crypto.js";
 import { buildAppAuthorizeUrl, exchangeCodeForAppUserProfile } from "../../services/github-app.js";
+import { completeInstallBind, recordPendingBind } from "../../services/github-app-install-intents.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../services/github-app-installations.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
 import {
@@ -43,11 +46,13 @@ import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
  * `GET /orgs/:orgId/github-app-installation/install-url` and surfaced both
  * in onboarding's "Connect your code" step and Settings → GitHub. After
  * that dialog GitHub redirects back here with `code + state +
- * installation_id`, which the callback verifies and binds. The install
- * BIND rests on the kickoff session signed into the state
- * (`kickoffUserId`, re-checked live), not on the identity the OAuth code
- * resolves to — the browser's github.com session is independent of the
- * First Tree session, and a mismatch must not strand the install unbound.
+ * installation_id`. The callback does NOT bind the installation: it records
+ * a per-install pending bind (keyed by `installation_id`, authorized by the
+ * signed kickoff state — `kickoffUserId`), and the actual bind is performed by
+ * the trusted, HMAC-signed `installation.created` webhook once it proves the
+ * installer IS the kickoff admin (and re-checks live admin). The URL
+ * `installation_id` is only a correlation handle; a forged one never binds.
+ * The browser's github.com session is independent of the First Tree session.
  *
  * The live `/callback` is a full-page browser navigation, so its error
  * replies redirect to the SPA error surface
@@ -100,10 +105,12 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(503).send({ error: "GitHub App is not configured on this First Tree deployment" });
     }
     const parsed = githubCallbackQuerySchema.parse(request.query);
-    // `installation_id` may ride the callback URL but is intentionally
-    // ignored — it's unsigned/forgeable and never a binding input (binding
-    // is webhook-driven; see the exchange comment below).
-    const { code, state } = parsed;
+    // `installation_id` from the URL is unsigned/forgeable, so it is NEVER a
+    // binding authority on its own. On the kickoff install path it is used
+    // only as a *correlation handle*: we record a per-install pending bind,
+    // and the trusted `installation.created` webhook completes it only after
+    // proving this installation's installer is the kickoff admin.
+    const { code, state, installation_id: installationIdRaw } = parsed;
     const cookieNonce = parseCookieHeader(request.headers.cookie, OAUTH_STATE_COOKIE);
 
     let next: string;
@@ -145,15 +152,10 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         clientSecret: appCfg.clientSecret,
         code,
         redirectUri,
-        // Sign-in is pure login. Installation binding is NOT driven by this
-        // OAuth round-trip, nor by the browser-supplied URL `installation_id`
-        // (unsigned, address-bar-forgeable). Binding is done by the trusted,
-        // HMAC-signed `installation.created` webhook, keyed by the
-        // admin-minted install-intent (see `services/github-app-install-intents`
-        // and `system/cloud/github/github-app.md`). So we neither thread nor
-        // bind an `installation_id` here — the old
-        // `verifyUserCanAdministerInstallation` probe (and its
-        // `organization:members:read` need) is gone.
+        // The OAuth code exchange resolves the signing-in identity for LOGIN.
+        // It is not an installation-binding input, so we don't thread the URL
+        // `installation_id` through it; binding is handled separately via the
+        // per-install pending bind + trusted `installation.created` webhook.
         installationId: null,
       });
       profile = result.profile;
@@ -166,6 +168,45 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       app.log.warn({ err }, "github sign-in code exchange failed");
       return redirectCallbackError(reply, "github-exchange-failed", next);
+    }
+
+    // Kickoff install-completion (per-install correlation). The signed state
+    // proves an admin kicked off an install for `targetOrganizationId`; the
+    // URL carries the concrete `installation_id`. Record a per-install pending
+    // bind so the trusted, HMAC-signed `installation.created` webhook can
+    // complete it once it proves this installation's installer IS the kickoff
+    // admin (and the kickoff user is still an active admin — live re-checked in
+    // `completeInstallBind`). A forged `installation_id` naming another org's
+    // install never binds: that install's webhook `sender` is not the kickoff
+    // admin. Calling `completeInstallBind` here also covers the
+    // webhook-arrived-before-callback ordering.
+    if (targetOrganizationId && kickoffUserId && installationIdRaw) {
+      const installationId = Number(installationIdRaw);
+      if (Number.isFinite(installationId)) {
+        const [kickoffIdentity] = await app.db
+          .select({ identifier: authIdentities.identifier })
+          .from(authIdentities)
+          .where(and(eq(authIdentities.userId, kickoffUserId), eq(authIdentities.provider, "github")))
+          .limit(1);
+        const kickoffGithubId = kickoffIdentity?.identifier ? Number(kickoffIdentity.identifier) : Number.NaN;
+        if (Number.isFinite(kickoffGithubId)) {
+          try {
+            await recordPendingBind(app.db, { installationId, targetOrganizationId, kickoffUserId, kickoffGithubId });
+            await completeInstallBind(app.db, installationId);
+          } catch (err) {
+            // Non-fatal: the webhook path retries completion; sign-in proceeds.
+            app.log.warn(
+              { err, installationId, targetOrganizationId, kickoffUserId },
+              "install pending-bind record/complete failed in callback — webhook will retry",
+            );
+          }
+        } else {
+          app.log.warn(
+            { kickoffUserId, targetOrganizationId },
+            "install callback: kickoff user has no GitHub identity on file — cannot record pending bind",
+          );
+        }
+      }
     }
 
     return completeOauthFlow(app, request, reply, profile, next, tokens, null, targetOrganizationId, {

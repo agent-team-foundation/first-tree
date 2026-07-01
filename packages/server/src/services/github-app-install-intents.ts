@@ -1,98 +1,160 @@
-import { and, eq, gt, sql } from "drizzle-orm";
+import { eq, lte } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { githubAppInstallIntents } from "../db/schema/github-app-install-intents.js";
+import { ConflictError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
+import { bindInstallationToOrg, findInstallationByGithubId } from "./github-app-installations.js";
+import { findActiveMembership } from "./membership.js";
 
 /**
- * Pending install-intent layer — the trusted correlation between an
- * admin-initiated "install the App for org T" kickoff and the later
- * `installation.created` webhook (see the table jsdoc in
- * `db/schema/github-app-install-intents.ts` and
+ * Per-installation pending-bind layer — the trusted, per-install correlation
+ * between an admin install kickoff and the `installation.created` webhook
+ * (see the table jsdoc in `db/schema/github-app-install-intents.ts` and
  * `system/cloud/github/github-app.md`).
  *
- * Binding is NOT driven by the browser-supplied URL `installation_id`
- * (unsigned, forgeable). Instead:
- *   1. `/install-url` records an intent keyed by the kickoff admin's
- *      GitHub id.
- *   2. The HMAC-signed `installation.created` webhook consumes the intent
- *      by its `sender` (the GitHub-authenticated installer) and binds.
+ * Binding is NOT inferred from the browser-supplied URL `installation_id`
+ * (unsigned, forgeable) nor from the installer alone. The callback records a
+ * pending bind keyed by the concrete `installation_id`; the bind only lands
+ * once the HMAC-signed webhook proves that installation's installer equals
+ * the kickoff admin AND the kickoff admin is still an active org admin
+ * (`completeInstallBind`).
  */
 
 /**
- * How long a kickoff intent stays consumable. Comfortably covers a slow
- * install (lingering on GitHub's repository picker) plus webhook delivery
- * lag, while bounding the window in which a stale, abandoned intent could
- * bind an unrelated later install by the same user.
+ * How long a pending bind stays completable. Comfortably covers webhook
+ * delivery lag after the callback, while bounding the window in which a
+ * stale pending row lingers.
  */
 export const INSTALL_INTENT_TTL_MS = 30 * 60 * 1000;
 
-export type RecordInstallIntentInput = {
-  installerGithubId: number;
+export type RecordPendingBindInput = {
+  installationId: number;
   targetOrganizationId: string;
+  kickoffUserId: string;
+  kickoffGithubId: number;
   /** Defaults to now + INSTALL_INTENT_TTL_MS. */
   expiresAt?: Date;
   now?: Date;
 };
 
 /**
- * Record (or refresh) the pending install intent for a kickoff admin.
- * One active intent per installer — a fresh kickoff for a different org
- * overwrites the previous one (last-write-wins) via the UNIQUE index.
+ * Record (or refresh) the pending bind for a specific installation. Keyed by
+ * `installation_id` — a re-callback for the same install is an idempotent
+ * refresh; concurrent installs (different `installation_id`) get independent
+ * rows, so they can never cross-bind.
  */
-export async function recordInstallIntent(db: Database, input: RecordInstallIntentInput): Promise<void> {
+export async function recordPendingBind(db: Database, input: RecordPendingBindInput): Promise<void> {
   const now = input.now ?? new Date();
   const expiresAt = input.expiresAt ?? new Date(now.getTime() + INSTALL_INTENT_TTL_MS);
   await db
     .insert(githubAppInstallIntents)
     .values({
       id: uuidv7(),
-      installerGithubId: input.installerGithubId,
+      installationId: input.installationId,
       targetOrganizationId: input.targetOrganizationId,
+      kickoffUserId: input.kickoffUserId,
+      kickoffGithubId: input.kickoffGithubId,
       expiresAt,
       createdAt: now,
     })
     .onConflictDoUpdate({
-      target: githubAppInstallIntents.installerGithubId,
+      target: githubAppInstallIntents.installationId,
       set: {
         targetOrganizationId: input.targetOrganizationId,
+        kickoffUserId: input.kickoffUserId,
+        kickoffGithubId: input.kickoffGithubId,
         expiresAt,
         createdAt: now,
       },
     });
 }
 
+/** Delete the pending bind for an installation (consumed / abandoned). */
+export async function deletePendingBind(db: Database, installationId: number): Promise<void> {
+  await db.delete(githubAppInstallIntents).where(eq(githubAppInstallIntents.installationId, installationId));
+}
+
+/** Housekeeping: drop pending binds past their TTL. Safe to call opportunistically. */
+export async function deleteExpiredPendingBinds(db: Database, now: Date = new Date()): Promise<void> {
+  await db.delete(githubAppInstallIntents).where(lte(githubAppInstallIntents.expiresAt, now));
+}
+
+export type CompleteInstallBindResult = {
+  bound: boolean;
+  /** Diagnostic reason — for logging + lifecycle status strings. */
+  reason:
+    | "bound"
+    | "no-intent"
+    | "intent-expired"
+    | "awaiting-webhook"
+    | "installer-mismatch"
+    | "kickoff-not-admin"
+    | "bind-conflict";
+};
+
 /**
- * Read (without consuming) a fresh intent for `installerGithubId`, or null
- * when no unexpired intent exists. The webhook binder peeks first, binds,
- * then deletes only on success — so a transient bind failure leaves the
- * intent in place for GitHub's webhook retry to rebind. (A permanent bind
- * conflict deletes it explicitly to stop the retry loop.)
+ * Attempt to complete a pending bind for `installationId`. Called from BOTH
+ * the `installation.created` webhook (after it records the installer) and the
+ * OAuth callback (after it records the pending bind), so binding lands
+ * whichever arrives second. Idempotent.
+ *
+ * Binds only when ALL hold:
+ *   - a fresh pending bind exists for this installation (the callback recorded
+ *     the target org from the signed kickoff);
+ *   - the installation row's `installer_github_id` is known (the signed
+ *     `installation.created` webhook recorded the `sender`) AND equals the
+ *     pending bind's `kickoff_github_id` — i.e. the installer IS the kickoff
+ *     admin (this is the anti-forgery gate: a forged callback `installation_id`
+ *     naming someone else's install fails here, because that install's
+ *     `sender` is not the kickoff admin);
+ *   - the kickoff user is STILL an active admin of the target org (live
+ *     re-check — defends against mid-TTL admin revocation).
+ *
+ * Throws only on a transient `bindInstallationToOrg` error (so the webhook
+ * caller can 500 and let GitHub redeliver); a permanent `ConflictError`
+ * consumes the pending bind and returns `bind-conflict`.
  */
-export async function peekFreshInstallIntent(
-  db: Database,
-  installerGithubId: number,
-  now: Date = new Date(),
-): Promise<{ targetOrganizationId: string } | null> {
-  const [row] = await db
-    .select({ targetOrganizationId: githubAppInstallIntents.targetOrganizationId })
+export async function completeInstallBind(db: Database, installationId: number): Promise<CompleteInstallBindResult> {
+  const [pending] = await db
+    .select()
     .from(githubAppInstallIntents)
-    .where(
-      and(eq(githubAppInstallIntents.installerGithubId, installerGithubId), gt(githubAppInstallIntents.expiresAt, now)),
-    )
+    .where(eq(githubAppInstallIntents.installationId, installationId))
     .limit(1);
-  return row ?? null;
-}
+  if (!pending) return { bound: false, reason: "no-intent" };
+  if (pending.expiresAt.getTime() <= Date.now()) {
+    await deletePendingBind(db, installationId);
+    return { bound: false, reason: "intent-expired" };
+  }
 
-/** Delete the intent for an installer (consumed after a successful or permanently-failed bind). */
-export async function deleteInstallIntent(db: Database, installerGithubId: number): Promise<void> {
-  await db.delete(githubAppInstallIntents).where(eq(githubAppInstallIntents.installerGithubId, installerGithubId));
-}
+  const installation = await findInstallationByGithubId(db, installationId);
+  if (!installation || installation.installerGithubId === null) {
+    // The signed webhook hasn't recorded the installer yet — wait for it.
+    return { bound: false, reason: "awaiting-webhook" };
+  }
+  if (installation.installerGithubId !== pending.kickoffGithubId) {
+    // The GitHub-authenticated installer is NOT the kickoff admin — this
+    // installation was not created by the person who kicked off the bind.
+    // Drop the pending row (forged/mismatched handle); never bind.
+    await deletePendingBind(db, installationId);
+    return { bound: false, reason: "installer-mismatch" };
+  }
 
-/**
- * Housekeeping: delete intents past their TTL. Safe to call opportunistically
- * (e.g. from the webhook path); not required for correctness because
- * `consumeFreshInstallIntent` already ignores expired rows.
- */
-export async function deleteExpiredInstallIntents(db: Database, now: Date = new Date()): Promise<void> {
-  await db.delete(githubAppInstallIntents).where(sql`${githubAppInstallIntents.expiresAt} <= ${now}`);
+  const membership = await findActiveMembership(db, pending.kickoffUserId, pending.targetOrganizationId);
+  if (!membership || membership.role !== "admin") {
+    // Admin was revoked/downgraded during the TTL — refuse and consume.
+    await deletePendingBind(db, installationId);
+    return { bound: false, reason: "kickoff-not-admin" };
+  }
+
+  try {
+    await bindInstallationToOrg(db, installationId, pending.targetOrganizationId);
+  } catch (err) {
+    if (err instanceof ConflictError) {
+      await deletePendingBind(db, installationId);
+      return { bound: false, reason: "bind-conflict" };
+    }
+    throw err;
+  }
+  await deletePendingBind(db, installationId);
+  return { bound: true, reason: "bound" };
 }

@@ -1,74 +1,9 @@
-import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
-import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { organizations } from "../db/schema/organizations.js";
-import {
-  findInstallationByGithubId,
-  findUnboundInstallationsByAccount,
-  upsertInstallationFromMetadata,
-} from "../services/github-app-installations.js";
+import { findInstallationByGithubId, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
-
-describe("findUnboundInstallationsByAccount", () => {
-  const getApp = useTestApp();
-
-  it("returns only unbound rows for the account, newest first", async () => {
-    const app = getApp();
-    const accountGithubId = 660_001;
-
-    // Two unbound installs for this account, plus one bound row that must
-    // not show up.
-    await upsertInstallationFromMetadata(app.db, {
-      installation: {
-        id: 9_001,
-        accountType: "User",
-        accountLogin: "acct",
-        accountGithubId,
-        permissions: {},
-        events: [],
-        suspendedAt: null,
-      },
-    });
-    await upsertInstallationFromMetadata(app.db, {
-      installation: {
-        id: 9_002,
-        accountType: "User",
-        accountLogin: "acct",
-        accountGithubId,
-        permissions: {},
-        events: [],
-        suspendedAt: null,
-      },
-    });
-    const orgId = uuidv7();
-    await app.db.insert(organizations).values({ id: orgId, name: `unbound-${orgId}`, displayName: "Org" });
-    await upsertInstallationFromMetadata(app.db, {
-      installation: {
-        id: 9_003,
-        accountType: "User",
-        accountLogin: "acct",
-        accountGithubId,
-        permissions: {},
-        events: [],
-        suspendedAt: null,
-      },
-      hubOrganizationId: orgId,
-    });
-    // Force 9_002 to be the newest.
-    await app.db
-      .update(githubAppInstallations)
-      .set({ createdAt: new Date(Date.now() - 60_000) })
-      .where(eq(githubAppInstallations.installationId, 9_001));
-
-    const rows = await findUnboundInstallationsByAccount(app.db, accountGithubId);
-    expect(rows.map((r) => r.installationId)).toEqual([9_002, 9_001]);
-
-    // A different account → nothing.
-    expect(await findUnboundInstallationsByAccount(app.db, 999_999)).toHaveLength(0);
-  });
-});
 
 /**
  * Manual claim recovery. Binding is normally driven by the trusted,

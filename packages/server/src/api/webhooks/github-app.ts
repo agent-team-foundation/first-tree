@@ -1,14 +1,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { githubAppInstallationPermissionsSchema, type WebhookSource } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
-import { BadRequestError, ConflictError, UnauthorizedError } from "../../errors.js";
+import { BadRequestError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
 import { handleContextReviewerPrEvent } from "../../services/context-reviewer-pr.js";
 import { claimEvent, unclaimEvent } from "../../services/event-dedup.js";
 import type { AppInstallation } from "../../services/github-app.js";
-import { deleteInstallIntent, peekFreshInstallIntent } from "../../services/github-app-install-intents.js";
+import { completeInstallBind, deleteExpiredPendingBinds } from "../../services/github-app-install-intents.js";
 import {
-  bindInstallationToOrg,
   deleteInstallationByGithubId,
   findInstallationByGithubId,
   markInstallationSuspended,
@@ -205,43 +204,31 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
     case "created": {
       const metadata = parseInstallationMetadata(installation);
       if (!metadata) return "ignored:malformed";
-      // The `sender` on `installation.created` is the GitHub-authenticated
-      // installer. GitHub only lets a user install on an account they
-      // administer, so this id is trusted proof of "installer administers
-      // the installed account" — it replaces the old
-      // `verifyUserCanAdministerInstallation` probe. Persist it, then bind
-      // this installation to the org the kickoff admin intended (matched by
-      // installer id via the signed install-intent). This is the ONLY
-      // binding path: the browser-supplied URL `installation_id` on the
-      // OAuth callback is never trusted for binding.
+      // Record the GitHub-authenticated installer (`sender`) on the row — the
+      // trusted anti-forgery anchor `completeInstallBind` compares against the
+      // kickoff admin. GitHub only lets a user install on an account they
+      // administer, so this id proves "installer administers the installed
+      // account" (it replaces the old `verifyUserCanAdministerInstallation`
+      // probe on the binding path).
       const installerGithubId = readSenderGithubId(payload);
       await upsertInstallationFromMetadata(app.db, {
         installation: metadata,
         ...(installerGithubId !== null ? { installerGithubId } : {}),
       });
+      // Opportunistic sweep of stale pending binds (keeps the table + index
+      // honest; not required for correctness — completeInstallBind filters by
+      // freshness anyway).
+      await deleteExpiredPendingBinds(app.db).catch((err) =>
+        log.warn({ err }, "install-intent expiry sweep failed (non-fatal)"),
+      );
       if (installerGithubId === null) return "created:no-sender";
-      const intent = await peekFreshInstallIntent(app.db, installerGithubId);
-      if (!intent) return "created:no-intent";
-      try {
-        await bindInstallationToOrg(app.db, installationId, intent.targetOrganizationId);
-      } catch (err) {
-        if (err instanceof ConflictError) {
-          // Permanent (D2 1:1 already satisfied elsewhere) — consume the
-          // intent so GitHub's retry doesn't loop on the same conflict.
-          await deleteInstallIntent(app.db, installerGithubId);
-          log.warn(
-            { installationId, installerGithubId, targetOrganizationId: intent.targetOrganizationId, err },
-            "installation.created: bind conflicted with an existing binding (D2 1:1) — left as-is",
-          );
-          return "created:bind-conflict";
-        }
-        // Transient (DB hiccup): keep the intent so GitHub's webhook retry
-        // rebinds. Rethrow → route returns 500 → GitHub redelivers.
-        throw err;
-      }
-      // Bound successfully — consume the intent.
-      await deleteInstallIntent(app.db, installerGithubId);
-      return "created:bound";
+      // Bind iff the callback already recorded a pending bind for THIS
+      // installation whose kickoff admin == this installer (and is still an
+      // active admin). If the callback hasn't arrived yet this no-ops and the
+      // callback completes the bind when it does. A transient bind error
+      // rethrows → 500 → GitHub redelivers (pending bind is preserved).
+      const result = await completeInstallBind(app.db, installationId);
+      return `created:${result.reason}`;
     }
     case "new_permissions_accepted": {
       const metadata = parseInstallationMetadata(installation);

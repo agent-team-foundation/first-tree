@@ -1,5 +1,5 @@
 {
-  "id": "1143e036-3034-423d-b52f-762c1957617b",
+  "id": "083d9670-24d8-45c4-8a59-9216d5a971bd",
   "prevId": "742cd4e7-4515-476b-9f42-10058676ab1d",
   "version": "7",
   "dialect": "postgresql",
@@ -1953,8 +1953,8 @@
           "primaryKey": true,
           "notNull": true
         },
-        "installer_github_id": {
-          "name": "installer_github_id",
+        "installation_id": {
+          "name": "installation_id",
           "type": "bigint",
           "primaryKey": false,
           "notNull": true
@@ -1962,6 +1962,18 @@
         "target_organization_id": {
           "name": "target_organization_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kickoff_user_id": {
+          "name": "kickoff_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kickoff_github_id": {
+          "name": "kickoff_github_id",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },
@@ -1980,11 +1992,11 @@
         }
       },
       "indexes": {
-        "uq_github_app_install_intents_installer": {
-          "name": "uq_github_app_install_intents_installer",
+        "uq_github_app_install_intents_installation": {
+          "name": "uq_github_app_install_intents_installation",
           "columns": [
             {
-              "expression": "installer_github_id",
+              "expression": "installation_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
