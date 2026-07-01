@@ -77,10 +77,7 @@ export async function peekFreshInstallIntent(
     .select({ targetOrganizationId: githubAppInstallIntents.targetOrganizationId })
     .from(githubAppInstallIntents)
     .where(
-      and(
-        eq(githubAppInstallIntents.installerGithubId, installerGithubId),
-        gt(githubAppInstallIntents.expiresAt, now),
-      ),
+      and(eq(githubAppInstallIntents.installerGithubId, installerGithubId), gt(githubAppInstallIntents.expiresAt, now)),
     )
     .limit(1);
   return row ?? null;

@@ -385,33 +385,6 @@ export async function findUnboundInstallationsByAccount(
 }
 
 /**
- * List unbound installations that a given GitHub user **installed** — matched
- * on the trusted `installer_github_id` (the `installation.created` webhook
- * `sender`), not the account or the browser-supplied URL id. Newest-first.
- *
- * This is the anti-forgery basis for the manual `POST /claim` recovery path:
- * a signed-in First Tree user may only claim an installation they themselves
- * installed on GitHub. Rows predating the `installer_github_id` column carry
- * NULL and are intentionally excluded — they are not claimable through this
- * path (recover them by re-installing, which mints the trusted id).
- */
-export async function findUnboundInstallationsByInstaller(
-  db: Database,
-  installerGithubId: number,
-): Promise<InstallationRow[]> {
-  return db
-    .select()
-    .from(githubAppInstallations)
-    .where(
-      and(
-        eq(githubAppInstallations.installerGithubId, installerGithubId),
-        isNull(githubAppInstallations.hubOrganizationId),
-      ),
-    )
-    .orderBy(desc(githubAppInstallations.createdAt));
-}
-
-/**
  * Belt-and-braces helper for tests / debugging: how many installations
  * currently bound to this First Tree team. Should always be 0 or 1 — anything
  * higher means the UNIQUE index was somehow violated and the rest of the

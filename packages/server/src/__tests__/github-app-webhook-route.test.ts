@@ -10,6 +10,7 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { users } from "../db/schema/users.js";
+import { recordInstallIntent } from "../services/github-app-install-intents.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -195,7 +196,7 @@ describe("POST /webhooks/github-app", () => {
     expect(res.json()).toEqual({ ok: true, event: "ping" });
   });
 
-  it("installation.created → UPSERTs the installation row", async () => {
+  it("installation.created → UPSERTs the row + records the installer, but stays unbound without a matching intent", async () => {
     const app = getApp();
     const installationId = 100001;
     const payload = {
@@ -203,14 +204,19 @@ describe("POST /webhooks/github-app", () => {
       installation: {
         id: installationId,
         account: { id: 555, login: "octolabs", type: "Organization" },
-        permissions: { contents: "write" },
+        permissions: { contents: "read" },
         events: ["pull_request"],
         suspended_at: null,
       },
+      // `sender` is the GitHub-authenticated installer — persisted as the
+      // trusted `installer_github_id`.
+      sender: { id: 777, login: "octo-admin", type: "User" },
     };
     const res = await postWebhook(app, "installation", payload);
     expect(res.statusCode).toBe(200);
-    expect(res.json().lifecycle).toBe("created");
+    // No matching install-intent → row is created + installer recorded, but
+    // it is NOT bound (binding is never inferred from the webhook alone).
+    expect(res.json().lifecycle).toBe("created:no-intent");
 
     const [row] = await app.db
       .select()
@@ -219,6 +225,74 @@ describe("POST /webhooks/github-app", () => {
       .limit(1);
     expect(row).toBeTruthy();
     expect(row?.accountLogin).toBe("octolabs");
+    expect(row?.installerGithubId).toBe(777);
+    expect(row?.hubOrganizationId).toBeNull();
+  });
+
+  it("installation.created with a matching install-intent → binds to the intent's target org", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100010;
+    const installerGithubId = 90210;
+    await recordInstallIntent(app.db, {
+      installerGithubId,
+      targetOrganizationId: admin.organizationId,
+    });
+
+    const res = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: installationId,
+        account: { id: 4242, login: "acme-inc", type: "Organization" },
+        permissions: { contents: "read" },
+        events: ["pull_request"],
+        suspended_at: null,
+      },
+      sender: { id: installerGithubId, login: "acme-admin", type: "User" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().lifecycle).toBe("created:bound");
+
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.hubOrganizationId).toBe(admin.organizationId);
+    expect(row?.installerGithubId).toBe(installerGithubId);
+  });
+
+  it("installation.created does NOT bind when the sender differs from the intent's installer (forgery guard)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100011;
+    // Intent was minted for the kickoff admin (github id 111), but the
+    // install is completed by a different GitHub identity (github id 222).
+    await recordInstallIntent(app.db, {
+      installerGithubId: 111,
+      targetOrganizationId: admin.organizationId,
+    });
+
+    const res = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: installationId,
+        account: { id: 4243, login: "victim-org", type: "Organization" },
+        permissions: { contents: "read" },
+        events: ["pull_request"],
+        suspended_at: null,
+      },
+      sender: { id: 222, login: "someone-else", type: "User" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().lifecycle).toBe("created:no-intent");
+
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.hubOrganizationId).toBeNull();
   });
 
   it("installation.deleted → removes the row", async () => {
