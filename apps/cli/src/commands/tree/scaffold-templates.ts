@@ -58,6 +58,13 @@ function yamlDoubleQuote(value: string): string {
   return JSON.stringify(value.replace(/\s+/g, " ").trim());
 }
 
+// NOTE: `validate-tree-workflow.yml.ejs` and `root-node.md.ejs` are kept
+// byte-for-byte in sync with the server one-click bootstrap's
+// `VALIDATE_TREE_WORKFLOW_CONTENT` / `initialRootNode`
+// (`packages/server/src/api/orgs/context-tree.ts`) so a tree created by either
+// path is identical. There is no cross-package test guarding this (the server
+// constants are module-private); if you touch either side, mirror the other.
+
 /** `.github/workflows/validate-tree.yml` — the optional CI workflow (`--with-workflow`). */
 export function validateTreeWorkflowContent(): string {
   return render("validate-tree-workflow.yml.ejs", {});
