@@ -8,13 +8,8 @@ import type { FastifyInstance } from "fastify";
 import { authIdentities } from "../../db/schema/auth-identities.js";
 import { ForbiddenError, NotFoundError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
-import { getStoredGithubAccessToken } from "../../services/auth-identity.js";
-import {
-  buildAppInstallUrl,
-  GithubAppApiError,
-  listInstallationRepos,
-  verifyUserCanAdministerInstallation,
-} from "../../services/github-app.js";
+import { buildAppInstallUrl, listInstallationRepos } from "../../services/github-app.js";
+import { recordInstallIntent } from "../../services/github-app-install-intents.js";
 import {
   bindInstallationToOrg,
   findInstallationByGithubId,
@@ -259,6 +254,32 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
         secure: process.env.NODE_ENV === "production",
       }),
     );
+
+    // Record the pending install intent so the trusted, HMAC-signed
+    // `installation.created` webhook can bind the resulting installation to
+    // THIS org — matched by the kickoff admin's GitHub id against the
+    // webhook `sender`. Binding is never driven by the browser-supplied URL
+    // `installation_id` (unsigned, forgeable). The `state`/nonce still
+    // guard the callback's CSRF + kickoff identity; this intent is the
+    // separate, trusted binding channel.
+    const [identity] = await app.db
+      .select({ identifier: authIdentities.identifier })
+      .from(authIdentities)
+      .where(and(eq(authIdentities.userId, scope.userId), eq(authIdentities.provider, "github")))
+      .limit(1);
+    const installerGithubId = identity?.identifier ? Number(identity.identifier) : Number.NaN;
+    if (!Number.isNaN(installerGithubId)) {
+      await recordInstallIntent(app.db, {
+        installerGithubId,
+        targetOrganizationId: scope.organizationId,
+      });
+    } else {
+      app.log.warn(
+        { userId: scope.userId, organizationId: scope.organizationId },
+        "install-url: kickoff admin has no GitHub identity on file — install won't auto-bind; recover via POST /claim",
+      );
+    }
+
     return { installUrl: buildAppInstallUrl({ appSlug: appCfg.slug, state: token }) };
   });
 
@@ -298,41 +319,33 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       throw new NotFoundError(`Installation ${installationId} not found`);
     }
 
-    const githubToken = await getStoredGithubAccessToken(app.db, scope.userId, app.config.secrets.encryptionKey);
-    if (!githubToken) {
-      throw new ForbiddenError("No GitHub access token on file — sign in with GitHub again before claiming an install");
-    }
-
-    // Same row `getStoredGithubAccessToken` just verified — pull the
-    // caller's numeric GitHub ID off `auth_identities.identifier`
-    // (written by the OAuth callback as `String(profile.githubId)`) so
-    // the User-type comparison has something to match against.
+    // Anti-forgery (no GitHub round-trip, no `organization:members:read`):
+    // the caller may claim ONLY an installation they installed themselves.
+    // `installer_github_id` is the `sender` from the trusted, HMAC-signed
+    // `installation.created` webhook; GitHub only lets a user install on an
+    // account they administer, so matching it to the caller's own GitHub id
+    // proves both "the caller installed this" and "the caller administers
+    // the installed account" — the guarantee the removed
+    // `verifyUserCanAdministerInstallation` probe used to provide.
     const [identity] = await app.db
       .select({ identifier: authIdentities.identifier })
       .from(authIdentities)
       .where(and(eq(authIdentities.userId, scope.userId), eq(authIdentities.provider, "github")))
       .limit(1);
-    const userGithubId = Number(identity?.identifier);
-
-    let canAdminister: boolean;
-    try {
-      canAdminister = await verifyUserCanAdministerInstallation(githubToken, userGithubId, {
-        accountType: installRow.accountType as "User" | "Organization",
-        accountLogin: installRow.accountLogin,
-        accountGithubId: installRow.accountGithubId,
-      });
-    } catch (err) {
-      const status = err instanceof GithubAppApiError ? err.status : 0;
-      if (status === 401) {
-        throw new ForbiddenError("Your GitHub session has expired — sign in with GitHub again, then retry the claim");
-      }
-      // Upstream hiccup — surface as 403 so the caller retries rather
-      // than treating a transient GitHub outage as a hard failure.
-      app.log.warn({ err, installationId, userId: scope.userId }, "claim: admin proof check failed");
-      throw new ForbiddenError("Couldn't verify GitHub access for this installation — try again in a moment");
+    const userGithubId = identity?.identifier ? Number(identity.identifier) : Number.NaN;
+    if (Number.isNaN(userGithubId)) {
+      throw new ForbiddenError("No GitHub identity on file — sign in with GitHub again before claiming an install");
     }
-    if (!canAdminister) {
-      throw new ForbiddenError("You don't administer this installation on GitHub");
+    if (installRow.installerGithubId === null) {
+      // Row predates the trusted installer id (or wasn't created via the
+      // `installation.created` webhook). Reinstall from the account owner
+      // to mint it.
+      throw new ForbiddenError(
+        "This installation has no recorded installer — reinstall the GitHub App from the account owner to claim it.",
+      );
+    }
+    if (installRow.installerGithubId !== userGithubId) {
+      throw new ForbiddenError("You didn't install this GitHub App installation, so you can't claim it.");
     }
 
     // bindInstallationToOrg throws NotFoundError (no such install row) →

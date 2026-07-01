@@ -53,6 +53,14 @@ export type UpsertInstallationInput = {
    * `bindInstallationToOrg` instead.
    */
   hubOrganizationId?: string;
+  /**
+   * GitHub numeric id of the user who installed the App — the `sender` on
+   * the `installation.created` webhook. Only pass it on `created` (the
+   * install moment); later lifecycle webhooks omit it and the original
+   * installer is preserved via COALESCE. This is the trusted anti-forgery
+   * anchor for binding (see the column jsdoc).
+   */
+  installerGithubId?: number;
 };
 
 export type InstallationRow = typeof githubAppInstallations.$inferSelect;
@@ -78,6 +86,7 @@ export async function upsertInstallationFromMetadata(
     accountType: input.installation.accountType,
     accountLogin: input.installation.accountLogin,
     accountGithubId: input.installation.accountGithubId,
+    installerGithubId: input.installerGithubId ?? null,
     hubOrganizationId: input.hubOrganizationId ?? null,
     permissions: input.installation.permissions,
     events: input.installation.events,
@@ -94,6 +103,12 @@ export async function upsertInstallationFromMetadata(
         accountType: values.accountType,
         accountLogin: values.accountLogin,
         accountGithubId: values.accountGithubId,
+        // Preserve the original installer: only fill it when currently
+        // NULL (a `created` webhook that seeds a row first-seen via a
+        // later lifecycle event). Never overwrite a known installer with
+        // a subsequent event's `sender` (which may be a different admin
+        // accepting new permissions).
+        installerGithubId: sql`coalesce(${githubAppInstallations.installerGithubId}, ${values.installerGithubId})`,
         permissions: values.permissions,
         events: values.events,
         suspendedAt: values.suspendedAt,
@@ -363,6 +378,33 @@ export async function findUnboundInstallationsByAccount(
     .where(
       and(
         eq(githubAppInstallations.accountGithubId, accountGithubId),
+        isNull(githubAppInstallations.hubOrganizationId),
+      ),
+    )
+    .orderBy(desc(githubAppInstallations.createdAt));
+}
+
+/**
+ * List unbound installations that a given GitHub user **installed** — matched
+ * on the trusted `installer_github_id` (the `installation.created` webhook
+ * `sender`), not the account or the browser-supplied URL id. Newest-first.
+ *
+ * This is the anti-forgery basis for the manual `POST /claim` recovery path:
+ * a signed-in First Tree user may only claim an installation they themselves
+ * installed on GitHub. Rows predating the `installer_github_id` column carry
+ * NULL and are intentionally excluded — they are not claimable through this
+ * path (recover them by re-installing, which mints the trusted id).
+ */
+export async function findUnboundInstallationsByInstaller(
+  db: Database,
+  installerGithubId: number,
+): Promise<InstallationRow[]> {
+  return db
+    .select()
+    .from(githubAppInstallations)
+    .where(
+      and(
+        eq(githubAppInstallations.installerGithubId, installerGithubId),
         isNull(githubAppInstallations.hubOrganizationId),
       ),
     )

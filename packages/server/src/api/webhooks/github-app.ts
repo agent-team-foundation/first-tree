@@ -1,12 +1,14 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { githubAppInstallationPermissionsSchema, type WebhookSource } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
-import { BadRequestError, UnauthorizedError } from "../../errors.js";
+import { BadRequestError, ConflictError, UnauthorizedError } from "../../errors.js";
 import { createLogger } from "../../observability/index.js";
 import { handleContextReviewerPrEvent } from "../../services/context-reviewer-pr.js";
 import { claimEvent, unclaimEvent } from "../../services/event-dedup.js";
 import type { AppInstallation } from "../../services/github-app.js";
+import { deleteInstallIntent, peekFreshInstallIntent } from "../../services/github-app-install-intents.js";
 import {
+  bindInstallationToOrg,
   deleteInstallationByGithubId,
   findInstallationByGithubId,
   markInstallationSuspended,
@@ -34,6 +36,18 @@ function readInstallationId(payload: unknown): number | null {
   if (!isRecord(payload)) return null;
   const installation = isRecord(payload.installation) ? payload.installation : null;
   const id = installation?.id;
+  return typeof id === "number" && Number.isFinite(id) ? id : null;
+}
+
+/**
+ * The GitHub-authenticated actor who triggered the webhook. On
+ * `installation.created` this is the user who installed the App — the
+ * trusted anti-forgery anchor for binding (GitHub only permits installing
+ * on an account the sender administers).
+ */
+function readSenderGithubId(payload: Record<string, unknown>): number | null {
+  const sender = isRecord(payload.sender) ? payload.sender : null;
+  const id = sender?.id;
   return typeof id === "number" && Number.isFinite(id) ? id : null;
 }
 
@@ -188,14 +202,53 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
   if (!installation || installationId === null) return "ignored:malformed";
 
   switch (action) {
-    case "created":
+    case "created": {
+      const metadata = parseInstallationMetadata(installation);
+      if (!metadata) return "ignored:malformed";
+      // The `sender` on `installation.created` is the GitHub-authenticated
+      // installer. GitHub only lets a user install on an account they
+      // administer, so this id is trusted proof of "installer administers
+      // the installed account" — it replaces the old
+      // `verifyUserCanAdministerInstallation` probe. Persist it, then bind
+      // this installation to the org the kickoff admin intended (matched by
+      // installer id via the signed install-intent). This is the ONLY
+      // binding path: the browser-supplied URL `installation_id` on the
+      // OAuth callback is never trusted for binding.
+      const installerGithubId = readSenderGithubId(payload);
+      await upsertInstallationFromMetadata(app.db, {
+        installation: metadata,
+        ...(installerGithubId !== null ? { installerGithubId } : {}),
+      });
+      if (installerGithubId === null) return "created:no-sender";
+      const intent = await peekFreshInstallIntent(app.db, installerGithubId);
+      if (!intent) return "created:no-intent";
+      try {
+        await bindInstallationToOrg(app.db, installationId, intent.targetOrganizationId);
+      } catch (err) {
+        if (err instanceof ConflictError) {
+          // Permanent (D2 1:1 already satisfied elsewhere) — consume the
+          // intent so GitHub's retry doesn't loop on the same conflict.
+          await deleteInstallIntent(app.db, installerGithubId);
+          log.warn(
+            { installationId, installerGithubId, targetOrganizationId: intent.targetOrganizationId, err },
+            "installation.created: bind conflicted with an existing binding (D2 1:1) — left as-is",
+          );
+          return "created:bind-conflict";
+        }
+        // Transient (DB hiccup): keep the intent so GitHub's webhook retry
+        // rebinds. Rethrow → route returns 500 → GitHub redelivers.
+        throw err;
+      }
+      // Bound successfully — consume the intent.
+      await deleteInstallIntent(app.db, installerGithubId);
+      return "created:bound";
+    }
     case "new_permissions_accepted": {
       const metadata = parseInstallationMetadata(installation);
       if (!metadata) return "ignored:malformed";
-      // UPSERT only writes metadata fields; `hub_organization_id` is owned
-      // by the OAuth-callback bind path. A webhook arriving before the
-      // callback leaves the row unbound (intentional — webhooks don't
-      // know which First Tree user installed the App).
+      // Metadata refresh only — never re-bind, and don't overwrite the
+      // original installer (COALESCE in the upsert preserves it). The
+      // `sender` here may be a different admin accepting new permissions.
       await upsertInstallationFromMetadata(app.db, { installation: metadata });
       return action;
     }

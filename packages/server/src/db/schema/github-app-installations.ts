@@ -61,6 +61,23 @@ export const githubAppInstallations = pgTable(
      */
     accountGithubId: bigint("account_github_id", { mode: "number" }).notNull(),
     /**
+     * GitHub numeric id of the user who **installed** the App — the
+     * `sender` on the trusted, HMAC-signed `installation.created` webhook.
+     * GitHub only lets a user install on an account they administer, so
+     * this id is a GitHub-authenticated proof of "this person administers
+     * `account_github_id`". It is the anti-forgery anchor that replaces the
+     * old `verifyUserCanAdministerInstallation` probe: installation binding
+     * (and the manual `/claim` + orphan recovery) rests on matching a First
+     * Tree user's GitHub id to this column, never on the browser-supplied
+     * URL `installation_id`.
+     *
+     * Nullable: rows created before this column existed, and any row not
+     * created via the `installation.created` webhook, carry NULL. Only the
+     * `created` webhook sets it; later lifecycle webhooks (permission
+     * changes, suspend) preserve the original installer via COALESCE.
+     */
+    installerGithubId: bigint("installer_github_id", { mode: "number" }),
+    /**
      * First Tree org this installation is bound to (1:1, see D2 / §8 Q1).
      * Nullable to allow inserting the row in the install callback before
      * the owning First Tree team is provisioned. Once bound, the value never
@@ -101,6 +118,10 @@ export const githubAppInstallations = pgTable(
     // Lookup by account id when resolving webhooks that name only the
     // account block (rare, but happens for account-rename events).
     index("idx_github_app_installations_account").on(table.accountGithubId),
+    // Lookup unbound installs by the GitHub user who installed them, for
+    // the manual `/claim` + orphan-recovery paths (match a signed-in
+    // user's GitHub id to the trusted installer id).
+    index("idx_github_app_installations_installer").on(table.installerGithubId),
     // Defense-in-depth: the Drizzle column type narrows to the union but
     // a manual INSERT bypassing the ORM would otherwise be able to write
     // arbitrary strings. Mirrors how auth_identities pins credential_type
