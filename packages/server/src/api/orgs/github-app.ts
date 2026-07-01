@@ -8,7 +8,13 @@ import type { FastifyInstance } from "fastify";
 import { authIdentities } from "../../db/schema/auth-identities.js";
 import { ForbiddenError, NotFoundError } from "../../errors.js";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
-import { buildAppInstallUrl, listInstallationRepos } from "../../services/github-app.js";
+import { getStoredGithubAccessToken } from "../../services/auth-identity.js";
+import {
+  buildAppInstallUrl,
+  GithubAppApiError,
+  listInstallationRepos,
+  verifyUserCanAdministerInstallation,
+} from "../../services/github-app.js";
 import {
   bindInstallationToOrg,
   findInstallationByGithubId,
@@ -274,14 +280,14 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   // it yet. The orphan-list endpoint and a per-install `Claim install` button
   // are tracked in #318; until then, recovery requires POSTing here directly.
   //
-  // Authorization: being a First Tree org admin isn't sufficient — the
-  // browser-supplied installation id isn't a secret. The caller may claim
-  // ONLY an installation THEY installed, matched against the trusted
-  // `installer_github_id` (the `installation.created` webhook `sender`; GitHub
-  // only lets a user install on an account they administer). This replaces the
-  // removed `verifyUserCanAdministerInstallation` probe on this path. The row
-  // (and its `installer_github_id`) is written by the webhook; 404 here means
-  // there's nothing to claim.
+  // Authorization: First Tree org-admin is not sufficient. Because `/claim` is
+  // a *delayed* recovery path, it keeps a LIVE current-GitHub-admin check
+  // (`verifyUserCanAdministerInstallation`) — the historical
+  // `installer_github_id` recorded at install time can be stale by claim time
+  // (the installer may have since lost GitHub admin/membership while the App
+  // installation lingers unbound). Fail-closed: User-type → caller's GitHub id
+  // must equal the install account's; Org-type → `/user/memberships/orgs`
+  // must return role=admin. 404 here means there's nothing to claim.
   app.post<{ Params: { orgId: string }; Body: unknown }>("/claim", async (request) => {
     const scope = await requireOrgAdmin(request, app.db);
     const { installationId } = githubAppInstallationClaimBodySchema.parse(request.body);
@@ -291,33 +297,48 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       throw new NotFoundError(`Installation ${installationId} not found`);
     }
 
-    // Anti-forgery (no GitHub round-trip, no `organization:members:read`):
-    // the caller may claim ONLY an installation they installed themselves.
-    // `installer_github_id` is the `sender` from the trusted, HMAC-signed
-    // `installation.created` webhook; GitHub only lets a user install on an
-    // account they administer, so matching it to the caller's own GitHub id
-    // proves both "the caller installed this" and "the caller administers
-    // the installed account" — the guarantee the removed
-    // `verifyUserCanAdministerInstallation` probe used to provide.
+    const githubToken = await getStoredGithubAccessToken(app.db, scope.userId, app.config.secrets.encryptionKey);
+    if (!githubToken) {
+      throw new ForbiddenError("No GitHub access token on file — sign in with GitHub again before claiming an install");
+    }
+
+    // Caller's numeric GitHub id off `auth_identities.identifier` (written by
+    // the OAuth callback as `String(profile.githubId)`) for the User-type
+    // owner comparison.
     const [identity] = await app.db
       .select({ identifier: authIdentities.identifier })
       .from(authIdentities)
       .where(and(eq(authIdentities.userId, scope.userId), eq(authIdentities.provider, "github")))
       .limit(1);
-    const userGithubId = identity?.identifier ? Number(identity.identifier) : Number.NaN;
-    if (Number.isNaN(userGithubId)) {
-      throw new ForbiddenError("No GitHub identity on file — sign in with GitHub again before claiming an install");
+    const userGithubId = Number(identity?.identifier);
+
+    // LIVE current-GitHub-admin check (fail-closed). `/claim` is the *delayed*
+    // recovery path: unlike the normal webhook bind (which fires when the
+    // installer is provably the current admin), an orphaned install may be
+    // claimed long after install time, when the recorded `installer_github_id`
+    // is stale. So this endpoint verifies CURRENT authority — User-type:
+    // caller's GitHub id equals the install account's; Org-type:
+    // `GET /user/memberships/orgs/{login}` returns role=admin, state=active
+    // (plain membership is not enough). This is why the probe +
+    // `Members:read` remain here (and for the Context-Tree repo provisioner)
+    // until the server-side build is retired.
+    let canAdminister: boolean;
+    try {
+      canAdminister = await verifyUserCanAdministerInstallation(githubToken, userGithubId, {
+        accountType: installRow.accountType as "User" | "Organization",
+        accountLogin: installRow.accountLogin,
+        accountGithubId: installRow.accountGithubId,
+      });
+    } catch (err) {
+      const status = err instanceof GithubAppApiError ? err.status : 0;
+      if (status === 401) {
+        throw new ForbiddenError("Your GitHub session has expired — sign in with GitHub again, then retry the claim");
+      }
+      app.log.warn({ err, installationId, userId: scope.userId }, "claim: admin proof check failed");
+      throw new ForbiddenError("Couldn't verify GitHub access for this installation — try again in a moment");
     }
-    if (installRow.installerGithubId === null) {
-      // Row predates the trusted installer id (or wasn't created via the
-      // `installation.created` webhook). Reinstall from the account owner
-      // to mint it.
-      throw new ForbiddenError(
-        "This installation has no recorded installer — reinstall the GitHub App from the account owner to claim it.",
-      );
-    }
-    if (installRow.installerGithubId !== userGithubId) {
-      throw new ForbiddenError("You didn't install this GitHub App installation, so you can't claim it.");
+    if (!canAdminister) {
+      throw new ForbiddenError("You don't currently administer this installation on GitHub");
     }
 
     // bindInstallationToOrg throws NotFoundError (no such install row) →
