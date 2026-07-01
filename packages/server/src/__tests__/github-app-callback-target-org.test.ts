@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
+import { githubAppInstallIntents } from "../db/schema/github-app-install-intents.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { findInstallationByGithubId, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
@@ -334,6 +335,72 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
 
     // Nothing bound (and nothing upserted) by the callback.
     expect(await findInstallationByGithubId(app.db, installationId)).toBeNull();
+  });
+
+  it("does NOT bind (and records no pending bind) when a matching installation row exists but the callback identity mismatches", async () => {
+    // Regression (yuezengwu): the signed webhook already created the
+    // installation row with the kickoff admin as installer, but the callback
+    // is completed under a DIFFERENT GitHub identity carrying that
+    // installation_id in the URL. The mismatch guard must run BEFORE any
+    // pending-bind side effect — expect install-not-verified, no bind, and no
+    // lingering pending bind.
+    const app = getApp();
+    const kickoffGithubId = 770_020;
+    const strangerGithubId = 770_021;
+    const login = `targetorg-preinstalled-${uuidv7().slice(0, 6)}`;
+    const installationId = 8_822_020;
+
+    const admin = await createTestAdmin(app, { username: `${login}-u` });
+    await seedGithubIdentity(app, admin.userId, kickoffGithubId, login);
+
+    // The signed webhook already recorded this installation with the kickoff
+    // admin as its installer.
+    await upsertInstallationFromMetadata(app.db, {
+      installation: {
+        id: installationId,
+        accountType: "Organization",
+        accountLogin: "acme",
+        accountGithubId: 990_020,
+        permissions: {},
+        events: [],
+        suspendedAt: null,
+      },
+      installerGithubId: kickoffGithubId,
+    });
+
+    const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/settings/github", {
+      targetOrganizationId: admin.organizationId,
+      kickoffUserId: admin.userId,
+    });
+    // OAuth resolves to a stranger; the URL carries the pre-installed id.
+    const restore = stubGithub({
+      githubId: strangerGithubId,
+      login: `${login}-stranger`,
+      installationIds: [installationId],
+    });
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/auth/github/callback?code=devcode&state=${token}&installation_id=${installationId}`,
+        headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+      });
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toContain("error=install-not-verified");
+      expect(res.headers.location).not.toContain("access=");
+    } finally {
+      restore();
+    }
+
+    // No bind, despite the matching installer row...
+    const row = await findInstallationByGithubId(app.db, installationId);
+    expect(row?.hubOrganizationId).toBeNull();
+    // ...and no pending bind was recorded (the mismatch guard ran first).
+    const pending = await app.db
+      .select()
+      .from(githubAppInstallIntents)
+      .where(eq(githubAppInstallIntents.installationId, installationId))
+      .limit(1);
+    expect(pending).toHaveLength(0);
   });
 
   it("surfaces an error (not success) when the identities mismatch, regardless of installation_id", async () => {

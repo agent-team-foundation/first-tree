@@ -4,9 +4,7 @@ import {
   githubStartQuerySchema,
   safeRedirectPath,
 } from "@first-tree/shared";
-import { and, eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { authIdentities } from "../../db/schema/auth-identities.js";
 import { signTokensForUser } from "../../services/auth.js";
 import {
   findOrCreateUserFromGithub,
@@ -170,46 +168,15 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return redirectCallbackError(reply, "github-exchange-failed", next);
     }
 
-    // Kickoff install-completion (per-install correlation). The signed state
-    // proves an admin kicked off an install for `targetOrganizationId`; the
-    // URL carries the concrete `installation_id`. Record a per-install pending
-    // bind so the trusted, HMAC-signed `installation.created` webhook can
-    // complete it once it proves this installation's installer IS the kickoff
-    // admin (and the kickoff user is still an active admin — live re-checked in
-    // `completeInstallBind`). A forged `installation_id` naming another org's
-    // install never binds: that install's webhook `sender` is not the kickoff
-    // admin. Calling `completeInstallBind` here also covers the
-    // webhook-arrived-before-callback ordering.
-    if (targetOrganizationId && kickoffUserId && installationIdRaw) {
-      const installationId = Number(installationIdRaw);
-      if (Number.isFinite(installationId)) {
-        const [kickoffIdentity] = await app.db
-          .select({ identifier: authIdentities.identifier })
-          .from(authIdentities)
-          .where(and(eq(authIdentities.userId, kickoffUserId), eq(authIdentities.provider, "github")))
-          .limit(1);
-        const kickoffGithubId = kickoffIdentity?.identifier ? Number(kickoffIdentity.identifier) : Number.NaN;
-        if (Number.isFinite(kickoffGithubId)) {
-          try {
-            await recordPendingBind(app.db, { installationId, targetOrganizationId, kickoffUserId, kickoffGithubId });
-            await completeInstallBind(app.db, installationId);
-          } catch (err) {
-            // Non-fatal: the webhook path retries completion; sign-in proceeds.
-            app.log.warn(
-              { err, installationId, targetOrganizationId, kickoffUserId },
-              "install pending-bind record/complete failed in callback — webhook will retry",
-            );
-          }
-        } else {
-          app.log.warn(
-            { kickoffUserId, targetOrganizationId },
-            "install callback: kickoff user has no GitHub identity on file — cannot record pending bind",
-          );
-        }
-      }
-    }
+    // Pass the URL `installation_id` (validated to a finite number, else null)
+    // through to completeOauthFlow. It is used ONLY inside the kickoff branch,
+    // and ONLY after that branch proves the OAuth-resolved user IS the kickoff
+    // admin — so no install-bind side effect happens on an identity mismatch
+    // (the pending-bind record + `completeInstallBind` live there, not here).
+    const callbackInstallationId =
+      installationIdRaw && Number.isFinite(Number(installationIdRaw)) ? Number(installationIdRaw) : null;
 
-    return completeOauthFlow(app, request, reply, profile, next, tokens, null, targetOrganizationId, {
+    return completeOauthFlow(app, request, reply, profile, next, tokens, callbackInstallationId, targetOrganizationId, {
       kickoffUserId,
       browserFacing: true,
     });
@@ -312,7 +279,9 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
 
     // Dev bypass never carries a `targetOrganizationId` — the install
     // stub binds to whatever team the dev session resolves into.
-    return completeOauthFlow(app, request, reply, profile, next, tokens, devInstallationId, null);
+    return completeOauthFlow(app, request, reply, profile, next, tokens, devInstallationId, null, {
+      devBindInstallation: true,
+    });
   });
 }
 
@@ -365,10 +334,12 @@ async function completeOauthFlow(
    */
   oauthTokens: GithubTokenBundle,
   /**
-   * GitHub-side installation id when the user just installed the App;
-   * null on the legacy OAuth path, returning App users without a fresh
-   * install, and `dev-callback`. Used after team resolution to bind the
-   * installation row to the user's First Tree team.
+   * The URL `installation_id` (validated) from the callback, or null. It is a
+   * correlation handle, NOT a binding authority: it is used ONLY inside the
+   * kickoff branch, and only after that branch proves the OAuth-resolved user
+   * is the kickoff admin, to record a per-install pending bind that the signed
+   * `installation.created` webhook then completes. `dev-callback` passes its
+   * stub id together with `opts.devBindInstallation` for a direct QA bind.
    */
   installationId: number | null,
   /**
@@ -394,9 +365,16 @@ async function completeOauthFlow(
      * dev/test suites assert on status codes).
      */
     browserFacing?: boolean;
+    /**
+     * DEV-CALLBACK ONLY. When true, the `installationId` stub is bound
+     * directly to the resolved org (so a local QA session looks connected
+     * without a real webhook). The real `/callback` never sets this — its
+     * binding is webhook-driven.
+     */
+    devBindInstallation?: boolean;
   } = {},
 ) {
-  const { kickoffUserId = null, browserFacing = false } = opts;
+  const { kickoffUserId = null, browserFacing = false, devBindInstallation = false } = opts;
   const { userId } = await findOrCreateUserFromGithub(app.db, profile, oauthTokens);
   const allowedOrganizationId = app.config.access?.allowedOrganizationId ?? null;
 
@@ -505,6 +483,32 @@ async function completeOauthFlow(
       );
       return redirectCallbackError(reply, "install-not-verified", next);
     }
+    // Identity match confirmed (OAuth-resolved user IS the kickoff admin, who
+    // is an active admin of the target org — checked above). ONLY NOW is it
+    // safe to record the per-install pending bind: recording it before the
+    // mismatch guard would let a callback under a foreign identity trigger a
+    // bind side effect while still returning `install-not-verified`. Here
+    // `profile.githubId` is the kickoff admin's GitHub id, so the trusted
+    // `installation.created` webhook completes the bind only when THIS
+    // installation's installer matches (and the admin is still active).
+    // `completeInstallBind` also covers the webhook-arrived-before-callback
+    // ordering. Non-fatal on error — the webhook retries completion.
+    if (installationId !== null) {
+      try {
+        await recordPendingBind(app.db, {
+          installationId,
+          targetOrganizationId,
+          kickoffUserId: bindAuthorityUserId,
+          kickoffGithubId: Number(profile.githubId),
+        });
+        await completeInstallBind(app.db, installationId);
+      } catch (err) {
+        app.log.warn(
+          { err, installationId, targetOrganizationId, kickoffUserId: bindAuthorityUserId },
+          "install pending-bind record/complete failed in callback — webhook will retry",
+        );
+      }
+    }
     resolved = true;
     resolvedOrganizationId = targetOrganizationId;
     // joinPath stays "returning"; keep caller's `next` (the Settings page)
@@ -553,14 +557,16 @@ async function completeOauthFlow(
     }
   }
 
-  // Direct installation bind — DEV-CALLBACK ONLY. The real `/callback`
-  // sign-in path passes `installationId = null`: installation binding is
-  // driven exclusively by the trusted, HMAC-signed `installation.created`
-  // webhook (keyed by the admin-minted install-intent), never by the
-  // browser-supplied URL id. `dev-callback` passes a stub installation id so
-  // a local QA session looks connected without a real webhook. Guarded by
-  // `installationId !== null`, so this is inert on the real sign-in path.
-  if (installationId !== null && resolvedOrganizationId) {
+  // Direct installation bind — DEV-CALLBACK ONLY, gated by `devBindInstallation`.
+  // The real `/callback` NEVER sets that flag: real binding is driven
+  // exclusively by the trusted, HMAC-signed `installation.created` webhook via
+  // the per-install pending bind recorded above, never by the browser-supplied
+  // URL id. `dev-callback` passes a stub installation id + the flag so a local
+  // QA session looks connected without a real webhook. The flag gate (not just
+  // `installationId !== null`) is essential now that the real callback DOES
+  // pass a URL `installation_id` for the kickoff pending bind — binding it here
+  // would reopen the URL-forgery hole.
+  if (devBindInstallation && installationId !== null && resolvedOrganizationId) {
     try {
       await bindInstallationToOrg(app.db, installationId, resolvedOrganizationId);
     } catch (err) {
