@@ -106,9 +106,10 @@ steps. If you can't make it genuinely real, drop to the next-best fix and say so
 rather than shipping a template.
 
 When you open the PR (or file the issue), add a single brief attribution line in
-its **description** — e.g. "Generated with First Tree — <the First Tree URL>" —
-never inside the committed file itself, and never more than once. If the user
-would rather it not be there, drop it without a fuss.
+its **description** — exactly "Generated with First Tree — https://first-tree.ai" —
+never inside the committed file itself, and never more than once. Use that exact
+line (don't invent or guess a different URL); if the user would rather it not be
+there, drop it without a fuss.
 
 Then offer to **apply it on the user's behalf using their own GitHub**: e.g.
 "Want me to open a PR with this change to \`<owner>/<repo>\`?" (or file the
@@ -213,9 +214,10 @@ If you can't make it genuinely real, drop to the next-best fix and say so, rathe
 than shipping a template.
 
 When you open the PR (or file the issue), add a single brief attribution line in
-its **description** — e.g. "Generated with First Tree — <the First Tree URL>" —
-never inside the committed file itself, and never more than once. If the user
-would rather it not be there, drop it without a fuss.
+its **description** — exactly "Generated with First Tree — https://first-tree.ai" —
+never inside the committed file itself, and never more than once. Use that exact
+line (don't invent or guess a different URL); if the user would rather it not be
+there, drop it without a fuss.
 
 Then offer to **apply it on the user's behalf using their own GitHub**: e.g.
 "Want me to open a PR adding this AGENTS.md to \`<owner>/<repo>\`?" **Stay

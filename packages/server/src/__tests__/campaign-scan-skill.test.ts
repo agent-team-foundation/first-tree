@@ -45,7 +45,9 @@ describe("campaign scan skills", () => {
       expect(body).toContain("never a placeholder");
       // Single-line attribution in the PR/issue description only (the share/acquisition loop) —
       // never a permanent footer in the user's committed file.
-      expect(body).toContain("Generated with First Tree");
+      // Concrete canonical URL — no placeholder can leak into a real PR/issue body.
+      expect(body).toContain("Generated with First Tree — https://first-tree.ai");
+      expect(body).not.toContain("<the First Tree URL>");
       expect(body).toContain("never inside the committed file");
       // Step 6 continues the funnel one thing at a time: next fix + one conversion next-step.
       expect(body).toContain("Step 6");
