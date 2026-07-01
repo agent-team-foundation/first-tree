@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import { buildScaffoldFiles, defaultRepoName, type ScaffoldFile } from "../commands/tree/init.js";
+import { renderContextTree } from "../commands/tree/tree.js";
 import { verifyTreeRoot } from "../commands/tree/verify.js";
 
 /**
@@ -77,5 +78,16 @@ describe("buildScaffoldFiles", () => {
   it("seeds a creator member node so member validation passes", () => {
     const files = buildScaffoldFiles({ title: "Acme", ownerLogin: "octocat", withWorkflow: false });
     expect(files.some((file) => file.relPath === join("members", "octocat", "NODE.md"))).toBe(true);
+  });
+
+  it("renders the members domain and creator in `tree tree` (needs non-empty owners)", () => {
+    // `tree tree` skips directory nodes with empty owners, so a scaffold that
+    // passes `verify` could still be invisible to the hierarchy browser. Assert
+    // the members domain and the creator member actually render.
+    const dir = makeTempDir();
+    writeScaffold(dir, buildScaffoldFiles({ title: "Acme", ownerLogin: "octocat", withWorkflow: false }));
+    const rendered = renderContextTree(dir);
+    expect(rendered).toContain("members/");
+    expect(rendered).toContain("members/octocat/");
   });
 });

@@ -532,19 +532,30 @@ server-side `agent_configs` row through the Admin API.
 
 ## tree
 
-Context Tree structural validation and hierarchy browsing. **`verify`
-and `tree` are the only surviving `tree` subcommands** — the rest of the
-namespace (`init` / `migrate` / `upgrade` / `status` / `codeowners` /
-`claude-hook` / `inject` / `review` / `automation` / `skill` groups) was
-retired in the 2026-06 cleanup because the cloud now owns workspace +
-tree provisioning and the client runtime inlines its own skill payload
-install (see PR following #844).
+Context Tree creation, structural validation, and hierarchy browsing. The
+`tree` namespace carries `verify`, `tree`, and `init`; the rest (`migrate` /
+`upgrade` / `status` / `codeowners` / `claude-hook` / `inject` / `review` /
+`automation` / `skill` groups) was retired in the 2026-06 cleanup because the
+cloud now owns workspace + tree provisioning and the client runtime inlines its
+own skill payload install (see PR following #844).
 
 ```
 first-tree tree
+├── init [options]                           # create a new team Context Tree repo with local gh
 ├── verify [--tree-path PATH]                # validate a Context Tree repo
 └── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
 ```
+
+`first-tree tree init` creates a brand-new team Context Tree repository with the
+user's local `gh`: it creates the repo (one path for user- and org-owned repos),
+scaffolds a minimal valid tree (root `NODE.md` + members index + a creator member
+node), self-verifies before pushing, pushes, and — unless `--no-bind` — binds the
+org's `context_tree` setting and surfaces guidance for adding the repo to the
+team's GitHub App installation. It does not seed `.github/workflows/validate-tree.yml`
+by default (that needs the interactive `workflow` gh scope); pass `--with-workflow`
+to include it. Key options: `--owner`, `--name`, `--title`, `--public`, `--dir`,
+`--with-workflow`, `--no-bind`, `--org`. Run `first-tree tree init --help` for the
+full list.
 
 Run `first-tree tree verify --help` for options.
 

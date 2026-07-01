@@ -90,11 +90,15 @@ owners: [${ownerLogin}]
 `;
 }
 
-function membersIndexContent(): string {
+function membersIndexContent(ownerLogin: string): string {
+  // Non-empty owners on purpose: `tree tree` skips any directory node whose
+  // owners array is empty, so `owners: []` would pass `tree verify` yet make
+  // the members domain invisible to the hierarchy browser. Seed the creator as
+  // the initial owner; seeding refines this later.
   return `---
 title: "Members"
 description: "Member definitions and work specifications."
-owners: []
+owners: [${ownerLogin}]
 ---
 
 # Members
@@ -130,7 +134,7 @@ Replace this with a short description of what you own and decide.
 export function buildScaffoldFiles(opts: { title: string; ownerLogin: string; withWorkflow: boolean }): ScaffoldFile[] {
   const files: ScaffoldFile[] = [
     { relPath: "NODE.md", content: rootNodeContent(opts.title, opts.ownerLogin) },
-    { relPath: join("members", "NODE.md"), content: membersIndexContent() },
+    { relPath: join("members", "NODE.md"), content: membersIndexContent(opts.ownerLogin) },
     { relPath: join("members", opts.ownerLogin, "NODE.md"), content: memberNodeContent(opts.ownerLogin) },
   ];
   if (opts.withWorkflow) {
@@ -184,11 +188,12 @@ function ghApiJson(endpoint: string): Record<string, unknown> {
   return parsed;
 }
 
-async function resolveOrgId(serverUrl: string, accessToken: string, override?: string): Promise<string> {
-  const explicit = override?.trim();
-  if (explicit) {
-    return explicit;
-  }
+type BindContext = { orgId: string; isAdmin: boolean };
+
+// Resolve the org to bind AND whether the caller administers it, from a single
+// `/me` read. Binding (`settings/context_tree`) is admin-only, so knowing this
+// up front lets the command fail before it creates any remote GitHub state.
+async function resolveBindContext(serverUrl: string, accessToken: string, override?: string): Promise<BindContext> {
   const res = await fetch(`${serverUrl}/api/v1/me`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(10_000),
@@ -197,105 +202,99 @@ async function resolveOrgId(serverUrl: string, accessToken: string, override?: s
     throw new Error(`server returned ${res.status} on /me while resolving the org to bind`);
   }
   const me = (await res.json()) as {
-    memberships?: Array<{ organizationId: string }>;
+    memberships?: Array<{ organizationId: string; role?: string }>;
     defaultOrganizationId?: string | null;
   };
   const memberships = me.memberships ?? [];
-  if (me.defaultOrganizationId && memberships.some((m) => m.organizationId === me.defaultOrganizationId)) {
-    return me.defaultOrganizationId;
-  }
-  if (memberships.length === 1 && memberships[0]) {
-    return memberships[0].organizationId;
-  }
-  if (memberships.length === 0) {
+
+  const explicit = override?.trim();
+  let orgId: string;
+  if (explicit) {
+    orgId = explicit;
+  } else if (me.defaultOrganizationId && memberships.some((m) => m.organizationId === me.defaultOrganizationId)) {
+    orgId = me.defaultOrganizationId;
+  } else if (memberships.length === 1 && memberships[0]) {
+    orgId = memberships[0].organizationId;
+  } else if (memberships.length === 0) {
     throw new Error("You don't belong to any organization; nothing to bind the tree to.");
+  } else {
+    throw new Error("Multiple organizations — pass --org <orgId> explicitly or set a default in the web UI first.");
   }
-  throw new Error("Multiple organizations — pass --org <orgId> explicitly or set a default in the web UI first.");
+
+  const membership = memberships.find((m) => m.organizationId === orgId);
+  return { orgId, isAdmin: membership?.role === "admin" };
 }
 
-type InstallationCoverage = "covered" | "added" | "skipped";
+type CoverageStatus = "guided" | "no_installation" | "suspended" | "lookup_failed";
+
+type CoverageResult = {
+  status: CoverageStatus;
+  appSettingsUrl: string | null;
+  note: string;
+};
+
+function appInstallationSettingsUrl(installation: {
+  installationId: number;
+  accountLogin: string;
+  accountType: string;
+}): string {
+  // GitHub's "configure installation" page — where a repo-admin edits which
+  // repositories a selected-repositories installation can access.
+  return installation.accountType === "Organization"
+    ? `https://github.com/organizations/${installation.accountLogin}/settings/installations/${installation.installationId}`
+    : `https://github.com/settings/installations/${installation.installationId}`;
+}
 
 /**
- * Ensure the freshly created tree repo is reachable by the team's GitHub App
- * installation, so web snapshots and the Context Tree reviewer webhook work.
- * This replaces the old server-side `administration/contents/workflows: write`
- * live-check: the server/App cannot add a repo to its own installation, but the
- * user who administers it can (`PUT /user/installations/{id}/repositories/{id}`).
- * Best-effort — any miss appends actionable guidance to `warnings` rather than
- * failing the whole command, because the repo is already created and bound.
+ * Web snapshots and the Context Tree reviewer read the tree through the team's
+ * GitHub App installation, so a newly created repo must be within the
+ * installation's reach. When the App itself creates a repo (via its installation
+ * token) GitHub auto-attaches it — but `tree init` creates the repo as the *user*
+ * with local `gh`, so a *selected-repositories* installation does NOT auto-cover
+ * it. Neither the App (no self-add API) nor the local `gh` token (not authorized
+ * for this App — `/user/installations/*` returns 403) can add it programmatically,
+ * so the reliable path is explicit guidance: point the admin at the installation
+ * settings page to include the repo. All-repositories installations already cover
+ * it. This never fails the command — the repo is created and bound regardless.
  */
-async function ensureInstallationCoverage(args: {
-  serverUrl: string;
-  accessToken: string;
-  orgId: string;
-  repoOwner: string;
-  repoName: string;
-  repoId: number;
-  warnings: string[];
-}): Promise<InstallationCoverage> {
-  const { serverUrl, accessToken, orgId, repoOwner, repoName, repoId, warnings } = args;
-  const manualHint = `Add it manually: install/adjust the First Tree GitHub App so it can access ${repoOwner}/${repoName}.`;
-
+async function resolveInstallationCoverage(
+  serverUrl: string,
+  accessToken: string,
+  orgId: string,
+  repoFullName: string,
+): Promise<CoverageResult> {
   const res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/context-tree/installation`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(10_000),
   });
   if (res.status === 404) {
-    warnings.push(
-      `No GitHub App installation is connected for this team yet, so the web snapshot and Context Tree reviewer will not see ${repoOwner}/${repoName} until the App is installed. ${manualHint}`,
-    );
-    return "skipped";
+    return {
+      status: "no_installation",
+      appSettingsUrl: null,
+      note: `No GitHub App installation is connected for this team yet — web snapshots and the Context Tree reviewer will not see ${repoFullName} until an admin installs the First Tree GitHub App and grants it access to this repo.`,
+    };
   }
   if (!res.ok) {
-    warnings.push(`Could not read the team's GitHub App installation (server returned ${res.status}). ${manualHint}`);
-    return "skipped";
+    return {
+      status: "lookup_failed",
+      appSettingsUrl: null,
+      note: `Could not read the team's GitHub App installation (server returned ${res.status}). Make sure the First Tree GitHub App can access ${repoFullName}.`,
+    };
   }
   const installation = contextTreeInstallationInfoResponseSchema.parse(await res.json());
+  const settingsUrl = appInstallationSettingsUrl(installation);
   if (installation.suspended) {
-    warnings.push(
-      `The team's GitHub App installation is suspended; ${repoOwner}/${repoName} cannot be covered until it is reactivated. ${manualHint}`,
-    );
-    return "skipped";
+    return {
+      status: "suspended",
+      appSettingsUrl: settingsUrl,
+      note: `The team's GitHub App installation is suspended; reactivate it and include ${repoFullName} before web snapshots and the reviewer can see the tree: ${settingsUrl}`,
+    };
   }
-
-  // Read the installation's repository selection from the user's own gh — an
-  // "all" install already covers the new repo; only "selected" needs the add.
-  let selection: string;
-  try {
-    selection = ghApiText([
-      "--paginate",
-      "/user/installations",
-      "--jq",
-      `first(.installations[] | select(.id == ${installation.installationId}) | .repository_selection)`,
-    ]).trim();
-  } catch {
-    warnings.push(`Your local gh could not read installation ${installation.installationId}. ${manualHint}`);
-    return "skipped";
-  }
-  if (selection === "") {
-    warnings.push(
-      `Your local gh does not see installation ${installation.installationId} (wrong account or missing scope). ${manualHint}`,
-    );
-    return "skipped";
-  }
-  if (selection === "all") {
-    return "covered";
-  }
-
-  try {
-    runCommand(
-      "gh",
-      ["api", "--method", "PUT", `/user/installations/${installation.installationId}/repositories/${repoId}`],
-      process.cwd(),
-    );
-    return "added";
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    warnings.push(
-      `Failed to add ${repoOwner}/${repoName} to installation ${installation.installationId}: ${detail}. ${manualHint}`,
-    );
-    return "skipped";
-  }
+  return {
+    status: "guided",
+    appSettingsUrl: settingsUrl,
+    note: `If the First Tree GitHub App is installed on selected repositories, add ${repoFullName} to it so web snapshots and the Context Tree reviewer can read the tree: ${settingsUrl} (all-repositories installations already include it).`,
+  };
 }
 
 async function bindOrgToTree(serverUrl: string, accessToken: string, orgId: string, repoUrl: string): Promise<void> {
@@ -321,8 +320,7 @@ type TreeInitSummary = {
   branch: string;
   withWorkflow: boolean;
   bound: boolean;
-  installationCoverage: InstallationCoverage | null;
-  warnings: string[];
+  coverage: CoverageResult | null;
 };
 
 function readOptions(command: Command): TreeInitOptions {
@@ -364,61 +362,67 @@ async function runInitCommand(context: CommandContext): Promise<void> {
     const repoOwner = options.owner?.trim() || creatorLogin;
     const title = options.title?.trim() || repoOwner;
     const repoName = options.name?.trim() || defaultRepoName(title);
+    const repoFullName = `${repoOwner}/${repoName}`;
     const treeRoot = resolve(process.cwd(), options.dir?.trim() || repoName);
 
     if (existsSync(treeRoot) && readdirSync(treeRoot).length > 0) {
       throw new Error(`Target directory is not empty: ${treeRoot}. Pass --dir to choose another path.`);
     }
-    mkdirSync(treeRoot, { recursive: true });
 
-    // Scaffold the minimal valid tree and verify it BEFORE creating anything
-    // remote, so a bad seed never reaches GitHub.
+    // Resolve EVERY First Tree bind precondition (auth, org, admin, installation
+    // lookup) BEFORE any remote GitHub write, so a logged-out / multi-org /
+    // non-admin caller fails without leaving an orphan created-but-unbound repo.
+    let bindContext: { serverUrl: string; accessToken: string; orgId: string } | null = null;
+    let coverage: CoverageResult | null = null;
+    if (options.bind) {
+      const serverUrl = resolveServerUrl();
+      const accessToken = await ensureFreshAccessToken();
+      const { orgId, isAdmin } = await resolveBindContext(serverUrl, accessToken, options.org);
+      if (!isAdmin) {
+        throw new Error(
+          `Binding the team Context Tree requires admin of org ${orgId}. Re-run with --no-bind to only create the repo, or have an admin bind it later with \`${channelConfig.binName} org bind-tree <url>\`.`,
+        );
+      }
+      coverage = await resolveInstallationCoverage(serverUrl, accessToken, orgId, repoFullName);
+      bindContext = { serverUrl, accessToken, orgId };
+    }
+
+    // Local scaffold + self-verify (reversible) before touching the remote — a
+    // bad seed never reaches GitHub.
+    mkdirSync(treeRoot, { recursive: true });
     writeScaffold(
       treeRoot,
       buildScaffoldFiles({ title, ownerLogin: creatorLogin, withWorkflow: options.withWorkflow }),
     );
     runCommand("git", ["init", "-b", DEFAULT_BRANCH], treeRoot);
 
-    const summary = verifyTreeRoot(treeRoot);
-    if (!summary.ok) {
-      throw new Error(`Scaffolded tree failed \`tree verify\`:\n  - ${collectVerifyErrors(summary).join("\n  - ")}`);
+    const verifySummary = verifyTreeRoot(treeRoot);
+    if (!verifySummary.ok) {
+      throw new Error(
+        `Scaffolded tree failed \`tree verify\`:\n  - ${collectVerifyErrors(verifySummary).join("\n  - ")}`,
+      );
     }
 
     runCommand("git", ["add", "-A"], treeRoot);
     runCommand("git", ["commit", "-m", "chore: bootstrap context tree"], treeRoot);
 
+    // Irreversible remote write: create + push in one shot.
     const visibility = options.public ? "--public" : "--private";
     runCommand(
       "gh",
-      ["repo", "create", `${repoOwner}/${repoName}`, visibility, "--source", treeRoot, "--remote", "origin", "--push"],
+      ["repo", "create", repoFullName, visibility, "--source", treeRoot, "--remote", "origin", "--push"],
       treeRoot,
     );
 
-    const repo = ghApiJson(`repos/${repoOwner}/${repoName}`);
-    const repoId = Number(repo.id);
+    const repo = ghApiJson(`repos/${repoFullName}`);
     const htmlUrl = typeof repo.html_url === "string" ? repo.html_url : "";
-    if (!Number.isFinite(repoId) || !htmlUrl) {
-      throw new Error(`Repo created but could not read its id/url back from GitHub for ${repoOwner}/${repoName}.`);
+    if (!htmlUrl) {
+      throw new Error(`Repo created but could not read its URL back from GitHub for ${repoFullName}.`);
     }
 
-    const warnings: string[] = [];
     let bound = false;
-    let installationCoverage: InstallationCoverage | null = null;
-
-    if (options.bind) {
-      const serverUrl = resolveServerUrl();
-      const accessToken = await ensureFreshAccessToken();
-      const orgId = await resolveOrgId(serverUrl, accessToken, options.org);
-      installationCoverage = await ensureInstallationCoverage({
-        serverUrl,
-        accessToken,
-        orgId,
-        repoOwner,
-        repoName,
-        repoId,
-        warnings,
-      });
-      await bindOrgToTree(serverUrl, accessToken, orgId, htmlUrl);
+    if (bindContext) {
+      await bindOrgToTree(bindContext.serverUrl, bindContext.accessToken, bindContext.orgId, htmlUrl);
       bound = true;
     }
 
@@ -431,8 +435,7 @@ async function runInitCommand(context: CommandContext): Promise<void> {
       branch: DEFAULT_BRANCH,
       withWorkflow: options.withWorkflow,
       bound,
-      installationCoverage,
-      warnings,
+      coverage,
     });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
@@ -455,20 +458,10 @@ function printSummary(context: CommandContext, summary: TreeInitSummary): void {
     `  Validate CI:  ${summary.withWorkflow ? "seeded" : "not seeded (optional; needs gh `workflow` scope)"}`,
   );
   console.log(`  Bound to org: ${summary.bound ? "yes" : "no (--no-bind)"}`);
-  if (summary.installationCoverage) {
-    const label = {
-      covered: "already covered (all-repositories install)",
-      added: "added to the App installation",
-      skipped: "not added — see warnings",
-    }[summary.installationCoverage];
-    console.log(`  App coverage: ${label}`);
-  }
 
-  if (summary.warnings.length > 0) {
-    console.log("\nWarnings:");
-    for (const warning of summary.warnings) {
-      console.log(`  ! ${warning}`);
-    }
+  if (summary.coverage) {
+    console.log("\nGitHub App coverage:");
+    console.log(`  ! ${summary.coverage.note}`);
   }
 
   console.log(summary.bound ? "\nContext Tree created and bound." : "\nContext Tree created.");
@@ -482,7 +475,7 @@ function configureInitCommand(command: Command): void {
     .option("--public", "create a public repository (default: private)")
     .option("--dir <path>", "local directory to scaffold and push from; defaults to ./<name>")
     .option("--with-workflow", "also seed .github/workflows/validate-tree.yml (needs gh `workflow` scope)")
-    .option("--no-bind", "skip binding the org and adding the repo to the App installation")
+    .option("--no-bind", "only create the repo: skip First Tree org binding and the installation-coverage check")
     .option("--org <orgId>", "org to bind; defaults to your selected/default org via /me");
 }
 

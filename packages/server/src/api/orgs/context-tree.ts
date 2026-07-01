@@ -44,11 +44,14 @@ const GITHUB_REPO_NAME_MAX_LENGTH = 100;
 export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> {
   // Read-only routing view of the team's bound GitHub App installation. The
   // agent-driven `first-tree tree init` flow calls this after creating the tree
-  // repo with local `gh`, so it can add that repo to a selected-repositories
-  // installation (`PUT /user/installations/{id}/repositories/{repoId}`) using the
-  // user's own GitHub credentials. The server/App cannot add a repo to its own
-  // installation; the administering user can. No token is minted here — only the
-  // non-secret installation id + account are returned.
+  // repo with local `gh` to build the "add this repo to your installation"
+  // guidance URL. Context: GitHub auto-attaches a repo to an installation only
+  // when the *App* creates it (via its installation token); a repo created by
+  // the *user* (local `gh`) is not auto-covered by a selected-repositories
+  // installation, and the local `gh` token cannot add it (it is not authorized
+  // for this App — `/user/installations/*` returns 403). So the reliable path is
+  // to point the admin at the installation settings page. No token is minted
+  // here — only the non-secret installation id + account are returned.
   app.get<{ Params: { orgId: string } }>("/installation", async (request, reply) => {
     const scope = await requireOrgMembership(request, app.db);
     const installation = await findInstallationByOrg(app.db, scope.organizationId);
