@@ -309,7 +309,7 @@ export class UpdateManager {
       if (now - lastQuietGateLogAt >= QUIET_GATE_LOG_INTERVAL_MS) {
         lastQuietGateLogAt = now;
         this.options.log(
-          "debug",
+          "info",
           `Quiet gate: activeCount=${snapshot.activeCount}, idleFor=${Math.round(idleFor)}ms; re-checking in ${intervalMs}ms`,
         );
       }
