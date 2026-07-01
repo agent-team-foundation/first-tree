@@ -1297,8 +1297,10 @@ function EntityLink({ metadata }: { metadata: Record<string, unknown> | undefine
   );
 }
 
-/** How long the group-mention hint row stays error-toned after a blocked send. */
-const MENTION_NUDGE_MS = 2200;
+/** How long the group-mention tip bubble stays up (no-interaction ceiling). */
+const MENTION_TIP_MS = 4000;
+/** Exit-animation duration before the tip bubble unmounts. */
+const MENTION_TIP_EXIT_MS = 300;
 
 export function ChatView({
   agentId,
@@ -1382,13 +1384,18 @@ export function ChatView({
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  // Transient emphasis for the persistent group-mention hint row (A1): a blocked
-  // Enter-press flips this true so the always-shown "mention a member" row turns
-  // an error tone for a beat, acknowledging the send attempt without printing a
-  // second, duplicate line below the composer. Cleared by the timer, the next
-  // keystroke, or the gate lifting (see effects near `sendBlockedByMentionGate`).
-  const [mentionGateNudged, setMentionGateNudged] = useState(false);
-  const mentionGateNudgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Group-mention tip bubble: a transient popover above the send button, shown
+  // only when a group send is attempted with no @mention. `"hidden"` = not
+  // rendered; `"in"` = shown (entrance anim); `"out"` = playing the exit anim
+  // before unmount. Driven by `flashMentionTip` / `dismissMentionTip` below.
+  const [mentionTip, setMentionTip] = useState<"hidden" | "in" | "out">("hidden");
+  // Mirror of `mentionTip` for cheap reads inside callbacks (avoids re-creating
+  // them on every phase change); lets `dismissMentionTip` early-out when already
+  // hidden instead of arming a needless timer on every keystroke.
+  const mentionTipPhaseRef = useRef(mentionTip);
+  mentionTipPhaseRef.current = mentionTip;
+  const mentionTipHoldTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mentionTipExitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Answering a blocking ask is owned by the AskTakeover overlay, which composes
   // its own text + @mentions + image attachments. `askBusy` disables the card
   // while its resolving reply is in flight (kept true through success so the
@@ -1402,20 +1409,34 @@ export function ChatView({
     // user adds or removes an image — they're already fixing it.
     onChange: () => setUploadError(null),
   });
-  // Emphasise the persistent mention-hint row on a blocked send attempt, then
-  // relax it after a beat. Re-arming clears any pending timer so rapid Enter
-  // presses keep the row lit rather than flickering.
-  const nudgeMentionGate = useCallback(() => {
-    setMentionGateNudged(true);
-    if (mentionGateNudgeTimer.current) clearTimeout(mentionGateNudgeTimer.current);
-    mentionGateNudgeTimer.current = setTimeout(() => setMentionGateNudged(false), MENTION_NUDGE_MS);
+  const clearMentionTipTimers = useCallback(() => {
+    if (mentionTipHoldTimer.current) clearTimeout(mentionTipHoldTimer.current);
+    if (mentionTipExitTimer.current) clearTimeout(mentionTipExitTimer.current);
+    mentionTipHoldTimer.current = null;
+    mentionTipExitTimer.current = null;
   }, []);
-  useEffect(
-    () => () => {
-      if (mentionGateNudgeTimer.current) clearTimeout(mentionGateNudgeTimer.current);
-    },
-    [],
-  );
+  // Show the tip on a blocked send attempt (Enter or clicking the dimmed send
+  // button). Re-arming resets the timers so a repeat attempt refreshes the
+  // bubble rather than stacking timers. Auto-hides after MENTION_TIP_MS via a
+  // brief exit phase.
+  const flashMentionTip = useCallback(() => {
+    clearMentionTipTimers();
+    setMentionTip("in");
+    mentionTipHoldTimer.current = setTimeout(() => {
+      setMentionTip("out");
+      mentionTipExitTimer.current = setTimeout(() => setMentionTip("hidden"), MENTION_TIP_EXIT_MS);
+    }, MENTION_TIP_MS);
+  }, [clearMentionTipTimers]);
+  // Dismiss early (user started typing, addressed someone, or the gate lifted):
+  // play the exit anim if currently shown, otherwise just ensure it's hidden.
+  const dismissMentionTip = useCallback(() => {
+    // Already gone — nothing to dismiss (skips per-keystroke timer churn).
+    if (mentionTipPhaseRef.current === "hidden") return;
+    clearMentionTipTimers();
+    setMentionTip((prev) => (prev === "in" ? "out" : "hidden"));
+    mentionTipExitTimer.current = setTimeout(() => setMentionTip("hidden"), MENTION_TIP_EXIT_MS);
+  }, [clearMentionTipTimers]);
+  useEffect(() => clearMentionTipTimers, [clearMentionTipTimers]);
   // Right-rail visibility. The rail holds participants + GitHub bindings; the
   // running summary now lives in the pinned ChatSummary above the stream, not
   // here. Default: the user's stored preference if they have ever toggled the
@@ -1902,19 +1923,17 @@ export function ChatView({
     // nothing and the button stays disabled, prompting the user to use
     // the `[+]` button or the autocomplete picker.
 
-    // Group-chat send guard: a multi-speaker chat has no no-recipient send
-    // path — every message must @mention at least one member. The send button
-    // is already disabled in this state (see `sendBlockedByMentionGate`), so
-    // this is the Enter-key / programmatic backstop. Applies to image-only
-    // sends too: the server's mention check runs per message regardless of
-    // format, so an un-addressed image would 400 just like un-addressed text.
-    // The persistent hint row (A1, rendered inside the composer when
-    // `sendBlockedByMentionGate`) already states the rule for both text and
-    // image sends; `nudgeMentionGate` emphasises that same row for a beat so a
-    // blocked Enter isn't a silent no-op — no separate line is printed. A live
-    // dock lifts the gate — `routedMentions` below defaults to the asker.
+    // Group-chat send guard: a multi-speaker chat has no no-recipient send path
+    // — every message must @mention at least one member. This is the send path
+    // for both Enter and clicking the dimmed-but-clickable send button (kept
+    // clickable precisely so a click here isn't a silent no-op). Applies to
+    // image-only sends too: the server's mention check runs per message
+    // regardless of format, so an un-addressed image would 400 just like
+    // un-addressed text. `flashMentionTip` pops the tip bubble above the send
+    // button for both text and image attempts. A live dock lifts the gate —
+    // `routedMentions` below defaults to the asker.
     if (sendBlockedByMentionGate) {
-      nudgeMentionGate();
+      flashMentionTip();
       return;
     }
 
@@ -3152,25 +3171,27 @@ export function ChatView({
     [draftMentions, peerAgentId],
   );
 
-  // Group-chat mention gate, shared by the send button (disabled / title /
-  // dimming) and handleSend's Enter-key backstop. A blocking question lifts the
-  // gate: the pinned question makes its asker the default recipient, so no
-  // typed @mention is required while a question blocks me.
+  // Group-chat mention gate, shared by the send button (dimming / title) and
+  // handleSend's guard. A blocking question lifts the gate: the pinned question
+  // makes its asker the default recipient, so no typed @mention is required
+  // while a question blocks me.
   const sendBlockedByMentionGate = requiresMention && draftMentions.length === 0 && !askOverlayActive;
 
   // Once the gate lifts (a member gets @mentioned, or a dock/overlay takes over)
-  // the hint row unmounts — drop any lingering emphasis so it never flashes back
-  // on the next block.
+  // the tip is moot — dismiss it so it never lingers into the next block.
   useEffect(() => {
-    if (!sendBlockedByMentionGate) setMentionGateNudged(false);
-  }, [sendBlockedByMentionGate]);
+    if (!sendBlockedByMentionGate) dismissMentionTip();
+  }, [sendBlockedByMentionGate, dismissMentionTip]);
 
   // Unified send-disabled gate for the composer. While the AskTakeover overlay
   // is active it covers the composer (answering is owned there), so the composer
-  // only ever sends ordinary messages: need text or an image, and (group chats)
-  // an addressed @mention.
-  const sendDisabled =
-    sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0) || sendBlockedByMentionGate;
+  // only ever sends ordinary messages: need text or an image. NOTE: the mention
+  // gate is deliberately NOT part of `sendDisabled` — a truly disabled button
+  // swallows clicks, so we keep the button clickable when only the mention is
+  // missing and let handleSend pop the tip. `sendDimmed` carries the greyed-out
+  // look for that state.
+  const sendDisabled = sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0);
+  const sendDimmed = sendDisabled || sendBlockedByMentionGate;
 
   const mention = useMentionAutocomplete({
     value: draft,
@@ -3798,26 +3819,37 @@ export function ChatView({
                         addImages(Array.from(e.dataTransfer.files));
                       }}
                     >
-                      {/* Persistent mention-required hint (A1): a group send has no
-                          no-recipient path, so while the gate blocks (group chat,
-                          no @mention yet) this row states the rule inside the card —
-                          above the textarea, sharing the composer's frame so it never
-                          collides with the agent status bar above. It collapses the
-                          moment a member is @mentioned. A blocked send attempt
-                          (`nudgeMentionGate`) tints it an error tone for a beat. */}
-                      {sendBlockedByMentionGate && (
+                      {/* Group-mention tip bubble: a transient popover anchored
+                          above the send button, shown only on a blocked send
+                          attempt (`flashMentionTip`). Opens upward (the composer
+                          hugs the screen bottom, so a hint below it would be off
+                          screen), points at the send button, and auto-dismisses.
+                          `pointer-events: none` so it never eats a click/keystroke
+                          that would resolve the block. */}
+                      {mentionTip !== "hidden" && (
                         <div
-                          className="flex items-center"
+                          role="status"
+                          className={mentionTip === "out" ? "mention-tip mention-tip-out" : "mention-tip"}
                           style={{
+                            position: "absolute",
+                            right: 8,
+                            bottom: 44,
+                            zIndex: 5,
+                            pointerEvents: "none",
+                            maxWidth: "calc(100% - var(--sp-4))",
+                            display: "flex",
+                            alignItems: "center",
                             gap: "var(--sp-1_5)",
-                            padding: "var(--sp-1_75) var(--sp-3)",
-                            borderBottom: "var(--hairline) solid var(--border-faint)",
-                            color: mentionGateNudged ? "var(--fg-error-strong)" : "var(--fg-3)",
-                            transition: "color 120ms ease",
+                            padding: "var(--sp-1_5) var(--sp-2_5)",
+                            borderRadius: "var(--radius-panel)",
+                            border: "var(--hairline) solid var(--border-strong)",
+                            background: "var(--bg-raised)",
+                            boxShadow: "var(--shadow-md)",
+                            color: "var(--fg)",
                           }}
                         >
-                          <AtSign className="h-3 w-3 shrink-0" aria-hidden="true" />
-                          <span className="text-label">@mention someone to send in this group</span>
+                          <span className="text-label">@mention someone, or no one gets this</span>
+                          <span className="mention-tip-arrow" aria-hidden="true" />
                         </div>
                       )}
                       {/* Image preview area — above textarea */}
@@ -3924,9 +3956,9 @@ export function ChatView({
                             // — React bails on identical setState so the null→null
                             // case is free.
                             setUploadError(null);
-                            // Same rationale for the mention-hint emphasis: the
-                            // user is actively editing, so relax the row.
-                            setMentionGateNudged(false);
+                            // Same rationale for the mention tip: the user is
+                            // actively editing, so dismiss it early.
+                            dismissMentionTip();
                           }}
                           onSelect={(e) => {
                             setCursor(e.currentTarget.selectionStart ?? draft.length);
@@ -3974,10 +4006,11 @@ export function ChatView({
                           }}
                           placeholder={
                             requiresMention
-                              ? // The mention-hint row (A1) above already tells the
-                                // user to @mention, so the placeholder stays neutral
-                                // rather than repeating it.
-                                "Write a message…  ·  / for commands"
+                              ? // Group chat: the placeholder carries the rule (this
+                                // is the calm, always-there teaching surface). It
+                                // shows only while empty; once the user types it's
+                                // gone, and the tip bubble covers a blocked send.
+                                "In a group, @mention who this is for"
                               : `Message @${displayName}  ·  / for commands  ·  @ to mention`
                           }
                           rows={2}
@@ -4136,16 +4169,22 @@ export function ChatView({
                           <button
                             type="button"
                             onClick={handleSend}
+                            // NOT `disabled` when only the mention is missing — a
+                            // disabled button swallows the click and the tip never
+                            // fires. `aria-disabled` still conveys the blocked
+                            // state to assistive tech while keeping it clickable.
                             disabled={sendDisabled}
+                            aria-disabled={sendBlockedByMentionGate || undefined}
                             title={
                               sendBlockedByMentionGate
-                                ? "@mention a member to send — a group message must address someone"
+                                ? "@mention someone to send — a group message must address someone"
                                 : "Send (Enter)"
                             }
                             aria-label="Send"
                             className={cn(
                               "inline-flex items-center justify-center transition-opacity",
-                              sendDisabled && "opacity-40 cursor-not-allowed",
+                              sendDimmed && "opacity-40",
+                              sendDisabled && "cursor-not-allowed",
                             )}
                             style={{
                               width: 28,

@@ -1331,11 +1331,23 @@ describe("ChatView", () => {
 
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Composer textarea missing");
-    // Group chat, no @mention yet: the persistent hint row states the rule, so
-    // the placeholder stays neutral (no duplicate "@ to pick a recipient").
-    expect(textarea.placeholder).toContain("Write a message");
-    expect(textarea.placeholder).not.toContain("Type @ to pick a recipient");
-    expect(container.textContent).toContain("@mention someone to send in this group");
+    // Group chat, no @mention yet: the placeholder carries the rule, and the
+    // tip bubble is NOT shown until a blocked send is actually attempted.
+    expect(textarea.placeholder).toContain("In a group, @mention who this is for");
+    expect(container.textContent).not.toContain("or no one gets this");
+
+    // Blocked TEXT send: typing without an @mention then pressing Enter pops the
+    // tip bubble and sends nothing. The send button stays clickable (not
+    // `disabled`) so a click would trigger the same tip.
+    await setValue(textarea, "no recipient here");
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled).toBe(false);
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+    await waitForText(container, "@mention someone, or no one gets this");
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
     await setValue(textarea, "Please review @nova");
     await click(container.querySelector('button[aria-label="Send"]'));
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected text send");
@@ -1350,9 +1362,9 @@ describe("ChatView", () => {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     });
     await flush();
-    // Image-only send with no @mention is blocked too; the persistent hint row
-    // carries the reason for both text and image sends (no separate line).
-    await waitForText(container, "@mention someone to send in this group");
+    // Image-only send with no @mention is blocked too; the tip bubble pops for
+    // both text and image attempts.
+    await waitForText(container, "@mention someone, or no one gets this");
     expect(chatMocks.sendFileMessageBatch).not.toHaveBeenCalled();
 
     await setValue(textarea, "@design image attached");
