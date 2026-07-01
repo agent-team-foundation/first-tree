@@ -130,6 +130,46 @@ describe("Resources Phase 1", () => {
     expect(configAfter?.version).toBe(2);
   });
 
+  it("ensureAndBindCampaignScanSkill refreshes a stale skill body and bumps the version so a returning user re-scan gets the latest rubric", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "member");
+    const agent = await createRuntimeAgent(app, owner);
+
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+
+    // Simulate a skill provisioned by an older server: overwrite the stored
+    // payload with a stale body, leaving the lookup key (the `name` column)
+    // intact, so the next ensure must refresh it to the current rubric.
+    const [before] = await app.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill")));
+    await app.db
+      .update(resources)
+      .set({ payload: { name: "production-scan", description: "stale", body: "STALE BODY", metadata: {} } })
+      .where(eq(resources.id, before?.id ?? ""));
+
+    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+
+    // Payload refreshed back to the current server-owned rubric.
+    const [after] = await app.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill")));
+    const body = (after?.payload as { body?: string })?.body ?? "";
+    expect(body).toContain("ps-1");
+    expect(body).not.toContain("STALE BODY");
+
+    // Linchpin: the already-bound path MUST bump the version when content
+    // changed — otherwise the client's refreshIfNewer never re-fetches the new
+    // rubric and the update silently never reaches the agent.
+    const [config] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, agent.uuid));
+    expect(config?.version).toBe(3);
+  });
+
   it("ensureAndBindCampaignScanSkill binds an already-provisioned skill the agent is not yet bound to", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "member");

@@ -1444,6 +1444,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // would update model/mcp/effort but silently leave the per-agent prompt
     // at the old version until the next session restart.
     if (cwd) {
+      // A resource skill bound mid-session (config version bumped, model
+      // unchanged) reaches the active session on this restart path. Materialize
+      // it BEFORE rewriting the briefing so the "## Team Skills" entries the
+      // briefing lists point at real SKILL.md files on disk — without this the
+      // restarted turn sees the skill named but no file to load (the reused /
+      // already-running agent bug). Guard on a genuine version increase so a
+      // transient empty fallback config (swallowed refresh failure) can't prune
+      // skills the running turn is about to load.
+      if (cached.version > appliedConfigVersion) {
+        await materializeResourceSkills(cwd, newPayload, sessionCtx);
+      }
       const switchedBriefing = currentBriefing(sessionCtx, cwd, newPayload);
       writeAgentBriefing(cwd, switchedBriefing);
       // Refresh the on-disk briefing fingerprint so the NEXT delivered message
@@ -2094,6 +2105,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // resumes. The agent still finds the v1.x checkouts at their
         // original `<localPath>/` — just without a top-level enumeration in
         // the prompt.
+        //
+        // Materialize resource skills to the legacy cwd as well. Unlike start()
+        // and the normal-design resume path, this pre-redesign branch never
+        // wrote them, so a skill bound to a reused legacy-layout agent (the
+        // gandy-coder reuse case) never reached disk. `cwd` is `legacyCwd` here
+        // (set above), NOT the agent home, so the files land where this
+        // session's briefing paths and the SDK cwd resolve them.
+        await materializeResourceSkills(cwd, payload, sessionCtx);
         writeAgentBriefing(legacyCwd, currentBriefing(sessionCtx, legacyCwd, payload));
         // Same convert-stash-then-spawn ordering as `start()` so a stream
         // error fired on the first turn of the resumed session can replay
