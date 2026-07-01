@@ -233,4 +233,52 @@ describe("client org mismatch handler", () => {
     expect(output).toContain("first-tree-dev logout --purge");
     expect(output).toContain("first-tree-dev login <token>");
   });
+
+  it("routes managed recovery text through an injected output sink", async () => {
+    const { handleClientOrgMismatch } = await import("../core/client-reidentify.js");
+    const output = {
+      blank: vi.fn(),
+      line: vi.fn(),
+    };
+
+    await expect(
+      handleClientOrgMismatch(new Error("wrong org") as never, {
+        managed: true,
+        configDir: tempDir,
+        rerunCommand: "ignored",
+        output,
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+
+    expect(output.blank).toHaveBeenCalled();
+    expect(output.line).toHaveBeenCalledWith(expect.stringContaining("wrong org"));
+    expect(printMocks.blank).not.toHaveBeenCalled();
+    expect(printMocks.line).not.toHaveBeenCalled();
+  });
+
+  it("routes managed logger output through an error-level status summary", async () => {
+    const { handleClientOrgMismatch } = await import("../core/client-reidentify.js");
+    const output = {
+      blank: vi.fn(),
+      line: vi.fn(),
+      status: vi.fn(),
+    };
+
+    await expect(
+      handleClientOrgMismatch(new Error("wrong org") as never, {
+        managed: true,
+        configDir: tempDir,
+        rerunCommand: "ignored",
+        output,
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+
+    expect(output.status).toHaveBeenCalledWith("✗", expect.stringContaining("wrong org"));
+    expect(output.status).toHaveBeenCalledWith("✗", expect.stringContaining("first-tree-dev logout --purge"));
+    expect(output.status).toHaveBeenCalledWith("✗", expect.stringContaining("first-tree-dev login <token>"));
+    expect(output.blank).not.toHaveBeenCalled();
+    expect(output.line).not.toHaveBeenCalled();
+    expect(printMocks.blank).not.toHaveBeenCalled();
+    expect(printMocks.line).not.toHaveBeenCalled();
+  });
 });
