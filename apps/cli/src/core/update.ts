@@ -148,6 +148,14 @@ export type ExecuteUpdateResult =
       reasonCode?: string;
     };
 
+export type InstallGlobalSpecOptions = {
+  output?: (chunk: string) => void;
+};
+
+function writeInstallOutput(options: InstallGlobalSpecOptions | undefined, chunk: string): void {
+  (options?.output ?? print.line)(chunk);
+}
+
 /**
  * Validate an npm install spec (the part after `@` in `<pkg>@<spec>`). We
  * accept either a known dist-tag string (`latest`, `alpha`, …) or an exact
@@ -186,7 +194,10 @@ function looksLikeVersion(spec: string): boolean {
  * install that exact version. The explicit `upgrade --latest` escape hatch keeps the dist-tag form for
  * operators who want the freshest package directly from npm.
  */
-export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResult> {
+export async function installGlobalSpec(
+  spec: string,
+  options?: InstallGlobalSpecOptions,
+): Promise<ExecuteUpdateResult> {
   if (!isSafeInstallSpec(spec)) {
     return {
       ok: false,
@@ -218,7 +229,7 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
         `Refusing to install ${spec}: target channel "${targetChannel}" does not match my channel ` +
         `"${channelConfig.channel}". This usually means the First Tree server is misconfigured ` +
         `(check FIRST_TREE_CHANNEL on the server).`;
-      print.line(`  [update] ${reason}\n`);
+      writeInstallOutput(options, `  [update] ${reason}\n`);
       return { ok: false, mode: "global", reason };
     }
   }
@@ -243,7 +254,7 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
     child.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => {
       stderrChunks.push(chunk);
-      print.line(chunk.toString("utf8"));
+      writeInstallOutput(options, chunk.toString("utf8"));
     });
 
     child.on("error", (err) => {
@@ -295,8 +306,8 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
  * `upgrade --latest`; managed update paths prefer
  * `installGlobalSpec` with the server-advertised target version.
  */
-export async function installGlobalLatest(): Promise<ExecuteUpdateResult> {
-  return installGlobalSpec("latest");
+export async function installGlobalLatest(options?: InstallGlobalSpecOptions): Promise<ExecuteUpdateResult> {
+  return installGlobalSpec("latest", options);
 }
 
 /**

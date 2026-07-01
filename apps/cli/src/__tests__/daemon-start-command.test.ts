@@ -8,6 +8,7 @@ const clientMocks = vi.hoisted(() => ({
   applyClientLoggerConfig: vi.fn(),
   captureClientException: vi.fn(),
   configureClientLoggerForService: vi.fn(),
+  createLogger: vi.fn(),
   discoverClaudeCodeSkills: vi.fn(),
   flushClientSentry: vi.fn(),
   initClientSentry: vi.fn(),
@@ -112,6 +113,12 @@ beforeEach(() => {
   stderrSpy.mockClear();
 
   clientMocks.probeCapabilities.mockResolvedValue({ "claude-code": { state: "ok" } });
+  clientMocks.createLogger.mockReturnValue({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  });
   clientMocks.reprobeOnReconnect.mockResolvedValue({
     capabilities: { "claude-code": { state: "ok" } },
     mode: "revalidate",
@@ -343,7 +350,9 @@ describe("daemon start command", () => {
     await expect(runStart(["--no-interactive"])).rejects.toMatchObject({ exitCode: 1 });
 
     expect(coreMocks.promptMissingFields).toHaveBeenCalledWith(expect.objectContaining({ noInteractive: true }));
-    expect(coreMocks.createExecuteUpdate).toHaveBeenCalledWith(expect.objectContaining({ managed: true }));
+    expect(coreMocks.createExecuteUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ log: expect.any(Function), managed: true }),
+    );
     expect(clientMocks.configureClientLoggerForService).toHaveBeenCalledWith(join(home, "logs"));
     expect(coreMocks.ClientRuntime).toHaveBeenCalledWith(
       "https://first-tree.example",

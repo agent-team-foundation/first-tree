@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import type { ExecuteUpdateFn, RefreshUpdateTargetFn, UpdatePromptFn } from "@first-tree/client";
+import type { ExecuteUpdateFn, RefreshUpdateTargetFn, UpdateLogger, UpdatePromptFn } from "@first-tree/client";
 import { confirm } from "@inquirer/prompts";
 import * as semver from "semver";
 import { channelConfig } from "./channel.js";
@@ -50,6 +50,22 @@ export type UpdateFailedPayload = {
   reasonCode: string;
 };
 
+function formatUpdateLine(message: string): string {
+  return `  [update] ${message.replace(/\n$/, "")}\n`;
+}
+
+function defaultUpdateLog(_level: "info" | "warn", message: string): void {
+  print.line(formatUpdateLine(message));
+}
+
+function createInstallOutputLog(log: UpdateLogger | undefined): ((chunk: string) => void) | undefined {
+  if (!log) return undefined;
+  return (chunk) => {
+    const message = chunk.trimEnd();
+    if (message) log("info", message);
+  };
+}
+
 /**
  * Build the command-layer `executeUpdate` callback.
  *
@@ -73,21 +89,26 @@ export type UpdateFailedPayload = {
  */
 export function createExecuteUpdate({
   managed,
+  log,
   onUpdateFailed,
 }: {
   managed: boolean;
+  log?: UpdateLogger;
   onUpdateFailed?: (payload: UpdateFailedPayload) => void;
 }): ExecuteUpdateFn {
+  const emit = log ?? defaultUpdateLog;
+  const installOutput = createInstallOutputLog(log);
   return async ({ currentVersion, targetVersion }) => {
     const mode = detectInstallMode();
     if (mode === "source") {
-      print.line("  [update] Running from source checkout — self-update skipped. Use `git pull` instead.\n");
+      emit("info", "Running from source checkout — self-update skipped. Use `git pull` instead.");
       return { installed: false };
     }
     if (mode === "npx") {
       const installHint = PACKAGE_NAME ?? channelConfig.binName;
-      print.line(
-        `  [update] Cannot self-update — not launched from a global npm install.\n  Run \`npm i -g ${installHint}\` manually.\n`,
+      emit(
+        "warn",
+        `Cannot self-update — not launched from a global npm install.\n  Run \`npm i -g ${installHint}\` manually.`,
       );
       return { installed: false };
     }
@@ -114,12 +135,13 @@ export function createExecuteUpdate({
     // get stuck on $target").
     if (isLoopGuarded(targetVersion)) {
       const installHint = PACKAGE_NAME ?? channelConfig.binName;
-      print.line(
-        `  [update] Refusing to retry ${targetVersion} — a previous attempt completed without\n` +
+      emit(
+        "warn",
+        `Refusing to retry ${targetVersion} — a previous attempt completed without\n` +
           "           advancing the on-disk version. The most likely cause is npm's `latest`\n" +
           "           dist-tag resolving to the same version this client is already running.\n" +
           `           Operator action: manually run \`npm install -g ${installHint}@latest\`,\n` +
-          "           then restart the service.\n",
+          "           then restart the service.",
       );
       return { installed: true };
     }
@@ -131,10 +153,10 @@ export function createExecuteUpdate({
     // run"; channelConfig.packageName guarantees we install against this
     // binary's own package (prod / staging), never crossing channels.
     const pkgSpec = PACKAGE_NAME ?? channelConfig.binName;
-    print.line(`  [update] Running \`npm install -g ${pkgSpec}@${targetVersion}\`...\n`);
-    const result = await installGlobalSpec(targetVersion);
+    emit("info", `Running \`npm install -g ${pkgSpec}@${targetVersion}\`...`);
+    const result = await installGlobalSpec(targetVersion, installOutput ? { output: installOutput } : undefined);
     if (!result.ok) {
-      print.line(`  [update] Install failed: ${result.reason}\n`);
+      emit("warn", `Install failed: ${result.reason}`);
       recordUpdateAttempt({
         result: "failed",
         target: targetVersion,
@@ -178,8 +200,8 @@ export function createExecuteUpdate({
     const installed = result.installedVersion;
     if (installed && semver.valid(installed) && semver.valid(targetVersion) && semver.lt(installed, targetVersion)) {
       const reason = `npm reported install of ${installed}, but the server-advertised target was ${targetVersion} (running ${currentVersion})`;
-      print.line(`  [update] WARNING: ${reason}\n`);
-      print.line("  [update] Skipping restart to avoid an exit-75 → reboot loop. Loop guard armed.\n");
+      emit("warn", `WARNING: ${reason}`);
+      emit("warn", "Skipping restart to avoid an exit-75 → reboot loop. Loop guard armed.");
       recordUpdateAttempt({
         result: "blocked",
         target: targetVersion,
@@ -218,12 +240,13 @@ export function createExecuteUpdate({
       // (matches `commands/upgrade.ts`'s "warn and continue" stance — the
       // operator can recover with logout + login if the
       // unit ends up stale).
-      refreshServiceUnit();
-      print.line(`  [update] Installed ${installedLabel}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).\n`);
+      refreshServiceUnit(emit);
+      emit("info", `Installed ${installedLabel}. Restarting (exit ${SELF_RESTART_EXIT_CODE}).`);
       process.exit(SELF_RESTART_EXIT_CODE);
     }
-    print.line(
-      `  [update] Installed ${installedLabel}. Restart the client manually (Ctrl+C then \`${channelConfig.binName} daemon start\`) to pick up the new version.\n`,
+    emit(
+      "info",
+      `Installed ${installedLabel}. Restart the client manually (Ctrl+C then \`${channelConfig.binName} daemon start\`) to pick up the new version.`,
     );
     return { installed: true };
   };
@@ -249,7 +272,7 @@ export function createExecuteUpdate({
  * runs `daemon-reload` + `enable --now` and on launchd runs `bootout` +
  * `bootstrap`, both of which routinely take 10-30s under load.
  */
-function refreshServiceUnit(): void {
+function refreshServiceUnit(log: (level: "info" | "warn", message: string) => void): void {
   // Spawn the channel's own bin name (prod → `first-tree`, staging →
   // `first-tree-staging`, dev → `first-tree-dev`). Crossing channels here
   // would either ENOENT (the other bin isn't installed) or, worse,
@@ -259,7 +282,8 @@ function refreshServiceUnit(): void {
   const recovery = `\`${bin} logout && ${bin} login <token>\``;
   try {
     const res = spawnSync(bin, ["daemon", "refresh-unit"], {
-      stdio: ["ignore", "inherit", "inherit"],
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
       timeout: 45_000,
       // Sanitize FIRST_TREE_SERVICE_MODE so the child doesn't think it's
       // being invoked by the supervisor and recursively delegate to
@@ -268,17 +292,20 @@ function refreshServiceUnit(): void {
       env: { ...process.env, FIRST_TREE_SERVICE_MODE: "" },
     });
     if (res.status !== 0) {
-      print.line(
-        `  [update] warning: 'daemon refresh-unit' exited with status ${res.status ?? "unknown"} ` +
+      const output = [res.stderr?.trim(), res.stdout?.trim()].filter(Boolean).join(" | ");
+      const outputSuffix = output ? ` Output: ${output}` : "";
+      log(
+        "warn",
+        `warning: 'daemon refresh-unit' exited with status ${res.status ?? "unknown"} ` +
           `(signal=${res.signal ?? "none"}). If the supervisor restart fails after exit ${SELF_RESTART_EXIT_CODE}, ` +
-          `recover with ${recovery}.\n`,
+          `recover with ${recovery}.${outputSuffix}`,
       );
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    print.line(
-      `  [update] warning: could not spawn 'daemon refresh-unit': ${msg}. If the supervisor restart fails, ` +
-        `recover with ${recovery}.\n`,
+    log(
+      "warn",
+      `warning: could not spawn 'daemon refresh-unit': ${msg}. If the supervisor restart fails, recover with ${recovery}.`,
     );
   }
 }
