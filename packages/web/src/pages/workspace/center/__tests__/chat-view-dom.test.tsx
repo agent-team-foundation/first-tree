@@ -1331,7 +1331,11 @@ describe("ChatView", () => {
 
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Composer textarea missing");
-    expect(textarea.placeholder).toContain("Type @ to pick a recipient");
+    // Group chat, no @mention yet: the persistent hint row states the rule, so
+    // the placeholder stays neutral (no duplicate "@ to pick a recipient").
+    expect(textarea.placeholder).toContain("Write a message");
+    expect(textarea.placeholder).not.toContain("Type @ to pick a recipient");
+    expect(container.textContent).toContain("@mention someone to send in this group");
     await setValue(textarea, "Please review @nova");
     await click(container.querySelector('button[aria-label="Send"]'));
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected text send");
@@ -1346,7 +1350,9 @@ describe("ChatView", () => {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     });
     await flush();
-    await waitForText(container, "@mention a group member");
+    // Image-only send with no @mention is blocked too; the persistent hint row
+    // carries the reason for both text and image sends (no separate line).
+    await waitForText(container, "@mention someone to send in this group");
     expect(chatMocks.sendFileMessageBatch).not.toHaveBeenCalled();
 
     await setValue(textarea, "@design image attached");

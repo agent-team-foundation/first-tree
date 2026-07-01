@@ -1173,7 +1173,7 @@ describe("page SSR smoke coverage", () => {
     const { ChatView } = await import("../workspace/center/chat-view.js");
 
     expect(renderWithClient(<ChatView agentId="agent-1" chatId="chat-1" />, createClient())).toContain(
-      "Type @ to pick a recipient",
+      "@mention someone to send in this group",
     );
 
     const readOnlyClient = createClient();
