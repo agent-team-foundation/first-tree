@@ -1437,6 +1437,16 @@ export function ChatView({
     mentionTipExitTimer.current = setTimeout(() => setMentionTip("hidden"), MENTION_TIP_EXIT_MS);
   }, [clearMentionTipTimers]);
   useEffect(() => clearMentionTipTimers, [clearMentionTipTimers]);
+  // Hard-reset on chat switch. ChatView is long-lived across chats, so a tip
+  // triggered in one group chat must not linger into the next — the gate-lift
+  // effect won't fire when both chats are group/no-mention (the gate stays
+  // true). Clear the timers and hide immediately (no exit animation) so the
+  // new chat never paints a stale bubble.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is a reset trigger — the body doesn't read it, but the tip must clear whenever the viewed chat changes
+  useEffect(() => {
+    clearMentionTipTimers();
+    setMentionTip("hidden");
+  }, [chatId, clearMentionTipTimers]);
   // Right-rail visibility. The rail holds participants + GitHub bindings; the
   // running summary now lives in the pinned ChatSummary above the stream, not
   // here. Default: the user's stored preference if they have ever toggled the

@@ -1385,6 +1385,45 @@ describe("ChatView", () => {
     await act(async () => root.unmount());
   });
 
+  it("clears the mention tip when switching to another group chat", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      undefined,
+      "/",
+    );
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    // Trigger the tip in chat-1 (group, no @mention).
+    await setValue(textarea, "no recipient");
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+    await waitForText(container, "@mention someone, or no one gets this");
+
+    // Switch to another group chat on the SAME long-lived ChatView instance
+    // (identical provider wrappers → React updates the chatId prop rather than
+    // remounting). The tip must not leak into the new chat before any blocked
+    // send there.
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/"]}>
+          <QueryClientProvider client={queryClient}>
+            <ToastProvider>
+              <ChatView agentId="agent-1" chatId="chat-2" />
+            </ToastProvider>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    await flush();
+    expect(container.textContent).not.toContain("@mention someone, or no one gets this");
+
+    await act(async () => root.unmount());
+  });
+
   it("clears a stale auto-primed @ when a request dock arrives late and clean-resolves option answers", async () => {
     const { ChatView } = await import("../chat-view.js");
     const dockMessages = messages([
