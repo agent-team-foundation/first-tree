@@ -45,6 +45,7 @@ export type TreeInitOptions = {
   dir?: string;
   withWorkflow: boolean;
   bind: boolean;
+  rebind: boolean;
   org?: string;
 };
 
@@ -245,43 +246,88 @@ function appInstallationSettingsUrl(installation: {
     : `https://github.com/settings/installations/${installation.installationId}`;
 }
 
+type InstallationInfo = { installationId: number; accountLogin: string; accountType: string; suspended: boolean };
+type InstallationLookup = { kind: "ok"; data: InstallationInfo } | { kind: "none" } | { kind: "error"; status: number };
+
+// Never throws: a network/timeout/parse failure returns `{ kind: "error" }` so
+// the caller decides (bound path fails closed rather than guessing the owner; a
+// pure informational read would degrade to a note).
+async function fetchInstallation(serverUrl: string, accessToken: string, orgId: string): Promise<InstallationLookup> {
+  let res: Response;
+  try {
+    res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/context-tree/installation`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch {
+    return { kind: "error", status: 0 };
+  }
+  if (res.status === 404) {
+    return { kind: "none" };
+  }
+  if (!res.ok) {
+    return { kind: "error", status: res.status };
+  }
+  try {
+    return { kind: "ok", data: contextTreeInstallationInfoResponseSchema.parse(await res.json()) };
+  } catch {
+    return { kind: "error", status: res.status };
+  }
+}
+
+/**
+ * The tree repo must live under the *same GitHub account as the App
+ * installation* — an installation is scoped to one account, so a repo under any
+ * other account can never be covered (not even by an all-repositories install).
+ * In the bound path we therefore default the owner to the installation account
+ * and reject a mismatching `--owner`. Only `--no-bind` / no-installation flows
+ * fall back to the local `gh` user, where the repo is explicitly unverified.
+ */
+export function resolveRepoOwner(args: {
+  optionOwner?: string;
+  creatorLogin: string;
+  installationAccount: string | null;
+}): string {
+  const explicit = args.optionOwner?.trim();
+  if (args.installationAccount) {
+    if (explicit && explicit !== args.installationAccount) {
+      throw new Error(
+        `--owner ${explicit} does not match this team's GitHub App installation account (${args.installationAccount}). The tree repo must live under ${args.installationAccount} so the App can cover it — omit --owner to use it, or pass --no-bind to create it elsewhere without binding.`,
+      );
+    }
+    return args.installationAccount;
+  }
+  return explicit || args.creatorLogin;
+}
+
 /**
  * Web snapshots and the Context Tree reviewer read the tree through the team's
- * GitHub App installation, so a newly created repo must be within the
- * installation's reach. When the App itself creates a repo (via its installation
- * token) GitHub auto-attaches it — but `tree init` creates the repo as the *user*
- * with local `gh`, so a *selected-repositories* installation does NOT auto-cover
- * it. Neither the App (no self-add API) nor the local `gh` token (not authorized
- * for this App — `/user/installations/*` returns 403) can add it programmatically,
- * so the reliable path is explicit guidance: point the admin at the installation
+ * GitHub App installation, so a newly created repo must be within its reach.
+ * When the App itself creates a repo (via its installation token) GitHub
+ * auto-attaches it — but `tree init` creates the repo as the *user* with local
+ * `gh`, so a *selected-repositories* installation does NOT auto-cover it. Neither
+ * the App (no self-add API) nor the local `gh` token (not authorized for this App
+ * — `/user/installations/*` returns 403) can add it programmatically, so the
+ * reliable path is explicit guidance: point the admin at the installation
  * settings page to include the repo. All-repositories installations already cover
  * it. This never fails the command — the repo is created and bound regardless.
  */
-async function resolveInstallationCoverage(
-  serverUrl: string,
-  accessToken: string,
-  orgId: string,
-  repoFullName: string,
-): Promise<CoverageResult> {
-  const res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/context-tree/installation`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (res.status === 404) {
+function buildCoverage(lookup: InstallationLookup, repoFullName: string): CoverageResult {
+  if (lookup.kind === "none") {
     return {
       status: "no_installation",
       appSettingsUrl: null,
       note: `No GitHub App installation is connected for this team yet — web snapshots and the Context Tree reviewer will not see ${repoFullName} until an admin installs the First Tree GitHub App and grants it access to this repo.`,
     };
   }
-  if (!res.ok) {
+  if (lookup.kind === "error") {
     return {
       status: "lookup_failed",
       appSettingsUrl: null,
-      note: `Could not read the team's GitHub App installation (server returned ${res.status}). Make sure the First Tree GitHub App can access ${repoFullName}.`,
+      note: `Could not read the team's GitHub App installation (server returned ${lookup.status}). Make sure the First Tree GitHub App can access ${repoFullName}.`,
     };
   }
-  const installation = contextTreeInstallationInfoResponseSchema.parse(await res.json());
+  const installation = lookup.data;
   const settingsUrl = appInstallationSettingsUrl(installation);
   if (installation.suspended) {
     return {
@@ -295,6 +341,27 @@ async function resolveInstallationCoverage(
     appSettingsUrl: settingsUrl,
     note: `If the First Tree GitHub App is installed on selected repositories, add ${repoFullName} to it so web snapshots and the Context Tree reviewer can read the tree: ${settingsUrl} (all-repositories installations already include it).`,
   };
+}
+
+// Read the team's current `context_tree` binding so `tree init` refuses to
+// clobber an already-configured tree (the server one-click path 409s on this;
+// the CLI must not silently replace a live tree with the empty scaffold).
+async function readContextTreeBinding(
+  serverUrl: string,
+  accessToken: string,
+  orgId: string,
+): Promise<{ repo: string | null }> {
+  const res = await fetch(`${serverUrl}/api/v1/orgs/${encodeURIComponent(orgId)}/settings/context_tree`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Could not read the team's current Context Tree binding (server returned ${res.status}); refusing to proceed so an existing tree is not replaced. Retry, or pass --no-bind.`,
+    );
+  }
+  const body = (await res.json()) as { repo?: string | null };
+  return { repo: body.repo ?? null };
 }
 
 async function bindOrgToTree(serverUrl: string, accessToken: string, orgId: string, repoUrl: string): Promise<void> {
@@ -332,6 +399,7 @@ function readOptions(command: Command): TreeInitOptions {
     dir?: string;
     withWorkflow?: boolean;
     bind?: boolean;
+    rebind?: boolean;
     org?: string;
   };
   return {
@@ -343,6 +411,7 @@ function readOptions(command: Command): TreeInitOptions {
     withWorkflow: raw.withWorkflow === true,
     // commander maps `--no-bind` to `bind: false`; default is bind: true.
     bind: raw.bind !== false,
+    rebind: raw.rebind === true,
     org: raw.org,
   };
 }
@@ -359,21 +428,14 @@ async function runInitCommand(context: CommandContext): Promise<void> {
     if (!creatorLogin) {
       throw new Error("Could not resolve your GitHub login from `gh api user`.");
     }
-    const repoOwner = options.owner?.trim() || creatorLogin;
-    const title = options.title?.trim() || repoOwner;
-    const repoName = options.name?.trim() || defaultRepoName(title);
-    const repoFullName = `${repoOwner}/${repoName}`;
-    const treeRoot = resolve(process.cwd(), options.dir?.trim() || repoName);
 
-    if (existsSync(treeRoot) && readdirSync(treeRoot).length > 0) {
-      throw new Error(`Target directory is not empty: ${treeRoot}. Pass --dir to choose another path.`);
-    }
-
-    // Resolve EVERY First Tree bind precondition (auth, org, admin, installation
-    // lookup) BEFORE any remote GitHub write, so a logged-out / multi-org /
-    // non-admin caller fails without leaving an orphan created-but-unbound repo.
+    // Resolve EVERY First Tree bind precondition (auth, org, admin, no existing
+    // binding, and the installation account) BEFORE any remote GitHub write, so a
+    // logged-out / multi-org / non-admin caller — or one that would clobber an
+    // existing tree or bind an uncoverable repo — fails without leaving an orphan.
     let bindContext: { serverUrl: string; accessToken: string; orgId: string } | null = null;
-    let coverage: CoverageResult | null = null;
+    let lookup: InstallationLookup | null = null;
+    let installationAccount: string | null = null;
     if (options.bind) {
       const serverUrl = resolveServerUrl();
       const accessToken = await ensureFreshAccessToken();
@@ -383,9 +445,33 @@ async function runInitCommand(context: CommandContext): Promise<void> {
           `Binding the team Context Tree requires admin of org ${orgId}. Re-run with --no-bind to only create the repo, or have an admin bind it later with \`${channelConfig.binName} org bind-tree <url>\`.`,
         );
       }
-      coverage = await resolveInstallationCoverage(serverUrl, accessToken, orgId, repoFullName);
+      const existing = await readContextTreeBinding(serverUrl, accessToken, orgId);
+      if (existing.repo && !options.rebind) {
+        throw new Error(
+          `This team is already bound to a Context Tree (${existing.repo}). \`tree init\` will not replace it — pass --rebind to intentionally replace it, or --no-bind to only create a repo.`,
+        );
+      }
+      lookup = await fetchInstallation(serverUrl, accessToken, orgId);
+      if (lookup.kind === "error") {
+        throw new Error(
+          `Could not read the team's GitHub App installation to place the repo under the coverable account (server ${lookup.status || "unreachable"}). Retry, or pass --no-bind to create the repo without binding.`,
+        );
+      }
+      // "ok" → the repo must live under the installation account; "none" (no App
+      // installed yet) → fall back to the user default (an explicitly unverified repo).
+      installationAccount = lookup.kind === "ok" ? lookup.data.accountLogin : null;
       bindContext = { serverUrl, accessToken, orgId };
     }
+
+    const repoOwner = resolveRepoOwner({ optionOwner: options.owner, creatorLogin, installationAccount });
+    const title = options.title?.trim() || repoOwner;
+    const repoName = options.name?.trim() || defaultRepoName(title);
+    const repoFullName = `${repoOwner}/${repoName}`;
+    const treeRoot = resolve(process.cwd(), options.dir?.trim() || repoName);
+    if (existsSync(treeRoot) && readdirSync(treeRoot).length > 0) {
+      throw new Error(`Target directory is not empty: ${treeRoot}. Pass --dir to choose another path.`);
+    }
+    const coverage = lookup ? buildCoverage(lookup, repoFullName) : null;
 
     // Local scaffold + self-verify (reversible) before touching the remote — a
     // bad seed never reaches GitHub.
@@ -469,13 +555,17 @@ function printSummary(context: CommandContext, summary: TreeInitSummary): void {
 
 function configureInitCommand(command: Command): void {
   command
-    .option("--owner <login>", "GitHub owner (user or org) to create the repo under; defaults to the authed gh user")
+    .option(
+      "--owner <login>",
+      "GitHub owner for the repo; in the bound path defaults to the team's App installation account (must match it), otherwise the authed gh user",
+    )
     .option("--name <repo>", "repository name; defaults to <team>-context-tree")
     .option("--title <team>", "team display name used in the root node title; defaults to the owner")
     .option("--public", "create a public repository (default: private)")
     .option("--dir <path>", "local directory to scaffold and push from; defaults to ./<name>")
     .option("--with-workflow", "also seed .github/workflows/validate-tree.yml (needs gh `workflow` scope)")
     .option("--no-bind", "only create the repo: skip First Tree org binding and the installation-coverage check")
+    .option("--rebind", "replace an existing team Context Tree binding (default: refuse if one exists)")
     .option("--org <orgId>", "org to bind; defaults to your selected/default org via /me");
 }
 

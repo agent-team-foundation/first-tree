@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
-import { buildScaffoldFiles, defaultRepoName, type ScaffoldFile } from "../commands/tree/init.js";
+import { buildScaffoldFiles, defaultRepoName, resolveRepoOwner, type ScaffoldFile } from "../commands/tree/init.js";
 import { renderContextTree } from "../commands/tree/tree.js";
 import { verifyTreeRoot } from "../commands/tree/verify.js";
 
@@ -89,5 +89,32 @@ describe("buildScaffoldFiles", () => {
     const rendered = renderContextTree(dir);
     expect(rendered).toContain("members/");
     expect(rendered).toContain("members/octocat/");
+  });
+});
+
+describe("resolveRepoOwner", () => {
+  it("defaults to the installation account in the bound path so the repo is coverable", () => {
+    // The App installation is on the org; the repo must live under the org, not
+    // the admin's personal account, or the installation can never cover it.
+    expect(resolveRepoOwner({ creatorLogin: "octocat", installationAccount: "acme-org" })).toBe("acme-org");
+  });
+
+  it("accepts an explicit --owner that matches the installation account", () => {
+    expect(
+      resolveRepoOwner({ optionOwner: "acme-org", creatorLogin: "octocat", installationAccount: "acme-org" }),
+    ).toBe("acme-org");
+  });
+
+  it("rejects an explicit --owner that does not match the installation account", () => {
+    expect(() =>
+      resolveRepoOwner({ optionOwner: "octocat", creatorLogin: "octocat", installationAccount: "acme-org" }),
+    ).toThrow(/does not match/u);
+  });
+
+  it("falls back to the gh user when there is no installation to match (no-bind / no-installation)", () => {
+    expect(resolveRepoOwner({ creatorLogin: "octocat", installationAccount: null })).toBe("octocat");
+    expect(resolveRepoOwner({ optionOwner: "someone", creatorLogin: "octocat", installationAccount: null })).toBe(
+      "someone",
+    );
   });
 });
