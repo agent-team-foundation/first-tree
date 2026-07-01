@@ -14,6 +14,7 @@ import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { BadRequestError, ClientUserMismatchError, ConflictError, NotFoundError } from "../errors.js";
 import { runtimeFieldsReset } from "./presence.js";
+import { recordClientHeartbeat } from "./runtime-liveness.js";
 
 /**
  * Assert the caller can act on this client. Throws 404 for both "not found"
@@ -139,8 +140,8 @@ export async function disconnectClient(db: Database, clientId: string) {
   await db.update(clients).set({ status: "disconnected", lastSeenAt: now }).where(eq(clients.id, clientId));
 }
 
-export async function heartbeatClient(db: Database, clientId: string) {
-  await db.update(clients).set({ lastSeenAt: new Date() }).where(eq(clients.id, clientId));
+export async function heartbeatClient(db: Database, clientId: string, instanceId: string) {
+  await recordClientHeartbeat(db, { clientId, instanceId, routedAgentIds: [] });
 }
 
 export async function getClient(db: Database, clientId: string) {

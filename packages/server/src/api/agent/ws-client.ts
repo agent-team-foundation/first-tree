@@ -50,6 +50,7 @@ import * as inboxService from "../../services/inbox.js";
 import * as notificationService from "../../services/notification.js";
 import type { InboxPushHandler, Notifier } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
+import * as runtimeLivenessService from "../../services/runtime-liveness.js";
 import * as sessionEventService from "../../services/session-event.js";
 
 /**
@@ -1513,15 +1514,16 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 }
               });
             } else if (type === "heartbeat") {
-              if (clientId) {
-                await clientService.heartbeatClient(app.db, clientId);
-                await Promise.all(
-                  [...boundAgents.keys()]
-                    .filter((id) => isAgentStillRoutedHere(id))
-                    .map((id) => presenceService.touchAgent(app.db, id)),
-                );
+              if (clientId && connectionManager.isActiveClientConnection(clientId, socket)) {
+                const routedAgentIds = [...boundAgents.keys()].filter((id) => isAgentStillRoutedHere(id));
+                const liveness = await runtimeLivenessService.recordClientHeartbeat(app.db, {
+                  clientId,
+                  instanceId,
+                  routedAgentIds,
+                });
+                const repairableAgentIds = new Set(liveness.restoredAgentIds);
                 for (const info of boundAgents.values()) {
-                  if (isAgentStillRoutedHere(info.agentId)) {
+                  if (repairableAgentIds.has(info.agentId) && isAgentStillRoutedHere(info.agentId)) {
                     maybeRepairInboxBacklog(info.agentId, info.inboxId);
                   }
                 }

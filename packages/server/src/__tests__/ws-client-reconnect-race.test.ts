@@ -1,12 +1,17 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { clients } from "../db/schema/clients.js";
+import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createAgent } from "../services/agent.js";
+import { createChat } from "../services/chat.js";
 import * as clientService from "../services/client.js";
+import * as connectionManager from "../services/connection-manager.js";
+import { sendMessage } from "../services/message.js";
+import * as presenceService from "../services/presence.js";
 import { createTestAdmin, createTestApp } from "./helpers.js";
 
 /**
@@ -34,6 +39,7 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
   let wsUrl: string;
   let userId: string;
   let memberId: string;
+  let humanAgentUuid: string;
   let orgId: string;
   let role: string;
   const jwtSecret = process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest";
@@ -127,6 +133,19 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
     return agent.uuid;
   }
 
+  async function loadNotifyRow(messageId: string) {
+    const [row] = await app.db
+      .select({
+        id: inboxEntries.id,
+        status: inboxEntries.status,
+        deliveredAt: inboxEntries.deliveredAt,
+      })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.messageId, messageId), eq(inboxEntries.notify, true)))
+      .limit(1);
+    return row;
+  }
+
   beforeAll(async () => {
     app = await createTestApp();
     await app.listen({ port: 0, host: "127.0.0.1" });
@@ -139,6 +158,7 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
     const admin = await createTestAdmin(app, { username: `race-${crypto.randomUUID().slice(0, 8)}` });
     userId = admin.userId;
     memberId = admin.memberId;
+    humanAgentUuid = admin.humanAgentUuid;
     const { members } = await import("../db/schema/members.js");
     const [m] = await app.db.select().from(members).where(eq(members.id, memberId)).limit(1);
     if (!m) throw new Error("member row missing after setup");
@@ -222,5 +242,98 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
     expect(stalePresence?.status).toBe("offline");
     expect(stalePresence?.clientId).toBeNull();
     expect(stalePresence?.runtimeState).toBeNull();
+  }, 10_000);
+
+  it("self-heals a false-positive stale sweep on heartbeat from the still-active socket", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    const agentId = await createBoundAgent(ws, clientId);
+
+    const staleAt = new Date(Date.now() - 120_000);
+    await app.db.update(clients).set({ lastSeenAt: staleAt }).where(eq(clients.id, clientId));
+    await expect(clientService.cleanupStaleClients(app.db, 60)).resolves.toBe(1);
+    await presenceService.setRuntimeState(app.db, agentId, "working");
+
+    const ackPromise = waitForFrame(ws, (m) => m.type === "heartbeat:ack");
+    ws.send(JSON.stringify({ type: "heartbeat" }));
+    await ackPromise;
+
+    const [client] = await app.db.select().from(clients).where(eq(clients.id, clientId));
+    expect(client?.status).toBe("connected");
+    expect(client?.instanceId).toBe("test-instance");
+    expect(client?.lastSeenAt.getTime()).toBeGreaterThan(staleAt.getTime());
+
+    const [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agentId));
+    expect(presence?.status).toBe("online");
+    expect(presence?.clientId).toBe(clientId);
+    expect(presence?.instanceId).toBe("test-instance");
+    expect(presence?.runtimeState).toBe("working");
+
+    ws.close();
+  }, 10_000);
+
+  it("acks but does not restore when the heartbeat socket is no longer the active client connection", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    const agentId = await createBoundAgent(ws, clientId);
+
+    const staleAt = new Date(Date.now() - 120_000);
+    await app.db.update(clients).set({ lastSeenAt: staleAt }).where(eq(clients.id, clientId));
+    await expect(clientService.cleanupStaleClients(app.db, 60)).resolves.toBe(1);
+
+    const activeSpy = vi.spyOn(connectionManager, "isActiveClientConnection").mockReturnValue(false);
+    try {
+      const ackPromise = waitForFrame(ws, (m) => m.type === "heartbeat:ack");
+      ws.send(JSON.stringify({ type: "heartbeat" }));
+      await ackPromise;
+    } finally {
+      activeSpy.mockRestore();
+      ws.close();
+    }
+
+    const [client] = await app.db.select().from(clients).where(eq(clients.id, clientId));
+    expect(client?.status).toBe("disconnected");
+    expect(client?.lastSeenAt.getTime()).toBe(staleAt.getTime());
+
+    const [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agentId));
+    expect(presence?.status).toBe("offline");
+    expect(presence?.clientId).toBeNull();
+  }, 10_000);
+
+  it("does not repair inbox backlog when liveness guards reject the heartbeat", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    const agentId = await createBoundAgent(ws, clientId);
+    const chat = await createChat(app.db, humanAgentUuid, {
+      type: "group",
+      participantIds: [agentId],
+    });
+
+    const sent = await sendMessage(app.db, chat.id, humanAgentUuid, {
+      source: "api",
+      format: "text",
+      content: "stale heartbeat must not repair inbox",
+      metadata: { mentions: [agentId] },
+    });
+    expect((await loadNotifyRow(sent.message.id))?.status).toBe("pending");
+
+    await app.db.update(clients).set({ instanceId: "other-instance" }).where(eq(clients.id, clientId));
+
+    const ackPromise = waitForFrame(ws, (m) => m.type === "heartbeat:ack");
+    ws.send(JSON.stringify({ type: "heartbeat" }));
+    await ackPromise;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const row = await loadNotifyRow(sent.message.id);
+    expect(row?.status).toBe("pending");
+    expect(row?.deliveredAt).toBeNull();
+
+    ws.close();
   }, 10_000);
 });
