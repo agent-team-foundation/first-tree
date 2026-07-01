@@ -1181,12 +1181,33 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
       // index is needed (no prod schema change). Bump the config version +
       // notify (mirroring replaceAgentResources) so the client re-fetches and
       // materializes the skill before the kickoff chat dispatches.
-      let didBind = false;
+      // The skill body is server-owned (campaign-scan-skill.ts) and evolves; a
+      // returning user's re-scan must pick up the latest rubric. So on an
+      // already-provisioned skill we refresh its payload to the current version
+      // and — the linchpin — bump the config version so the client actually
+      // re-fetches and re-materializes it. Comparing body + description first
+      // keeps a no-op re-scan from churning the version on every kickoff.
+      const desiredPayload = {
+        name: skill.name,
+        description: skill.description,
+        body: skill.body,
+        metadata: {},
+      };
+      const payloadMatchesDesired = (stored: unknown): boolean =>
+        typeof stored === "object" &&
+        stored !== null &&
+        "body" in stored &&
+        stored.body === skill.body &&
+        "description" in stored &&
+        stored.description === skill.description;
+
+      let needsNotify = false;
       await db.transaction(async (tx) => {
         const targetDb = tx as unknown as Database;
         await targetDb.select({ uuid: agents.uuid }).from(agents).where(eq(agents.uuid, agentId)).for("update");
 
         let resourceId = await findSkillResourceId(targetDb);
+        let contentChanged = false;
         if (!resourceId) {
           resourceId = uuidv7();
           await targetDb.insert(resources).values({
@@ -1199,10 +1220,23 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
             repoCanonicalKey: null,
             defaultEnabled: null,
             status: "active",
-            payload: { name: skill.name, description: skill.description, body: skill.body, metadata: {} },
+            payload: desiredPayload,
             createdBy: actorId,
             updatedBy: actorId,
           });
+        } else {
+          const [current] = await targetDb
+            .select({ payload: resources.payload })
+            .from(resources)
+            .where(eq(resources.id, resourceId))
+            .limit(1);
+          if (!payloadMatchesDesired(current?.payload)) {
+            await targetDb
+              .update(resources)
+              .set({ payload: desiredPayload, updatedAt: new Date(), updatedBy: actorId })
+              .where(eq(resources.id, resourceId));
+            contentChanged = true;
+          }
         }
 
         const [already] = await targetDb
@@ -1210,7 +1244,19 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
           .from(agentResourceBindings)
           .where(and(eq(agentResourceBindings.agentId, agentId), eq(agentResourceBindings.resourceId, resourceId)))
           .limit(1);
-        if (already) return;
+        if (already) {
+          // Binding set is unchanged, but a refreshed body still has to reach the
+          // client: without a version bump `refreshIfNewer` is a no-op and the
+          // new rubric never re-materializes. Skip the bump when nothing changed.
+          if (contentChanged) {
+            await targetDb
+              .update(agentConfigs)
+              .set({ version: sql`${agentConfigs.version} + 1`, updatedAt: new Date(), updatedBy: actorId })
+              .where(eq(agentConfigs.agentId, agentId));
+            needsNotify = true;
+          }
+          return;
+        }
         const existing = await targetDb
           .select({ id: agentResourceBindings.id })
           .from(agentResourceBindings)
@@ -1234,9 +1280,9 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
           createdBy: actorId,
           updatedBy: actorId,
         });
-        didBind = true;
+        needsNotify = true;
       });
-      if (didBind) await notifyAgents([agentId]);
+      if (needsNotify) await notifyAgents([agentId]);
     },
 
     resolveRuntimeConfig,
