@@ -12,18 +12,9 @@ import {
   type GithubTokenBundle,
 } from "../../services/auth-identity.js";
 import { encryptValue } from "../../services/crypto.js";
-import {
-  buildAppAuthorizeUrl,
-  createAppJwt,
-  exchangeCodeForAppUserProfile,
-  fetchInstallation,
-  verifyUserCanAdministerInstallation,
-} from "../../services/github-app.js";
-import {
-  bindInstallationToOrg,
-  findUnboundInstallationsByAccount,
-  upsertInstallationFromMetadata,
-} from "../../services/github-app-installations.js";
+import { buildAppAuthorizeUrl, exchangeCodeForAppUserProfile } from "../../services/github-app.js";
+import { completeInstallBind, recordPendingBind } from "../../services/github-app-install-intents.js";
+import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../services/github-app-installations.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
 import {
   createPersonalTeam,
@@ -53,11 +44,13 @@ import { buildCookie, parseCookieHeader } from "./oauth-cookie.js";
  * `GET /orgs/:orgId/github-app-installation/install-url` and surfaced both
  * in onboarding's "Connect your code" step and Settings → GitHub. After
  * that dialog GitHub redirects back here with `code + state +
- * installation_id`, which the callback verifies and binds. The install
- * BIND rests on the kickoff session signed into the state
- * (`kickoffUserId`, re-checked live), not on the identity the OAuth code
- * resolves to — the browser's github.com session is independent of the
- * First Tree session, and a mismatch must not strand the install unbound.
+ * installation_id`. The callback does NOT bind the installation: it records
+ * a per-install pending bind (keyed by `installation_id`, authorized by the
+ * signed kickoff state — `kickoffUserId`), and the actual bind is performed by
+ * the trusted, HMAC-signed `installation.created` webhook once it proves the
+ * installer IS the kickoff admin (and re-checks live admin). The URL
+ * `installation_id` is only a correlation handle; a forged one never binds.
+ * The browser's github.com session is independent of the First Tree session.
  *
  * The live `/callback` is a full-page browser navigation, so its error
  * replies redirect to the SPA error surface
@@ -110,6 +103,11 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(503).send({ error: "GitHub App is not configured on this First Tree deployment" });
     }
     const parsed = githubCallbackQuerySchema.parse(request.query);
+    // `installation_id` from the URL is unsigned/forgeable, so it is NEVER a
+    // binding authority on its own. On the kickoff install path it is used
+    // only as a *correlation handle*: we record a per-install pending bind,
+    // and the trusted `installation.created` webhook completes it only after
+    // proving this installation's installer is the kickoff admin.
     const { code, state, installation_id: installationIdRaw } = parsed;
     const cookieNonce = parseCookieHeader(request.headers.cookie, OAUTH_STATE_COOKIE);
 
@@ -146,82 +144,39 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
     let profile: GithubProfile;
     let tokens: GithubTokenBundle;
-    let plaintextUserAccessToken: string;
-    let installationId: number | null = null;
     try {
       const result = await exchangeCodeForAppUserProfile({
         clientId: appCfg.clientId,
         clientSecret: appCfg.clientSecret,
         code,
         redirectUri,
-        installationId: installationIdRaw ? Number(installationIdRaw) : null,
+        // The OAuth code exchange resolves the signing-in identity for LOGIN.
+        // It is not an installation-binding input, so we don't thread the URL
+        // `installation_id` through it; binding is handled separately via the
+        // per-install pending bind + trusted `installation.created` webhook.
+        installationId: null,
       });
       profile = result.profile;
-      plaintextUserAccessToken = result.accessToken;
       tokens = {
         encryptedAccessToken: encryptValue(result.accessToken, app.config.secrets.encryptionKey),
         accessTokenExpiresAt: result.accessTokenExpiresAt,
         encryptedRefreshToken: encryptValue(result.refreshToken, app.config.secrets.encryptionKey),
         refreshTokenExpiresAt: result.refreshTokenExpiresAt,
       };
-      installationId = result.installationId;
     } catch (err) {
       app.log.warn({ err }, "github sign-in code exchange failed");
       return redirectCallbackError(reply, "github-exchange-failed", next);
     }
 
-    // SECURITY: `installation_id` rides the browser address bar — not a
-    // secret, not signed. Any signed-in user could append
-    // `?installation_id=<other-team's-id>` and bind that installation to
-    // their own First Tree team if we don't authorize first (the App JWT can
-    // read every installation, so `fetchInstallation` would succeed).
-    //
-    // Require GitHub-side **admin** on the install's account: User-type
-    // owner-match, Org-type admin via `/user/memberships/orgs/{login}`.
-    // Plain read access via org membership isn't enough — that's what
-    // made the original `/user/installations` primitive forgeable.
-    //
-    // We fetch the installation first to get its account metadata, then
-    // verify, then upsert. On any failure — verify / fetch / upsert —
-    // we drop `installationId` so sign-in still succeeds but no row is
-    // bound; the user can re-trigger install from Settings.
-    if (installationId !== null && appCfg) {
-      try {
-        const appJwt = await createAppJwt({ appId: appCfg.appId, privateKeyPem: appCfg.privateKeyPem });
-        const installation = await fetchInstallation(appJwt, installationId);
-        const canAdminister = await verifyUserCanAdministerInstallation(
-          plaintextUserAccessToken,
-          Number(profile.githubId),
-          installation,
-        );
-        if (!canAdminister) {
-          app.log.warn(
-            {
-              event: "github_app.installation_id_unauthorized",
-              installationId,
-              githubId: profile.githubId,
-              accountType: installation.accountType,
-              accountLogin: installation.accountLogin,
-            },
-            "callback installation_id admin proof failed — refusing to bind",
-          );
-          installationId = null;
-        } else {
-          await upsertInstallationFromMetadata(app.db, { installation });
-        }
-      } catch (err) {
-        // Failing closed: fetch / membership API / upsert all roll up
-        // here so we never half-bind. User still signs in; the Settings
-        // panel surfaces a clean "Install" CTA for retry.
-        app.log.warn(
-          { err, installationId, githubId: profile.githubId },
-          "github app install verify/upsert failed — clearing installation_id, user can retry from Settings",
-        );
-        installationId = null;
-      }
-    }
+    // Pass the URL `installation_id` (validated to a finite number, else null)
+    // through to completeOauthFlow. It is used ONLY inside the kickoff branch,
+    // and ONLY after that branch proves the OAuth-resolved user IS the kickoff
+    // admin — so no install-bind side effect happens on an identity mismatch
+    // (the pending-bind record + `completeInstallBind` live there, not here).
+    const callbackInstallationId =
+      installationIdRaw && Number.isFinite(Number(installationIdRaw)) ? Number(installationIdRaw) : null;
 
-    return completeOauthFlow(app, request, reply, profile, next, tokens, installationId, targetOrganizationId, {
+    return completeOauthFlow(app, request, reply, profile, next, tokens, callbackInstallationId, targetOrganizationId, {
       kickoffUserId,
       browserFacing: true,
     });
@@ -324,7 +279,9 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
 
     // Dev bypass never carries a `targetOrganizationId` — the install
     // stub binds to whatever team the dev session resolves into.
-    return completeOauthFlow(app, request, reply, profile, next, tokens, devInstallationId, null);
+    return completeOauthFlow(app, request, reply, profile, next, tokens, devInstallationId, null, {
+      devBindInstallation: true,
+    });
   });
 }
 
@@ -377,10 +334,12 @@ async function completeOauthFlow(
    */
   oauthTokens: GithubTokenBundle,
   /**
-   * GitHub-side installation id when the user just installed the App;
-   * null on the legacy OAuth path, returning App users without a fresh
-   * install, and `dev-callback`. Used after team resolution to bind the
-   * installation row to the user's First Tree team.
+   * The URL `installation_id` (validated) from the callback, or null. It is a
+   * correlation handle, NOT a binding authority: it is used ONLY inside the
+   * kickoff branch, and only after that branch proves the OAuth-resolved user
+   * is the kickoff admin, to record a per-install pending bind that the signed
+   * `installation.created` webhook then completes. `dev-callback` passes its
+   * stub id together with `opts.devBindInstallation` for a direct QA bind.
    */
   installationId: number | null,
   /**
@@ -406,9 +365,16 @@ async function completeOauthFlow(
      * dev/test suites assert on status codes).
      */
     browserFacing?: boolean;
+    /**
+     * DEV-CALLBACK ONLY. When true, the `installationId` stub is bound
+     * directly to the resolved org (so a local QA session looks connected
+     * without a real webhook). The real `/callback` never sets this — its
+     * binding is webhook-driven.
+     */
+    devBindInstallation?: boolean;
   } = {},
 ) {
-  const { kickoffUserId = null, browserFacing = false } = opts;
+  const { kickoffUserId = null, browserFacing = false, devBindInstallation = false } = opts;
   const { userId } = await findOrCreateUserFromGithub(app.db, profile, oauthTokens);
   const allowedOrganizationId = app.config.access?.allowedOrganizationId ?? null;
 
@@ -493,19 +459,17 @@ async function completeOauthFlow(
       return reply.status(403).send({ error: "Not an admin of the First Tree organization this installation targets" });
     }
     if (bindAuthorityUserId !== userId) {
-      // Identity mismatch: complete the install on the kickoff admin's
-      // authority, then bounce straight to `next` WITHOUT issuing tokens —
-      // signing the browser in as the OAuth identity would replace the
-      // kickoff admin's session across every tab. GitHub-side authority is
-      // unchanged: `installationId` is non-null only when the OAuth user
-      // proved they administer the installed account, and the nonce cookie
-      // pins this request to the same browser that minted the kickoff.
-      //
-      // The no-token success redirect is earned ONLY by an actual bind
-      // (review finding on the first cut of this branch): with no verified
-      // installation, or a bind refusal, `next` may be the onboarding
-      // auto-close page — bouncing there would present a silent failure as
-      // "connected". Surface the error instead.
+      // The install was completed under a DIFFERENT GitHub identity than the
+      // admin who kicked it off — the browser's github.com session differs
+      // from the First Tree kickoff admin (a second GitHub account, someone
+      // else's github.com session in the same browser, …). Binding requires
+      // installer == kickoff admin: the install-intent is keyed by the
+      // kickoff admin's GitHub id and the trusted `installation.created`
+      // webhook only binds when its `sender` matches, so this install will
+      // NOT bind. Surface it as an error rather than sign the browser in as
+      // the foreign identity (which would replace the kickoff admin's
+      // session in every tab). Install must use the same GitHub account you
+      // signed in / started the install with.
       app.log.warn(
         {
           event: "github_app.install_callback_identity_mismatch",
@@ -514,25 +478,36 @@ async function completeOauthFlow(
           oauthUserId: userId,
           githubId: profile.githubId,
           githubLogin: profile.login,
-          installationId,
         },
-        "install callback: OAuth identity differs from the kickoff session — binding on kickoff authority, skipping sign-in",
+        "install callback: OAuth identity differs from the kickoff admin — refusing (install must use the same GitHub account)",
       );
-      if (installationId === null) {
-        // Either GitHub never sent an installation_id, or the GitHub-side
-        // admin proof / fetch / upsert failed closed and cleared it.
-        return redirectCallbackError(reply, "install-not-verified", next);
-      }
+      return redirectCallbackError(reply, "install-not-verified", next);
+    }
+    // Identity match confirmed (OAuth-resolved user IS the kickoff admin, who
+    // is an active admin of the target org — checked above). ONLY NOW is it
+    // safe to record the per-install pending bind: recording it before the
+    // mismatch guard would let a callback under a foreign identity trigger a
+    // bind side effect while still returning `install-not-verified`. Here
+    // `profile.githubId` is the kickoff admin's GitHub id, so the trusted
+    // `installation.created` webhook completes the bind only when THIS
+    // installation's installer matches (and the admin is still active).
+    // `completeInstallBind` also covers the webhook-arrived-before-callback
+    // ordering. Non-fatal on error — the webhook retries completion.
+    if (installationId !== null) {
       try {
-        await bindInstallationToOrg(app.db, installationId, targetOrganizationId);
+        await recordPendingBind(app.db, {
+          installationId,
+          targetOrganizationId,
+          kickoffUserId: bindAuthorityUserId,
+          kickoffGithubId: Number(profile.githubId),
+        });
+        await completeInstallBind(app.db, installationId);
       } catch (err) {
         app.log.warn(
-          { err, installationId, hubOrganizationId: targetOrganizationId, kickoffUserId: bindAuthorityUserId },
-          "github app install bind-to-org failed on identity-mismatch path — reconcile in Settings",
+          { err, installationId, targetOrganizationId, kickoffUserId: bindAuthorityUserId },
+          "install pending-bind record/complete failed in callback — webhook will retry",
         );
-        return redirectCallbackError(reply, "install-bind-failed", next);
       }
-      return reply.redirect(next, 302);
     }
     resolved = true;
     resolvedOrganizationId = targetOrganizationId;
@@ -582,62 +557,32 @@ async function completeOauthFlow(
     }
   }
 
-  // Bind the installation to whichever First Tree team the user just resolved
-  // into. Late-bound (after team resolution) so a personal-team-creating
-  // signup ends up bound to the team it just minted, and an invitee binds
-  // to the inviting org.
-  //
-  // Tolerates the "already bound to this org" no-op case (idempotent on
-  // returning sign-ins). Refuses to rebind to a different org per D2 1:1
-  // — that path logs a warning and lets the sign-in succeed; the
-  // installation stays attached to whoever installed it first, which is
-  // the documented design (no "transfer install" UX yet).
-  if (installationId !== null && resolvedOrganizationId) {
+  // Direct installation bind — DEV-CALLBACK ONLY, gated by `devBindInstallation`.
+  // The real `/callback` NEVER sets that flag: real binding is driven
+  // exclusively by the trusted, HMAC-signed `installation.created` webhook via
+  // the per-install pending bind recorded above, never by the browser-supplied
+  // URL id. `dev-callback` passes a stub installation id + the flag so a local
+  // QA session looks connected without a real webhook. The flag gate (not just
+  // `installationId !== null`) is essential now that the real callback DOES
+  // pass a URL `installation_id` for the kickoff pending bind — binding it here
+  // would reopen the URL-forgery hole.
+  if (devBindInstallation && installationId !== null && resolvedOrganizationId) {
     try {
       await bindInstallationToOrg(app.db, installationId, resolvedOrganizationId);
     } catch (err) {
       app.log.warn(
         { err, installationId, hubOrganizationId: resolvedOrganizationId, userId },
-        "github app install bind-to-org failed — sign-in continues; reconcile in Settings",
+        "dev-callback install bind-to-org failed — sign-in continues",
       );
     }
   }
 
-  // Orphan-install reclaim (codex P1-5 + H1): if a prior sign-in UPSERTed
-  // an installation row but the bind step failed, the row stays unbound
-  // forever — GitHub only sends `installation_id` on the initial install,
-  // so a later sign-in never re-attempts the bind via the branch above.
-  // Sweep here for unbound rows whose GitHub account is *this user's own*
-  // personal account (the same authorization basis the callback's
-  // `/user/installations` check enforced when the row was first written),
-  // and auto-claim if there's exactly one. Multiple → leave them for the
-  // manual `POST /claim` endpoint to disambiguate (the Settings "Claim install"
-  // UI that drives that endpoint is tracked in #318).
-  if (resolvedOrganizationId) {
-    try {
-      const orphans = await findUnboundInstallationsByAccount(app.db, Number(profile.githubId));
-      if (orphans.length === 1) {
-        const orphan = orphans[0];
-        if (orphan) {
-          await bindInstallationToOrg(app.db, orphan.installationId, resolvedOrganizationId).catch((err) => {
-            app.log.warn(
-              { err, installationId: orphan.installationId, hubOrganizationId: resolvedOrganizationId, userId },
-              "orphan install reclaim failed — operator can retry via POST /claim (UI tracked in #318)",
-            );
-          });
-        }
-      } else if (orphans.length > 1) {
-        app.log.info(
-          { count: orphans.length, accountGithubId: Number(profile.githubId), userId },
-          "multiple unbound installs match this account — skipping auto-claim; operator must POST /claim to pick (UI #318)",
-        );
-      }
-    } catch (err) {
-      // The reclaim sweep is best-effort; a failure here must never block
-      // sign-in.
-      app.log.warn({ err, userId }, "orphan install reclaim sweep failed");
-    }
-  }
+  // NOTE: the previous sign-in-time orphan-install auto-reclaim sweep (which
+  // matched unbound rows by the user's GitHub *account* id and auto-bound the
+  // single match) is removed. Binding is now webhook-driven, and recovery of
+  // an unbound install goes through the explicit `POST /claim`, which matches
+  // on the trusted `installer_github_id` (the webhook `sender`) rather than
+  // mere account membership.
 
   if (!resolved) {
     if (browserFacing) return redirectCallbackError(reply, "membership-unresolved");

@@ -218,8 +218,9 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
   // The SPA fetches this (with its bearer token), gets `{ installUrl }`
   // back plus a `Set-Cookie`, then does `window.location = installUrl`.
   // GitHub shows the install dialog, the user picks repos, GitHub
-  // redirects to `/auth/github/callback?code=…&state=…&installation_id=…`,
-  // and the callback verifies the state cookie + binds the install.
+  // redirects to `/auth/github/callback?code=…&state=…&installation_id=…`.
+  // The callback verifies the state cookie and records a per-install pending
+  // bind; the trusted `installation.created` webhook performs the actual bind.
   app.get<{ Params: { orgId: string }; Querystring: { next?: string } }>("/install-url", async (request, reply) => {
     // Admin-gated: the resolved scope is the org the install binds to.
     const scope = await requireOrgAdmin(request, app.db);
@@ -234,10 +235,10 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: "GitHub App install URL is unavailable — FIRST_TREE_GITHUB_APP_SLUG is not configured." });
     }
 
-    // `targetOrganizationId` rides inside the signed state so the OAuth
-    // callback binds the install to *this* org rather than the caller's
-    // primary org (codex P1-3) — an admin in org B installing the App must
-    // end up bound to org B. `kickoffUserId` rides alongside it so the
+    // `targetOrganizationId` rides inside the signed state so the resulting
+    // installation binds to *this* org rather than the caller's primary org
+    // (codex P1-3) — an admin in org B installing the App must end up bound to
+    // org B. `kickoffUserId` rides alongside it so the
     // callback can rest the bind on THIS admin's (re-checked) authority
     // even when the browser's github.com session resolves to a different
     // GitHub identity — the github.com session and the First Tree session
@@ -259,36 +260,34 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
         secure: process.env.NODE_ENV === "production",
       }),
     );
+
+    // No DB write here: `installation_id` doesn't exist until the user
+    // completes the install. The signed state carries `targetOrganizationId`
+    // + `kickoffUserId` to the callback, which records the per-install pending
+    // bind (keyed by the concrete `installation_id`) that the trusted
+    // `installation.created` webhook then completes.
     return { installUrl: buildAppInstallUrl({ appSlug: appCfg.slug, state: token }) };
   });
 
   // ── Manual install claim ────────────────────────────────────────────
   //
-  // Recovery hatch for an installation row that ended up unbound — the
-  // OAuth callback's auto-reclaim sweep handles the single-orphan case at
-  // sign-in, but bails when there are several (or when the install is on
-  // an org account, where "the user is an org admin" isn't a strong enough
-  // basis to auto-claim).
+  // Recovery hatch for an installation row that ended up unbound (e.g. the
+  // `installation.created` webhook arrived without a matching pending bind, or
+  // the kickoff callback never completed). Normal binding is webhook-driven;
+  // this is the manual fallback.
   //
   // ⚠ This endpoint is **API-only** — there is no Settings UI that calls
-  // it yet. The orphan-list endpoint and the `Claim install` button per
-  // orphan are tracked in #318. Until #318 ships, multi-orphan recovery
-  // requires the operator to POST to this endpoint directly.
+  // it yet. The orphan-list endpoint and a per-install `Claim install` button
+  // are tracked in #318; until then, recovery requires POSTing here directly.
   //
-  // Authorization mirrors the OAuth callback's `installation_id` check:
-  // being an admin of the target First Tree org isn't sufficient — installation
-  // IDs aren't secrets, so we also confirm the caller can actually
-  // **administer** the install on GitHub. Per-install rules:
-  //   - User-type: caller's GitHub ID must equal the install account's
-  //     GitHub ID (only the account owner counts).
-  //   - Org-type: `GET /user/memberships/orgs/{login}` must return
-  //     `state=active, role=admin`. Plain org membership is NOT enough —
-  //     that's what made the legacy `/user/installations` primitive
-  //     forgeable (it surfaced any install the user had read access to).
-  //
-  // Account metadata comes from the existing DB row (UPSERTed by the
-  // webhook or the OAuth callback). 404 here means there's nothing to
-  // claim at all; the bind step never runs.
+  // Authorization: First Tree org-admin is not sufficient. Because `/claim` is
+  // a *delayed* recovery path, it keeps a LIVE current-GitHub-admin check
+  // (`verifyUserCanAdministerInstallation`) — the historical
+  // `installer_github_id` recorded at install time can be stale by claim time
+  // (the installer may have since lost GitHub admin/membership while the App
+  // installation lingers unbound). Fail-closed: User-type → caller's GitHub id
+  // must equal the install account's; Org-type → `/user/memberships/orgs`
+  // must return role=admin. 404 here means there's nothing to claim.
   app.post<{ Params: { orgId: string }; Body: unknown }>("/claim", async (request) => {
     const scope = await requireOrgAdmin(request, app.db);
     const { installationId } = githubAppInstallationClaimBodySchema.parse(request.body);
@@ -303,10 +302,9 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       throw new ForbiddenError("No GitHub access token on file — sign in with GitHub again before claiming an install");
     }
 
-    // Same row `getStoredGithubAccessToken` just verified — pull the
-    // caller's numeric GitHub ID off `auth_identities.identifier`
-    // (written by the OAuth callback as `String(profile.githubId)`) so
-    // the User-type comparison has something to match against.
+    // Caller's numeric GitHub id off `auth_identities.identifier` (written by
+    // the OAuth callback as `String(profile.githubId)`) for the User-type
+    // owner comparison.
     const [identity] = await app.db
       .select({ identifier: authIdentities.identifier })
       .from(authIdentities)
@@ -314,6 +312,16 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       .limit(1);
     const userGithubId = Number(identity?.identifier);
 
+    // LIVE current-GitHub-admin check (fail-closed). `/claim` is the *delayed*
+    // recovery path: unlike the normal webhook bind (which fires when the
+    // installer is provably the current admin), an orphaned install may be
+    // claimed long after install time, when the recorded `installer_github_id`
+    // is stale. So this endpoint verifies CURRENT authority — User-type:
+    // caller's GitHub id equals the install account's; Org-type:
+    // `GET /user/memberships/orgs/{login}` returns role=admin, state=active
+    // (plain membership is not enough). This is why the probe +
+    // `Members:read` remain here (and for the Context-Tree repo provisioner)
+    // until the server-side build is retired.
     let canAdminister: boolean;
     try {
       canAdminister = await verifyUserCanAdministerInstallation(githubToken, userGithubId, {
@@ -326,13 +334,11 @@ export async function orgGithubAppRoutes(app: FastifyInstance): Promise<void> {
       if (status === 401) {
         throw new ForbiddenError("Your GitHub session has expired — sign in with GitHub again, then retry the claim");
       }
-      // Upstream hiccup — surface as 403 so the caller retries rather
-      // than treating a transient GitHub outage as a hard failure.
       app.log.warn({ err, installationId, userId: scope.userId }, "claim: admin proof check failed");
       throw new ForbiddenError("Couldn't verify GitHub access for this installation — try again in a moment");
     }
     if (!canAdminister) {
-      throw new ForbiddenError("You don't administer this installation on GitHub");
+      throw new ForbiddenError("You don't currently administer this installation on GitHub");
     }
 
     // bindInstallationToOrg throws NotFoundError (no such install row) →
