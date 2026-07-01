@@ -310,7 +310,8 @@ fi
 NEW_LINK="$PREFIX/.current.$$"
 rm -f "$NEW_LINK"
 ln -s "$FINAL_VERSION_DIR" "$NEW_LINK"
-mv -f "$NEW_LINK" "$CURRENT_LINK"
+rm -f "$CURRENT_LINK"
+mv "$NEW_LINK" "$CURRENT_LINK"
 
 write_shim "$BIN_DIR/$BIN_NAME" "$CURRENT_LINK"
 write_shim "$BIN_DIR/$ALIAS_NAME" "$CURRENT_LINK"

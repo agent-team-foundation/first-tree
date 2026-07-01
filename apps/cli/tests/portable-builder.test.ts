@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -44,28 +44,27 @@ describe("portable builder helpers", () => {
 });
 
 describe("portable installer", () => {
-  async function makeFixture(): Promise<string> {
-    const root = tempDir("first-tree-install-test-");
+  async function writeFixtureVersion(root: string, version: string): Promise<void> {
     const channelDir = join(root, "prod");
-    const versionDir = join(channelDir, "1.2.3");
-    const payload = join(root, "payload");
+    const versionDir = join(channelDir, version);
+    const payload = join(root, `payload-${version}`);
     await mkdir(join(payload, "node", "bin"), { recursive: true });
     await mkdir(join(payload, "app", "cli"), { recursive: true });
     await mkdir(join(payload, "bin"), { recursive: true });
     await writeFile(
       join(payload, "node", "bin", "node"),
-      '#!/bin/sh\nif [ "$2" = "--version" ]; then echo 1.2.3; exit 0; fi\nif [ "$1" = "--version" ]; then echo 1.2.3; exit 0; fi\necho node-stub "$@"\n',
+      `#!/bin/sh\nif [ "$2" = "--version" ]; then echo ${version}; exit 0; fi\nif [ "$1" = "--version" ]; then echo ${version}; exit 0; fi\necho node-stub "$@"\n`,
       { mode: 0o755 },
     );
     await writeFile(join(payload, "app", "cli", "index.mjs"), "// fixture\n");
-    await writeFile(join(payload, "app", "package.json"), JSON.stringify({ name: "first-tree", version: "1.2.3" }));
-    await writeFile(join(payload, "VERSION"), "1.2.3\n");
+    await writeFile(join(payload, "app", "package.json"), JSON.stringify({ name: "first-tree", version }));
+    await writeFile(join(payload, "VERSION"), `${version}\n`);
     await writeFile(
       join(payload, "INSTALL.json"),
       JSON.stringify({
         schemaVersion: 1,
         channel: "prod",
-        version: "1.2.3",
+        version,
         gitSha: "abc123",
         nodeVersion: "v24.0.0",
         packageName: "first-tree",
@@ -88,14 +87,14 @@ describe("portable installer", () => {
       { mode: 0o755 },
     );
     await mkdir(versionDir, { recursive: true });
-    const tarball = join(versionDir, "first-tree-1.2.3-linux-x64.tar.gz");
+    const tarball = join(versionDir, `first-tree-${version}-linux-x64.tar.gz`);
     const tar = spawnSync("tar", ["-czf", tarball, "-C", payload, "."], { encoding: "utf8" });
     if (tar.status !== 0) throw new Error(tar.stderr);
     const sha = spawnSync("sha256sum", [tarball], { encoding: "utf8" }).stdout.split(/\s+/)[0];
     const latest = {
       schemaVersion: 1,
       channel: "prod",
-      version: "1.2.3",
+      version,
       gitSha: "abc123",
       nodeVersion: "v24.0.0",
       packageName: "first-tree",
@@ -106,7 +105,7 @@ describe("portable installer", () => {
       assets: [
         {
           platform: "linux-x64",
-          fileName: "first-tree-1.2.3-linux-x64.tar.gz",
+          fileName: `first-tree-${version}-linux-x64.tar.gz`,
           url: `file://${tarball}`,
           sha256: sha,
           size: Number.parseInt(spawnSync("wc", ["-c", tarball], { encoding: "utf8" }).stdout, 10),
@@ -115,6 +114,11 @@ describe("portable installer", () => {
     };
     writeFileSync(join(channelDir, "latest.json"), JSON.stringify(latest, null, 2));
     writeFileSync(join(versionDir, "manifest.json"), JSON.stringify({ ...latest, manifestUrl: undefined }, null, 2));
+  }
+
+  async function makeFixture(): Promise<string> {
+    const root = tempDir("first-tree-install-test-");
+    await writeFixtureVersion(root, "1.2.3");
     return root;
   }
 
@@ -143,6 +147,39 @@ describe("portable installer", () => {
     const shim = readFileSync(join(binDir, "first-tree"), "utf8");
     expect(shim).toContain("FIRST_TREE_INSTALL_MODE=portable");
     expect(shim).toContain("FIRST_TREE_PORTABLE_ROOT");
+  });
+
+  it("replaces the current symlink itself when upgrading with the shell installer", async () => {
+    if (process.platform !== "linux" || process.arch !== "x64") return;
+    const fixture = await makeFixture();
+    const home = tempDir("first-tree-home-");
+    const prefix = join(home, "prefix");
+    const binDir = join(home, "bin");
+    const installArgs = [
+      join(REPO_ROOT, "scripts", "portable", "install.sh"),
+      "--prefix",
+      prefix,
+      "--bin-dir",
+      binDir,
+      "--no-path-edit",
+    ];
+    const env = {
+      ...process.env,
+      HOME: home,
+      FIRST_TREE_PORTABLE_CHANNEL: "prod",
+      FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: `file://${fixture}`,
+    };
+
+    const firstInstall = spawnSync("sh", installArgs, { cwd: REPO_ROOT, env, encoding: "utf8" });
+    expect(firstInstall.status, firstInstall.stderr || firstInstall.stdout).toBe(0);
+    expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("1.2.3\n");
+
+    await writeFixtureVersion(fixture, "1.2.4");
+    const secondInstall = spawnSync("sh", installArgs, { cwd: REPO_ROOT, env, encoding: "utf8" });
+
+    expect(secondInstall.status, secondInstall.stderr || secondInstall.stdout).toBe(0);
+    expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("1.2.4\n");
+    expect(readdirSync(join(prefix, "versions", "1.2.3")).filter((entry) => entry.startsWith(".current."))).toEqual([]);
   });
 
   it("leaves the previous current symlink intact on checksum failure", async () => {
