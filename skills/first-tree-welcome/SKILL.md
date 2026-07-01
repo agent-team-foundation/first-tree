@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.1.0
+version: 1.0.5
 description: Use only when a First Tree onboarding start-chat message explicitly names first-tree-welcome, or for a First Tree onboarding welcome / intro / value-first first-work chat. It reads the user's code, shows concrete value, then offers a first-task menu that can include building the team's Context Tree, and fans selected work out into parallel chats. Do not use for an existing tree setup chat you were placed in, ordinary chats, PR reviews, tree writes, or maintenance.
 ---
 
