@@ -553,9 +553,11 @@ node), self-verifies before pushing, pushes, and — unless `--no-bind` — bind
 org's `context_tree` setting and surfaces guidance for adding the repo to the
 team's GitHub App installation. It does not seed `.github/workflows/validate-tree.yml`
 by default (that needs the interactive `workflow` gh scope); pass `--with-workflow`
-to include it. Key options: `--owner`, `--name`, `--title`, `--public`, `--dir`,
-`--with-workflow`, `--no-bind`, `--org`. Run `first-tree tree init --help` for the
-full list.
+to include it. In the bound path the repo is created under the team's GitHub App
+installation account (so the installation can cover it), and `tree init` refuses
+to replace an existing team binding unless `--rebind` is passed. Key options:
+`--owner`, `--name`, `--title`, `--public`, `--dir`, `--with-workflow`, `--no-bind`,
+`--rebind`, `--org`. Run `first-tree tree init --help` for the full list.
 
 Run `first-tree tree verify --help` for options.
 
