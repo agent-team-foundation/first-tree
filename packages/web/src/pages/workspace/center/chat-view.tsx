@@ -1297,6 +1297,9 @@ function EntityLink({ metadata }: { metadata: Record<string, unknown> | undefine
   );
 }
 
+/** How long the group-mention hint row stays error-toned after a blocked send. */
+const MENTION_NUDGE_MS = 2200;
+
 export function ChatView({
   agentId,
   chatId,
@@ -1379,6 +1382,13 @@ export function ChatView({
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Transient emphasis for the persistent group-mention hint row (A1): a blocked
+  // Enter-press flips this true so the always-shown "mention a member" row turns
+  // an error tone for a beat, acknowledging the send attempt without printing a
+  // second, duplicate line below the composer. Cleared by the timer, the next
+  // keystroke, or the gate lifting (see effects near `sendBlockedByMentionGate`).
+  const [mentionGateNudged, setMentionGateNudged] = useState(false);
+  const mentionGateNudgeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Answering a blocking ask is owned by the AskTakeover overlay, which composes
   // its own text + @mentions + image attachments. `askBusy` disables the card
   // while its resolving reply is in flight (kept true through success so the
@@ -1392,6 +1402,20 @@ export function ChatView({
     // user adds or removes an image — they're already fixing it.
     onChange: () => setUploadError(null),
   });
+  // Emphasise the persistent mention-hint row on a blocked send attempt, then
+  // relax it after a beat. Re-arming clears any pending timer so rapid Enter
+  // presses keep the row lit rather than flickering.
+  const nudgeMentionGate = useCallback(() => {
+    setMentionGateNudged(true);
+    if (mentionGateNudgeTimer.current) clearTimeout(mentionGateNudgeTimer.current);
+    mentionGateNudgeTimer.current = setTimeout(() => setMentionGateNudged(false), MENTION_NUDGE_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (mentionGateNudgeTimer.current) clearTimeout(mentionGateNudgeTimer.current);
+    },
+    [],
+  );
   // Right-rail visibility. The rail holds participants + GitHub bindings; the
   // running summary now lives in the pinned ChatSummary above the stream, not
   // here. Default: the user's stored preference if they have ever toggled the
@@ -1884,15 +1908,13 @@ export function ChatView({
     // this is the Enter-key / programmatic backstop. Applies to image-only
     // sends too: the server's mention check runs per message regardless of
     // format, so an un-addressed image would 400 just like un-addressed text.
-    // Surface a hint when the user has only attached images so the
-    // silent-return doesn't look like a stuck send. A live dock lifts the
-    // gate — `routedMentions` below defaults the recipient to the asker.
+    // The persistent hint row (A1, rendered inside the composer when
+    // `sendBlockedByMentionGate`) already states the rule for both text and
+    // image sends; `nudgeMentionGate` emphasises that same row for a beat so a
+    // blocked Enter isn't a silent no-op — no separate line is printed. A live
+    // dock lifts the gate — `routedMentions` below defaults to the asker.
     if (sendBlockedByMentionGate) {
-      if (images.length > 0) {
-        // English matches the other uploadError strings in this file
-        // (Failed to send image / Failed to add participants / Image too large).
-        setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
-      }
+      nudgeMentionGate();
       return;
     }
 
@@ -3136,6 +3158,13 @@ export function ChatView({
   // typed @mention is required while a question blocks me.
   const sendBlockedByMentionGate = requiresMention && draftMentions.length === 0 && !askOverlayActive;
 
+  // Once the gate lifts (a member gets @mentioned, or a dock/overlay takes over)
+  // the hint row unmounts — drop any lingering emphasis so it never flashes back
+  // on the next block.
+  useEffect(() => {
+    if (!sendBlockedByMentionGate) setMentionGateNudged(false);
+  }, [sendBlockedByMentionGate]);
+
   // Unified send-disabled gate for the composer. While the AskTakeover overlay
   // is active it covers the composer (answering is owned there), so the composer
   // only ever sends ordinary messages: need text or an image, and (group chats)
@@ -3769,6 +3798,28 @@ export function ChatView({
                         addImages(Array.from(e.dataTransfer.files));
                       }}
                     >
+                      {/* Persistent mention-required hint (A1): a group send has no
+                          no-recipient path, so while the gate blocks (group chat,
+                          no @mention yet) this row states the rule inside the card —
+                          above the textarea, sharing the composer's frame so it never
+                          collides with the agent status bar above. It collapses the
+                          moment a member is @mentioned. A blocked send attempt
+                          (`nudgeMentionGate`) tints it an error tone for a beat. */}
+                      {sendBlockedByMentionGate && (
+                        <div
+                          className="flex items-center"
+                          style={{
+                            gap: "var(--sp-1_5)",
+                            padding: "var(--sp-1_75) var(--sp-3)",
+                            borderBottom: "var(--hairline) solid var(--border-faint)",
+                            color: mentionGateNudged ? "var(--fg-error-strong)" : "var(--fg-3)",
+                            transition: "color 120ms ease",
+                          }}
+                        >
+                          <AtSign className="h-3 w-3 shrink-0" aria-hidden="true" />
+                          <span className="text-label">@mention someone to send in this group</span>
+                        </div>
+                      )}
                       {/* Image preview area — above textarea */}
                       {pendingImages.length > 0 && (
                         <div
@@ -3873,6 +3924,9 @@ export function ChatView({
                             // — React bails on identical setState so the null→null
                             // case is free.
                             setUploadError(null);
+                            // Same rationale for the mention-hint emphasis: the
+                            // user is actively editing, so relax the row.
+                            setMentionGateNudged(false);
                           }}
                           onSelect={(e) => {
                             setCursor(e.currentTarget.selectionStart ?? draft.length);
@@ -3920,7 +3974,10 @@ export function ChatView({
                           }}
                           placeholder={
                             requiresMention
-                              ? "Type @ to pick a recipient, then your message"
+                              ? // The mention-hint row (A1) above already tells the
+                                // user to @mention, so the placeholder stays neutral
+                                // rather than repeating it.
+                                "Write a message…  ·  / for commands"
                               : `Message @${displayName}  ·  / for commands  ·  @ to mention`
                           }
                           rows={2}
