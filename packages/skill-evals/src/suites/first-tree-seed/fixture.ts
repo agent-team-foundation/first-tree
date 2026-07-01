@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { assertCommandOk, runCommand, writeText } from "../../core/commands.js";
@@ -26,9 +26,15 @@ function workspaceAgentsMarkdown(
         ? `The manifest source \`source-repo\` exists as a bare clone of the current first-tree repo at \`${sourceRepoPath}\`.`
         : `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`.`;
   const treeLine =
-    evalCase.fixture.treeState === "empty"
-      ? "The Context Tree at `./context-tree` is newly provisioned and empty."
-      : "The Context Tree at `./context-tree` is already populated with durable domains.";
+    evalCase.fixture.treeState === "unbound"
+      ? 'The workspace is NOT bound to a Context Tree yet: `./.first-tree/workspace.json` has no `tree` field and no `./context-tree` exists. Per Step 0 state A, the tree must be created and bound with `first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/context-tree"` (the `--dir` pin is load-bearing so the created clone lands where the workspace expects it).'
+      : evalCase.fixture.treeState === "empty"
+        ? "The Context Tree at `./context-tree` is newly provisioned and empty."
+        : "The Context Tree at `./context-tree` is already populated with durable domains.";
+  const contextTreeStateLine =
+    evalCase.fixture.treeState === "unbound"
+      ? "- Context Tree: unbound (no `tree` field in the manifest; conventional path would be `./context-tree`)"
+      : "- Context Tree: `./context-tree`";
 
   return `# First Tree Seed Eval Workspace
 
@@ -50,7 +56,7 @@ installed in this workspace.
 ## Eval Workspace State
 
 - Workspace manifest: \`./.first-tree/workspace.json\`
-- Context Tree: \`./context-tree\`
+${contextTreeStateLine}
 - Sources root: \`./source-repos\`
 - Declared source: \`source-repo\`
 - Tree state: ${evalCase.fixture.treeState}
@@ -92,11 +98,12 @@ function installSeedSkills(repoRoot: string, workspacePath: string, evalCase: Fi
   );
 }
 
-function writeWorkspaceManifest(paths: RunPaths): void {
-  writeText(
-    join(paths.workspacePath, ".first-tree", "workspace.json"),
-    `${JSON.stringify({ sources: ["source-repo"], sourcesRoot: "source-repos", tree: "context-tree" }, null, 2)}\n`,
-  );
+function writeWorkspaceManifest(paths: RunPaths, evalCase: FirstTreeSeedEvalCase): void {
+  const manifest =
+    evalCase.fixture.treeState === "unbound"
+      ? { sources: ["source-repo"], sourcesRoot: "source-repos" }
+      : { sources: ["source-repo"], sourcesRoot: "source-repos", tree: "context-tree" };
+  writeText(join(paths.workspacePath, ".first-tree", "workspace.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 function rootNodeMarkdown(): string {
@@ -183,6 +190,11 @@ function initGitRepo(repoPath: string, message: string): void {
 
 function writeContextTreeFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCase): string {
   const contextTreePath = join(paths.workspacePath, "context-tree");
+  if (evalCase.fixture.treeState === "unbound") {
+    // State A: the workspace is genuinely unbound. Do NOT provision a
+    // context-tree; Step 0 must create + bind it with `tree init --dir`.
+    return contextTreePath;
+  }
   mkdirSync(contextTreePath, { recursive: true });
   writeText(join(contextTreePath, ".first-tree", "VERSION"), "0.7.0\n");
   writeText(join(contextTreePath, ".first-tree", "tree.json"), contextTreeMetadata());
@@ -343,7 +355,7 @@ export function setupFixture(evalCase: FirstTreeSeedEvalCase, paths: RunPaths, r
   reporter.fixtureSetupStarted("seed-bootstrap");
 
   installSeedSkills(paths.repoRoot, paths.workspacePath, evalCase);
-  writeWorkspaceManifest(paths);
+  writeWorkspaceManifest(paths, evalCase);
   const contextTreePath = writeContextTreeFixture(paths, evalCase);
   const sourceRepoPath = writeBareSourceFixture(paths, evalCase);
   mkdirSync(join(paths.workspacePath, "worktrees"), { recursive: true });
@@ -390,8 +402,41 @@ function validateSourceRepo(paths: RunPaths, evalCase: FirstTreeSeedEvalCase, er
   return true;
 }
 
-function validateTreeEmpty(contextTreePath: string, evalCase: FirstTreeSeedEvalCase, errors: string[]): boolean {
+function validateTreeUnbound(paths: RunPaths, contextTreePath: string, errors: string[]): boolean {
+  let ok = true;
+  if (existsSync(contextTreePath)) {
+    errors.push(`unbound tree fixture must not pre-create a context tree: ${contextTreePath}`);
+    ok = false;
+  }
+  const manifestPath = join(paths.workspacePath, ".first-tree", "workspace.json");
+  let manifest: unknown = null;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch (error: unknown) {
+    errors.push(
+      `unbound tree fixture manifest is unreadable: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
+  const tree =
+    typeof manifest === "object" && manifest !== null && !Array.isArray(manifest)
+      ? (manifest as Record<string, unknown>).tree
+      : undefined;
+  if (typeof tree === "string" && tree.trim() !== "") {
+    errors.push(`unbound tree fixture manifest must not bind a tree, found tree=${tree}`);
+    ok = false;
+  }
+  return ok;
+}
+
+function validateTreeEmpty(
+  paths: RunPaths,
+  contextTreePath: string,
+  evalCase: FirstTreeSeedEvalCase,
+  errors: string[],
+): boolean {
   if (evalCase.fixture.treeState === "nonempty") return true;
+  if (evalCase.fixture.treeState === "unbound") return validateTreeUnbound(paths, contextTreePath, errors);
   const forbiddenEntries = readdirSync(contextTreePath).filter((entry) => {
     if (entry === ".git" || entry === ".first-tree" || entry === ".github") return false;
     return !entry.startsWith(".");
@@ -412,17 +457,22 @@ export function validateFixture(
 ): FixtureValidation {
   const errors: string[] = [];
   const manifestPath = join(paths.workspacePath, ".first-tree", "workspace.json");
-  const requiredFiles = [
-    manifestPath,
-    join(contextTreePath, ".first-tree", "VERSION"),
-    join(contextTreePath, ".first-tree", "tree.json"),
-  ];
+  // An unbound workspace (Step 0 state A) has no provisioned context tree, so
+  // the tree's `.first-tree` metadata files do not exist yet by design.
+  const requiredFiles =
+    evalCase.fixture.treeState === "unbound"
+      ? [manifestPath]
+      : [
+          manifestPath,
+          join(contextTreePath, ".first-tree", "VERSION"),
+          join(contextTreePath, ".first-tree", "tree.json"),
+        ];
   const missingFiles = requiredFiles.filter((file) => !existsSync(file));
   for (const missing of missingFiles) {
     errors.push(`missing required file: ${missing}`);
   }
 
-  const treeEmptyOk = validateTreeEmpty(contextTreePath, evalCase, errors);
+  const treeEmptyOk = validateTreeEmpty(paths, contextTreePath, evalCase, errors);
   const sourceRepoOk = validateSourceRepo(paths, evalCase, errors);
   void verbose;
   reporter.fixtureValidationSkipped();

@@ -40,6 +40,9 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
   if (evalCase.expected.action === "report_missing_source") {
     return !metrics.skeletonObserved;
   }
+  if (evalCase.expected.action === "create_tree_via_init") {
+    return metrics.treeInitWithContextTreeDirObserved;
+  }
   return false;
 }
 
@@ -82,7 +85,7 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
       ),
       evidence(
         "outcome_pass",
-        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}`,
+        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}`,
       ),
       evidence(
         "risk_pass",
@@ -136,6 +139,8 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - directBareSourceContentReadObserved: ${markdownBool(summary.metrics.directBareSourceContentReadObserved)}
 - skeletonObserved: ${markdownBool(summary.metrics.skeletonObserved)}
 - approvalRequestObserved: ${markdownBool(summary.metrics.approvalRequestObserved)}
+- treeInitObserved: ${markdownBool(summary.metrics.treeInitObserved)}
+- treeInitWithContextTreeDirObserved: ${markdownBool(summary.metrics.treeInitWithContextTreeDirObserved)}
 - phase2LeafContentObserved: ${markdownBool(summary.metrics.phase2LeafContentObserved)}
 - sourceRepoChanged: ${markdownBool(summary.metrics.sourceRepoChanged)}
 - contextTreeChanged: ${markdownBool(summary.metrics.contextTreeChanged)}
