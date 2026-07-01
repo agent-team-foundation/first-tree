@@ -39,7 +39,7 @@
   },
   "scripts": {
     "dev": "tsx src/cli/index.ts",
-    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @openai/codex-sdk && node ../../scripts/copy-client-runtime-templates.mjs apps/cli",
+    "build": "tsdown src/cli/index.ts src/index.ts --format esm --no-dts --external @anthropic-ai/claude-agent-sdk --external @openai/codex-sdk && node ../../scripts/copy-client-runtime-templates.mjs apps/cli && node ../../scripts/copy-cli-tree-templates.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "coverage": "pnpm run build && vitest run --coverage --passWithNoTests",
@@ -74,6 +74,7 @@
     "@first-tree/server": "workspace:*",
     "@first-tree/shared": "workspace:*",
     "@first-tree/web": "workspace:*",
+    "@types/ejs": "^3.1.5",
     "@types/node": "^22.16.0",
     "@types/semver": "^7.5.8",
     "@vitest/coverage-v8": "3.2.4",
