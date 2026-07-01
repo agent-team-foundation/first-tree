@@ -49,17 +49,22 @@ describe("campaign scan skills", () => {
       expect(body).toContain("Generated with First Tree — https://first-tree.ai");
       expect(body).not.toContain("<the First Tree URL>");
       expect(body).toContain("never inside the committed file");
-      // Step 6 continues the funnel one thing at a time: next fix + one conversion next-step.
+      // Step 6 turns the win into First Tree adoption — a First Tree team + context tree is the
+      // PRIMARY ask (not a soft footnote), gated on the apply offer being resolved.
       expect(body).toContain("Step 6");
       expect(body).toContain("after the apply offer is resolved");
-      expect(body).toContain("After the user answers the apply offer");
-      expect(body).toContain("next single one");
-      expect(body).toContain("standing member of their team");
-      // ...but never a menu / choice overload.
+      expect(body).toContain("convert to a First Tree team");
+      expect(body).toContain("build the context tree for this repo");
+      // The tree is explained vs the static file just delivered (so the ask isn't hand-wavy).
+      expect(body).toContain("living context tree");
+      // The primary→secondary demotion cannot read as a second ask (no re-pitch loophole).
+      expect(body).toContain("single ask, not a second one after a no");
+      // ...still one ask, never a menu / choice overload.
       expect(body).toContain("never a menu");
-      // And an explicit stop condition so a declined/quiet user is not re-pitched.
-      expect(body).toContain("Know when to stop");
-      expect(body).toContain("If the apply offer is unanswered");
+      // And the not-naggy guardrails stay: gated stop condition, convert by usefulness not nagging.
+      expect(body).toContain("know when to stop");
+      expect(body).toContain("apply offer is unanswered");
+      expect(body).toContain("never by nagging");
     }
   });
 });
