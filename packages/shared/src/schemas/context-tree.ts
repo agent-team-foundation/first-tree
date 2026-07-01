@@ -346,3 +346,18 @@ export const initializeContextTreeResponseSchema = z.object({
   nodePath: z.literal("NODE.md"),
 });
 export type InitializeContextTreeResponse = z.infer<typeof initializeContextTreeResponseSchema>;
+
+// Read-only view of the team's bound GitHub App installation, exposed so a
+// user's local `gh` can add an agent-created tree repo to a
+// selected-repositories installation (`PUT /user/installations/{id}/repositories/{repoId}`).
+// The server/App cannot add a repo to its own installation, but the user who
+// administers the installation can — this is the agent-driven counterpart to the
+// old server-side write-permission bootstrap. Returns only non-secret routing
+// facts; no token is minted or returned here.
+export const contextTreeInstallationInfoResponseSchema = z.object({
+  installationId: z.number().int().positive(),
+  accountLogin: z.string(),
+  accountType: z.enum(["User", "Organization"]),
+  suspended: z.boolean(),
+});
+export type ContextTreeInstallationInfoResponse = z.infer<typeof contextTreeInstallationInfoResponseSchema>;
