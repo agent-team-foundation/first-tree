@@ -1054,14 +1054,17 @@ together and cross-link them in the PR descriptions**, so a reviewer on
 the code PR can reach the decision and its rationale from the linked
 tree PR; when review reshapes the design, update both PRs together so
 they never describe different things. **Merge the code PR first, then
-the tree PR** — the code PR is the source of truth for what was decided,
-so let it settle before the tree records it; do not merge the tree PR
-concurrently with, or ahead of, the code PR. Before merging the tree
-PR, reconcile it against the **final merged** code PR: fold in any
-last-round review changes so the tree PR reflects the code's final
-conclusion, not an earlier draft. Then merge the tree PR promptly — a
-tree that trails the merged code for long is one other agents read
-while stale.
+the tree PR.** To hold that order, **open the tree PR as a draft**: a
+draft stays cross-linked and fully readable — a code reviewer still
+reaches the decision and rationale from it — but cannot merge, so it
+can't land ahead of the code PR or auto-merge on green. The code PR is
+the source of truth for what was decided, so let it settle first. Once
+the code PR merges, reconcile the tree PR against the **final merged**
+code PR — fold in any last-round review changes so it reflects the
+code's final conclusion, not an earlier draft — then mark the tree PR
+**ready**. Its own review and merge happen at that point, against the
+final code; keep it prompt so the tree does not trail the merged code
+for long.
 Implementation-only changes skip the tree write — not the read.
 
 Before writing, you MUST load the relevant skill first and follow its

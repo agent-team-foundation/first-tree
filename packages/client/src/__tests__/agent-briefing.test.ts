@@ -930,16 +930,17 @@ describe("buildAgentBriefing — # Context Tree", () => {
 
     // Writing discipline anchors — fresh vs persistent context framing, the
     // co-open + cross-link PR coordination rule, and the tightened merge
-    // order: the code PR merges first, then the tree PR is reconciled against
-    // the final merged code before it lands (never concurrent or ahead). The
-    // prose wraps the emphasised phrases across lines, so allow either
-    // single-line or wrapped forms.
+    // order: the tree PR opens as a draft so it can't land ahead, the code PR
+    // merges first, then the tree PR is reconciled against the final merged
+    // code and marked ready. The prose wraps the emphasised phrases across
+    // lines, so allow either single-line or wrapped forms.
     expect(briefing).toContain("fresh context");
     expect(briefing).toMatch(/\*\*persistent[\s\n]+context\*\*/);
     expect(briefing).toMatch(
       /open the tree PR and the code[\s\n]+PR[\s\n]+together and cross-link them in the PR descriptions/,
     );
     expect(briefing).toMatch(/Merge the code PR first, then[\s\n]+the tree PR/);
+    expect(briefing).toMatch(/open the tree PR as a draft/);
     expect(briefing).toContain("final merged");
     expect(briefing).not.toContain("need not merge first");
     expect(briefing).toContain("Implementation-only changes skip the tree");
