@@ -1052,10 +1052,16 @@ open the code PR. If the task touched decisions, constraints, ownership,
 or cross-domain relationships, **open the tree PR and the code PR
 together and cross-link them in the PR descriptions**, so a reviewer on
 the code PR can reach the decision and its rationale from the linked
-tree PR; when review
-reshapes the design, update both PRs together. The tree PR lands **with
-the code PR or shortly after** — it need not merge first, but keep it
-close so the tree never trails the merged code for long.
+tree PR; when review reshapes the design, update both PRs together so
+they never describe different things. **Merge the code PR first, then
+the tree PR** — the code PR is the source of truth for what was decided,
+so let it settle before the tree records it; do not merge the tree PR
+concurrently with, or ahead of, the code PR. Before merging the tree
+PR, reconcile it against the **final merged** code PR: fold in any
+last-round review changes so the tree PR reflects the code's final
+conclusion, not an earlier draft. Then merge the tree PR promptly — a
+tree that trails the merged code for long is one other agents read
+while stale.
 Implementation-only changes skip the tree write — not the read.
 
 Before writing, you MUST load the relevant skill first and follow its
