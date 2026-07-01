@@ -1824,6 +1824,17 @@ body:has(#onboarding-preview-root) hearback-widget {
   color: transparent;
 }
 
+/* The textarea paints its own glyphs transparent (the mirror overlay draws
+   them); without an explicit placeholder color the placeholder would inherit
+   that transparent color and render invisible. The `placeholder:text-muted-
+   foreground` utility on the textarea sets the color (matching every other
+   composer/input placeholder in the app); this rule only forces `opacity: 1`
+   so browsers that dim `::placeholder` by default don't fade it further. Font
+   size is inherited from the textarea (`--composer-font-size`). */
+.mention-composer-textarea::placeholder {
+  opacity: 1;
+}
+
 /* ============================================================================
    Agent profile · Usage tab — Activity calendar + Recent turns
    ============================================================================
