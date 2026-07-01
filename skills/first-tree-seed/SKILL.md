@@ -63,7 +63,7 @@ field, or the team has no `context_tree` binding. This is the
 agent-driven creation path — create the tree with the user's local `gh`:
 
 ```bash
-first-tree tree init --title "<team display name>"
+first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/<manifest.tree>"
 ```
 
 `tree init` creates the repo under the team's GitHub App installation
@@ -74,9 +74,17 @@ and the creator's member node), pushes, and binds the org's
 surface that exact gap and stop (binding a team tree is an admin action).
 Take the team display name from the chat context / `first-tree agent
 status`. After it succeeds the tree is bound and in state **B** — proceed.
-(Make sure the local tree clone is at `<workspaceRoot>/<manifest.tree>` so
-Phase 1 can read and write it; follow the Tree Location protocol in your
-`AGENTS.md` / `CLAUDE.md` briefing if it is not already there.)
+
+**Pin the local checkout with `--dir` — this is load-bearing.** `tree
+init` defaults its local clone to `<cwd>/<repo-name>`, but a managed
+workspace reads and writes the tree at `<workspaceRoot>/<manifest.tree>`
+(usually `context-tree`), and seed does **not** rewrite `workspace.json`.
+Without `--dir`, Step 0 would create + bind `<workspaceRoot>/<team>-context-tree`
+while Phase 1 then operates on a missing/stale `<workspaceRoot>/<manifest.tree>`.
+Passing `--dir "<workspaceRoot>/<manifest.tree>"` puts the freshly created
+clone exactly where Phase 1 (and the runtime) expect it. If the manifest
+carries no tree name yet (a fully unbound workspace), use the conventional
+`<workspaceRoot>/context-tree`.
 
 **B — Bound but unseeded.** The tree is bound and holds at most the
 bootstrap set — a root `NODE.md`, a `members/` index, and creator member
