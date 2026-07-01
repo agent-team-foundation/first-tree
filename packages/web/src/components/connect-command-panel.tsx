@@ -127,12 +127,45 @@ export function ConnectCommandPanel({
         </>
       )}
 
-      {caption && (
+      {/* Gate the caption on a present command so the "Single-use · regenerates"
+          line never renders over the "Generating token…" placeholder. */}
+      {caption && command && (
         <p className="text-label" style={{ color: "var(--fg-4)", margin: 0 }}>
           {caption}
         </p>
       )}
 
+      <ConnectStatusRow
+        phase={phase}
+        waitingText={waitingText}
+        successContent={successContent}
+        errorContent={errorContent}
+      />
+    </div>
+  );
+}
+
+/**
+ * The yellow→green→red status row rendered beneath a connect command.
+ * Extracted from `ConnectCommandPanel` so a host with MORE than one command
+ * block (e.g. `ReconnectDialog`: a `daemon start` primary + a reinstall
+ * fallback) can render ONE machine-arrival status row at dialog level that
+ * plainly covers "whichever command you ran", instead of pinning the spinner
+ * to a single command block.
+ */
+export function ConnectStatusRow({
+  phase,
+  waitingText = "Waiting for your computer to connect…",
+  successContent,
+  errorContent,
+}: {
+  phase: ConnectPhase;
+  waitingText?: ReactNode;
+  successContent?: ReactNode;
+  errorContent?: ReactNode;
+}) {
+  return (
+    <>
       {phase === "waiting" && (
         <div
           className="flex items-center text-body"
@@ -181,7 +214,7 @@ export function ConnectCommandPanel({
           {errorContent}
         </div>
       )}
-    </div>
+    </>
   );
 }
 
