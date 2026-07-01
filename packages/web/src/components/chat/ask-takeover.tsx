@@ -300,6 +300,11 @@ export function AskTakeover({
       />
       <textarea
         ref={taRef}
+        // Shares the composer's transparent-text overlay treatment: the class
+        // carries `::selection` + `::placeholder { opacity: 1 }`, and the
+        // utility colors the placeholder — without these the transparent text
+        // color cascades to the placeholder and it renders invisible.
+        className="mention-composer-textarea placeholder:text-muted-foreground"
         value={freeText}
         onChange={(e) => {
           setFreeText(e.target.value);

@@ -4053,7 +4053,7 @@ export function ChatView({
                             }
                           }}
                           disabled={sendMut.isPending || uploading}
-                          className="mention-composer-textarea w-full outline-none text-subtitle font-normal"
+                          className="mention-composer-textarea w-full outline-none text-subtitle font-normal placeholder:text-muted-foreground"
                           style={{
                             padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
                             background: "transparent",
