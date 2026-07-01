@@ -5,6 +5,7 @@ import {
   ClientUserMismatchError,
   captureClientException,
   configureClientLoggerForService,
+  createLogger,
   discoverClaudeCodeSkills,
   flushClientSentry,
   initClientSentry,
@@ -229,6 +230,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // exit-for-restart path scoped to that case.
         const noInteractive = options.interactive === false;
         const managed = isSupervisorChild;
+        const updateLogger = createLogger("update");
         // The `executeUpdate` closure needs access to the ClientRuntime's
         // connection to emit `resilience.update.failed`, but the runtime
         // doesn't exist yet at construction time. Use a deferred reference
@@ -238,6 +240,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         let runtimeRef: ClientRuntime | null = null;
         const executeUpdate = createExecuteUpdate({
           managed,
+          log: managed ? (level, msg) => updateLogger[level](msg) : undefined,
           onUpdateFailed: (payload) => {
             runtimeRef?.emitConnectionResilienceEvent("resilience.update.failed", payload);
           },

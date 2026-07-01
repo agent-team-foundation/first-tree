@@ -23,6 +23,8 @@ export type UpdateLogLevel = "debug" | "info" | "warn";
 
 export type UpdateLogger = (level: UpdateLogLevel, msg: string) => void;
 
+const QUIET_GATE_LOG_INTERVAL_MS = 60_000;
+
 /**
  * Command-layer TTY prompt. Returns `true` when the operator explicitly
  * consents to the update (pressing `y`); returns `false` on `N`, timeout, or
@@ -298,15 +300,19 @@ export class UpdateManager {
   private async waitForQuietGate(): Promise<void> {
     const quietMs = this.options.updateConfig.restart_quiet_seconds * 1000;
     const intervalMs = this.options.updateConfig.restart_check_interval_seconds * 1000;
+    let lastQuietGateLogAt = Number.NEGATIVE_INFINITY;
     while (!this.disposed) {
       const snapshot = this.options.getQuietGateSnapshot();
       const now = Date.now();
       const idleFor = snapshot.lastActivityMs === 0 ? Number.POSITIVE_INFINITY : now - snapshot.lastActivityMs;
       if (snapshot.activeCount === 0 && idleFor >= quietMs) return;
-      this.options.log(
-        "debug",
-        `Quiet gate: activeCount=${snapshot.activeCount}, idleFor=${Math.round(idleFor)}ms; re-checking in ${intervalMs}ms`,
-      );
+      if (now - lastQuietGateLogAt >= QUIET_GATE_LOG_INTERVAL_MS) {
+        lastQuietGateLogAt = now;
+        this.options.log(
+          "debug",
+          `Quiet gate: activeCount=${snapshot.activeCount}, idleFor=${Math.round(idleFor)}ms; re-checking in ${intervalMs}ms`,
+        );
+      }
       await new Promise<void>((resolve) => {
         this.quietGateTimer = setTimeout(() => {
           this.quietGateTimer = null;

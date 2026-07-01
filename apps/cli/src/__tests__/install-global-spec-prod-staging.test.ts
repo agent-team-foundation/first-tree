@@ -54,11 +54,13 @@ describe("§9 channel-mismatch guard — prod CLI", () => {
     vi.resetModules();
     vi.doMock("../core/channel.js", () => PROD_MOCK);
     const { installGlobalSpec } = await import("../core/update.js");
-    const result = await installGlobalSpec("0.5.2-staging.42.1");
+    const output = vi.fn();
+    const result = await installGlobalSpec("0.5.2-staging.42.1", { output });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toMatch(/target channel "staging" does not match my channel "prod"/i);
     }
+    expect(output).toHaveBeenCalledWith(expect.stringContaining('target channel "staging"'));
   }, 30_000);
 
   it("refuses unknown prerelease formats (fail-closed)", async () => {

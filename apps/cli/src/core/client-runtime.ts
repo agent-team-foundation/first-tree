@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import {
   AgentSlot,
   ClientConnection,
+  createLogger,
   getChildProcessRegistry,
   getHandlerFactory,
   hasHandler,
@@ -268,11 +269,12 @@ export class ClientRuntime {
     // Attach before connecting so the first welcome frame on a stale client
     // is acted on rather than missed until the next reconnect.
     if (this.options.currentVersion && this.options.update) {
+      const updateLogger = createLogger("update");
       this.updateManager = UpdateManager.attach(this.connection, {
         currentVersion: this.options.currentVersion,
         ...this.options.update,
         isTTY: Boolean(process.stdout.isTTY),
-        log: (level, msg) => print.status(`[update/${level}]`, msg),
+        log: (level, msg) => updateLogger[level](msg),
         getQuietGateSnapshot: () => this.aggregateQuietGate(),
       });
     }

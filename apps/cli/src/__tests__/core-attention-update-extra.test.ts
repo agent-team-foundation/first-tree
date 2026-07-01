@@ -142,7 +142,8 @@ describe("core update helpers", () => {
     childRegistryMocks.classify.mockReturnValueOnce({ kind: "permanent", reasonCode: "ebadengine" });
     const failChild = new MockChild();
     installSpawn(failChild);
-    const failPromise = installGlobalSpec("latest");
+    const installOutput: string[] = [];
+    const failPromise = installGlobalSpec("latest", { output: (chunk) => installOutput.push(chunk) });
     failChild.stderr.emit("data", Buffer.from("line1\nline2\nline3\nline4\n"));
     failChild.emit("exit", 1, null);
     const failResult = await failPromise;
@@ -153,6 +154,8 @@ describe("core update helpers", () => {
     });
     if (failResult.ok) throw new Error("expected install failure");
     expect(failResult.reason).toContain("line2 | line3 | line4");
+    expect(installOutput).toEqual(["line1\nline2\nline3\nline4\n"]);
+    expect(printLineMock).not.toHaveBeenCalled();
 
     const timeoutChild = new MockChild();
     installSpawn(timeoutChild);

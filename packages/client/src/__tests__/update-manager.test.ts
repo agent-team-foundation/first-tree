@@ -356,6 +356,49 @@ describe("UpdateManager decision flow", () => {
     }
   });
 
+  it("throttles quiet-gate debug logs without changing the re-check interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const conn = makeFakeConnection();
+      const logs: Array<{ level: string; msg: string }> = [];
+      const executeUpdate = vi.fn(async () => ({ installed: false }));
+      const getQuietGateSnapshot = vi.fn(() => ({ activeCount: 1, lastActivityMs: Date.now() }));
+
+      const mgr = UpdateManager.attach(conn, {
+        currentVersion: "0.8.4",
+        updateConfig: makeUpdateConfig({
+          policy: "auto",
+          restart_quiet_seconds: 30,
+          restart_check_interval_seconds: 10,
+        }),
+        isTTY: false,
+        log: (level, msg) => logs.push({ level, msg }),
+        getQuietGateSnapshot,
+        prompt: async () => false,
+        executeUpdate,
+      });
+
+      conn.emitWelcome(makeWelcome("0.9.2", true));
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(getQuietGateSnapshot).toHaveBeenCalledTimes(1);
+      expect(logs.filter((entry) => entry.msg.startsWith("Quiet gate:"))).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(50_000);
+      expect(getQuietGateSnapshot).toHaveBeenCalledTimes(6);
+      expect(logs.filter((entry) => entry.msg.startsWith("Quiet gate:"))).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(getQuietGateSnapshot).toHaveBeenCalledTimes(7);
+      expect(logs.filter((entry) => entry.msg.startsWith("Quiet gate:"))).toHaveLength(2);
+      expect(executeUpdate).not.toHaveBeenCalled();
+
+      mgr.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("policy=auto, reconnect coalesces the latest welcome target while the quiet gate waits", async () => {
     vi.useFakeTimers();
     try {
