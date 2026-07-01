@@ -1396,6 +1396,10 @@ export function ChatView({
   mentionTipPhaseRef.current = mentionTip;
   const mentionTipHoldTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mentionTipExitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The chat that owns the current tip. The bubble only renders while this
+  // matches the viewed `chatId`, so a tip from a previous chat can never paint
+  // in the next one — a render-time guard that holds regardless of effect timing.
+  const mentionTipChatId = useRef<string | null>(null);
   // Answering a blocking ask is owned by the AskTakeover overlay, which composes
   // its own text + @mentions + image attachments. `askBusy` disables the card
   // while its resolving reply is in flight (kept true through success so the
@@ -1421,12 +1425,15 @@ export function ChatView({
   // brief exit phase.
   const flashMentionTip = useCallback(() => {
     clearMentionTipTimers();
+    // Stamp the chat that owns this tip so the render gate can refuse to paint
+    // it in any other chat, even for a single frame before effects run.
+    mentionTipChatId.current = chatId;
     setMentionTip("in");
     mentionTipHoldTimer.current = setTimeout(() => {
       setMentionTip("out");
       mentionTipExitTimer.current = setTimeout(() => setMentionTip("hidden"), MENTION_TIP_EXIT_MS);
     }, MENTION_TIP_MS);
-  }, [clearMentionTipTimers]);
+  }, [clearMentionTipTimers, chatId]);
   // Dismiss early (user started typing, addressed someone, or the gate lifted):
   // play the exit anim if currently shown, otherwise just ensure it's hidden.
   const dismissMentionTip = useCallback(() => {
@@ -1440,12 +1447,14 @@ export function ChatView({
   // Hard-reset on chat switch. ChatView is long-lived across chats, so a tip
   // triggered in one group chat must not linger into the next — the gate-lift
   // effect won't fire when both chats are group/no-mention (the gate stays
-  // true). Clear the timers and hide immediately (no exit animation) so the
-  // new chat never paints a stale bubble.
+  // true). The render gate (`mentionTipChatId.current === chatId`) already keeps
+  // a stale tip from painting in the new chat; this pre-paint `useLayoutEffect`
+  // additionally drains the timers and hard-hides so no exit animation plays.
   // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is a reset trigger — the body doesn't read it, but the tip must clear whenever the viewed chat changes
-  useEffect(() => {
+  useLayoutEffect(() => {
     clearMentionTipTimers();
     setMentionTip("hidden");
+    mentionTipChatId.current = null;
   }, [chatId, clearMentionTipTimers]);
   // Right-rail visibility. The rail holds participants + GitHub bindings; the
   // running summary now lives in the pinned ChatSummary above the stream, not
@@ -3836,7 +3845,7 @@ export function ChatView({
                           screen), points at the send button, and auto-dismisses.
                           `pointer-events: none` so it never eats a click/keystroke
                           that would resolve the block. */}
-                      {mentionTip !== "hidden" && (
+                      {mentionTip !== "hidden" && mentionTipChatId.current === chatId && (
                         <div
                           role="status"
                           className={mentionTip === "out" ? "mention-tip mention-tip-out" : "mention-tip"}

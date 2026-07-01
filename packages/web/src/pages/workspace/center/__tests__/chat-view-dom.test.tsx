@@ -1418,6 +1418,10 @@ describe("ChatView", () => {
         </MemoryRouter>,
       );
     });
+    // Pre-paint: the render gate (tip's origin chat ≠ viewed chat) keeps the
+    // stale bubble from painting even before effects flush — assert right after
+    // the commit, with no intervening flush.
+    expect(container.textContent).not.toContain("@mention someone, or no one gets this");
     await flush();
     expect(container.textContent).not.toContain("@mention someone, or no one gets this");
 
