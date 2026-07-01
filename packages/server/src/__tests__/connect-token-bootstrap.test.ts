@@ -62,8 +62,15 @@ describe("POST /me/connect-tokens bootstrap method", () => {
       expect(body.npmSpec).toBe("first-tree");
       expect(body.installerUrl).toBe("https://downloads.example.test/releases/prod/install.sh");
       expect(body.installerUrl).not.toContain(body.token);
+      expect(body.bootstrapCommand).toContain('tmp="$(mktemp "$' + '{TMPDIR:-/tmp}/first-tree-install.XXXXXX")"');
+      expect(body.bootstrapCommand).toContain(`trap 'rm -f "$tmp"' EXIT HUP INT TERM`);
       expect(body.bootstrapCommand).toContain("curl -fsSL 'https://downloads.example.test/releases/prod/install.sh'");
+      expect(body.bootstrapCommand).toContain(
+        "FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL='https://downloads.example.test/releases' sh \"$tmp\"",
+      );
       expect(body.bootstrapCommand).toContain(`"$HOME/.local/bin/first-tree" login '${body.token}'`);
+      expect(body.bootstrapCommand).toContain(" && \\");
+      expect(body.bootstrapCommand).not.toContain("/tmp/first-tree-install-first-tree.sh");
       expect(body.bootstrapCommand).not.toContain(`${body.installerUrl}?token=`);
     });
   });

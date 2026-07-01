@@ -5,11 +5,13 @@ import {
   COMMAND_VERSION,
   detectInstallMode,
   fetchLatestVersion,
+  fetchPortableLatestVersion,
   fetchServerCommandVersion,
   getClientServiceStatus,
   installClientService,
   installGlobalLatest,
   installGlobalSpec,
+  installPortableSpec,
   isServiceSupported,
   PACKAGE_NAME,
   restartClientService,
@@ -55,21 +57,36 @@ export function registerUpgradeCommand(program: Command): void {
         return;
       }
 
-      const useNpmLatest = options.latest === true;
-      print.line(useNpmLatest ? "\n  Checking npm registry...\n" : "\n  Checking server update target...\n");
-      const target = useNpmLatest ? fetchLatestVersion() : await fetchServerCommandVersion();
+      const useLatest = options.latest === true;
+      const isPortable = mode === "portable";
+      print.line(
+        useLatest
+          ? isPortable
+            ? "\n  Checking portable update target...\n"
+            : "\n  Checking npm registry...\n"
+          : "\n  Checking server update target...\n",
+      );
+      const target = useLatest
+        ? isPortable
+          ? await fetchPortableLatestVersion()
+          : fetchLatestVersion()
+        : await fetchServerCommandVersion();
       if (!target.ok) {
-        const targetLabel = useNpmLatest ? "latest version" : "server update target";
+        const targetLabel = useLatest
+          ? isPortable
+            ? "portable update target"
+            : "latest version"
+          : "server update target";
         print.line(`  Could not fetch ${targetLabel}: ${target.reason}\n`);
-        if (!useNpmLatest) {
-          print.line(`  Run \`${binName} upgrade --latest\` to install npm latest instead.\n`);
+        if (!useLatest) {
+          print.line(`  Run \`${binName} upgrade --latest\` to install latest instead.\n`);
         }
         print.line("\n");
         process.exit(1);
       }
 
       const current = COMMAND_VERSION;
-      const sourceLabel = useNpmLatest ? "npm latest" : "server target";
+      const sourceLabel = useLatest ? (isPortable ? "portable latest" : "npm latest") : "server target";
       const cmp = semver.valid(current) ? semver.compare(current, target.version) : -1;
       if (cmp >= 0) {
         print.line(`  Already on ${current} (${sourceLabel} is ${target.version}).\n\n`);
@@ -78,12 +95,16 @@ export function registerUpgradeCommand(program: Command): void {
 
       if (options.check) {
         print.line(`  Upgrade available: ${current} → ${target.version}\n`);
-        print.line(`  Run \`${binName} upgrade${useNpmLatest ? " --latest" : ""}\` to install.\n\n`);
+        print.line(`  Run \`${binName} upgrade${useLatest ? " --latest" : ""}\` to install.\n\n`);
         return;
       }
 
       print.line(`  Upgrading ${current} → ${target.version}...\n`);
-      const installRes = useNpmLatest ? await installGlobalLatest() : await installGlobalSpec(target.version);
+      const installRes = isPortable
+        ? await installPortableSpec(useLatest ? "latest" : target.version)
+        : useLatest
+          ? await installGlobalLatest()
+          : await installGlobalSpec(target.version);
       if (!installRes.ok) {
         print.line(`\n  Install failed: ${installRes.reason}\n\n`);
         process.exit(1);

@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { detectInstallMode } from "../core/update.js";
 
 describe("detectInstallMode", () => {
@@ -12,7 +12,23 @@ describe("detectInstallMode", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     rmSync(root, { recursive: true, force: true });
+  });
+
+  it("returns 'portable' when portable env vars are present before package detection", () => {
+    const pkgDir = join(root, ".nvm/versions/node/v22/lib/node_modules/first-tree");
+    mkdirSync(join(pkgDir, "dist/cli"), { recursive: true });
+    writeFileSync(join(pkgDir, "package.json"), JSON.stringify({ name: "first-tree", version: "0.9.2" }));
+    const argv1 = join(pkgDir, "dist/cli/index.mjs");
+    writeFileSync(argv1, "// stub");
+
+    vi.stubEnv("FIRST_TREE_INSTALL_MODE", "portable");
+    expect(detectInstallMode(argv1, "first-tree")).toBe("portable");
+
+    vi.stubEnv("FIRST_TREE_INSTALL_MODE", "");
+    vi.stubEnv("FIRST_TREE_PORTABLE_ROOT", join(root, "portable", "current"));
+    expect(detectInstallMode(argv1, "first-tree")).toBe("portable");
   });
 
   it("returns 'source' immediately when packageName is null (dev channel — not published)", () => {

@@ -56,14 +56,19 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-function buildPortableBootstrapCommand(options: { installerUrl: string; binName: string; token: string }): string {
-  const tempFile = `/tmp/first-tree-install-${options.binName}.sh`;
+function buildPortableBootstrapCommand(options: {
+  installerUrl: string;
+  portableDownloadBaseUrl: string;
+  binName: string;
+  token: string;
+}): string {
   return [
-    `curl -fsSL ${shellQuote(options.installerUrl)} -o ${shellQuote(tempFile)}`,
-    `sh ${shellQuote(tempFile)}`,
-    `rm -f ${shellQuote(tempFile)}`,
+    `tmp="$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX")"`,
+    `trap 'rm -f "$tmp"' EXIT HUP INT TERM`,
+    `curl -fsSL ${shellQuote(options.installerUrl)} -o "$tmp"`,
+    `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL=${shellQuote(options.portableDownloadBaseUrl)} sh "$tmp"`,
     `"$HOME/.local/bin/${options.binName}" login ${shellQuote(options.token)}`,
-  ].join("\n");
+  ].join(" && \\\n");
 }
 
 /**
@@ -486,8 +491,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
           binName: ch.binName,
         };
       }
-      const installerUrl = joinUrl(app.config.connectBootstrap.portableDownloadBaseUrl, installerPath);
-      const bootstrapCommand = buildPortableBootstrapCommand({ installerUrl, binName: ch.binName, token });
+      const portableDownloadBaseUrl = app.config.connectBootstrap.portableDownloadBaseUrl;
+      const installerUrl = joinUrl(portableDownloadBaseUrl, installerPath);
+      const bootstrapCommand = buildPortableBootstrapCommand({
+        installerUrl,
+        portableDownloadBaseUrl,
+        binName: ch.binName,
+        token,
+      });
       return {
         token,
         expiresIn,

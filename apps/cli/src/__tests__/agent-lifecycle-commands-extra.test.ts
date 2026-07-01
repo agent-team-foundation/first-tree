@@ -33,6 +33,7 @@ const coreMocks = vi.hoisted(() => ({
   detectInstallMode: vi.fn(),
   ensureFreshAccessToken: vi.fn(),
   fetchLatestVersion: vi.fn(),
+  fetchPortableLatestVersion: vi.fn(),
   fetchServerCommandVersion: vi.fn(),
   findStaleAliases: vi.fn(),
   formatStaleReason: vi.fn((reason: string) => reason),
@@ -40,6 +41,7 @@ const coreMocks = vi.hoisted(() => ({
   installClientService: vi.fn(),
   installGlobalLatest: vi.fn(),
   installGlobalSpec: vi.fn(),
+  installPortableSpec: vi.fn(),
   isServiceSupported: vi.fn(),
   PACKAGE_NAME: "first-tree",
   promptAddAgent: vi.fn(),
@@ -109,9 +111,11 @@ beforeEach(() => {
   coreMocks.ensureFreshAccessToken.mockResolvedValue("user-token");
   coreMocks.resolveServerUrl.mockReturnValue("https://hub.example");
   coreMocks.fetchLatestVersion.mockReturnValue({ ok: true, version: "99.0.0" });
+  coreMocks.fetchPortableLatestVersion.mockResolvedValue({ ok: true, version: "99.0.0" });
   coreMocks.fetchServerCommandVersion.mockResolvedValue({ ok: true, version: "99.0.0" });
-  coreMocks.installGlobalLatest.mockResolvedValue({ ok: true, installedVersion: "99.0.0" });
-  coreMocks.installGlobalSpec.mockResolvedValue({ ok: true, installedVersion: "99.0.0" });
+  coreMocks.installGlobalLatest.mockResolvedValue({ ok: true, mode: "global", installedVersion: "99.0.0" });
+  coreMocks.installGlobalSpec.mockResolvedValue({ ok: true, mode: "global", installedVersion: "99.0.0" });
+  coreMocks.installPortableSpec.mockResolvedValue({ ok: true, mode: "portable", installedVersion: "99.0.0" });
   cliFetchMock.mockReset();
   coreMocks.promptAddAgent.mockResolvedValue({ name: "nova", agentId: "agent-1" });
   coreMocks.findStaleAliases.mockResolvedValue([
@@ -372,7 +376,14 @@ describe("logout and upgrade commands", () => {
     await runTopLevel(registerUpgradeCommand, ["upgrade", "--latest", "--no-restart"]);
     expect(coreMocks.installGlobalLatest).toHaveBeenCalled();
 
+    coreMocks.detectInstallMode.mockReturnValue("portable");
+    coreMocks.fetchPortableLatestVersion.mockResolvedValueOnce({ ok: true, version: "101.0.0" });
+    await runTopLevel(registerUpgradeCommand, ["upgrade", "--latest", "--no-restart"]);
+    expect(coreMocks.fetchPortableLatestVersion).toHaveBeenCalled();
+    expect(coreMocks.installPortableSpec).toHaveBeenCalledWith("latest");
+
     coreMocks.installGlobalSpec.mockResolvedValueOnce({ ok: false, reason: "permission denied" });
+    coreMocks.detectInstallMode.mockReturnValue("global");
     await expect(runTopLevel(registerUpgradeCommand, ["upgrade"])).rejects.toMatchObject({ code: 1 });
 
     await runTopLevel(registerUpgradeCommand, ["upgrade", "--no-restart"]);
