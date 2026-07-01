@@ -860,12 +860,79 @@ owners: [${ACCOUNT_LOGIN}]
   });
 });
 
+describe("GET /orgs/:orgId/context-tree/installation", () => {
+  const getApp = useTestApp({ githubAppPrivateKeyPem });
+
+  it("returns the bound installation's routing info without minting a token or calling GitHub", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = await seedInstallation(app, admin.organizationId);
+    const fetchSpy = mockFetch(async () => new Response("unexpected", { status: 500 }));
+
+    const res = await getInstallation(app, admin);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      installationId,
+      accountLogin: ACCOUNT_LOGIN,
+      accountType: "Organization",
+      suspended: false,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("allows a non-admin member (the read is membership-gated, unlike /initialize)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedInstallation(app, admin.organizationId);
+    const member = await createTestAdmin(app);
+    await app.db
+      .update(members)
+      .set({ organizationId: admin.organizationId, role: "member" })
+      .where(eq(members.id, member.memberId));
+
+    const res = await getInstallation(app, { ...admin, accessToken: member.accessToken });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ accountLogin: ACCOUNT_LOGIN });
+  });
+
+  it("returns 404 no_installation when no installation is bound", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await getInstallation(app, admin);
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ code: "no_installation" });
+  });
+
+  it("reports a suspended installation so the CLI warns instead of silently failing coverage", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedInstallation(app, admin.organizationId, { suspendedAt: "2026-05-11T10:00:00Z" });
+
+    const res = await getInstallation(app, admin);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ suspended: true });
+  });
+});
+
 async function initialize(app: FastifyInstance, admin: Pick<TestAdmin, "organizationId" | "accessToken">) {
   return app.inject({
     method: "POST",
     url: `/api/v1/orgs/${admin.organizationId}/context-tree/initialize`,
     headers: { authorization: `Bearer ${admin.accessToken}` },
     payload: {},
+  });
+}
+
+async function getInstallation(app: FastifyInstance, admin: Pick<TestAdmin, "organizationId" | "accessToken">) {
+  return app.inject({
+    method: "GET",
+    url: `/api/v1/orgs/${admin.organizationId}/context-tree/installation`,
+    headers: { authorization: `Bearer ${admin.accessToken}` },
   });
 }
 
