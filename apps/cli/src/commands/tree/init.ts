@@ -6,36 +6,18 @@ import type { Command } from "commander";
 import { ensureFreshAccessToken, resolveServerUrl } from "../../core/bootstrap.js";
 import { channelConfig } from "../../core/channel.js";
 import type { CommandContext, SubcommandModule } from "../types.js";
+import {
+  memberNodeContent,
+  membersIndexContent,
+  rootNodeContent,
+  validateTreeWorkflowContent,
+} from "./scaffold-templates.js";
 import { ensureTrailingNewline, runCommand } from "./shared.js";
 import { type VerifySummary, verifyTreeRoot } from "./verify.js";
 
 const REPO_SUFFIX = "-context-tree";
 const GITHUB_REPO_NAME_MAX_LENGTH = 100;
 const DEFAULT_BRANCH = "main";
-
-// Kept byte-for-byte in sync with the server's one-click bootstrap
-// (`packages/server/src/api/orgs/context-tree.ts`) so a tree created either way
-// runs the same CI. Only seeded when `--with-workflow` is passed, because
-// writing under `.github/workflows/` needs the interactive `workflow` gh scope
-// (`gh auth refresh -s workflow`); the default path skips it and stays
-// frictionless — the workflow is optional CI, not required for a valid tree.
-const VALIDATE_TREE_WORKFLOW = `name: Validate Context Tree
-
-on:
-  pull_request:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Validate Context Tree
-        run: npx -p first-tree first-tree tree verify
-`;
 
 export type TreeInitOptions = {
   owner?: string;
@@ -50,10 +32,6 @@ export type TreeInitOptions = {
 };
 
 export type ScaffoldFile = { relPath: string; content: string };
-
-function yamlDoubleQuote(value: string): string {
-  return JSON.stringify(value.replace(/\s+/g, " ").trim());
-}
 
 // Mirror the server's `slugifyRepoBase` byte-for-byte (NFKD strip + hyphenate +
 // collapse), including the `team` fallback, so agent-created and Cloud-created
@@ -79,58 +57,11 @@ export function defaultRepoName(title: string): string {
   return `${base}${REPO_SUFFIX}`;
 }
 
-function rootNodeContent(title: string, ownerLogin: string): string {
-  const description = `Shared context, decisions, ownership, and operating knowledge for ${title}.`;
-  return `---
-title: ${yamlDoubleQuote(`${title} Context Tree`)}
-description: ${yamlDoubleQuote(description)}
-owners: [${ownerLogin}]
----
-
-# ${title}'s Context Tree
-`;
-}
-
-function membersIndexContent(ownerLogin: string): string {
-  // Non-empty owners on purpose: `tree tree` skips any directory node whose
-  // owners array is empty, so `owners: []` would pass `tree verify` yet make
-  // the members domain invisible to the hierarchy browser. Seed the creator as
-  // the initial owner; seeding refines this later.
-  return `---
-title: "Members"
-description: "Member definitions and work specifications."
-owners: [${ownerLogin}]
----
-
-# Members
-
-Member definitions, work scope, and personal node specifications. Members are
-both humans and AI agents — each has a personal node under \`members/<id>/\`.
-`;
-}
-
-function memberNodeContent(login: string): string {
-  return `---
-title: ${yamlDoubleQuote(login)}
-description: ${yamlDoubleQuote(`Member profile for ${login}.`)}
-owners: [${login}]
-type: human
-role: "Team member"
-domains:
-  - "context-tree"
----
-
-# ${login}
-
-Initial member node, created when the team Context Tree was bootstrapped.
-Replace this with a short description of what you own and decide.
-`;
-}
-
 /**
  * The minimal file set that makes a fresh tree pass `first-tree tree verify`:
  * a root `NODE.md`, the `members/` domain index, and one member node for the
- * creator (verify hard-fails on a `members/` dir with no member nodes).
+ * creator (verify hard-fails on a `members/` dir with no member nodes). The node
+ * bodies are rendered from `./templates/*.ejs` (see `scaffold-templates.ts`).
  */
 export function buildScaffoldFiles(opts: { title: string; ownerLogin: string; withWorkflow: boolean }): ScaffoldFile[] {
   const files: ScaffoldFile[] = [
@@ -139,7 +70,7 @@ export function buildScaffoldFiles(opts: { title: string; ownerLogin: string; wi
     { relPath: join("members", opts.ownerLogin, "NODE.md"), content: memberNodeContent(opts.ownerLogin) },
   ];
   if (opts.withWorkflow) {
-    files.push({ relPath: join(".github", "workflows", "validate-tree.yml"), content: VALIDATE_TREE_WORKFLOW });
+    files.push({ relPath: join(".github", "workflows", "validate-tree.yml"), content: validateTreeWorkflowContent() });
   }
   return files;
 }
@@ -290,7 +221,9 @@ export function resolveRepoOwner(args: {
 }): string {
   const explicit = args.optionOwner?.trim();
   if (args.installationAccount) {
-    if (explicit && explicit !== args.installationAccount) {
+    // GitHub account names are case-insensitive, so compare case-folded; always
+    // return the installation account's canonical casing.
+    if (explicit && explicit.toLowerCase() !== args.installationAccount.toLowerCase()) {
       throw new Error(
         `--owner ${explicit} does not match this team's GitHub App installation account (${args.installationAccount}). The tree repo must live under ${args.installationAccount} so the App can cover it — omit --owner to use it, or pass --no-bind to create it elsewhere without binding.`,
       );

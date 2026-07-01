@@ -4,6 +4,12 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import { buildScaffoldFiles, defaultRepoName, resolveRepoOwner, type ScaffoldFile } from "../commands/tree/init.js";
+import {
+  memberNodeContent,
+  membersIndexContent,
+  rootNodeContent,
+  validateTreeWorkflowContent,
+} from "../commands/tree/scaffold-templates.js";
 import { renderContextTree } from "../commands/tree/tree.js";
 import { verifyTreeRoot } from "../commands/tree/verify.js";
 
@@ -116,5 +122,37 @@ describe("resolveRepoOwner", () => {
     expect(resolveRepoOwner({ optionOwner: "someone", creatorLogin: "octocat", installationAccount: null })).toBe(
       "someone",
     );
+  });
+
+  it("matches --owner case-insensitively and returns the canonical casing", () => {
+    // GitHub account names are case-insensitive, so `--owner ACME-Org` must not
+    // be rejected against a stored `acme-org`; the canonical casing is returned.
+    expect(
+      resolveRepoOwner({ optionOwner: "ACME-Org", creatorLogin: "octocat", installationAccount: "acme-org" }),
+    ).toBe("acme-org");
+  });
+});
+
+describe("scaffold-templates (ejs)", () => {
+  it("renders the root node with quoted frontmatter and the owner", () => {
+    const node = rootNodeContent("Acme", "octocat");
+    expect(node).toContain('title: "Acme Context Tree"');
+    expect(node).toContain("owners: [octocat]");
+    expect(node).toContain("# Acme's Context Tree");
+  });
+
+  it("renders the members index with a non-empty owner", () => {
+    expect(membersIndexContent("octocat")).toContain("owners: [octocat]");
+  });
+
+  it("renders a member node carrying the required member fields", () => {
+    const node = memberNodeContent("octocat");
+    expect(node).toContain('title: "octocat"');
+    expect(node).toContain("owners: [octocat]");
+    expect(node).toContain("type: human");
+  });
+
+  it("renders the validate-tree workflow", () => {
+    expect(validateTreeWorkflowContent()).toContain("first-tree tree verify");
   });
 });
