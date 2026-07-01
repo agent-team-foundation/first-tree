@@ -1193,6 +1193,11 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         body: skill.body,
         metadata: {},
       };
+      // `body` and `description` are the only server-mutable fields of a
+      // campaign scan skill: `name` is the stable lookup key and `metadata` is
+      // always empty for these skills, so this two-field diff is a complete
+      // change check. If a campaign skill ever gains meaningful metadata or a
+      // renamable identity, extend both `desiredPayload` above and this compare.
       const payloadMatchesDesired = (stored: unknown): boolean =>
         typeof stored === "object" &&
         stored !== null &&
