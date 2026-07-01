@@ -53,21 +53,29 @@ first-tree
 ## login
 
 ```
-first-tree login <token> [--no-start]
+first-tree login <token> [--no-start] [--force-switch]
 ```
 
 Sign this computer in using a connect token from the web console. The
 token's `iss` claim carries the server URL — no `--server` flag needed,
 and switching to a different deployment only requires a fresh token.
 If this machine already has credentials for another user, `login` refuses to
-overwrite them. If credentials are missing, `login` preserves `client.yaml` and
-local agent state so the same user can reconnect after a normal `logout`. Switch
-accounts by running `first-tree logout --purge` first, then login with the new
-token.
+overwrite them or reuse the existing client id. If credentials are missing,
+`login` preserves `client.yaml` and local agent state so the same user can
+reconnect after a normal `logout`.
+
+Switching this computer to a different First Tree user is a controlled local
+client switch: the current daemon/agents may be interrupted, the old user's
+root state is preserved, and the new user gets a separate local client id. In a
+non-interactive shell, `--force-switch` is required to authorize that switch
+attempt; it does not bypass provider-drain, service, filesystem, or recovery
+safety gates. Until the root-state park/restore transaction is available,
+different-user login fails closed rather than overwriting local credentials.
 
 | Flag | Effect |
 |---|---|
 | `--no-start` | Write credentials and exit without installing/starting the background daemon. |
+| `--force-switch` | Authorize a different First Tree user to become active on this computer in non-interactive contexts. May interrupt the current runtime; does not bypass switch safety gates. |
 
 ## logout
 
@@ -77,12 +85,12 @@ first-tree logout [--purge]
 
 Stop the daemon and clear credentials. `--purge` additionally removes
 `client.yaml`, local agent configs, agent workspaces, and session state. Use
-`--purge` before switching this machine to a different account. The purge is
-local-only: server-side clients, agents, chats, and history are not deleted,
-but the previous client and agents stop running from this machine unless they
-are set up again. If the daemon is active and cannot be stopped, `--purge`
-refuses to delete local agent state. The default keeps local client/agent state
-for the same user to reconnect later.
+`--purge` as a destructive local computer reset, not as the ordinary account
+switch path. The purge is local-only: server-side clients, agents, chats, and
+history are not deleted, but the previous client and agents stop running from
+this machine unless they are set up again. If the daemon is active and cannot
+be stopped, `--purge` refuses to delete local agent state. The default keeps
+local client/agent state for the same user to reconnect later.
 
 ## status
 

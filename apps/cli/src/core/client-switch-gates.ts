@@ -46,6 +46,25 @@ export class ClientSwitchFilesystemError extends Error {
   }
 }
 
+export type ClientSwitchLoginAuthorizationMode = "interactive-confirmation" | "force-switch";
+
+export type ClientSwitchLoginAuthorization = {
+  mode: ClientSwitchLoginAuthorizationMode;
+  interruptRuntime: true;
+  createsNewClientIdForNewUser: true;
+  bypassesSafetyGates: false;
+};
+
+export class ClientSwitchAuthorizationError extends Error {
+  constructor(
+    readonly code: "CLIENT_SWITCH_REQUIRES_FORCE_SWITCH",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ClientSwitchAuthorizationError";
+  }
+}
+
 type ExistsFn = (path: string) => boolean;
 
 export function clientSwitchPaths(home = defaultHome()): ClientSwitchPaths {
@@ -116,6 +135,32 @@ export function stopServiceForClientSwitch(deps: {
   const after = deps.status();
   assertServiceInactiveForClientSwitch(after);
   return after;
+}
+
+export function authorizeDifferentUserLoginSwitch(options: {
+  forceSwitch: boolean;
+  isInteractive: boolean;
+}): ClientSwitchLoginAuthorization {
+  if (options.forceSwitch) {
+    return {
+      mode: "force-switch",
+      interruptRuntime: true,
+      createsNewClientIdForNewUser: true,
+      bypassesSafetyGates: false,
+    };
+  }
+  if (!options.isInteractive) {
+    throw new ClientSwitchAuthorizationError(
+      "CLIENT_SWITCH_REQUIRES_FORCE_SWITCH",
+      "different-user login would switch this computer's active First Tree user; rerun with --force-switch to authorize interrupting the current runtime in a non-interactive context",
+    );
+  }
+  return {
+    mode: "interactive-confirmation",
+    interruptRuntime: true,
+    createsNewClientIdForNewUser: true,
+    bypassesSafetyGates: false,
+  };
 }
 
 export type DirectoryMovePlan = {

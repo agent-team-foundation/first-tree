@@ -58,6 +58,7 @@ vi.mock("../core/update-glue.js", async (importOriginal) => ({
 
 const originalFirstTreeHome = process.env.FIRST_TREE_HOME;
 const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
+const originalStdinIsTTY = process.stdin.isTTY;
 
 let home: string;
 let runtimeInstance: {
@@ -103,11 +104,16 @@ function writeCredentials(memberId: string, serverUrl = "http://old.test", sub =
   );
 }
 
+function setStdinIsTTY(value: boolean | undefined): void {
+  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value });
+}
+
 beforeEach(() => {
   vi.resetModules();
   home = join(tmpdir(), `ft-login-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(join(home, "config"), { recursive: true });
   process.env.FIRST_TREE_HOME = home;
+  setStdinIsTTY(false);
   delete process.env.FIRST_TREE_SERVER_URL;
   cliFetchMock.mockReset();
   installClientServiceMock.mockReset();
@@ -148,6 +154,7 @@ afterEach(() => {
   else process.env.FIRST_TREE_HOME = originalFirstTreeHome;
   if (originalServerUrl === undefined) delete process.env.FIRST_TREE_SERVER_URL;
   else process.env.FIRST_TREE_SERVER_URL = originalServerUrl;
+  setStdinIsTTY(originalStdinIsTTY);
   process.exitCode = undefined;
 });
 
@@ -175,7 +182,7 @@ describe("login command", { timeout: 15_000 }, () => {
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("--no-start");
   });
 
-  it("rejects cross-account login before overwriting local credentials", async () => {
+  it("requires --force-switch for non-interactive cross-account login before overwriting local credentials", async () => {
     const yamlPath = join(home, "config", "client.yaml");
     writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
     writeCredentials("member-old", "http://first-tree.test", "user-old");
@@ -189,8 +196,29 @@ describe("login command", { timeout: 15_000 }, () => {
     expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
     expect(installClientServiceMock).not.toHaveBeenCalled();
     const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
-    expect(output).toContain("ACCOUNT_SWITCH_REQUIRES_PURGE");
-    expect(output).toContain("first-tree-dev logout --purge");
+    expect(output).toContain("CLIENT_SWITCH_REQUIRES_FORCE_SWITCH");
+    expect(output).toContain("first-tree-dev login <token> --force-switch");
+    expect(output).toContain("may stop the current daemon, agents, and provider turn");
+  });
+
+  it("accepts --force-switch as interrupt authorization but still refuses the unimplemented root-state switch", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
+    writeCredentials("member-old", "http://first-tree.test", "user-old");
+
+    await expect(
+      runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--force-switch", "--no-start"]),
+    ).rejects.toThrow("process.exit");
+
+    expect(cliFetchMock).toHaveBeenCalledTimes(1);
+    expect(readFileSync(credentialsPath(), "utf8")).toContain("old-refresh");
+    expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
+    expect(installClientServiceMock).not.toHaveBeenCalled();
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("CLIENT_SWITCH_NOT_IMPLEMENTED");
+    expect(output).toContain("authorized by --force-switch");
+    expect(output).toContain("new First Tree user must receive a separate");
+    expect(output).toContain("Safety gates are not bypassed by --force-switch");
   });
 
   it("allows same-user reauth without rotating the client identity", async () => {
@@ -291,6 +319,8 @@ describe("login command", { timeout: 15_000 }, () => {
     exitMock.mockClear();
     writeCredentials("member-old");
     await expect(runLogin(["login", jwt({ iss: "http://hub.test" })])).rejects.toThrow("process.exit");
-    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("ACCOUNT_SWITCH_REQUIRES_PURGE");
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "CLIENT_SWITCH_REQUIRES_FORCE_SWITCH",
+    );
   });
 });

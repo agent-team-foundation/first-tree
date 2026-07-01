@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assertDaemonStartupAllowedDuringClientSwitch,
   assertSameDeviceMove,
+  authorizeDifferentUserLoginSwitch,
+  ClientSwitchAuthorizationError,
   ClientSwitchFilesystemError,
   ClientSwitchMaintenanceError,
   ClientSwitchServiceError,
@@ -85,6 +87,32 @@ describe("client switch service supervisor gate", () => {
         }),
       }),
     ).toThrow("daemon service stop failed before client switch: permission denied");
+  });
+});
+
+describe("client switch login authorization", () => {
+  it("requires --force-switch for different-user login in non-interactive contexts", () => {
+    expect(() => authorizeDifferentUserLoginSwitch({ forceSwitch: false, isInteractive: false })).toThrow(
+      ClientSwitchAuthorizationError,
+    );
+  });
+
+  it("treats --force-switch as interrupt authorization, not a safety-gate bypass", () => {
+    expect(authorizeDifferentUserLoginSwitch({ forceSwitch: true, isInteractive: false })).toEqual({
+      mode: "force-switch",
+      interruptRuntime: true,
+      createsNewClientIdForNewUser: true,
+      bypassesSafetyGates: false,
+    });
+  });
+
+  it("allows the interactive path to ask for an explicit switch confirmation", () => {
+    expect(authorizeDifferentUserLoginSwitch({ forceSwitch: false, isInteractive: true })).toEqual({
+      mode: "interactive-confirmation",
+      interruptRuntime: true,
+      createsNewClientIdForNewUser: true,
+      bypassesSafetyGates: false,
+    });
   });
 });
 

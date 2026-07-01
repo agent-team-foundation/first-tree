@@ -15,7 +15,10 @@ import type { Command } from "commander";
 import { fail } from "../cli/output.js";
 import { channelConfig } from "../core/channel.js";
 import {
+  authorizeDifferentUserLoginSwitch,
   ClientRuntime,
+  ClientSwitchAuthorizationError,
+  type ClientSwitchLoginAuthorization,
   COMMAND_VERSION,
   cliFetch,
   createApiNameResolver,
@@ -50,19 +53,42 @@ function formatServiceLine(): string {
   return "not installed";
 }
 
-function rejectAccountSwitch(opts: { reason: string; serverUrl?: string }): never {
-  const purgeCommand = `${channelConfig.binName} logout --purge`;
+function rejectAccountSwitch(opts: {
+  reason: string;
+  serverUrl?: string;
+  authorization?: ClientSwitchLoginAuthorization;
+  authorizationError?: ClientSwitchAuthorizationError;
+}): never {
+  const switchCommand = `${channelConfig.binName} login <token> --force-switch`;
   print.line("\n  This computer already has First Tree login state for another or unknown user.\n\n");
   if (opts.serverUrl) print.line(`       Existing server:    ${opts.serverUrl}\n`);
   print.line(`       Background service: ${formatServiceLine()}\n\n`);
-  print.line("  Refusing to overwrite local credentials or reuse this machine's client identity.\n");
-  print.line(`  To switch accounts, run \`${purgeCommand}\` first, then login again.\n\n`);
-  print.line("  `logout --purge` stops the current daemon, signs out the current user, and\n");
-  print.line("  removes this machine's local client identity plus local agent configs,\n");
-  print.line("  workspaces, and session state. Server-side clients, agents, chats, and\n");
-  print.line("  history are not deleted; the previous client and agents simply stop running\n");
-  print.line("  from this machine unless they are set up again.\n\n");
-  fail("ACCOUNT_SWITCH_REQUIRES_PURGE", opts.reason, 1);
+  print.line("  Refusing to overwrite local credentials or reuse this machine's client identity.\n\n");
+
+  if (opts.authorizationError) {
+    print.line("  Different-user login changes the active First Tree user on this computer.\n");
+    print.line("  In non-interactive contexts this requires explicit authorization because it\n");
+    print.line("  may stop the current daemon, agents, and provider turn.\n\n");
+    print.line(`  Re-run with \`${switchCommand}\` to authorize the switch attempt.\n\n`);
+    fail(opts.authorizationError.code, opts.authorizationError.message, 1);
+  }
+
+  if (opts.authorization) {
+    const mode = opts.authorization.mode === "force-switch" ? "authorized by --force-switch" : "approved interactively";
+    print.line(`  Account switch ${mode}: the switch may interrupt the current daemon,\n`);
+    print.line("  agents, and provider turn. A new First Tree user must receive a separate\n");
+    print.line("  local client id; the existing client id is not transferred or reused.\n\n");
+    print.line("  This Phase 0.5 build has the safety gates but not the root state\n");
+    print.line("  park/restore transaction, so it cannot complete the switch yet.\n");
+    print.line("  Safety gates are not bypassed by --force-switch.\n\n");
+    fail(
+      "CLIENT_SWITCH_NOT_IMPLEMENTED",
+      `${opts.reason} Controlled client switch is not implemented in this build.`,
+      1,
+    );
+  }
+
+  fail("CLIENT_SWITCH_NOT_IMPLEMENTED", opts.reason, 1);
 }
 
 async function exchangeToken(url: string, token: string): Promise<{ accessToken: string; refreshToken: string }> {
@@ -86,16 +112,21 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
  *
  * Account switches are fail-closed when credentials already exist. The stored
  * access token owner is compared with the new server-issued access token's
- * `sub` claim; a mismatch must go through `logout --purge` before logging in
- * again. Without credentials, login preserves the local client identity so a
- * normal `logout` can be followed by same-user reconnect.
+ * `sub` claim; a mismatch must go through controlled local-client switch, not
+ * credential overwrite or client-id reuse. Without credentials, login preserves
+ * the local client identity so a normal `logout` can be followed by same-user
+ * reconnect.
  */
 export function registerLoginCommand(program: Command): void {
   program
     .command("login <token>")
     .description("Sign this computer into First Tree using a token from the web console")
     .option("--no-start", "Skip background daemon install/start (writes credentials and exits)")
-    .action(async (token: string, options: { start?: boolean }) => {
+    .option(
+      "--force-switch",
+      "Authorize a different First Tree user to become active here; may interrupt the current runtime",
+    )
+    .action(async (token: string, options: { forceSwitch?: boolean; start?: boolean }) => {
       try {
         let url: string;
         try {
@@ -117,10 +148,23 @@ export function registerLoginCommand(program: Command): void {
           fail("AUTH_ERROR", "Server access token is missing the required `sub` claim.", 1);
         }
         if (existingCredentials && (!previousOwnerSub || previousOwnerSub !== newOwnerSub)) {
+          let authorization: ClientSwitchLoginAuthorization | undefined;
+          let authorizationError: ClientSwitchAuthorizationError | undefined;
+          try {
+            authorization = authorizeDifferentUserLoginSwitch({
+              forceSwitch: options.forceSwitch === true,
+              isInteractive: process.stdin.isTTY === true,
+            });
+          } catch (err) {
+            if (err instanceof ClientSwitchAuthorizationError) authorizationError = err;
+            else throw err;
+          }
           rejectAccountSwitch({
             reason:
               "This connect token belongs to a different user than the credentials already stored on this machine.",
             serverUrl: existingCredentials.serverUrl,
+            authorization,
+            authorizationError,
           });
         }
 

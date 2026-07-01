@@ -23,12 +23,19 @@ export { handleClientOrgMismatch } from "./client-reidentify.js";
 export type { ClientRuntimeOptions, ClientRuntimeOutput } from "./client-runtime.js";
 // Client runtime
 export { ClientRuntime, createLoggerRuntimeOutput } from "./client-runtime.js";
-export type { ClientSwitchMaintenanceState, ClientSwitchPaths, DirectoryMovePlan } from "./client-switch-gates.js";
+export type {
+  ClientSwitchLoginAuthorization,
+  ClientSwitchMaintenanceState,
+  ClientSwitchPaths,
+  DirectoryMovePlan,
+} from "./client-switch-gates.js";
 export {
   assertDaemonStartupAllowedDuringClientSwitch,
   assertSameDeviceMove,
   assertSameDeviceMovePlan,
   assertServiceInactiveForClientSwitch,
+  authorizeDifferentUserLoginSwitch,
+  ClientSwitchAuthorizationError,
   ClientSwitchFilesystemError,
   ClientSwitchMaintenanceError,
   ClientSwitchServiceError,
