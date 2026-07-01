@@ -356,7 +356,7 @@ describe("UpdateManager decision flow", () => {
     }
   });
 
-  it("throttles quiet-gate debug logs without changing the re-check interval", async () => {
+  it("throttles quiet-gate info logs without changing the re-check interval", async () => {
     vi.useFakeTimers();
     try {
       const conn = makeFakeConnection();
@@ -383,6 +383,7 @@ describe("UpdateManager decision flow", () => {
 
       expect(getQuietGateSnapshot).toHaveBeenCalledTimes(1);
       expect(logs.filter((entry) => entry.msg.startsWith("Quiet gate:"))).toHaveLength(1);
+      expect(logs.filter((entry) => entry.msg.startsWith("Quiet gate:")).map((entry) => entry.level)).toEqual(["info"]);
 
       await vi.advanceTimersByTimeAsync(50_000);
       expect(getQuietGateSnapshot).toHaveBeenCalledTimes(6);
@@ -391,6 +392,10 @@ describe("UpdateManager decision flow", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       expect(getQuietGateSnapshot).toHaveBeenCalledTimes(7);
       expect(logs.filter((entry) => entry.msg.startsWith("Quiet gate:"))).toHaveLength(2);
+      expect(logs.filter((entry) => entry.msg.startsWith("Quiet gate:")).map((entry) => entry.level)).toEqual([
+        "info",
+        "info",
+      ]);
       expect(executeUpdate).not.toHaveBeenCalled();
 
       mgr.dispose();

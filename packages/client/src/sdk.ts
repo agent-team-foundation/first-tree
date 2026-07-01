@@ -22,6 +22,7 @@ import {
   type UploadAttachmentResponse,
   uploadAttachmentResponseSchema,
 } from "@first-tree/shared";
+import { createLogger } from "./observability/logger.js";
 
 /**
  * Callback that returns the current member access JWT.
@@ -208,6 +209,7 @@ export class FirstTreeHubSDK {
   private readonly getAccessToken: AccessTokenProvider;
   private readonly _agentId: string | undefined;
   private readonly _userAgent: string | undefined;
+  private readonly logger = createLogger("sdk");
 
   constructor(config: SdkConfig) {
     this._baseUrl = config.serverUrl.replace(/\/+$/, "");
@@ -554,7 +556,7 @@ export class FirstTreeHubSDK {
         const response = await this.doFetchOnce(path, init, opts);
         const isLastAttempt = attempt === delays.length - 1;
         if (response.status >= 500 && !isLastAttempt) {
-          console.warn(`sdk: retry attempt=${attempt + 1} reason=http-${response.status} path=${path}`);
+          this.logger.warn(`retry attempt=${attempt + 1} reason=http-${response.status} path=${path}`);
           lastErr = new Error(`HTTP ${response.status}`);
           continue;
         }
@@ -564,7 +566,7 @@ export class FirstTreeHubSDK {
         if (!isTransientNetworkError(err)) throw err;
         const isLastAttempt = attempt === delays.length - 1;
         if (!isLastAttempt) {
-          console.warn(`sdk: retry attempt=${attempt + 1} reason=${classifyRetryReason(err)} path=${path}`);
+          this.logger.warn(`retry attempt=${attempt + 1} reason=${classifyRetryReason(err)} path=${path}`);
         }
       }
     }

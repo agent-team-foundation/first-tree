@@ -69,11 +69,12 @@ describe("status block renderers", () => {
         label: state === "active" ? "first-tree-dev.service" : "dev.first-tree",
         state,
         detail: state === "active" ? "pid 123" : "",
+        logDir: "/logs",
       });
       renderServiceBlock();
       expect(output()).toContain(expected);
     }
-    expect(output()).toContain("journalctl --user -u first-tree-dev -f");
+    expect(output()).toContain("logs: /logs/client.log");
   });
 
   it("renders server configuration states", async () => {

@@ -98,6 +98,22 @@ describe("createApiNameResolver", () => {
 });
 
 describe("migrateLocalAgentDirs extra failure branches", () => {
+  it("routes migration status through an injected logger", async () => {
+    const { migrateLocalAgentDirs } = await import("../core/migrate-agent-dirs.js");
+    writeAgentYaml("old", "agent-1");
+    const log = vi.fn();
+
+    const result = await migrateLocalAgentDirs({
+      ...dirs(),
+      resolver: { resolveName: vi.fn(async () => "new") },
+      log,
+    });
+
+    expect(result).toMatchObject({ renamed: 1, errors: 0 });
+    expect(log).toHaveBeenCalledWith("", 'agent "old" renamed to "new" to match server');
+    expect(printMock.status).not.toHaveBeenCalled();
+  });
+
   it("records an enumeration error without throwing", async () => {
     const { migrateLocalAgentDirs } = await import("../core/migrate-agent-dirs.js");
     const agentsDir = join(root, "config", "agents");

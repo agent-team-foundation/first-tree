@@ -33,6 +33,53 @@ type AgentStartState = "idle" | "starting" | "running" | "suspended-skipped" | "
 
 const CLIENT_RUNTIME_AGENT_UNBOUND_LISTENER_COUNT = 1;
 
+export type ClientRuntimeOutput = {
+  blank: () => void;
+  check: (pass: boolean, label: string, detail?: string) => void;
+  line: (text: string) => void;
+  status: (label: string, message: string) => void;
+};
+
+type RuntimeOutputLogLevel = "info" | "warn" | "error";
+
+type RuntimeOutputLogger = {
+  info: (message: string) => void;
+  warn: (message: string) => void;
+  error: (message: string) => void;
+};
+
+const printRuntimeOutput: ClientRuntimeOutput = {
+  blank: () => print.blank(),
+  check: (pass, label, detail) => print.check(pass, label, detail),
+  line: (text) => print.line(text),
+  status: (label, message) => print.status(label, message),
+};
+
+function logTrimmed(logger: RuntimeOutputLogger, level: RuntimeOutputLogLevel, text: string): void {
+  const message = text.trim();
+  if (message) logger[level](message);
+}
+
+function levelForStatus(label: string): RuntimeOutputLogLevel {
+  if (label.includes("✗")) return "error";
+  if (label.includes("⚠")) return "warn";
+  return "info";
+}
+
+export function createLoggerRuntimeOutput(logger: RuntimeOutputLogger): ClientRuntimeOutput {
+  return {
+    blank: () => undefined,
+    check: (pass, label, detail) => {
+      const message = detail ? `${label}: ${detail}` : label;
+      logger[pass ? "info" : "warn"](message);
+    },
+    line: (text) => logTrimmed(logger, "info", text),
+    status: (label, message) => {
+      logger[levelForStatus(label)](label ? `${label} ${message}` : message);
+    },
+  };
+}
+
 export function isAgentSuspendedBindError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
   return msg.includes("agent_suspended");
@@ -58,6 +105,12 @@ export type ClientRuntimeOptions = {
    * UpdateManager attaches only when this and `currentVersion` are both set.
    */
   update?: UpdateHooks;
+  /**
+   * Human/status output sink. Defaults to the CLI Print layer for foreground
+   * runs; daemon service children inject a logger-backed sink so runtime
+   * diagnostics go through `client.log` instead of supervisor stderr.
+   */
+  output?: ClientRuntimeOutput;
 };
 
 /**
@@ -79,6 +132,7 @@ export class ClientRuntime {
   private readonly agentNames = new Set<string>();
   private readonly agentIds = new Set<string>();
   private readonly options: ClientRuntimeOptions;
+  private readonly output: ClientRuntimeOutput;
   private updateManager: UpdateManager | null = null;
   private watcher: FSWatcher | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -109,6 +163,7 @@ export class ClientRuntime {
   constructor(serverUrl: string, clientId: string, options: ClientRuntimeOptions = {}) {
     this.serverUrl = serverUrl;
     this.options = options;
+    this.output = options.output ?? printRuntimeOutput;
     this.connection = new ClientConnection({
       serverUrl,
       clientId,
@@ -125,7 +180,7 @@ export class ClientRuntime {
     registerBuiltinHandlers();
 
     this.connection.on("auth:expired", () => {
-      print.status("⚠️", "access token expired — reconnecting after refresh...");
+      this.output.status("⚠️", "access token expired — reconnecting after refresh...");
     });
 
     // Refresh token rejected by the server. Bug 2 fix: instead of
@@ -136,20 +191,20 @@ export class ClientRuntime {
     // to run the channel-aware login command. On change we call
     // `connection.clearPaused()` to resume.
     this.connection.on("auth:paused", (reason, err) => {
-      print.blank();
-      print.status("✗", "auth rejected — pausing agents until fresh credentials arrive.");
-      print.status("", authPausedDetail(err));
-      print.status("", "Recovery: get a new connect token from the First Tree web console");
-      print.status(
+      this.output.blank();
+      this.output.status("✗", "auth rejected — pausing agents until fresh credentials arrive.");
+      this.output.status("", authPausedDetail(err));
+      this.output.status("", "Recovery: get a new connect token from the First Tree web console");
+      this.output.status(
         "",
         `          (Computers → + New Connection), then re-run \`${channelConfig.binName} login <token>\`.`,
       );
-      print.status("", `Paused reason: ${reason}. Process is staying alive — no restart needed after login.`);
+      this.output.status("", `Paused reason: ${reason}. Process is staying alive — no restart needed after login.`);
       this.ensureCredentialsWatcher();
     });
 
     this.connection.on("auth:resumed", (previousReason) => {
-      print.status("✓", `credentials refreshed — resuming agents (was paused: ${previousReason})`);
+      this.output.status("✓", `credentials refreshed — resuming agents (was paused: ${previousReason})`);
     });
 
     // Back-compat: legacy auth:fatal listeners on older consumers used to
@@ -163,7 +218,7 @@ export class ClientRuntime {
     // failures) to the operator. ClientConnection's own reconnect loop handles
     // recovery; the process-wide crash guard lives in ClientConnection itself.
     this.connection.on("error", (err) => {
-      print.status("⚠️", `client connection error: ${err.message}`);
+      this.output.status("⚠️", `client connection error: ${err.message}`);
     });
 
     // Server tells us an agent has just been pinned to this client — mirror
@@ -190,7 +245,7 @@ export class ClientRuntime {
         try {
           cb();
         } catch (err) {
-          print.status("⚠️", `reconnect handler error: ${err instanceof Error ? err.message : String(err)}`);
+          this.output.status("⚠️", `reconnect handler error: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
     });
@@ -225,7 +280,7 @@ export class ClientRuntime {
     // name/id so rescans and reconnects don't re-warn; a client upgrade + restart
     // picks the agent up once its handler is registered.
     if (!hasHandler(config.runtime)) {
-      print.status(
+      this.output.status(
         "⚠️",
         `agent "${name}" uses runtime "${config.runtime}" which this client build does not support yet — skipping. Update the client to run it.`,
       );
@@ -280,16 +335,16 @@ export class ClientRuntime {
     }
 
     await this.connection.connect();
-    print.check(true, "client registered", this.connection.clientId);
+    this.output.check(true, "client registered", this.connection.clientId);
 
     if (this.agents.length === 0) {
-      print.blank();
-      print.status("", "no agents configured yet.");
-      print.status(
+      this.output.blank();
+      this.output.status("", "no agents configured yet.");
+      this.output.status(
         "",
         `add one with: ${channelConfig.binName} agent create <name> --type claude-code --client-id <id>`,
       );
-      print.blank();
+      this.output.blank();
       return;
     }
 
@@ -297,9 +352,9 @@ export class ClientRuntime {
 
     const connected = startupResults.filter((r) => r === "connected").length;
     const skipped = startupResults.filter((r) => r === "skipped").length;
-    print.blank();
+    this.output.blank();
     const skippedSuffix = skipped > 0 ? `, ${skipped} skipped` : "";
-    print.status("", `${connected} agent(s) running${skippedSuffix}. Press Ctrl+C to stop.`);
+    this.output.status("", `${connected} agent(s) running${skippedSuffix}. Press Ctrl+C to stop.`);
   }
 
   watchAgentsDir(agentsDir: string): void {
@@ -320,7 +375,7 @@ export class ClientRuntime {
     // or inotify exhaustion on Linux). An unhandled 'error' throws and would
     // take down the daemon — tear the watcher down so it degrades gracefully.
     this.watcher.on("error", (err: Error) => {
-      print.status("⚠️", `agents dir watcher error: ${err.message}`);
+      this.output.status("⚠️", `agents dir watcher error: ${err.message}`);
       this.unwatchAgentsDir();
     });
   }
@@ -376,7 +431,7 @@ export class ClientRuntime {
           if (snapshot && snapshot !== this.lastCredentialsSnapshot) {
             this.lastCredentialsSnapshot = snapshot;
             if (this.connection.isPaused()) {
-              print.status("", "credentials.json updated — clearing paused mode");
+              this.output.status("", "credentials.json updated — clearing paused mode");
               this.connection.clearPaused();
             }
           }
@@ -386,11 +441,11 @@ export class ClientRuntime {
       // still emit 'error' later; without a listener that would crash the
       // daemon. Tear it down so paused-mode recovery degrades gracefully.
       this.credentialsWatcher.on("error", (err: Error) => {
-        print.status("⚠️", `credentials watcher error: ${err.message}`);
+        this.output.status("⚠️", `credentials watcher error: ${err.message}`);
         this.stopCredentialsWatcher();
       });
     } catch (err) {
-      print.status("⚠️", `credentials watcher failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.output.status("⚠️", `credentials watcher failed: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -454,8 +509,8 @@ export class ClientRuntime {
         if (this.agentNames.has(name)) continue;
         if (this.agentIds.has(config.agentId)) continue;
 
-        print.blank();
-        print.status("", `new agent detected: ${name}`);
+        this.output.blank();
+        this.output.status("", `new agent detected: ${name}`);
         this.addAgent(name, config);
         this.startAgent(name);
       }
@@ -474,14 +529,14 @@ export class ClientRuntime {
     const existing = this.agents.find((agent) => agent.slot.agentId === message.agentId);
     if (existing) {
       if (existing.state === "suspended-skipped") {
-        print.status("", `agent reactivated: ${existing.name}`);
+        this.output.status("", `agent reactivated: ${existing.name}`);
         this.startAgent(existing.name);
       }
       return;
     }
 
     if (!this.agentsDir) {
-      print.status("⚠️", `agent pinned (${message.agentId}) but no agents dir set — cannot auto-register.`);
+      this.output.status("⚠️", `agent pinned (${message.agentId}) but no agents dir set — cannot auto-register.`);
       return;
     }
 
@@ -491,10 +546,10 @@ export class ClientRuntime {
       mkdirSync(agentDir, { recursive: true, mode: 0o700 });
       const yaml = stringifyYaml({ agentId: message.agentId, runtime: message.runtimeProvider });
       writeFileSync(join(agentDir, "agent.yaml"), yaml, { mode: 0o600 });
-      print.check(true, `auto-added agent "${localName}"`, `${message.agentId} (from server push)`);
+      this.output.check(true, `auto-added agent "${localName}"`, `${message.agentId} (from server push)`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      print.check(false, `failed to auto-add agent "${localName}"`, msg);
+      this.output.check(false, `failed to auto-add agent "${localName}"`, msg);
       return;
     }
 
@@ -550,17 +605,17 @@ export class ClientRuntime {
     try {
       const identity = await entry.slot.start();
       entry.state = "running";
-      print.check(true, `${entry.name}: connected`, `agent: ${identity.displayName ?? identity.agentId}`);
+      this.output.check(true, `${entry.name}: connected`, `agent: ${identity.displayName ?? identity.agentId}`);
       return "connected";
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       if (isAgentSuspendedBindError(error)) {
         entry.state = "suspended-skipped";
-        print.status("•", `${entry.name}: skipped (suspended)`);
+        this.output.status("•", `${entry.name}: skipped (suspended)`);
         return "skipped";
       }
       entry.state = "failed";
-      print.check(false, `${entry.name}: connection failed`, msg);
+      this.output.check(false, `${entry.name}: connection failed`, msg);
       return "failed";
     }
   }

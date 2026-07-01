@@ -26,8 +26,7 @@ export function renderServiceBlock(): void {
     return;
   }
   const svc = getClientServiceStatus();
-  const tail =
-    svc.platform === "systemd" ? `  (logs: journalctl --user -u ${svc.label.replace(/\.service$/, "")} -f)` : "";
+  const tail = `  (logs: ${join(svc.logDir, "client.log")})`;
   if (svc.state === "active") {
     print.line(`  Service:  ✓ running (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""})${tail}\n`);
   } else if (svc.state === "inactive") {

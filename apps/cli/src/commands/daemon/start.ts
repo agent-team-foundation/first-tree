@@ -31,6 +31,7 @@ import {
   COMMAND_VERSION,
   createApiNameResolver,
   createExecuteUpdate,
+  createLoggerRuntimeOutput,
   declineUpdate,
   ensureFreshAccessToken,
   getClientServiceStatus,
@@ -60,6 +61,28 @@ export function registerDaemonStartCommand(daemon: Command): void {
     .option("--foreground", "Run inline instead of delegating to the background service (for debugging)")
     .action(async (options: { interactive?: boolean; foreground?: boolean }) => {
       const binName = channelConfig.binName;
+      const serviceMode = process.env.FIRST_TREE_SERVICE_MODE === "1";
+      const isSupervisorChild = options.interactive === false && serviceMode;
+      if (serviceMode) {
+        configureClientLoggerForService(join(defaultHome(), "logs"));
+        // The CLI preAction defaults one-shot command logs to `warn`; the
+        // daemon service is long-running and needs startup diagnostics in
+        // client.log even before client.yaml has been parsed. This is
+        // config-driven, so explicit operator levels still win.
+        applyClientLoggerConfig({ level: "info" });
+      }
+      const daemonOutput = serviceMode ? createLoggerRuntimeOutput(createLogger("daemon")) : null;
+      const writeLine = (text: string) => (daemonOutput ? daemonOutput.line(text) : print.line(text));
+      const writeStatus = (symbol: string, msg: string) =>
+        daemonOutput ? daemonOutput.status(symbol, msg) : print.status(symbol, msg);
+      const writeErrorAndExit = (message: string): never => {
+        if (daemonOutput) {
+          daemonOutput.status("✗", message);
+        } else {
+          print.line(`  ${message}\n`);
+        }
+        process.exit(1);
+      };
       // Compatibility, not management: a launchd / systemd daemon does not inherit
       // the user's login-shell environment, so load the user-owned
       // `~/.first-tree/daemon.env` (if present) into our env BEFORE the runtime
@@ -67,19 +90,18 @@ export function registerDaemonStartCommand(daemon: Command): void {
       // whatever proxy the user configured. First Tree only reads this file.
       const appliedDaemonEnv = loadDaemonEnv();
       if (appliedDaemonEnv.length > 0) {
-        print.line(`  loaded ${appliedDaemonEnv.length} var(s) from daemon.env (${appliedDaemonEnv.join(", ")})\n`);
+        writeLine(`  loaded ${appliedDaemonEnv.length} var(s) from daemon.env (${appliedDaemonEnv.join(", ")})\n`);
       }
       // Fail closed: never spin up the runtime without persisted credentials.
       // Hooking this in BEFORE the service-delegation branch keeps the policy
       // uniform — supervisor child, foreground debug, or background daemon
       // launch all bail out the same way pointing at `login`.
-      const isSupervisorChild = options.interactive === false && process.env.FIRST_TREE_SERVICE_MODE === "1";
       if (!loadCredentials()) {
-        fail(
-          "NO_CREDENTIALS",
-          `no credentials — run \`${binName} login <token>\` to sign in before starting the daemon.`,
-          1,
-        );
+        const message = `no credentials — run \`${binName} login <token>\` to sign in before starting the daemon.`;
+        if (daemonOutput) {
+          writeErrorAndExit(message);
+        }
+        fail("NO_CREDENTIALS", message, 1);
       }
 
       try {
@@ -97,52 +119,53 @@ export function registerDaemonStartCommand(daemon: Command): void {
         if (!wantInline && isServiceSupported()) {
           const svc = getClientServiceStatus();
           if (svc.state === "active") {
-            print.line("\n");
-            print.line(`  Service is already running (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""}).\n`);
-            print.line(`  Use \`${binName} daemon restart\` to restart, or \`--foreground\` to run inline.\n\n`);
+            writeLine("\n");
+            writeLine(`  Service is already running (${svc.platform}${svc.detail ? `, ${svc.detail}` : ""}).\n`);
+            writeLine(`  Use \`${binName} daemon restart\` to restart, or \`--foreground\` to run inline.\n\n`);
             return;
           }
           if (svc.state === "inactive") {
             const res = startClientService();
             if (!res.ok) {
-              print.line(`\n  Failed to start service: ${res.reason}\n`);
+              writeLine(`\n  Failed to start service: ${res.reason}\n`);
               if (isWslDbusOvermount(res.reason)) {
-                print.line("\n");
-                print.line("  WSL2 detected — WSLg has over-mounted /run/user/$UID and is hiding\n");
-                print.line("  the user dbus socket. The systemd user manager is fine; the bus\n");
-                print.line("  socket just isn't reachable from your shell.\n\n");
-                print.line("  Quick fix (one-shot, lost on reboot):\n");
-                print.line("      sudo umount -l /run/user/$(id -u)\n\n");
-                print.line("  Permanent fix — install a boot-time helper, then update wsl.conf:\n\n");
-                print.line("      sudo tee /usr/local/bin/strip-wslg-overlay.sh >/dev/null <<'EOF'\n");
-                print.line("      #!/bin/sh\n");
-                print.line("      for d in /run/user/*; do\n");
-                print.line('        uid=$(basename "$d")\n');
-                print.line('        case "$uid" in ""|*[!0-9]*) continue ;; esac\n');
-                print.line("        for i in $(seq 1 30); do\n");
-                print.line('          if mount | grep -q "tmpfs on $d .*mode=755"; then\n');
-                print.line('            umount -l "$d"; break\n');
-                print.line("          fi\n");
-                print.line("          sleep 1\n");
-                print.line("        done\n");
-                print.line("      done\n");
-                print.line("      EOF\n");
-                print.line("      sudo chmod +x /usr/local/bin/strip-wslg-overlay.sh\n\n");
-                print.line("  Then add to /etc/wsl.conf under [boot]:\n");
-                print.line("      command=/usr/local/bin/strip-wslg-overlay.sh\n\n");
-                print.line("  Then run `wsl --shutdown` in Windows PowerShell and reopen the shell.\n");
+                writeLine("\n");
+                writeLine("  WSL2 detected — WSLg has over-mounted /run/user/$UID and is hiding\n");
+                writeLine("  the user dbus socket. The systemd user manager is fine; the bus\n");
+                writeLine("  socket just isn't reachable from your shell.\n\n");
+                writeLine("  Quick fix (one-shot, lost on reboot):\n");
+                writeLine("      sudo umount -l /run/user/$(id -u)\n\n");
+                writeLine("  Permanent fix — install a boot-time helper, then update wsl.conf:\n\n");
+                writeLine("      sudo tee /usr/local/bin/strip-wslg-overlay.sh >/dev/null <<'EOF'\n");
+                writeLine("      #!/bin/sh\n");
+                writeLine("      for d in /run/user/*; do\n");
+                writeLine('        uid=$(basename "$d")\n');
+                writeLine('        case "$uid" in ""|*[!0-9]*) continue ;; esac\n');
+                writeLine("        for i in $(seq 1 30); do\n");
+                writeLine('          if mount | grep -q "tmpfs on $d .*mode=755"; then\n');
+                writeLine('            umount -l "$d"; break\n');
+                writeLine("          fi\n");
+                writeLine("          sleep 1\n");
+                writeLine("        done\n");
+                writeLine("      done\n");
+                writeLine("      EOF\n");
+                writeLine("      sudo chmod +x /usr/local/bin/strip-wslg-overlay.sh\n\n");
+                writeLine("  Then add to /etc/wsl.conf under [boot]:\n");
+                writeLine("      command=/usr/local/bin/strip-wslg-overlay.sh\n\n");
+                writeLine("  Then run `wsl --shutdown` in Windows PowerShell and reopen the shell.\n");
               }
-              print.line("  Try `--foreground` to run inline instead.\n\n");
+              writeLine("  Try `--foreground` to run inline instead.\n\n");
               process.exit(1);
             }
             const after = getClientServiceStatus();
-            print.line("\n");
-            print.line(`  Started ${after.platform} service${after.detail ? ` (${after.detail})` : ""}.\n`);
-            const journalHint =
+            writeLine("\n");
+            writeLine(`  Started ${after.platform} service${after.detail ? ` (${after.detail})` : ""}.\n`);
+            writeLine(`  Logs:  ${join(after.logDir, "client.log")}\n`);
+            const supervisorHint =
               after.platform === "systemd"
-                ? `  (or \`journalctl --user -u ${after.label.replace(/\.service$/, "")}\`)`
-                : "";
-            print.line(`  Logs:  ${after.logDir}${journalHint}\n\n`);
+                ? `  Supervisor fallback: \`journalctl --user -u ${after.label.replace(/\.service$/, "")}\`\n\n`
+                : `  Supervisor fallback: ${join(after.logDir, "client.stdout.log")} / ${join(after.logDir, "client.stderr.log")}\n\n`;
+            writeLine(supervisorHint);
             return;
           }
           if (svc.state === "unknown") {
@@ -151,10 +174,10 @@ export function registerDaemonStartCommand(daemon: Command): void {
             // race a still-supervised process for the same client.id, which
             // is exactly the failure mode this whole PR is trying to
             // eliminate. Refuse and let the operator inspect.
-            print.line(
+            writeLine(
               `\n  Service state could not be determined (${svc.platform}${svc.detail ? `: ${svc.detail}` : ""}).\n`,
             );
-            print.line(`  Inspect with \`${binName} daemon doctor\`, or pass \`--foreground\` to bypass.\n\n`);
+            writeLine(`  Inspect with \`${binName} daemon doctor\`, or pass \`--foreground\` to bypass.\n\n`);
             process.exit(1);
           }
           // state === "not-installed" → fall through to inline run.
@@ -176,12 +199,6 @@ export function registerDaemonStartCommand(daemon: Command): void {
         // `logLevel: debug` in client.yaml is parsed but never reaches pino.
         applyClientLoggerConfig({ level: config.logLevel });
 
-        // Service mode (launchd / systemd): route pino through a rotating
-        // NDJSON file instead of stderr, so the supervisor's stdout/stderr
-        // capture stays empty under normal operation.
-        if (process.env.FIRST_TREE_SERVICE_MODE === "1") {
-          configureClientLoggerForService(join(defaultHome(), "logs"));
-        }
         initClientSentry({ version: COMMAND_VERSION, gitSha: GIT_SHA, defaultDsn: CLIENT_SENTRY_DSN });
 
         // Load agents (may be empty — daemon can start without agents).
@@ -197,10 +214,11 @@ export function registerDaemonStartCommand(daemon: Command): void {
             workspacesDir: join(defaultDataDir(), "workspaces"),
             sessionsDir: join(defaultDataDir(), "sessions"),
             resolver: createApiNameResolver(config.server.url, () => ensureFreshAccessToken()),
+            log: writeStatus,
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          print.status("⚠️", `agent-dir migration skipped: ${msg}`);
+          writeStatus("⚠️", `agent-dir migration skipped: ${msg}`);
         }
 
         // Pre-flight runtime-provider reconciliation rewrites any local
@@ -214,15 +232,15 @@ export function registerDaemonStartCommand(daemon: Command): void {
             serverUrl: config.server.url,
             accessToken,
             agentsDir,
-            log: (level, msg) => print.status(level === "warn" ? "⚠️" : "•", msg),
+            log: (level, msg) => writeStatus(level === "warn" ? "⚠️" : "•", msg),
           });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          print.status("⚠️", `runtime-provider reconcile skipped: ${msg}`);
+          writeStatus("⚠️", `runtime-provider reconcile skipped: ${msg}`);
         }
         const agents = loadAgents({ schema: agentConfigSchema, agentsDir });
 
-        print.line(`\n  Connecting to ${config.server.url} (client id: ${config.client.id})...\n`);
+        writeLine(`\n  Connecting to ${config.server.url} (client id: ${config.client.id})...\n`);
 
         // `--no-interactive` suppresses update prompts, but it does not by
         // itself prove a supervisor will relaunch us after exit(75). Only the
@@ -247,6 +265,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         });
         const runtime = new ClientRuntime(config.server.url, config.client.id, {
           currentVersion: COMMAND_VERSION,
+          output: daemonOutput ?? undefined,
           update: {
             updateConfig: config.update,
             prompt: noInteractive ? declineUpdate : promptUpdate,
@@ -274,7 +293,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
               capabilities,
             });
           },
-          log: (symbol, msg) => print.status(symbol, msg),
+          log: (symbol, msg) => writeStatus(symbol, msg),
         });
         runtime.onReconnect(() => capabilityRefresher.onReconnect());
 
@@ -290,7 +309,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           // preserve the pending browser-auth entry instead of clobbering it on
           // the next re-probe.
           if (capabilityRefresher.isInteractive(command.provider)) {
-            print.status(
+            writeStatus(
               "•",
               `runtime-auth: ${command.provider} login already in progress — ignoring duplicate (ref ${command.ref})`,
             );
@@ -300,7 +319,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           void runRuntimeAuthLogin(command, {
             currentEntry: (provider) => capabilityRefresher.currentEntry(provider),
             setProviderEntry: (provider, entry) => capabilityRefresher.setProviderEntry(provider, entry),
-            log: (symbol, msg) => print.status(symbol, msg),
+            log: (symbol, msg) => writeStatus(symbol, msg),
           }).finally(() => capabilityRefresher.endInteractive(command.provider));
         });
 
@@ -323,7 +342,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           const claudeAgents = [...agents].filter(([, c]) => c.runtime === "claude-code");
           if (claudeAgents.length > 0) {
             const skills = await discoverClaudeCodeSkills({
-              warn: (msg) => print.status("⚠️", `skill scan: ${msg}`),
+              warn: (msg) => writeStatus("⚠️", `skill scan: ${msg}`),
             });
             const accessToken = await ensureFreshAccessToken();
             let pinnedByAgentId: Map<string, { agentId: string; clientId: string }> | null = null;
@@ -332,21 +351,21 @@ export function registerDaemonStartCommand(daemon: Command): void {
               pinnedByAgentId = new Map(pinned.map((agent) => [agent.agentId, agent]));
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
-              print.status("⚠️", `skills upload pin check skipped: ${msg}`);
+              writeStatus("⚠️", `skills upload pin check skipped: ${msg}`);
             }
             await Promise.all(
               claudeAgents.map(async ([name, c]) => {
                 try {
                   const pinned = pinnedByAgentId?.get(c.agentId);
                   if (pinnedByAgentId && !pinned) {
-                    print.status(
+                    writeStatus(
                       "⚠️",
                       `skills upload for ${name} skipped: local agent ${c.agentId} is not pinned to this user; run \`${binName} agent prune --dry-run\` to inspect stale aliases.`,
                     );
                     return;
                   }
                   if (pinned && pinned.clientId !== config.client.id) {
-                    print.status(
+                    writeStatus(
                       "⚠️",
                       `skills upload for ${name} skipped: local agent ${c.agentId} is pinned to another client (${pinned.clientId}); run \`${binName} agent prune --dry-run\` to inspect stale aliases.`,
                     );
@@ -360,14 +379,14 @@ export function registerDaemonStartCommand(daemon: Command): void {
                   });
                 } catch (err) {
                   const msg = err instanceof Error ? err.message : String(err);
-                  print.status("⚠️", `skills upload for ${name} skipped: ${msg}`);
+                  writeStatus("⚠️", `skills upload for ${name} skipped: ${msg}`);
                 }
               }),
             );
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          print.status("⚠️", `skills upload skipped: ${msg}`);
+          writeStatus("⚠️", `skills upload skipped: ${msg}`);
         }
 
         // Watch agents config dir for hot-add
@@ -375,7 +394,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
 
         // Graceful shutdown
         const shutdown = async () => {
-          print.line("\n  Shutting down...\n");
+          writeLine("\n  Shutting down...\n");
           capabilityRefresher.stop();
           runtime.unwatchAgentsDir();
           await runtime.stop();
@@ -389,13 +408,20 @@ export function registerDaemonStartCommand(daemon: Command): void {
         await new Promise(() => {});
       } catch (error) {
         if (error instanceof ClientUserMismatchError) {
-          print.line("\n");
-          print.line("  ⚠️  This client.yaml is owned by a different user.\n");
-          print.line(`  Run \`${binName} logout --purge\` before logging in with another account.\n`);
-          print.line("  This signs out the current user and removes this machine's local client\n");
-          print.line("  identity plus local agent configs, workspaces, and session state. Server-side\n");
-          print.line("  clients, agents, chats, and history are not deleted; the previous client and\n");
-          print.line("  agents simply stop running from this machine unless they are set up again.\n\n");
+          if (daemonOutput) {
+            writeStatus(
+              "✗",
+              `client.yaml is owned by a different user; run \`${binName} logout --purge\`, then \`${binName} login <token>\` with the intended account. This signs out the current local client identity plus local agent configs, workspaces, and session state; server-side clients, agents, chats, and history are not deleted.`,
+            );
+            process.exit(1);
+          }
+          writeLine("\n");
+          writeLine("  ⚠️  This client.yaml is owned by a different user.\n");
+          writeLine(`  Run \`${binName} logout --purge\` before logging in with another account.\n`);
+          writeLine("  This signs out the current user and removes this machine's local client\n");
+          writeLine("  identity plus local agent configs, workspaces, and session state. Server-side\n");
+          writeLine("  clients, agents, chats, and history are not deleted; the previous client and\n");
+          writeLine("  agents simply stop running from this machine unless they are set up again.\n\n");
           process.exit(1);
         }
         if (error instanceof ClientOrgMismatchError) {
@@ -403,13 +429,13 @@ export function registerDaemonStartCommand(daemon: Command): void {
             managed: isSupervisorChild,
             configDir: defaultConfigDir(),
             rerunCommand: `${binName} daemon start`,
+            output: daemonOutput ?? undefined,
           });
         }
         const msg = error instanceof Error ? error.message : String(error);
         captureClientException(error, { command: "daemon start" });
         await flushClientSentry();
-        print.line(`  Error: ${msg}\n`);
-        process.exit(1);
+        writeErrorAndExit(`Error: ${msg}`);
       } finally {
         // Reset singleton so other commands can reinit
         resetConfig();

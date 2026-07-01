@@ -21,6 +21,7 @@ const coreMocks = vi.hoisted(() => ({
   ClientRuntime: vi.fn(),
   createApiNameResolver: vi.fn(),
   createExecuteUpdate: vi.fn(),
+  createLoggerRuntimeOutput: vi.fn(),
   declineUpdate: vi.fn(),
   ensureFreshAccessToken: vi.fn(),
   getClientServiceStatus: vi.fn(),
@@ -141,6 +142,26 @@ beforeEach(() => {
   coreMocks.promptMissingFields.mockResolvedValue(undefined);
   coreMocks.createApiNameResolver.mockReturnValue(async () => "nova");
   coreMocks.createExecuteUpdate.mockReturnValue(async () => undefined);
+  coreMocks.createLoggerRuntimeOutput.mockImplementation(
+    (logger: {
+      error: (message: string) => void;
+      info: (message: string) => void;
+      warn: (message: string) => void;
+    }) => ({
+      blank: vi.fn(),
+      check: vi.fn((pass: boolean, label: string, detail?: string) => {
+        logger[pass ? "info" : "warn"](detail ? `${label}: ${detail}` : label);
+      }),
+      line: vi.fn((text: string) => {
+        const message = text.trim();
+        if (message) logger.info(message);
+      }),
+      status: vi.fn((symbol: string, msg: string) => {
+        const level = symbol === "⚠️" ? "warn" : symbol === "✗" ? "error" : "info";
+        logger[level](symbol ? `${symbol} ${msg}` : msg);
+      }),
+    }),
+  );
   coreMocks.migrateLocalAgentDirs.mockResolvedValue(undefined);
   coreMocks.reconcileLocalRuntimeProviders.mockResolvedValue(undefined);
   coreMocks.uploadClientCapabilities.mockResolvedValue(undefined);
@@ -230,7 +251,8 @@ describe("daemon start command", () => {
     await expect(runStart()).resolves.toBeTruthy();
     expect(coreMocks.startClientService).toHaveBeenCalled();
     expect(output()).toContain("Started systemd service");
-    expect(output()).toContain("journalctl --user -u first-tree");
+    expect(output()).toContain("Logs:  /logs/client.log");
+    expect(output()).toContain("Supervisor fallback: `journalctl --user -u first-tree`");
   });
 
   it("prints WSL repair guidance when service startup fails", async () => {
@@ -354,13 +376,91 @@ describe("daemon start command", () => {
       expect.objectContaining({ log: expect.any(Function), managed: true }),
     );
     expect(clientMocks.configureClientLoggerForService).toHaveBeenCalledWith(join(home, "logs"));
+    expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "info" });
+    expect(coreMocks.createLoggerRuntimeOutput).toHaveBeenCalledWith(expect.any(Object));
     expect(coreMocks.ClientRuntime).toHaveBeenCalledWith(
       "https://first-tree.example",
       "client_1234abcd",
       expect.objectContaining({
+        output: expect.any(Object),
         update: expect.objectContaining({ prompt: coreMocks.declineUpdate }),
       }),
     );
+    expect(output()).toBe("");
+  });
+
+  it("logs early service-mode startup failures before config logLevel is applied", async () => {
+    const daemonLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    clientMocks.createLogger.mockReturnValue(daemonLogger);
+    process.env.FIRST_TREE_SERVICE_MODE = "1";
+    coreMocks.promptMissingFields.mockRejectedValueOnce(new Error("client.yaml is malformed"));
+
+    await expect(runStart(["--no-interactive"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(clientMocks.configureClientLoggerForService).toHaveBeenCalledWith(join(home, "logs"));
+    expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "info" });
+    expect(daemonLogger.error).toHaveBeenCalledWith("✗ Error: client.yaml is malformed");
+    expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
+    expect(output()).toBe("");
+  });
+
+  it("logs missing credentials through the service logger instead of CLI stderr", async () => {
+    const daemonLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    clientMocks.createLogger.mockReturnValue(daemonLogger);
+    process.env.FIRST_TREE_SERVICE_MODE = "1";
+    coreMocks.loadCredentials.mockReturnValueOnce(null);
+
+    await expect(runStart(["--no-interactive"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(failMock).not.toHaveBeenCalled();
+    expect(daemonLogger.error).toHaveBeenCalledWith(
+      "✗ no credentials — run `first-tree-dev login <token>` to sign in before starting the daemon.",
+    );
+    expect(output()).toBe("");
+  });
+
+  it("logs service-mode user mismatch through error-level logger after config logLevel is applied", async () => {
+    const daemonLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    clientMocks.createLogger.mockReturnValue(daemonLogger);
+    writeFileSync(
+      join(home, "config", "client.yaml"),
+      "logLevel: error\nserver:\n  url: https://first-tree.example\nclient:\n  id: client_1234abcd\n",
+    );
+    process.env.FIRST_TREE_SERVICE_MODE = "1";
+    const client = await import("@first-tree/client");
+    runtimeInstance.start.mockRejectedValueOnce(new client.ClientUserMismatchError("wrong user"));
+
+    await expect(runStart(["--no-interactive"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "error" });
+    expect(daemonLogger.error).toHaveBeenCalledWith(
+      expect.stringContaining("client.yaml is owned by a different user"),
+    );
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev logout --purge"));
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <token>"));
+    expect(output()).toBe("");
+  });
+
+  it("logs service-mode org mismatch through error-level logger after config logLevel is applied", async () => {
+    const daemonLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    clientMocks.createLogger.mockReturnValue(daemonLogger);
+    writeFileSync(
+      join(home, "config", "client.yaml"),
+      "logLevel: warn\nserver:\n  url: https://first-tree.example\nclient:\n  id: client_1234abcd\n",
+    );
+    process.env.FIRST_TREE_SERVICE_MODE = "1";
+    const client = await import("@first-tree/client");
+    const actual = await vi.importActual<typeof import("../core/client-reidentify.js")>("../core/client-reidentify.js");
+    coreMocks.handleClientOrgMismatch.mockImplementation(actual.handleClientOrgMismatch);
+    runtimeInstance.start.mockRejectedValueOnce(new client.ClientOrgMismatchError("wrong org"));
+
+    await expect(runStart(["--no-interactive"])).rejects.toMatchObject({ exitCode: 1 });
+
+    expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "warn" });
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("wrong org"));
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev logout --purge"));
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <token>"));
+    expect(output()).toBe("");
   });
 
   it("does not treat non-supervisor --no-interactive inline runs as managed updates", async () => {
@@ -373,6 +473,7 @@ describe("daemon start command", () => {
       "https://first-tree.example",
       "client_1234abcd",
       expect.objectContaining({
+        output: undefined,
         update: expect.objectContaining({ prompt: coreMocks.declineUpdate }),
       }),
     );
