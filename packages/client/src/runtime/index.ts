@@ -18,6 +18,13 @@ export type {
 export { getHandlerFactory, hasHandler, registerHandler } from "./handler.js";
 export { InputController } from "./input-controller.js";
 export { registerShutdownHook, runShutdown } from "./lifecycle.js";
+export type { ProviderDrainProcess, ProviderDrainSnapshot, ProviderProcessName } from "./process-tree-probe.js";
+export {
+  assertProviderDrainClear,
+  OsProviderDrainSource,
+  PROVIDER_DRAIN_PROCESS_NAMES,
+  ProviderDrainBlockedError,
+} from "./process-tree-probe.js";
 export type { AgentRuntimeOptions } from "./runtime.js";
 export { AgentRuntime } from "./runtime.js";
 export { SessionManager } from "./session-manager.js";

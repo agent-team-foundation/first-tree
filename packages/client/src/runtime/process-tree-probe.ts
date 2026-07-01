@@ -27,6 +27,22 @@ export interface SubprocessProbe {
 }
 
 export type ProcessRow = { pid: number; ppid: number; comm: string };
+export type ProviderProcessName = "claude" | "codex";
+export const PROVIDER_DRAIN_PROCESS_NAMES: readonly ProviderProcessName[] = ["claude", "codex"];
+
+export type ProviderDrainProcess = {
+  pid: number;
+  ppid: number;
+  comm: string;
+  provider: ProviderProcessName;
+  clientId: string | null;
+  agentId: string | null;
+  chatId: string | null;
+  home: string | null;
+  descendantPids: number[];
+};
+
+export type ProviderDrainSnapshot = { ok: true; processes: ProviderDrainProcess[] } | { ok: false; reason: string };
 
 /** Parse `ps -axo pid=,ppid=,comm=` output into rows. Unparseable lines are skipped. */
 export function parseProcessRows(output: string): ProcessRow[] {
@@ -57,6 +73,18 @@ function isClaudeComm(comm: string): boolean {
   return comm === "claude" || comm.endsWith("/claude");
 }
 
+function basenameForComm(comm: string): string {
+  return comm.split(/[\\/]/).pop() ?? comm;
+}
+
+export function providerNameForComm(comm: string): ProviderProcessName | null {
+  const base = basenameForComm(comm);
+  for (const name of PROVIDER_DRAIN_PROCESS_NAMES) {
+    if (base === name) return name;
+  }
+  return null;
+}
+
 /** Provider pids = `claude` processes that are direct children of the daemon. */
 export function findProviderPids(rows: readonly ProcessRow[], daemonPid: number): number[] {
   return rows.filter((row) => row.ppid === daemonPid && isClaudeComm(row.comm)).map((row) => row.pid);
@@ -73,6 +101,36 @@ export function hasDescendant(pid: number, childrenByParent: ReadonlyMap<number,
   return (childrenByParent.get(pid)?.length ?? 0) > 0;
 }
 
+export function collectDescendantPids(pid: number, childrenByParent: ReadonlyMap<number, number[]>): number[] {
+  const out: number[] = [];
+  const stack = [...(childrenByParent.get(pid) ?? [])];
+  while (stack.length > 0) {
+    const child = stack.pop();
+    if (child === undefined) continue;
+    out.push(child);
+    stack.push(...(childrenByParent.get(child) ?? []));
+  }
+  out.sort((a, b) => a - b);
+  return out;
+}
+
+export function buildParentIndex(rows: readonly ProcessRow[]): Map<number, number> {
+  const byPid = new Map<number, number>();
+  for (const { pid, ppid } of rows) byPid.set(pid, ppid);
+  return byPid;
+}
+
+export function isDescendantOf(pid: number, ancestorPid: number, parentByPid: ReadonlyMap<number, number>): boolean {
+  let current = parentByPid.get(pid);
+  const seen = new Set<number>();
+  while (typeof current === "number" && current > 0 && !seen.has(current)) {
+    if (current === ancestorPid) return true;
+    seen.add(current);
+    current = parentByPid.get(current);
+  }
+  return false;
+}
+
 /**
  * Extract the `FIRST_TREE_CHAT_ID` value from a process's environment dump.
  * Handles both forms produced by {@link defaultEnvForPid}: space-separated
@@ -85,6 +143,19 @@ export function extractChatId(envText: string): string | null {
   return match ? (match[1] ?? null) : null;
 }
 
+export function extractEnvValue(envText: string, key: string): string | null {
+  if (envText.includes("\0")) {
+    const prefix = `${key}=`;
+    for (const part of envText.split("\0")) {
+      if (part.startsWith(prefix)) return part.slice(prefix.length);
+    }
+    return null;
+  }
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = envText.match(new RegExp(`(?:^|[\\s\\0])${escaped}=([^\\s\\0]+)`));
+  return match ? (match[1] ?? null) : null;
+}
+
 type PsSubprocessProbeOptions = {
   log: pino.Logger;
   /** Defaults to this daemon process. */
@@ -94,6 +165,21 @@ type PsSubprocessProbeOptions = {
   /** Injectable for tests: returns `ps -axo pid=,ppid=,comm=` stdout. */
   runProcessSnapshot?: () => Promise<string>;
   /** Injectable for tests: returns `ps -Eww -p <pid> -o command=` stdout. */
+  runEnvForPid?: (pid: number) => Promise<string>;
+};
+
+export type OsProviderDrainSourceOptions = {
+  /** Defaults to this process. Used when checking a live daemon's process tree. */
+  daemonPid?: number;
+  /** Active local client id. Preferred switch-drain scope once provider env carries it. */
+  clientId?: string;
+  /** Current FIRST_TREE_HOME. Covers older provider envs before FIRST_TREE_CLIENT_ID existed. */
+  home?: string;
+  /** Optional narrower scope for callers that already know local agent ids. */
+  agentIds?: readonly string[];
+  /** Injectable for tests: returns `ps -axo pid=,ppid=,comm=` stdout. */
+  runProcessSnapshot?: () => Promise<string>;
+  /** Injectable for tests: returns the provider process env text. */
   runEnvForPid?: (pid: number) => Promise<string>;
 };
 
@@ -112,6 +198,122 @@ async function defaultEnvForPid(pid: number): Promise<string> {
   }
   const { stdout } = await execFileAsync("ps", ["-Eww", "-p", String(pid), "-o", "command="]);
   return stdout;
+}
+
+function hasDrainScope(opts: OsProviderDrainSourceOptions): boolean {
+  return Boolean(opts.clientId || opts.home || (opts.agentIds && opts.agentIds.length > 0) || opts.daemonPid);
+}
+
+function processMatchesDrainScope(input: {
+  envText: string;
+  pid: number;
+  opts: OsProviderDrainSourceOptions;
+  parentByPid: ReadonlyMap<number, number>;
+}): boolean {
+  const { envText, pid, opts, parentByPid } = input;
+  if (opts.clientId && extractEnvValue(envText, "FIRST_TREE_CLIENT_ID") === opts.clientId) return true;
+  if (opts.home && extractEnvValue(envText, "FIRST_TREE_HOME") === opts.home) return true;
+  const agentId = extractEnvValue(envText, "FIRST_TREE_AGENT_ID");
+  if (agentId && opts.agentIds?.includes(agentId)) return true;
+  if (typeof opts.daemonPid === "number" && isDescendantOf(pid, opts.daemonPid, parentByPid)) return true;
+  return false;
+}
+
+/**
+ * Fail-closed process-tree source for client-switch drain. Unlike
+ * {@link PsSubprocessProbe}, which is an idle-suspend hint and degrades to
+ * "no live background work", this source is a safety gate: a process or env
+ * snapshot failure means the caller cannot prove the old provider is gone.
+ */
+export class OsProviderDrainSource {
+  private readonly daemonPid: number | undefined;
+  private readonly runProcessSnapshot: () => Promise<string>;
+  private readonly runEnvForPid: (pid: number) => Promise<string>;
+
+  constructor(private readonly opts: OsProviderDrainSourceOptions = {}) {
+    this.daemonPid = opts.daemonPid;
+    this.runProcessSnapshot = opts.runProcessSnapshot ?? defaultProcessSnapshot;
+    this.runEnvForPid = opts.runEnvForPid ?? defaultEnvForPid;
+  }
+
+  async snapshot(): Promise<ProviderDrainSnapshot> {
+    if (!hasDrainScope({ ...this.opts, daemonPid: this.daemonPid })) {
+      return { ok: false, reason: "provider drain source has no client/home/agent/daemon scope" };
+    }
+
+    let rows: ProcessRow[];
+    try {
+      rows = parseProcessRows(await this.runProcessSnapshot());
+    } catch (err) {
+      return {
+        ok: false,
+        reason: `provider process snapshot failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+
+    const parentByPid = buildParentIndex(rows);
+    const childrenByParent = buildChildrenIndex(rows);
+    const processes: ProviderDrainProcess[] = [];
+    for (const row of rows) {
+      const provider = providerNameForComm(row.comm);
+      if (!provider) continue;
+      let envText: string;
+      try {
+        envText = await this.runEnvForPid(row.pid);
+      } catch (err) {
+        return {
+          ok: false,
+          reason: `provider process env read failed for pid ${row.pid}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        };
+      }
+      const scoped = processMatchesDrainScope({
+        envText,
+        pid: row.pid,
+        opts: { ...this.opts, daemonPid: this.daemonPid },
+        parentByPid,
+      });
+      if (!scoped) continue;
+      processes.push({
+        pid: row.pid,
+        ppid: row.ppid,
+        comm: row.comm,
+        provider,
+        clientId: extractEnvValue(envText, "FIRST_TREE_CLIENT_ID"),
+        agentId: extractEnvValue(envText, "FIRST_TREE_AGENT_ID"),
+        chatId: extractChatId(envText),
+        home: extractEnvValue(envText, "FIRST_TREE_HOME"),
+        descendantPids: collectDescendantPids(row.pid, childrenByParent),
+      });
+    }
+
+    processes.sort((a, b) => a.pid - b.pid);
+    return { ok: true, processes };
+  }
+}
+
+export class ProviderDrainBlockedError extends Error {
+  constructor(
+    message: string,
+    readonly snapshot: ProviderDrainSnapshot,
+  ) {
+    super(message);
+    this.name = "ProviderDrainBlockedError";
+  }
+}
+
+export async function assertProviderDrainClear(source: Pick<OsProviderDrainSource, "snapshot">): Promise<void> {
+  const snapshot = await source.snapshot();
+  if (!snapshot.ok) {
+    throw new ProviderDrainBlockedError(`provider drain source unavailable: ${snapshot.reason}`, snapshot);
+  }
+  if (snapshot.processes.length > 0) {
+    const details = snapshot.processes
+      .map((p) => `${p.provider} pid ${p.pid}${p.chatId ? ` chat ${p.chatId}` : ""}`)
+      .join(", ");
+    throw new ProviderDrainBlockedError(`provider processes still live: ${details}`, snapshot);
+  }
 }
 
 /**

@@ -428,7 +428,7 @@ describe("formatInboundContent", () => {
 });
 
 describe("buildAgentEnv", () => {
-  it("layers the four First Tree envelope vars on top of parent env (parent wins on unrelated keys)", () => {
+  it("layers the First Tree envelope vars on top of parent env (parent wins on unrelated keys)", () => {
     const parent = { PATH: "/usr/bin", FOO: "bar" } as NodeJS.ProcessEnv;
     const env = buildAgentEnv(parent, {
       sdk: { serverUrl: "http://first-tree" },
@@ -442,10 +442,12 @@ describe("buildAgentEnv", () => {
         metadata: {},
       },
       chatId: "chat-1",
+      clientId: "client-a",
     });
     expect(env.PATH).toBe("/usr/bin");
     expect(env.FOO).toBe("bar");
     expect(env.FIRST_TREE_SERVER_URL).toBe("http://first-tree");
+    expect(env.FIRST_TREE_CLIENT_ID).toBe("client-a");
     expect(env.FIRST_TREE_AGENT_ID).toBe("agent-a");
     expect(env.FIRST_TREE_INBOX_ID).toBe("inbox-a");
     expect(env.FIRST_TREE_CHAT_ID).toBe("chat-1");

@@ -26,8 +26,10 @@ import { CLIENT_SENTRY_DSN, GIT_SHA } from "../../build-info.js";
 import { fail } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
 import {
+  assertDaemonStartupAllowedDuringClientSwitch,
   CapabilityRefresher,
   ClientRuntime,
+  ClientSwitchMaintenanceError,
   COMMAND_VERSION,
   createApiNameResolver,
   createExecuteUpdate,
@@ -83,6 +85,15 @@ export function registerDaemonStartCommand(daemon: Command): void {
         }
         process.exit(1);
       };
+      try {
+        assertDaemonStartupAllowedDuringClientSwitch(defaultHome());
+      } catch (err) {
+        if (err instanceof ClientSwitchMaintenanceError) {
+          writeStatus("⚠️", err.message);
+          process.exit(isSupervisorChild ? 0 : 1);
+        }
+        throw err;
+      }
       // Compatibility, not management: a launchd / systemd daemon does not inherit
       // the user's login-shell environment, so load the user-owned
       // `~/.first-tree/daemon.env` (if present) into our env BEFORE the runtime

@@ -19,6 +19,8 @@ const clientMocks = vi.hoisted(() => ({
 const coreMocks = vi.hoisted(() => ({
   CapabilityRefresher: vi.fn(),
   ClientRuntime: vi.fn(),
+  ClientSwitchMaintenanceError: class ClientSwitchMaintenanceError extends Error {},
+  assertDaemonStartupAllowedDuringClientSwitch: vi.fn(),
   createApiNameResolver: vi.fn(),
   createExecuteUpdate: vi.fn(),
   createLoggerRuntimeOutput: vi.fn(),
@@ -109,7 +111,9 @@ beforeEach(() => {
   delete process.env.FIRST_TREE_SERVICE_MODE;
 
   for (const mock of Object.values(clientMocks)) mock.mockReset();
-  for (const mock of Object.values(coreMocks)) mock.mockReset();
+  for (const mock of Object.values(coreMocks)) {
+    if (typeof mock === "function" && "mockReset" in mock) mock.mockReset();
+  }
   failMock.mockClear();
   stderrSpy.mockClear();
 
@@ -135,6 +139,7 @@ beforeEach(() => {
     logDir: join(home, "logs"),
   });
   coreMocks.startClientService.mockReturnValue({ ok: true });
+  coreMocks.assertDaemonStartupAllowedDuringClientSwitch.mockImplementation(() => undefined);
   coreMocks.ensureFreshAccessToken.mockResolvedValue("access-token");
   coreMocks.listPinnedAgents.mockResolvedValue([
     { agentId: "agent-1", clientId: "client_1234abcd", runtimeProvider: "claude-code", status: "active" },
@@ -214,6 +219,38 @@ function output(): string {
 }
 
 describe("daemon start command", () => {
+  it("blocks before credentials when a client switch maintenance file exists", async () => {
+    coreMocks.assertDaemonStartupAllowedDuringClientSwitch.mockImplementationOnce(() => {
+      throw new coreMocks.ClientSwitchMaintenanceError(
+        "client switch in progress; daemon startup is blocked before reading root client state",
+      );
+    });
+
+    await expect(runStart()).rejects.toMatchObject({ exitCode: 1 });
+    expect(coreMocks.loadCredentials).not.toHaveBeenCalled();
+    expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
+    expect(output()).toContain("client switch in progress");
+  });
+
+  it("lets supervisor restart attempts exit cleanly during client switch maintenance", async () => {
+    const daemonLogger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    clientMocks.createLogger.mockReturnValue(daemonLogger);
+    process.env.FIRST_TREE_SERVICE_MODE = "1";
+    coreMocks.assertDaemonStartupAllowedDuringClientSwitch.mockImplementationOnce(() => {
+      throw new coreMocks.ClientSwitchMaintenanceError(
+        "client switch in progress; daemon startup is blocked before reading root client state",
+      );
+    });
+
+    await expect(runStart(["--no-interactive"])).rejects.toMatchObject({ exitCode: 0 });
+    expect(coreMocks.loadCredentials).not.toHaveBeenCalled();
+    expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
+    expect(daemonLogger.warn).toHaveBeenCalledWith(
+      "⚠️ client switch in progress; daemon startup is blocked before reading root client state",
+    );
+    expect(output()).toBe("");
+  });
+
   it("fails closed when credentials are missing", async () => {
     coreMocks.loadCredentials.mockReturnValueOnce(null);
 

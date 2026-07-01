@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertProviderDrainClear,
   buildChildrenIndex,
   extractChatId,
+  extractEnvValue,
   findProviderPids,
   hasDescendant,
+  OsProviderDrainSource,
   PsSubprocessProbe,
   parseProcessRows,
+  providerNameForComm,
 } from "../runtime/process-tree-probe.js";
 import { silentLogger } from "./_logger-helpers.js";
 
@@ -52,6 +56,15 @@ describe("process-tree-probe pure helpers", () => {
     );
     // The value must not bleed into the next NUL-separated entry.
     expect(extractChatId(environ)).toBe("f93566d9-00c8");
+  });
+
+  it("extracts arbitrary FIRST_TREE env values and provider names", () => {
+    const environ = ["FIRST_TREE_CLIENT_ID=client_a", "FIRST_TREE_HOME=/tmp/first-tree", ""].join("\0");
+    expect(extractEnvValue(environ, "FIRST_TREE_CLIENT_ID")).toBe("client_a");
+    expect(extractEnvValue(environ, "FIRST_TREE_HOME")).toBe("/tmp/first-tree");
+    expect(providerNameForComm("/opt/homebrew/bin/codex")).toBe("codex");
+    expect(providerNameForComm("/opt/homebrew/bin/claude")).toBe("claude");
+    expect(providerNameForComm("/bin/zsh")).toBeNull();
   });
 });
 
@@ -110,5 +123,127 @@ describe("PsSubprocessProbe", () => {
     await probe.refresh();
     expect(probe.hasLiveSubprocess("chat-A")).toBe(false);
     probe.stop();
+  });
+});
+
+describe("OsProviderDrainSource", () => {
+  const snapshot = [
+    "100  1 /opt/homebrew/bin/claude",
+    "101 100 /bin/zsh",
+    "102 101 sleep",
+    "200  1 /usr/local/bin/codex",
+    "300  1 /usr/local/bin/codex",
+  ].join("\n");
+
+  const envForPid = async (pid: number): Promise<string> => {
+    if (pid === 100) {
+      return ["FIRST_TREE_CLIENT_ID=client_A", "FIRST_TREE_AGENT_ID=agent-A", "FIRST_TREE_CHAT_ID=chat-A"].join("\0");
+    }
+    if (pid === 200) {
+      return ["FIRST_TREE_CLIENT_ID=client_B", "FIRST_TREE_AGENT_ID=agent-B", "FIRST_TREE_CHAT_ID=chat-B"].join("\0");
+    }
+    return ["FIRST_TREE_HOME=/tmp/first-tree", "FIRST_TREE_AGENT_ID=agent-old"].join("\0");
+  };
+
+  it("reports scoped provider processes and descendants for switch drain", async () => {
+    const source = new OsProviderDrainSource({
+      clientId: "client_A",
+      runProcessSnapshot: async () => snapshot,
+      runEnvForPid: envForPid,
+    });
+
+    const result = await source.snapshot();
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.processes).toEqual([
+      expect.objectContaining({
+        pid: 100,
+        provider: "claude",
+        clientId: "client_A",
+        agentId: "agent-A",
+        chatId: "chat-A",
+        descendantPids: [101, 102],
+      }),
+    ]);
+  });
+
+  it("can scope older provider processes by FIRST_TREE_HOME when client id is absent", async () => {
+    const source = new OsProviderDrainSource({
+      home: "/tmp/first-tree",
+      runProcessSnapshot: async () => snapshot,
+      runEnvForPid: envForPid,
+    });
+
+    const result = await source.snapshot();
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.processes.map((p) => p.pid)).toEqual([300]);
+  });
+
+  it("fails closed when process snapshot is unavailable", async () => {
+    const source = new OsProviderDrainSource({
+      clientId: "client_A",
+      runProcessSnapshot: async () => {
+        throw new Error("ps denied");
+      },
+      runEnvForPid: envForPid,
+    });
+
+    await expect(source.snapshot()).resolves.toEqual({
+      ok: false,
+      reason: "provider process snapshot failed: ps denied",
+    });
+  });
+
+  it("fails closed when a provider env cannot be read", async () => {
+    const source = new OsProviderDrainSource({
+      clientId: "client_A",
+      runProcessSnapshot: async () => snapshot,
+      runEnvForPid: async (pid) => {
+        if (pid === 100) throw new Error("permission denied");
+        return envForPid(pid);
+      },
+    });
+
+    await expect(source.snapshot()).resolves.toEqual({
+      ok: false,
+      reason: "provider process env read failed for pid 100: permission denied",
+    });
+  });
+
+  it("assertProviderDrainClear rejects live or unavailable drain snapshots", async () => {
+    await expect(
+      assertProviderDrainClear(
+        new OsProviderDrainSource({
+          clientId: "client_A",
+          runProcessSnapshot: async () => snapshot,
+          runEnvForPid: envForPid,
+        }),
+      ),
+    ).rejects.toThrow("provider processes still live: claude pid 100 chat chat-A");
+
+    await expect(
+      assertProviderDrainClear(
+        new OsProviderDrainSource({
+          clientId: "client_A",
+          runProcessSnapshot: async () => {
+            throw new Error("ps denied");
+          },
+          runEnvForPid: envForPid,
+        }),
+      ),
+    ).rejects.toThrow("provider drain source unavailable: provider process snapshot failed: ps denied");
+  });
+
+  it("assertProviderDrainClear resolves only after the scoped provider is gone", async () => {
+    await expect(
+      assertProviderDrainClear(
+        new OsProviderDrainSource({
+          clientId: "client_A",
+          runProcessSnapshot: async () => "200 1 /usr/local/bin/codex",
+          runEnvForPid: envForPid,
+        }),
+      ),
+    ).resolves.toBeUndefined();
   });
 });

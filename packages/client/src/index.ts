@@ -82,6 +82,13 @@ export type {
 } from "./runtime/handler.js";
 export { getHandlerFactory, hasHandler, registerHandler } from "./runtime/handler.js";
 export { InputController } from "./runtime/input-controller.js";
+export type { ProviderDrainProcess, ProviderDrainSnapshot, ProviderProcessName } from "./runtime/process-tree-probe.js";
+export {
+  assertProviderDrainClear,
+  OsProviderDrainSource,
+  PROVIDER_DRAIN_PROCESS_NAMES,
+  ProviderDrainBlockedError,
+} from "./runtime/process-tree-probe.js";
 export type { AgentRuntimeOptions } from "./runtime/runtime.js";
 export { AgentRuntime } from "./runtime/runtime.js";
 // Runtime-auth (browser OAuth)

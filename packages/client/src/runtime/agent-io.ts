@@ -72,6 +72,7 @@ export function buildAgentEnv(
       workspacesRoot: string;
       selfSlug: string;
     };
+    clientId?: string;
     log?: (msg: string) => void;
   },
 ): NodeJS.ProcessEnv {
@@ -79,6 +80,7 @@ export function buildAgentEnv(
   return {
     ...env,
     FIRST_TREE_SERVER_URL: ctx.sdk.serverUrl,
+    ...(ctx.clientId ? { FIRST_TREE_CLIENT_ID: ctx.clientId } : {}),
     FIRST_TREE_AGENT_ID: ctx.agent.agentId,
     FIRST_TREE_INBOX_ID: ctx.agent.inboxId,
     FIRST_TREE_CHAT_ID: ctx.chatId,

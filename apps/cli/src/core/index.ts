@@ -23,6 +23,20 @@ export { handleClientOrgMismatch } from "./client-reidentify.js";
 export type { ClientRuntimeOptions, ClientRuntimeOutput } from "./client-runtime.js";
 // Client runtime
 export { ClientRuntime, createLoggerRuntimeOutput } from "./client-runtime.js";
+export type { ClientSwitchMaintenanceState, ClientSwitchPaths, DirectoryMovePlan } from "./client-switch-gates.js";
+export {
+  assertDaemonStartupAllowedDuringClientSwitch,
+  assertSameDeviceMove,
+  assertSameDeviceMovePlan,
+  assertServiceInactiveForClientSwitch,
+  ClientSwitchFilesystemError,
+  ClientSwitchMaintenanceError,
+  ClientSwitchServiceError,
+  clientSwitchPaths,
+  readClientSwitchMaintenanceState,
+  renameSameDeviceDirectory,
+  stopServiceForClientSwitch,
+} from "./client-switch-gates.js";
 // User-owned daemon environment (proxy etc.) — read, never written by us
 export { daemonEnvPath, loadDaemonEnv, parseDaemonEnv } from "./daemon-env.js";
 // Diagnostics (doctor)

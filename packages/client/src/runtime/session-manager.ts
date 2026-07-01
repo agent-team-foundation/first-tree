@@ -2034,6 +2034,7 @@ export class SessionManager {
       sdk: this.config.sdk,
       agent: this.config.agentIdentity,
       chatId,
+      clientId: typeof this.config.handlerConfig.clientId === "string" ? this.config.handlerConfig.clientId : undefined,
       log,
       docContext: {
         base: docBase,
