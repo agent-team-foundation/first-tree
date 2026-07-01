@@ -1331,11 +1331,23 @@ describe("ChatView", () => {
 
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Composer textarea missing");
-    // Group chat, no @mention yet: the persistent hint row states the rule, so
-    // the placeholder stays neutral (no duplicate "@ to pick a recipient").
-    expect(textarea.placeholder).toContain("Write a message");
-    expect(textarea.placeholder).not.toContain("Type @ to pick a recipient");
-    expect(container.textContent).toContain("@mention someone to send in this group");
+    // Group chat, no @mention yet: the placeholder carries the rule, and the
+    // tip bubble is NOT shown until a blocked send is actually attempted.
+    expect(textarea.placeholder).toContain("In a group, @mention who this is for");
+    expect(container.textContent).not.toContain("or no one gets this");
+
+    // Blocked TEXT send: typing without an @mention then pressing Enter pops the
+    // tip bubble and sends nothing. The send button stays clickable (not
+    // `disabled`) so a click would trigger the same tip.
+    await setValue(textarea, "no recipient here");
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled).toBe(false);
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+    await waitForText(container, "@mention someone, or no one gets this");
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
     await setValue(textarea, "Please review @nova");
     await click(container.querySelector('button[aria-label="Send"]'));
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected text send");
@@ -1350,9 +1362,9 @@ describe("ChatView", () => {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     });
     await flush();
-    // Image-only send with no @mention is blocked too; the persistent hint row
-    // carries the reason for both text and image sends (no separate line).
-    await waitForText(container, "@mention someone to send in this group");
+    // Image-only send with no @mention is blocked too; the tip bubble pops for
+    // both text and image attempts.
+    await waitForText(container, "@mention someone, or no one gets this");
     expect(chatMocks.sendFileMessageBatch).not.toHaveBeenCalled();
 
     await setValue(textarea, "@design image attached");
@@ -1369,6 +1381,49 @@ describe("ChatView", () => {
       // No live request in this chat → nothing to thread under.
       undefined,
     );
+
+    await act(async () => root.unmount());
+  });
+
+  it("clears the mention tip when switching to another group chat", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      undefined,
+      "/",
+    );
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    // Trigger the tip in chat-1 (group, no @mention).
+    await setValue(textarea, "no recipient");
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+    await waitForText(container, "@mention someone, or no one gets this");
+
+    // Switch to another group chat on the SAME long-lived ChatView instance
+    // (identical provider wrappers → React updates the chatId prop rather than
+    // remounting). The tip must not leak into the new chat before any blocked
+    // send there.
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/"]}>
+          <QueryClientProvider client={queryClient}>
+            <ToastProvider>
+              <ChatView agentId="agent-1" chatId="chat-2" />
+            </ToastProvider>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    // Pre-paint: the render gate (tip's origin chat ≠ viewed chat) keeps the
+    // stale bubble from painting even before effects flush — assert right after
+    // the commit, with no intervening flush.
+    expect(container.textContent).not.toContain("@mention someone, or no one gets this");
+    await flush();
+    expect(container.textContent).not.toContain("@mention someone, or no one gets this");
 
     await act(async () => root.unmount());
   });

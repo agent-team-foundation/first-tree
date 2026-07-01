@@ -797,6 +797,53 @@
   }
 }
 
+/* Group-mention tip bubble: entrance rises toward the send button it points at;
+   exit reverses. See chat-view's `mentionTip` state machine. */
+@keyframes mention-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes mention-tip-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+.mention-tip {
+  animation: mention-tip-in 150ms ease-out;
+}
+.mention-tip.mention-tip-out {
+  animation: mention-tip-out 300ms ease-in forwards;
+}
+/* The downward caret connecting the bubble to the send button below it. */
+.mention-tip-arrow {
+  position: absolute;
+  right: 14px;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  background: var(--bg-raised);
+  border-right: var(--hairline) solid var(--border-strong);
+  border-bottom: var(--hairline) solid var(--border-strong);
+  transform: rotate(45deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mention-tip,
+  .mention-tip.mention-tip-out {
+    animation: none;
+  }
+}
+
 @keyframes context-live-halo-breathe {
   0%,
   100% {
