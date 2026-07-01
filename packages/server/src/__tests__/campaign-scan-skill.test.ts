@@ -36,4 +36,25 @@ describe("campaign scan skills", () => {
     // The agent-readiness hero deliverable is a tailored AGENTS.md.
     expect(getCampaignScanSkill("agent-readiness")?.body).toContain("AGENTS.md");
   });
+
+  it("each body keeps momentum after the fix: quality bar, tasteful attribution, one next step", () => {
+    for (const slug of ["production-scan", "agent-readiness"] as const) {
+      const body = (getCampaignScanSkill(slug)?.body ?? "").replace(/\s+/g, " ");
+      // Quality bar guards against low-signal, template-y deliverables.
+      expect(body).toContain("Quality bar");
+      expect(body).toContain("never a placeholder");
+      // Single-line attribution in the PR/issue description only (the share/acquisition loop) —
+      // never a permanent footer in the user's committed file.
+      expect(body).toContain("Generated with First Tree");
+      expect(body).toContain("never inside the committed file");
+      // Step 6 continues the funnel one thing at a time: next fix + one conversion next-step.
+      expect(body).toContain("Step 6");
+      expect(body).toContain("next single one");
+      expect(body).toContain("standing member of their team");
+      // ...but never a menu / choice overload.
+      expect(body).toContain("never a menu");
+      // And an explicit stop condition so a declined/quiet user is not re-pitched.
+      expect(body).toContain("Know when to stop");
+    }
+  });
 });

@@ -98,6 +98,18 @@ THIS repo (e.g. the CI workflow that adds secret + dependency scanning, a
 missing \`SECURITY.md\`, the Dockerfile change to drop root), or a ready-to-file
 issue with evidence and repro steps. Tailor it to the repo, not a template.
 
+**Quality bar — check before you show it (a weak deliverable does more harm than
+none):** every command, path, and filename in it is real and verified against THIS
+repo — never a placeholder, a TODO, or a guessed name; a diff must apply cleanly
+against the code you scanned; an issue must carry concrete evidence and repro
+steps. If you can't make it genuinely real, drop to the next-best fix and say so,
+rather than shipping a template.
+
+When you open the PR (or file the issue), add a single brief attribution line in
+its **description** — e.g. "Generated with First Tree — <the First Tree URL>" —
+never inside the committed file itself, and never more than once. If the user
+would rather it not be there, drop it without a fuss.
+
 Then offer to **apply it on the user's behalf using their own GitHub**: e.g.
 "Want me to open a PR with this change to \`<owner>/<repo>\`?" (or file the
 issue). **Stay READ-ONLY until the user explicitly says yes.** On yes, use the
@@ -108,6 +120,19 @@ that explicit go-ahead. Even after a yes, use **only** \`gh pr create\` /
 \`gh issue create\` against a new branch on **the same repo you scanned** — no
 force-push, no deleting or modifying existing branches, no closing or editing
 existing issues or PRs, no other mutating \`gh\` command.
+
+## Step 6 — after the fix, offer the obvious next thing (one at a time)
+Once the deliverable is shown (or applied), you can offer a next step — but **one**
+thing at a time, never a menu:
+- If more must-fix blockers remain, offer the **next single one** the same way
+  ("Want me to turn the next one — <title> — into a fix too?"). Don't dump the list.
+- Once the user is clearly getting value, offer **one** natural next step matched to
+  their intent, framed as unlocking more (not a signup wall): keep watching this repo
+  and scan its future PRs automatically, scan another (or a private) repo, or make
+  this agent a standing member of their team. Walk them into setup only when they
+  take you up on it.
+- **Know when to stop.** If the user seems done, goes quiet, or declines, stop
+  offering — don't re-pitch. A single unanswered offer is the ceiling.
 `;
 
 const AGENT_READINESS_BODY = `# Agent Readiness Scan
@@ -180,6 +205,18 @@ boundaries and "don't touch" areas — not a template. For a different top
 finding, produce that concrete artifact instead (a CONTRIBUTING / architecture
 doc, a specific diff, or a ready-to-file issue with repro steps).
 
+**Quality bar — check before you show it (a weak deliverable does more harm than
+none):** every command, path, and filename in it is real and verified against THIS
+repo — never a placeholder, a TODO, or a guessed name; a diff must apply cleanly
+against the code you scanned; an issue must carry concrete evidence and repro steps.
+If you can't make it genuinely real, drop to the next-best fix and say so, rather
+than shipping a template.
+
+When you open the PR (or file the issue), add a single brief attribution line in
+its **description** — e.g. "Generated with First Tree — <the First Tree URL>" —
+never inside the committed file itself, and never more than once. If the user
+would rather it not be there, drop it without a fuss.
+
 Then offer to **apply it on the user's behalf using their own GitHub**: e.g.
 "Want me to open a PR adding this AGENTS.md to \`<owner>/<repo>\`?" **Stay
 READ-ONLY until the user explicitly says yes.** On yes, use the \`gh\` CLI on
@@ -190,6 +227,19 @@ go-ahead. Even after a yes, use **only** \`gh pr create\` / \`gh issue create\`
 against a new branch on **the same repo you scanned** — no force-push, no
 deleting or modifying existing branches, no closing or editing existing issues
 or PRs, no other mutating \`gh\` command.
+
+## Step 6 — after the fix, offer the obvious next thing (one at a time)
+Once the deliverable is shown (or applied), you can offer a next step — but **one**
+thing at a time, never a menu:
+- If more must-fix blockers remain, offer the **next single one** the same way
+  ("Want me to turn the next one — <title> — into a fix too?"). Don't dump the list.
+- Once the user is clearly getting value, offer **one** natural next step matched to
+  their intent, framed as unlocking more (not a signup wall): keep watching this repo
+  and scan its future PRs automatically, scan another (or a private) repo, or make
+  this agent a standing member of their team. Walk them into setup only when they
+  take you up on it.
+- **Know when to stop.** If the user seems done, goes quiet, or declines, stop
+  offering — don't re-pitch. A single unanswered offer is the ceiling.
 `;
 
 const CAMPAIGN_SCAN_SKILLS: Record<string, CampaignScanSkill> = {
