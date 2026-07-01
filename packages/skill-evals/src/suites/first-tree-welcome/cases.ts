@@ -29,7 +29,7 @@ type WelcomeRow = {
 const WELCOME_ROWS: readonly WelcomeRow[] = [
   {
     action: "route_to_tree_skill",
-    forbiddenActions: ["first-task-options", "seed-tree-in-welcome-chat", "tree-setup-as-value-task"],
+    forbiddenActions: ["first-task-options", "seed-tree-in-welcome-chat"],
     forbiddenClaims: ["repo evidence", "tree readiness"],
     id: "first-tree-welcome-tree-kickoff-chat",
     kickoffKind: "tree",
@@ -57,7 +57,7 @@ Use first-tree-welcome only to classify the setup state from its matrix. Reply w
   },
   {
     action: "offer_invitee_value_without_admin_setup",
-    forbiddenActions: ["admin-setup", "repo-selection", "tree-setup-as-first-task", "seed-tree"],
+    forbiddenActions: ["admin-setup", "repo-selection", "duplicate-tree"],
     forbiddenClaims: ["unread evidence"],
     id: "first-tree-welcome-invitee-ready",
     kickoffKind: "work",
@@ -125,8 +125,8 @@ No repository is connected, no local path or GitHub URL is available, and no pop
     treeState: "unknown",
   },
   {
-    action: "offer_code_value_without_tree_setup_task",
-    forbiddenActions: ["tree-setup-as-first-task", "seed-tree"],
+    action: "offer_tree_build_with_code_value",
+    forbiddenActions: ["seed-tree-in-welcome-chat", "create-tree"],
     forbiddenClaims: ["tree readiness"],
     id: "first-tree-welcome-readable-repo-empty-tree",
     kickoffKind: "work",
@@ -135,6 +135,7 @@ No repository is connected, no local path or GitHub URL is available, and no pop
     requiredResponseHints: ["task", "repo"],
     role: "admin",
     tags: ["welcome-row-7", "planned"],
+    taskOptionHints: ["context tree", "shared memory", "checkout", "session", "map"],
     treeState: "empty",
   },
   {
