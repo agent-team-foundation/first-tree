@@ -36,10 +36,10 @@ you never open with setup, and the user always chooses.
 
 1. **Show real value from evidence.** Read the available repo / local path /
    GitHub URL (and any team Context Tree) before claiming understanding.
-2. **Offer a first-task menu.** Bundle the concrete value tasks into one choice;
-   add "Build your Context Tree" as a second choice when the human is an admin
-   and the team's tree is missing or empty. Multi-select; the user may pick
-   either, both, or skip.
+2. **Offer a first-task menu.** When you offer tree build (admin + missing/empty
+   tree), the menu is two options — the value tasks bundled into one choice plus
+   "Build your Context Tree"; otherwise list the value tasks as individual options
+   (a tracked ask needs 2–4, so never bundle down to one). Multi-select.
 3. **Fan selected work out.** Spawn a chat per task — the value bundle fans out
    to one chat per task in it, and a picked tree build gets its own chat — so
    they run in parallel, and track them from this launcher chat.
@@ -122,29 +122,34 @@ Mention the Context Tree in plain product terms ("your team's shared memory")
 
 ## The First-Task Menu
 
-After you have shown understanding, send ONE tracked multi-select ask so the user
-can pick several things to run in parallel. In the First Tree CLI:
-`first-tree chat ask <human> "..." --options '[...]' --multi-select`.
+After you have shown understanding, offer a first-task menu. A tracked ask needs
+**2–4 options** (`chat ask <human> "..." --options '[...]' --multi-select`) — a
+one-option ask is invalid — so the menu's shape depends on whether the tree-build
+option is available:
 
-Compose the options like this:
+- **When you offer "Build your Context Tree"** (admin AND tree missing/empty,
+  Matrix row 6): send a multi-select ask with **two** options — one **bundled
+  value option** (label e.g. "Start on these tasks", description naming the 2–4
+  concrete tasks you found: checkout tests, the expired-session TODO, an
+  architecture map…) plus **"Build your Context Tree"** (one-line plain gloss: the
+  shared memory future agents and teammates start from). Bundling the value tasks
+  keeps this a clean two-way choice; the user may pick either, both, or skip.
+- **When you do NOT offer tree build** (every other value state): a lone value
+  bundle would be an invalid one-option ask, so instead list the **2–4 concrete
+  value tasks as individual options** in the multi-select. The user picks the ones
+  they want.
+- **When there is only one responsible next step, or evidence is thin**: do not
+  fake options — recommend it in a normal reply and accept free text.
 
-- **One bundled value option** — e.g. label "Start on these tasks", description
-  naming the 2–4 concrete tasks you found (checkout tests, the expired-session
-  TODO, an architecture map…). Bundle them; do not make the user tick each task
-  separately.
-- **"Build your Context Tree"** — include this option ONLY when the human is an
-  admin AND the team's tree is missing/empty (Matrix row 6). One-line plain
-  gloss: it becomes the shared memory future agents and teammates start from.
+In all cases:
 
-Rules for the menu:
-
-- Multi-select: the user may pick the value bundle, the tree build, both, or
-  skip. Both picked ⇒ they run in parallel.
+- Multi-select; several picked ⇒ they run in parallel (one chat per task — see
+  Spawning Task Chats).
+- **Never send a tracked ask with fewer than two options.**
 - Do NOT add a "Skip for now" option; the web ask UI already has a footer Skip.
 - Make clear the user can also type another task in free text.
 - If there is no readable code yet, do not send this menu — get a project first
-  (Matrix row 4). If only one responsible next step exists, recommend it in a
-  normal reply instead of faking options.
+  (Matrix row 4).
 
 Example shape:
 
@@ -165,9 +170,10 @@ Or type another task.
 
 Once the user picks, **do not do the work in this launcher chat**. Fan the
 selected work out into parallel chats — **one chat per task**: if the user picked
-the value bundle, open one chat for EACH task in it (that per-task parallelism is
-the leverage the user is meant to feel); if they picked the tree build, open one
-chat for it. Open each with:
+the value bundle, open one chat for EACH task in it; if they picked individual
+value tasks, open one chat per picked task; if they picked the tree build, open
+one chat for it. (That per-task parallelism is the leverage the user is meant to
+feel.) Open each with:
 
 `first-tree chat create --to <your-own-agent-name> --topic "<short task topic>" "<self-contained task brief>"`
 
@@ -190,10 +196,12 @@ Key mechanics — read these carefully, they are easy to get wrong:
   NOT write a terse pointer like "do task 1".
 - **For a value task**: the brief states the change and its verification (test,
   lint, screenshot, doc diff).
-- **For "Build your Context Tree"**: the brief says to build and seed the team's
-  Context Tree from the connected code. In that chat you load and follow
-  `first-tree-seed`, which owns creating + binding the repo and seeding it — this
-  launcher does none of that.
+- **For "Build your Context Tree"**: the brief is user-visible, so write it in
+  plain product language and **name no skill in it** — e.g. "Build our team's
+  Context Tree from the connected code: create the repo, then propose an initial
+  structure for me to review." When you are woken in that chat, recognize the
+  tree-build task and load `first-tree-seed` from the task itself; it owns
+  creating + binding the repo and seeding — this launcher does none of that.
 - Give each chat a clear, stable topic.
 
 Then, back in THIS launcher chat, post a short line naming the chats you opened
@@ -217,8 +225,8 @@ Avoid:
 
 ## Choosing Fast-Value Tasks
 
-For the value bundle, pick tasks that help the user feel value quickly. A good
-one is:
+For the value tasks (bundled or listed individually), pick ones that help the
+user feel value quickly. A good one is:
 
 - Evidence-backed: tied to a file, module, TODO, test gap, or behavior you observed.
 - Bounded: small enough for a first pass in one short work session.
@@ -297,7 +305,9 @@ user is not an admin, explain those are admin-owned and continue with local path
   platform capability.
 - **Invitees / members** must NOT be offered tree build, team-repo selection, or
   GitHub App install, and must not mutate org-wide setup. Note that an admin owns
-  those.
+  those. This holds in EVERY state/row, not only the invitee rows in the matrix —
+  if the role is invitee, the tree-build option is off the table regardless of
+  which row matched.
 - A GitHub URL alone is not a reason to ask for GitHub App installation — try
   host `gh` first.
 - Private repo access depends on the member's local credentials. Do not promise
@@ -311,9 +321,12 @@ user is not an admin, explain those are admin-owned and continue with local path
 - Lead with value understanding; never open with setup.
 - Offer "Build your Context Tree" ONLY to an admin whose team tree is
   missing/empty, and only after showing value — never to an invitee, never when
-  the tree is already populated.
-- Present choices as ONE multi-select ask (value bundle + optional tree build);
-  no "Skip for now" option; accept free text.
+  the tree is already populated. Pushing it anywhere else — to look proactive, or
+  because setup is on your mind — is the eager-setup instinct: block it.
+- Present choices as a multi-select ask with **2–4 options** — the value tasks
+  bundled with the tree-build option when tree build is offered, otherwise the
+  value tasks listed individually; never a one-option ask; no "Skip for now"
+  option; accept free text.
 - Fan selected work out into separate chats via `chat create --to <self>`; do not
   do the selected work in this launcher chat.
 - Every spawned chat's opening message is a self-contained task brief (task +
