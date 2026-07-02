@@ -650,11 +650,15 @@ export function deriveMetrics(
     ) {
       sourceEvidenceReadObserved = true;
     }
-    // Any touch of a source worktree path (`git worktree add ...`, a read, a
+    // Any touch of the source worktree (`git worktree add ...`, a read, a
     // listing) — an event-level signal that survives later `git worktree
     // remove`, so a Phase-1 add/read/cleanup cannot pass Step 0 by leaving the
-    // final filesystem clean.
-    if (containsPathAccess(event, ["worktrees/seed-source-repo"])) {
+    // final filesystem clean. Match the distinctive worktree NAME
+    // `seed-source-repo` rather than the full `worktrees/seed-source-repo` path,
+    // so a `cd worktrees && … seed-source-repo …` sequence with relative targets
+    // is still caught. The name does not appear in the bare clone path
+    // `source-repos/source-repo`, so incidental bare-clone reads stay tolerated.
+    if (containsPathAccess(event, ["seed-source-repo"])) {
       sourceWorktreeAccessObserved = true;
     }
 

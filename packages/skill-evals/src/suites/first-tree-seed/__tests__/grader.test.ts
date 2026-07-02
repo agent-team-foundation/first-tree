@@ -737,6 +737,87 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("event-detects a RELATIVE source worktree add/read/remove (cd worktrees) and still fails", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-worktree-relative-"));
+    try {
+      // Evasion via relative paths: the model cds into `worktrees` and refers to
+      // the worktree as `seed-source-repo` (no `worktrees/` prefix appears in any
+      // command). Matching the worktree NAME still catches the add/read/remove
+      // Phase-1 sequence, so it fails Step 0 even though no command contains
+      // `worktrees/seed-source-repo` and the final filesystem is clean.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: {
+              command: "cd worktrees && git -C ../source-repos/source-repo worktree add seed-source-repo origin/main",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: { command: "cat seed-source-repo/README.md", type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command: "git -C ../source-repos/source-repo worktree remove seed-source-repo",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+      expect(metrics.sourceWorktreeCreated).toBe(false);
+      expect(metrics.sourceWorktreeAccessObserved).toBe(true);
+      expect(casePassed(findCase("unbound-tree-inits-with-dir"), metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not flag the bare clone path as a source worktree access", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-bare-not-worktree-"));
+    try {
+      // The distinctive name `seed-source-repo` must not match the bare clone
+      // `source-repos/source-repo` — otherwise a tolerated incidental bare read
+      // would be misclassified as a worktree touch.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: { command: "ls source-repos/source-repo", type: "command_execution" },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeAccessObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("detects tree init --dir context-tree from captured first-tree argv", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-"));
     try {
