@@ -29,6 +29,9 @@ describe("campaign scan skills", () => {
       // not a plain message — so it can't be missed and blocks on the answer.
       expect(body).toContain("tracked ask-user");
       expect(body).toContain("chat ask");
+      // The skill states the GENERAL principle (not only the two concrete asks):
+      // any user decision goes through a tracked ask-user card, never a plain message.
+      expect(body).toContain("any decision you put to the user");
       // Consent gate: never mutates the repo without an explicit yes.
       expect(body.toLowerCase()).toContain("read-only until");
       expect(body).toContain("explicit go-ahead");
