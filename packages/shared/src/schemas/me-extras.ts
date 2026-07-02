@@ -57,8 +57,6 @@ export type CompleteOnboarding = z.infer<typeof completeOnboardingSchema>;
  * `organizationId` scopes the membership whose completion is stamped (defaults
  * to the caller's default membership).
  */
-const legacyKickoffKindSchema = z.enum(["intro", "work", "tree"]);
-
 export const kickoffOnboardingSchema = z
   .object({
     organizationId: z.string().optional(),
@@ -66,9 +64,6 @@ export const kickoffOnboardingSchema = z
     bootstrap: z.string().min(1),
     topic: z.string().trim().min(1).max(120).optional(),
     complete: z.boolean().optional(),
-    // Rolling-deploy compatibility only. New clients do not send this field,
-    // and the parsed output deliberately drops it.
-    kind: legacyKickoffKindSchema.optional(),
     // Optional campaign slug (reusable quickstart growth entries). Appended to
     // the kickoff idempotency key so two campaigns for the same (human, agent)
     // get distinct chats. Slug form keeps the colon-delimited key unambiguous.
@@ -78,8 +73,7 @@ export const kickoffOnboardingSchema = z
       .max(50)
       .optional(),
   })
-  .strict()
-  .transform(({ kind: _kind, ...body }) => body);
+  .strict();
 export type KickoffOnboarding = z.infer<typeof kickoffOnboardingSchema>;
 
 /**

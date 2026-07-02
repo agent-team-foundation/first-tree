@@ -16,14 +16,14 @@ describe("kickoffOnboardingSchema", () => {
     expect(parsed.complete).toBe(false);
   });
 
-  it("accepts and drops the retired kickoff kind field for rolling-deploy compatibility", () => {
-    const parsed = kickoffOnboardingSchema.parse({
+  it("rejects the retired kickoff kind field", () => {
+    const parsed = kickoffOnboardingSchema.safeParse({
       agentUuid: "agent-1",
       bootstrap: "First Tree is getting the agent up to speed.",
       kind: "work",
     });
 
-    expect(parsed).not.toHaveProperty("kind");
+    expect(parsed.success).toBe(false);
   });
 
   it("still rejects unknown extra fields", () => {
