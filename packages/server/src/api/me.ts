@@ -282,7 +282,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * recovery) reuses the same first chat and stamps completion only once,
    * instead of leaving the orphan-chat / duplicate-bootstrap / completed-stamp-
    * decoupled-from-reality states the client-orchestrated flow could produce.
-  */
+   */
   app.post("/me/onboarding/kickoff", async (request, reply) => {
     const { userId } = requireUser(request);
     if (hasRetiredKickoffKind(request.body)) {
