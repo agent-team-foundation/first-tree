@@ -1047,6 +1047,10 @@ The moment your code PR is ready to land, the job is to translate fresh
 context + the code change back into tree context, so the next agent
 picks up where you left off.
 
+When a task calls for a tree write, the request explicitly includes
+creating and updating the needed tree-node files (\`NODE.md\` and other
+\`*.md\` nodes) as structured persistent-context output.
+
 The write trigger is **task completion** — the moment you're ready to
 open the code PR. If the task touched decisions, constraints, ownership,
 or cross-domain relationships, **open the tree PR and the code PR
