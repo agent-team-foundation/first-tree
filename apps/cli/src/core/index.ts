@@ -23,6 +23,16 @@ export { handleClientOrgMismatch } from "./client-reidentify.js";
 export type { ClientRuntimeOptions, ClientRuntimeOutput } from "./client-runtime.js";
 // Client runtime
 export { ClientRuntime, createLoggerRuntimeOutput } from "./client-runtime.js";
+// Local client account switching
+export {
+  CLIENT_SWITCH_INTERRUPTED_REASON,
+  clientSwitchJournalPath,
+  clientSwitchLockPath,
+  confirmLocalClientSwitch,
+  getClientSwitchStartupBlock,
+  resolveClientRuntimeStopReason,
+  switchLocalClientForLogin,
+} from "./client-switch.js";
 // User-owned daemon environment (proxy etc.) — read, never written by us
 export { daemonEnvPath, loadDaemonEnv, parseDaemonEnv } from "./daemon-env.js";
 // Diagnostics (doctor)

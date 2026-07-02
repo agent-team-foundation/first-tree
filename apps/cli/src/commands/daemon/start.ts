@@ -35,6 +35,7 @@ import {
   declineUpdate,
   ensureFreshAccessToken,
   getClientServiceStatus,
+  getClientSwitchStartupBlock,
   handleClientOrgMismatch,
   isServiceSupported,
   listPinnedAgents,
@@ -45,6 +46,7 @@ import {
   promptUpdate,
   reconcileLocalRuntimeProviders,
   refreshServerUpdateTarget,
+  resolveClientRuntimeStopReason,
   runRuntimeAuthLogin,
   startClientService,
   uploadAgentSkills,
@@ -91,6 +93,17 @@ export function registerDaemonStartCommand(daemon: Command): void {
       const appliedDaemonEnv = loadDaemonEnv();
       if (appliedDaemonEnv.length > 0) {
         writeLine(`  loaded ${appliedDaemonEnv.length} var(s) from daemon.env (${appliedDaemonEnv.join(", ")})\n`);
+      }
+      const switchBlock = getClientSwitchStartupBlock();
+      if (switchBlock) {
+        const message =
+          "client switch is in progress; daemon startup is parked before reading root credentials/config.";
+        if (daemonOutput) {
+          writeStatus("•", message);
+          process.exit(0);
+        }
+        writeLine(`  ${message}\n`);
+        return;
       }
       // Fail closed: never spin up the runtime without persisted credentials.
       // Hooking this in BEFORE the service-delegation branch keeps the policy
@@ -397,7 +410,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
           writeLine("\n  Shutting down...\n");
           capabilityRefresher.stop();
           runtime.unwatchAgentsDir();
-          await runtime.stop();
+          await runtime.stop(resolveClientRuntimeStopReason());
           await flushClientSentry();
           process.exit(0);
         };
@@ -411,17 +424,16 @@ export function registerDaemonStartCommand(daemon: Command): void {
           if (daemonOutput) {
             writeStatus(
               "✗",
-              `client.yaml is owned by a different user; run \`${binName} logout --purge\`, then \`${binName} login <token>\` with the intended account. This signs out the current local client identity plus local agent configs, workspaces, and session state; server-side clients, agents, chats, and history are not deleted.`,
+              `client.yaml is owned by a different user; run \`${binName} login <token>\` with the intended account to switch local clients. If local identity state is damaged, back it up and run \`${binName} computer reset\`.`,
             );
             process.exit(1);
           }
           writeLine("\n");
           writeLine("  ⚠️  This client.yaml is owned by a different user.\n");
-          writeLine(`  Run \`${binName} logout --purge\` before logging in with another account.\n`);
-          writeLine("  This signs out the current user and removes this machine's local client\n");
-          writeLine("  identity plus local agent configs, workspaces, and session state. Server-side\n");
-          writeLine("  clients, agents, chats, and history are not deleted; the previous client and\n");
-          writeLine("  agents simply stop running from this machine unless they are set up again.\n\n");
+          writeLine(`  Run \`${binName} login <token>\` with the intended account to switch local clients.\n`);
+          writeLine("  Login will ask for confirmation, stop and drain the current daemon, park\n");
+          writeLine("  the current local client state, and activate a client for the new user.\n");
+          writeLine(`  If local identity state is damaged, back it up and run \`${binName} computer reset\`.\n\n`);
           process.exit(1);
         }
         if (error instanceof ClientOrgMismatchError) {

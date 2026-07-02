@@ -1614,9 +1614,9 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       resetThreadUsageTracking(null);
     },
 
-    async shutdown() {
+    async shutdown(reason?: string) {
       shutdownRequested = true;
-      retryQueuedMessages("codex_shutdown_before_terminal");
+      retryQueuedMessages(reason ?? "codex_shutdown_before_terminal");
       await interruptCurrentTurn();
       await appServer?.shutdown();
       appServer = null;

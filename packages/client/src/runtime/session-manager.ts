@@ -710,7 +710,7 @@ export class SessionManager {
   }
 
   /** Shut down all sessions gracefully. */
-  async shutdown(): Promise<void> {
+  async shutdown(reason?: string): Promise<void> {
     this.config.subprocessProbe?.stop();
     if (this.idleTimer) {
       clearInterval(this.idleTimer);
@@ -731,7 +731,7 @@ export class SessionManager {
     }
 
     const shutdowns = [...this.sessions.values()].map((s) =>
-      s.status === "active" ? s.handler.shutdown() : Promise.resolve(),
+      s.status === "active" ? s.handler.shutdown(reason) : Promise.resolve(),
     );
     await Promise.allSettled(shutdowns);
 
@@ -2034,6 +2034,11 @@ export class SessionManager {
       sdk: this.config.sdk,
       agent: this.config.agentIdentity,
       chatId,
+      clientId: typeof this.config.handlerConfig.clientId === "string" ? this.config.handlerConfig.clientId : undefined,
+      provider:
+        typeof this.config.handlerConfig.runtimeProvider === "string"
+          ? this.config.handlerConfig.runtimeProvider
+          : undefined,
       log,
       docContext: {
         base: docBase,

@@ -310,6 +310,36 @@ describe("logout and upgrade commands", () => {
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Logged out");
   });
 
+  it("computer reset uses the same guarded local-state removal as logout --purge", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    const agentsDir = join(tempDir, "agents");
+    const sessionsDir = join(tempDir, "data", "sessions");
+    const workspacesDir = join(tempDir, "data", "workspaces");
+    mkdirSync(tempDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(workspacesDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    writeFileSync(join(agentsDir, "agent.yaml"), "agentId: agent-1\n");
+    writeFileSync(join(sessionsDir, "session.json"), "{}");
+    writeFileSync(join(workspacesDir, "workspace.json"), "{}");
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus.mockReturnValue({ state: "active", platform: "launchd" });
+    coreMocks.stopClientService.mockReturnValue({ ok: true });
+
+    const { registerComputerCommands } = await import("../commands/computer/index.js");
+    await runTopLevel(registerComputerCommands, ["computer", "reset"]);
+
+    expect(coreMocks.stopClientService).toHaveBeenCalled();
+    expect(() => readFileSync(credentials, "utf8")).toThrow();
+    expect(() => readFileSync(clientYaml, "utf8")).toThrow();
+    expect(() => readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toThrow();
+    expect(() => readFileSync(join(sessionsDir, "session.json"), "utf8")).toThrow();
+    expect(() => readFileSync(join(workspacesDir, "workspace.json"), "utf8")).toThrow();
+  });
+
   it("refuses purge before deleting local state when an active service cannot be stopped", async () => {
     const credentials = join(tempDir, "credentials.json");
     const clientYaml = join(tempDir, "client.yaml");

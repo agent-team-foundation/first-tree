@@ -427,9 +427,9 @@ export class AgentSlot {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop(reason?: string): Promise<void> {
     if (this.stopping) return this.stopping;
-    this.stopping = this.stopOnce();
+    this.stopping = this.stopOnce(reason);
     try {
       await this.stopping;
     } finally {
@@ -437,7 +437,7 @@ export class AgentSlot {
     }
   }
 
-  private async stopOnce(): Promise<void> {
+  private async stopOnce(reason?: string): Promise<void> {
     this.bringupAbort?.abort();
     this.activeRuntimeChatIdsRefreshGeneration++;
     if (this.reconcileTimer) {
@@ -457,7 +457,7 @@ export class AgentSlot {
     }
     this.listeners = [];
     await this.clientConnection.unbindAgent(this.config.agentId);
-    await this.sessionManager?.shutdown();
+    await this.sessionManager?.shutdown(reason);
     this.sessionManager = null;
     this.agentConfigCache = null;
     this.sdk = null;

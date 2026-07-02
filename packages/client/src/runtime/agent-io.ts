@@ -39,6 +39,8 @@ export function buildAgentEnv(
     sdk: Pick<FirstTreeHubSDK, "serverUrl">;
     agent: AgentIdentity;
     chatId: string;
+    clientId?: string;
+    provider?: string;
     /**
      * Resolved doc-preview context for this session, so a `first-tree
      * chat send` sub-process can snapshot referenced `.md`. (The result-sink's
@@ -82,6 +84,13 @@ export function buildAgentEnv(
     FIRST_TREE_AGENT_ID: ctx.agent.agentId,
     FIRST_TREE_INBOX_ID: ctx.agent.inboxId,
     FIRST_TREE_CHAT_ID: ctx.chatId,
+    ...(ctx.clientId ? { FIRST_TREE_CLIENT_ID: ctx.clientId } : {}),
+    ...(ctx.provider
+      ? {
+          FIRST_TREE_PROVIDER: ctx.provider,
+          FIRST_TREE_SWITCH_DRAIN_VERSION: "1",
+        }
+      : {}),
     ...(ctx.docContext
       ? {
           FIRST_TREE_DOC_BASE: ctx.docContext.base,

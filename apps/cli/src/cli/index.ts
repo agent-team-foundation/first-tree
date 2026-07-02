@@ -12,6 +12,7 @@ import { applyClientLoggerConfig } from "@first-tree/client";
 import { Command } from "commander";
 import { registerAgentCommands } from "../commands/agent/index.js";
 import { registerChatCommands } from "../commands/chat/index.js";
+import { registerComputerCommands } from "../commands/computer/index.js";
 import { registerConfigCommands } from "../commands/config/index.js";
 import { registerDaemonCommands } from "../commands/daemon/index.js";
 import { registerDoctorCommand } from "../commands/doctor.js";
@@ -71,6 +72,7 @@ registerUpgradeCommand(program);
 
 registerAgentCommands(program);
 registerChatCommands(program);
+registerComputerCommands(program);
 registerGithubCommands(program);
 registerOrgCommands(program);
 registerDaemonCommands(program);

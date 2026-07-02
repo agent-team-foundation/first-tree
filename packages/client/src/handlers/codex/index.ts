@@ -86,8 +86,8 @@ export const createCodexHandler: HandlerFactory = (config) => {
       return active.suspend();
     },
 
-    shutdown() {
-      return active.shutdown();
+    shutdown(reason?: string) {
+      return active.shutdown(reason);
     },
   } satisfies AgentHandler;
 };

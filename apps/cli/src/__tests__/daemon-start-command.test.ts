@@ -24,6 +24,7 @@ const coreMocks = vi.hoisted(() => ({
   createLoggerRuntimeOutput: vi.fn(),
   declineUpdate: vi.fn(),
   ensureFreshAccessToken: vi.fn(),
+  getClientSwitchStartupBlock: vi.fn(),
   getClientServiceStatus: vi.fn(),
   handleClientOrgMismatch: vi.fn(),
   isServiceSupported: vi.fn(),
@@ -35,6 +36,7 @@ const coreMocks = vi.hoisted(() => ({
   promptUpdate: vi.fn(),
   reconcileLocalRuntimeProviders: vi.fn(),
   refreshServerUpdateTarget: vi.fn(),
+  resolveClientRuntimeStopReason: vi.fn(),
   startClientService: vi.fn(),
   uploadAgentSkills: vi.fn(),
   uploadClientCapabilities: vi.fn(),
@@ -127,6 +129,8 @@ beforeEach(() => {
   clientMocks.discoverClaudeCodeSkills.mockResolvedValue([{ name: "review", description: "Review code." }]);
   coreMocks.loadCredentials.mockReturnValue({ refreshToken: "refresh" });
   coreMocks.loadDaemonEnv.mockReturnValue([]);
+  coreMocks.getClientSwitchStartupBlock.mockReturnValue(null);
+  coreMocks.resolveClientRuntimeStopReason.mockReturnValue(undefined);
   coreMocks.isServiceSupported.mockReturnValue(false);
   coreMocks.getClientServiceStatus.mockReturnValue({
     platform: "launchd",
@@ -219,6 +223,32 @@ describe("daemon start command", () => {
 
     await expect(runStart()).rejects.toMatchObject({ code: "NO_CREDENTIALS", exitCode: 1 });
     expect(failMock).toHaveBeenCalledWith("NO_CREDENTIALS", expect.stringContaining("no credentials"), 1);
+  });
+
+  it("parks daemon startup before reading credentials while a client switch is in progress", async () => {
+    coreMocks.getClientSwitchStartupBlock.mockReturnValueOnce({
+      lockPath: join(home, "state", "client-switch.lock"),
+      journalPath: join(home, "state", "client-switch-journal.json"),
+    });
+
+    await expect(runStart()).resolves.toBeTruthy();
+
+    expect(coreMocks.loadCredentials).not.toHaveBeenCalled();
+    expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
+    expect(output()).toContain("client switch is in progress");
+  });
+
+  it("lets supervisor children exit 0 before root state reads during a client switch", async () => {
+    process.env.FIRST_TREE_SERVICE_MODE = "1";
+    coreMocks.getClientSwitchStartupBlock.mockReturnValueOnce({
+      lockPath: join(home, "state", "client-switch.lock"),
+      journalPath: join(home, "state", "client-switch-journal.json"),
+    });
+
+    await expect(runStart(["--no-interactive"])).rejects.toMatchObject({ exitCode: 0 });
+
+    expect(coreMocks.loadCredentials).not.toHaveBeenCalled();
+    expect(coreMocks.ClientRuntime).not.toHaveBeenCalled();
   });
 
   it("refuses when the background service is already active", async () => {
@@ -436,8 +466,8 @@ describe("daemon start command", () => {
     expect(daemonLogger.error).toHaveBeenCalledWith(
       expect.stringContaining("client.yaml is owned by a different user"),
     );
-    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev logout --purge"));
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <token>"));
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev computer reset"));
     expect(output()).toBe("");
   });
 
@@ -458,8 +488,8 @@ describe("daemon start command", () => {
 
     expect(clientMocks.applyClientLoggerConfig).toHaveBeenCalledWith({ level: "warn" });
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("wrong org"));
-    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev logout --purge"));
     expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev login <token>"));
+    expect(daemonLogger.error).toHaveBeenCalledWith(expect.stringContaining("first-tree-dev computer reset"));
     expect(output()).toBe("");
   });
 
@@ -498,8 +528,9 @@ describe("daemon start command", () => {
     await expect(runStart(["--foreground"])).rejects.toMatchObject({ exitCode: 1 });
     const mismatchText = output();
     expect(mismatchText).toContain("client.yaml is owned by a different user");
-    expect(mismatchText).toContain("logout --purge");
-    expect(mismatchText).toContain("local agent configs, workspaces, and session state");
+    expect(mismatchText).toContain("login <token>");
+    expect(mismatchText).toContain("computer reset");
+    expect(mismatchText).toContain("park");
     // Purge-first account switching must NOT resurrect the removed server-side
     // transfer/unpin language.
     expect(mismatchText).not.toContain("transfer ownership");
