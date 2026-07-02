@@ -417,6 +417,25 @@ export {
   rotateInvitationSchema,
 } from "./schemas/invitation.js";
 export {
+  isLandingCampaignTrialAgentMetadata,
+  isLandingCampaignTrialChatLocked,
+  type LandingCampaignRepoMetadata,
+  type LandingCampaignStartRequest,
+  type LandingCampaignStartResponse,
+  type LandingCampaignTrialAgentMetadata,
+  type LandingCampaignTrialChatMetadata,
+  type LandingCampaignTrialChatState,
+  landingCampaignRepoMetadataSchema,
+  landingCampaignSlugSchema,
+  landingCampaignStartRequestSchema,
+  landingCampaignStartResponseSchema,
+  landingCampaignTrialAgentMetadataSchema,
+  landingCampaignTrialChatMetadataSchema,
+  landingCampaignTrialChatStateSchema,
+  parseLandingCampaignTrialAgentMetadata,
+  parseLandingCampaignTrialChatMetadata,
+} from "./schemas/landing-campaign.js";
+export {
   type AddMeChatParticipants,
   ASSISTANT_TEXT_PREVIEW_MAX,
   addMeChatParticipantsSchema,

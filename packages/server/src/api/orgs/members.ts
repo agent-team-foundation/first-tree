@@ -1,13 +1,18 @@
 import { createMemberSchema, updateMemberSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
+import {
+  assertMemberIsNotLandingCampaignServiceMember,
+  isLandingCampaignOfficialUser,
+} from "../../services/landing-campaigns/guards.js";
 import * as memberService from "../../services/member.js";
 
 /** Class B — `/api/v1/orgs/:orgId/members`. */
 export async function orgMemberRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { orgId: string } }>("/", async (request) => {
     const scope = await requireOrgMembership(request, app.db);
-    return memberService.listMembers(app.db, scope.organizationId);
+    const rows = await memberService.listMembers(app.db, scope.organizationId);
+    return rows.filter((row) => !isLandingCampaignOfficialUser(app.config, row.userId));
   });
 
   app.post<{ Params: { orgId: string } }>("/", async (request, reply) => {
@@ -20,11 +25,13 @@ export async function orgMemberRoutes(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { orgId: string; id: string } }>("/:id", async (request) => {
     const scope = await requireOrgAdmin(request, app.db);
     const body = updateMemberSchema.parse(request.body);
+    await assertMemberIsNotLandingCampaignServiceMember(app.db, app.config, request.params.id);
     return memberService.updateMember(app.db, request.params.id, body, scope.organizationId);
   });
 
   app.delete<{ Params: { orgId: string; id: string } }>("/:id", async (request, reply) => {
     const scope = await requireOrgAdmin(request, app.db);
+    await assertMemberIsNotLandingCampaignServiceMember(app.db, app.config, request.params.id);
     await memberService.deleteMember(app.db, request.params.id, scope.organizationId);
     return reply.status(204).send();
   });

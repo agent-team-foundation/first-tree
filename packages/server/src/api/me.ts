@@ -9,7 +9,7 @@ import {
   updateMyProfileSchema,
 } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
-import { and, asc, eq, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { agents } from "../db/schema/agents.js";
@@ -112,6 +112,25 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       app.db,
       memberships.map((mb) => mb.organizationId),
     );
+    const serviceUserId = app.config.growth.landingCampaigns?.serviceUserId;
+    if (serviceUserId && memberships.length > 0) {
+      const serviceMemberRows = await app.db
+        .select({ organizationId: members.organizationId })
+        .from(members)
+        .where(
+          and(
+            eq(members.userId, serviceUserId),
+            eq(members.status, "active"),
+            inArray(
+              members.organizationId,
+              memberships.map((mb) => mb.organizationId),
+            ),
+          ),
+        );
+      for (const row of serviceMemberRows) {
+        memberCounts.set(row.organizationId, Math.max(0, (memberCounts.get(row.organizationId) ?? 0) - 1));
+      }
+    }
 
     // Org-scoped onboarding readiness: which of the caller's orgs already
     // hold a non-human agent THIS member can use (own or org-visible). The
@@ -267,10 +286,17 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const { userId } = requireUser(request);
     const body = kickoffOnboardingSchema.parse(request.body);
     const campaign = body.campaign;
-    if (campaign && !app.config.growth.landingPagesEnabled) {
-      return reply
-        .status(404)
-        .send({ error: "Growth landing pages are disabled on this First Tree deployment.", code: "feature_disabled" });
+    if (campaign) {
+      if (!app.config.growth.landingPagesEnabled) {
+        return reply.status(404).send({
+          error: "Growth landing pages are disabled on this First Tree deployment.",
+          code: "feature_disabled",
+        });
+      }
+      return reply.status(410).send({
+        error: "Campaign quickstart moved to /me/landing-campaigns/start.",
+        code: "campaign_kickoff_moved",
+      });
     }
     const { memberId, humanAgentId } = await resolveOnboardingMember(app, userId, body.organizationId);
     const result = await kickoffOnboarding(app.db, {
@@ -280,17 +306,6 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       bootstrap: body.bootstrap,
       kind: body.kind,
       complete: body.complete ?? true,
-      // Provision + bind the campaign's agent-private scan skill via onChatReady
-      // — AFTER createChat validates the target agent (cross-org / active /
-      // private) plus the service's own manage-ownership gate, and BEFORE the
-      // bootstrap is sent. Running it before validation would let an
-      // unauthorized kickoff mutate another org/agent's resources.
-      ...(campaign
-        ? {
-            campaign,
-            onChatReady: () => app.resourcesService.ensureAndBindCampaignScanSkill(body.agentUuid, campaign, memberId),
-          }
-        : {}),
     });
     if (result.sent) {
       notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);

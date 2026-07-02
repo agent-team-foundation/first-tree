@@ -23,6 +23,7 @@ import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
+import { getLandingCampaignTrialChat, withLandingCampaignChatState } from "./landing-campaigns/metadata.js";
 
 const log = createLogger("message");
 const ADDRESSED_AGENT_IDS_METADATA_KEY = "addressedAgentIds";
@@ -499,7 +500,7 @@ async function sendMessageInner(
     //    v2: `chat_membership.mode` is **not** SELECTed — fan-out no longer
     //    reads it. Likewise `chats.type` is locked to 'group' since
     //    first-tree-context PR #465 and no longer drives any decision here.
-    const [participants, [senderRow]] = await Promise.all([
+    const [participants, [senderRow], [chatRow]] = await Promise.all([
       tx
         .select({
           agentId: chatMembership.agentId,
@@ -517,6 +518,7 @@ async function sendMessageInner(
         .from(agents)
         .where(eq(agents.uuid, senderId))
         .limit(1),
+      tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).limit(1),
     ]);
     if (!senderRow) {
       throw new NotFoundError(`Sender agent "${senderId}" not found`);
@@ -673,6 +675,7 @@ async function sendMessageInner(
     // Storing it would both mislead readers and poison the prior-resolution
     // idempotency scan below (which matches on `resolves ->> 'request'`),
     // permanently blocking the legitimate decrement.
+    let resolvedRequest = false;
     const resolution = requestResolutionSchema.safeParse(metadataToStore.resolves);
     if (resolution.success) {
       const requestId = resolution.data.request;
@@ -746,6 +749,23 @@ async function sendMessageInner(
              SET open_request_count = GREATEST(0, open_request_count - 1)
            WHERE chat_id = ${chatId} AND agent_id = ${target}
         `);
+      }
+      resolvedRequest = true;
+    }
+
+    const trial = getLandingCampaignTrialChat(chatRow);
+    if (chatRow && trial) {
+      let nextMetadata: Record<string, unknown> | null = null;
+      if (senderId === trial.agentId && senderRow.type !== "human") {
+        nextMetadata =
+          data.format === MESSAGE_FORMATS.REQUEST
+            ? withLandingCampaignChatState(chatRow.metadata, "awaiting_user", false)
+            : withLandingCampaignChatState(chatRow.metadata, "completed", true);
+      } else if (senderRow.type === "human" && trial.state === "awaiting_user" && resolvedRequest) {
+        nextMetadata = withLandingCampaignChatState(chatRow.metadata, "running", true);
+      }
+      if (nextMetadata) {
+        await tx.update(chats).set({ metadata: nextMetadata, updatedAt: new Date() }).where(eq(chats.id, chatId));
       }
     }
 

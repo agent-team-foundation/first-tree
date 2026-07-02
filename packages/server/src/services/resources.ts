@@ -38,7 +38,7 @@ import { members } from "../db/schema/members.js";
 import { resources } from "../db/schema/resources.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
-import { getCampaignScanSkill } from "./campaign-scan-skill.js";
+import { getCampaignScanSkill } from "./landing-campaigns/skills/catalog.js";
 import type { Notifier } from "./notifier.js";
 
 type ResourceDbRow = typeof resources.$inferSelect;
