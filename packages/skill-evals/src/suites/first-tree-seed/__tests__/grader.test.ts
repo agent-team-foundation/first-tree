@@ -207,10 +207,27 @@ describe("first-tree-seed grader", () => {
           finalResponse: "The tree is already non-empty; use first-tree-write or a focused maintenance task.",
           skeletonObserved: false,
           sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: false,
           sourceWorktreeCreated: false,
         }),
       ),
     ).toBe(true);
+  });
+
+  it("fails non-empty tree refusal when a source worktree was touched then removed before grading", () => {
+    // Event-level worktree access (add/read/remove) is Phase-1 exploration and
+    // must fail refusal even if the final filesystem is clean.
+    expect(
+      casePassed(
+        findCase("non-empty-tree-refuses"),
+        baseMetrics({
+          skeletonObserved: false,
+          sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: true,
+          sourceWorktreeCreated: false,
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("fails non-empty tree refusal when seed continues into source exploration", () => {
@@ -261,10 +278,25 @@ describe("first-tree-seed grader", () => {
           finalResponse: "The source clone is missing at source-repos/source-repo; provisioning is incomplete.",
           skeletonObserved: false,
           sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: false,
           sourceWorktreeCreated: false,
         }),
       ),
     ).toBe(true);
+  });
+
+  it("fails missing-source refusal when a source worktree was touched then removed before grading", () => {
+    expect(
+      casePassed(
+        findCase("source-missing-refuses"),
+        baseMetrics({
+          skeletonObserved: false,
+          sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: true,
+          sourceWorktreeCreated: false,
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("passes bare-source protocol when source is read from materialized worktree", () => {

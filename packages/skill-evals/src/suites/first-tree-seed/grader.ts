@@ -749,6 +749,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (evalCase.expected.action === "refuse_nonempty_tree") {
     return (
       !metrics.sourceWorktreeCreated &&
+      !metrics.sourceWorktreeAccessObserved &&
       !metrics.sourceEvidenceReadObserved &&
       !metrics.directBareSourceContentReadObserved &&
       !metrics.skeletonObserved
@@ -756,7 +757,12 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   }
 
   if (evalCase.expected.action === "report_missing_source") {
-    return !metrics.sourceWorktreeCreated && !metrics.sourceEvidenceReadObserved && !metrics.skeletonObserved;
+    return (
+      !metrics.sourceWorktreeCreated &&
+      !metrics.sourceWorktreeAccessObserved &&
+      !metrics.sourceEvidenceReadObserved &&
+      !metrics.skeletonObserved
+    );
   }
 
   if (evalCase.expected.action === "create_tree_via_init") {
