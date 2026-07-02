@@ -4,6 +4,7 @@ import { channelConfig } from "../core/channel.js";
 const updateMocks = vi.hoisted(() => ({
   detectInstallMode: vi.fn(),
   installGlobalSpec: vi.fn(),
+  installPortableSpec: vi.fn(),
   PACKAGE_NAME: "first-tree",
 }));
 
@@ -36,6 +37,7 @@ describe("update glue", () => {
   beforeEach(() => {
     updateMocks.detectInstallMode.mockReset();
     updateMocks.installGlobalSpec.mockReset();
+    updateMocks.installPortableSpec.mockReset();
     updateStateMocks.isLoopGuarded.mockReset();
     updateStateMocks.recordUpdateAttempt.mockReset();
     spawnSyncMock.mockReset();
@@ -46,6 +48,11 @@ describe("update glue", () => {
     updateMocks.installGlobalSpec.mockResolvedValue({
       ok: true,
       mode: "global",
+      installedVersion: "0.6.0",
+    });
+    updateMocks.installPortableSpec.mockResolvedValue({
+      ok: true,
+      mode: "portable",
       installedVersion: "0.6.0",
     });
     updateStateMocks.isLoopGuarded.mockReturnValue(false);
@@ -105,6 +112,39 @@ describe("update glue", () => {
       targetVersion: "0.6.0",
       retryable: true,
       reasonCode: "network",
+    });
+  });
+
+  it("uses the portable installer in portable mode and records failures through the same path", async () => {
+    const { createExecuteUpdate } = await import("../core/update-glue.js");
+    updateMocks.detectInstallMode.mockReturnValue("portable");
+
+    await expect(
+      createExecuteUpdate({ managed: false })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).resolves.toEqual({ installed: true });
+    expect(updateMocks.installPortableSpec).toHaveBeenCalledWith("0.6.0");
+    expect(updateMocks.installGlobalSpec).not.toHaveBeenCalled();
+    expect(output()).toContain("Switching portable");
+
+    printLineMock.mockClear();
+    updateMocks.installPortableSpec.mockResolvedValueOnce({
+      ok: false,
+      mode: "portable",
+      reason: "checksum mismatch",
+      retryable: false,
+      reasonCode: "checksum",
+    });
+    const onUpdateFailed = vi.fn();
+    await expect(
+      createExecuteUpdate({ managed: false, onUpdateFailed })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).resolves.toEqual({ installed: false });
+    expect(updateStateMocks.recordUpdateAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ result: "failed", reason: "checksum mismatch", target: "0.6.0" }),
+    );
+    expect(onUpdateFailed).toHaveBeenCalledWith({
+      targetVersion: "0.6.0",
+      retryable: false,
+      reasonCode: "checksum",
     });
   });
 

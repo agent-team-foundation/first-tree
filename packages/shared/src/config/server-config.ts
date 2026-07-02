@@ -186,6 +186,20 @@ export const serverConfigSchema = defineConfig({
    * safe for local development.
    */
   trustProxy: field(z.boolean().default(false), { env: "FIRST_TREE_TRUST_PROXY" }),
+  connectBootstrap: {
+    /**
+     * Fresh-machine bootstrap method returned by POST /me/connect-tokens.
+     * Defaults to npm for published channels until portable artifacts are
+     * fully promoted in production. Dev remains source-only regardless of
+     * this value because it has no published channel artifact.
+     */
+    method: field(z.enum(["npm", "portable"]).default("npm"), {
+      env: "FIRST_TREE_CONNECT_BOOTSTRAP_METHOD",
+    }),
+    portableDownloadBaseUrl: field(z.string().url().default("https://downloads.first-tree.ai"), {
+      env: "FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL",
+    }),
+  },
   rateLimit: optional({
     /** Actor-aware global safety cap. High enough to avoid normal-use 429s. */
     max: field(z.number().default(3000), { env: "FIRST_TREE_RATE_LIMIT_MAX" }),

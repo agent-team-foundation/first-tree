@@ -104,9 +104,11 @@ export type { ExecuteUpdateResult, InstallMode, VersionLookupResult } from "./up
 export {
   detectInstallMode,
   fetchLatestVersion,
+  fetchPortableLatestVersion,
   fetchServerCommandVersion,
   installGlobalLatest,
   installGlobalSpec,
+  installPortableSpec,
   PACKAGE_NAME,
 } from "./update.js";
 export {

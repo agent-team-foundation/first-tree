@@ -48,6 +48,29 @@ const onboardingTreeSetupStatusQuerySchema = z.object({
   organizationId: z.string().optional(),
 });
 
+function joinUrl(base: string, path: string): string {
+  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function buildPortableBootstrapCommand(options: {
+  installerUrl: string;
+  portableDownloadBaseUrl: string;
+  binName: string;
+  token: string;
+}): string {
+  return [
+    `tmp="$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX")"`,
+    `trap 'rm -f "$tmp"' EXIT HUP INT TERM`,
+    `curl -fsSL ${shellQuote(options.installerUrl)} -o "$tmp"`,
+    `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL=${shellQuote(options.portableDownloadBaseUrl)} sh "$tmp"`,
+    `"$HOME/.local/bin/${options.binName}" login ${shellQuote(options.token)}`,
+  ].join(" && \\\n");
+}
+
 /**
  * `/me` and self-service organization routes (Class A — User-scoped).
  * Mounted under `requireUser` so the JWT only needs `sub = userId`.
@@ -448,12 +471,56 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         command,
         bootstrapCommand: command,
         npmSpec: null,
+        installMethod: "source",
+        installerUrl: null,
         binName: ch.binName,
       };
     }
     const npmSpec = ch.packageName;
+    if (app.config.connectBootstrap.method === "portable") {
+      const installerPath = ch.portable.publicInstallerPath;
+      if (installerPath === null) {
+        return {
+          token,
+          expiresIn,
+          command,
+          bootstrapCommand: command,
+          npmSpec,
+          installMethod: "source",
+          installerUrl: null,
+          binName: ch.binName,
+        };
+      }
+      const portableDownloadBaseUrl = app.config.connectBootstrap.portableDownloadBaseUrl;
+      const installerUrl = joinUrl(portableDownloadBaseUrl, installerPath);
+      const bootstrapCommand = buildPortableBootstrapCommand({
+        installerUrl,
+        portableDownloadBaseUrl,
+        binName: ch.binName,
+        token,
+      });
+      return {
+        token,
+        expiresIn,
+        command,
+        bootstrapCommand,
+        npmSpec,
+        installMethod: "portable",
+        installerUrl,
+        binName: ch.binName,
+      };
+    }
     const bootstrapCommand = `npm install -g ${npmSpec}\n${command}`;
-    return { token, expiresIn, command, bootstrapCommand, npmSpec, binName: ch.binName };
+    return {
+      token,
+      expiresIn,
+      command,
+      bootstrapCommand,
+      npmSpec,
+      installMethod: "npm",
+      installerUrl: null,
+      binName: ch.binName,
+    };
   });
 
   /**

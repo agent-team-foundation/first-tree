@@ -136,6 +136,10 @@ export type ConnectTokenResponse = {
    * suppresses the `npm install -g` step).
    */
   npmSpec: string | null;
+  /** Bootstrap install method selected by the server. */
+  installMethod: "npm" | "portable" | "source";
+  /** Installer URL when `installMethod` is `portable`; never contains tokens. */
+  installerUrl: string | null;
   /**
    * Bin name to invoke after install — `first-tree` / `first-tree-staging`
    * / `first-tree-dev` depending on this server's channel. Use instead of

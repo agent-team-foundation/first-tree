@@ -133,6 +133,8 @@ describe("Connect token carries iss claim", () => {
       command: string;
       bootstrapCommand: string;
       npmSpec: string | null;
+      installMethod: string;
+      installerUrl: string | null;
       binName: string;
     }>();
 
@@ -151,6 +153,8 @@ describe("Connect token carries iss claim", () => {
     expect(body.binName).toBe("first-tree-dev");
     expect(body.command).toBe(`first-tree-dev login ${body.token}`);
     expect(body.npmSpec).toBeNull();
+    expect(body.installMethod).toBe("source");
+    expect(body.installerUrl).toBeNull();
     expect(body.bootstrapCommand).toBe(body.command);
   });
 });
