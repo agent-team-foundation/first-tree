@@ -815,6 +815,84 @@ describe("SessionManager", () => {
     await sm.shutdown();
   });
 
+  it("waits for evicted active handler shutdown before resuming the same chat", async () => {
+    const shutdownGate = deferred<void>();
+    const contexts = new Map<string, SessionContext>();
+    const messages = new Map<string, SessionMessage>();
+    const resumeSpy = vi.fn(async (msg: SessionMessage | undefined, sessionId: string, ctx: SessionContext) => {
+      if (msg) {
+        contexts.set(`${msg.chatId}:resume`, ctx);
+        messages.set(`${msg.chatId}:resume`, msg);
+      }
+      return sessionId;
+    });
+
+    const handlerA = createMockHandler({
+      async start(msg, ctx) {
+        contexts.set(msg.chatId, ctx);
+        messages.set(msg.chatId, msg);
+        return "session-chat-a";
+      },
+      shutdown: vi.fn(() => shutdownGate.promise),
+    });
+    const handlerB = createMockHandler({
+      async start(msg, ctx) {
+        contexts.set(msg.chatId, ctx);
+        messages.set(msg.chatId, msg);
+        return "session-chat-b";
+      },
+    });
+    const handlerAResume = createMockHandler({
+      resume: resumeSpy,
+    });
+    const handlers = [handlerA, handlerB, handlerAResume];
+    const sm = createSessionManager({
+      handlerFactory: () => {
+        const handler = handlers.shift();
+        if (!handler) throw new Error("unexpected handler allocation");
+        return handler;
+      },
+      recoverChat: vi.fn().mockResolvedValue(undefined),
+      concurrency: 1,
+      session: { idle_timeout: 300, max_sessions: 1, working_grace_seconds: 3600, reconcile_interval_seconds: 300 },
+    });
+
+    const chatA = mockEntry({ id: 1, chatId: "chat-a", messageId: "msg-a" });
+    await sm.dispatch(chatA);
+    await finishEntry(contexts.get("chat-a"), 1, "chat-a", "msg-a");
+
+    const chatB = mockEntry({ id: 2, chatId: "chat-b", messageId: "msg-b" });
+    await sm.dispatch(chatB);
+    expect(handlerA.shutdown).toHaveBeenCalledTimes(1);
+    await finishEntry(contexts.get("chat-b"), 2, "chat-b", "msg-b");
+
+    const chatAReturn = mockEntry({ id: 3, chatId: "chat-a", messageId: "msg-a-return" });
+    await sm.dispatch(chatAReturn);
+
+    let resumeDispatchSettled = false;
+    const resumeDispatch = sm.dispatch(chatAReturn).then(() => {
+      resumeDispatchSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(resumeSpy).not.toHaveBeenCalled();
+    expect(resumeDispatchSettled).toBe(false);
+
+    shutdownGate.resolve(undefined);
+    await resumeDispatch;
+
+    expect(resumeSpy).toHaveBeenCalledTimes(1);
+    expect(resumeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: "chat-a", id: "msg-a-return" }),
+      "session-chat-a",
+      expect.any(Object),
+      expect.any(Object),
+    );
+    await finishEntry(contexts.get("chat-a:resume"), 3, "chat-a", "msg-a-return");
+
+    await sm.shutdown();
+  });
+
   it("enforces concurrency limit and queues overflow", async () => {
     const startCalls: string[] = [];
     const factory: HandlerFactory = () =>

@@ -109,6 +109,12 @@ type SessionEntry = {
   retryFromEvicted: { claudeSessionId: string; lastActivity: number } | null;
 };
 
+type EvictedMapping = {
+  claudeSessionId: string;
+  lastActivity: number;
+  cleanup?: Promise<void>;
+};
+
 type PendingMessage = {
   message: SessionMessage | null;
   chatId: string;
@@ -402,7 +408,7 @@ export function encodeResilienceMessage(eventName: string, payload: Record<strin
 
 export class SessionManager {
   private readonly sessions = new Map<string, SessionEntry>();
-  private readonly evictedMappings = new Map<string, { claudeSessionId: string; lastActivity: number }>();
+  private readonly evictedMappings = new Map<string, EvictedMapping>();
   private readonly config: SessionManagerConfig;
   private readonly inboxDelivery: InboxDeliveryCoordinator;
   /** Last lazy Context-Tree re-resolution attempt (epoch ms); see `TREE_RERESOLVE_INTERVAL_MS`. */
@@ -1115,7 +1121,9 @@ export class SessionManager {
       lastRetryRawError: null,
       startMessage: message,
       retryQueuedMessages: [],
-      retryFromEvicted: evicted ?? null,
+      retryFromEvicted: evicted
+        ? { claudeSessionId: evicted.claudeSessionId, lastActivity: evicted.lastActivity }
+        : null,
     };
 
     this.sessions.set(chatId, entry);
@@ -1131,6 +1139,7 @@ export class SessionManager {
       this.setCurrentTrigger(chatId, message);
       const token = this.createDeliveryToken(chatId);
       if (evicted) {
+        if (evicted.cleanup) await evicted.cleanup;
         const receipt = normalizeResumeReceipt(await handler.resume(message, evicted.claudeSessionId, ctx, token));
         if (this.sessions.get(chatId) !== entry) return;
         entry.claudeSessionId = receipt.sessionId;
@@ -1864,17 +1873,24 @@ export class SessionManager {
     }
 
     if (candidate) {
+      let cleanup: Promise<void> | undefined;
+      if (candidate.session.status === "active") {
+        this._activeCount--;
+        cleanup = candidate.session.handler.shutdown().catch((err) => {
+          this.config.log.warn({ chatId: candidate.key, err }, "evicted session shutdown error");
+        });
+      } else {
+        cleanup = candidate.session.suspending ?? undefined;
+      }
+
       // Preserve mapping for future recovery
       this.addEvictedMapping(candidate.key, {
         claudeSessionId: candidate.session.claudeSessionId,
         lastActivity: candidate.session.lastActivity,
+        cleanup,
       });
 
       this.config.log.info({ chatId: candidate.key }, "session evicted (max_sessions reached)");
-      if (candidate.session.status === "active") {
-        this._activeCount--;
-        candidate.session.handler.shutdown().catch(() => {});
-      }
       // LRU eviction is local memory-management, not operator intent — do
       // NOT emit a wire state here. The chat now lives in `evictedMappings`
       // and the next `agent:bound` (initial bind or reconnect) will pick it
@@ -1961,7 +1977,7 @@ export class SessionManager {
   }
 
   /** Add an evicted mapping, pruning the oldest if over capacity. */
-  private addEvictedMapping(chatId: string, mapping: { claudeSessionId: string; lastActivity: number }): void {
+  private addEvictedMapping(chatId: string, mapping: EvictedMapping): void {
     this.evictedMappings.set(chatId, mapping);
     if (this.evictedMappings.size > MAX_EVICTED_MAPPINGS) {
       // Map iteration order is insertion order — first key is the oldest
