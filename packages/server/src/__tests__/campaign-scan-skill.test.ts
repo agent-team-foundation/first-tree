@@ -24,8 +24,11 @@ describe("campaign scan skills", () => {
       expect(body).toContain("Step 5");
       expect(body).toContain("ready-to-apply");
       // Offers to apply via the user's own GitHub (gh), on a branch.
-      expect(body).toContain("open a PR");
       expect(body).toContain("`gh`");
+      // The apply-consent offer is raised as a tracked ask-user decision (chat ask),
+      // not a plain message — so it can't be missed and blocks on the answer.
+      expect(body).toContain("tracked ask-user");
+      expect(body).toContain("chat ask");
       // Consent gate: never mutates the repo without an explicit yes.
       expect(body.toLowerCase()).toContain("read-only until");
       expect(body).toContain("explicit go-ahead");
@@ -62,6 +65,11 @@ describe("campaign scan skills", () => {
       expect(body).toContain("ONE ask at a time");
       // (4) explicit stop condition — no re-pitch when unanswered / declined / quiet.
       expect(body).toContain("don't re-pitch");
+      // (5) BOTH the apply-consent offer and the Step 6 conversion are raised as
+      //     tracked ask-user decisions (chat ask) — the two asks in the flow — and
+      //     the conversion stays a single yes/no, never a multi-option menu.
+      expect((body.match(/chat ask/g) ?? []).length).toBeGreaterThanOrEqual(2);
+      expect(body).toContain("never a menu");
     }
   });
 });

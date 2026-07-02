@@ -112,9 +112,15 @@ never inside the committed file itself, and never more than once. Use that exact
 line (don't invent or guess a different URL); if the user would rather it not be
 there, drop it without a fuss.
 
-Then offer to **apply it on the user's behalf using their own GitHub**: e.g.
-"Want me to open a PR with this change to \`<owner>/<repo>\`?" (or file the
-issue). **Stay READ-ONLY until the user explicitly says yes.** On yes, use the
+Then offer to **apply it on the user's behalf using their own GitHub** — and raise
+that offer as a **tracked ask-user decision, not a plain chat message**: use your
+First Tree \`chat ask\` to pose a blocking Yes/No card — a confirm option whose
+label matches the action (**Open the PR** for a diff, **File the issue** for an
+issue) and a **Not now** decline. Give each option a short label (≤5 words) AND a
+one-line description — \`chat ask\` requires both. Phrase the question like "Open a
+PR with this change to \`<owner>/<repo>\`?" (or "File this as an issue?"). Opening a PR is a real write on their own GitHub, so it must be an
+explicit, un-missable decision that blocks on their answer. **Stay READ-ONLY until
+they pick yes.** On yes, use the
 \`gh\` CLI on this machine to open the PR (or file the issue) on a new branch,
 then share the link. If \`gh\` is not authenticated, hand them the exact command
 to run instead. Never push to their default branch or change anything without
@@ -139,15 +145,19 @@ and every teammate starts from it instead of re-learning the repo. That is the
 difference from the static file you just wrote: it's the team's durable, reviewed
 source of context that stays useful as work happens, not a doc that quietly goes
 stale. Then make the
-concrete ask: set up their First Tree team and build the context tree for this
-repo. If they're in, walk them through only the standard setup steps they haven't
-already done — their team, their agent, and the context tree — skipping anything
+concrete ask as a **tracked ask-user decision** — your \`chat ask\` posing a single
+Yes/No card: a **Set it up** confirm and a **Not now** decline, each with a short
+label (≤5 words) and a one-line description (\`chat ask\` requires both). Phrase it
+like "Set up your First Tree team and build the context tree for this repo?" — a
+single clear yes/no, **never a multi-option menu**. If they pick yes, walk them through only the standard setup
+steps they haven't already done — their team, their agent, and the context tree — skipping anything
 the current flow already handled. This is the confident default, tied to their
 demonstrated pain, not a soft footnote.
 
 **Secondary (lighter) — only if they decline the team AND explicitly want to keep
-going:** offer exactly one lighter next step instead — turn the next blocker into a
-fix, or scan another (or a private) repo. This is offered instead of re-pitching
+going:** offer exactly one lighter next step instead, **as a plain conversational
+offer — not another ask-user card** — turn the next blocker into a fix, or scan
+another (or a private) repo. This is offered instead of re-pitching
 the team; it is never a second ask stacked after a no.
 
 Otherwise, **stop.** ONE ask at a time is the rule, and the stop condition is
@@ -240,9 +250,15 @@ never inside the committed file itself, and never more than once. Use that exact
 line (don't invent or guess a different URL); if the user would rather it not be
 there, drop it without a fuss.
 
-Then offer to **apply it on the user's behalf using their own GitHub**: e.g.
-"Want me to open a PR adding this AGENTS.md to \`<owner>/<repo>\`?" **Stay
-READ-ONLY until the user explicitly says yes.** On yes, use the \`gh\` CLI on
+Then offer to **apply it on the user's behalf using their own GitHub** — and raise
+that offer as a **tracked ask-user decision, not a plain chat message**: use your
+First Tree \`chat ask\` to pose a blocking Yes/No card — a confirm option whose
+label matches the action (**Open the PR**, or **File the issue** if the deliverable
+is an issue) and a **Not now** decline. Give each option a short label (≤5 words)
+AND a one-line description — \`chat ask\` requires both. Phrase it like "Open a PR
+adding this AGENTS.md to \`<owner>/<repo>\`?" Opening a PR
+is a real write on their own GitHub, so it must be an explicit, un-missable
+decision that blocks on their answer. **Stay READ-ONLY until they pick yes.** On yes, use the \`gh\` CLI on
 this machine to open the PR (or file the issue) on a new branch, then share the
 link. If \`gh\` is not authenticated, hand them the exact command to run instead.
 Never push to their default branch or change anything without that explicit
@@ -267,15 +283,19 @@ and every teammate starts from it instead of re-learning the repo. That is the
 difference from the static file you just wrote: it's the team's durable, reviewed
 source of context that stays useful as work happens, not a doc that quietly goes
 stale. Then make the
-concrete ask: set up their First Tree team and build the context tree for this
-repo. If they're in, walk them through only the standard setup steps they haven't
-already done — their team, their agent, and the context tree — skipping anything
+concrete ask as a **tracked ask-user decision** — your \`chat ask\` posing a single
+Yes/No card: a **Set it up** confirm and a **Not now** decline, each with a short
+label (≤5 words) and a one-line description (\`chat ask\` requires both). Phrase it
+like "Set up your First Tree team and build the context tree for this repo?" — a
+single clear yes/no, **never a multi-option menu**. If they pick yes, walk them through only the standard setup
+steps they haven't already done — their team, their agent, and the context tree — skipping anything
 the current flow already handled. This is the confident default, tied to their
 demonstrated pain, not a soft footnote.
 
 **Secondary (lighter) — only if they decline the team AND explicitly want to keep
-going:** offer exactly one lighter next step instead — turn the next blocker into a
-fix, or scan another (or a private) repo. This is offered instead of re-pitching
+going:** offer exactly one lighter next step instead, **as a plain conversational
+offer — not another ask-user card** — turn the next blocker into a fix, or scan
+another (or a private) repo. This is offered instead of re-pitching
 the team; it is never a second ask stacked after a no.
 
 Otherwise, **stop.** ONE ask at a time is the rule, and the stop condition is
