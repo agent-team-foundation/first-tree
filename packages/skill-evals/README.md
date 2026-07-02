@@ -143,7 +143,11 @@ matrix. It covers every concrete setup-state row from the current
 `first-tree-welcome` matrix, including invitee not-ready/ready states, selected
 repo authorization failure, local-readable repo with missing GitHub App,
 installed app with no selected repo, readable repo with empty tree, and
-readable repo with unknown tree. The explicit catch-all row remains a no-model
+readable repo with unknown tree. For the admin + readable repo + missing/empty
+tree row, the welcome chat leads with evidence-backed code-first task options
+and may also offer "Build your Context Tree" as a first-class menu option; it
+must never seed, create, or bind the tree from the launcher itself — that side
+effect stays forbidden. The explicit catch-all row remains a no-model
 floor invariant because it is a structural fallback rather than a stable live
 oracle. Periodic case ids use the gate row id plus `-periodic`; `--case` also
 accepts the source row id as an alias.

@@ -37,6 +37,7 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     skillFileReadObserved: true,
     sourceRepoChanged: false,
     taskOptionsObserved: false,
+    treeBuildOptionObserved: false,
     treeEvidenceReadObserved: false,
     ...overrides,
   };
@@ -325,8 +326,8 @@ describe("first-tree-welcome grader", () => {
     }
   });
 
-  it("fails readable-repo-empty-tree when Context Tree setup is offered as a first task option", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-empty-tree-task-setup-"));
+  it("passes readable-repo-empty-tree when Build your Context Tree is offered as a first-class option", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-empty-tree-build-option-"));
     try {
       const evalCase = findCase("first-tree-welcome-readable-repo-empty-tree-periodic");
       const metrics = deriveMetrics(
@@ -338,18 +339,22 @@ describe("first-tree-welcome grader", () => {
               "chat",
               "ask",
               "baixiaohang",
-              "Choose the first task from repo evidence.",
+              "I read the repo; pick a first task. One option is to build shared memory later.",
               "--options",
               JSON.stringify([
                 { description: "Debug the expired session flow.", label: "Fix session" },
                 { description: "Trace checkout reliability failures.", label: "Trace checkout" },
-                { description: "Create and seed a Context Tree first.", label: "Build Context Tree" },
+                {
+                  description:
+                    "Build your Context Tree — seed the Context Tree so the team gets durable shared memory.",
+                  label: "Build your Context Tree",
+                },
               ]),
             ],
             phase: "model",
             type: "first_tree_call",
           },
-          assistantMessageEvent("I read the repo; choose a session, checkout, or Context Tree setup task."),
+          assistantMessageEvent("I read the repo; choose a session or checkout task, or build shared memory."),
         ],
         evalCase,
         fixtureValidation(),
@@ -360,8 +365,10 @@ describe("first-tree-welcome grader", () => {
 
       expect(metrics.repoEvidenceReadObserved).toBe(true);
       expect(metrics.taskOptionsObserved).toBe(true);
-      expect(metrics.forbiddenActionHits).toContain("tree-setup-as-first-task");
-      expect(casePassed(evalCase, metrics)).toBe(false);
+      expect(metrics.treeBuildOptionObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toEqual([]);
+      expect(metrics.forbiddenSideEffectHits).toEqual([]);
+      expect(casePassed(evalCase, metrics)).toBe(true);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -520,9 +527,11 @@ describe("first-tree-welcome grader", () => {
       {
         chatAskCount: 1,
         chatOptionCount: 3,
-        finalResponse: "I read the repo; choose a checkout, session, or map task before tree setup.",
+        finalResponse:
+          "I read the repo; choose a checkout, session, or map task, or build your Context Tree for shared memory.",
         repoEvidenceReadObserved: true,
         taskOptionsObserved: true,
+        treeBuildOptionObserved: true,
       },
     ],
     [
@@ -546,6 +555,7 @@ describe("first-tree-welcome grader", () => {
       chatOptionCount: 2,
       repoEvidenceReadObserved: true,
       taskOptionsObserved: true,
+      treeBuildOptionObserved: true,
       treeEvidenceReadObserved: false,
     });
 

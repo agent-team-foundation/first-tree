@@ -41,7 +41,7 @@ function processPass(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): 
   if (evalCase.expected.action === "guide_repo_selection_without_claiming_repo_read") {
     return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
   }
-  if (evalCase.expected.action === "offer_code_value_without_tree_setup_task") {
+  if (evalCase.expected.action === "offer_tree_build_with_code_value") {
     return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
   }
   if (evalCase.expected.action === "offer_bounded_first_tasks_from_repo_and_tree") {
@@ -76,7 +76,7 @@ function outcomePass(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): 
   if (evalCase.expected.action === "guide_repo_selection_without_claiming_repo_read") {
     return !metrics.taskOptionsObserved;
   }
-  if (evalCase.expected.action === "offer_code_value_without_tree_setup_task") {
+  if (evalCase.expected.action === "offer_tree_build_with_code_value") {
     return metrics.taskOptionsObserved;
   }
   if (evalCase.expected.action === "offer_bounded_first_tasks_from_repo_and_tree") {
