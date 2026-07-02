@@ -1289,8 +1289,11 @@ describe("POST /webhooks/github-app", () => {
       .from(messages)
       .where(eq(messages.chatId, chat?.id ?? ""))
       .limit(1);
-    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --comment --body");
-    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body");
+    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --request-changes --body-file");
+    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --comment --body-file");
+    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
+    expect(message?.content).toContain("Context changes requested");
+    expect(message?.content).toContain("Still unclear or needs more detail");
     expect(message?.metadata).toMatchObject({
       source: "github",
       event: "pull_request",
