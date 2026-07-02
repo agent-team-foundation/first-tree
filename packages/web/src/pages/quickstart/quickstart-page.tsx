@@ -7,7 +7,7 @@ import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { useAgentCreation } from "../../features/agent-setup/use-agent-creation.js";
 import { useComputerConnection } from "../../features/agent-setup/use-computer-connection.js";
-import { useServerChannelState } from "../../hooks/use-server-channel.js";
+import { useGrowthLandingPagesState } from "../../hooks/use-server-channel.js";
 import { runtimeProviderLabel } from "../clients/cards/shared/providers.js";
 import { CommandBox, FlowHint, StatusRow, WorkingState } from "../onboarding/flow-ui.js";
 import { getCampaign, QUICKSTART_AGENT_NAME } from "./campaigns.js";
@@ -36,15 +36,13 @@ export function QuickstartPage() {
   const location = useLocation();
   const { organizationId, refreshMe, currentOrgHasPersonalAgent } = useAuth();
 
-  // This growth entry is dev/staging-only — it must not run in prod. The
-  // prod-safe default falls out of the channel hook (unknown / old server →
-  // null → not allowed). `channelAllowed` gates the render, the
-  // `useComputerConnection` enable, the setup/resume effects, and the redirect
-  // below — so prod never connects a computer, creates an agent, or starts a
-  // chat. `settled` lets us hold a neutral screen while the channel resolves
-  // instead of bouncing a dev/staging visitor mid-fetch.
-  const { channel, settled } = useServerChannelState();
-  const channelAllowed = channel === "dev" || channel === "staging";
+  // This growth entry is controlled by an explicit server feature flag, not by
+  // release channel. Unknown / old server → disabled. The flag gates render,
+  // `useComputerConnection`, setup/resume effects, and redirect — so disabled
+  // deployments never connect a computer, create an agent, or start a chat.
+  // `settled` lets us hold a neutral screen while the flag resolves instead of
+  // bouncing an enabled visitor mid-fetch.
+  const { enabled: growthLandingPagesEnabled, settled } = useGrowthLandingPagesState();
 
   // Resolve the campaign handoff once. Prefer the URL — the landing CTA and the
   // post-login `next` round-trip land the params here — and persist it so a
@@ -59,7 +57,7 @@ export function QuickstartPage() {
   }, [location]);
   const campaign = intent ? getCampaign(intent.campaign) : null;
 
-  const computer = useComputerConnection(Boolean(intent && campaign) && channelAllowed);
+  const computer = useComputerConnection(Boolean(intent && campaign) && growthLandingPagesEnabled);
   const setupStartedRef = useRef(false);
   const startChatStartedRef = useRef(false);
   const onlineAgentRef = useRef<{ uuid: string; displayName: string } | null>(null);
@@ -183,7 +181,7 @@ export function QuickstartPage() {
   // button, no picker. Fires once; skipped when an agent was already created
   // this attempt (remount) — the resume effect below handles that.
   useEffect(() => {
-    if (setupStartedRef.current || stashedAgentUuid || !intent || !campaign || !channelAllowed) return;
+    if (setupStartedRef.current || stashedAgentUuid || !intent || !campaign || !growthLandingPagesEnabled) return;
     if (!computer.connectedClient || !computer.selectedRuntime || phase !== "idle") return;
     setupStartedRef.current = true;
     void setupAgent();
@@ -195,24 +193,24 @@ export function QuickstartPage() {
     campaign,
     setupAgent,
     stashedAgentUuid,
-    channelAllowed,
+    growthLandingPagesEnabled,
   ]);
 
   // Remount after the agent was already created (refresh while waiting, or the
   // timeout/error screen): reuse the stashed agent and resume start chat.
   useEffect(() => {
-    if (resumeStartedRef.current || !stashedAgentUuid || !intent || !campaign || !channelAllowed) return;
+    if (resumeStartedRef.current || !stashedAgentUuid || !intent || !campaign || !growthLandingPagesEnabled) return;
     resumeStartedRef.current = true;
     void startChat(stashedAgentUuid, QUICKSTART_AGENT_NAME);
-  }, [stashedAgentUuid, intent, campaign, startChat, channelAllowed]);
+  }, [stashedAgentUuid, intent, campaign, startChat, growthLandingPagesEnabled]);
 
-  // Channel gate redirect: once the channel has settled, a prod (or
+  // Feature gate redirect: once the flag has settled, a disabled (or
   // unknown/old-server) visitor is sent home. Imperative to match the success
-  // navigate above; the side effects are already gated on `channelAllowed`, so
-  // nothing fires here even in the render before this runs.
+  // navigate above; the side effects are already gated, so nothing fires here
+  // even in the render before this runs.
   useEffect(() => {
-    if (settled && !channelAllowed) navigate("/", { replace: true });
-  }, [settled, channelAllowed, navigate]);
+    if (settled && !growthLandingPagesEnabled) navigate("/", { replace: true });
+  }, [settled, growthLandingPagesEnabled, navigate]);
 
   const retryStartChat = useCallback(() => {
     const a = onlineAgentRef.current;
@@ -229,10 +227,11 @@ export function QuickstartPage() {
     void setupAgent();
   }, [phase, retryAgent, setupAgent]);
 
-  // Channel gate render. `!settled`: channel still resolving — neutral hold.
-  // `!channelAllowed`: prod/unknown — the redirect effect is taking us home;
-  // render neutral, never the flow (the connect step would flash first).
-  if (!settled || !channelAllowed) {
+  // Feature gate render. `!settled`: flag still resolving — neutral hold.
+  // `!growthLandingPagesEnabled`: disabled/unknown — the redirect effect is
+  // taking us home; render neutral, never the flow (the connect step would
+  // flash first).
+  if (!settled || !growthLandingPagesEnabled) {
     return (
       <QuickstartShell>
         <StatusRow state="waiting" label="Loading…" />

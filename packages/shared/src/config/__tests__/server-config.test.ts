@@ -60,6 +60,31 @@ describe("server config", () => {
     expect(fieldSchema.parse("   ")).toBeUndefined();
   });
 
+  it("keeps growth landing pages disabled by default and enables them via env", async () => {
+    const defaultConfigDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+
+    const defaultConfig = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: defaultConfigDir,
+    });
+
+    expect(defaultConfig.growth.landingPagesEnabled).toBe(false);
+
+    resetConfig();
+    const enabledConfigDir = makeTempConfigDir();
+    vi.stubEnv("FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED", "true");
+
+    const enabledConfig = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: enabledConfigDir,
+    });
+
+    expect(enabledConfig.growth.landingPagesEnabled).toBe(true);
+  });
+
   it("does not auto-generate server secrets when disabled", async () => {
     const configDir = makeTempConfigDir();
     vi.stubEnv("FIRST_TREE_DATABASE_URL", "postgres://first-tree:test@localhost:5432/firsttree");

@@ -36,12 +36,12 @@ const computerMock = vi.hoisted(() => ({
     retry: vi.fn(),
   },
   // Captures the `enabled` arg the page passes to useComputerConnection so a
-  // test can assert the channel gate keeps the connection off in prod/loading.
+  // test can assert the feature gate keeps the connection off when disabled/loading.
   lastEnabled: undefined as boolean | undefined,
 }));
 
-const channelMock = vi.hoisted(() => ({
-  value: { channel: "dev" as "dev" | "staging" | "prod" | null, settled: true },
+const growthLandingMock = vi.hoisted(() => ({
+  value: { enabled: true, settled: true },
 }));
 
 type CreateAgentArgs = {
@@ -82,8 +82,8 @@ vi.mock("../../../features/agent-setup/use-computer-connection.js", () => ({
   },
 }));
 vi.mock("../../../hooks/use-server-channel.js", () => ({
-  useServerChannelState: () => channelMock.value,
-  useServerChannel: () => channelMock.value.channel,
+  useGrowthLandingPagesState: () => growthLandingMock.value,
+  useGrowthLandingPagesEnabled: () => growthLandingMock.value.enabled,
 }));
 vi.mock("../../../features/agent-setup/use-agent-creation.js", () => ({
   useAgentCreation: (opts?: { onOnline?: (uuid: string) => void }) => {
@@ -166,9 +166,9 @@ beforeEach(() => {
   agentsListMock.mockResolvedValue([]);
   updateAgentMock.mockReset();
   updateAgentMock.mockResolvedValue({});
-  // Default to dev (allowed + settled) so existing flow tests run unchanged;
-  // the channel-gate tests override this per case.
-  channelMock.value = { channel: "dev", settled: true };
+  // Default to enabled + settled so existing flow tests run unchanged; the
+  // feature-gate tests override this per case.
+  growthLandingMock.value = { enabled: true, settled: true };
   computerMock.lastEnabled = undefined;
 });
 
@@ -471,11 +471,11 @@ describe("QuickstartPage — full flow (e2e)", () => {
     expect(navigateMock).toHaveBeenCalledWith("/?c=chat-1");
   });
 
-  it("prod channel: redirects home and fires no connect/agent side effects", async () => {
+  it("disabled feature flag: redirects home and fires no connect/agent side effects", async () => {
     // Even a fully connected computer with a usable runtime must not set up in
-    // prod — the gate blocks the whole flow (connection enable + setup effect)
-    // and sends the user home.
-    channelMock.value = { channel: "prod", settled: true };
+    // a disabled deployment — the gate blocks the whole flow (connection enable
+    // + setup effect) and sends the user home.
+    growthLandingMock.value = { enabled: false, settled: true };
     seedIntent("production-scan");
     connectedWith("claude-code");
     await renderPage();
@@ -484,26 +484,13 @@ describe("QuickstartPage — full flow (e2e)", () => {
     });
 
     expect(navigateMock).toHaveBeenCalledWith("/", { replace: true });
-    expect(computerMock.lastEnabled).toBe(false); // connection never enabled in prod
+    expect(computerMock.lastEnabled).toBe(false); // connection never enabled when disabled
     expect(agentCreationMock.create).not.toHaveBeenCalled();
     expect(onboardingMocks.postOnboardingStartChat).not.toHaveBeenCalled();
   });
 
-  it("unknown channel (old server / unreadable): treated as prod — redirects, creates nothing", async () => {
-    channelMock.value = { channel: null, settled: true };
-    seedIntent("production-scan");
-    connectedWith("claude-code");
-    await renderPage();
-    await act(async () => {
-      for (let i = 0; i < 8; i++) await Promise.resolve();
-    });
-
-    expect(navigateMock).toHaveBeenCalledWith("/", { replace: true });
-    expect(agentCreationMock.create).not.toHaveBeenCalled();
-  });
-
-  it("channel still loading: holds a neutral screen, no redirect, no side effects", async () => {
-    channelMock.value = { channel: null, settled: false };
+  it("feature flag still loading: holds a neutral screen, no redirect, no side effects", async () => {
+    growthLandingMock.value = { enabled: false, settled: false };
     seedIntent("production-scan");
     connectedWith("claude-code");
     const container = await renderPage();
@@ -511,14 +498,14 @@ describe("QuickstartPage — full flow (e2e)", () => {
       for (let i = 0; i < 8; i++) await Promise.resolve();
     });
 
-    expect(navigateMock).not.toHaveBeenCalled(); // must NOT bounce a dev/staging user mid-fetch
-    expect(computerMock.lastEnabled).toBe(false); // connection waits until the channel settles
+    expect(navigateMock).not.toHaveBeenCalled(); // must NOT bounce an enabled deployment mid-fetch
+    expect(computerMock.lastEnabled).toBe(false); // connection waits until the flag settles
     expect(agentCreationMock.create).not.toHaveBeenCalled();
     expect(container.textContent).not.toContain("npx @first-tree/cli login"); // not the connect step
   });
 
-  it("staging channel: allowed — connection enabled, no redirect", async () => {
-    channelMock.value = { channel: "staging", settled: true };
+  it("enabled feature flag: connection enabled, no redirect", async () => {
+    growthLandingMock.value = { enabled: true, settled: true };
     seedIntent("production-scan");
     await renderPage();
     await act(async () => {

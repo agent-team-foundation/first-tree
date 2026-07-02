@@ -7,10 +7,10 @@ import { describe, expect, it, vi } from "vitest";
 import { readCampaignHandoff } from "../../quickstart/intent.js";
 import { buildScanHandoffHref, ScanLandingPage } from "../scan-landing-page.js";
 
-// Mock the channel hook so each test pins dev / staging / prod / loading.
-const channelMock = vi.hoisted(() => ({ value: { channel: "dev" as string | null, settled: true } }));
+// Mock the growth flag hook so each test pins enabled / disabled / loading.
+const growthLandingMock = vi.hoisted(() => ({ value: { enabled: true, settled: true } }));
 vi.mock("../../../hooks/use-server-channel.js", () => ({
-  useServerChannelState: () => channelMock.value,
+  useGrowthLandingPagesState: () => growthLandingMock.value,
 }));
 
 const INPUT_LABEL = "GitHub repository URL";
@@ -50,38 +50,33 @@ describe("buildScanHandoffHref — landing → quickstart contract", () => {
   });
 });
 
-describe("ScanLandingPage — dev/staging-only channel gate", () => {
-  it("renders the scan form on dev for a known campaign", () => {
-    channelMock.value = { channel: "dev", settled: true };
+describe("ScanLandingPage — growth landing feature gate", () => {
+  it("renders the scan form when enabled for a known campaign", () => {
+    growthLandingMock.value = { enabled: true, settled: true };
     const markup = renderScan("/scan/production-scan");
     expect(markup).toContain(INPUT_LABEL);
     expect(markup).toContain("Is your repo ready to ship?");
   });
 
-  it("renders on staging too", () => {
-    channelMock.value = { channel: "staging", settled: true };
+  it("renders other known campaigns when enabled", () => {
+    growthLandingMock.value = { enabled: true, settled: true };
     expect(renderScan("/scan/agent-readiness")).toContain(INPUT_LABEL);
   });
 
-  it("does NOT render the form in prod — the whole funnel is hidden", () => {
-    channelMock.value = { channel: "prod", settled: true };
+  it("does NOT render the form when disabled — the whole funnel is hidden", () => {
+    growthLandingMock.value = { enabled: false, settled: true };
     expect(renderScan("/scan/production-scan")).not.toContain(INPUT_LABEL);
   });
 
-  it("does NOT render the form for an unknown/old server (null channel)", () => {
-    channelMock.value = { channel: null, settled: true };
-    expect(renderScan("/scan/production-scan")).not.toContain(INPUT_LABEL);
-  });
-
-  it("holds a neutral surface (no form) while the channel is still loading", () => {
-    channelMock.value = { channel: null, settled: false };
+  it("holds a neutral surface (no form) while the feature flag is still loading", () => {
+    growthLandingMock.value = { enabled: false, settled: false };
     const markup = renderScan("/scan/production-scan");
     expect(markup).not.toContain(INPUT_LABEL);
     expect(markup).toContain("landing-marketing");
   });
 
-  it("redirects an unknown campaign slug even on dev", () => {
-    channelMock.value = { channel: "dev", settled: true };
+  it("redirects an unknown campaign slug even when enabled", () => {
+    growthLandingMock.value = { enabled: true, settled: true };
     expect(renderScan("/scan/bogus-campaign")).not.toContain(INPUT_LABEL);
   });
 });
