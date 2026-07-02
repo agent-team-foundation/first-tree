@@ -1289,7 +1289,8 @@ describe("POST /webhooks/github-app", () => {
       .from(messages)
       .where(eq(messages.chatId, chat?.id ?? ""))
       .limit(1);
-    expect(message?.content).toContain("gh pr comment 42 --repo owner/context-tree --body");
+    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --comment --body");
+    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body");
     expect(message?.metadata).toMatchObject({
       source: "github",
       event: "pull_request",
@@ -1337,7 +1338,7 @@ describe("POST /webhooks/github-app", () => {
         "Comment URL: https://github.com/owner/context-tree/pull/42#issuecomment-2",
       ].join("\n"),
     );
-    expect(followUpMessage?.content).not.toContain("gh pr comment 42 --repo owner/context-tree --body");
+    expect(followUpMessage?.content).not.toContain("gh pr review 42 --repo owner/context-tree");
     expect(followUpMessage?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
