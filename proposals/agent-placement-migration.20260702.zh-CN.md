@@ -205,12 +205,28 @@ Agent 详情页(admin/manager 视角)加 "Migrate" 操作:选择目标 computer(
 ### 6.1 目标 client
 
 - 新 alias:`agent:pinned` 处理器现有逻辑直接生效(写 `agent.yaml`、启 slot)。帧里已带 `runtimeProvider`,yaml 的 `runtime` 字段写对。
-- **已存在同 agentId 的 alias(回迁 / 换 provider 场景)——`handleAgentPinned` 需要增强**:目前对已存在的 agent 直接 return;改为比对本地 `agent.yaml` 的 `runtime` 与帧中 `runtimeProvider`,不一致则改写 yaml 并重启 slot(provider 原地切换就落在这条路径:server 推 `agent:pinned` 给同一台机器)。
+- **已存在同 agentId 的 alias(回迁 / 换 provider 场景)——`handleAgentPinned` 需要两点增强**:
+  1. 目前对已存在的 agent 只在 `suspended-skipped` 状态下重启,其余直接 return。必须扩展为:`failed`(迁走后 bind 被 `wrong_client` 拒绝的终态)与 `idle`(被 `force_disconnect(migrated)` 停掉的状态)也触发重启——否则 **A→B→A 回迁时源机 daemon 若一直在跑,agent 不会自动复活,只能重启 daemon**(现状已核实,`apps/cli/src/core/client-runtime.ts` 的 `handleAgentPinned`)。
+  2. 比对本地 `agent.yaml` 的 `runtime` 与帧中 `runtimeProvider`,不一致则改写 yaml 后再重启 slot(provider 原地切换就落在这条路径:server 推 `agent:pinned` 给同一台机器)。
 - 目标机上的 workspace 冷启动完全走现有首启路径:clone Context Tree、按 `agent_configs` 拉 server 管理的运行时配置、装 skills——不需要任何迁移专用逻辑。workspace 目录若已存在(回迁)则保留复用,会话映射由 F1–F3 作废。
 
 ### 6.2 provider 原地切换(client 不变)
 
 同一 API,`targetClientId` = 当前 client。流程完全一致:源即目标,先收 `force_disconnect(migrated)`(F1 作废会话),再收 `agent:pinned` 触发 yaml 改写 + slot 以新 handler 重启。
+
+### 6.3 源机残留目录:不强制清理(已核实无依赖)
+
+迁移后源机的 `config/agents/<name>/`、`data/workspaces/<name>/`、`data/sessions/<name>.json` **保留原地,不自动删除**。已逐路径核实残留是惰性的、没有代码逻辑依赖清理才能正确工作:
+
+- daemon 启动照常加载残留 alias,bind 被 `wrong_client` 拒绝 → slot 进 `failed` 态,一条 "connection failed" 日志;不崩溃、不影响同机其他 agent、不消费 inbox;
+- 目录 watcher(`scanForNewAgents`)对已加载条目按 name/agentId 去重,不会反复重加;
+- `wrong_client` 在错误分类里是 transient(有意为之,覆盖"agent 稍后才 pin 到本机"的场景,不改):每次 WS 重连会重试 bind,指数退避封顶约 5 分钟,debug 级日志。代价是无意义的低频 bind 流量,直到操作员清理;
+- `doctor` / `agent prune` 已把残留归类为 `pinned-elsewhere`,是既有的清理通道。
+
+两条纪律(写进 CLI 提示与文档,不写自动化):
+
+1. 清理必须走 `agent remove` / `agent prune`(三件套一起删)。**手动只删 config alias 是危险的**:残留的 `data/sessions/<name>.json` 会被日后复用同名的新 agent 吸入旧会话映射(F1–F3 之外唯一已知的会话污染路径,靠工具纪律封死)。
+2. F1 的边界:`force_disconnect` 只对当前 bound 的 agent 生效;源机 slot 已死(`failed`)时它是 no-op,会话作废由 F2/F3 兜底——分层设计已覆盖,无需额外处理。
 
 ---
 
@@ -240,7 +256,7 @@ Agent 详情页(admin/manager 视角)加 "Migrate" 操作:选择目标 computer(
 | migrate 与首绑 claim 并发 | claim 是 `WHERE client_id IS NULL`,migrate 要求 `client_id = 旧值`;互斥,各自原子 |
 | 旧 client 在 migrate 提交后 re-bind | bind 每次从 DB 重读 → `wrong_client`,现有机制,同时触发 F2 会话作废 |
 | 旧 client 已 bind、migrate 后继续发帧 | 主防线:提交后立即 forceDisconnect(本实例)+ 跨实例广播(§8.2)。残余窗口内旧帧只污染 presence/会话状态,而这两者都已在事务里重置;广播到达后即断流。不追求逐帧查 DB(成本不值) |
-| 目标 client 恰好持有同 agent 的旧 alias 且 daemon 在跑 | `agent:pinned` 增强路径(§6.1)+ F1–F3 会话作废 |
+| 目标 client 恰好持有同 agent 的旧 alias 且 daemon 在跑 | `agent:pinned` 增强路径(§6.1,含 `failed`/`idle` 态重启)+ F1–F3 会话作废 |
 | migrate 事务提交后、通知发出前 server 崩溃 | DB 已是新 placement:旧 client 下次任何 bind 被拒(F2 兜底会话作废);目标 client 下次 `client:register` 收到 pinned backfill。通知只是加速,不承载正确性 |
 | A→B→A 回迁且 A 全程离线 | F3(`updatedAt` 快照)兜底 |
 
@@ -291,7 +307,7 @@ Agent 详情页(admin/manager 视角)加 "Migrate" 操作:选择目标 computer(
 
 - **Server 单测**:migrate 服务全部前置校验矩阵;CAS 并发(两个 migrate、migrate vs 首绑 claim);会话 runtime_state 重置;force 语义(capability 跳过、working 跳过);无变化请求 400。
 - **WS 集成**:旧 client bind → migrate → 旧 client 收 force_disconnect、re-bind 收 `wrong_client`;目标 client 收 `agent:pinned`;bind 后 stuck-`delivered` inbox 恢复到新机。
-- **CLI 单测**:pinned handler 的三分支(新 alias / 同 alias 同 provider / 同 alias 换 provider);F1/F2/F3 三条作废路径(含 A→B→A 回迁模拟);prune 对迁走 alias 的 `pinned-elsewhere` 归类(已有测试,验证不回归)。
+- **CLI 单测**:pinned handler 的分支矩阵(新 alias / 同 alias 同 provider / 同 alias 换 provider × `failed`/`idle`/`suspended-skipped` 态重启);F1/F2/F3 三条作废路径(含 A→B→A 回迁模拟,daemon 不重启);源机残留 alias 的惰性行为(bind 拒绝后不影响其他 agent、watcher 不重加);prune 对迁走 alias 的 `pinned-elsewhere` 归类(已有测试,验证不回归)。
 - **端到端手测脚本**:A→B、B→A 回迁(验证 F3)、A 原地换 provider、目标离线迁移 + 上线 backfill。
 
 ---
