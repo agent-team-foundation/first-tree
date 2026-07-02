@@ -505,6 +505,13 @@
       "when": 1782896796980,
       "tag": "0071_moaning_maverick",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1782966067086,
+      "tag": "0072_dark_leader",
+      "breakpoints": true
     }
   ]
 }

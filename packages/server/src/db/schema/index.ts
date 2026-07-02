@@ -13,6 +13,7 @@ export { chats } from "./chats.js";
 export { clients } from "./clients.js";
 export { contextTreeIoEvents } from "./context-tree-io-events.js";
 export { githubAppInstallIntents } from "./github-app-install-intents.js";
+export { githubAppInstallRequests } from "./github-app-install-requests.js";
 export { githubAppInstallations } from "./github-app-installations.js";
 export { githubEntityChatMappings } from "./github-entity-chat-mappings.js";
 export { inboxEntries } from "./inbox-entries.js";

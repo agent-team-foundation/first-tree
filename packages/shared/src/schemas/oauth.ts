@@ -12,7 +12,13 @@ export const githubStartQuerySchema = z.object({
 export type GithubStartQuery = z.infer<typeof githubStartQuerySchema>;
 
 export const githubCallbackQuerySchema = z.object({
-  code: z.string().min(1),
+  /**
+   * OAuth exchange code. Present on the login / install-complete callbacks.
+   * Optional because the approval-flow request callback (`setup_action=request`,
+   * see below) can arrive without a completed OAuth exchange — the route
+   * handler requires `code` for every path except `setup_action=request`.
+   */
+  code: z.string().min(1).optional(),
   state: z.string().min(1),
   /**
    * GitHub App installation ID. Present when the user landed in callback
@@ -26,11 +32,12 @@ export const githubCallbackQuerySchema = z.object({
   installation_id: z.string().regex(/^\d+$/).optional(),
   /**
    * GitHub may send `setup_action=install` (first-time install), `update`
-   * (existing install reconfigured / re-visited), or `request` (the user
-   * requested install but an org admin must approve). We don't branch on
-   * it — `installation_id` is the actual signal — but we accept all three
-   * shapes so otherwise-valid callbacks aren't rejected at the schema
-   * gate (codex P2 follow-up).
+   * (existing install reconfigured / re-visited), or `request` (a non-owner
+   * requested install and an org owner must approve). `request` is handled
+   * specially: it arrives before any installation exists (no
+   * `installation_id`, possibly no `code`), so the route captures a pending
+   * install request keyed by the kickoff initiator (see #1392). The other
+   * shapes go through the normal login / install-complete path.
    */
   setup_action: z.enum(["install", "update", "request"]).optional(),
 });

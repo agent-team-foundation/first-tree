@@ -211,6 +211,24 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
       // account" (it replaces the old `verifyUserCanAdministerInstallation`
       // probe on the binding path).
       const installerGithubId = readSenderGithubId(payload);
+      // #1392 instrumentation: capture the approval-flow signals on the real
+      // webhook so the staging test reveals what GitHub actually sends —
+      // whether `sender` is the approver (not the requester) and whether the
+      // `requester` field is populated with the original requester. Drives the
+      // approve-flow correlation design.
+      const requester = isRecord(payload.requester) ? payload.requester : null;
+      log.info(
+        {
+          event: "github_app.installation_created_signals",
+          installationId,
+          senderId: installerGithubId,
+          requesterId: typeof requester?.id === "number" ? requester.id : null,
+          requesterLogin: typeof requester?.login === "string" ? requester.login : null,
+          account: metadata.accountLogin,
+          accountType: metadata.accountType,
+        },
+        "installation.created signals (approval-flow instrument, #1392)",
+      );
       await upsertInstallationFromMetadata(app.db, {
         installation: metadata,
         ...(installerGithubId !== null ? { installerGithubId } : {}),

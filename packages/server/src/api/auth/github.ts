@@ -4,7 +4,9 @@ import {
   githubStartQuerySchema,
   safeRedirectPath,
 } from "@first-tree/shared";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { authIdentities } from "../../db/schema/auth-identities.js";
 import { signTokensForUser } from "../../services/auth.js";
 import {
   findOrCreateUserFromGithub,
@@ -14,6 +16,7 @@ import {
 import { encryptValue } from "../../services/crypto.js";
 import { buildAppAuthorizeUrl, exchangeCodeForAppUserProfile } from "../../services/github-app.js";
 import { completeInstallBind, recordPendingBind } from "../../services/github-app-install-intents.js";
+import { recordInstallRequest } from "../../services/github-app-install-requests.js";
 import { bindInstallationToOrg, upsertInstallationFromMetadata } from "../../services/github-app-installations.js";
 import { findActiveByToken, recordRedemption } from "../../services/invitation.js";
 import {
@@ -108,7 +111,7 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     // only as a *correlation handle*: we record a per-install pending bind,
     // and the trusted `installation.created` webhook completes it only after
     // proving this installation's installer is the kickoff admin.
-    const { code, state, installation_id: installationIdRaw } = parsed;
+    const { code, state, installation_id: installationIdRaw, setup_action: setupAction } = parsed;
     const cookieNonce = parseCookieHeader(request.headers.cookie, OAUTH_STATE_COOKIE);
 
     let next: string;
@@ -140,6 +143,57 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
         secure: process.env.NODE_ENV === "production",
       }),
     );
+
+    // Approval-flow capture (#1392). When a non-owner First Tree admin
+    // initiates the install, GitHub can't install directly — it records a
+    // request for an org owner to approve and redirects here with
+    // `setup_action=request`, BEFORE any installation exists (no
+    // `installation_id`, and possibly no OAuth `code`). GitHub gives no
+    // correlation signal at approval time (the `installation.created` `sender`
+    // is the approver, not the requester), so we capture the request NOW,
+    // keyed by the initiator — known from our own signed state (`kickoffUserId`)
+    // — so the initiator can complete the bind on return after approval. The
+    // instrumentation log records the real request-callback shape for the
+    // staging validation (does GitHub route it here at all? carry a `code`?).
+    if (setupAction === "request") {
+      app.log.info(
+        {
+          event: "github_app.install_request_callback",
+          hasCode: Boolean(code),
+          installationId: installationIdRaw ?? null,
+          targetOrganizationId,
+          kickoffUserId,
+          rawQueryKeys: Object.keys((request.query as Record<string, unknown>) ?? {}),
+        },
+        "install-request callback (setup_action=request) — capture + instrument",
+      );
+      if (targetOrganizationId && kickoffUserId) {
+        const [kickoffIdentity] = await app.db
+          .select({ identifier: authIdentities.identifier })
+          .from(authIdentities)
+          .where(and(eq(authIdentities.userId, kickoffUserId), eq(authIdentities.provider, "github")))
+          .limit(1);
+        const initiatorGithubId = kickoffIdentity?.identifier ? Number(kickoffIdentity.identifier) : Number.NaN;
+        if (Number.isFinite(initiatorGithubId)) {
+          await recordInstallRequest(app.db, { initiatorGithubId, targetOrganizationId, kickoffUserId });
+        } else {
+          app.log.warn(
+            { kickoffUserId, targetOrganizationId },
+            "install-request: kickoff user has no GitHub identity on file — cannot capture request",
+          );
+        }
+      }
+      // The install is pending an org owner's approval; nothing to bind yet.
+      // Bounce back to the kickoff surface (Settings / onboarding), which
+      // surfaces the pending state and lets the initiator complete on return.
+      return reply.redirect(next, 302);
+    }
+
+    if (!code) {
+      // Non-request callbacks must carry an OAuth code (login / install-complete).
+      app.log.warn({ setupAction }, "github callback missing code on a non-request flow");
+      return redirectCallbackError(reply, "github-exchange-failed", next);
+    }
 
     const redirectUri = `${resolvePublicUrl(app, request)}/api/v1/auth/github/callback`;
     let profile: GithubProfile;
