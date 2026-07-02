@@ -146,11 +146,12 @@ function buildAgentBriefingRenderModel(opts: BuildAgentBriefingOptions): AgentBr
   // before doing any real work. Placing it
   // immediately before `# Context Tree` also keeps the mandate adjacent
   // to the content domains the two skills cover. Gated on
-  // `contextTreePath !== null` for the same reason `skillsSection`
-  // gates `firstTreeFamilyMap`: a tree-less agent has no First Tree
-  // skill payloads installed on disk (`installFirstTreeIntegration`
-  // is short-circuited in `agent-bootstrap.ts`), so mandating a load
-  // would point at files that don't exist.
+  // `contextTreePath !== null` because the UNCONDITIONAL mandate to load
+  // `first-tree-write` on every task is a tree-ops discipline (reflecting
+  // sources into an existing tree). A tree-less agent DOES carry write on disk
+  // now — it ships core as `first-tree-seed`'s dependency — but should load it
+  // only when seed pulls it in, not on every task; its installed core skills
+  // are still surfaced by the tree-less family map in `skillsSection`.
   const requiredReading = requiredReadingSection(opts.contextTreePath, opts.workspacePath);
   const contextTreeBlock = contextTreeSection(
     opts.contextTreePath,
@@ -1147,11 +1148,12 @@ function skillsSection(
   // header so we can splice it under the new `# Skills` umbrella.
   const teamBlock = buildResourceSkillsBriefing(workspacePath, payload).trim();
 
-  // The full First Tree family map is gated on `contextTreePath` because most
-  // rows are tree-bound skills installed by `installFirstTreeIntegration`.
-  // Core skills (for example onboarding kickoff) are installed separately and
-  // can still be invoked directly by a system kickoff in a tree-less workspace.
-  const familyBlock = contextTreePath !== null ? firstTreeFamilyMap() : null;
+  // The First Tree family map is emitted in both modes, but its rows are scoped
+  // to what is actually installed: tree-bound agents get the full four, while
+  // tree-less agents get only the core skills on disk (welcome + the from-zero
+  // build pair seed/write). A tree-less map matters because a welcome-spawned
+  // tree-build chat needs a routing surface to reach `first-tree-seed`.
+  const familyBlock = firstTreeFamilyMap(contextTreePath);
 
   // Skip the `# Skills` umbrella entirely when both inner blocks are
   // empty — a bare header without rows is just visual noise.
@@ -1163,12 +1165,34 @@ function skillsSection(
   return blocks.join("\n\n");
 }
 
-function firstTreeFamilyMap(): string {
-  // Listed skills MUST match what the inline installer actually deploys
-  // (`CORE_SKILL_NAMES` + `TREE_SKILL_NAMES`). Adding an aspirational row here
-  // would tell every agent to load a skill the runtime never puts on disk.
-  // Tests lock this map against the repo's `skills/` directory and the prebuild
-  // copy script.
+function firstTreeFamilyMap(contextTreePath: string | null): string {
+  // Listed skills MUST match what the inline installer actually deploys for
+  // THIS agent: `CORE_SKILL_NAMES` always, plus `TREE_SKILL_NAMES` only when
+  // tree-bound. Listing a skill the runtime never puts on disk would tell the
+  // agent to load a payload that isn't there; omitting an installed one leaves
+  // it with no First Tree routing surface. Tests lock this against the
+  // installer constants and the repo's `skills/` directory.
+  if (contextTreePath === null) {
+    // Tree-less: only the core skills are on disk — `first-tree-welcome` plus
+    // the from-zero build pair (`first-tree-seed` and its `first-tree-write`
+    // dependency). `first-tree-read` is tree-bound and NOT installed here, so
+    // it is omitted. This map is the routing surface a welcome-spawned
+    // tree-build chat relies on to reach `first-tree-seed`: that chat's opening
+    // brief names no skill by design, so without this the agent would fall back
+    // to provider auto-discovery instead of First Tree's own routing.
+    return `## First Tree Family
+
+These First Tree skills are installed even before your team has a Context
+Tree; each row's \`description\` drives progressive disclosure. If the task is
+to build the team's Context Tree from the connected code, load
+\`first-tree-seed\`.
+
+| Skill | Load when |
+|---|---|
+| \`first-tree-welcome\` | a First Tree onboarding welcome / intro / value-first first chat |
+| \`first-tree-seed\` | building the team's Context Tree from zero — it creates + binds the repo and seeds it; refuses once a tree exists |
+| \`first-tree-write\` | pulled in by \`first-tree-seed\` as its authoring dependency (source-driven tree writes) |`;
+  }
   return `## First Tree Family
 
 \`first-tree-write\` is **unconditional** — load it on every task per
