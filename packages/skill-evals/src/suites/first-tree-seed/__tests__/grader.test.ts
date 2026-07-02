@@ -521,41 +521,58 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("fails unbound-tree case when it materializes a source worktree or reads source content", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-source-read-"));
-    try {
-      // Step 0 stops before Phase 1 source work; this case declares
-      // requireWorktree/requireSourceRead false. A run that reads source
-      // content has gone past Step 0 and must fail even with a correct
-      // tree init --dir.
-      const metrics = deriveMetrics(
-        [
-          {
-            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
-            phase: "model",
-            type: "first_tree_call",
-          },
-          {
-            event: {
-              command: "cat worktrees/seed-source-repo/README.md",
-              type: "command_execution",
-            },
-            type: "codex_event",
-          },
-        ],
+  it("passes the unbound-tree case when Step 0 incidentally reads source but does no Phase 1 work", () => {
+    // Relaxation (2026-07, liuchao-approved): an incidental source read during
+    // Step 0 — e.g. glancing at a file to derive the team name for --title — no
+    // longer fails the gate. The real invariant is the `tree init --dir`
+    // routing; materializing a source worktree or reading the bare clone still
+    // fail (next two cases). Fixes a ~1/3 model-flake where the --dir routing
+    // was correct but an incidental read tripped the old strict gate.
+    expect(
+      casePassed(
         findCase("unbound-tree-inits-with-dir"),
-        fixtureValidation(),
-        0,
-        baseRunPaths(tempRoot),
-        join(tempRoot, "context-tree"),
-      );
+        baseMetrics({
+          treeInitObserved: true,
+          treeInitWithContextTreeDirObserved: true,
+          sourceEvidenceReadObserved: true,
+          sourceWorktreeCreated: false,
+          directBareSourceContentReadObserved: false,
+          skeletonObserved: false,
+        }),
+      ),
+    ).toBe(true);
+  });
 
-      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
-      expect(metrics.sourceEvidenceReadObserved).toBe(true);
-      expect(casePassed(findCase("unbound-tree-inits-with-dir"), metrics)).toBe(false);
-    } finally {
-      rmSync(tempRoot, { force: true, recursive: true });
-    }
+  it("fails the unbound-tree case when Step 0 materializes a source worktree (past Step 0)", () => {
+    expect(
+      casePassed(
+        findCase("unbound-tree-inits-with-dir"),
+        baseMetrics({
+          treeInitObserved: true,
+          treeInitWithContextTreeDirObserved: true,
+          sourceWorktreeCreated: true,
+          sourceEvidenceReadObserved: false,
+          directBareSourceContentReadObserved: false,
+          skeletonObserved: false,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("fails the unbound-tree case when Step 0 reads the bare source clone directly", () => {
+    expect(
+      casePassed(
+        findCase("unbound-tree-inits-with-dir"),
+        baseMetrics({
+          treeInitObserved: true,
+          treeInitWithContextTreeDirObserved: true,
+          directBareSourceContentReadObserved: true,
+          sourceWorktreeCreated: false,
+          sourceEvidenceReadObserved: false,
+          skeletonObserved: false,
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("detects tree init --dir context-tree from captured first-tree argv", () => {

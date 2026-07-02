@@ -754,16 +754,24 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     // PASS only when Step 0 routes to `tree init` WITH a `--dir` resolving to
     // the workspace `context-tree`. `tree init` without that `--dir` (or with a
     // default/wrong dir) leaves `treeInitWithContextTreeDirObserved` false and
-    // fails — that omission is the regression this case guards. Step 0 stops
-    // BEFORE any Phase 1 source work, so this case declares
-    // requireWorktree/requireSourceRead false; enforce that here the same way
-    // the report_missing_source sibling does — a run that materializes a source
-    // worktree or reads source content has gone past Step 0 and must fail.
+    // fails — that omission is the regression this case guards.
+    //
+    // Step 0's real invariant is the `tree init --dir <managed>` routing above.
+    // Materializing a source worktree, or reading the bare source clone
+    // directly, are strong signals of going past Step 0 into Phase 1 source
+    // exploration, so they still fail. We deliberately do NOT fail on
+    // `sourceEvidenceReadObserved` alone: a model creating the tree may
+    // incidentally glance at a source file (e.g. to derive the team name for
+    // `--title`) without doing Phase 1 work, and hard-failing that made this
+    // gate ~1/3 model-flaky (2026-07, liuchao approved relaxing it) while the
+    // `--dir` routing — the thing this case exists to prove — was correct every
+    // time. This is where state A intentionally diverges from the stricter
+    // report_missing_source sibling (a pure refuse case, where any source read
+    // is off-contract).
     return (
       metrics.treeInitWithContextTreeDirObserved &&
       !metrics.directBareSourceContentReadObserved &&
-      !metrics.sourceWorktreeCreated &&
-      !metrics.sourceEvidenceReadObserved
+      !metrics.sourceWorktreeCreated
     );
   }
 
