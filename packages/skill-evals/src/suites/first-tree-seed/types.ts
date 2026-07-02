@@ -80,6 +80,11 @@ export type EvalMetrics = {
   skeletonObserved: boolean;
   sourceEvidenceReadObserved: boolean;
   sourceRepoChanged: boolean;
+  // Event-level signal that the model touched a `worktrees/seed-source-repo`
+  // path (materialize or read). Unlike `sourceWorktreeCreated` (final
+  // filesystem state), this survives a `git worktree remove` before grading, so
+  // a Phase-1 add/read/cleanup sequence cannot erase it.
+  sourceWorktreeAccessObserved: boolean;
   sourceWorktreeCreated: boolean;
   treeInitObserved: boolean;
   treeInitWithContextTreeDirObserved: boolean;

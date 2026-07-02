@@ -35,6 +35,7 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     skeletonObserved: true,
     sourceEvidenceReadObserved: true,
     sourceRepoChanged: false,
+    sourceWorktreeAccessObserved: true,
     sourceWorktreeCreated: true,
     treeInitObserved: false,
     treeInitWithContextTreeDirObserved: false,
@@ -206,10 +207,27 @@ describe("first-tree-seed grader", () => {
           finalResponse: "The tree is already non-empty; use first-tree-write or a focused maintenance task.",
           skeletonObserved: false,
           sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: false,
           sourceWorktreeCreated: false,
         }),
       ),
     ).toBe(true);
+  });
+
+  it("fails non-empty tree refusal when a source worktree was touched then removed before grading", () => {
+    // Event-level worktree access (add/read/remove) is Phase-1 exploration and
+    // must fail refusal even if the final filesystem is clean.
+    expect(
+      casePassed(
+        findCase("non-empty-tree-refuses"),
+        baseMetrics({
+          skeletonObserved: false,
+          sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: true,
+          sourceWorktreeCreated: false,
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("fails non-empty tree refusal when seed continues into source exploration", () => {
@@ -260,10 +278,25 @@ describe("first-tree-seed grader", () => {
           finalResponse: "The source clone is missing at source-repos/source-repo; provisioning is incomplete.",
           skeletonObserved: false,
           sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: false,
           sourceWorktreeCreated: false,
         }),
       ),
     ).toBe(true);
+  });
+
+  it("fails missing-source refusal when a source worktree was touched then removed before grading", () => {
+    expect(
+      casePassed(
+        findCase("source-missing-refuses"),
+        baseMetrics({
+          skeletonObserved: false,
+          sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: true,
+          sourceWorktreeCreated: false,
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("passes bare-source protocol when source is read from materialized worktree", () => {
@@ -446,6 +479,7 @@ describe("first-tree-seed grader", () => {
           finalResponse: "No tree yet. Created and bound the Context Tree at ./context-tree.",
           skeletonObserved: false,
           sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: false,
           sourceWorktreeCreated: false,
           treeInitObserved: true,
           treeInitWithContextTreeDirObserved: true,
@@ -521,13 +555,146 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("fails unbound-tree case when it materializes a source worktree or reads source content", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-source-read-"));
+  it("passes the unbound-tree case when Step 0 incidentally reads source but touches no worktree", () => {
+    // Relaxation (2026-07, liuchao-approved): an incidental source read during
+    // Step 0 — e.g. glancing at a file to derive the team name for --title,
+    // WITHOUT touching a source worktree — no longer fails the gate. The real
+    // invariant is the `tree init --dir` routing; touching a source worktree or
+    // reading the bare clone still fail (next cases). Fixes a ~1/3 model-flake
+    // where the --dir routing was correct but an incidental read tripped the old
+    // strict gate.
+    expect(
+      casePassed(
+        findCase("unbound-tree-inits-with-dir"),
+        baseMetrics({
+          treeInitObserved: true,
+          treeInitWithContextTreeDirObserved: true,
+          sourceEvidenceReadObserved: true,
+          sourceWorktreeAccessObserved: false,
+          sourceWorktreeCreated: false,
+          directBareSourceContentReadObserved: false,
+          skeletonObserved: false,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails the unbound-tree case when Step 0 materializes a source worktree (final filesystem)", () => {
+    expect(
+      casePassed(
+        findCase("unbound-tree-inits-with-dir"),
+        baseMetrics({
+          treeInitObserved: true,
+          treeInitWithContextTreeDirObserved: true,
+          sourceWorktreeCreated: true,
+          sourceWorktreeAccessObserved: false,
+          sourceEvidenceReadObserved: false,
+          directBareSourceContentReadObserved: false,
+          skeletonObserved: false,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("fails the unbound-tree case when Step 0 touched a source worktree even if it was removed before grading", () => {
+    // The add/read/`git worktree remove` evasion: the final filesystem is clean
+    // (`sourceWorktreeCreated=false`), but the event-level
+    // `sourceWorktreeAccessObserved` records the worktree touch, so this Phase-1
+    // path still fails Step 0.
+    expect(
+      casePassed(
+        findCase("unbound-tree-inits-with-dir"),
+        baseMetrics({
+          treeInitObserved: true,
+          treeInitWithContextTreeDirObserved: true,
+          sourceWorktreeCreated: false,
+          sourceWorktreeAccessObserved: true,
+          sourceEvidenceReadObserved: true,
+          directBareSourceContentReadObserved: false,
+          skeletonObserved: false,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("fails the unbound-tree case when Step 0 reads the bare source clone directly", () => {
+    expect(
+      casePassed(
+        findCase("unbound-tree-inits-with-dir"),
+        baseMetrics({
+          treeInitObserved: true,
+          treeInitWithContextTreeDirObserved: true,
+          directBareSourceContentReadObserved: true,
+          sourceWorktreeCreated: false,
+          sourceWorktreeAccessObserved: false,
+          sourceEvidenceReadObserved: false,
+          skeletonObserved: false,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps buildGrading process_pass aligned with the relaxed gate for an incidental source read", () => {
+    // The relaxed casePassed gate accepts an incidental Step 0 source read, so
+    // the grading `process_pass` dimension must not contradict it (no
+    // `passed=true` / `process_pass=false` artifact). The stronger past-Step-0
+    // signals still fail process.
+    const incidentalRead = buildGrading(
+      findCase("unbound-tree-inits-with-dir"),
+      baseMetrics({
+        treeInitObserved: true,
+        treeInitWithContextTreeDirObserved: true,
+        sourceEvidenceReadObserved: true,
+        sourceWorktreeAccessObserved: false,
+        sourceWorktreeCreated: false,
+        directBareSourceContentReadObserved: false,
+        skeletonObserved: false,
+      }),
+      true,
+    );
+    expect(incidentalRead.scores.process_pass).toBe(true);
+
+    const withWorktree = buildGrading(
+      findCase("unbound-tree-inits-with-dir"),
+      baseMetrics({
+        treeInitObserved: true,
+        treeInitWithContextTreeDirObserved: true,
+        sourceWorktreeCreated: true,
+        sourceWorktreeAccessObserved: false,
+        sourceEvidenceReadObserved: false,
+        directBareSourceContentReadObserved: false,
+        skeletonObserved: false,
+      }),
+      false,
+    );
+    expect(withWorktree.scores.process_pass).toBe(false);
+
+    // Event-level: a worktree touched then removed before grading still fails
+    // process (the artifact must not report process_pass=true for Phase 1 work).
+    const worktreeRemoved = buildGrading(
+      findCase("unbound-tree-inits-with-dir"),
+      baseMetrics({
+        treeInitObserved: true,
+        treeInitWithContextTreeDirObserved: true,
+        sourceWorktreeCreated: false,
+        sourceWorktreeAccessObserved: true,
+        sourceEvidenceReadObserved: true,
+        directBareSourceContentReadObserved: false,
+        skeletonObserved: false,
+      }),
+      false,
+    );
+    expect(worktreeRemoved.scores.process_pass).toBe(false);
+  });
+
+  it("event-detects a source worktree add/read/remove and still fails the unbound-tree case", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-worktree-cleanup-"));
     try {
-      // Step 0 stops before Phase 1 source work; this case declares
-      // requireWorktree/requireSourceRead false. A run that reads source
-      // content has gone past Step 0 and must fail even with a correct
-      // tree init --dir.
+      // Correct tree init --dir, but the model ALSO adds a source worktree,
+      // reads it, then removes it. The final filesystem is clean
+      // (sourceWorktreeCreated=false), yet the event trace records the worktree
+      // touch (sourceWorktreeAccessObserved=true), so the Phase-1 path still
+      // fails — cleanup cannot erase the signal.
       const metrics = deriveMetrics(
         [
           {
@@ -537,7 +704,18 @@ describe("first-tree-seed grader", () => {
           },
           {
             event: {
-              command: "cat worktrees/seed-source-repo/README.md",
+              command: "git -C source-repos/source-repo worktree add worktrees/seed-source-repo origin/main",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: { command: "cat worktrees/seed-source-repo/README.md", type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command: "git -C source-repos/source-repo worktree remove worktrees/seed-source-repo",
               type: "command_execution",
             },
             type: "codex_event",
@@ -551,8 +729,171 @@ describe("first-tree-seed grader", () => {
       );
 
       expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
-      expect(metrics.sourceEvidenceReadObserved).toBe(true);
+      expect(metrics.sourceWorktreeCreated).toBe(false);
+      expect(metrics.sourceWorktreeAccessObserved).toBe(true);
       expect(casePassed(findCase("unbound-tree-inits-with-dir"), metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("event-detects a RELATIVE source worktree add/read/remove (cd worktrees) and still fails", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-worktree-relative-"));
+    try {
+      // Evasion via relative paths: the model cds into `worktrees` and refers to
+      // the worktree as `seed-source-repo` (no `worktrees/` prefix appears in any
+      // command). Matching the worktree NAME still catches the add/read/remove
+      // Phase-1 sequence, so it fails Step 0 even though no command contains
+      // `worktrees/seed-source-repo` and the final filesystem is clean.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: {
+              command: "cd worktrees && git -C ../source-repos/source-repo worktree add seed-source-repo origin/main",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: { command: "cat seed-source-repo/README.md", type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command: "git -C ../source-repos/source-repo worktree remove seed-source-repo",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+      expect(metrics.sourceWorktreeCreated).toBe(false);
+      expect(metrics.sourceWorktreeAccessObserved).toBe(true);
+      expect(casePassed(findCase("unbound-tree-inits-with-dir"), metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not flag the bare clone path as a source worktree access", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-bare-not-worktree-"));
+    try {
+      // The distinctive name `seed-source-repo` must not match the bare clone
+      // `source-repos/source-repo` — otherwise a tolerated incidental bare read
+      // would be misclassified as a worktree touch.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: { command: "ls source-repos/source-repo", type: "command_execution" },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeAccessObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not treat a doc search for the worktree name (grep seed-source-repo AGENTS.md) as access", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-worktree-name-search-"));
+    try {
+      // The fixture's AGENTS.md documents the worktrees/seed-source-repo protocol,
+      // so a compliant Step 0 self-check may grep the instructions for the name.
+      // Searching docs does not touch a worktree, so it must NOT flip
+      // sourceWorktreeAccessObserved (else an otherwise-correct run false-fails).
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: { command: "grep seed-source-repo AGENTS.md", type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: { command: "rg seed-source-repo", type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            // A search whose PATTERN quotes a worktree command must not count as
+            // a worktree operation — the program is a search tool.
+            event: { command: "rg 'worktree add .*seed-source-repo' AGENTS.md", type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            // A search whose PATTERN is the documented worktree PATH (which the
+            // fixture AGENTS.md contains) also must not count: `worktrees/seed-source-repo`
+            // has no trailing slash after the name, and the program is a search tool.
+            event: { command: "rg 'worktrees/seed-source-repo' AGENTS.md", type: "command_execution" },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeAccessObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("event-detects a search-tool READ of a worktree path (rg Apollo seed-source-repo/README.md)", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-worktree-search-read-"));
+    try {
+      // A search tool also takes PATH operands: reading a worktree file with
+      // rg/grep (a `seed-source-repo/<file>` sub-path) IS worktree access, unlike
+      // a bare name search or a quoted-pattern search of the docs. The trailing
+      // slash distinguishes the two.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: { command: "rg Apollo seed-source-repo/README.md", type: "command_execution" },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeAccessObserved).toBe(true);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }

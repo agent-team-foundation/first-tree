@@ -97,6 +97,55 @@ function containsPathAccess(event: unknown, patterns: readonly string[]): boolea
   return collectToolInputStrings(event.event).some((value) => patterns.some((pattern) => value.includes(pattern)));
 }
 
+// Search tools whose operands are PATTERNS, not paths — a doc search with any of
+// these (even one whose pattern quotes `git worktree add … seed-source-repo`)
+// must not count as a worktree operation.
+const WORKTREE_SEARCH_TOOLS = new Set(["grep", "egrep", "fgrep", "rg", "ripgrep", "ag", "ack"]);
+
+// True when a single shell SEGMENT operates on the source worktree
+// `seed-source-repo` as a path / `git worktree` operand — not when it merely
+// mentions the name (e.g. `grep seed-source-repo AGENTS.md` or
+// `rg 'worktree add .*seed-source-repo' AGENTS.md`, which search the documented
+// protocol in the fixture's AGENTS.md).
+function segmentTouchesSourceWorktree(segment: string): boolean {
+  const trimmed = segment.trim();
+  if (trimmed.length === 0) return false;
+  // A sub-path UNDER the worktree (`seed-source-repo/<file>`) is a real path
+  // operand for ANY program — including a search-tool read of a worktree file
+  // like `rg Apollo seed-source-repo/README.md`. The trailing slash marks a
+  // path, so this does NOT fire on a bare name search
+  // (`grep seed-source-repo AGENTS.md`) or a quoted pattern
+  // (`rg 'worktree add .*seed-source-repo' AGENTS.md`) — neither has it.
+  if (/\bseed-source-repo\//u.test(trimmed)) return true;
+  // A `cd` INTO the worktree directory (`cd` is never a search tool).
+  if (/\bcd\s+[^\s&|;]*seed-source-repo\b/u.test(trimmed)) return true;
+  // A `git worktree add|remove|move … seed-source-repo` — materialization or
+  // teardown, even with no trailing slash (the relative-path evasion). Skip
+  // search tools here: their quoted PATTERN could otherwise spoof this regex
+  // (`rg 'worktree add .*seed-source-repo' AGENTS.md`).
+  const program = (trimmed.split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
+  if (
+    !WORKTREE_SEARCH_TOOLS.has(program) &&
+    /\bworktree\s+(?:add|remove|move)\b[^\n]*\bseed-source-repo\b/u.test(trimmed)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+// True when a captured command string operates on the source worktree. Split on
+// shell operators first so a search sub-command's quoted pattern is not
+// attributed to a neighboring real operation.
+function commandTouchesSourceWorktree(text: string): boolean {
+  return text.split(/&&|\|\||[;|\n]/u).some((segment) => segmentTouchesSourceWorktree(segment));
+}
+
+function eventTouchesSourceWorktree(event: unknown): boolean {
+  if (!isRecord(event)) return false;
+  if (eventType(event) !== "codex_event") return false;
+  return collectToolInputStrings(event.event).some((value) => commandTouchesSourceWorktree(value));
+}
+
 function isAssistantMessageRecord(record: Record<string, unknown>): boolean {
   const type = eventType(record);
   const role = typeof record.role === "string" ? record.role : null;
@@ -626,6 +675,7 @@ export function deriveMetrics(
   let writeSkillFileReadObserved = false;
   let workspaceManifestReadObserved = false;
   let sourceEvidenceReadObserved = false;
+  let sourceWorktreeAccessObserved = false;
   const firstTreeArgv: string[][] = [];
   const firstTreeCalls: FirstTreeCall[] = [];
   const modelOutputTexts: string[] = [];
@@ -648,6 +698,17 @@ export function deriveMetrics(
       ])
     ) {
       sourceEvidenceReadObserved = true;
+    }
+    // Any operation ON the source worktree (`git worktree add/remove`, reading a
+    // `seed-source-repo/...` path, `cd` into it) — an event-level signal that
+    // survives a later `git worktree remove`, so a Phase-1 add/read/cleanup
+    // cannot pass Step 0 by leaving the final filesystem clean. Detected
+    // structurally (see `commandTouchesSourceWorktree`) so both full-path and
+    // `cd worktrees && … seed-source-repo …` relative forms are caught, while a
+    // mere name search of the docs (`grep seed-source-repo AGENTS.md`) and the
+    // bare clone `source-repos/source-repo` are NOT treated as access.
+    if (eventTouchesSourceWorktree(event)) {
+      sourceWorktreeAccessObserved = true;
     }
 
     modelOutputTexts.push(...collectModelOutputText(event));
@@ -691,6 +752,7 @@ export function deriveMetrics(
     sourceEvidenceReadObserved:
       sourceEvidenceReadObserved || events.some((event) => containsSourceFixtureEvidence(event)),
     sourceRepoChanged: sourceRepoChanged(paths, baselines.sourceRepoHead),
+    sourceWorktreeAccessObserved,
     sourceWorktreeCreated: sourceWorktreeWasCreated,
     treeInitObserved: treeInit.observed,
     treeInitWithContextTreeDirObserved: treeInit.withContextTreeDir,
@@ -740,6 +802,7 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (evalCase.expected.action === "refuse_nonempty_tree") {
     return (
       !metrics.sourceWorktreeCreated &&
+      !metrics.sourceWorktreeAccessObserved &&
       !metrics.sourceEvidenceReadObserved &&
       !metrics.directBareSourceContentReadObserved &&
       !metrics.skeletonObserved
@@ -747,23 +810,39 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   }
 
   if (evalCase.expected.action === "report_missing_source") {
-    return !metrics.sourceWorktreeCreated && !metrics.sourceEvidenceReadObserved && !metrics.skeletonObserved;
+    return (
+      !metrics.sourceWorktreeCreated &&
+      !metrics.sourceWorktreeAccessObserved &&
+      !metrics.sourceEvidenceReadObserved &&
+      !metrics.skeletonObserved
+    );
   }
 
   if (evalCase.expected.action === "create_tree_via_init") {
     // PASS only when Step 0 routes to `tree init` WITH a `--dir` resolving to
     // the workspace `context-tree`. `tree init` without that `--dir` (or with a
     // default/wrong dir) leaves `treeInitWithContextTreeDirObserved` false and
-    // fails — that omission is the regression this case guards. Step 0 stops
-    // BEFORE any Phase 1 source work, so this case declares
-    // requireWorktree/requireSourceRead false; enforce that here the same way
-    // the report_missing_source sibling does — a run that materializes a source
-    // worktree or reads source content has gone past Step 0 and must fail.
+    // fails — that omission is the regression this case guards.
+    //
+    // Step 0's real invariant is the `tree init --dir <managed>` routing above.
+    // Going past Step 0 into Phase 1 source exploration still fails, via three
+    // signals: materializing a source worktree (`sourceWorktreeCreated`, final
+    // filesystem), TOUCHING a source worktree at all (`sourceWorktreeAccessObserved`,
+    // event-level — so an add/read/`git worktree remove` sequence cannot pass by
+    // leaving the filesystem clean), and reading the bare source clone directly.
+    // We deliberately do NOT fail on `sourceEvidenceReadObserved` alone: a model
+    // creating the tree may incidentally glance at a source file (e.g. to derive
+    // the team name for `--title`) WITHOUT touching a worktree, and hard-failing
+    // that made this gate ~1/3 model-flaky (2026-07, liuchao approved relaxing
+    // it) while the `--dir` routing — the thing this case exists to prove — was
+    // correct every time. This is where state A intentionally diverges from the
+    // stricter report_missing_source sibling (a pure refuse case, where any
+    // source read is off-contract).
     return (
       metrics.treeInitWithContextTreeDirObserved &&
       !metrics.directBareSourceContentReadObserved &&
       !metrics.sourceWorktreeCreated &&
-      !metrics.sourceEvidenceReadObserved
+      !metrics.sourceWorktreeAccessObserved
     );
   }
 
