@@ -33,45 +33,37 @@ export type CampaignBootstrapArgs = {
 
 export type CampaignConfig = {
   slug: CampaignSlug;
+  topic: string;
   /** Whether the landing requires a repo (all current campaigns scan one). */
   needsRepo: boolean;
   /**
    * The first-chat opening message. DUAL-READER: rendered verbatim to the user
-   * as the first "First Tree" bubble AND used as the agent's opening trigger,
-   * so it stays clean user-facing welcome copy — no skill names or operational
-   * jargon. Agent-only activation (which skill to load) rides message metadata,
-   * never this body. See system/cloud/onboarding.md "Kickoff Finalization".
+   * and used as the agent's opening trigger, so it stays clean user-facing task
+   * copy — no skill names or operational jargon.
    */
   buildBootstrap(args: CampaignBootstrapArgs): string;
 };
 
-function buildWelcome(agentDisplayName: string, repoUrl: string | null, closing: string): string {
-  const lines = [`Welcome to First Tree — this is your first chat with ${agentDisplayName}.`];
-  if (repoUrl) lines.push("", `It's connected to your code: ${repoUrl}`);
-  lines.push("", closing);
+function buildScanRequest(agentDisplayName: string, repoUrl: string | null, request: string): string {
+  const lines = [`${agentDisplayName}, welcome aboard.`, "", request];
+  if (repoUrl) lines.push(`- ${repoUrl}`);
   return lines.join("\n");
 }
 
 const CAMPAIGNS: Record<CampaignSlug, CampaignConfig> = {
   "production-scan": {
     slug: "production-scan",
+    topic: "Production readiness scan",
     needsRepo: true,
     buildBootstrap: ({ agentDisplayName, repoUrl }) =>
-      buildWelcome(
-        agentDisplayName,
-        repoUrl,
-        `${agentDisplayName} will get oriented and flag a few things worth tightening before you ship — or just tell it what you'd like to focus on.`,
-      ),
+      buildScanRequest(agentDisplayName, repoUrl, "Please run a production readiness scan on this repo:"),
   },
   "agent-readiness": {
     slug: "agent-readiness",
+    topic: "Agent readiness scan",
     needsRepo: true,
     buildBootstrap: ({ agentDisplayName, repoUrl }) =>
-      buildWelcome(
-        agentDisplayName,
-        repoUrl,
-        `${agentDisplayName} will get oriented and point out what makes this repo hard for coding agents to work in — or just tell it what you'd like to focus on.`,
-      ),
+      buildScanRequest(agentDisplayName, repoUrl, "Please check how ready this repo is for coding agents:"),
   },
 };
 

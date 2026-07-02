@@ -287,7 +287,7 @@ function claimsTreeReady(text: string): boolean {
 
 function isInputCollectionOption(text: string): boolean {
   if (
-    !/local clone path|local path|clone path|github url|repo url|repository url|project entry|项目入口|本地路径|仓库\s*url|github\s*仓库/iu.test(
+    !/local project folder path|local clone path|local path|clone path|github repo url|github url|repo url|repository url|project entry|项目入口|本地路径|仓库\s*url|github\s*仓库/iu.test(
       text,
     )
   ) {
@@ -441,7 +441,7 @@ function forbiddenActionHits(
     if (
       action === "setup-as-first-task" &&
       taskOptionsObserved &&
-      /install|select repo|connect repo|setup|set up|github app|authorization|authorize|local clone path|github url/iu.test(
+      /install|select repo|connect repo|setup|set up|github app|authorization|authorize|local project folder path|local clone path|github repo url|github url/iu.test(
         combinedText,
       )
     ) {

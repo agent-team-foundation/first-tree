@@ -250,7 +250,7 @@ describe("QuickstartPage — full flow (e2e)", () => {
     });
   });
 
-  it("production-scan: starts a work kickoff with the campaign segment + clean bootstrap + complete:false, then navigates", async () => {
+  it("production-scan: starts a campaign kickoff with a natural bootstrap + complete:false, then navigates", async () => {
     seedIntent("production-scan");
     connectedWith("claude-code");
     await renderPage();
@@ -262,13 +262,19 @@ describe("QuickstartPage — full flow (e2e)", () => {
     expect(arg).toMatchObject({
       organizationId: "org-1",
       agentUuid: "agent-1",
-      kind: "work",
+      topic: "Production readiness scan",
       campaign: "production-scan",
       complete: false,
     });
-    expect(arg.bootstrap).toContain("Cedar");
-    expect(arg.bootstrap).toContain("github.com/acme/backend");
-    // dual-reader: the bootstrap renders verbatim to the user, so no jargon.
+    expect(arg).not.toHaveProperty("kind");
+    expect(arg.bootstrap).toBe(
+      [
+        "Cedar, welcome aboard.",
+        "",
+        "Please run a production readiness scan on this repo:",
+        "- https://github.com/acme/backend",
+      ].join("\n"),
+    );
     expect(arg.bootstrap.toLowerCase()).not.toContain("skill");
     // The campaign's scan skill is provisioned + bound server-side by the
     // kickoff (see the server kickoff test), so the client only sends the
@@ -284,8 +290,21 @@ describe("QuickstartPage — full flow (e2e)", () => {
 
     const arg = onboardingMocks.postOnboardingStartChat.mock.calls[0]?.[0];
     if (!arg) throw new Error("expected a start-chat call");
-    expect(arg).toMatchObject({ agentUuid: "agent-2", kind: "work", campaign: "agent-readiness", complete: false });
-    expect(arg.bootstrap).toContain("github.com/acme/backend");
+    expect(arg).toMatchObject({
+      agentUuid: "agent-2",
+      topic: "Agent readiness scan",
+      campaign: "agent-readiness",
+      complete: false,
+    });
+    expect(arg).not.toHaveProperty("kind");
+    expect(arg.bootstrap).toBe(
+      [
+        "Cedar, welcome aboard.",
+        "",
+        "Please check how ready this repo is for coding agents:",
+        "- https://github.com/acme/backend",
+      ].join("\n"),
+    );
   });
 
   it("auto-picks the preferred runtime when two are present (no blocking picker)", async () => {

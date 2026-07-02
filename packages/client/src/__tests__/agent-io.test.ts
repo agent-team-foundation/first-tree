@@ -89,7 +89,7 @@ describe("formatInboundContent", () => {
     expect(await formatInboundContent(msg, cache)).toBe("[From: alice · type=agent]\n\nhello");
   });
 
-  it("appends the onboarding skill directive for a First Tree onboarding kickoff", async () => {
+  it("does not append an agent-only directive for legacy First Tree onboarding metadata", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
     const msg: SessionMessage = {
@@ -101,13 +101,10 @@ describe("formatInboundContent", () => {
       metadata: { systemSender: "first_tree_onboarding" },
     };
     const out = await formatInboundContent(msg, cache);
-    // The user-facing body stays intact; the agent-only directive is appended.
-    expect(out.startsWith("[From: alice · type=agent]\n\nWelcome to First Tree.")).toBe(true);
-    expect(out).toContain("<first-tree-onboarding>");
-    expect(out).toContain("load and follow the `first-tree-welcome` skill");
+    expect(out).toBe("[From: alice · type=agent]\n\nWelcome to First Tree.");
   });
 
-  it("points the agent at the campaign scan skill when the kickoff carries a campaign", async () => {
+  it("does not append a campaign directive for legacy campaign metadata", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
     const msg: SessionMessage = {
@@ -119,14 +116,10 @@ describe("formatInboundContent", () => {
       metadata: { systemSender: "first_tree_onboarding", campaign: "production-scan" },
     };
     const out = await formatInboundContent(msg, cache);
-    expect(out.startsWith("[From: alice · type=agent]\n\nWelcome to First Tree.")).toBe(true);
-    // Campaign kickoff → load the matching scan skill, not the onboarding welcome.
-    expect(out).toContain("<first-tree-onboarding>");
-    expect(out).toContain("load and follow the `production-scan` skill");
-    expect(out).not.toContain("first-tree-welcome");
+    expect(out).toBe("[From: alice · type=agent]\n\nWelcome to First Tree.");
   });
 
-  it("ignores a malformed campaign slug and falls back to the welcome directive", async () => {
+  it("ignores a malformed legacy campaign slug without adding fallback instructions", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
     const msg: SessionMessage = {
@@ -138,10 +131,10 @@ describe("formatInboundContent", () => {
       metadata: { systemSender: "first_tree_onboarding", campaign: "../etc/passwd" },
     };
     const out = await formatInboundContent(msg, cache);
-    expect(out).toContain("load and follow the `first-tree-welcome` skill");
+    expect(out).toBe("[From: alice · type=agent]\n\nWelcome to First Tree.");
   });
 
-  it("does not append the onboarding directive for other system senders", async () => {
+  it("does not append hidden directives for other system senders", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
     const msg: SessionMessage = {

@@ -81,11 +81,6 @@ import { type AskAnswer, AskTakeover } from "../../../components/chat/ask-takeov
 import { awaitedAgentsFromMessage, ChatOfflineNotice } from "../../../components/chat/chat-offline-notice.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
-  FIRST_TREE_SYSTEM_SENDER_NAME,
-  FirstTreeSystemAvatar,
-  isTrustedFirstTreeOnboardingSystemMessage,
-} from "../../../components/chat/first-tree-system-message.js";
-import {
   GITHUB_SYSTEM_SENDER_NAME,
   GithubEventCardMessage,
   GithubSystemAvatar,
@@ -776,13 +771,8 @@ const MessageRow = memo(function MessageRow({
   // so the recipient does not see their own name color treatment on a
   // card the dispatcher wrote on their row.
   const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
-  const isFirstTreeSystem = isTrustedFirstTreeOnboardingSystemMessage(msg);
-  const isSystem = isGithubSystem || isFirstTreeSystem;
-  const senderName = isGithubSystem
-    ? GITHUB_SYSTEM_SENDER_NAME
-    : isFirstTreeSystem
-      ? FIRST_TREE_SYSTEM_SENDER_NAME
-      : agentNameFn(msg.senderId);
+  const isSystem = isGithubSystem;
+  const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
   const isSelf = !isSystem && myAgentId === msg.senderId;
 
   return (
@@ -797,8 +787,6 @@ const MessageRow = memo(function MessageRow({
     >
       {isGithubSystem ? (
         <GithubSystemAvatar size={20} />
-      ) : isFirstTreeSystem ? (
-        <FirstTreeSystemAvatar size={20} />
       ) : (
         <AgentHovercard
           agentId={msg.senderId}

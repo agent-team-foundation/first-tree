@@ -37,6 +37,8 @@ export type CreateTaskChatInput = {
   contextParticipantAgentIds: readonly string[];
   topic?: string | null;
   description?: string | null;
+  onboardingKickoffKey?: string;
+  beforeInitialMessage?: () => Promise<void>;
   initialMessage: SendMessage;
   source: "agent" | "manual";
 };
@@ -76,6 +78,7 @@ export type CreateTaskChatResult = {
   message: typeof messages.$inferSelect;
   participants: (typeof chatMembership.$inferSelect)[];
   recipients: string[];
+  initialMessageCreated: boolean;
   effectiveSenderId: string;
   initialRecipientAgentIds: string[];
   contextParticipantAgentIds: string[];
@@ -357,6 +360,82 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
   });
 
   const chatId = randomUUID();
+  const kickoffKey = input.onboardingKickoffKey ?? null;
+  if (!kickoffKey && input.beforeInitialMessage) {
+    throw new Error("Task chat beforeInitialMessage requires an onboardingKickoffKey");
+  }
+  if (kickoffKey) {
+    const result = await db.transaction(async (tx) => {
+      const initialDescription = input.description && input.description.length > 0 ? input.description : null;
+      const values = {
+        id: chatId,
+        organizationId: input.organizationId,
+        type: "group",
+        topic: input.topic && input.topic.length > 0 ? input.topic : null,
+        description: initialDescription,
+        descriptionUpdatedAt: initialDescription != null ? new Date() : null,
+        onboardingKickoffKey: kickoffKey,
+        metadata: chatMetadata,
+      };
+      const [inserted] = await tx
+        .insert(chats)
+        .values(values)
+        .onConflictDoNothing({ target: chats.onboardingKickoffKey })
+        .returning();
+
+      const activeChat = inserted
+        ? inserted
+        : (await tx.select().from(chats).where(eq(chats.onboardingKickoffKey, kickoffKey)).for("update").limit(1))[0];
+      if (!activeChat) throw new Error("Unexpected: kickoff-key conflict but no existing chat row");
+
+      if (inserted) {
+        await addChatParticipants(
+          tx,
+          activeChat.id,
+          allSpeakerIds.map((agentId) => ({
+            agentId,
+            role: agentId === effectiveSenderId ? ("owner" as const) : ("member" as const),
+          })),
+        );
+      }
+
+      const participants = await tx
+        .select()
+        .from(chatMembership)
+        .where(and(eq(chatMembership.chatId, activeChat.id), eq(chatMembership.accessMode, "speaker")));
+      const [existingMessage] = await tx.select().from(messages).where(eq(messages.chatId, activeChat.id)).limit(1);
+      if (existingMessage) {
+        return {
+          chat: activeChat,
+          message: existingMessage,
+          participants,
+          recipients: [] as string[],
+          initialMessageCreated: false,
+        };
+      }
+
+      if (input.beforeInitialMessage) await input.beforeInitialMessage();
+      invalidateChatAudience(activeChat.id);
+      const { message, recipients } = await sendMessage(
+        tx as unknown as Database,
+        activeChat.id,
+        effectiveSenderId,
+        initialMessage,
+        {
+          normalizeMentionsInContent: input.source === "agent",
+        },
+      );
+      return { chat: activeChat, message, participants, recipients, initialMessageCreated: true };
+    });
+    invalidateChatAudience(result.chat.id);
+    return {
+      ...result,
+      effectiveSenderId,
+      initialRecipientAgentIds,
+      contextParticipantAgentIds,
+    };
+  }
+
   const chat = await db.transaction(async (tx) => {
     const initialDescription = input.description && input.description.length > 0 ? input.description : null;
     const [inserted] = await tx
@@ -400,6 +479,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
     message,
     participants,
     recipients,
+    initialMessageCreated: true,
     effectiveSenderId,
     initialRecipientAgentIds,
     contextParticipantAgentIds,

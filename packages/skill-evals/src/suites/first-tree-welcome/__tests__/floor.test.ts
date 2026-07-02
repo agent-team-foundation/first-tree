@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SkillEvalCase } from "../../../core/case-schema.js";
 import { FIRST_TREE_WELCOME_SUITE } from "../cases.js";
@@ -13,6 +15,7 @@ if (!validateFloor) {
   throw new Error("first-tree-welcome suite must define validateFloor");
 }
 const cases = FIRST_TREE_WELCOME_SUITE.cases;
+const skillMarkdown = readFileSync(join(process.cwd(), "../../skills/first-tree-welcome/SKILL.md"), "utf8");
 
 function hasTag(evalCase: SkillEvalCase, tag: string): boolean {
   const tags = (evalCase as { tags?: readonly string[] }).tags;
@@ -92,11 +95,21 @@ describe("first-tree-welcome floor invariants", () => {
       fixture: {
         ...(sample.fixture as Record<string, unknown>),
         role: "invitee",
-        kickoffKind: "tree",
+        chatScenario: "tree-setup",
         repoState: "local-readable",
         treeState: "empty",
       },
     };
     expect(validateFloor([...cases, trailing]).some((error) => error.includes("must be last"))).toBe(true);
+  });
+
+  it("keeps onboarding attribution and no-project first reply guidance aligned with the product flow", () => {
+    const description = skillMarkdown.match(/^description:\s*(.*)$/m)?.[1] ?? "";
+
+    expect(description).not.toContain("local project folder path");
+    expect(skillMarkdown).toContain("Treat the opening message as the user's onboarding request.");
+    expect(skillMarkdown).toContain("local project folder path");
+    expect(skillMarkdown).toContain("GitHub repo URL");
+    expect(skillMarkdown).not.toContain("First Tree sent it");
   });
 });

@@ -175,3 +175,4 @@ and ack via `connection.sendInboxAck(entryId)`.
 
 - [CLI Reference](cli-reference.md)
 - [Quickstart](quickstart.md)
+- [Onboarding kickoff contract](development/onboarding-kickoff-contract.md)

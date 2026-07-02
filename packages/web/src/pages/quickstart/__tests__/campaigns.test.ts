@@ -12,7 +12,9 @@ describe("campaign registry", () => {
 
   it("getCampaign returns the config for a known slug, null otherwise", () => {
     expect(getCampaign("production-scan")?.slug).toBe("production-scan");
+    expect(getCampaign("production-scan")?.topic).toBe("Production readiness scan");
     expect(getCampaign("agent-readiness")?.slug).toBe("agent-readiness");
+    expect(getCampaign("agent-readiness")?.topic).toBe("Agent readiness scan");
     expect(getCampaign("unknown")).toBeNull();
     expect(getCampaign(null)).toBeNull();
   });
@@ -22,34 +24,45 @@ describe("campaign registry", () => {
   });
 });
 
-describe("campaign bootstrap — dual-reader: shown verbatim to the user, so clean welcome copy only", () => {
+describe("campaign bootstrap — visible task brief for both user and agent", () => {
   const repoUrl = "https://github.com/acme/backend";
 
-  it("production-scan names the agent + repo and carries no skill/operational jargon", () => {
+  it("production-scan naturally asks for a production readiness scan", () => {
     const cfg = getCampaign("production-scan");
     if (!cfg) throw new Error("expected production-scan config");
     const bootstrap = cfg.buildBootstrap({ agentDisplayName: QUICKSTART_AGENT_NAME, repoUrl });
 
-    expect(bootstrap).toContain("Cedar");
-    expect(bootstrap).toContain("github.com/acme/backend");
-    // The bootstrap renders verbatim as the user's first chat bubble (see
-    // system/cloud/onboarding.md "dual-reader"), so it must not leak agent-only
-    // activation jargon — that travels in message metadata, never the body.
+    expect(bootstrap).toBe(
+      [
+        "Cedar, welcome aboard.",
+        "",
+        "Please run a production readiness scan on this repo:",
+        "- https://github.com/acme/backend",
+      ].join("\n"),
+    );
     const lower = bootstrap.toLowerCase();
     expect(lower).not.toContain("skill");
     expect(lower).not.toContain("first-tree-welcome");
+    expect(lower).not.toContain("production-scan");
     expect(lower).not.toContain("rubric");
     expect(lower).not.toContain("bootstrap");
   });
 
-  it("agent-readiness has its own framing but stays equally clean", () => {
+  it("agent-readiness naturally asks for a coding-agent readiness check", () => {
     const cfg = getCampaign("agent-readiness");
     if (!cfg) throw new Error("expected agent-readiness config");
     const bootstrap = cfg.buildBootstrap({ agentDisplayName: "Cedar", repoUrl });
 
-    expect(bootstrap).toContain("Cedar");
-    expect(bootstrap).toContain("github.com/acme/backend");
+    expect(bootstrap).toBe(
+      [
+        "Cedar, welcome aboard.",
+        "",
+        "Please check how ready this repo is for coding agents:",
+        "- https://github.com/acme/backend",
+      ].join("\n"),
+    );
     expect(bootstrap.toLowerCase()).not.toContain("skill");
+    expect(bootstrap).not.toContain("agent-readiness");
   });
 
   it("falls back gracefully when no repo is provided", () => {

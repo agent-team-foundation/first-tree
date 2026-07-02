@@ -3,8 +3,8 @@
  *
  * The skill body is PRODUCT CONTENT — one canonical version per campaign — so it
  * lives here on the server, NOT created ad-hoc from the browser. The web
- * quickstart flow only stamps the campaign slug onto the kickoff; the server
- * (see `resourcesService.ensureAndBindCampaignScanSkill`) ensures the matching
+ * quickstart flow passes the campaign slug to the server; the server (see
+ * `resourcesService.ensureAndBindCampaignScanSkill`) ensures the matching
  * managed skill resource exists in the agent's org and binds it to the agent.
  *
  * Why server-owned: creating a team resource over HTTP is admin-only
@@ -14,13 +14,13 @@
  * every quickstart user without widening that HTTP boundary, and makes the
  * skill content trusted (the client never supplies the body).
  *
- * The slug is ALSO the skill's resource name, so the client's campaign-aware
- * onboarding directive can name it ("load and follow the `<campaign>` skill")
- * and the agent finds it under "## Team Skills" in its briefing.
+ * The slug is ALSO the skill's resource name. The visible first-chat request is
+ * natural user-facing language; the agent selects the bound skill from that task
+ * wording and the skill description in its briefing.
  */
 
 export type CampaignScanSkill = {
-  /** Resource name === campaign slug; the directive and briefing key on it. */
+  /** Resource name === campaign slug; the briefing keys on it. */
   name: string;
   description: string;
   /** SKILL.md body; the runtime materializer re-adds YAML frontmatter. */
@@ -42,7 +42,8 @@ decline or go quiet.
 
 ## Step 0 — get the repo
 Get the target repo before scanning. **Fastest path (preferred):** the repo's
-GitHub URL is in the opening chat message ("connected to your code: …") —
+GitHub URL is in the opening chat message (usually a bullet under the scan
+request) —
 \`git clone\` it read-only into a temp dir and scan that (one step, no write). If
 a repo is instead already bound into your workspace as a source repo, note it is
 a **bare** clone (no working tree) — you'd \`git worktree add\` to get files; for a
@@ -181,7 +182,8 @@ decline or go quiet.
 
 ## Step 0 — get the repo
 Get the target repo before scanning. **Fastest path (preferred):** the repo's
-GitHub URL is in the opening chat message ("connected to your code: …") —
+GitHub URL is in the opening chat message (usually a bullet under the scan
+request) —
 \`git clone\` it read-only into a temp dir and scan that (one step, no write). If
 a repo is instead already bound into your workspace as a source repo, note it is
 a **bare** clone (no working tree) — you'd \`git worktree add\` to get files; for a
@@ -308,13 +310,13 @@ const CAMPAIGN_SCAN_SKILLS: Record<string, CampaignScanSkill> = {
   "production-scan": {
     name: "production-scan",
     description:
-      "Use when asked to run a production-readiness / launch-readiness scan on the target repository for this chat (e.g. a production-scan growth chat). Produces a scored, security-weighted report with the must-fix blockers before shipping.",
+      "Use when asked to run a production-readiness or launch-readiness scan on the target repository for this chat. Natural triggers include 'Please run a production readiness scan on this repo.' Produces a scored, security-weighted report with the must-fix blockers before shipping.",
     body: PRODUCTION_SCAN_BODY,
   },
   "agent-readiness": {
     name: "agent-readiness",
     description:
-      "Use when asked to run an agent-readiness scan on the target repository for this chat (e.g. an agent-readiness growth chat). Assesses how well a coding agent (Claude Code / Codex / Cursor) can work in this repo without getting lost, and names the must-fix blockers.",
+      "Use when asked to check how ready the target repository is for coding agents. Natural triggers include 'Please check how ready this repo is for coding agents.' Assesses how well a coding agent (Claude Code / Codex / Cursor) can work in this repo without getting lost, and names the must-fix blockers.",
     body: AGENT_READINESS_BODY,
   },
 };
