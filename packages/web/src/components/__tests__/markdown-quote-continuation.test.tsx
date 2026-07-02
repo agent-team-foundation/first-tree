@@ -64,4 +64,14 @@ describe("Markdown quote continuation", () => {
     expect(container.querySelector("pre")?.textContent).toContain("> quoted\n| quoted");
     expect(container.textContent).toContain("outside");
   });
+
+  it("does not treat pipe-prefixed indented code as quote shorthand", () => {
+    renderMarkdown("    | quoted\n    outside");
+
+    expect(container.querySelector("blockquote")).toBeNull();
+    expect(container.querySelector("pre")).not.toBeNull();
+    const codeText = container.querySelector("pre")?.textContent ?? "";
+    expect(codeText).toContain("| quoted\noutside");
+    expect(codeText).not.toContain("| quoted\n\noutside");
+  });
 });

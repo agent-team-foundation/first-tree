@@ -26,16 +26,18 @@ function previewSafeUrlTransform(url: string): string {
 function quoteLineKind(line: string): QuoteLineKind | null {
   if (/^ {0,3}>/.test(line)) return "standard";
 
-  const trimmed = line.trimStart();
-  if (!trimmed.startsWith("|")) return null;
-  if (trimmed.length > 1 && !/\s/.test(trimmed[1] ?? "")) return null;
+  const pipeMatch = /^ {0,3}\|(.*)$/.exec(line);
+  if (!pipeMatch) return null;
 
-  const content = trimmed.slice(1).trimEnd();
+  const markerTail = pipeMatch[1] ?? "";
+  if (markerTail && !/^\s/.test(markerTail)) return null;
+
+  const content = markerTail.trimEnd();
   return content.includes("|") ? null : "pipe";
 }
 
 function normalizePipeQuoteLine(line: string): string {
-  return line.replace(/^([ \t]{0,3})\|[ \t]?/, "$1> ");
+  return line.replace(/^( {0,3})\|[ \t]?/, "$1> ");
 }
 
 function fenceMarker(line: string): { char: "`" | "~"; length: number } | null {
