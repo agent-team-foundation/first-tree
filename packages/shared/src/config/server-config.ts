@@ -55,6 +55,24 @@ export const serverConfigSchema = defineConfig({
     landingPagesEnabled: field(z.boolean().default(false), {
       env: "FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED",
     }),
+    landingCampaigns: optional({
+      /**
+       * First Tree official service user that manages landing campaign trial
+       * agents inside customer orgs. Optional at boot so the feature flag can
+       * remain off by default; the start API checks both ids before creating
+       * anything.
+       */
+      serviceUserId: field(optionalTrimmedStringSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID",
+      }),
+      /**
+       * Official client row owned by `serviceUserId`. Trial agents are pinned
+       * to this real client so chat/runtime/status use the native path.
+       */
+      clientId: field(optionalTrimmedStringSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID",
+      }),
+    }),
   },
   database: {
     url: field(z.string(), {

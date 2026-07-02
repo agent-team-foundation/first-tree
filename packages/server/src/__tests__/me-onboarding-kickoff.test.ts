@@ -293,45 +293,32 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(treeMsgs[0]?.content).toBe("Seed the team tree.");
   });
 
-  it("scopes the kickoff key by campaign so two campaigns for the same agent get separate chats", async () => {
+  it("rejects campaign kickoff when growth landing pages are enabled because campaigns moved to landing-campaigns/start", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const agent = await createOrgAgent(app, admin);
-    const base = {
-      organizationId: admin.organizationId,
-      agentUuid: agent.uuid,
-      kind: "work" as const,
-      complete: false,
-    };
 
-    const scan = await app.inject({
+    const res = await app.inject({
       method: "POST",
       url: KICKOFF_URL,
       headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { ...base, bootstrap: "Welcome — let's scan acme/api.", campaign: "production-scan" },
+      payload: {
+        organizationId: admin.organizationId,
+        agentUuid: agent.uuid,
+        bootstrap: "Welcome — let's scan acme/api.",
+        kind: "work",
+        complete: false,
+        campaign: "production-scan",
+      },
     });
-    expect(scan.statusCode).toBe(200);
-    const scanChatId = scan.json<{ chatId: string }>().chatId;
 
-    const ready = await app.inject({
-      method: "POST",
-      url: KICKOFF_URL,
-      headers: { authorization: `Bearer ${admin.accessToken}` },
-      payload: { ...base, bootstrap: "Welcome — let's check agent-readiness.", campaign: "agent-readiness" },
-    });
-    expect(ready.statusCode).toBe(200);
-    const readyChatId = ready.json<{ chatId: string }>().chatId;
-
-    // Distinct campaigns for the same (human, agent, kind) must not collapse into
-    // one chat, or the second campaign's bootstrap is swallowed by the first's
-    // already-existing chat — the multi-landing "swallow" failure the campaign
-    // segment exists to prevent.
-    expect(readyChatId).not.toBe(scanChatId);
-
-    const [scanChat] = await app.db.select().from(chats).where(eq(chats.id, scanChatId)).limit(1);
-    const [readyChat] = await app.db.select().from(chats).where(eq(chats.id, readyChatId)).limit(1);
-    expect(scanChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work:production-scan`);
-    expect(readyChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work:agent-readiness`);
+    expect(res.statusCode).toBe(410);
+    expect(res.json()).toMatchObject({ code: "campaign_kickoff_moved" });
+    const rows = await app.db
+      .select()
+      .from(chats)
+      .where(eq(chats.onboardingKickoffKey, `${admin.humanAgentUuid}:${agent.uuid}:work:production-scan`));
+    expect(rows).toHaveLength(0);
   });
 
   it("rejects campaign kickoff when growth landing pages are disabled", async () => {
@@ -387,15 +374,16 @@ describe("POST /me/onboarding/kickoff", () => {
     const [legacyChat] = await app.db.select().from(chats).where(eq(chats.id, legacyChatId)).limit(1);
     expect(legacyChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work`);
 
-    // A campaign kickoff for the same triple is a separate chat from the legacy one.
+    // Campaign quickstart no longer shares this endpoint, so the legacy
+    // onboarding key remains the only chat created through kickoff.
     const campaign = await app.inject({
       method: "POST",
       url: KICKOFF_URL,
       headers: { authorization: `Bearer ${admin.accessToken}` },
       payload: { ...base, bootstrap: "Campaign work kickoff.", campaign: "production-scan" },
     });
-    expect(campaign.statusCode).toBe(200);
-    expect(campaign.json<{ chatId: string }>().chatId).not.toBe(legacyChatId);
+    expect(campaign.statusCode).toBe(410);
+    expect(campaign.json()).toMatchObject({ code: "campaign_kickoff_moved" });
   });
 });
 

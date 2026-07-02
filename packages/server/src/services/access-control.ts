@@ -15,7 +15,7 @@
  */
 
 import { AGENT_STATUSES, AGENT_TYPES, AGENT_VISIBILITY } from "@first-tree/shared";
-import { and, eq, inArray, ne, or, type SQL } from "drizzle-orm";
+import { and, eq, inArray, ne, or, type SQL, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { members } from "../db/schema/members.js";
@@ -41,8 +41,13 @@ export function agentVisibilityCondition(orgId: string, memberId: string): SQL {
 export function agentAddressableCondition(): SQL {
   return and(
     eq(agents.status, AGENT_STATUSES.ACTIVE),
+    agentNotLandingCampaignTrialCondition(),
     or(ne(agents.type, AGENT_TYPES.HUMAN), eq(members.status, "active")),
   ) as SQL;
+}
+
+export function agentNotLandingCampaignTrialCondition(): SQL {
+  return sql`COALESCE(${agents.metadata} ->> 'landingCampaignTrial', 'false') <> 'true'`;
 }
 
 /**
@@ -135,6 +140,7 @@ export async function listOrgsWithUsableNonHumanAgent(
         inArray(agents.organizationId, orgIds),
         ne(agents.type, "human"),
         eq(agents.status, AGENT_STATUSES.ACTIVE),
+        agentNotLandingCampaignTrialCondition(),
         or(eq(agents.visibility, AGENT_VISIBILITY.ORGANIZATION), inArray(agents.managerId, memberIds)),
       ),
     );
