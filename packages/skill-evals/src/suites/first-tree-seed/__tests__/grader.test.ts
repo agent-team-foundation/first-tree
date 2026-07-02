@@ -575,6 +575,40 @@ describe("first-tree-seed grader", () => {
     ).toBe(false);
   });
 
+  it("keeps buildGrading process_pass aligned with the relaxed gate for an incidental source read", () => {
+    // The relaxed casePassed gate accepts an incidental Step 0 source read, so
+    // the grading `process_pass` dimension must not contradict it (no
+    // `passed=true` / `process_pass=false` artifact). The stronger past-Step-0
+    // signals still fail process.
+    const incidentalRead = buildGrading(
+      findCase("unbound-tree-inits-with-dir"),
+      baseMetrics({
+        treeInitObserved: true,
+        treeInitWithContextTreeDirObserved: true,
+        sourceEvidenceReadObserved: true,
+        sourceWorktreeCreated: false,
+        directBareSourceContentReadObserved: false,
+        skeletonObserved: false,
+      }),
+      true,
+    );
+    expect(incidentalRead.scores.process_pass).toBe(true);
+
+    const withWorktree = buildGrading(
+      findCase("unbound-tree-inits-with-dir"),
+      baseMetrics({
+        treeInitObserved: true,
+        treeInitWithContextTreeDirObserved: true,
+        sourceWorktreeCreated: true,
+        sourceEvidenceReadObserved: false,
+        directBareSourceContentReadObserved: false,
+        skeletonObserved: false,
+      }),
+      false,
+    );
+    expect(withWorktree.scores.process_pass).toBe(false);
+  });
+
   it("detects tree init --dir context-tree from captured first-tree argv", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-"));
     try {

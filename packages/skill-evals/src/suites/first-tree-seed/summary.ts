@@ -22,7 +22,20 @@ function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeCreated) return false;
   if (!evalCase.expected.requireWorktree && metrics.sourceWorktreeCreated) return false;
   if (evalCase.expected.requireSourceRead && !metrics.sourceEvidenceReadObserved) return false;
-  if (!evalCase.expected.requireSourceRead && metrics.sourceEvidenceReadObserved) return false;
+  // State A (create_tree_via_init) tolerates an incidental Step 0 source read —
+  // keep this grading dimension aligned with the relaxed `casePassed` gate so an
+  // accepted incidental-read run does not report `passed=true` alongside
+  // `process_pass=false`. The stronger past-Step-0 signals still fail process:
+  // a source worktree (line above) and a bare-clone read (below). Refuse cases
+  // (report_missing_source / refuse_nonempty_tree) keep the strict penalty —
+  // there any source read is off-contract.
+  if (
+    !evalCase.expected.requireSourceRead &&
+    metrics.sourceEvidenceReadObserved &&
+    evalCase.expected.action !== "create_tree_via_init"
+  ) {
+    return false;
+  }
   return !metrics.directBareSourceContentReadObserved;
 }
 
