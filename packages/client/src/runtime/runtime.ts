@@ -197,10 +197,10 @@ export class AgentRuntime {
     });
   }
 
-  async stop(): Promise<void> {
+  async stop(reason?: string): Promise<void> {
     this.updateManager?.dispose();
     this.updateManager = null;
-    await Promise.allSettled(this.slots.map((slot) => slot.stop()));
+    await Promise.allSettled(this.slots.map((slot) => slot.stop(reason)));
     await this.clientConnection.disconnect();
   }
 }

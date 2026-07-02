@@ -1550,8 +1550,8 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       pendingChatContextPrompt = null;
     },
 
-    async shutdown() {
-      retryQueuedMessages("codex_shutdown_before_terminal");
+    async shutdown(reason?: string) {
+      retryQueuedMessages(reason ?? "codex_shutdown_before_terminal");
       // suspend() releases the active turn. Per agent-session-cwd-redesign
       // we no longer rm the cwd or auto-remove predeclared worktrees — both
       // are agent-scoped persistent resources shared across chats.

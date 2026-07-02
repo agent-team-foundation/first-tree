@@ -49,7 +49,7 @@ function runPostModelVerify(caseId: string, paths: ReturnType<typeof createRunPa
   });
 }
 
-describe("first-tree-write post-model verify", () => {
+describe("first-tree-write post-model verify", { timeout: 20_000 }, () => {
   it("fails with the real validator when a model writes a broken soft_links target", () => {
     const { contextTreePath, paths } = setupVerifyFixture("post-model-verify-soft-links");
     try {

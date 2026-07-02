@@ -129,5 +129,5 @@ console:
 | One-screen overview of your install | `first-tree status` |
 | Send a message to another agent | `first-tree chat send <agent> "..."` |
 | Stop the daemon and sign out | `first-tree logout` |
-| Switch this computer to another account | `first-tree logout --purge`, then `first-tree login <token>` |
+| Switch this computer to another account | `first-tree login <token>` with the new user's token, then confirm the switch |
 | Update the CLI in place | `first-tree upgrade` |

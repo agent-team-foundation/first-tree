@@ -11,6 +11,7 @@ const clientMocks = vi.hoisted(() => ({
 const registrationMocks = vi.hoisted(() => ({
   registerAgentCommands: vi.fn(),
   registerChatCommands: vi.fn(),
+  registerComputerCommands: vi.fn(),
   registerConfigCommands: vi.fn(),
   registerDaemonCommands: vi.fn(),
   registerDoctorCommand: vi.fn(),
@@ -29,6 +30,9 @@ const outputMocks = vi.hoisted(() => ({
 vi.mock("@first-tree/client", () => clientMocks);
 vi.mock("../commands/agent/index.js", () => ({ registerAgentCommands: registrationMocks.registerAgentCommands }));
 vi.mock("../commands/chat/index.js", () => ({ registerChatCommands: registrationMocks.registerChatCommands }));
+vi.mock("../commands/computer/index.js", () => ({
+  registerComputerCommands: registrationMocks.registerComputerCommands,
+}));
 vi.mock("../commands/config/index.js", () => ({ registerConfigCommands: registrationMocks.registerConfigCommands }));
 vi.mock("../commands/daemon/index.js", () => ({ registerDaemonCommands: registrationMocks.registerDaemonCommands }));
 vi.mock("../commands/doctor.js", () => ({ registerDoctorCommand: registrationMocks.registerDoctorCommand }));
@@ -93,6 +97,7 @@ describe("CLI entry and public exports", () => {
         registrationMocks.registerUpgradeCommand,
         registrationMocks.registerAgentCommands,
         registrationMocks.registerChatCommands,
+        registrationMocks.registerComputerCommands,
         registrationMocks.registerOrgCommands,
         registrationMocks.registerDaemonCommands,
         registrationMocks.registerConfigCommands,
