@@ -846,6 +846,13 @@ describe("first-tree-seed grader", () => {
             event: { command: "rg 'worktree add .*seed-source-repo' AGENTS.md", type: "command_execution" },
             type: "codex_event",
           },
+          {
+            // A search whose PATTERN is the documented worktree PATH (which the
+            // fixture AGENTS.md contains) also must not count: `worktrees/seed-source-repo`
+            // has no trailing slash after the name, and the program is a search tool.
+            event: { command: "rg 'worktrees/seed-source-repo' AGENTS.md", type: "command_execution" },
+            type: "codex_event",
+          },
         ],
         findCase("unbound-tree-inits-with-dir"),
         fixtureValidation(),
