@@ -266,7 +266,6 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post("/me/onboarding/kickoff", async (request, reply) => {
     const { userId } = requireUser(request);
-    const legacyKind = readLegacyKickoffKind(request.body);
     const body = kickoffOnboardingSchema.parse(request.body);
     const campaign = body.campaign;
     if (campaign && !app.config.growth.landingPagesEnabled) {
@@ -275,26 +274,23 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: "Growth landing pages are disabled on this First Tree deployment.", code: "feature_disabled" });
     }
     const { memberId, humanAgentId, organizationId } = await resolveOnboardingMember(app, userId, body.organizationId);
-    const isLegacyTreeSetup = legacyKind === "tree";
     const result = await kickoffOnboarding(app.db, {
       memberId,
       humanAgentId,
       organizationId,
       targetAgentId: body.agentUuid,
       bootstrap: body.bootstrap,
-      topic: body.topic ?? (isLegacyTreeSetup ? "Set up shared context" : "Get started with First Tree"),
-      kickoffKey: isLegacyTreeSetup
-        ? `${organizationId}:tree-setup`
-        : campaign
-          ? `${humanAgentId}:${body.agentUuid}:quickstart:${campaign}`
-          : `${humanAgentId}:${body.agentUuid}:onboarding`,
+      topic: body.topic ?? "Get started with First Tree",
+      kickoffKey: campaign
+        ? `${humanAgentId}:${body.agentUuid}:quickstart:${campaign}`
+        : `${humanAgentId}:${body.agentUuid}:onboarding`,
       complete: body.complete ?? true,
       // Provision + bind the campaign's agent-private scan skill via onChatReady
       // — AFTER createChat validates the target agent (cross-org / active /
       // private) plus the service's own manage-ownership gate, and BEFORE the
       // bootstrap is sent. Running it before validation would let an
       // unauthorized kickoff mutate another org/agent's resources.
-      ...(campaign && !isLegacyTreeSetup
+      ...(campaign
         ? {
             // The scan skill's Step 6 CTA links to the env-correct onboarding
             // page; resolve it here (dev/staging/prod) and let the materializer
@@ -313,11 +309,11 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
       app.log.info(
         {
-          event: isLegacyTreeSetup ? "onboarding.tree_setup_kickoff" : "onboarding.kickoff",
+          event: "onboarding.kickoff",
           userId,
           chatId: result.chatId,
         },
-        isLegacyTreeSetup ? "onboarding funnel: tree setup kickoff" : "onboarding funnel: kickoff",
+        "onboarding funnel: kickoff",
       );
     }
     return reply.status(200).send({ chatId: result.chatId });
@@ -830,10 +826,4 @@ async function resolveOnboardingMember(
     .limit(1);
   if (!row) throw new NotFoundError("Membership not found");
   return { memberId, humanAgentId: row.agentId, organizationId: row.organizationId };
-}
-
-function readLegacyKickoffKind(body: unknown): "intro" | "work" | "tree" | null {
-  if (typeof body !== "object" || body === null) return null;
-  const kind = (body as { kind?: unknown }).kind;
-  return kind === "intro" || kind === "work" || kind === "tree" ? kind : null;
 }

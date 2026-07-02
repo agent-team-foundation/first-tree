@@ -299,7 +299,7 @@ describe("POST /me/onboarding/kickoff", () => {
     expect(treeMsgs[0]?.content).toBe("Seed the team tree.");
   });
 
-  it("maps a legacy kind=tree kickoff payload to the dedicated tree setup chat", async () => {
+  it("rejects legacy kind=tree on the first-chat kickoff endpoint", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const agent = await createOrgAgent(app, admin);
@@ -317,14 +317,9 @@ describe("POST /me/onboarding/kickoff", () => {
       },
     });
 
-    expect(res.statusCode).toBe(200);
-    const { chatId } = res.json<{ chatId: string }>();
-    const [chat] = await app.db.select().from(chats).where(eq(chats.id, chatId)).limit(1);
-    expect(chat?.onboardingKickoffKey).toBe(`${admin.organizationId}:tree-setup`);
-    expect(chat?.topic).toBe("Set up shared context");
-
-    const [msg] = await app.db.select().from(messages).where(eq(messages.chatId, chatId)).limit(1);
-    expect(msg?.content).toBe("Seed the legacy tree.");
+    expect(res.statusCode).toBe(400);
+    const rows = await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId));
+    expect(rows).toHaveLength(0);
   });
 
   it("scopes the kickoff key by campaign so two campaigns for the same agent get separate chats", async () => {
@@ -397,7 +392,6 @@ describe("POST /me/onboarding/kickoff", () => {
         organizationId: admin.organizationId,
         agentUuid: agent.uuid,
         bootstrap: "Campaign work kickoff.",
-        kind: "work",
         campaign: "production-scan",
       },
     });
