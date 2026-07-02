@@ -266,6 +266,13 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post("/me/onboarding/kickoff", async (request, reply) => {
     const { userId } = requireUser(request);
+    if (hasRetiredKickoffKind(request.body)) {
+      return reply.status(409).send({
+        error:
+          'This onboarding kickoff request uses the retired "kind" contract. Refresh the First Tree web app and retry.',
+        code: "stale_onboarding_kickoff_contract",
+      });
+    }
     const body = kickoffOnboardingSchema.parse(request.body);
     const campaign = body.campaign;
     if (campaign && !app.config.growth.landingPagesEnabled) {
@@ -826,4 +833,8 @@ async function resolveOnboardingMember(
     .limit(1);
   if (!row) throw new NotFoundError("Membership not found");
   return { memberId, humanAgentId: row.agentId, organizationId: row.organizationId };
+}
+
+function hasRetiredKickoffKind(body: unknown): boolean {
+  return typeof body === "object" && body !== null && "kind" in body;
 }

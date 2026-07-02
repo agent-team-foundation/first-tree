@@ -317,7 +317,8 @@ describe("POST /me/onboarding/kickoff", () => {
       },
     });
 
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ code: "stale_onboarding_kickoff_contract" });
     const rows = await app.db.select().from(chats).where(eq(chats.organizationId, admin.organizationId));
     expect(rows).toHaveLength(0);
   });
