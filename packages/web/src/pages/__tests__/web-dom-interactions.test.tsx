@@ -2073,11 +2073,8 @@ describe("web DOM interaction coverage", () => {
     await unmountRoot(view.root);
   });
 
-  it("builds a missing tree from the Context page entry via the tree setup chat", async () => {
+  it("builds a missing tree from the Context page entry via an agent-seed tree-less chat (no server provision)", async () => {
     const { ContextTreeBuildEntry } = await import("../context-tree-build-entry.js");
-    orgSettingsMocks.getContextTreeSetting
-      .mockResolvedValueOnce({ repo: "", branch: null })
-      .mockResolvedValueOnce({ repo: "https://github.com/acme/context-tree", branch: "main" });
 
     const view = await renderDom(<ContextTreeBuildEntry />);
     await waitForText("Build your Context Tree", view.container);
@@ -2087,13 +2084,15 @@ describe("web DOM interaction coverage", () => {
     );
     await waitForText("Building", view.container);
 
-    expect(contextTreeMocks.initializeContextTree).toHaveBeenCalledWith("org-1");
+    // agentSeed default: no server-side provisioning — the tree-less chat's
+    // agent builds the tree from zero via first-tree-seed.
+    expect(contextTreeMocks.initializeContextTree).not.toHaveBeenCalled();
     expect(onboardingEventMocks.startOnboardingChat).not.toHaveBeenCalled();
     expect(onboardingEventMocks.treeSetupStartChat).toHaveBeenCalledTimes(1);
     expect(onboardingEventMocks.treeSetupStartChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("This chat sets up team context for future agent work."),
+        bootstrap: expect.stringContaining("Build our team's Context Tree from our connected code"),
         topic: "Set up shared context",
         complete: true,
       }),

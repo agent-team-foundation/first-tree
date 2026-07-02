@@ -33,9 +33,11 @@ const INSTALL_OWNER_HINT = {
 
 /**
  * The team's single "build your Context Tree" action, on the Context tab.
- * Building is one chat-driven flow: connect code (if needed) → provision or
- * reuse the binding → start the `tree` agent chat that seeds/updates it. This
- * replaced the standalone `/build-tree` wizard page — there is one build home.
+ * Building is one chat-driven flow: connect code (if needed) → start a
+ * tree-setup agent chat. For a new tree (`agentSeed`) the chat is tree-less and
+ * the agent builds it from zero via `first-tree-seed` (create + bind + seed);
+ * for an already-bound tree (`useBoundTree`) the agent fills it. This replaced
+ * the standalone `/build-tree` wizard page — there is one build home.
  *
  * When no code is connected yet, the connect + repo pick happens INLINE here
  * (install the GitHub App, then choose from the repos it grants) instead of
@@ -47,7 +49,7 @@ const INSTALL_OWNER_HINT = {
  * breach the Context tab's read-only-perception boundary.
  */
 export function ContextTreeBuildEntry({
-  treeBindingPlan = "createBinding",
+  treeBindingPlan = "agentSeed",
   detectedTreeUrl = null,
 }: {
   treeBindingPlan?: TreeBindingPlan;
@@ -101,9 +103,9 @@ export function ContextTreeBuildEntry({
     setError(null);
     setPhase("building");
     try {
-      // New-tree setup registers the chosen repos before Cloud one-click creates
-      // the binding; a bound-tree recovery passes no repos and only re-sends the
-      // idempotent tree setup chat.
+      // New-tree setup registers the chosen repos, then starts a tree-less chat
+      // where the agent builds the tree from zero; a bound-tree recovery passes
+      // no repos and only re-sends the idempotent tree setup chat.
       if (sourceRepos.length > 0) await ensureStartChatRepos(organizationId, sourceRepos);
       const chatId = await startTreeSetupChat({
         agent: chosenAgent,

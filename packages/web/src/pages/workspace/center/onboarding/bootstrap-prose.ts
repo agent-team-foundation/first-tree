@@ -13,7 +13,7 @@
  * needs the same prompts, hoist these builders to `packages/shared`.
  */
 
-export type TreeSetupBootstrapPlan = "createBinding" | "useBoundTree";
+export type TreeSetupBootstrapPlan = "agentSeed" | "createBinding" | "useBoundTree";
 
 function formatSourceList(sourceUrls: readonly string[], heading: string): string[] {
   return [heading, ...sourceUrls.map((u) => `- ${u}`)];
@@ -45,6 +45,19 @@ export function buildTreeSetupBootstrap(
   opts: { treeBindingPlan: TreeSetupBootstrapPlan; treeUrl: string | null },
 ): string {
   const sourceLines = formatSourceList(sourceUrls, "Source code:");
+  if (opts.treeBindingPlan === "agentSeed") {
+    // No binding yet — the agent builds the Context Tree from zero in this
+    // tree-less chat. Visible task text only, per the onboarding kickoff
+    // contract: name no skill; the agent recognizes the build task and reaches
+    // `first-tree-seed` from its skill map. Do not reference a bound tree.
+    return [
+      "Build our team's Context Tree from our connected code: create the repo, propose an initial structure for me to review, then fill it in.",
+      "",
+      ...sourceLines,
+      "",
+      "This gives future agents the team's code, decisions, and conventions. The first task chat stays separate.",
+    ].join("\n");
+  }
   const treeLine = `Context Tree: ${opts.treeUrl ?? "resolved by First Tree Cloud"}`;
   return [
     "This chat sets up team context for future agent work.",
