@@ -818,6 +818,42 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("does not treat a doc search for the worktree name (grep seed-source-repo AGENTS.md) as access", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-worktree-name-search-"));
+    try {
+      // The fixture's AGENTS.md documents the worktrees/seed-source-repo protocol,
+      // so a compliant Step 0 self-check may grep the instructions for the name.
+      // Searching docs does not touch a worktree, so it must NOT flip
+      // sourceWorktreeAccessObserved (else an otherwise-correct run false-fails).
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: { command: "grep seed-source-repo AGENTS.md", type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: { command: "rg seed-source-repo", type: "command_execution" },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeAccessObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("detects tree init --dir context-tree from captured first-tree argv", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-"));
     try {

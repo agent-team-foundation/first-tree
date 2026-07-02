@@ -97,6 +97,31 @@ function containsPathAccess(event: unknown, patterns: readonly string[]): boolea
   return collectToolInputStrings(event.event).some((value) => patterns.some((pattern) => value.includes(pattern)));
 }
 
+// True when a command string OPERATES ON the source worktree `seed-source-repo`
+// as a path or `git worktree` operand — NOT when it merely mentions the name.
+// The generated fixture's AGENTS.md documents the `worktrees/seed-source-repo`
+// protocol, so a compliant Step-0 search of the instructions
+// (`grep seed-source-repo AGENTS.md`, `rg seed-source-repo`) must not count as
+// worktree access. Distinguish real touches structurally:
+function commandTouchesSourceWorktree(text: string): boolean {
+  // A path UNDER the worktree — `worktrees/seed-source-repo/...` or a relative
+  // `seed-source-repo/...` after `cd worktrees`. The trailing slash marks a path
+  // operand, not a search term.
+  if (/seed-source-repo\//u.test(text)) return true;
+  // A `git worktree add|remove|move ... seed-source-repo` — materialization or
+  // teardown, even with no trailing slash (the relative-path evasion).
+  if (/\bworktree\s+(?:add|remove|move)\b[^\n]*\bseed-source-repo\b/u.test(text)) return true;
+  // A `cd` INTO the worktree directory.
+  if (/\bcd\s+[^\s&|;]*seed-source-repo\b/u.test(text)) return true;
+  return false;
+}
+
+function eventTouchesSourceWorktree(event: unknown): boolean {
+  if (!isRecord(event)) return false;
+  if (eventType(event) !== "codex_event") return false;
+  return collectToolInputStrings(event.event).some((value) => commandTouchesSourceWorktree(value));
+}
+
 function isAssistantMessageRecord(record: Record<string, unknown>): boolean {
   const type = eventType(record);
   const role = typeof record.role === "string" ? record.role : null;
@@ -650,15 +675,15 @@ export function deriveMetrics(
     ) {
       sourceEvidenceReadObserved = true;
     }
-    // Any touch of the source worktree (`git worktree add ...`, a read, a
-    // listing) — an event-level signal that survives later `git worktree
-    // remove`, so a Phase-1 add/read/cleanup cannot pass Step 0 by leaving the
-    // final filesystem clean. Match the distinctive worktree NAME
-    // `seed-source-repo` rather than the full `worktrees/seed-source-repo` path,
-    // so a `cd worktrees && … seed-source-repo …` sequence with relative targets
-    // is still caught. The name does not appear in the bare clone path
-    // `source-repos/source-repo`, so incidental bare-clone reads stay tolerated.
-    if (containsPathAccess(event, ["seed-source-repo"])) {
+    // Any operation ON the source worktree (`git worktree add/remove`, reading a
+    // `seed-source-repo/...` path, `cd` into it) — an event-level signal that
+    // survives a later `git worktree remove`, so a Phase-1 add/read/cleanup
+    // cannot pass Step 0 by leaving the final filesystem clean. Detected
+    // structurally (see `commandTouchesSourceWorktree`) so both full-path and
+    // `cd worktrees && … seed-source-repo …` relative forms are caught, while a
+    // mere name search of the docs (`grep seed-source-repo AGENTS.md`) and the
+    // bare clone `source-repos/source-repo` are NOT treated as access.
+    if (eventTouchesSourceWorktree(event)) {
       sourceWorktreeAccessObserved = true;
     }
 
