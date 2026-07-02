@@ -288,7 +288,16 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       ...(campaign
         ? {
             campaign,
-            onChatReady: () => app.resourcesService.ensureAndBindCampaignScanSkill(body.agentUuid, campaign, memberId),
+            // The scan skill's Step 6 CTA links to the env-correct onboarding
+            // page; resolve it here (dev/staging/prod) and let the materializer
+            // template it into the skill body's `{{FIRST_TREE_SETUP_URL}}`.
+            onChatReady: () =>
+              app.resourcesService.ensureAndBindCampaignScanSkill(
+                body.agentUuid,
+                campaign,
+                memberId,
+                `${resolvePublicUrl(app, request)}/onboarding`,
+              ),
           }
         : {}),
     });

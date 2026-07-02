@@ -77,7 +77,12 @@ describe("Resources Phase 1", () => {
     const owner = await createOrgUser(app, "member");
     const agent = await createRuntimeAgent(app, owner);
 
-    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+    await app.resourcesService.ensureAndBindCampaignScanSkill(
+      agent.uuid,
+      "production-scan",
+      owner.memberId,
+      "https://ft.test/onboarding",
+    );
 
     // Agent-PRIVATE resource (scope=agent, owned by this agent) — not an org
     // team resource, so it never lands in the org catalogue.
@@ -110,7 +115,12 @@ describe("Resources Phase 1", () => {
 
     // Idempotent: a returning user's second campaign / a retry neither
     // duplicates the resource nor the binding, and does not re-bump the version.
-    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+    await app.resourcesService.ensureAndBindCampaignScanSkill(
+      agent.uuid,
+      "production-scan",
+      owner.memberId,
+      "https://ft.test/onboarding",
+    );
     const skillsAfter = await app.db
       .select()
       .from(resources)
@@ -135,7 +145,12 @@ describe("Resources Phase 1", () => {
     const owner = await createOrgUser(app, "member");
     const agent = await createRuntimeAgent(app, owner);
 
-    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+    await app.resourcesService.ensureAndBindCampaignScanSkill(
+      agent.uuid,
+      "production-scan",
+      owner.memberId,
+      "https://ft.test/onboarding",
+    );
 
     // Simulate a skill provisioned by an older server: overwrite the stored
     // payload with a stale body, leaving the lookup key (the `name` column)
@@ -149,7 +164,12 @@ describe("Resources Phase 1", () => {
       .set({ payload: { name: "production-scan", description: "stale", body: "STALE BODY", metadata: {} } })
       .where(eq(resources.id, before?.id ?? ""));
 
-    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+    await app.resourcesService.ensureAndBindCampaignScanSkill(
+      agent.uuid,
+      "production-scan",
+      owner.memberId,
+      "https://ft.test/onboarding",
+    );
 
     // Payload refreshed back to the current server-owned rubric.
     const [after] = await app.db
@@ -177,10 +197,20 @@ describe("Resources Phase 1", () => {
     // Simulate a prior run that created the agent-private resource but failed
     // before binding. Re-running must find the existing resource and bind it,
     // not duplicate.
-    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+    await app.resourcesService.ensureAndBindCampaignScanSkill(
+      agent.uuid,
+      "production-scan",
+      owner.memberId,
+      "https://ft.test/onboarding",
+    );
     await app.db.delete(agentResourceBindings).where(eq(agentResourceBindings.agentId, agent.uuid));
 
-    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+    await app.resourcesService.ensureAndBindCampaignScanSkill(
+      agent.uuid,
+      "production-scan",
+      owner.memberId,
+      "https://ft.test/onboarding",
+    );
     const skills = await app.db
       .select()
       .from(resources)
@@ -206,7 +236,12 @@ describe("Resources Phase 1", () => {
     const attacker = await createOrgUser(app, "admin");
 
     await expect(
-      app.resourcesService.ensureAndBindCampaignScanSkill(victimAgent.uuid, "production-scan", attacker.memberId),
+      app.resourcesService.ensureAndBindCampaignScanSkill(
+        victimAgent.uuid,
+        "production-scan",
+        attacker.memberId,
+        "https://ft.test/onboarding",
+      ),
     ).rejects.toThrow();
 
     const skills = await app.db
@@ -225,7 +260,12 @@ describe("Resources Phase 1", () => {
     const app = getApp();
     const owner = await createOrgUser(app, "member");
     const agent = await createRuntimeAgent(app, owner);
-    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "production-scan", owner.memberId);
+    await app.resourcesService.ensureAndBindCampaignScanSkill(
+      agent.uuid,
+      "production-scan",
+      owner.memberId,
+      "https://ft.test/onboarding",
+    );
 
     // The web resource/prompt editors re-submit the FULL binding array on every
     // save — which now includes the agent-private scan-skill binding. A normal
@@ -252,7 +292,12 @@ describe("Resources Phase 1", () => {
     const owner = await createOrgUser(app, "member");
     const agent = await createRuntimeAgent(app, owner);
 
-    await app.resourcesService.ensureAndBindCampaignScanSkill(agent.uuid, "not-a-real-campaign", owner.memberId);
+    await app.resourcesService.ensureAndBindCampaignScanSkill(
+      agent.uuid,
+      "not-a-real-campaign",
+      owner.memberId,
+      "https://ft.test/onboarding",
+    );
 
     const skills = await app.db
       .select()
