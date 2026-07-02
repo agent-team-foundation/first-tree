@@ -35,6 +35,7 @@ import {
   declineUpdate,
   ensureFreshAccessToken,
   getClientServiceStatus,
+  getClientSwitchStartupBlock,
   handleClientOrgMismatch,
   isServiceSupported,
   listPinnedAgents,
@@ -45,6 +46,8 @@ import {
   promptUpdate,
   reconcileLocalRuntimeProviders,
   refreshServerUpdateTarget,
+  registerClientRuntimeMarker,
+  resolveClientRuntimeStopReason,
   runRuntimeAuthLogin,
   startClientService,
   uploadAgentSkills,
@@ -92,6 +95,17 @@ export function registerDaemonStartCommand(daemon: Command): void {
       if (appliedDaemonEnv.length > 0) {
         writeLine(`  loaded ${appliedDaemonEnv.length} var(s) from daemon.env (${appliedDaemonEnv.join(", ")})\n`);
       }
+      const switchBlock = getClientSwitchStartupBlock();
+      if (switchBlock) {
+        const message =
+          "client switch is in progress; daemon startup is parked before reading root credentials/config.";
+        if (daemonOutput) {
+          writeStatus("•", message);
+          process.exit(0);
+        }
+        writeLine(`  ${message}\n`);
+        return;
+      }
       // Fail closed: never spin up the runtime without persisted credentials.
       // Hooking this in BEFORE the service-delegation branch keeps the policy
       // uniform — supervisor child, foreground debug, or background daemon
@@ -104,6 +118,7 @@ export function registerDaemonStartCommand(daemon: Command): void {
         fail("NO_CREDENTIALS", message, 1);
       }
 
+      let unregisterRuntimeMarker: (() => void) | null = null;
       try {
         // Service-mode delegation. We split four cases so the user gets a
         // single coherent command:
@@ -193,6 +208,10 @@ export function registerDaemonStartCommand(daemon: Command): void {
         const config = await initConfig({
           schema: clientConfigSchema,
           role: "client",
+        });
+        unregisterRuntimeMarker = registerClientRuntimeMarker({
+          clientId: config.client.id,
+          mode: isSupervisorChild ? "service" : "foreground",
         });
 
         // Wire the resolved logLevel into the client logger — without this,
@@ -397,7 +416,9 @@ export function registerDaemonStartCommand(daemon: Command): void {
           writeLine("\n  Shutting down...\n");
           capabilityRefresher.stop();
           runtime.unwatchAgentsDir();
-          await runtime.stop();
+          await runtime.stop(resolveClientRuntimeStopReason());
+          unregisterRuntimeMarker?.();
+          unregisterRuntimeMarker = null;
           await flushClientSentry();
           process.exit(0);
         };
@@ -411,17 +432,16 @@ export function registerDaemonStartCommand(daemon: Command): void {
           if (daemonOutput) {
             writeStatus(
               "✗",
-              `client.yaml is owned by a different user; run \`${binName} logout --purge\`, then \`${binName} login <token>\` with the intended account. This signs out the current local client identity plus local agent configs, workspaces, and session state; server-side clients, agents, chats, and history are not deleted.`,
+              `client.yaml is not accepted for the current credentials; back up local workspaces, run \`${binName} computer reset\`, then run \`${binName} login <token>\` with the intended account.`,
             );
             process.exit(1);
           }
           writeLine("\n");
-          writeLine("  ⚠️  This client.yaml is owned by a different user.\n");
-          writeLine(`  Run \`${binName} logout --purge\` before logging in with another account.\n`);
-          writeLine("  This signs out the current user and removes this machine's local client\n");
-          writeLine("  identity plus local agent configs, workspaces, and session state. Server-side\n");
-          writeLine("  clients, agents, chats, and history are not deleted; the previous client and\n");
-          writeLine("  agents simply stop running from this machine unless they are set up again.\n\n");
+          writeLine("  ⚠️  This client.yaml is not accepted for the current credentials.\n");
+          writeLine("  The active client id and current credentials do not form a valid server-side owner pair.\n");
+          writeLine(
+            `  Back up local workspaces, run \`${binName} computer reset\`, then run \`${binName} login <token>\` with the intended account.\n\n`,
+          );
           process.exit(1);
         }
         if (error instanceof ClientOrgMismatchError) {
@@ -434,9 +454,12 @@ export function registerDaemonStartCommand(daemon: Command): void {
         }
         const msg = error instanceof Error ? error.message : String(error);
         captureClientException(error, { command: "daemon start" });
+        unregisterRuntimeMarker?.();
+        unregisterRuntimeMarker = null;
         await flushClientSentry();
         writeErrorAndExit(`Error: ${msg}`);
       } finally {
+        unregisterRuntimeMarker?.();
         // Reset singleton so other commands can reinit
         resetConfig();
         resetConfigMeta();

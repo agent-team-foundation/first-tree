@@ -22,7 +22,8 @@ import { recordClientHeartbeat } from "./runtime-liveness.js";
  * one user; cross-user admin access is no longer supported by this code path
  * (see decouple-client-from-identity-design §4.10.5 option A). There is no
  * cross-user ownership transfer: machine handover is local-only via
- * `logout --purge` followed by login, which generates a fresh clientId.
+ * `login <token>` on the target user, which parks the old local client and
+ * activates a separate client id.
  */
 export async function assertClientOwner(db: Database, clientId: string, scope: { userId: string }): Promise<void> {
   const [row] = await db
@@ -47,8 +48,8 @@ export async function assertClientOwner(db: Database, clientId: string, scope: {
  *     at first insert sticks for the row's lifetime.
  *   - Existing row with a different user_id → raises
  *     {@link ClientUserMismatchError} (WS close 4403). The CLI guides the
- *     operator through `logout --purge` before a new login; the previous
- *     owner's row stays untouched.
+ *     operator through local-client switching; the previous owner's row stays
+ *     untouched.
  */
 export async function registerClient(
   db: Database,
@@ -81,7 +82,7 @@ export async function registerClient(
   if (existing?.userId && existing.userId !== data.userId) {
     throw new ClientUserMismatchError(
       `Client "${data.clientId}" is owned by a different user. ` +
-        `Run \`${getServerCliBinding().binName} logout --purge\`, then login with the new account's connect token.`,
+        `Run \`${getServerCliBinding().binName} login <token>\` with the intended account to switch local clients before daemon startup; if this mismatch persists, back up local workspaces and run \`${getServerCliBinding().binName} computer reset\`.`,
     );
   }
 

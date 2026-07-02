@@ -293,10 +293,10 @@ export type AgentHandler = {
   inject(message: SessionMessage, token?: DeliveryToken): HandlerRouteReceipt | undefined;
 
   /** Idle timeout. Close query, preserve state for resume. */
-  suspend(): Promise<void>;
+  suspend(reason?: string): Promise<void>;
 
   /** Eviction or runtime shutdown. Same as suspend(). */
-  shutdown(): Promise<void>;
+  shutdown(reason?: string): Promise<void>;
 };
 
 /**

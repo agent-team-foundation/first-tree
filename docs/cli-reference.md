@@ -35,8 +35,9 @@ Requirements: Node.js ≥ 22.13 (24 recommended).
 
 ```
 first-tree
-├── login <token>            Sign this computer in
+├── login <token>            Sign this computer in or switch local clients
 ├── logout                   Stop the daemon and clear credentials
+├── computer ...             Computer-level local state recovery
 ├── status                   CLI + daemon + server + auth + agent overview
 ├── doctor                   Cross-subsystem readiness check
 ├── upgrade                  Self-update + restart the daemon
@@ -53,21 +54,23 @@ first-tree
 ## login
 
 ```
-first-tree login <token> [--no-start]
+first-tree login <token> [--no-start] [--force-switch]
 ```
 
 Sign this computer in using a connect token from the web console. The
 token's `iss` claim carries the server URL — no `--server` flag needed,
 and switching to a different deployment only requires a fresh token.
-If this machine already has credentials for another user, `login` refuses to
-overwrite them. If credentials are missing, `login` preserves `client.yaml` and
-local agent state so the same user can reconnect after a normal `logout`. Switch
-accounts by running `first-tree logout --purge` first, then login with the new
-token.
+If this machine already has credentials for another user, `login` asks for
+explicit confirmation and switches the active local client after stopping and
+draining the old runtime. In non-TTY automation, `--force-switch` is the only
+confirmation flag; it does not skip supervisor, drain, filesystem, or journal
+safety checks. If credentials are missing, `login` preserves `client.yaml` and
+local agent state so the same user can reconnect after a normal `logout`.
 
 | Flag | Effect |
 |---|---|
 | `--no-start` | Write credentials and exit without installing/starting the background daemon. |
+| `--force-switch` | Confirm a different-user local client switch in non-interactive mode. Safety gates still run. |
 
 ## logout
 
@@ -75,14 +78,38 @@ token.
 first-tree logout [--purge]
 ```
 
-Stop the daemon and clear credentials. `--purge` additionally removes
-`client.yaml`, local agent configs, agent workspaces, and session state. Use
-`--purge` before switching this machine to a different account. The purge is
-local-only: server-side clients, agents, chats, and history are not deleted,
-but the previous client and agents stop running from this machine unless they
-are set up again. If the daemon is active and cannot be stopped, `--purge`
-refuses to delete local agent state. The default keeps local client/agent state
-for the same user to reconnect later.
+Stop the daemon and clear credentials. `--purge` additionally removes active
+root client state, parked clients under `$FIRST_TREE_HOME/parked-clients/`, and
+switch lock/journal files. This is a destructive local reset path, not the
+normal account-switch path. To switch this computer to another First Tree user,
+run `first-tree login <token>` with the new user's connect token and confirm
+the switch. The purge is local-only: server-side clients, agents, chats, and
+history are not deleted, but the previous clients and agents stop running from
+this machine unless they are set up again. If the daemon is active and cannot
+be stopped, `--purge` refuses to delete local client state. The default keeps
+local client/agent state for the same user to reconnect later.
+
+## computer
+
+Computer-level local state recovery.
+
+```
+first-tree computer
+└── reset
+```
+
+### computer reset
+
+```
+first-tree computer reset
+```
+
+Stop the daemon and remove active root client state, parked clients under
+`$FIRST_TREE_HOME/parked-clients/`, switch lock/journal files, and active
+credentials. Use this when local identity state is damaged or when you
+intentionally want to discard every local First Tree client stored in this
+installation. Normal different-user switching should use
+`first-tree login <token>` instead, which parks inactive clients.
 
 ## status
 

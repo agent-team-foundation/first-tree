@@ -451,6 +451,27 @@ describe("buildAgentEnv", () => {
     expect(env.FIRST_TREE_CHAT_ID).toBe("chat-1");
   });
 
+  it("adds client switch drain markers when provider context is available", () => {
+    const env = buildAgentEnv({ PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
+      sdk: { serverUrl: "http://first-tree" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+      clientId: "client_aabbccdd",
+      provider: "codex",
+    });
+    expect(env.FIRST_TREE_CLIENT_ID).toBe("client_aabbccdd");
+    expect(env.FIRST_TREE_PROVIDER).toBe("codex");
+    expect(env.FIRST_TREE_SWITCH_DRAIN_VERSION).toBe("1");
+  });
+
   it("prepends FIRST_TREE_HOME/bin to PATH for channel-local CLI resolution", () => {
     const parent = {
       FIRST_TREE_HOME: "/first-tree-home",

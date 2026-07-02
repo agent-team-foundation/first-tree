@@ -2223,7 +2223,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       return { kind: "owned", mode: "queued" };
     },
 
-    async suspend() {
+    async suspend(reason?: string) {
       ctx?.log("Suspending session");
 
       if (inputController) {
@@ -2246,12 +2246,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // The session is no longer active — any pending replay inputs would be
       // moot. Resume goes through `handler.resume(message, sessionId)`, which
       // builds a fresh replay buffer from its own pushed inputs.
-      retryBufferedMessages("claude_suspend_before_terminal");
+      retryBufferedMessages(reason ?? "claude_suspend_before_terminal");
       injectDrainInProgress = false;
     },
 
-    async shutdown() {
-      await handler.suspend();
+    async shutdown(reason?: string) {
+      await handler.suspend(reason);
       // Per agent-session-cwd-redesign: cwd is the per-agent home — shared
       // by every chat. shutdown() of ONE chat must NOT remove it (would
       // wipe persistent state and worktrees other chats are using).

@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { registerAgentCommands } from "../commands/agent/index.js";
 import { registerChatCommands } from "../commands/chat/index.js";
+import { registerComputerCommands } from "../commands/computer/index.js";
 import { registerConfigCommands } from "../commands/config/index.js";
 import { registerDaemonCommands } from "../commands/daemon/index.js";
 import { registerDoctorCommand } from "../commands/doctor.js";
@@ -35,6 +36,7 @@ describe("CLI command registration", () => {
     registerUpgradeCommand(root);
     registerAgentCommands(root);
     registerChatCommands(root);
+    registerComputerCommands(root);
     registerOrgCommands(root);
     registerDaemonCommands(root);
     registerConfigCommands(root);
@@ -43,6 +45,7 @@ describe("CLI command registration", () => {
     expect(root.commands.map((entry) => entry.name()).sort()).toEqual([
       "agent",
       "chat",
+      "computer",
       "config",
       "daemon",
       "doctor",
@@ -55,10 +58,11 @@ describe("CLI command registration", () => {
     ]);
   });
 
-  it("registers agent, chat, daemon, config, and org subcommands", () => {
+  it("registers agent, chat, computer, daemon, config, and org subcommands", () => {
     const root = new Command();
     registerAgentCommands(root);
     registerChatCommands(root);
+    registerComputerCommands(root);
     registerDaemonCommands(root);
     registerConfigCommands(root);
     registerOrgCommands(root);
@@ -88,6 +92,7 @@ describe("CLI command registration", () => {
       "set-topic",
       "update",
     ]);
+    expect(subcommands(root, "computer")).toEqual(["reset"]);
     expect(subcommands(root, "daemon")).toEqual([
       "doctor",
       "home-info",
@@ -130,7 +135,7 @@ describe("CLI command registration", () => {
 
     const optionNames = (cmd: Command) => cmd.options.map((option) => option.long).sort();
 
-    expect(optionNames(command(root, "login"))).toEqual(["--no-start"]);
+    expect(optionNames(command(root, "login"))).toEqual(["--force-switch", "--no-start"]);
     expect(optionNames(command(command(root, "agent"), "create"))).toEqual([
       "--client-id",
       "--display-name",

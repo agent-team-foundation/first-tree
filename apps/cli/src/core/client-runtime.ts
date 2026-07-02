@@ -391,12 +391,12 @@ export class ClientRuntime {
     }
   }
 
-  async stop(): Promise<void> {
+  async stop(reason?: string): Promise<void> {
     this.unwatchAgentsDir();
     this.stopCredentialsWatcher();
     this.updateManager?.dispose();
     this.updateManager = null;
-    await Promise.allSettled(this.agents.map((a) => a.slot.stop()));
+    await Promise.allSettled(this.agents.map((a) => a.slot.stop(reason)));
     await this.connection.disconnect();
     // Bug 3: sweep any subprocess we still track (git, npm install) so they
     // do not stay in our cgroup after the parent exits. AgentSlot.stop has
