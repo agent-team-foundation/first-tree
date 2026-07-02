@@ -626,6 +626,7 @@ export function deriveMetrics(
   let writeSkillFileReadObserved = false;
   let workspaceManifestReadObserved = false;
   let sourceEvidenceReadObserved = false;
+  let sourceWorktreeAccessObserved = false;
   const firstTreeArgv: string[][] = [];
   const firstTreeCalls: FirstTreeCall[] = [];
   const modelOutputTexts: string[] = [];
@@ -648,6 +649,13 @@ export function deriveMetrics(
       ])
     ) {
       sourceEvidenceReadObserved = true;
+    }
+    // Any touch of a source worktree path (`git worktree add ...`, a read, a
+    // listing) — an event-level signal that survives later `git worktree
+    // remove`, so a Phase-1 add/read/cleanup cannot pass Step 0 by leaving the
+    // final filesystem clean.
+    if (containsPathAccess(event, ["worktrees/seed-source-repo"])) {
+      sourceWorktreeAccessObserved = true;
     }
 
     modelOutputTexts.push(...collectModelOutputText(event));
@@ -691,6 +699,7 @@ export function deriveMetrics(
     sourceEvidenceReadObserved:
       sourceEvidenceReadObserved || events.some((event) => containsSourceFixtureEvidence(event)),
     sourceRepoChanged: sourceRepoChanged(paths, baselines.sourceRepoHead),
+    sourceWorktreeAccessObserved,
     sourceWorktreeCreated: sourceWorktreeWasCreated,
     treeInitObserved: treeInit.observed,
     treeInitWithContextTreeDirObserved: treeInit.withContextTreeDir,
@@ -757,21 +766,24 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     // fails — that omission is the regression this case guards.
     //
     // Step 0's real invariant is the `tree init --dir <managed>` routing above.
-    // Materializing a source worktree, or reading the bare source clone
-    // directly, are strong signals of going past Step 0 into Phase 1 source
-    // exploration, so they still fail. We deliberately do NOT fail on
-    // `sourceEvidenceReadObserved` alone: a model creating the tree may
-    // incidentally glance at a source file (e.g. to derive the team name for
-    // `--title`) without doing Phase 1 work, and hard-failing that made this
-    // gate ~1/3 model-flaky (2026-07, liuchao approved relaxing it) while the
-    // `--dir` routing — the thing this case exists to prove — was correct every
-    // time. This is where state A intentionally diverges from the stricter
-    // report_missing_source sibling (a pure refuse case, where any source read
-    // is off-contract).
+    // Going past Step 0 into Phase 1 source exploration still fails, via three
+    // signals: materializing a source worktree (`sourceWorktreeCreated`, final
+    // filesystem), TOUCHING a source worktree at all (`sourceWorktreeAccessObserved`,
+    // event-level — so an add/read/`git worktree remove` sequence cannot pass by
+    // leaving the filesystem clean), and reading the bare source clone directly.
+    // We deliberately do NOT fail on `sourceEvidenceReadObserved` alone: a model
+    // creating the tree may incidentally glance at a source file (e.g. to derive
+    // the team name for `--title`) WITHOUT touching a worktree, and hard-failing
+    // that made this gate ~1/3 model-flaky (2026-07, liuchao approved relaxing
+    // it) while the `--dir` routing — the thing this case exists to prove — was
+    // correct every time. This is where state A intentionally diverges from the
+    // stricter report_missing_source sibling (a pure refuse case, where any
+    // source read is off-contract).
     return (
       metrics.treeInitWithContextTreeDirObserved &&
       !metrics.directBareSourceContentReadObserved &&
-      !metrics.sourceWorktreeCreated
+      !metrics.sourceWorktreeCreated &&
+      !metrics.sourceWorktreeAccessObserved
     );
   }
 

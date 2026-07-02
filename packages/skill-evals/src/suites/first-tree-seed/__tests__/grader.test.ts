@@ -35,6 +35,7 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     skeletonObserved: true,
     sourceEvidenceReadObserved: true,
     sourceRepoChanged: false,
+    sourceWorktreeAccessObserved: true,
     sourceWorktreeCreated: true,
     treeInitObserved: false,
     treeInitWithContextTreeDirObserved: false,
@@ -446,6 +447,7 @@ describe("first-tree-seed grader", () => {
           finalResponse: "No tree yet. Created and bound the Context Tree at ./context-tree.",
           skeletonObserved: false,
           sourceEvidenceReadObserved: false,
+          sourceWorktreeAccessObserved: false,
           sourceWorktreeCreated: false,
           treeInitObserved: true,
           treeInitWithContextTreeDirObserved: true,
@@ -521,13 +523,14 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("passes the unbound-tree case when Step 0 incidentally reads source but does no Phase 1 work", () => {
+  it("passes the unbound-tree case when Step 0 incidentally reads source but touches no worktree", () => {
     // Relaxation (2026-07, liuchao-approved): an incidental source read during
-    // Step 0 — e.g. glancing at a file to derive the team name for --title — no
-    // longer fails the gate. The real invariant is the `tree init --dir`
-    // routing; materializing a source worktree or reading the bare clone still
-    // fail (next two cases). Fixes a ~1/3 model-flake where the --dir routing
-    // was correct but an incidental read tripped the old strict gate.
+    // Step 0 — e.g. glancing at a file to derive the team name for --title,
+    // WITHOUT touching a source worktree — no longer fails the gate. The real
+    // invariant is the `tree init --dir` routing; touching a source worktree or
+    // reading the bare clone still fail (next cases). Fixes a ~1/3 model-flake
+    // where the --dir routing was correct but an incidental read tripped the old
+    // strict gate.
     expect(
       casePassed(
         findCase("unbound-tree-inits-with-dir"),
@@ -535,6 +538,7 @@ describe("first-tree-seed grader", () => {
           treeInitObserved: true,
           treeInitWithContextTreeDirObserved: true,
           sourceEvidenceReadObserved: true,
+          sourceWorktreeAccessObserved: false,
           sourceWorktreeCreated: false,
           directBareSourceContentReadObserved: false,
           skeletonObserved: false,
@@ -543,7 +547,7 @@ describe("first-tree-seed grader", () => {
     ).toBe(true);
   });
 
-  it("fails the unbound-tree case when Step 0 materializes a source worktree (past Step 0)", () => {
+  it("fails the unbound-tree case when Step 0 materializes a source worktree (final filesystem)", () => {
     expect(
       casePassed(
         findCase("unbound-tree-inits-with-dir"),
@@ -551,7 +555,29 @@ describe("first-tree-seed grader", () => {
           treeInitObserved: true,
           treeInitWithContextTreeDirObserved: true,
           sourceWorktreeCreated: true,
+          sourceWorktreeAccessObserved: false,
           sourceEvidenceReadObserved: false,
+          directBareSourceContentReadObserved: false,
+          skeletonObserved: false,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("fails the unbound-tree case when Step 0 touched a source worktree even if it was removed before grading", () => {
+    // The add/read/`git worktree remove` evasion: the final filesystem is clean
+    // (`sourceWorktreeCreated=false`), but the event-level
+    // `sourceWorktreeAccessObserved` records the worktree touch, so this Phase-1
+    // path still fails Step 0.
+    expect(
+      casePassed(
+        findCase("unbound-tree-inits-with-dir"),
+        baseMetrics({
+          treeInitObserved: true,
+          treeInitWithContextTreeDirObserved: true,
+          sourceWorktreeCreated: false,
+          sourceWorktreeAccessObserved: true,
+          sourceEvidenceReadObserved: true,
           directBareSourceContentReadObserved: false,
           skeletonObserved: false,
         }),
@@ -568,6 +594,7 @@ describe("first-tree-seed grader", () => {
           treeInitWithContextTreeDirObserved: true,
           directBareSourceContentReadObserved: true,
           sourceWorktreeCreated: false,
+          sourceWorktreeAccessObserved: false,
           sourceEvidenceReadObserved: false,
           skeletonObserved: false,
         }),
@@ -586,6 +613,7 @@ describe("first-tree-seed grader", () => {
         treeInitObserved: true,
         treeInitWithContextTreeDirObserved: true,
         sourceEvidenceReadObserved: true,
+        sourceWorktreeAccessObserved: false,
         sourceWorktreeCreated: false,
         directBareSourceContentReadObserved: false,
         skeletonObserved: false,
@@ -600,6 +628,7 @@ describe("first-tree-seed grader", () => {
         treeInitObserved: true,
         treeInitWithContextTreeDirObserved: true,
         sourceWorktreeCreated: true,
+        sourceWorktreeAccessObserved: false,
         sourceEvidenceReadObserved: false,
         directBareSourceContentReadObserved: false,
         skeletonObserved: false,
@@ -607,6 +636,73 @@ describe("first-tree-seed grader", () => {
       false,
     );
     expect(withWorktree.scores.process_pass).toBe(false);
+
+    // Event-level: a worktree touched then removed before grading still fails
+    // process (the artifact must not report process_pass=true for Phase 1 work).
+    const worktreeRemoved = buildGrading(
+      findCase("unbound-tree-inits-with-dir"),
+      baseMetrics({
+        treeInitObserved: true,
+        treeInitWithContextTreeDirObserved: true,
+        sourceWorktreeCreated: false,
+        sourceWorktreeAccessObserved: true,
+        sourceEvidenceReadObserved: true,
+        directBareSourceContentReadObserved: false,
+        skeletonObserved: false,
+      }),
+      false,
+    );
+    expect(worktreeRemoved.scores.process_pass).toBe(false);
+  });
+
+  it("event-detects a source worktree add/read/remove and still fails the unbound-tree case", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-worktree-cleanup-"));
+    try {
+      // Correct tree init --dir, but the model ALSO adds a source worktree,
+      // reads it, then removes it. The final filesystem is clean
+      // (sourceWorktreeCreated=false), yet the event trace records the worktree
+      // touch (sourceWorktreeAccessObserved=true), so the Phase-1 path still
+      // fails — cleanup cannot erase the signal.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: {
+              command: "git -C source-repos/source-repo worktree add worktrees/seed-source-repo origin/main",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+          {
+            event: { command: "cat worktrees/seed-source-repo/README.md", type: "command_execution" },
+            type: "codex_event",
+          },
+          {
+            event: {
+              command: "git -C source-repos/source-repo worktree remove worktrees/seed-source-repo",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+      expect(metrics.sourceWorktreeCreated).toBe(false);
+      expect(metrics.sourceWorktreeAccessObserved).toBe(true);
+      expect(casePassed(findCase("unbound-tree-inits-with-dir"), metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
   });
 
   it("detects tree init --dir context-tree from captured first-tree argv", () => {
