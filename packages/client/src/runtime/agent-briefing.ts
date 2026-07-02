@@ -334,11 +334,14 @@ prompt.*`,
  *    `decisionLocksCode`), the Double Test, Node Shape, and the
  *    Worked Examples.
  *
- * Both are gated on `contextTreePath !== null` because the runtime only
- * installs the SKILL.md payloads to disk when a Context Tree is bound
- * (see `runtime/first-tree-skills/installer.ts` and the short-circuit in
- * `agent-bootstrap.ts`). Telling a tree-less agent to load them would
- * point at files that aren't there.
+ * This section is gated on `contextTreePath !== null` because the
+ * UNCONDITIONAL mandate to load `first-tree-write` on every task is a
+ * tree-ops discipline (reflecting sources into an existing tree). Since the
+ * seed/write→core move, a tree-less agent DOES carry `first-tree-write` on
+ * disk (it ships core as `first-tree-seed`'s dependency), but should load it
+ * only when seed pulls it in — not on every task — so the mandate stays
+ * tree-bound. A tree-less agent's installed core skills are surfaced by the
+ * tree-less First Tree Family map in `skillsSection` instead.
  */
 function requiredReadingSection(contextTreePath: string | null, workspacePath: string): string | null {
   if (contextTreePath === null) return null;
