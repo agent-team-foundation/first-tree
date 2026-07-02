@@ -128,6 +128,7 @@ export const migrateAgentRequestSchema = z.object({
 | 条件 | 响应 |
 |------|------|
 | agent 是 human / 已删除 | 400 / 404 |
+| agent 从未首绑(`client_id` 为 NULL) | 400(首绑走现有 PATCH / WS claim 路径;migrate 只服务已有 placement,同时保证 §5 CAS 与首绑 claim 的互斥前提) |
 | agent suspended | 400(先 reactivate;suspend 状态下迁移没有意义,`agent:pinned` 对 suspended agent 也不会启动 slot) |
 | 目标 client 不存在 / 不归 manager 的 user | 400 |
 | 目标 == 当前 (client, provider),无变化 | 400(幂等噪音直接拒绝,防误操作;该前置同时是 §6 CAS 可靠性的前提) |
@@ -303,12 +304,174 @@ Agent 详情页(admin/manager 视角)加 "Migrate" 操作:选择目标 computer(
 
 ---
 
-## 12. 测试计划
+## 12. 测试计划(全量 use case)
 
-- **Server 单测**:migrate 服务全部前置校验矩阵;CAS 并发(两个 migrate、migrate vs 首绑 claim);会话 runtime_state 重置;force 语义(capability 跳过、working 跳过);无变化请求 400。
-- **WS 集成**:旧 client bind → migrate → 旧 client 收 force_disconnect、re-bind 收 `wrong_client`;目标 client 收 `agent:pinned`;bind 后 stuck-`delivered` inbox 恢复到新机。
-- **CLI 单测**:pinned handler 的分支矩阵(新 alias / 同 alias 同 provider / 同 alias 换 provider × `failed`/`idle`/`suspended-skipped` 态重启);F1/F2/F3 三条作废路径(含 A→B→A 回迁模拟,daemon 不重启);源机残留 alias 的惰性行为(bind 拒绝后不影响其他 agent、watcher 不重加);prune 对迁走 alias 的 `pinned-elsewhere` 归类(已有测试,验证不回归)。
-- **端到端手测脚本**:A→B、B→A 回迁(验证 F3)、A 原地换 provider、目标离线迁移 + 上线 backfill。
+按被测层分组;每条给出前置、动作、期望。标注 **[回归]** 的是现有行为的钉死用例,防止迁移改动破坏既有语义。
+
+### A. migrate API 前置校验(server 单测,`agent-migrate.test.ts`)
+
+| # | 场景 | 期望 |
+|---|------|------|
+| A1 | manager 本人迁移自己的 agent 到自己的另一台 client | 200,响应含新 clientId/runtimeProvider |
+| A2 | org admin 迁移他人 agent,目标 client 归该 agent manager 的 user | 200 |
+| A3 | org admin 迁移他人 agent,目标 client 归 **admin 自己**(非 manager)的 user | 400(防死 placement) |
+| A4 | 普通 member 迁移他人的 agent(无 manage 权限) | 403 |
+| A5 | agent 为 human 类型 | 400 |
+| A6 | agent 已删除(status=deleted / uuid 不存在) | 404 |
+| A7 | agent suspended | 400,文案提示先 reactivate |
+| A8 | 目标 clientId 不存在 | 400 |
+| A9 | 目标 client 的 `user_id` 为 NULL(legacy 行) | 400 |
+| A10 | 目标 == 当前 (client, provider),完全无变化 | 400 |
+| A11 | 仅换 provider(targetClientId == 当前 client,provider 不同) | 200 |
+| A12 | 仅换 client(provider 省略 = 保持当前) | 200 |
+| A13 | 同时换 client + provider | 200 |
+| A14 | 目标 client capability 报告 provider `missing`/`error`,未 force | 400,文案与 createAgent 的 capability 报错一致 |
+| A15 | 同 A14 但 `force: true` | 200 |
+| A16 | 目标 client capability 为空(从未探测),未 force | 200(三态语义:unknown 放行)**[回归]** 与 `assertClientSupportsRuntimeProvider` 现有语义一致 |
+| A17 | 存在 `runtime_state = 'working'` 的会话,未 force | 409 |
+| A18 | 同 A17 但 `force: true` | 200 |
+| A19 | agent 的 `client_id` 为 NULL(从未首绑) | 400(首绑走 PATCH/claim,migrate 只服务已有 placement;防止绕过首绑语义) |
+| A20 | 请求体非法(未知 provider 值、缺 targetClientId) | 400(Zod) |
+
+### B. 事务、CAS 与并发(server 单测)
+
+| # | 场景 | 期望 |
+|---|------|------|
+| B1 | 两个并发 migrate,同旧值、不同目标 | 恰好一个 200;另一个 409;终态 = 赢者的目标 |
+| B2 | 两个并发 migrate,同旧值、同目标 | 一个 200 一个 409(后者 CAS 落空);终态正确且只有一条审计日志成功路径 |
+| B3 | migrate 与 WS 首绑 claim 并发(agent `client_id` 为 NULL) | migrate 被 A19 拒绝;claim 正常——两路径互斥 |
+| B4 | migrate 提交后,携带旧值的第二次 migrate 请求 | 409(CAS WHERE 落空) |
+| B5 | 事务内三个写(agents CAS、agent_chat_sessions 重置、presence 清空)原子性:CAS 落空时 | 会话/presence 均不被改动(整个事务回滚) |
+| B6 | migrate 成功后 `agent_chat_sessions` 全部行 `runtime_state='idle'`、`runtime_state_at IS NULL` | 断言逐行 |
+| B7 | migrate 成功后 `agent_presence` ephemeral 字段清空(status offline、client_id NULL、runtime 字段 reset) | 断言 |
+| B8 | migrate 成功后 `agents.updated_at` 必然变化(F3 依赖) | 断言新旧不等 |
+
+### C. PATCH 不可变语义(现有测试更新)**[回归]**
+
+| # | 场景 | 期望 |
+|---|------|------|
+| C1 | PATCH `clientId` NULL → ID(首绑) | 200,推 `agent:pinned`(现有行为不变) |
+| C2 | PATCH `clientId` ID → 另一 ID | 400,报错文案指向 migrate 端点(更新 `agent-client-immutable.test.ts`) |
+| C3 | PATCH `clientId` ID → NULL | 400(不变) |
+| C4 | migrate 服务是 `client_id` ID → ID 的唯一变更路径 | 断言(替换原"没有 move/re-bind 路径"的断言) |
+
+### D. WS 集成:源/目标 在线×离线 四象限(server WS 集成测试)
+
+| # | 源机 | 目标机 | 期望 |
+|---|------|--------|------|
+| D1 | 在线且 agent 已 bind | 在线 | 源收 `agent:force_disconnect {reason:"migrated"}`;目标收 `agent:pinned`(含正确 runtimeProvider);源随后 re-bind 收 `wrong_client` |
+| D2 | 在线且 agent 已 bind | 离线 | 源同 D1;agent 进 offline;目标之后 `client:register` 时收到 pinned backfill,bind 成功 |
+| D3 | 离线 | 在线 | 无 force_disconnect 可发(no-op,不报错);目标立即收 `agent:pinned`;源之后上线 bind 收 `wrong_client` |
+| D4 | 离线 | 离线 | migrate 仍 200(DB 生效);双方之后各自上线:源被拒、目标 backfill 落地 |
+| D5 | 源在线但该 agent 未 bind(slot 早已 failed) | 任意 | force_disconnect 对未 bound agent 是 no-op,migrate 正常完成 |
+| D6 | migrate 后源机整个 daemon 重启 | — | 启动时 bind 收 `wrong_client`,slot `failed`,同机其他 agent 正常启动 **[回归]** |
+| D7 | `agent test` 端点在 migrate 后、目标未上线时 | — | 如实报告 offline + 新 client 信息 |
+
+### E. Inbox 连续性(server WS 集成测试)
+
+| # | 场景 | 期望 |
+|---|------|------|
+| E1 | migrate 前有 `pending` 的 inbox 行 | 目标机 bind 后照常收到 `inbox:deliver` |
+| E2 | 旧 client 收到 `inbox:deliver` 但未 ack 即被 migrate 踢下线(stuck `delivered`) | 目标机首次 bind 时恢复逻辑重置重投;消息不丢 |
+| E3 | migrate 后向该 agent 发新消息(目标未上线) | 入队 pending;目标上线 bind 后投递 |
+| E4 | 残余窗口:旧 client 在 force_disconnect 到达前发出 ack | ack 幂等处理,不破坏 inbox 状态机(at-least-once 语义)**[回归]** |
+| E5 | 旧 client 在残余窗口发 `session:state`/`runtime:state` 帧 | 不使 agent 出现"双活"可见状态;广播到达后断流(允许短暂污染,B6/B7 的重置保证终态干净) |
+
+### F. 客户端会话 fence(client/CLI 单测)
+
+| # | 场景 | 期望 |
+|---|------|------|
+| F1-1 | 在线源机收 `force_disconnect(reason:"migrated")` | slot 停止;该 agent 本地会话映射立即作废;本地文件(workspace/config)不删 |
+| F1-2 | 收 `force_disconnect` 但 reason 为其他值(`server_forced`/`agent_suspended`) | 不作废会话映射 **[回归]**(挂起/断连不该丢会话) |
+| F2-1 | bind 收 `wrong_client` 拒绝 | 会话映射作废;slot 停止(现有行为)+ 作废是新增 |
+| F2-2 | bind 收 `not_owned`/`runtime_provider_mismatch` 等其他拒绝 | **不**作废(只有 `wrong_client` 语义是"本机不是 placement") |
+| F3-1 | 绑定成功后 registry 记录的 `updatedAt` 与 `sdk.register()` 返回不一致 | 先作废映射再更新记录,会话冷启动 |
+| F3-2 | `updatedAt` 一致 | 映射保留,会话正常恢复 **[回归]** |
+| F3-3 | registry 无 `updatedAt` 字段(旧版本文件升级) | 视为一致放行 + 补写字段(升级兼容,不误伤存量) |
+| F4 | F1/F2 触发作废时 registry 文件写失败(磁盘/权限) | 不崩溃;日志告警;下次 F3 兜底 |
+
+### G. `handleAgentPinned` 分支矩阵(CLI 单测)
+
+现有分支 × 新增分支的全交叉:
+
+| # | 本地状态 | pinned 帧内容 | 期望 |
+|---|----------|--------------|------|
+| G1 | 无该 agentId 的 alias | 新 agent | 写 `agent.yaml` + 启 slot **[回归]** |
+| G2 | 无 alias 且本地名被**另一个** agent 占用 | 同名新 agent | `pickLocalName` 取后缀名,不覆盖已有目录 **[回归]** |
+| G3 | 已有 alias,state=`running`,provider 相同 | 重复 pinned(如 backfill) | no-op **[回归]** |
+| G4 | 已有 alias,state=`suspended-skipped` | reactivate 推送 | 重启 slot **[回归]** |
+| G5 | 已有 alias,state=`failed`(迁走后被拒的终态) | 回迁 pinned | **重启 slot**(新增,A→B→A daemon 不重启场景) |
+| G6 | 已有 alias,state=`idle`(被 migrated 踢停) | 原地换 provider 的 pinned | 改写 yaml `runtime` + 重启 slot(新增) |
+| G7 | 已有 alias,provider 与帧不一致,state=`running` | 原地换 provider | 停旧 handler → 改写 yaml → 以新 handler 重启(新增) |
+| G8 | agentsDir 未设置 / 写 yaml 失败 | 任意 | 告警不崩溃 **[回归]** |
+
+### H. 源机残留惰性(CLI 单测)**[回归钉死]**
+
+| # | 场景 | 期望 |
+|---|------|------|
+| H1 | daemon 启动含一个迁走的 alias + 一个健康 agent | 健康 agent 正常;迁走者一条 "connection failed";daemon 不退出 |
+| H2 | WS 重连时迁走 alias 的 rebind | 退避重试、debug 级日志,不影响健康 agent |
+| H3 | watcher 触发 rescan | 迁走 alias 不被重复添加 |
+| H4 | `agent prune` | 迁走 alias 归类 `pinned-elsewhere`,删除时三件套一起删 |
+| H5 | `doctor` | 报告 `pinned-elsewhere`,命令正常完成 |
+| H6 | 新 agent 复用已被 prune 清理的名字 | 全新 workspace/session,无旧数据吸入 |
+
+### I. 回迁与多跳(集成 / 端到端)
+
+| # | 场景 | 期望 |
+|---|------|------|
+| I1 | A→B→A,A 的 daemon 全程在跑 | A 收两次信号(migrated 踢停 → 回迁 pinned);G5 路径复活;F1 已作废会话,冷启动 |
+| I2 | A→B→A,A 全程离线,期间从未跑 daemon | A 上线后 bind 成功;F3(`updatedAt`)捕获变更,会话作废 |
+| I3 | A→B→A,A 在 B 阶段跑过 daemon(bind 被拒过) | F2 已作废;回迁后 G5 复活,冷启动 |
+| I4 | A→B→C 连续两跳 | 每跳独立正确;B 残留惰性(H 组);C 正常落地 |
+| I5 | 快速连续两次 migrate(第二次在源机还没收到第一次通知时发起) | 第二次携带新读到的旧值 → 200;或携带过期值 → 409;终态唯一 |
+
+### J. 多实例(server 集成,双实例拓扑)
+
+| # | 场景 | 期望 |
+|---|------|------|
+| J1 | 源 client WS 挂在实例 2,migrate 请求打到实例 1 | 实例 2 经 `agent_placement` NOTIFY 收到广播并 force_disconnect |
+| J2 | migrate 提交后、NOTIFY 消费前实例 2 崩溃重启 | 源 client 重连任一实例,bind 被拒(F2)——通知丢失不破坏不变量 |
+| J3 | `/disconnect`、suspend 走同一广播频道(顺带修复项) | 跨实例生效,reason 正确 |
+
+### K. 版本兼容(集成)
+
+| # | 场景 | 期望 |
+|---|------|------|
+| K1 | 旧 CLI 源机收 `reason:"migrated"` | 当作普通 force_disconnect 停 slot;re-bind 被拒;无崩溃(F1 作废退化到 F2/F3) |
+| K2 | 旧 CLI 目标机收新 agent 的 `agent:pinned` | 正常落地(帧结构未变) |
+| K3 | 旧 CLI 目标机,已有 alias + provider 变化 | 以旧 provider bind → `runtime_provider_mismatch` 永久跳过 + 一条 warn;状态可见、无损坏;升级 CLI 后恢复 |
+| K4 | server 回滚到无 migrate 版本 | 已迁移 agent 的新 pin 是合法数据,R-RUN 正常;无 schema 依赖 |
+
+### L. CLI 命令(`agent migrate` 单测)
+
+| # | 场景 | 期望 |
+|---|------|------|
+| L1 | 按 name 解析 agent(本地 alias / 服务端查询) | 解析到正确 uuid |
+| L2 | 交互确认文案 | 完整复述 §7 数据丢失清单,**点名"未提交/未 push 改动会丢"** |
+| L3 | `--yes` | 跳过确认 |
+| L4 | 目标 client `status: disconnected` | 提示但不阻止 |
+| L5 | 服务端各错误码(400/403/404/409) | 映射为可读文案;409-working 提示等待或 `--force` |
+| L6 | `--provider` 传非法值 | 本地 Zod 拒绝,不发请求 |
+| L7 | 迁移成功输出 | 展示 from→to、提示源机可运行 `agent prune` 清理(§13-4 若采纳) |
+
+### M. 周边非回归 **[回归]**
+
+| # | 场景 | 期望 |
+|---|------|------|
+| M1 | `retireClient` 在有 agent pin 时 | 仍拒绝,文案改为提示先 migrate |
+| M2 | migrate 全部 agent 后 retireClient | 成功 |
+| M3 | 成员离开的 agent 转移路径(`clientId: null` + fallback manager) | 不受影响;转移后 agent 可被新 manager 用 PATCH 首绑(非 migrate,A19) |
+| M4 | `GET /me/pinned-agents` | migrate 后反映新 clientId |
+| M5 | Web agent 详情 / computers 列表 | 显示新 placement;无缓存串台 |
+
+### 端到端手测脚本(发布前)
+
+1. A→B(双在线)全流程:消息续投、目标冷启动回复成功;
+2. B→A 回迁(I1、I2 两变体);
+3. A 原地 claude-code → codex;
+4. 目标离线迁移 + 上线 backfill;
+5. force 迁移一个 working 中的 agent,确认飞行 turn 丢弃后系统状态干净。
 
 ---
 
