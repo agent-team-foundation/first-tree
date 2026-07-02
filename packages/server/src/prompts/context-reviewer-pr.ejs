@@ -28,11 +28,21 @@ Review goals:
 
 Required workflow:
 
-1. Inspect this pull request with `gh` commands.
-2. Post a top-level PR review comment using exactly this GitHub CLI shape:
+1. Inspect this pull request with `gh` commands before deciding on the review outcome.
+2. Submit exactly one GitHub PR review using one of these outcomes:
+
+- If changes are needed, or if feedback should be recorded without approval, run:
 
 ```bash
-gh pr comment <%= prNumber %> --repo <%= repoFullName %> --body "..."
+gh pr review <%= prNumber %> --repo <%= repoFullName %> --comment --body "..."
 ```
 
-3. After posting the PR comment, reply in this chat with a short summary and include whether the comment was posted successfully.
+- If inspection is complete, the PR needs no changes, satisfies merge requirements, and is safe to merge as durable Context Tree material, run:
+
+```bash
+gh pr review <%= prNumber %> --repo <%= repoFullName %> --approve --body "..."
+```
+
+3. Approve only after inspection is complete and only when the PR is safe to merge as Context Tree material.
+4. Do not also post a top-level `gh pr comment` for the same outcome.
+5. After submitting the PR review, reply in this chat with a short summary and report which review action was submitted: `approved`, `commented`, or `failed`.
