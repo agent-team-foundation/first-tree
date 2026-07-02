@@ -39,6 +39,36 @@ export type LandingCampaignSkillSet = {
 
 const LANDING_CAMPAIGN_SKILL_SET_VERSION = "2026.07.02.1";
 
+const FIRST_TREE_SETUP_CTA = `## Step 6 — after the apply offer is resolved, invite them to set up First Tree for their team (one message + the setup link)
+The gap this scan exposed is real and recurring, and the artifact you produced is a
+one-time patch. The point of the scan is to get the user set up on First Tree so an
+agent that knows their repo is there for every task, for their whole team — not a
+one-off. Once the apply offer is resolved (the user answered, or the PR/issue is
+open), send ONE short message inviting them to set up — never a menu, never a nag.
+
+**This is a plain message with one clear, clickable link — NOT an ask-user card**
+(it hands off to a web setup flow, not a Yes/No in chat). Keep it value-first and
+tied to what they just got; **do not mention how the work was done, or that any
+agent (hosted or otherwise) produced it** — just the value and the next step. Use
+this shape, adapt lightly, keep it tight:
+
+"Want this on every task, not just once? Set up First Tree for your team. → Get
+started: {{FIRST_TREE_SETUP_URL}}"
+
+Use the link **exactly** as it appears in {{FIRST_TREE_SETUP_URL}} — never invent,
+alter, or drop it. That page walks them through setting up their own First Tree
+(their team, their own computer, their own agent).
+
+Send it **once**. If the apply offer is still unanswered, or the user is done, goes
+quiet, or declines — stop, and don't re-pitch: a single invitation is the ceiling.
+You convert by being genuinely useful, not by nagging. If they decline the setup
+but want to keep going, offer exactly one lighter next step as a plain
+conversational message (turn the next blocker into a fix, or scan another repo) —
+never a second link-pitch after a no.`;
+
+const GITHUB_FOLLOW_OVERRIDE =
+  'This overrides your usual "follow what you create" default: do NOT run `github follow` — or any First Tree event-tracking / attention wiring — on the PR or issue you create: this is a value-first scan and the org isn\'t set up for webhooks, so just share the link and stop there. If any follow/tracking step is attempted and errors, never surface it to the user as an error or an "install the GitHub App" task — drop it silently.';
+
 const PRODUCTION_SCAN_BODY = `# Production Readiness Scan
 
 You are a senior staff engineer doing a pre-launch review of the **target
@@ -49,6 +79,8 @@ repository for this chat**. Produce a structured production-readiness report.
 to proceed — goes through a **tracked ask-user card** (your \`chat ask\`), never a
 plain message: Yes/No or a few clean options, one ask at a time, dropped if they
 decline or go quiet.
+
+**What the user sees:** never expose your internal working mechanics to the user — clone / worktree / branch names, temp paths, git collisions, "worked around…", or how you set up your workspace. Show only value and results: the report, the deliverable, the PR/issue link, and the next step.
 
 ## Step 0 — get the repo
 Get the target repo before scanning. **Fastest path (preferred):** the repo's
@@ -146,41 +178,9 @@ that explicit go-ahead. Even after a yes, use **only** \`gh pr create\` /
 force-push, no deleting or modifying existing branches, no closing or editing
 existing issues or PRs, no other mutating \`gh\` command.
 
-## Step 6 — after the apply offer is resolved, turn the win into a standing setup for their team (one ask at a time)
-The gap this scan exposed is real and recurring, and the artifact you produced is a
-one-time patch. The point of the scan is to get the user onto First Tree so this
-stays maintained for their whole team — not a one-off. Once the apply offer is
-resolved (the user answered, or the PR/issue is open), make ONE next-step ask —
-never a menu.
+${GITHUB_FOLLOW_OVERRIDE}
 
-**Primary ask — convert to a First Tree team + context tree.** Anchor it to the
-specific gap THIS report exposed and the fix you just delivered (they are the
-proof). The case, in one breath: First Tree turns that one-time patch into your
-team's **living context tree** — shared, versioned in Git, and kept current by you
-and your agents through reviewed updates as you work — so every future agent task
-and every teammate starts from it instead of re-learning the repo. That is the
-difference from the static file you just wrote: it's the team's durable, reviewed
-source of context that stays useful as work happens, not a doc that quietly goes
-stale. Then make the
-concrete ask as a **tracked ask-user decision** — your \`chat ask\` posing a single
-Yes/No card: a **Set it up** confirm and a **Not now** decline, each with a short
-label (≤5 words) and a one-line description (\`chat ask\` requires both). Phrase it
-like "Set up your First Tree team and build the context tree for this repo?" — a
-single clear yes/no, **never a multi-option menu**. If they pick yes, walk them through only the standard setup
-steps they haven't already done — their team, their agent, and the context tree — skipping anything
-the current flow already handled. This is the confident default, tied to their
-demonstrated pain, not a soft footnote.
-
-**Secondary (lighter) — only if they decline the team AND explicitly want to keep
-going:** offer exactly one lighter next step instead, **as a plain conversational
-offer — not another ask-user card** — turn the next blocker into a fix, or scan
-another (or a private) repo. This is offered instead of re-pitching
-the team; it is never a second ask stacked after a no.
-
-Otherwise, **stop.** ONE ask at a time is the rule, and the stop condition is
-explicit: if the apply offer is still unanswered, or the user is done, goes quiet,
-or declines without asking for more — stop and don't re-pitch. A single unanswered
-offer is the ceiling. You convert by being genuinely useful, not by nagging.
+${FIRST_TREE_SETUP_CTA}
 `;
 
 const AGENT_READINESS_BODY = `# Agent Readiness Scan
@@ -193,6 +193,8 @@ structured agent-readiness report. **READ-ONLY**: do not modify anything.
 to proceed — goes through a **tracked ask-user card** (your \`chat ask\`), never a
 plain message: Yes/No or a few clean options, one ask at a time, dropped if they
 decline or go quiet.
+
+**What the user sees:** never expose your internal working mechanics to the user — clone / worktree / branch names, temp paths, git collisions, "worked around…", or how you set up your workspace. Show only value and results: the report, the deliverable, the PR/issue link, and the next step.
 
 ## Step 0 — get the repo
 Get the target repo before scanning. **Fastest path (preferred):** the repo's
@@ -289,41 +291,9 @@ against a new branch on **the same repo you scanned** — no force-push, no
 deleting or modifying existing branches, no closing or editing existing issues
 or PRs, no other mutating \`gh\` command.
 
-## Step 6 — after the apply offer is resolved, turn the win into a standing setup for their team (one ask at a time)
-The gap this scan exposed is real and recurring, and the artifact you produced is a
-one-time patch. The point of the scan is to get the user onto First Tree so this
-stays maintained for their whole team — not a one-off. Once the apply offer is
-resolved (the user answered, or the PR/issue is open), make ONE next-step ask —
-never a menu.
+${GITHUB_FOLLOW_OVERRIDE}
 
-**Primary ask — convert to a First Tree team + context tree.** Anchor it to the
-specific gap THIS report exposed and the fix you just delivered (they are the
-proof). The case, in one breath: First Tree turns that one-time patch into your
-team's **living context tree** — shared, versioned in Git, and kept current by you
-and your agents through reviewed updates as you work — so every future agent task
-and every teammate starts from it instead of re-learning the repo. That is the
-difference from the static file you just wrote: it's the team's durable, reviewed
-source of context that stays useful as work happens, not a doc that quietly goes
-stale. Then make the
-concrete ask as a **tracked ask-user decision** — your \`chat ask\` posing a single
-Yes/No card: a **Set it up** confirm and a **Not now** decline, each with a short
-label (≤5 words) and a one-line description (\`chat ask\` requires both). Phrase it
-like "Set up your First Tree team and build the context tree for this repo?" — a
-single clear yes/no, **never a multi-option menu**. If they pick yes, walk them through only the standard setup
-steps they haven't already done — their team, their agent, and the context tree — skipping anything
-the current flow already handled. This is the confident default, tied to their
-demonstrated pain, not a soft footnote.
-
-**Secondary (lighter) — only if they decline the team AND explicitly want to keep
-going:** offer exactly one lighter next step instead, **as a plain conversational
-offer — not another ask-user card** — turn the next blocker into a fix, or scan
-another (or a private) repo. This is offered instead of re-pitching
-the team; it is never a second ask stacked after a no.
-
-Otherwise, **stop.** ONE ask at a time is the rule, and the stop condition is
-explicit: if the apply offer is still unanswered, or the user is done, goes quiet,
-or declines without asking for more — stop and don't re-pitch. A single unanswered
-offer is the ceiling. You convert by being genuinely useful, not by nagging.
+${FIRST_TREE_SETUP_CTA}
 `;
 
 const CAMPAIGN_SCAN_SKILLS: Record<string, CampaignScanSkill> = {

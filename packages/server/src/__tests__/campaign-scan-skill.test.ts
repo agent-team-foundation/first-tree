@@ -38,6 +38,13 @@ describe("campaign scan skills", () => {
       // Even after consent the gh write is fenced to PR/issue creation only.
       expect(body).toContain("gh pr create");
       expect(body).toContain("no other mutating");
+      // Growth flow does NOT auto-follow the PR — on a fresh org that surfaces an
+      // "install the GitHub App" admin error; the skill forbids it and forbids
+      // surfacing any such failure to the user.
+      expect(body).toContain("github follow");
+      expect(body).toContain("install the GitHub App");
+      // Never leak internal workspace mechanics (clones/worktrees/collisions) to the user.
+      expect(body).toContain("never expose your internal working mechanics");
     }
     // The agent-readiness hero deliverable is a tailored AGENTS.md.
     expect(getCampaignScanSkill("agent-readiness")?.body).toContain("AGENTS.md");
@@ -58,21 +65,20 @@ describe("campaign scan skills", () => {
       // Step 6 conversion INVARIANTS — lock behavior, not marketing wording, so the
       // copy can be tuned without churning tests; only a real behavior change breaks these.
       expect(body).toContain("Step 6");
-      // (1) the apply-offer gate phrase is present (the copy fires the conversion ask
-      //     only after it resolves; this asserts the gate exists, not its ordering).
+      // (1) gated on the apply offer resolving first.
       expect(body).toContain("apply offer");
-      // (2) primary next step = convert to a First Tree team + build this repo's context tree.
-      expect(body).toContain("First Tree team");
-      expect(body).toContain("build the context tree");
-      // (3) one ask at a time — never a stacked second ask.
-      expect(body).toContain("ONE ask at a time");
-      // (4) explicit stop condition — no re-pitch when unanswered / declined / quiet.
+      // (2) Step 6 is a PLAIN MESSAGE carrying the env-templated setup link — NOT an
+      //     ask-user card (it hands off to a web onboarding flow). The server replaces
+      //     the placeholder with the env-correct URL at skill materialization.
+      expect(body).toContain("{{FIRST_TREE_SETUP_URL}}");
+      expect(body).toContain("NOT an ask-user card");
+      // (3) the CTA drives First Tree setup (connect own computer + create own agent).
+      expect(body).toContain("Set up First Tree for your team");
+      // (4) explicit stop condition — one invitation, no re-pitch, never a menu.
       expect(body).toContain("don't re-pitch");
-      // (5) BOTH the apply-consent offer and the Step 6 conversion are raised as
-      //     tracked ask-user decisions (chat ask) — the two asks in the flow — and
-      //     the conversion stays a single yes/no, never a multi-option menu.
-      expect((body.match(/chat ask/g) ?? []).length).toBeGreaterThanOrEqual(2);
       expect(body).toContain("never a menu");
+      // (5) the Step 5 apply-consent offer is still a tracked ask-user card.
+      expect(body).toContain("tracked ask-user");
     }
   });
 });

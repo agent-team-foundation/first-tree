@@ -64,7 +64,7 @@ export type ResourcesService = {
    * works for non-admin quickstart actors (the team-resource HTTP route is
    * admin-only); no-op for an unknown campaign slug.
    */
-  ensureAndBindCampaignScanSkill(agentId: string, campaign: string, actorId: string): Promise<void>;
+  ensureAndBindCampaignScanSkill(agentId: string, campaign: string, actorId: string, setupUrl: string): Promise<void>;
   resolveRuntimeConfig(config: AgentRuntimeConfig): Promise<AgentRuntimeConfig>;
   resolveEffectiveResources(agentId: string): Promise<EffectiveAgentResources>;
 };
@@ -1127,9 +1127,16 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
       };
     },
 
-    async ensureAndBindCampaignScanSkill(agentId, campaign, actorId) {
+    async ensureAndBindCampaignScanSkill(agentId, campaign, actorId, setupUrl) {
       const skill = getCampaignScanSkill(campaign);
       if (!skill) return;
+      // Env-correct setup link (dev/staging/prod) is templated in at
+      // materialization: the skill body ships an env-agnostic
+      // `{{FIRST_TREE_SETUP_URL}}` placeholder (campaign-scan-skill.ts Step 6).
+      // Use `body` everywhere below — payload AND the change-check — so a
+      // same-env re-scan compares templated-vs-templated and doesn't churn the
+      // config version on every kickoff.
+      const body = skill.body.replaceAll("{{FIRST_TREE_SETUP_URL}}", setupUrl);
       const [agent] = await db
         .select({ organizationId: agents.organizationId, managerId: agents.managerId, status: agents.status })
         .from(agents)
@@ -1190,7 +1197,7 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
       const desiredPayload = {
         name: skill.name,
         description: skill.description,
-        body: skill.body,
+        body,
         metadata: {},
       };
       // `body` and `description` are the only server-mutable fields of a
@@ -1202,7 +1209,7 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         typeof stored === "object" &&
         stored !== null &&
         "body" in stored &&
-        stored.body === skill.body &&
+        stored.body === body &&
         "description" in stored &&
         stored.description === skill.description;
 

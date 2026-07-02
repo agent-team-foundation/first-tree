@@ -413,6 +413,7 @@ export async function startLandingCampaignTrial(
   app: FastifyInstance,
   userId: string,
   body: LandingCampaignStartRequest,
+  setupUrl: string,
 ): Promise<LandingCampaignStartResponse> {
   const config = requireLandingCampaignConfig(app);
   const skillSet = getLandingCampaignSkillSet(body.campaign);
@@ -432,7 +433,7 @@ export async function startLandingCampaignTrial(
     skillSet,
     repo,
   });
-  await app.resourcesService.ensureAndBindCampaignScanSkill(trialAgent.uuid, body.campaign, serviceMember.id);
+  await app.resourcesService.ensureAndBindCampaignScanSkill(trialAgent.uuid, body.campaign, serviceMember.id, setupUrl);
   notifyClientAgentPinned(app, trialAgent);
 
   const result = await ensureTrialChatAndBootstrap(app, {

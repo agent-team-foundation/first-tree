@@ -183,6 +183,9 @@ describe("POST /me/landing-campaigns/start", () => {
       .limit(1);
     expect(skill?.name).toBe("production-scan");
     expect(skill?.defaultEnabled).toBeNull();
+    expect(skill?.payload).toMatchObject({ name: "production-scan" });
+    expect(JSON.stringify(skill?.payload)).toContain("/onboarding");
+    expect(JSON.stringify(skill?.payload)).not.toContain("{{FIRST_TREE_SETUP_URL}}");
     const bindings = await app.db
       .select()
       .from(agentResourceBindings)
