@@ -1,198 +1,199 @@
-# Proposal: Chat Bootstrap Core and Growth Activation Foundation
+# Proposal：Chat Bootstrap Core 与 Growth Activation Foundation
 
-Status: Draft for architecture review
+状态：架构评审草案
 
-## Summary
+## 摘要
 
-First Tree is currently evolving two related areas:
+First Tree 当前同时在推进两条相关但不应该混在一起的工作：
 
-- Onboarding is being simplified into a value-first path: connect a computer,
-  create or reuse a user-managed agent, then open the first useful chat.
-- Growth is starting to form a repeatable campaign platform through quickstart
-  scan flows, where an external entry point carries a campaign and repository
-  intent into a guided agent setup and scan chat.
+- **Onboarding 重构**：把新用户首次体验收敛到 value-first 路径，即连接电脑、创建或复用用户自己的 agent，然后尽快打开第一个有价值的 chat。
+- **Growth 增长平台建设**：以 quickstart scan campaign 为第一条闭环链路，把外部 campaign/repo intent 带入应用，并复用现有 client、agent、skill、chat 能力完成一次可转化的价值展示。
 
-Both areas need the same lower-level capability: create or reuse a normal chat
-idempotently, send exactly one server-authored bootstrap message, and notify the
-target agent. Today that capability still lives under the historical onboarding
-kickoff naming and API shape. The implementation is useful and mostly correct,
-but the ownership and naming are now misleading.
+这两条线都需要同一个底层能力：幂等创建或复用一个普通 chat，发送且只发送一次服务端可信的 bootstrap message，然后通知目标 agent。
 
-This proposal recommends extracting that lower-level capability as a small
-`chatBootstrapService`, keeping chat as a single product model, removing global
-intent presets from the core, and letting domain services plus skills define
-what the agent should do.
+当前这套能力仍然挂在历史命名下：`/me/onboarding/kickoff`、`kickoffOnboarding`、`chats.onboarding_kickoff_key`。它的并发和幂等设计是有价值的，但命名和职责已经不准确，因为 quickstart growth、Context Tree setup recovery、未来外部集成触发的 chat 都可能复用同一类底层能力。
 
-## Background
+本文建议抽出一个小而稳定的内部核心服务：`chatBootstrapService`。它只负责 chat bootstrap 的幂等基础能力，不理解 onboarding、growth、Context Tree、GitHub，也不引入 chat type 或全局 `kind`。业务意图由 domain service、绑定的 skill、bootstrap 内容和显式事件来表达。
 
-### Onboarding direction
+## 背景
 
-The current onboarding direction is correct: the first-run path should prove
-value quickly. The user should not need to complete GitHub App installation,
-repository authorization, or Context Tree setup before seeing an agent work.
+### Onboarding 重构背景
 
-The current onboarding flow already reflects this direction:
+当前 onboarding 的方向是正确的：首次体验应该尽快证明 agent 有用，而不是要求用户先完成 GitHub App 安装、repo 授权或 Context Tree setup。
 
-- Connect the user's computer.
-- Create or reuse the user's personal agent in the selected org.
-- Start a chat with that agent.
-- Mark onboarding complete only after the start-chat path succeeds.
+当前主路径已经基本收敛为：
 
-GitHub App installation, repository selection, and Context Tree setup should
-remain available, but they should be task-time, settings-time, or
-post-onboarding capabilities. They should not be hard prerequisites for the
-main onboarding success path.
+- 连接用户自己的电脑。
+- 在当前 org 下创建或复用用户自己的个人 agent。
+- agent 在线后启动一个 chat。
+- start-chat 成功后，再写 onboarding completion。
 
-### Growth and quickstart direction
+这个路径的核心价值是降低首次成功体验的阻力。GitHub App、repo 选择、Context Tree 初始化仍然重要，但它们不应该回到 onboarding 的关键路径里。它们更适合放在 Settings、Context tab、task-time setup，或 onboarding 之后由 agent 引导完成。
 
-The quickstart scan campaign is the first concrete growth loop. Its internal
-architecture flow is:
+因此，onboarding 后续应该只承担 membership 生命周期相关的状态：
 
-1. An external landing page generates a quickstart handoff URL with a campaign
-   slug and target repository URL.
-2. The web app enters `/quickstart` and parses the handoff.
-3. The parser accepts only known campaign slugs and normalized GitHub
-   repository URLs.
-4. If the user is logged out, the login round trip preserves the quickstart
-   intent through a safe redirect.
-5. The quickstart page reuses the existing computer-connection flow to mint a
-   connect token and wait for the local client or daemon to register.
-6. After the client reports runtime capabilities, the web app selects a usable
-   runtime provider.
-7. The web app creates or reuses the user's private agent in the current org.
-8. When the agent is online, the web app starts a campaign chat with the target
-   agent.
-9. Before the bootstrap message is sent, the server provisions and binds the
-   server-owned scan skill for the campaign.
-10. The server idempotently creates or reuses the chat and sends one bootstrap
-    message.
-11. The agent runtime uses the bound skill and bootstrap content to run the
-    scan, produce a report, offer a concrete deliverable, and ask for the next
-    conversion action.
+- 当前 membership 是否需要 onboarding。
+- 用户是否已经拥有可用的个人 agent。
+- 用户是否 finish later / suppressed。
+- 用户是否真正完成了 onboarding。
 
-This flow already contains the primitives a reusable growth platform needs:
-external intent handoff, login continuation, device connection, agent
-provisioning, campaign-specific skill binding, first-value chat creation, and
-conversion prompts.
+它不应该长期拥有通用 chat bootstrap 能力。
 
-The problem is not the product direction. The problem is that the shared
-infrastructure for the chat bootstrap still lives in onboarding-specific
-surfaces.
+### Growth 平台背景
 
-## Current architecture issues
+quickstart scan campaign 已经是增长平台的第一条内部闭环链路。它不是用户可见的一组概念，而是当前系统中已经跑通的一套架构流程：
 
-### 1. Onboarding kickoff is now a generic bootstrap path
+1. 外部 landing 构造 quickstart handoff URL，携带 `campaign` slug 和目标 `repo` URL。
+2. Web 进入 `/quickstart` 后解析 handoff。
+3. 解析层只接受已知 campaign slug 和规范化后的 GitHub repo URL。
+4. 如果用户未登录，登录流程通过 safe redirect 把 quickstart intent 带回应用。
+5. Quickstart 页面复用现有 computer connection 逻辑，生成 connect token，并等待本地 client/daemon 注册上线。
+6. 本地 client 上报 runtime capabilities 后，Web 选择可用 runtime provider。
+7. Web 在当前 org 下创建或复用用户自己的 private agent。
+8. agent 在线后，Web 发起 campaign start-chat。
+9. 服务端在发送 bootstrap message 前，根据 campaign 绑定对应的 server-owned scan skill 到目标 agent。
+10. 服务端幂等创建或复用 chat，并发送第一条 bootstrap message。
+11. agent runtime 根据已绑定 skill 和 bootstrap 内容执行 scan。
+12. scan skill 负责产出报告、给出具体 deliverable，并通过 ask-user card 引导后续转化动作，例如打开 PR、设置 First Tree team 或构建 Context Tree。
 
-The route `POST /me/onboarding/kickoff`, the service `kickoffOnboarding`, and
-the column `chats.onboarding_kickoff_key` are named as onboarding concepts.
-However, the same path is now also used by quickstart growth campaigns.
+这条链路已经包含长期 growth 平台所需的基础元素：
 
-The underlying operation is not onboarding-specific anymore. It is:
+- 外部入口和 intent handoff。
+- 登录回跳和 intent 延续。
+- 本地 client 连接。
+- agent provisioning。
+- campaign-specific skill binding。
+- value-first chat 启动。
+- 报告、deliverable 和转化动作。
 
-- create or reuse a chat by an idempotency key;
-- send exactly one server-authored bootstrap message;
-- optionally perform a pre-send side effect;
-- notify recipients.
+当前问题不是 quickstart 的产品方向，而是它仍然复用了 onboarding 命名的底层 start-chat/kickoff 管道。随着 campaign 数量增加，这会让增长平台继续依赖 onboarding 语义，长期不稳定。
 
-Keeping this under onboarding naming makes future growth, Context Tree, and
-integration-triggered flows depend on an unrelated product lifecycle.
+### 共同底层能力
 
-### 2. The core path is accumulating business intent
+Onboarding、quickstart growth、Context Tree setup、未来 GitHub/Slack/Linear 等外部触发器，本质上都会需要一个共同底层动作：
 
-The current kickoff shape includes a `kind` concept such as intro, work, and
-tree, and quickstart adds campaign data to the same path. This encourages the
-core service to grow a global vocabulary of business intents.
+1. 根据业务提供的唯一 key 找到或创建一个 chat。
+2. 确保同一个 key 只对应一个 bootstrap chat。
+3. 确保第一条 bootstrap message 只发一次。
+4. 通知目标 agent。
 
-That conflicts with the product model: First Tree should have one chat model.
-The chat core should not know whether a bootstrap is for onboarding, a scan,
-Context Tree setup, or a future GitHub review. Those intents belong to domain
-services and skills.
+这个能力应该独立出来，成为一个和具体业务无关的内部基础服务。
 
-### 3. Idempotency keys need stronger domain ownership
+## 当前架构问题
 
-The current key shape is suitable for onboarding, but it is not sufficient for
-long-term growth campaigns. A campaign may be run multiple times for the same
-user and agent against different repositories. The key must include the domain
-identity that makes a bootstrap unique, such as a canonical repository key or a
-campaign run id.
+### 1. `onboarding kickoff` 已经变成通用 bootstrap 管道
 
-The core service should not construct this key from a fixed set of global
-fields. The domain service should provide the key because only the domain knows
-the uniqueness boundary.
+当前 route 是 `POST /me/onboarding/kickoff`，service 叫 `kickoffOnboarding`，DB 字段叫 `chats.onboarding_kickoff_key`。但这条路径已经不只服务 onboarding，quickstart growth campaign 也通过它启动 campaign chat。
 
-### 4. Campaign behavior is split across web and server
+这说明底层能力的真实职责已经变成：
 
-Today the web campaign registry owns the first-chat bootstrap copy while the
-server owns the campaign scan skill. This split is workable for the first
-campaigns, but it does not scale well.
+- 按 idempotency key 创建或复用 chat。
+- 发送且只发送一次 server-authored bootstrap message。
+- 允许调用方在发送前完成必要 side effect。
+- 通知参与者。
 
-For a reusable growth platform, the server should own the campaign behavior
-that affects execution:
+这些职责不是 onboarding 专属。继续让 growth、Context Tree、未来 integration flow 依赖 onboarding 命名，会让系统边界越来越模糊。
 
-- campaign slug validation;
-- scan skill payload and version;
-- bootstrap content;
-- conversion policy;
-- event names and properties.
+### 2. 底层管道开始理解业务意图
 
-The web app should parse and carry the handoff, render setup state, and call the
-campaign API. It should not be the source of truth for agent behavior.
+当前 kickoff shape 里有 `kind`，例如 intro、work、tree；quickstart 又往同一条路径里加入 campaign。
 
-### 5. Growth events do not yet have a product fact table
+这会诱导后续继续往 core 层增加预设类型，例如 campaign_scan、github_review、security_scan。这个方向不符合 First Tree 的产品模型。
 
-Onboarding and quickstart events are currently spread across server logs, GA4,
-message metadata, and session events. Those are useful for diagnostics and
-external analytics, but they are not a stable product fact source.
+我们应该坚持：
 
-Growth needs queryable, append-only product events in Postgres so campaign
-funnels can be analyzed without reverse-engineering logs or chat metadata.
+- 只有一种 chat。
+- chat core 不知道这次 chat 是 onboarding、scan、tree setup 还是 GitHub review。
+- agent 要做什么，由 skill 和 bootstrap 内容定义。
+- 业务恢复和分析，由 domain service 的状态和事件定义。
 
-### 6. Context Tree setup still has onboarding namespace residue
+因此，长期不应该在 core 层引入全局 `kind` 或 chat type。
 
-Context Tree setup recovery is an org-level capability. It should not remain
-long-term under `/me/onboarding/*`. It can still reuse the same chat bootstrap
-primitive, but its status and recovery APIs should live under Context Tree or
-org setup ownership.
+### 3. 幂等 key 的语义需要由业务域拥有
 
-## Goals
+当前 key 形态适合 onboarding，但不适合长期 growth。
 
-### Onboarding goals
+例如同一个用户、同一个 agent、同一个 campaign，如果扫描不同 repo，必须把 repo canonical key 或 run id 纳入 bootstrap key。否则不同 repo 的 campaign 可能复用同一个 chat。
 
-- Keep onboarding focused on the membership lifecycle.
-- Preserve the value-first path: connect computer, create or reuse agent, start
-  chat.
-- Complete onboarding only after the start-chat path succeeds.
-- Keep GitHub App and Context Tree setup outside the critical first-run path.
-- Remove the need for growth and Context Tree flows to call onboarding-named
-  bootstrap APIs.
+Core service 不应该根据固定字段拼 key，因为 core 不知道业务唯一性边界。正确做法是：
 
-### Growth platform goals
+- domain service 生成 `bootstrapKey`；
+- `chatBootstrapService` 只接受并执行这个 key；
+- key 的格式和唯一性规则由业务域负责。
 
-- Support multiple reusable campaigns, such as production scan, agent readiness,
-  security scan, migration audit, and future repository-specific assessments.
-- Support repeat runs across different repositories without idempotency
-  collisions.
-- Keep campaign execution behavior server-owned.
-- Record product events in a durable, queryable fact table.
-- Reuse existing computer connection and agent provisioning primitives without
-  duplicating setup logic.
+### 4. Campaign 行为真相源分裂
 
-### Platform goals
+当前 Web 管 campaign bootstrap 文案，Server 管 campaign scan skill。对第一批 campaign 还能工作，但不适合增长平台长期扩展。
 
-- Keep one chat model.
-- Do not introduce global chat kinds or chat types.
-- Do not use message metadata as a business orchestration layer.
-- Let skills and domain services define agent intent.
-- Make the shared chat bootstrap primitive small, idempotent, and reusable.
+长期 campaign 行为应该 server-owned，至少包括：
 
-## Proposed architecture
+- campaign slug 校验。
+- scan skill payload 和版本。
+- bootstrap 内容。
+- conversion policy。
+- 需要写入的事件名称和 properties。
 
-### 1. Extract `chatBootstrapService`
+Web 应该负责解析 handoff、展示 setup 状态、调用 campaign API，而不是成为 agent 行为的真相源。
 
-Create an internal service that owns the generic idempotent chat-bootstrap
-operation.
+### 5. Growth 缺少稳定的产品事实源
 
-Proposed input:
+当前 onboarding/growth 事件分散在 server log、GA4、message metadata、session events 中。
+
+这些各自有价值：
+
+- GA4 适合外部流量和页面分析。
+- Server log 适合诊断。
+- Session events 适合 agent runtime 观察。
+- Chat messages 是用户协作记录。
+
+但它们都不应该成为增长漏斗的唯一事实源。增长平台需要 Postgres 中可查询、append-only 的产品事件表，用来回答：
+
+- 哪个 campaign 带来了多少 connect？
+- 哪个 repo scan 完成了？
+- 哪个 ask-user card 被展示和接受？
+- 哪个 campaign 转化到了 team/context tree setup？
+
+### 6. Context Tree setup 仍残留 onboarding namespace
+
+Context Tree setup recovery 本质是 org-level capability，不是 onboarding membership lifecycle 的一部分。
+
+当前 `/me/onboarding/tree-setup-status` 可以短期保留，但长期应该迁到 Context Tree 或 org setup 语义下。它可以复用同一个 chat bootstrap primitive，但不应该继续挂在 onboarding namespace。
+
+## 目标
+
+### Onboarding 目标
+
+- 保持 onboarding 主路径极简。
+- Onboarding 只负责 membership lifecycle。
+- start-chat 成功后再完成 onboarding。
+- GitHub App 和 Context Tree setup 不阻塞首次成功体验。
+- Growth 和 Context Tree flow 不再调用 onboarding 命名的 bootstrap API。
+
+### Growth 平台目标
+
+- 支持多个长期可复用 campaign，例如 production scan、agent readiness、security scan、migration audit、repository review。
+- 支持同一用户对不同 repo、不同 campaign、不同时间重复运行。
+- 避免不同 campaign/repo/run 之间的幂等冲突。
+- Campaign execution behavior 由 server 统一拥有。
+- 有 Postgres 产品事件事实源，支持 funnel、conversion、experiment 分析。
+- 复用现有 computer connection 和 agent provisioning 能力，不重复造 setup flow。
+
+### 平台层目标
+
+- 保持单一 chat model。
+- 不引入 chat type。
+- 不引入全局 `kind`。
+- 不把 message metadata 变成业务编排层。
+- Skill 和 domain service 定义业务意图。
+- Chat bootstrap core 保持小、稳定、幂等、可复用。
+
+## 建议架构
+
+### 1. 抽出 `chatBootstrapService`
+
+新增内部服务 `chatBootstrapService`，作为通用的 chat bootstrap 原语。
+
+建议输入：
 
 ```ts
 type ChatBootstrapInput = {
@@ -205,71 +206,70 @@ type ChatBootstrapInput = {
 };
 ```
 
-The service guarantees:
+该服务只保证：
 
-- a non-null `bootstrapKey` maps to at most one chat;
-- the bootstrap message is sent at most once for that chat;
-- concurrent retries serialize safely;
-- recipient notification happens only when a message is actually sent.
+- 非空 `bootstrapKey` 最多对应一个 chat。
+- 对该 chat 最多发送一次 bootstrap message。
+- 并发重试、刷新、双击可以安全收敛。
+- 只有真正发送了 message 时才通知参与者。
 
-The service does not know:
+该服务不负责：
 
-- onboarding completion;
-- campaign names;
-- Context Tree state;
-- GitHub App state;
-- skill selection;
-- growth event names;
-- global chat kinds.
+- onboarding completion；
+- campaign 选择；
+- Context Tree 状态；
+- GitHub App 授权；
+- skill 决策；
+- growth event；
+- global kind；
+- chat type。
 
-### 2. Keep business intent in domain services and skills
+### 2. 业务意图留在 domain service 和 skill 中
 
-The caller prepares the business context, binds required skills or resources,
-builds the bootstrap content, and writes domain events.
+调用方负责准备业务上下文、绑定必要 skill/resource、生成 bootstrap 内容、写入业务事件。
 
-Suggested domain services:
+建议拆分以下 domain services。
 
 #### `onboardingStartChatService`
 
-Responsibilities:
+职责：
 
-- resolve the caller's membership and human agent;
-- resolve the target agent;
-- prepare onboarding welcome/bootstrap content;
-- call `chatBootstrapService`;
-- mark `members.onboarding_completed_at` and suppression fields only after the
-  chat bootstrap succeeds.
+- 解析当前 membership。
+- 解析 human agent。
+- 解析 target agent。
+- 构造 onboarding welcome bootstrap。
+- 生成 onboarding 语义的 `bootstrapKey`。
+- 调用 `chatBootstrapService`。
+- chat bootstrap 成功后写 `members.onboarding_completed_at` 和 suppression 字段。
 
 #### `quickstartCampaignService`
 
-Responsibilities:
+职责：
 
-- validate the campaign slug and target repository;
-- canonicalize the repository identity;
-- create or reuse the target agent through existing agent setup primitives;
-- ensure the server-owned campaign scan skill is bound to the target agent;
-- generate a campaign bootstrap key that includes the repository or run
-  identity;
-- call `chatBootstrapService`;
-- write growth activation events.
+- 校验 campaign slug。
+- 校验并规范化 repo URL。
+- 创建或复用目标 agent。
+- 绑定 server-owned campaign scan skill。
+- 生成包含 repo 或 run identity 的 `bootstrapKey`。
+- 调用 `chatBootstrapService`。
+- 写入 growth activation events。
 
 #### `contextTreeSetupService`
 
-Responsibilities:
+职责：
 
-- verify GitHub App and Context Tree prerequisites;
-- register source repositories when needed;
-- create or adopt the Context Tree repo when appropriate;
-- call `chatBootstrapService` to start the setup chat;
-- expose setup status and recovery under Context Tree ownership, not
-  onboarding ownership.
+- 检查 GitHub App installation。
+- 检查 source repo/resource。
+- 创建或采用 Context Tree repo。
+- 生成 Context Tree setup 的 `bootstrapKey`。
+- 调用 `chatBootstrapService` 启动 setup chat。
+- 在 Context Tree namespace 下暴露 setup status 和 recovery。
 
-### 3. Make `bootstrapKey` domain-owned
+### 3. `bootstrapKey` 由业务域生成
 
-The core service should accept a key. It should not build one from global
-fields.
+Core 不拼 key，只接受 key。
 
-Examples:
+示例：
 
 ```txt
 onboarding:<membershipId>:<agentId>:welcome
@@ -278,35 +278,42 @@ context-tree-setup:<orgId>:<agentId>:<treeRepoCanonicalKey>
 github-pr-review:<installationId>:<repoCanonicalKey>:<prNumber>
 ```
 
-The important property is not the exact string format. The important property
-is that the domain owns the uniqueness boundary.
+这里重要的不是具体字符串格式，而是唯一性边界由业务域显式决定。
 
-### 4. Avoid global `kind`
+### 4. 不引入全局 `kind`
 
-Do not add a new global `kind` enum to the core.
+不要在新的 core 里引入 `kind`。
 
-The previous `intro | work | tree` vocabulary may remain in compatibility
-wrappers while routes are migrated, but it should not be the long-term core
-model. If a domain needs category labels for analytics or recovery, it should
-write domain events or domain state.
+现有 intro/work/tree 可以留在兼容 wrapper 中，帮助旧路径迁移。但长期 core 不应该通过全局枚举理解业务意图。
 
-### 5. Keep metadata minimal
+如果某个业务域需要分类：
 
-Do not introduce a new business metadata contract for chat bootstrap.
+- analytics 用 domain event；
+- recovery 用 domain state；
+- agent 行为用 skill；
+- UI 展示用 domain API 返回的状态。
 
-Short term, keep the existing trusted system marker for compatibility. Medium
-term, rename it from an onboarding-specific value to a generic bootstrap marker
-only after all readers are migrated.
+不要让 chat core 承担这些职责。
 
-Message metadata should mark server trust and compatibility only. It should not
-become the source of truth for campaign, onboarding, or Context Tree workflow
-state.
+### 5. Metadata 最小化
 
-### 6. Introduce `activation_events`
+不要新增业务 metadata contract。
 
-Add an append-only product event table for onboarding and growth.
+短期可以保留当前 trusted system marker 以兼容已有 reader。中期如果要迁出 onboarding 命名，可以把系统标记从 onboarding-specific value 迁到 generic bootstrap marker，但这必须等所有 reader 都迁移后再做。
 
-Suggested shape:
+Message metadata 应该只用于：
+
+- 标记这是服务端可信系统消息；
+- 兼容历史 reader；
+- 必要的安全/审计信息。
+
+它不应该成为 campaign、onboarding、Context Tree workflow 的状态存储。
+
+### 6. 新增 `activation_events`
+
+新增 append-only 产品事件表，作为 onboarding 和 growth 的事实源。
+
+建议结构：
 
 ```txt
 activation_events
@@ -320,7 +327,7 @@ activation_events
 - created_at
 ```
 
-Examples:
+示例事件：
 
 - `onboarding_started`
 - `onboarding_agent_created`
@@ -333,78 +340,107 @@ Examples:
 - `context_tree_setup_started`
 - `context_tree_setup_completed`
 
-This should complement, not replace, GA4 and operational logs. GA4 remains
-external analytics. Logs remain diagnostics. `activation_events` is the product
-fact source.
+它不替代 GA4 和 log：
 
-`activation_runs` can be deferred until the product needs cross-tab,
-cross-device, or long-running campaign recovery. Avoid introducing a workflow
-engine before that requirement is concrete.
+- GA4 继续做外部页面和来源分析。
+- Log 继续做诊断。
+- `activation_events` 作为产品事实源。
 
-## Migration plan
+`activation_runs` 可以后置。只有当产品明确需要跨 tab、跨设备、长流程恢复时，再引入 run model，避免过早做 workflow engine。
 
-### Phase 0: Extract without behavior change
+## 关键调用链路
 
-- Add `chatBootstrapService`.
-- Move the core idempotent chat creation and bootstrap send logic into it.
-- Keep `kickoffOnboarding` as a thin compatibility wrapper.
-- Keep existing route behavior.
-- Update comments around `chats.onboarding_kickoff_key` to mark it as a legacy
-  bootstrap key name.
+### Onboarding start-chat
 
-### Phase 1: Move callers to domain ownership
+1. Web onboarding 确认用户已经有 connected client 和 personal agent。
+2. Web 调用 onboarding start-chat domain API。
+3. `onboardingStartChatService` 解析 membership、human agent、target agent。
+4. Service 构造 onboarding bootstrap 内容和 `bootstrapKey`。
+5. Service 调用 `chatBootstrapService`。
+6. Bootstrap 成功后，service 写 onboarding completion。
+7. Web 跳转到 chat。
 
-- Add an onboarding start-chat domain service.
-- Add a quickstart campaign start-chat domain service.
-- Move campaign bootstrap generation to the server.
-- Update quickstart to call the campaign domain API instead of the onboarding
-  API wrapper.
-- Ensure quickstart bootstrap keys include repository or run identity.
-- Keep Context Tree setup on the current path until the bootstrap core is
-  stable.
+### Quickstart campaign
 
-### Phase 2: Add growth facts
+1. `/quickstart` 解析 campaign/repo handoff。
+2. Web 确保 client connected 和 runtime available。
+3. Web 创建或复用用户 private agent。
+4. Web 调用 quickstart campaign domain API。
+5. `quickstartCampaignService` 校验 campaign 和 repo。
+6. Service 绑定 campaign scan skill。
+7. Service 生成包含 repo identity 的 `bootstrapKey`。
+8. Service 调用 `chatBootstrapService`。
+9. Service 写 `activation_events`。
+10. Web 跳转到 campaign chat。
 
-- Add `activation_events`.
-- Write events from onboarding and quickstart services.
-- Keep GA4 and logs as secondary analytics and diagnostics.
-- Start building campaign funnel queries from Postgres events.
+### Context Tree setup
 
-### Phase 3: Rename storage and remove legacy surfaces
+1. Context Tree setup surface 调用 Context Tree domain API。
+2. `contextTreeSetupService` 检查 GitHub App 和 Context Tree prerequisites。
+3. Service 注册 source repos 或创建/adopt tree repo。
+4. Service 生成 Context Tree setup 的 `bootstrapKey`。
+5. Service 调用 `chatBootstrapService`。
+6. Service 写 setup event。
+7. Web 跳转到 setup chat 或展示 recovery 状态。
 
-- Add `chats.bootstrap_key`.
-- Dual-write old and new key fields.
-- Backfill existing rows.
-- Cut reads to `bootstrap_key`.
-- Retire `onboarding_kickoff_key` usage.
-- Move Context Tree setup status out of onboarding namespace.
-- Remove legacy kickoff wrappers once all callers are migrated.
+## 迁移计划
 
-## Non-goals
+### Phase 0：抽 core，不改行为
 
-- Do not add chat types.
-- Do not add a global chat `kind` system.
-- Do not build a generic workflow engine in this proposal.
-- Do not make message metadata the orchestration state store.
-- Do not move GitHub App installation or Context Tree setup back into the
-  critical onboarding path.
+- 新增 `chatBootstrapService`。
+- 把当前幂等创建 chat 和发送 bootstrap message 的核心逻辑迁入该服务。
+- 保留 `kickoffOnboarding` 作为 thin wrapper。
+- 保留现有 route 行为。
+- 更新 `chats.onboarding_kickoff_key` 注释，标记为 legacy bootstrap key name。
 
-## Review questions
+### Phase 1：调用方回到各自 domain
 
-1. Should `chatBootstrapService` become the shared internal primitive for
-   server-authored bootstrap chats?
-2. Do we agree that chat remains a single model, with intent defined by skills
-   and domain services rather than global kinds?
-3. Should quickstart campaign behavior become server-owned before adding more
-   campaigns?
-4. Is `activation_events` the right first step for a reusable growth platform,
-   with `activation_runs` deferred until recovery requirements are concrete?
-5. Should we keep the existing DB field temporarily and migrate to
-   `bootstrap_key` in a later phase?
+- 新增 onboarding start-chat domain service。
+- 新增 quickstart campaign start-chat domain service。
+- Campaign bootstrap 迁到 server-owned catalog。
+- Quickstart 改为调用 campaign domain API，而不是 onboarding API wrapper。
+- Quickstart bootstrap key 加入 repo canonical key 或 run identity。
+- Context Tree setup 暂时保留现有路径，等 bootstrap core 稳定后迁移。
 
-## Expected outcome
+### Phase 2：补 growth 事实源
 
-After this refactor, onboarding remains simple, growth gains a reusable
-foundation, and future Context Tree or integration-triggered flows can reuse a
-small idempotent chat bootstrap primitive without depending on onboarding
-semantics.
+- 新增 `activation_events`。
+- Onboarding 和 quickstart domain service 写入事件。
+- GA4 和 log 保留为 secondary analytics / diagnostics。
+- Growth funnel 查询基于 Postgres events。
+
+### Phase 3：迁移 DB 命名和旧接口
+
+- 新增 `chats.bootstrap_key`。
+- 双写 old/new key。
+- 回填历史数据。
+- 读逻辑切到 `bootstrap_key`。
+- 退休 `onboarding_kickoff_key` 的业务使用。
+- Context Tree setup status 从 onboarding namespace 迁出。
+- 所有调用方迁移后，删除 legacy kickoff wrapper。
+
+## 非目标
+
+- 不增加 chat type。
+- 不增加全局 `kind` 系统。
+- 不在本 proposal 中构建通用 workflow engine。
+- 不让 message metadata 成为业务编排状态。
+- 不把 GitHub App installation 或 Context Tree setup 放回 onboarding critical path。
+
+## 架构评审问题
+
+1. 是否同意 `chatBootstrapService` 成为服务端可信 bootstrap chat 的内部共享原语？
+2. 是否同意保持单一 chat model，业务意图由 skill 和 domain service 定义，而不是由全局 kind 定义？
+3. 是否同意在增加更多 campaign 前，将 quickstart campaign 行为迁到 server-owned catalog？
+4. 是否同意先建设 `activation_events` 作为 growth/onboarding 产品事实源，并推迟 `activation_runs`？
+5. 是否同意短期保留 `onboarding_kickoff_key`，后续分阶段迁移到 `bootstrap_key`？
+
+## 预期结果
+
+完成该重构后：
+
+- Onboarding 只关注首次设置和 membership lifecycle。
+- Growth 获得可复用的 campaign 基础平台。
+- Context Tree setup 可以从 onboarding namespace 中退出。
+- 所有需要服务端可信首条消息的流程都能复用同一个小而稳定的 chat bootstrap core。
+- Chat model 仍然只有一种，agent 行为继续由 skill 定义。
