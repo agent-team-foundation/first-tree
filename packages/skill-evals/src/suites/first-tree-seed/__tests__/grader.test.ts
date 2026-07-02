@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -584,6 +584,147 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("accepts the equals form tree init --dir=<workspace>/context-tree from captured argv", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-eq-"));
+    try {
+      // Commander declares `.option("--dir <path>")`, which accepts BOTH
+      // `--dir <path>` and `--dir=<path>`. The shim records raw argv before
+      // Commander parses it, so an equals-form invocation appears as the single
+      // token `--dir=<path>`; the structured parser must credit it (now that
+      // raw command strings are presence-only, this is the only load-bearing
+      // path).
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", `--dir=${join(tempRoot, "context-tree")}`],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+      expect(metrics.forbiddenSideEffectHits).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects the equals form tree init --dir=/tmp/context-tree that resolves outside the workspace", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-eq-outside-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir=/tmp/context-tree"],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the LAST --dir when repeated (Commander overwrites), so a later outside path fails", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-dup-outside-"));
+    try {
+      // `--dir <ws>/context-tree --dir /tmp/context-tree`: Commander keeps the
+      // LAST scalar value, so the effective target is the outside `/tmp` path.
+      // The grader must mirror that and NOT credit the earlier managed value.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--dir", join(tempRoot, "context-tree"), "--dir", "/tmp/context-tree"],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the LAST --dir when repeated so a later managed path is credited", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-dup-inside-"));
+    try {
+      // Reverse order: outside first, managed last -> last wins -> accepted.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--dir=/tmp/context-tree", `--dir=${join(tempRoot, "context-tree")}`],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("stops --dir scanning at a -- terminator (later --dir is a positional, not an option)", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-terminator-"));
+    try {
+      // After `--`, tokens are positionals: the managed `--dir` before the
+      // terminator is the effective option; the `/tmp` one after it is not.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--dir", join(tempRoot, "context-tree"), "--", "--dir", "/tmp/context-tree"],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("detects a tree init without a context-tree --dir as the regression", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-nodir-"));
     try {
@@ -638,6 +779,269 @@ describe("first-tree-seed grader", () => {
       expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects an absolute tree init --dir that resolves outside the workspace", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-abs-outside-"));
+    try {
+      // `/tmp/context-tree` shares the `context-tree` basename but the checkout
+      // would land outside the workspace-managed `<workspacePath>/context-tree`.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", "/tmp/context-tree"],
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+      expect(
+        casePassed(
+          findCase("unbound-tree-inits-with-dir"),
+          baseMetrics({
+            skeletonObserved: false,
+            sourceEvidenceReadObserved: false,
+            sourceWorktreeCreated: false,
+            treeInitObserved: true,
+            treeInitWithContextTreeDirObserved: metrics.treeInitWithContextTreeDirObserved,
+          }),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a relative ../context-tree tree init --dir that escapes the workspace", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-parent-dir-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              command: "first-tree tree init --title 'Apollo Console' --dir ../context-tree",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts a relative ./context-tree tree init --dir resolved against the captured workspace cwd", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-rel-dir-"));
+    try {
+      // The model runs with cwd = workspacePath, so `./context-tree` resolves
+      // against the CAPTURED cwd to the workspace-managed checkout.
+      const relativeMetrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", "./context-tree"],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+      expect(relativeMetrics.treeInitWithContextTreeDirObserved).toBe(true);
+
+      // The absolute workspace path is likewise accepted, cwd-independent.
+      const absoluteMetrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            cwd: "/tmp",
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+      expect(absoluteMetrics.treeInitWithContextTreeDirObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a relative ./context-tree tree init --dir when captured cwd is OUTSIDE the workspace", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-cwd-outside-"));
+    try {
+      // `cd /tmp && first-tree tree init --dir ./context-tree`: the relative
+      // --dir resolves against the CAPTURED cwd (/tmp), NOT the workspace, so
+      // the checkout would land at /tmp/context-tree — reject it.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", "./context-tree"],
+            cwd: "/tmp",
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+      expect(
+        casePassed(
+          findCase("unbound-tree-inits-with-dir"),
+          baseMetrics({
+            skeletonObserved: false,
+            sourceEvidenceReadObserved: false,
+            sourceWorktreeCreated: false,
+            treeInitObserved: true,
+            treeInitWithContextTreeDirObserved: metrics.treeInitWithContextTreeDirObserved,
+          }),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit a relative --dir from a bare command string, even with a context-tree basename", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-cmd-relative-"));
+    try {
+      // The command-string path carries no structured cwd (`cd /tmp && ...`),
+      // so a relative --dir cannot be resolved soundly: it must NOT credit
+      // withContextTreeDir. This is the FINDING 1b bypass.
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              command: "cd /tmp && first-tree tree init --title 'Apollo Console' --dir ./context-tree",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("does not credit a later command-string --dir to a real tree init that lacks --dir (cross-segment false green)", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-cmd-crosssegment-"));
+    try {
+      // `first-tree tree init --title X && echo --dir <ws>/context-tree`: the
+      // real shimmed argv has NO --dir, but the raw command string carries a
+      // later, unrelated absolute --dir in a separate `echo` segment. A naive
+      // scan of the whole string would mis-attribute that --dir to the tree
+      // init. withContextTreeDir must come SOLELY from the structured
+      // first_tree_call argv, so the later --dir must NOT be credited.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console"],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: {
+              command: `first-tree tree init --title 'Apollo Console' && echo --dir ${join(tempRoot, "context-tree")}`,
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+      expect(casePassed(findCase("unbound-tree-inits-with-dir"), metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("canonicalizes symlinked roots so a --dir through a symlinked workspace is accepted", () => {
+    // FINDING 2: the context-tree leaf does not exist (shim blocks creation),
+    // so the resolver must canonicalize the deepest EXISTING ancestor. Here the
+    // real workspace lives under a real dir, and we present the workspacePath
+    // through a symlink to it; the argv --dir uses the real (realpath) form with
+    // the non-existent context-tree leaf. They must compare equal.
+    const realBase = mkdtempSync(join(tmpdir(), "seed-eval-symlink-real-"));
+    const linkBase = `${realBase}-link`;
+    try {
+      const realWorkspace = join(realBase, "workspace");
+      mkdirSync(realWorkspace, { recursive: true });
+      symlinkSync(realBase, linkBase);
+      const linkedWorkspace = join(linkBase, "workspace");
+      const realDir = join(realpathSync(realWorkspace), "context-tree"); // leaf absent
+
+      const paths = baseRunPaths(linkedWorkspace); // workspacePath through the symlink
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", realDir],
+            cwd: linkedWorkspace,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        paths,
+        join(linkedWorkspace, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+    } finally {
+      // linkBase is a symlink to a directory; unlink the link itself (rmSync
+      // without recursive refuses a directory target), then remove the real dir.
+      unlinkSync(linkBase);
+      rmSync(realBase, { force: true, recursive: true });
     }
   });
 
