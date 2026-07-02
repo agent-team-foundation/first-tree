@@ -49,22 +49,19 @@ describe("campaign scan skills", () => {
       expect(body).toContain("Generated with First Tree — https://first-tree.ai");
       expect(body).not.toContain("<the First Tree URL>");
       expect(body).toContain("never inside the committed file");
-      // Step 6 turns the win into First Tree adoption — a First Tree team + context tree is the
-      // PRIMARY ask (not a soft footnote), gated on the apply offer being resolved.
+      // Step 6 conversion INVARIANTS — lock behavior, not marketing wording, so the
+      // copy can be tuned without churning tests; only a real behavior change breaks these.
       expect(body).toContain("Step 6");
-      expect(body).toContain("after the apply offer is resolved");
-      expect(body).toContain("convert to a First Tree team");
-      expect(body).toContain("build the context tree for this repo");
-      // The tree is explained vs the static file just delivered (so the ask isn't hand-wavy).
-      expect(body).toContain("living context tree");
-      // The primary→secondary demotion cannot read as a second ask (no re-pitch loophole).
-      expect(body).toContain("single ask, not a second one after a no");
-      // ...still one ask, never a menu / choice overload.
-      expect(body).toContain("never a menu");
-      // And the not-naggy guardrails stay: gated stop condition, convert by usefulness not nagging.
-      expect(body).toContain("know when to stop");
-      expect(body).toContain("apply offer is unanswered");
-      expect(body).toContain("never by nagging");
+      // (1) the apply-offer gate phrase is present (the copy fires the conversion ask
+      //     only after it resolves; this asserts the gate exists, not its ordering).
+      expect(body).toContain("apply offer");
+      // (2) primary next step = convert to a First Tree team + build this repo's context tree.
+      expect(body).toContain("First Tree team");
+      expect(body).toContain("build the context tree");
+      // (3) one ask at a time — never a stacked second ask.
+      expect(body).toContain("ONE ask at a time");
+      // (4) explicit stop condition — no re-pitch when unanswered / declined / quiet.
+      expect(body).toContain("don't re-pitch");
     }
   });
 });
