@@ -1207,7 +1207,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 
 | Skill | Load when |
 |---|---|
-| \`first-tree-welcome\` | First Tree onboarding system messages ask for welcome, setup guidance, or the value-first first chat |
+| \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
 | \`first-tree-write\`   | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
 | \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |`;
