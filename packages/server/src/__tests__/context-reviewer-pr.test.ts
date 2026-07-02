@@ -129,9 +129,12 @@ describe("Context Reviewer PR prompt", () => {
     expect(prompt).toContain("clear, accurate");
     expect(prompt).toContain("missing background");
     expect(prompt).toContain("excessive detail");
-    expect(prompt).toContain("gh pr review 123 --repo owner/context-tree --comment --body");
-    expect(prompt).toContain("gh pr review 123 --repo owner/context-tree --approve --body");
-    expect(prompt).toContain("review action was submitted: `approved`, `commented`, or `failed`");
+    expect(prompt).toContain("gh pr review 123 --repo owner/context-tree --request-changes --body-file");
+    expect(prompt).toContain("gh pr review 123 --repo owner/context-tree --comment --body-file");
+    expect(prompt).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
+    expect(prompt).toContain("Context changes requested");
+    expect(prompt).toContain("Still unclear or needs more detail");
+    expect(prompt).toContain("review action was submitted: `approved`, `commented`, `changes_requested`, or `failed`");
   });
 
   it("renders when optional refs are missing", async () => {
@@ -152,8 +155,9 @@ describe("Context Reviewer PR prompt", () => {
     expect(prompt).toContain("Base ref: unknown");
     expect(prompt).toContain("Head ref: unknown");
     expect(prompt).toContain("Trigger event: pull_request.synchronize");
-    expect(prompt).toContain("gh pr review 124 --repo owner/context-tree --comment --body");
-    expect(prompt).toContain("gh pr review 124 --repo owner/context-tree --approve --body");
+    expect(prompt).toContain("gh pr review 124 --repo owner/context-tree --request-changes --body-file");
+    expect(prompt).toContain("gh pr review 124 --repo owner/context-tree --comment --body-file");
+    expect(prompt).toContain("gh pr review 124 --repo owner/context-tree --approve --body-file");
   });
 
   it("renders comment trigger context when present", async () => {
@@ -304,8 +308,11 @@ describe("handleContextReviewerPrEvent", () => {
     );
 
     const [message] = await app.db.select().from(messages).where(eq(messages.id, result.messageId)).limit(1);
-    expect(message?.content).toContain("gh pr review 123 --repo owner/context-tree --comment --body");
-    expect(message?.content).toContain("gh pr review 123 --repo owner/context-tree --approve --body");
+    expect(message?.content).toContain("gh pr review 123 --repo owner/context-tree --request-changes --body-file");
+    expect(message?.content).toContain("gh pr review 123 --repo owner/context-tree --comment --body-file");
+    expect(message?.content).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
+    expect(message?.content).toContain("Context changes requested");
+    expect(message?.content).toContain("Still unclear or needs more detail");
     expect(message?.content).toContain("Trigger event: pull_request.opened");
     expect(message?.metadata).toMatchObject({
       contextTreeReviewer: true,
