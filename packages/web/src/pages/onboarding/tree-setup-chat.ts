@@ -28,6 +28,10 @@ async function ensureTreeBindingForSetup(args: {
   treeBindingPlan: TreeBindingPlan;
   detectedTreeUrl: string | null;
 }): Promise<string | null> {
+  // `agentSeed`: no pre-binding. The chat starts tree-less and the agent builds
+  // the tree from zero via `first-tree-seed` (create + bind + seed). Do NOT
+  // provision server-side here — that is the retained `createBinding` path.
+  if (args.treeBindingPlan === "agentSeed") return null;
   if (args.treeBindingPlan === "createBinding") {
     await provisionNewTree(args.organizationId);
   }

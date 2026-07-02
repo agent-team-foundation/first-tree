@@ -24,7 +24,15 @@ import {
   type StepId,
 } from "./steps.js";
 
-export type TreeBindingPlan = "createBinding" | "useBoundTree";
+// How the tree-setup chat expects the Context Tree to come to be:
+//  - `agentSeed`    — no binding yet; the agent builds it from zero in a
+//                     tree-less chat via `first-tree-seed` (create + bind + seed).
+//                     This is the default for the "Build your Context Tree" CTA.
+//  - `useBoundTree` — a binding already exists; the agent fills it.
+//  - `createBinding`— Cloud provisions + binds the repo server-side before the
+//                     chat (App-token). Retained for a possible fallback; no
+//                     live entry point wires it today (see issue 1411).
+export type TreeBindingPlan = "agentSeed" | "useBoundTree" | "createBinding";
 
 export type OnboardingFlowValue = {
   path: OnboardingPath;

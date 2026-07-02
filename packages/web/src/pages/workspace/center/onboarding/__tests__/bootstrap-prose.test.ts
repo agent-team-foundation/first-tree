@@ -105,6 +105,26 @@ describe("start-chat bootstrap prose", () => {
     expect(message).not.toContain("ask me which owner");
   });
 
+  it("builds a tree-less from-zero build message for agentSeed — names no skill, no bound tree", () => {
+    const message = buildTreeSetupBootstrap(["https://github.com/acme/web"], {
+      treeBindingPlan: "agentSeed",
+      treeUrl: null,
+    });
+
+    expect(message).toContain("Build our team's Context Tree from our connected code");
+    expect(message).toContain("Source code:");
+    expect(message).toContain("- https://github.com/acme/web");
+    expect(message).toContain("The first task chat stays separate.");
+    // Tree-less: no bound-tree line, and the visible task text names no skill —
+    // the agent reaches first-tree-seed from its skill map, not the message.
+    expect(message).not.toContain("Context Tree:");
+    expect(message).not.toContain("resolved by First Tree Cloud");
+    expect(message).not.toContain("Read the bound tree first.");
+    expect(message).not.toContain("first-tree-seed");
+    expect(message).not.toContain("first-tree-read");
+    expect(message).not.toContain("first-tree-write");
+  });
+
   it("builds a value-first joining-teammate welcome without a raw tree URL or jargon", () => {
     const message = buildInviteeReadyBootstrap("Nova");
 
