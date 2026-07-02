@@ -40,6 +40,27 @@ function normalizePipeQuoteLine(line: string): string {
   return line.replace(/^( {0,3})\|[ \t]?/, "$1> ");
 }
 
+function isPipeTableRow(line: string): boolean {
+  return /^ {0,3}\|/.test(line);
+}
+
+function isPipeTableDelimiter(line: string | undefined): boolean {
+  if (!line || !isPipeTableRow(line)) return false;
+
+  const trimmed = line.trim();
+  const cells = trimmed
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function startsPipeTable(lines: string[], index: number): boolean {
+  return isPipeTableRow(lines[index] ?? "") && isPipeTableDelimiter(lines[index + 1]);
+}
+
 function fenceMarker(line: string): { char: "`" | "~"; length: number } | null {
   const match = /^(?: {0,3})(`{3,}|~{3,})/.exec(line);
   if (!match) return null;
@@ -57,6 +78,7 @@ function normalizeQuoteContinuations(markdown: string): string {
   const lines = markdown.split(/\r?\n/);
   const normalized: string[] = [];
   let openFence: { char: "`" | "~"; length: number } | null = null;
+  let insidePipeTable = false;
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
@@ -64,6 +86,20 @@ function normalizeQuoteContinuations(markdown: string): string {
     if (openFence) {
       normalized.push(line);
       if (closesFence(line, openFence)) openFence = null;
+      continue;
+    }
+
+    if (insidePipeTable) {
+      if (isPipeTableRow(line)) {
+        normalized.push(line);
+        continue;
+      }
+      insidePipeTable = false;
+    }
+
+    if (startsPipeTable(lines, index)) {
+      insidePipeTable = true;
+      normalized.push(line);
       continue;
     }
 

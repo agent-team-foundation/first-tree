@@ -57,6 +57,15 @@ describe("Markdown quote continuation", () => {
     expect(container.textContent).toContain("Col B");
   });
 
+  it("preserves leading-pipe single-column tables without trailing pipes", () => {
+    renderMarkdown("| Col A\n| ---\n| A");
+
+    expect(container.querySelector("blockquote")).toBeNull();
+    expect(container.querySelector("table")).not.toBeNull();
+    expect(container.textContent).toContain("Col A");
+    expect(container.textContent).toContain("A");
+  });
+
   it("leaves quote-like lines inside fenced code blocks untouched", () => {
     renderMarkdown("```\n> quoted\n| quoted\n```\noutside");
 
