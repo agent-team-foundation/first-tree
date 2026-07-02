@@ -134,4 +134,22 @@ describe("first-tree-welcome floor invariants", () => {
       expect(bootstrapProse, `bootstrap-prose.ts should still ship the kickoff opener: "${opener}"`).toContain(opener);
     }
   });
+
+  it("keeps the OpenAI/Codex routing metadata description in sync with SKILL.md", () => {
+    // `skills/<name>/agents/openai.yaml` is a second shipped routing surface:
+    // the composer/runtime read it to select the skill on the OpenAI/Codex side.
+    // Since activation is description-driven (no hidden directive), a stale
+    // description here can still follow the retired explicit-name trigger and
+    // miss the repo-scan exclusion even when SKILL.md is correct. Bind the two
+    // so a copy reword cannot drift one surface without the other.
+    const openaiYaml = readFileSync(join(process.cwd(), "../../skills/first-tree-welcome/agents/openai.yaml"), "utf8");
+    const skillDescription = skillMarkdown.match(/^description:\s*(.*)$/m)?.[1] ?? "";
+    const yamlDescription = openaiYaml.match(/^description:\s*(.*)$/m)?.[1] ?? "";
+
+    expect(skillDescription, "SKILL.md must declare a description").not.toBe("");
+    expect(yamlDescription, "openai.yaml description must match SKILL.md description").toBe(skillDescription);
+    // Guard the specific retired trigger the drift-guard exists to catch.
+    expect(yamlDescription).not.toContain("explicitly names first-tree-welcome");
+    expect(yamlDescription).toContain("repo scans");
+  });
 });
