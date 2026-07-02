@@ -112,4 +112,44 @@ describe("first-tree-welcome floor invariants", () => {
     expect(skillMarkdown).toContain("GitHub repo URL");
     expect(skillMarkdown).not.toContain("First Tree sent it");
   });
+
+  it("keeps the skill's example trigger phrases in sync with the real onboarding bootstraps", () => {
+    // Skill activation now rests entirely on the visible message matching the
+    // skill description (no hidden directive — see the onboarding kickoff
+    // contract). The skill hard-codes the product's kickoff openers as its
+    // activation examples, so bind them to the real copy: a reword in
+    // bootstrap-prose.ts must not silently drift the skill's trigger examples
+    // and weaken selection.
+    const bootstrapProse = readFileSync(
+      join(process.cwd(), "../web/src/pages/workspace/center/onboarding/bootstrap-prose.ts"),
+      "utf8",
+    );
+    const sharedOpeners = [
+      "welcome aboard",
+      "Please help me get started with First Tree",
+      "Please help me get settled into this team on First Tree",
+    ];
+    for (const opener of sharedOpeners) {
+      expect(skillMarkdown, `skill should reference the real kickoff opener: "${opener}"`).toContain(opener);
+      expect(bootstrapProse, `bootstrap-prose.ts should still ship the kickoff opener: "${opener}"`).toContain(opener);
+    }
+  });
+
+  it("keeps the OpenAI/Codex routing metadata description in sync with SKILL.md", () => {
+    // `skills/<name>/agents/openai.yaml` is a second shipped routing surface:
+    // the composer/runtime read it to select the skill on the OpenAI/Codex side.
+    // Since activation is description-driven (no hidden directive), a stale
+    // description here can still follow the retired explicit-name trigger and
+    // miss the repo-scan exclusion even when SKILL.md is correct. Bind the two
+    // so a copy reword cannot drift one surface without the other.
+    const openaiYaml = readFileSync(join(process.cwd(), "../../skills/first-tree-welcome/agents/openai.yaml"), "utf8");
+    const skillDescription = skillMarkdown.match(/^description:\s*(.*)$/m)?.[1] ?? "";
+    const yamlDescription = openaiYaml.match(/^description:\s*(.*)$/m)?.[1] ?? "";
+
+    expect(skillDescription, "SKILL.md must declare a description").not.toBe("");
+    expect(yamlDescription, "openai.yaml description must match SKILL.md description").toBe(skillDescription);
+    // Guard the specific retired trigger the drift-guard exists to catch.
+    expect(yamlDescription).not.toContain("explicitly names first-tree-welcome");
+    expect(yamlDescription).toContain("repo scans");
+  });
 });

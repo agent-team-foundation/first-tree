@@ -1,4 +1,4 @@
 ---
 name: first-tree-welcome
-description: Use only when a First Tree onboarding start-chat message explicitly names first-tree-welcome, or for a First Tree onboarding welcome / intro / value-first first-work chat. It reads the user's code, shows concrete value, then offers a first-task menu that can include building the team's Context Tree, and fans selected work out into parallel chats. Do not use for an existing tree setup chat you were placed in, ordinary chats, PR reviews, tree writes, or maintenance.
+description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
 ---

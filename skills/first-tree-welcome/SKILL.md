@@ -1,6 +1,6 @@
 ---
 name: first-tree-welcome
-version: 1.0.6
+version: 1.0.7
 description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
 ---
 
@@ -11,10 +11,14 @@ description: Use for a First Tree onboarding first chat, especially natural open
 Use this skill only when the chat is clearly the onboarding first chat created by
 First Tree, including natural messages such as "welcome aboard", "Please help me
 get started with First Tree", or "Please help me get settled into this team on
-First Tree." Do not use it for ordinary chats, PR reviews, tree writes, or
-maintenance work, and do not use it inside a chat that already IS a dedicated
-tree-build or single-task chat — there you run the task's own skill
+First Tree." Do not use it for ordinary chats, PR reviews, repo scans, tree
+writes, or maintenance work, and do not use it inside a chat that already IS a
+dedicated tree-build or single-task chat — there you run the task's own skill
 (`first-tree-seed` etc.), not this launcher flow.
+
+A repo-scan chat can open with the same "welcome aboard" line but then asks for a
+repository scan or readiness report; that is a scan chat — run its own bound scan
+skill, not this launcher flow.
 
 ## Goal
 
@@ -114,8 +118,11 @@ legitimate first result; the evidence-backed contract in B applies to your next
 reply, once a project exists. Do not ask for GitHub App authorization first, do
 not offer the first-task menu yet, and do not mention Context Tree setup yet.
 
-**B. Evidence available** — a repo is connected, or a local path / URL was given.
-Your first substantive reply must:
+**B. Evidence available** — a repo is connected, or a local path / URL was given,
+AND you can actually read it. (If a repo is connected but local credentials
+cannot read it, that is Matrix row 5, not this branch: report the exact read
+failure and ask for a readable path / accessible URL / credentials — do not fake
+understanding or send a first-task menu.) Your first substantive reply must:
 
 1. State specific understanding from evidence: stack, entry points, important
    modules, tests, TODOs, conventions, risks, or team context you actually
