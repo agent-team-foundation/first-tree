@@ -60,7 +60,13 @@
  *     post-commit audience-cache invalidation.
  */
 
-import { AGENT_STATUSES, AGENT_TYPES, AGENT_VISIBILITY } from "@first-tree/shared";
+import {
+  AGENT_STATUSES,
+  AGENT_TYPES,
+  AGENT_VISIBILITY,
+  parseLandingCampaignTrialAgentMetadata,
+  parseLandingCampaignTrialChatMetadata,
+} from "@first-tree/shared";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
@@ -170,12 +176,15 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
 
   // 1. Chat exists.
   const [chat] = await db
-    .select({ id: chats.id, organizationId: chats.organizationId })
+    .select({ id: chats.id, organizationId: chats.organizationId, metadata: chats.metadata })
     .from(chats)
     .where(eq(chats.id, chatId))
     .limit(1);
   if (!chat) {
     throw new NotFoundError(`Chat "${chatId}" not found`);
+  }
+  if (parseLandingCampaignTrialChatMetadata(chat.metadata)) {
+    throw new ForbiddenError("Landing campaign trial chats are managed by First Tree.");
   }
 
   // 2. Caller is a speaker. Join `chatMembership` × `agents` so we get the
@@ -184,7 +193,7 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
   //    `agents.managerId` (vs. accepting it as a parameter) prevents an
   //    internal caller from mismatching and bypassing the gate.
   const [callerRow] = await db
-    .select({ ownerMemberId: agents.managerId })
+    .select({ ownerMemberId: agents.managerId, metadata: agents.metadata })
     .from(chatMembership)
     .innerJoin(agents, eq(agents.uuid, chatMembership.agentId))
     .where(
@@ -198,6 +207,9 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
   if (!callerRow) {
     throw new CallerNotSpeakerError(callerAgentId, chatId);
   }
+  if (parseLandingCampaignTrialAgentMetadata(callerRow.metadata)) {
+    throw new ForbiddenError("Landing campaign trial agents cannot manage ordinary chat participants.");
+  }
   const callerMemberId = callerRow.ownerMemberId;
 
   // 3. Targets exist + cross-org.
@@ -210,6 +222,7 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
       status: agents.status,
       type: agents.type,
       memberStatus: members.status,
+      metadata: agents.metadata,
     })
     .from(agents)
     .leftJoin(members, eq(members.agentId, agents.uuid))
@@ -228,6 +241,12 @@ export async function inviteParticipantsToChat(db: Database, args: InvitePartici
   );
   if (inactiveTargets.length > 0) {
     throw new BadRequestError(`Inactive participant rejected: ${inactiveTargets.map((t) => t.uuid).join(", ")}`);
+  }
+  const trialTarget = targetRows.find((t) => parseLandingCampaignTrialAgentMetadata(t.metadata));
+  if (trialTarget) {
+    throw new ForbiddenError(
+      `Agent "${trialTarget.uuid}" is a single-run landing campaign agent. Start it from the landing page flow.`,
+    );
   }
 
   // 4. Owner-exclusive for private targets. The caller's owning member

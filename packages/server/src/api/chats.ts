@@ -492,7 +492,10 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
   /** POST /chats/:chatId/participants — add speaking participants. Idempotent. */
   app.post<{ Params: { chatId: string } }>("/:chatId/participants", async (request, reply) => {
-    const { scope } = await requireChatAccess(request, app.db);
+    const { chat, scope } = await requireChatAccess(request, app.db);
+    if (parseLandingCampaignTrialChatMetadata(chat.metadata)) {
+      throw new ForbiddenError("Landing campaign trial chats are managed by First Tree.");
+    }
     const body = addMeChatParticipantsSchema.parse(request.body);
     await assertAllAgentsVisibleInOrg(app.db, scope, body.participantIds);
     await assertNoLandingCampaignTrialAgents(app.db, body.participantIds);

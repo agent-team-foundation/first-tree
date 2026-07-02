@@ -374,6 +374,7 @@ async function ensureTrialChatAndBootstrap(
       topic: input.skillSet.chatTopic,
       metadata,
       onboardingKickoffKey: kickoffKey,
+      allowLandingCampaignTrial: true,
     });
     chatId = created.id;
   }
