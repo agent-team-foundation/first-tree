@@ -20,7 +20,7 @@ function workspaceAgentsMarkdown(skillDescription: string, evalCase: FirstTreeWe
       return "A local readable source repo fixture is available at `./source-repo`; use it before asking for long-term setup.";
     }
     if (evalCase.fixture.repoState === "selected-auth-fails") {
-      return "A selected repository exists, but reading it fails with an authorization error. No repo evidence is readable; ask for a local clone path or accessible URL.";
+      return "A selected repository exists, but reading it fails with an authorization error. No repo evidence is readable; ask for a local project folder path or accessible URL.";
     }
     return "No readable source repository is connected in this eval workspace.";
   })();
@@ -52,7 +52,7 @@ skill workflow exactly.
 ## Eval Setup State
 
 - Role: ${evalCase.fixture.role}
-- Kickoff kind: ${evalCase.fixture.kickoffKind}
+- Chat scenario: ${evalCase.fixture.chatScenario}
 - GitHub App: ${evalCase.fixture.githubAppState}
 - Repo state: ${evalCase.fixture.repoState}
 - Context Tree state: ${evalCase.fixture.treeState}

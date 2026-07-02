@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { ManagedAgent } from "../../api/agents.js";
-import { postOnboardingStartChat, reportOnboardingEvent, type StartChatKind } from "../../api/onboarding-events.js";
+import { postOnboardingStartChat, postTreeSetupStartChat, reportOnboardingEvent } from "../../api/onboarding-events.js";
 import { getContextTreeSetting } from "../../api/org-settings.js";
 import { buildTreeSetupBootstrap } from "../workspace/center/onboarding/bootstrap-prose.js";
 import type { TreeBindingPlan } from "./onboarding-flow.js";
@@ -9,7 +9,7 @@ import { ensureSourceReposRegistered, provisionNewTree } from "./provision-tree.
 /**
  * Shared Context Tree setup-chat plumbing. Extracted from the onboarding
  * start-chat step so the standalone build entry on the Context tab can reuse the
- * exact same "register repos → provision the binding → start the `tree` setup
+ * exact same "register repos → provision the binding → start the tree setup
  * chat" sequence — there is one build path, not a wizard-page copy of it.
  */
 
@@ -40,29 +40,28 @@ export async function startOnboardingChat(args: {
   bootstrap: string;
   /** The selected org — scopes the membership completion stamped by the server. */
   organizationId: string | null;
-  /** "intro" = meet-only; "work" = value-first first chat; "tree" = Context Tree setup/update chat. */
-  kind: StartChatKind;
+  /** Display title for the created chat. */
+  topic: string;
   treeBindingPlan: TreeBindingPlan | "none";
   joinPath?: "invite";
   complete?: boolean;
 }): Promise<string> {
   // Create-or-reuse the start-chat target and send the bootstrap in one idempotent
-  // server call. Value-first work/intro paths can let the server stamp
-  // completion after the user-facing chat exists; background tree setup passes
-  // `complete: false` because it should not control the user's first-chat entry.
+  // server call. First-chat paths can let the server stamp completion after the
+  // user-facing chat exists.
   // A failure here surfaces to the caller rather than being swallowed.
   const { chatId } = await postOnboardingStartChat({
     ...(args.organizationId ? { organizationId: args.organizationId } : {}),
     agentUuid: args.agent.uuid,
     bootstrap: args.bootstrap,
-    kind: args.kind,
+    topic: args.topic,
     complete: args.complete,
   });
   void reportOnboardingEvent("kickoff_chat_started", {
     agentUuid: args.agent.uuid,
     chatId,
     treeBindingPlan: args.treeBindingPlan,
-    kind: args.kind,
+    startChatType: args.joinPath === "invite" ? "team-onboarding" : "onboarding",
     ...(args.joinPath ? { joinPath: args.joinPath } : {}),
   });
   return chatId;
@@ -85,16 +84,21 @@ export async function startTreeSetupChat(args: {
   args.queryClient.removeQueries({ queryKey: ["org-setting", args.organizationId, "context_tree"] });
   args.queryClient.removeQueries({ queryKey: ["onboarding", "context-tree", args.organizationId] });
   args.queryClient.removeQueries({ queryKey: ["me", "onboarding", "tree-setup-status", args.organizationId] });
-  const chatId = await startOnboardingChat({
-    agent: args.agent,
+  const { chatId } = await postTreeSetupStartChat({
+    organizationId: args.organizationId,
+    agentUuid: args.agent.uuid,
     bootstrap: buildTreeSetupBootstrap(args.sourceRepos, {
       treeBindingPlan: args.treeBindingPlan,
       treeUrl,
     }),
-    organizationId: args.organizationId,
-    kind: "tree",
-    treeBindingPlan: args.treeBindingPlan,
+    topic: "Set up shared context",
     complete: args.complete,
+  });
+  void reportOnboardingEvent("kickoff_chat_started", {
+    agentUuid: args.agent.uuid,
+    chatId,
+    treeBindingPlan: args.treeBindingPlan,
+    startChatType: "tree-setup",
   });
   args.queryClient.removeQueries({ queryKey: ["me", "onboarding", "tree-setup-status", args.organizationId] });
   return chatId;

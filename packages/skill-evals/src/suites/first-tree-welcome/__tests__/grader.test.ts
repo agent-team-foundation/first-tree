@@ -130,12 +130,13 @@ describe("first-tree-welcome grader", () => {
     ).toBe(false);
   });
 
-  it("passes row 3 when the model asks for a local clone path or GitHub URL without evidence claims", () => {
+  it("passes row 3 when the model asks for a local project folder path or GitHub repo URL without evidence claims", () => {
     expect(
       casePassed(
         findCase("first-tree-welcome-no-repo-intro"),
         baseMetrics({
-          finalResponse: "Please send one local clone path or GitHub URL so I can inspect the repo first.",
+          finalResponse:
+            "Please send one local project folder path or GitHub repo URL so I can inspect the repo first.",
         }),
       ),
     ).toBe(true);
@@ -148,7 +149,7 @@ describe("first-tree-welcome grader", () => {
         baseMetrics({
           chatAskCount: 1,
           chatOptionCount: 3,
-          finalResponse: "Choose a local clone path or GitHub URL setup option.",
+          finalResponse: "Choose a local project folder path or GitHub repo URL setup option.",
           forbiddenActionHits: ["setup-as-first-task"],
           taskOptionsObserved: true,
         }),
@@ -168,7 +169,7 @@ describe("first-tree-welcome grader", () => {
               "chat",
               "ask",
               "baixiaohang",
-              "请发我一个项目入口：本地 clone 路径或 GitHub 仓库 URL。",
+              "请发我一个项目入口：本地项目文件夹路径或 GitHub repo URL。",
               "--options",
               JSON.stringify([
                 { description: "我可以直接读取本机代码，最快开始给出基于证据的帮助。", label: "本地路径" },
@@ -309,7 +310,7 @@ describe("first-tree-welcome grader", () => {
         [
           skillReadEvent(),
           assistantMessageEvent(
-            "An admin finishes team setup; for now send a local clone path and I can help from that without selecting a repo.",
+            "An admin finishes team setup; for now send a local project folder path and I can help from that without selecting a repo.",
           ),
         ],
         evalCase,
@@ -421,7 +422,7 @@ describe("first-tree-welcome grader", () => {
         [
           skillReadEvent(),
           assistantMessageEvent(
-            "I read the selected private repo README and found checkout TODOs; still send a local clone path.",
+            "I read the selected private repo README and found checkout TODOs; still send a local project folder path.",
           ),
         ],
         evalCase,
@@ -504,7 +505,8 @@ describe("first-tree-welcome grader", () => {
     [
       "first-tree-welcome-repo-auth-fails-periodic",
       {
-        finalResponse: "The selected repository has a read failure. Send a local clone path or accessible URL.",
+        finalResponse:
+          "The selected repository has a read failure. Send a local project folder path or accessible URL.",
       },
     ],
     [
