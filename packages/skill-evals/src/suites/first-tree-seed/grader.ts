@@ -418,9 +418,12 @@ function argvIsTreeInitWithContextTreeDir(argv: readonly string[]): boolean {
 }
 
 // Detect a `first-tree[-staging] tree init` invocation inside a raw command
-// string or free-text response. Returns whether it is present and whether it
-// carries a `--dir` resolving to a `context-tree` checkout.
-function textTreeInitSignal(text: string): { present: boolean; withContextTreeDir: boolean } {
+// string captured from a real command/exec event. Returns whether it is present
+// and whether it carries a `--dir` resolving to a `context-tree` checkout.
+// This must only ever be fed captured COMMAND strings, never free-text prose:
+// a run where the model merely describes the command in its final response
+// (without invoking it) must NOT satisfy the invocation signal.
+function commandTreeInitSignal(text: string): { present: boolean; withContextTreeDir: boolean } {
   const initPattern = /\bfirst-tree(?:-staging)?\s+tree\s+init\b/gu;
   let present = false;
   let withContextTreeDir = false;
@@ -438,10 +441,14 @@ function textTreeInitSignal(text: string): { present: boolean; withContextTreeDi
 
 type TreeInitObservation = { observed: boolean; withContextTreeDir: boolean };
 
+// The tree-init signal is derived ONLY from captured invocation evidence — the
+// shimmed `first-tree` argv vectors and the real codex exec/command-string
+// events. The model's final response prose is deliberately NOT consulted here:
+// describing `tree init --dir .../context-tree` without invoking it must not
+// pass a gate whose whole point is to prove a real `tree init` invocation.
 function deriveTreeInitObservation(
   events: readonly unknown[],
   firstTreeArgv: readonly (readonly string[])[],
-  finalResponse: string,
 ): TreeInitObservation {
   let observed = false;
   let withContextTreeDir = false;
@@ -454,15 +461,11 @@ function deriveTreeInitObservation(
   for (const event of events) {
     if (!isRecord(event) || eventType(event) !== "codex_event") continue;
     for (const command of collectCommandStrings(event.event)) {
-      const signal = textTreeInitSignal(command);
+      const signal = commandTreeInitSignal(command);
       if (signal.present) observed = true;
       if (signal.withContextTreeDir) withContextTreeDir = true;
     }
   }
-
-  const responseSignal = textTreeInitSignal(finalResponse);
-  if (responseSignal.present) observed = true;
-  if (responseSignal.withContextTreeDir) withContextTreeDir = true;
 
   return { observed, withContextTreeDir };
 }
@@ -574,7 +577,7 @@ export function deriveMetrics(
   const sourceWorktreeWasCreated = sourceWorktreeCreated(paths);
   const skeletonHints = evalCase.expected.skeletonHints ?? [];
   const approvalHints = evalCase.expected.approvalHints ?? [];
-  const treeInit = deriveTreeInitObservation(events, firstTreeArgv, finalResponse);
+  const treeInit = deriveTreeInitObservation(events, firstTreeArgv);
 
   const partialMetrics = {
     approvalRequestObserved: approvalHints.length === 0 || containsAny(finalResponse, approvalHints),
@@ -656,8 +659,17 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     // PASS only when Step 0 routes to `tree init` WITH a `--dir` resolving to
     // the workspace `context-tree`. `tree init` without that `--dir` (or with a
     // default/wrong dir) leaves `treeInitWithContextTreeDirObserved` false and
-    // fails — that omission is the regression this case guards.
-    return metrics.treeInitWithContextTreeDirObserved && !metrics.directBareSourceContentReadObserved;
+    // fails — that omission is the regression this case guards. Step 0 stops
+    // BEFORE any Phase 1 source work, so this case declares
+    // requireWorktree/requireSourceRead false; enforce that here the same way
+    // the report_missing_source sibling does — a run that materializes a source
+    // worktree or reads source content has gone past Step 0 and must fail.
+    return (
+      metrics.treeInitWithContextTreeDirObserved &&
+      !metrics.directBareSourceContentReadObserved &&
+      !metrics.sourceWorktreeCreated &&
+      !metrics.sourceEvidenceReadObserved
+    );
   }
 
   return false;
