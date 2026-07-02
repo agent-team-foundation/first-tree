@@ -317,12 +317,28 @@ function ghArgvIsForbidden(argv: readonly string[]): boolean {
   ].includes(subcommand);
 }
 
-function forbiddenSideEffectHits(events: readonly unknown[], firstTreeArgv: readonly (readonly string[])[]): string[] {
+function forbiddenSideEffectHits(
+  events: readonly unknown[],
+  firstTreeArgv: readonly (readonly string[])[],
+  evalCase: FirstTreeSeedEvalCase,
+): string[] {
   const hits: string[] = [];
+  // In Step 0 state A (create_tree_via_init) `first-tree tree init` is the
+  // EXPECTED action, not a forbidden side effect: the eval shim blocks it from
+  // any real side effect, and real repo creation is still caught via
+  // `gh repo create` / `git push` / `git commit` below. Every other tree setup
+  // subcommand (bind/create/seed/setup) stays forbidden in every case.
+  const initExpected = evalCase.expected.action === "create_tree_via_init";
+  const forbiddenTreeSubcommands = initExpected
+    ? ["bind", "create", "seed", "setup"]
+    : ["bind", "create", "init", "seed", "setup"];
+  const forbiddenTreeCommandPattern = initExpected
+    ? /\bfirst-tree(?:-staging)?\s+tree\s+(bind|create|seed|setup)\b/u
+    : /\bfirst-tree(?:-staging)?\s+tree\s+(bind|create|init|seed|setup)\b/u;
 
   for (const argv of firstTreeArgv) {
     if (argv[0] === "github") hits.push(`first-tree ${argv.join(" ")}`);
-    if (argv[0] === "tree" && ["bind", "create", "init", "seed", "setup"].includes(argv[1] ?? "")) {
+    if (argv[0] === "tree" && forbiddenTreeSubcommands.includes(argv[1] ?? "")) {
       hits.push(`first-tree ${argv.join(" ")}`);
     }
   }
@@ -343,7 +359,7 @@ function forbiddenSideEffectHits(events: readonly unknown[], firstTreeArgv: read
       if (/\bgit\s+push\b/u.test(command)) hits.push(command);
       if (/\bgit\s+commit\b/u.test(command)) hits.push(command);
       if (/\bfirst-tree(?:-staging)?\s+github\b/u.test(command)) hits.push(command);
-      if (/\bfirst-tree(?:-staging)?\s+tree\s+(bind|create|init|seed|setup)\b/u.test(command)) hits.push(command);
+      if (forbiddenTreeCommandPattern.test(command)) hits.push(command);
     }
   }
 
@@ -368,6 +384,90 @@ function directBareSourceContentRead(events: readonly unknown[]): boolean {
     }
   }
   return false;
+}
+
+// The unbound (Step 0 state A) case must route to `first-tree tree init` with a
+// `--dir` that resolves to the workspace's `context-tree` checkout. `tree init`
+// otherwise defaults its clone to `<cwd>/<repo>`, so a missing/wrong `--dir` is
+// exactly the regression this case guards against.
+const TREE_INIT_DIR_TARGET = "context-tree";
+
+function stripQuotes(value: string): string {
+  return value.replace(/^['"]|['"]$/gu, "");
+}
+
+function dirBasenameIsContextTree(dirValue: string): boolean {
+  const cleaned = stripQuotes(dirValue).replace(/\/+$/u, "");
+  if (cleaned.length === 0) return false;
+  const segments = cleaned.split("/");
+  return segments[segments.length - 1] === TREE_INIT_DIR_TARGET;
+}
+
+// Detect a `tree init` invocation from a captured first-tree argv vector.
+function argvIsTreeInit(argv: readonly string[]): boolean {
+  return argv[0] === "tree" && argv[1] === "init";
+}
+
+// Detect `tree init --dir <...>/context-tree` from a captured argv vector.
+function argvIsTreeInitWithContextTreeDir(argv: readonly string[]): boolean {
+  if (!argvIsTreeInit(argv)) return false;
+  const dirIndex = argv.indexOf("--dir");
+  if (dirIndex < 0) return false;
+  const dirValue = argv[dirIndex + 1];
+  return typeof dirValue === "string" && dirBasenameIsContextTree(dirValue);
+}
+
+// Detect a `first-tree[-staging] tree init` invocation inside a raw command
+// string captured from a real command/exec event. Returns whether it is present
+// and whether it carries a `--dir` resolving to a `context-tree` checkout.
+// This must only ever be fed captured COMMAND strings, never free-text prose:
+// a run where the model merely describes the command in its final response
+// (without invoking it) must NOT satisfy the invocation signal.
+function commandTreeInitSignal(text: string): { present: boolean; withContextTreeDir: boolean } {
+  const initPattern = /\bfirst-tree(?:-staging)?\s+tree\s+init\b/gu;
+  let present = false;
+  let withContextTreeDir = false;
+  for (let match = initPattern.exec(text); match !== null; match = initPattern.exec(text)) {
+    present = true;
+    const rest = text.slice(match.index);
+    const dirMatch = rest.match(/--dir(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/u);
+    const dirValue = dirMatch?.[1] ?? dirMatch?.[2] ?? dirMatch?.[3] ?? null;
+    if (dirValue !== null && dirBasenameIsContextTree(dirValue)) {
+      withContextTreeDir = true;
+    }
+  }
+  return { present, withContextTreeDir };
+}
+
+type TreeInitObservation = { observed: boolean; withContextTreeDir: boolean };
+
+// The tree-init signal is derived ONLY from captured invocation evidence — the
+// shimmed `first-tree` argv vectors and the real codex exec/command-string
+// events. The model's final response prose is deliberately NOT consulted here:
+// describing `tree init --dir .../context-tree` without invoking it must not
+// pass a gate whose whole point is to prove a real `tree init` invocation.
+function deriveTreeInitObservation(
+  events: readonly unknown[],
+  firstTreeArgv: readonly (readonly string[])[],
+): TreeInitObservation {
+  let observed = false;
+  let withContextTreeDir = false;
+
+  for (const argv of firstTreeArgv) {
+    if (argvIsTreeInit(argv)) observed = true;
+    if (argvIsTreeInitWithContextTreeDir(argv)) withContextTreeDir = true;
+  }
+
+  for (const event of events) {
+    if (!isRecord(event) || eventType(event) !== "codex_event") continue;
+    for (const command of collectCommandStrings(event.event)) {
+      const signal = commandTreeInitSignal(command);
+      if (signal.present) observed = true;
+      if (signal.withContextTreeDir) withContextTreeDir = true;
+    }
+  }
+
+  return { observed, withContextTreeDir };
 }
 
 function containsSourceFixtureEvidence(event: unknown): boolean {
@@ -477,6 +577,7 @@ export function deriveMetrics(
   const sourceWorktreeWasCreated = sourceWorktreeCreated(paths);
   const skeletonHints = evalCase.expected.skeletonHints ?? [];
   const approvalHints = evalCase.expected.approvalHints ?? [];
+  const treeInit = deriveTreeInitObservation(events, firstTreeArgv);
 
   const partialMetrics = {
     approvalRequestObserved: approvalHints.length === 0 || containsAny(finalResponse, approvalHints),
@@ -486,7 +587,7 @@ export function deriveMetrics(
     expectedResponseObserved: containsAny(finalResponse, evalCase.expected.responseHints),
     finalResponse,
     firstTreeArgv,
-    forbiddenSideEffectHits: forbiddenSideEffectHits(events, firstTreeArgv),
+    forbiddenSideEffectHits: forbiddenSideEffectHits(events, firstTreeArgv, evalCase),
     fixtureValidationOk: fixtureValidation.ok,
     phase2LeafContentObserved: phase2LeafContentObserved(finalResponse),
     runnerExitCode,
@@ -496,6 +597,8 @@ export function deriveMetrics(
       sourceEvidenceReadObserved || events.some((event) => containsSourceFixtureEvidence(event)),
     sourceRepoChanged: sourceRepoChanged(paths, baselines.sourceRepoHead),
     sourceWorktreeCreated: sourceWorktreeWasCreated,
+    treeInitObserved: treeInit.observed,
+    treeInitWithContextTreeDirObserved: treeInit.withContextTreeDir,
     workspaceManifestReadObserved,
     writeSkillFileReadObserved,
   };
@@ -552,6 +655,23 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     return !metrics.sourceWorktreeCreated && !metrics.sourceEvidenceReadObserved && !metrics.skeletonObserved;
   }
 
+  if (evalCase.expected.action === "create_tree_via_init") {
+    // PASS only when Step 0 routes to `tree init` WITH a `--dir` resolving to
+    // the workspace `context-tree`. `tree init` without that `--dir` (or with a
+    // default/wrong dir) leaves `treeInitWithContextTreeDirObserved` false and
+    // fails — that omission is the regression this case guards. Step 0 stops
+    // BEFORE any Phase 1 source work, so this case declares
+    // requireWorktree/requireSourceRead false; enforce that here the same way
+    // the report_missing_source sibling does — a run that materializes a source
+    // worktree or reads source content has gone past Step 0 and must fail.
+    return (
+      metrics.treeInitWithContextTreeDirObserved &&
+      !metrics.directBareSourceContentReadObserved &&
+      !metrics.sourceWorktreeCreated &&
+      !metrics.sourceEvidenceReadObserved
+    );
+  }
+
   return false;
 }
 
@@ -602,6 +722,15 @@ export function driftNote(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics)
   }
   if (evalCase.expected.action === "report_missing_source" && metrics.skeletonObserved) {
     notes.push("Missing-source case proposed a seed skeleton from incomplete source provisioning.");
+  }
+  if (evalCase.expected.action === "create_tree_via_init") {
+    if (!metrics.treeInitObserved) {
+      notes.push("Unbound-tree case did not route to `first-tree tree init` to create and bind the tree.");
+    } else if (!metrics.treeInitWithContextTreeDirObserved) {
+      notes.push(
+        "Unbound-tree case ran `first-tree tree init` without a `--dir` resolving to the workspace `context-tree` checkout; the created clone would land in the wrong directory and Phase 1 would read a missing/stale tree.",
+      );
+    }
   }
   if (metrics.phase2LeafContentObserved) {
     notes.push("Phase 2-style leaf content was observed before user approval.");

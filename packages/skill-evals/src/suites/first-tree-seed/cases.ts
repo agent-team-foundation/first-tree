@@ -86,6 +86,31 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
   {
     briefingMode: "generated-fixture",
     expected: {
+      action: "create_tree_via_init",
+      requireSourceRead: false,
+      requireWorktree: false,
+      responseHints: ["tree init", "context-tree", "--dir"],
+    },
+    fixture: {
+      sourceRepoState: "bare-readable",
+      treeState: "unbound",
+    },
+    forbidden: {
+      actions: ["direct_bare_source_read", "phase1_skeleton", "phase2_leaf_content_before_approval"],
+      sideEffects: ["tree_write", "tree_pr", "source_write", "github"],
+    },
+    id: "unbound-tree-inits-with-dir",
+    prompt:
+      "Use first-tree-seed to bootstrap this team's Context Tree. The workspace is not bound to a Context Tree yet, so run the seed Step 0 self-check and take the correct first action to create and bind the tree before any Phase 1 skeleton.",
+    provider: "codex",
+    skill: "first-tree-seed",
+    status: "implemented",
+    tags: ["unbound-tree", "step-0", "tree-init-dir"],
+    tier: "gate",
+  },
+  {
+    briefingMode: "generated-fixture",
+    expected: {
       action: "materialize_bare_worktree",
       approvalHints: ["approve", "reply", "confirm", "ON"],
       requireSourceRead: true,
@@ -151,7 +176,7 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
     },
     fixture: {
       sourceRepoStates: ["bare-readable", "missing", "real-first-tree-bare-readable"],
-      treeStates: ["empty", "nonempty"],
+      treeStates: ["empty", "nonempty", "unbound"],
     },
     id: FLOOR_CASE_ID,
     skill: "first-tree-seed",
@@ -166,8 +191,8 @@ export const FIRST_TREE_SEED_EVAL_CASES: readonly SkillEvalCase[] = [
 function validateFirstTreeSeedFloor(cases: readonly SkillEvalCase[]): readonly string[] {
   const errors: string[] = [];
   const gateCases = cases.filter((evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "gate");
-  if (gateCases.length !== 4) {
-    errors.push(`seed suite must declare 4 gate cases, found ${gateCases.length}.`);
+  if (gateCases.length !== 5) {
+    errors.push(`seed suite must declare 5 gate cases, found ${gateCases.length}.`);
   }
   const periodicCases = cases.filter(
     (evalCase) => evalCase.skill === "first-tree-seed" && evalCase.tier === "periodic",

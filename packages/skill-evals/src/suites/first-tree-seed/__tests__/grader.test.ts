@@ -36,6 +36,8 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     sourceEvidenceReadObserved: true,
     sourceRepoChanged: false,
     sourceWorktreeCreated: true,
+    treeInitObserved: false,
+    treeInitWithContextTreeDirObserved: false,
     workspaceManifestReadObserved: true,
     writeSkillFileReadObserved: true,
     ...overrides,
@@ -431,6 +433,242 @@ describe("first-tree-seed grader", () => {
 
       expect(metrics.sourceEvidenceReadObserved).toBe(true);
       expect(metrics.forbiddenActionHits).toContain("continue_seed");
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("passes unbound-tree case when Step 0 runs tree init with a context-tree --dir", () => {
+    expect(
+      casePassed(
+        findCase("unbound-tree-inits-with-dir"),
+        baseMetrics({
+          finalResponse: "No tree yet. Created and bound the Context Tree at ./context-tree.",
+          skeletonObserved: false,
+          sourceEvidenceReadObserved: false,
+          sourceWorktreeCreated: false,
+          treeInitObserved: true,
+          treeInitWithContextTreeDirObserved: true,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails unbound-tree case when tree init omits the context-tree --dir (the regression)", () => {
+    expect(
+      casePassed(
+        findCase("unbound-tree-inits-with-dir"),
+        baseMetrics({
+          finalResponse: "No tree yet. Created and bound the Context Tree.",
+          skeletonObserved: false,
+          sourceEvidenceReadObserved: false,
+          sourceWorktreeCreated: false,
+          treeInitObserved: true,
+          treeInitWithContextTreeDirObserved: false,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("fails unbound-tree case when the model never routes to tree init", () => {
+    expect(
+      casePassed(
+        findCase("unbound-tree-inits-with-dir"),
+        baseMetrics({
+          finalResponse: "The tree is empty; here is the Phase 1 skeleton for approval.",
+          skeletonObserved: false,
+          sourceEvidenceReadObserved: false,
+          sourceWorktreeCreated: false,
+          treeInitObserved: false,
+          treeInitWithContextTreeDirObserved: false,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("fails unbound-tree case when tree init is only described in prose, never invoked", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-prose-only-"));
+    try {
+      // The model DESCRIBES `tree init --dir .../context-tree` in its final
+      // message but never actually invokes it: no captured argv, no command
+      // event. The invocation signal must not fire on prose alone.
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              item: {
+                text: `I would run: first-tree tree init --title "Apollo" --dir ${join(tempRoot, "context-tree")}`,
+                type: "agent_message",
+              },
+              type: "item.completed",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.finalResponse).toContain("first-tree tree init");
+      expect(metrics.treeInitObserved).toBe(false);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+      expect(casePassed(findCase("unbound-tree-inits-with-dir"), metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("fails unbound-tree case when it materializes a source worktree or reads source content", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-source-read-"));
+    try {
+      // Step 0 stops before Phase 1 source work; this case declares
+      // requireWorktree/requireSourceRead false. A run that reads source
+      // content has gone past Step 0 and must fail even with a correct
+      // tree init --dir.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: {
+              command: "cat worktrees/seed-source-repo/README.md",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+      expect(metrics.sourceEvidenceReadObserved).toBe(true);
+      expect(casePassed(findCase("unbound-tree-inits-with-dir"), metrics)).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("detects tree init --dir context-tree from captured first-tree argv", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+      expect(metrics.forbiddenSideEffectHits).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("detects a tree init without a context-tree --dir as the regression", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-nodir-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              command: "first-tree tree init --title 'Apollo Console'",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+      // tree init is the expected action for this case, so it is not a
+      // forbidden side effect even without the correct --dir.
+      expect(metrics.forbiddenSideEffectHits).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("treats tree init --dir pointing at the default repo dir as the regression", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-wrongdir-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              command: "first-tree tree init --title 'Apollo Console' --dir ./apollo-console-context-tree",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("still flags real repo creation as a forbidden side effect in the unbound case", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-repo-create-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: {
+              command: "gh repo create apollo-context-tree --private",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+      expect(metrics.forbiddenSideEffectHits.length).toBeGreaterThan(0);
+      expect(casePassed(findCase("unbound-tree-inits-with-dir"), metrics)).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
