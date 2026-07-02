@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { createLogger } from "../observability/logger.js";
 
 const REGISTRY_VERSION = 1;
 
@@ -22,6 +23,7 @@ type RegistryData = {
  */
 export class SessionRegistry {
   private readonly filePath: string;
+  private readonly logger = createLogger("session-registry");
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingEntries: Map<string, { claudeSessionId: string; lastActivity: number; status: string }> | null = null;
 
@@ -103,9 +105,7 @@ export class SessionRegistry {
       renameSync(tmpPath, this.filePath);
     } catch (err) {
       // Log but don't throw — registry persistence is best-effort
-      process.stderr.write(
-        `[session-registry] Failed to persist: ${err instanceof Error ? err.message : String(err)}\n`,
-      );
+      this.logger.warn(`Failed to persist: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

@@ -797,6 +797,53 @@
   }
 }
 
+/* Group-mention tip bubble: entrance rises toward the send button it points at;
+   exit reverses. See chat-view's `mentionTip` state machine. */
+@keyframes mention-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes mention-tip-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+.mention-tip {
+  animation: mention-tip-in 150ms ease-out;
+}
+.mention-tip.mention-tip-out {
+  animation: mention-tip-out 300ms ease-in forwards;
+}
+/* The downward caret connecting the bubble to the send button below it. */
+.mention-tip-arrow {
+  position: absolute;
+  right: 14px;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  background: var(--bg-raised);
+  border-right: var(--hairline) solid var(--border-strong);
+  border-bottom: var(--hairline) solid var(--border-strong);
+  transform: rotate(45deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mention-tip,
+  .mention-tip.mention-tip-out {
+    animation: none;
+  }
+}
+
 @keyframes context-live-halo-breathe {
   0%,
   100% {
@@ -1775,6 +1822,17 @@ body:has(#onboarding-preview-root) hearback-widget {
 .mention-composer-textarea::selection {
   background: var(--brand-ring);
   color: transparent;
+}
+
+/* The textarea paints its own glyphs transparent (the mirror overlay draws
+   them); without an explicit placeholder color the placeholder would inherit
+   that transparent color and render invisible. The `placeholder:text-muted-
+   foreground` utility on the textarea sets the color (matching every other
+   composer/input placeholder in the app); this rule only forces `opacity: 1`
+   so browsers that dim `::placeholder` by default don't fade it further. Font
+   size is inherited from the textarea (`--composer-font-size`). */
+.mention-composer-textarea::placeholder {
+  opacity: 1;
 }
 
 /* ============================================================================

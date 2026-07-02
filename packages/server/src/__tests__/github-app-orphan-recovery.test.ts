@@ -1,14 +1,8 @@
-import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
-import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { organizations } from "../db/schema/organizations.js";
 import { encryptValue } from "../services/crypto.js";
-import {
-  findInstallationByGithubId,
-  findUnboundInstallationsByAccount,
-  upsertInstallationFromMetadata,
-} from "../services/github-app-installations.js";
+import { findInstallationByGithubId, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
@@ -48,136 +42,6 @@ function stubGithubMemberships(memberships: Record<string, "admin" | "member">) 
     globalThis.fetch = original;
   };
 }
-
-describe("findUnboundInstallationsByAccount", () => {
-  const getApp = useTestApp();
-
-  it("returns only unbound rows for the account, newest first", async () => {
-    const app = getApp();
-    const accountGithubId = 660_001;
-
-    // Two unbound installs for this account, plus one bound row that must
-    // not show up.
-    await upsertInstallationFromMetadata(app.db, {
-      installation: {
-        id: 9_001,
-        accountType: "User",
-        accountLogin: "acct",
-        accountGithubId,
-        permissions: {},
-        events: [],
-        suspendedAt: null,
-      },
-    });
-    await upsertInstallationFromMetadata(app.db, {
-      installation: {
-        id: 9_002,
-        accountType: "User",
-        accountLogin: "acct",
-        accountGithubId,
-        permissions: {},
-        events: [],
-        suspendedAt: null,
-      },
-    });
-    const orgId = uuidv7();
-    await app.db.insert(organizations).values({ id: orgId, name: `unbound-${orgId}`, displayName: "Org" });
-    await upsertInstallationFromMetadata(app.db, {
-      installation: {
-        id: 9_003,
-        accountType: "User",
-        accountLogin: "acct",
-        accountGithubId,
-        permissions: {},
-        events: [],
-        suspendedAt: null,
-      },
-      hubOrganizationId: orgId,
-    });
-    // Force 9_002 to be the newest.
-    await app.db
-      .update(githubAppInstallations)
-      .set({ createdAt: new Date(Date.now() - 60_000) })
-      .where(eq(githubAppInstallations.installationId, 9_001));
-
-    const rows = await findUnboundInstallationsByAccount(app.db, accountGithubId);
-    expect(rows.map((r) => r.installationId)).toEqual([9_002, 9_001]);
-
-    // A different account → nothing.
-    expect(await findUnboundInstallationsByAccount(app.db, 999_999)).toHaveLength(0);
-  });
-});
-
-describe("OAuth sign-in orphan-install reclaim (codex P1-5 + H1)", () => {
-  const getApp = useTestApp();
-
-  it("auto-claims the single unbound install matching the signing-in user's account", async () => {
-    const app = getApp();
-    const githubId = 661_001;
-    const login = `orphan1-${uuidv7().slice(0, 6)}`;
-    const installationId = 9_101;
-
-    // First sign-in: mints the user + their personal team.
-    await app.inject({ method: "GET", url: `/api/v1/auth/github/dev-callback?githubId=${githubId}&login=${login}` });
-
-    // A stranded unbound install row whose account == this GitHub user.
-    await upsertInstallationFromMetadata(app.db, {
-      installation: {
-        id: installationId,
-        accountType: "User",
-        accountLogin: login,
-        accountGithubId: githubId,
-        permissions: {},
-        events: [],
-        suspendedAt: null,
-      },
-    });
-
-    // Second sign-in: the reclaim sweep runs and binds the orphan.
-    const res = await app.inject({
-      method: "GET",
-      url: `/api/v1/auth/github/dev-callback?githubId=${githubId}&login=${login}`,
-    });
-    expect(res.statusCode).toBe(302);
-
-    const row = await findInstallationByGithubId(app.db, installationId);
-    expect(row?.hubOrganizationId).not.toBeNull();
-    // It's the user's personal team — assert by cross-checking the org row's slug.
-    const [org] = await app.db
-      .select()
-      .from(organizations)
-      .where(eq(organizations.id, row?.hubOrganizationId ?? ""))
-      .limit(1);
-    expect(org?.name).toMatch(new RegExp(`^${login}`));
-  });
-
-  it("does NOT auto-claim when multiple unbound installs match the account", async () => {
-    const app = getApp();
-    const githubId = 661_002;
-    const login = `orphan2-${uuidv7().slice(0, 6)}`;
-
-    await app.inject({ method: "GET", url: `/api/v1/auth/github/dev-callback?githubId=${githubId}&login=${login}` });
-    for (const id of [9_201, 9_202]) {
-      await upsertInstallationFromMetadata(app.db, {
-        installation: {
-          id,
-          accountType: "User",
-          accountLogin: login,
-          accountGithubId: githubId,
-          permissions: {},
-          events: [],
-          suspendedAt: null,
-        },
-      });
-    }
-
-    await app.inject({ method: "GET", url: `/api/v1/auth/github/dev-callback?githubId=${githubId}&login=${login}` });
-
-    for (const id of [9_201, 9_202]) {
-      expect((await findInstallationByGithubId(app.db, id))?.hubOrganizationId).toBeNull();
-    }
-  });
-});
 
 describe("POST /api/v1/orgs/:orgId/github-app-installation/claim", () => {
   const getApp = useTestApp();
@@ -290,6 +154,43 @@ describe("POST /api/v1/orgs/:orgId/github-app-installation/claim", () => {
       },
     });
     const restore = stubGithubMemberships({ victim: "member" });
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/v1/orgs/${organizationId}/github-app-installation/claim`,
+        headers: { authorization: `Bearer ${accessToken}` },
+        payload: { installationId },
+      });
+      expect(res.statusCode).toBe(403);
+    } finally {
+      restore();
+    }
+    expect((await findInstallationByGithubId(app.db, installationId))?.hubOrganizationId).toBeNull();
+  });
+
+  it("403s (no bind) when the recorded installer matches but current GitHub membership is non-admin", async () => {
+    // Regression (yuezengwu + baixiaohang): `/claim` is a *delayed* recovery
+    // path. Even when the row's recorded `installer_github_id` matches the
+    // caller (they DID originally install it), the LIVE current-admin check
+    // must still gate — the installer may have since lost GitHub org admin.
+    const app = getApp();
+    const { accessToken, organizationId, userGithubId } = await seedAdminWithGithubToken();
+    const installationId = 9_314;
+    await upsertInstallationFromMetadata(app.db, {
+      installation: {
+        id: installationId,
+        accountType: "Organization",
+        accountLogin: "exadmin",
+        accountGithubId: 880_014,
+        permissions: {},
+        events: [],
+        suspendedAt: null,
+      },
+      // Recorded installer == the caller (they installed it originally)...
+      installerGithubId: userGithubId,
+    });
+    // ...but they are no longer an admin of the GitHub org.
+    const restore = stubGithubMemberships({ exadmin: "member" });
     try {
       const res = await app.inject({
         method: "POST",

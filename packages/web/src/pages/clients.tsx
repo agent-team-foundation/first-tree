@@ -37,6 +37,7 @@ import { DemoNavigator, useDemoScenarioParam } from "./clients/demo-navigator.js
 import { compareByPillPriority, deriveComputerStatus } from "./clients/derive-status.js";
 import { DEMO_AGENT_NAMES, DEMO_SELF_USER_ID, findDemoScenario } from "./clients/dev-fixtures.js";
 import { NewConnectionDialog } from "./clients/new-connection-dialog.js";
+import { ReconnectDialog } from "./clients/reconnect-dialog.js";
 
 /**
  * `embedded` drops the full-bleed `-m-6` wrapper so this page can be rendered
@@ -106,6 +107,12 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [reAuthClientId, setReAuthClientId] = useState<string | null>(null);
   /** Hostname captured when the re-auth was kicked off — drives dialog copy. */
   const [reAuthHostname, setReAuthHostname] = useState<string | null>(null);
+  /**
+   * Reconnect target — a known offline machine the viewer owns. Opens the
+   * daemon-first ReconnectDialog scoped to this row (distinct from the
+   * install+login `+ Connect` flow, which targets an unknown machine).
+   */
+  const [reconnectClient, setReconnectClient] = useState<HubClient | null>(null);
 
   const openNewConnection = (): void => {
     setReAuthClientId(null);
@@ -361,6 +368,13 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
           }
         />
 
+        <ReconnectDialog
+          client={reconnectClient}
+          onOpenChange={(next) => {
+            if (!next) setReconnectClient(null);
+          }}
+        />
+
         {confirmRetire && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim">
             <div
@@ -541,7 +555,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                           boundAgents={getClientAgents(client.id)}
                           agentName={agentName}
                           onGenerateNewToken={() => openReAuth(client)}
-                          onReconnect={openNewConnection}
+                          onReconnect={() => setReconnectClient(client)}
                           onDisconnect={() => setConfirmDisconnect(client)}
                           onRetire={() => {
                             setRetireError(null);
@@ -614,7 +628,7 @@ export function ClientsPage({ embedded = false }: { embedded?: boolean } = {}) {
                     boundAgents={getClientAgents(client.id)}
                     agentName={agentName}
                     onGenerateNewToken={() => openReAuth(client)}
-                    onReconnect={openNewConnection}
+                    onReconnect={() => setReconnectClient(client)}
                     onDisconnect={() => setConfirmDisconnect(client)}
                     onRetire={() => {
                       setRetireError(null);

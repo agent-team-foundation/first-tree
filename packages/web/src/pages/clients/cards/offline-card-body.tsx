@@ -1,9 +1,7 @@
-import { useState } from "react";
 import type { HubClient, RuntimeAgent } from "../../../api/activity.js";
 import { BoundAgentsList } from "./shared/bound-agents-list.js";
 import { CardSection, CardSectionLabel } from "./shared/card-section.js";
 import { CompactMetaLine } from "./shared/compact-meta-line.js";
-import { InlineCommand } from "./shared/inline-command.js";
 import { PROVIDER_ORDER } from "./shared/providers.js";
 import { RuntimeStateLine } from "./shared/runtime-state-line.js";
 import { summarizeBoundAgents } from "./view-models.js";
@@ -23,18 +21,17 @@ type OfflineCardBodyProps = {
  *   Meta:           Last seen 2d ago · First Tree X · OS  (top)
  *   Runtimes:       ✓ Claude Code v0.2.130 (dimmed)
  *   Agents:         per-agent list (dimmed)
- *   Disclosure:     ⌄ Daemon not running? → wake command
  *
  * Reconnect button is rendered by `ComputerCard`'s `HeaderAction` slot
- * — paired with the pill so state ↔ action sit on one horizontal
- * line. Disclosure label is a self-explanatory question so the
- * operator doesn't need to know what a "wake command" is.
+ * — paired with the pill so state ↔ action sit on one horizontal line.
+ * The recovery command (`<binName> daemon start`, plus the reinstall +
+ * login fallback) lives in the `ReconnectDialog` that button opens, so
+ * this body stays a read-only "last reported" snapshot with no inline
+ * command to drift from the dialog's copy.
  */
 export function OfflineCardBody({ client, boundAgents, agentName }: OfflineCardBodyProps) {
   const summary = summarizeBoundAgents(boundAgents);
   const reportedProviders = PROVIDER_ORDER.filter((p) => client.capabilities[p] != null);
-  const [showCommand, setShowCommand] = useState(false);
-  const daemonStartCommand = `${client.binName} daemon start`;
   return (
     <div className="flex flex-col">
       <CardSection>
@@ -58,32 +55,6 @@ export function OfflineCardBody({ client, boundAgents, agentName }: OfflineCardB
           <BoundAgentsList summary={summary} agentName={agentName} headerless />
         </CardSection>
       )}
-      <CardSection>
-        <button
-          type="button"
-          onClick={() => setShowCommand((v) => !v)}
-          className="text-caption"
-          style={{
-            alignSelf: "flex-start",
-            background: "transparent",
-            color: "var(--fg-3)",
-            border: "none",
-            padding: 0,
-            cursor: "pointer",
-          }}
-          aria-expanded={showCommand}
-        >
-          {showCommand ? "⌃ Daemon not running?" : "⌄ Daemon not running?"}
-        </button>
-        {showCommand && (
-          <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
-            <p className="text-caption" style={{ margin: 0, color: "var(--fg-3)" }}>
-              Run on this computer:
-            </p>
-            <InlineCommand command={daemonStartCommand} ariaLabel="Daemon wake command" />
-          </div>
-        )}
-      </CardSection>
     </div>
   );
 }

@@ -115,9 +115,10 @@ describe("CLI command registration", () => {
     expect(subcommands(agent, "workspace")).toEqual(["clean"]);
 
     const tree = command(root, "tree");
-    // `verify` survived the 2026-06 cleanup, and `tree` is the narrow
-    // hierarchy browser added back for agents and scripted consumers.
-    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["tree", "verify"]);
+    // `verify` survived the 2026-06 cleanup, `tree` is the narrow hierarchy
+    // browser added back for agents and scripted consumers, and `init` was
+    // reintroduced in 2026-07 as the agent/local-`gh` tree-repo creation path.
+    expect(tree.commands.map((entry) => entry.name()).sort()).toEqual(["init", "tree", "verify"]);
   });
 
   it("keeps important options on high-risk commands", () => {

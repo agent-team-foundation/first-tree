@@ -589,9 +589,8 @@ export function renderSystemdUnit(invocation: ResolvedBinary): string {
   //     UpdateManager exits 75 after `npm i -g`, systemd sees it as a
   //     "must restart" signal and brings up the new binary.
   // StartLimit* caps a crash storm (10 failures in 5 min → systemd holds back).
-  // Logs go through journald — `journalctl --user -u <service-unit>` is
-  // the documented surface. The client itself still writes its rotating NDJSON
-  // to client.log when FIRST_TREE_SERVICE_MODE=1; journald only catches
+  // Normal client diagnostics go through the rotating NDJSON `client.log` when
+  // FIRST_TREE_SERVICE_MODE=1; journald is only the supervisor fallback for
   // bare stdout/stderr (crashes, third-party spam).
   return `[Unit]
 Description=First Tree Client

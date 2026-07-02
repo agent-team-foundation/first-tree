@@ -199,4 +199,42 @@ describe("update glue", () => {
     ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
     expect(output()).toContain("warning: 'daemon refresh-unit' exited with status 7");
   });
+
+  it("routes managed update output through the injected logger and captures refresh-unit output", async () => {
+    const { SELF_RESTART_EXIT_CODE, createExecuteUpdate } = await import("../core/update-glue.js");
+    const logs: Array<[level: string, message: string]> = [];
+    updateMocks.installGlobalSpec.mockImplementationOnce(
+      async (_target: string, options?: { output?: (chunk: string) => void }) => {
+        options?.output?.("npm stderr line\n");
+        return { ok: true, mode: "global" as const, installedVersion: "0.6.0" };
+      },
+    );
+    spawnSyncMock.mockReturnValueOnce({
+      status: 7,
+      signal: "SIGTERM",
+      stderr: "stderr line\n",
+      stdout: "stdout line\n",
+    });
+
+    await expect(
+      createExecuteUpdate({
+        managed: true,
+        log: (level, message) => logs.push([level, message]),
+      })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
+
+    expect(printLineMock).not.toHaveBeenCalled();
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      channelConfig.binName,
+      ["daemon", "refresh-unit"],
+      expect.objectContaining({ encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }),
+    );
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        ["info", "npm stderr line"],
+        ["warn", expect.stringContaining("warning: 'daemon refresh-unit' exited with status 7")],
+        ["warn", expect.stringContaining("Output: stderr line | stdout line")],
+      ]),
+    );
+  });
 });

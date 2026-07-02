@@ -20,13 +20,13 @@ export type ComputerCardProps = {
    */
   onGenerateNewToken: () => void;
   /**
-   * Opens the NewConnectionDialog UNSCOPED (fresh connect command).
-   * The Offline card promotes this to an inline "Reconnect" button as
-   * its primary affordance — an offline machine's credentials are
-   * usually still alive, so the operator just needs a working connect
-   * token to re-pair. Routing this through `onGenerateNewToken` would
-   * scope the arrival detector to this row and mislead with re-auth
-   * copy.
+   * Opens the `ReconnectDialog` scoped to this offline machine. The
+   * Offline card promotes this to an inline "Reconnect" button as its
+   * primary affordance. The machine is already paired and its
+   * credentials are usually still alive, so the dialog leads with the
+   * lightweight `<binName> daemon start` (no reinstall, no token) and
+   * demotes install+login to a "Still offline?" fallback — distinct
+   * from `+ Connect`, which targets an unknown machine.
    */
   onReconnect: () => void;
   /** Opens the disconnect-confirmation modal. */

@@ -1,7 +1,11 @@
-import { initializeContextTreeRequestSchema, initializeContextTreeResponseSchema } from "@first-tree/shared";
+import {
+  contextTreeInstallationInfoResponseSchema,
+  initializeContextTreeRequestSchema,
+  initializeContextTreeResponseSchema,
+} from "@first-tree/shared";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { ConflictError } from "../../errors.js";
-import { requireOrgAdmin } from "../../scope/require-org.js";
+import { requireOrgAdmin, requireOrgMembership } from "../../scope/require-org.js";
 import {
   ContextTreeRepoProvisionError,
   ensureInstallationOwnedContextTreeRepo,
@@ -38,6 +42,38 @@ const REPO_SUFFIX = "-context-tree";
 const GITHUB_REPO_NAME_MAX_LENGTH = 100;
 
 export async function orgContextTreeRoutes(app: FastifyInstance): Promise<void> {
+  // Read-only routing view of the team's bound GitHub App installation. The
+  // agent-driven `first-tree tree init` flow calls this after creating the tree
+  // repo with local `gh` to build the "add this repo to your installation"
+  // guidance URL. Context: GitHub auto-attaches a repo to an installation only
+  // when the *App* creates it (via its installation token); a repo created by
+  // the *user* (local `gh`) is not auto-covered by a selected-repositories
+  // installation, and the local `gh` token cannot add it (it is not authorized
+  // for this App — `/user/installations/*` returns 403). So the reliable path is
+  // to point the admin at the installation settings page. No token is minted
+  // here — only the non-secret installation id + account are returned.
+  app.get<{ Params: { orgId: string } }>("/installation", async (request, reply) => {
+    const scope = await requireOrgMembership(request, app.db);
+    const installation = await findInstallationByOrg(app.db, scope.organizationId);
+    if (!installation) {
+      return reply.status(404).send({
+        error: "No GitHub App installation is connected for this team yet.",
+        code: "no_installation",
+      });
+    }
+    // Build untyped and validate through the schema: Drizzle widens
+    // `accountType` to `string`, so `.parse()` is what narrows it to the
+    // `User | Organization` union (and rejects a corrupt row at runtime).
+    return reply.status(200).send(
+      contextTreeInstallationInfoResponseSchema.parse({
+        installationId: installation.installationId,
+        accountLogin: installation.accountLogin,
+        accountType: installation.accountType,
+        suspended: installation.suspendedAt !== null,
+      }),
+    );
+  });
+
   app.post<{ Params: { orgId: string }; Body: unknown }>("/initialize", async (request, reply) => {
     initializeContextTreeRequestSchema.parse(request.body ?? {});
     const scope = await requireOrgAdmin(request, app.db);

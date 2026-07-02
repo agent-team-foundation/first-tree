@@ -1,0 +1,15 @@
+<%
+const sections = [
+  generatedBannerBlock,
+  identityBlock,
+  teamPromptBlock,
+  agentPromptBlock,
+  agentPromptOverridesBlock,
+  legacyPromptBlock,
+  workingInFirstTreeBlock,
+  requiredReadingBlock,
+  contextTreeBlock,
+  skillsBlock,
+].filter((section) => section !== null && section.length > 0);
+-%>
+<%- sections.join("\n\n") %>

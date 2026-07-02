@@ -17,7 +17,7 @@
   },
   "scripts": {
     "prebuild": "node scripts/copy-bundled-skills.mjs",
-    "build": "tsdown src/index.ts src/observability/index.ts --format esm --no-dts",
+    "build": "tsdown src/index.ts src/observability/index.ts --format esm --no-dts && node ../../scripts/copy-client-runtime-templates.mjs packages/client",
     "pretest": "node scripts/copy-bundled-skills.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
@@ -31,6 +31,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.187",
     "@openai/codex-sdk": "^0.140.0",
     "@sentry/node": "^10.62.0",
+    "ejs": "^6.0.1",
     "pino": "^9.5.0",
     "semver": "^7.6.3",
     "ws": "^8.20.0",
@@ -39,6 +40,7 @@
   },
   "devDependencies": {
     "@first-tree/shared": "workspace:*",
+    "@types/ejs": "^3.1.5",
     "@types/node": "^22.16.0",
     "@types/semver": "^7.5.8",
     "@types/ws": "^8.18.1",

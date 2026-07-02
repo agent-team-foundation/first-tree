@@ -1,9 +1,23 @@
+import { Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerBuiltinHandlers } from "../handlers/index.js";
+import { applyClientLoggerConfig } from "../observability/logger.js";
 import { getHandlerFactory } from "../runtime/handler.js";
+
+function collectLogs(): { dest: Writable; read: () => string } {
+  const chunks: string[] = [];
+  const dest = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(chunk.toString());
+      callback();
+    },
+  });
+  return { dest, read: () => chunks.join("") };
+}
 
 describe("Built-in Handlers", () => {
   afterEach(() => {
+    applyClientLoggerConfig({ level: "silent", format: "json", destination: process.stderr, explicit: false });
     vi.restoreAllMocks();
   });
 
@@ -71,19 +85,14 @@ describe("Built-in Handlers", () => {
   });
 
   it("logs the SDK bundled binary fallback when no Claude executable is resolved", () => {
-    const stderrMessages: string[] = [];
-    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((message: string | Uint8Array) => {
-      stderrMessages.push(String(message));
-      return true;
-    });
-    try {
-      // Inject a resolver that finds nothing — hermetic against the dev machine's
-      // real PATH / well-known install dirs and any login-shell probe.
-      registerBuiltinHandlers({ resolveExecutable: () => ({ path: undefined, source: "default" }) });
-    } finally {
-      stderrWrite.mockRestore();
-    }
+    const { dest, read } = collectLogs();
+    applyClientLoggerConfig({ level: "info", format: "json", destination: dest });
 
-    expect(stderrMessages.join("")).toContain("using SDK bundled native binary");
+    // Inject a resolver that finds nothing — hermetic against the dev machine's
+    // real PATH / well-known install dirs and any login-shell probe.
+    registerBuiltinHandlers({ resolveExecutable: () => ({ path: undefined, source: "default" }) });
+
+    expect(read()).toContain('"module":"handlers"');
+    expect(read()).toContain("using SDK bundled native binary");
   });
 });

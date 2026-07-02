@@ -335,6 +335,32 @@ describe("ClientRuntime context-tree wiring", () => {
     await rt.stop();
   });
 
+  it("routes runtime status through an injected output sink", async () => {
+    const { print } = await import("../core/output.js");
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const output = {
+      blank: vi.fn(),
+      check: vi.fn(),
+      line: vi.fn(),
+      status: vi.fn(),
+    };
+    const rt = new ClientRuntime("https://hub.test", "client-test", { output });
+    rt.addAgent("alpha", {
+      agentId: "agent-alpha",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rt.addAgent>[1]);
+
+    await rt.start();
+
+    expect(output.check).toHaveBeenCalledWith(true, "client registered", "client-test");
+    expect(output.check).toHaveBeenCalledWith(true, "alpha: connected", "agent: alpha");
+    expect(output.status).toHaveBeenCalledWith("", "1 agent(s) running. Press Ctrl+C to stop.");
+    expect(print.check).not.toHaveBeenCalledWith(true, "client registered", "client-test");
+    await rt.stop();
+  });
+
   it("reports generic agent start failures and ignores already-starting entries", async () => {
     const { print } = await import("../core/output.js");
     const { ClientRuntime } = await import("../core/client-runtime.js");

@@ -8,6 +8,7 @@ import {
   type BuildAgentBriefingOptions,
   buildAgentBriefing,
   FIRST_TREE_FAMILY_SKILL_NAMES,
+  resolveAgentBriefingTemplatePath,
 } from "../runtime/agent-briefing.js";
 import type { PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
@@ -46,6 +47,18 @@ function makeOpts(overrides?: Partial<BuildAgentBriefingOptions>): BuildAgentBri
 }
 
 describe("buildAgentBriefing — top-level structure & section order", () => {
+  it("resolves the checked-in source EJS template and renders through it", () => {
+    const templatePath = resolveAgentBriefingTemplatePath();
+
+    expect(templatePath).toBe(
+      resolve(dirname(fileURLToPath(import.meta.url)), "..", "runtime", "templates", "agent-briefing.ejs"),
+    );
+
+    const briefing = buildAgentBriefing(makeOpts());
+    expect(briefing).toContain("# Identity\n\nYou are Test Agent, an autonomous agent.");
+    expect(briefing.endsWith("\n")).toBe(true);
+  });
+
   it("emits stable shared sections without per-chat Current Chat Context", () => {
     // Tree-bound case so every shared header in the expected order list is
     // present; tree-less cases are exercised in their dedicated describe
@@ -915,16 +928,20 @@ describe("buildAgentBriefing — # Context Tree", () => {
     expect(briefing).toContain("the tree wins");
     expect(briefing).toContain("eagerly, not lazily");
 
-    // Writing discipline anchors — fresh vs persistent context framing and
-    // the co-open + cross-link PR coordination rule (the tree PR need not
-    // merge before the code PR). The prose wraps the emphasised phrases
-    // across lines, so allow either single-line or wrapped forms.
+    // Writing discipline anchors — fresh vs persistent context framing, the
+    // co-open + cross-link PR coordination rule, and the tightened merge
+    // order: the code PR merges first, then the tree PR is reconciled against
+    // the final merged code before it lands (never concurrent or ahead). The
+    // prose wraps the emphasised phrases across lines, so allow either
+    // single-line or wrapped forms.
     expect(briefing).toContain("fresh context");
     expect(briefing).toMatch(/\*\*persistent[\s\n]+context\*\*/);
     expect(briefing).toMatch(
       /open the tree PR and the code[\s\n]+PR[\s\n]+together and cross-link them in the PR descriptions/,
     );
-    expect(briefing).toMatch(/with[\s\n]+the code PR or shortly after/);
+    expect(briefing).toMatch(/Merge the code PR first, then[\s\n]+the tree PR/);
+    expect(briefing).toContain("final merged");
+    expect(briefing).not.toContain("need not merge first");
     expect(briefing).toContain("Implementation-only changes skip the tree");
 
     // Tree path interpolated under Tree Location.
