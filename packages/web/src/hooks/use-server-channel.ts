@@ -2,6 +2,11 @@ import type { ChannelName } from "@first-tree/shared/channel";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client.js";
 
+type ServerBootstrapConfig = {
+  channel: ChannelName | null;
+  growthLandingPagesEnabled: boolean;
+};
+
 /**
  * Narrow the bootstrap `/config` payload to its release channel without an
  * `as` cast. Returns null for any unrecognised shape (older server that does
@@ -16,9 +21,43 @@ export function extractChannel(data: unknown): ChannelName | null {
   return null;
 }
 
-async function fetchServerChannel(): Promise<ChannelName | null> {
+/**
+ * Narrow the growth landing feature flag from the public bootstrap config.
+ * Older servers and malformed payloads resolve to false so public growth
+ * funnels fail closed.
+ */
+export function extractGrowthLandingPagesEnabled(data: unknown): boolean {
+  if (typeof data === "object" && data !== null && "growthLandingPagesEnabled" in data) {
+    const { growthLandingPagesEnabled } = data;
+    return growthLandingPagesEnabled === true;
+  }
+  return false;
+}
+
+function extractServerBootstrapConfig(data: unknown): ServerBootstrapConfig {
+  return {
+    channel: extractChannel(data),
+    growthLandingPagesEnabled: extractGrowthLandingPagesEnabled(data),
+  };
+}
+
+async function fetchServerBootstrapConfig(): Promise<ServerBootstrapConfig> {
   const data = await api.get<unknown>("/bootstrap/config");
-  return extractChannel(data);
+  return extractServerBootstrapConfig(data);
+}
+
+function useServerBootstrapConfig(): { config: ServerBootstrapConfig | null; settled: boolean } {
+  const { data, status } = useQuery({
+    queryKey: ["server-bootstrap-config"],
+    queryFn: fetchServerBootstrapConfig,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+  });
+  // With infinite staleTime `pending` is the only not-yet-resolved status;
+  // `success` (a config object) and `error` both count as settled, so safe
+  // defaults apply the moment we know.
+  return { config: data ?? null, settled: status !== "pending" };
 }
 
 /**
@@ -32,17 +71,8 @@ async function fetchServerChannel(): Promise<ChannelName | null> {
  * and cached for the session.
  */
 export function useServerChannelState(): { channel: ChannelName | null; settled: boolean } {
-  const { data, status } = useQuery({
-    queryKey: ["server-channel"],
-    queryFn: fetchServerChannel,
-    staleTime: Number.POSITIVE_INFINITY,
-    gcTime: Number.POSITIVE_INFINITY,
-    refetchOnWindowFocus: false,
-  });
-  // With infinite staleTime `pending` is the only not-yet-resolved status;
-  // `success` (a channel or an unrecognised body → null) and `error` both
-  // count as settled, so the prod-safe default applies the moment we know.
-  return { channel: data ?? null, settled: status !== "pending" };
+  const { config, settled } = useServerBootstrapConfig();
+  return { channel: config?.channel ?? null, settled };
 }
 
 /**
@@ -53,4 +83,19 @@ export function useServerChannelState(): { channel: ChannelName | null; settled:
  */
 export function useServerChannel(): ChannelName | null {
   return useServerChannelState().channel;
+}
+
+/**
+ * Whether growth landing pages are explicitly enabled by the server. This is
+ * independent from release channel: unknown / older servers and fetch errors
+ * fail closed to `false`, while `settled` lets redirecting callers avoid a
+ * loading-time bounce.
+ */
+export function useGrowthLandingPagesState(): { enabled: boolean; settled: boolean } {
+  const { config, settled } = useServerBootstrapConfig();
+  return { enabled: config?.growthLandingPagesEnabled ?? false, settled };
+}
+
+export function useGrowthLandingPagesEnabled(): boolean {
+  return useGrowthLandingPagesState().enabled;
 }

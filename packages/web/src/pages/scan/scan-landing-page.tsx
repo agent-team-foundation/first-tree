@@ -3,7 +3,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
-import { useServerChannelState } from "../../hooks/use-server-channel.js";
+import { useGrowthLandingPagesState } from "../../hooks/use-server-channel.js";
 import { Footer } from "../landing/footer.js";
 import { LandingNav } from "../landing/nav.js";
 import { type CampaignSlug, isKnownCampaign } from "../quickstart/campaigns.js";
@@ -30,18 +30,17 @@ export function buildScanHandoffHref(campaign: CampaignSlug, repoUrl: string): s
  * connecting a computer, and starting the campaign's first chat. This page does
  * one job: validate the repo and build that handoff URL.
  *
- * Dev/staging-only, exactly like the quickstart it feeds: the same prod-safe
- * channel gate (unknown / old server → null → not allowed) keeps the whole
- * funnel hidden in prod until we open it. Public route (no auth) — login
- * happens later, inside quickstart, carried by the `next` round-trip.
+ * Feature-flagged, exactly like the quickstart it feeds: older servers and
+ * fetch failures resolve to disabled, keeping the whole funnel hidden until an
+ * operator explicitly opens it. Public route (no auth) — login happens later,
+ * inside quickstart, carried by the `next` round-trip.
  */
 export function ScanLandingPage() {
   const navigate = useNavigate();
   const { campaign: slugParam } = useParams<{ campaign: string }>();
   const campaign: CampaignSlug | null = isKnownCampaign(slugParam) ? slugParam : null;
 
-  const { channel, settled } = useServerChannelState();
-  const channelAllowed = channel === "dev" || channel === "staging";
+  const { enabled: growthLandingPagesEnabled, settled } = useGrowthLandingPagesState();
 
   const copy = campaign ? SCAN_LANDING_COPY[campaign] : null;
 
@@ -57,14 +56,13 @@ export function ScanLandingPage() {
   const [repoInput, setRepoInput] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  // Hold a neutral surface while the channel resolves — never flash the form
-  // for a prod visitor mid-fetch (mirrors the quickstart gate).
+  // Hold a neutral surface while the feature flag resolves — never flash the
+  // form for a disabled deployment mid-fetch (mirrors the quickstart gate).
   if (!settled) {
     return <div className="landing-marketing min-h-screen bg-background" />;
   }
-  // Prod / unknown server, or a campaign slug we don't recognise → send home.
-  // The funnel simply does not exist outside dev/staging.
-  if (!channelAllowed || !campaign || !copy) {
+  // Disabled / old server, or a campaign slug we don't recognise → send home.
+  if (!growthLandingPagesEnabled || !campaign || !copy) {
     return <Navigate to="/" replace />;
   }
 

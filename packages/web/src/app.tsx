@@ -151,8 +151,8 @@ export function App() {
               {/* Public: the connect-code install popup lands here to auto-close. */}
               <Route path="/onboarding/connected" element={<GithubConnectedPage />} />
               <Route path="/invite/:token" element={<InviteAcceptPage />} />
-              {/* Public top-of-funnel scan landing. Dev/staging-only via its own
-                  channel gate; feeds /quickstart with campaign + repo. */}
+              {/* Public top-of-funnel scan landing. Feature-flagged in the page;
+                  feeds /quickstart with campaign + repo. */}
               <Route path="/scan/:campaign" element={<ScanLandingPage />} />
               {ContextPreviewPage ? (
                 <Route
