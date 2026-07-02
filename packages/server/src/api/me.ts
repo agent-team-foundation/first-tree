@@ -6,6 +6,7 @@ import {
   type OnboardingStep,
   onboardingEventSchema,
   patchOnboardingSchema,
+  treeSetupKickoffSchema,
   updateMyProfileSchema,
 } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
@@ -259,12 +260,13 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * Folds the three steps the browser used to orchestrate sequentially (create
    * the first chat → send the bootstrap message → stamp completion) into one
    * resumable request. Re-running it (reopened tab, network retry, build-tree
-   * recovery) reuses the same kickoff chat and stamps completion only once,
+   * recovery) reuses the same first chat and stamps completion only once,
    * instead of leaving the orphan-chat / duplicate-bootstrap / completed-stamp-
    * decoupled-from-reality states the client-orchestrated flow could produce.
    */
   app.post("/me/onboarding/kickoff", async (request, reply) => {
     const { userId } = requireUser(request);
+    const legacyKind = readLegacyKickoffKind(request.body);
     const body = kickoffOnboardingSchema.parse(request.body);
     const campaign = body.campaign;
     if (campaign && !app.config.growth.landingPagesEnabled) {
@@ -272,22 +274,28 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         .status(404)
         .send({ error: "Growth landing pages are disabled on this First Tree deployment.", code: "feature_disabled" });
     }
-    const { memberId, humanAgentId } = await resolveOnboardingMember(app, userId, body.organizationId);
+    const { memberId, humanAgentId, organizationId } = await resolveOnboardingMember(app, userId, body.organizationId);
+    const isLegacyTreeSetup = legacyKind === "tree";
     const result = await kickoffOnboarding(app.db, {
       memberId,
       humanAgentId,
+      organizationId,
       targetAgentId: body.agentUuid,
       bootstrap: body.bootstrap,
-      kind: body.kind,
+      topic: body.topic ?? (isLegacyTreeSetup ? "Set up shared context" : "Get started with First Tree"),
+      kickoffKey: isLegacyTreeSetup
+        ? `${organizationId}:tree-setup`
+        : campaign
+          ? `${humanAgentId}:${body.agentUuid}:quickstart:${campaign}`
+          : `${humanAgentId}:${body.agentUuid}:onboarding`,
       complete: body.complete ?? true,
       // Provision + bind the campaign's agent-private scan skill via onChatReady
       // — AFTER createChat validates the target agent (cross-org / active /
       // private) plus the service's own manage-ownership gate, and BEFORE the
       // bootstrap is sent. Running it before validation would let an
       // unauthorized kickoff mutate another org/agent's resources.
-      ...(campaign
+      ...(campaign && !isLegacyTreeSetup
         ? {
-            campaign,
             // The scan skill's Step 6 CTA links to the env-correct onboarding
             // page; resolve it here (dev/staging/prod) and let the materializer
             // template it into the skill body's `{{FIRST_TREE_SETUP_URL}}`.
@@ -303,7 +311,38 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     });
     if (result.sent) {
       notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
-      app.log.info({ event: "onboarding.kickoff", userId, chatId: result.chatId }, "onboarding funnel: kickoff");
+      app.log.info(
+        {
+          event: isLegacyTreeSetup ? "onboarding.tree_setup_kickoff" : "onboarding.kickoff",
+          userId,
+          chatId: result.chatId,
+        },
+        isLegacyTreeSetup ? "onboarding funnel: tree setup kickoff" : "onboarding funnel: kickoff",
+      );
+    }
+    return reply.status(200).send({ chatId: result.chatId });
+  });
+
+  app.post("/me/onboarding/tree-setup/kickoff", async (request, reply) => {
+    const { userId } = requireUser(request);
+    const body = treeSetupKickoffSchema.parse(request.body);
+    const { memberId, humanAgentId, organizationId } = await resolveOnboardingMember(app, userId, body.organizationId);
+    const result = await kickoffOnboarding(app.db, {
+      memberId,
+      humanAgentId,
+      organizationId,
+      targetAgentId: body.agentUuid,
+      bootstrap: body.bootstrap,
+      topic: body.topic ?? "Set up shared context",
+      kickoffKey: `${organizationId}:tree-setup`,
+      complete: body.complete ?? true,
+    });
+    if (result.sent) {
+      notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
+      app.log.info(
+        { event: "onboarding.tree_setup_kickoff", userId, chatId: result.chatId },
+        "onboarding funnel: tree setup kickoff",
+      );
     }
     return reply.status(200).send({ chatId: result.chatId });
   });
@@ -311,10 +350,10 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
   /**
    * GET /me/onboarding/tree-setup-status — recovery probe for the standalone
    * `/build-tree` surface and Settings nav. A missing tree binding still needs
-   * setup. A binding created after the org's value-first work chat completed
-   * also needs setup until a tree kickoff bootstrap message exists; this covers
+   * setup. A binding created after the org's value-first first chat completed
+   * also needs setup until a tree setup bootstrap message exists; this covers
    * the recoverable edge where Cloud wrote `context_tree` but the background
-   * tree kickoff failed before notifying the agent. The recovery decision is
+   * tree setup kickoff failed before notifying the agent. The recovery decision is
    * org-level: different admins in the same org must not see different setup
    * debt just because their own onboarding completion timestamps differ.
    */
@@ -782,13 +821,19 @@ async function resolveOnboardingMember(
   app: FastifyInstance,
   userId: string,
   organizationId?: string,
-): Promise<{ memberId: string; humanAgentId: string }> {
+): Promise<{ memberId: string; humanAgentId: string; organizationId: string }> {
   const memberId = await resolveOnboardingMembershipId(app, userId, organizationId);
   const [row] = await app.db
-    .select({ agentId: members.agentId })
+    .select({ agentId: members.agentId, organizationId: members.organizationId })
     .from(members)
     .where(eq(members.id, memberId))
     .limit(1);
   if (!row) throw new NotFoundError("Membership not found");
-  return { memberId, humanAgentId: row.agentId };
+  return { memberId, humanAgentId: row.agentId, organizationId: row.organizationId };
+}
+
+function readLegacyKickoffKind(body: unknown): "intro" | "work" | "tree" | null {
+  if (typeof body !== "object" || body === null) return null;
+  const kind = (body as { kind?: unknown }).kind;
+  return kind === "intro" || kind === "work" || kind === "tree" ? kind : null;
 }

@@ -89,7 +89,7 @@ export const COPY = {
   },
   /** connect-code states */
   connectCode: {
-    // `intro` was deleted (R1 from baixiaohang review): it duplicated
+    // The old intro copy was deleted (R1 from baixiaohang review): it duplicated
     // `STEP_COPY['connect-code'].why` verbatim and had no remaining
     // consumer after the connect-code step started reading from
     // STEP_COPY directly. Keep the why as the single source of truth.
@@ -318,7 +318,7 @@ export const COPY = {
     notReadyTitle: "Start working with your agent",
     notReadyBody:
       "Team context can be added by an admin later. You can start now with a question, project path, or GitHub URL.",
-    // The primary action on the not-ready screen — start an intro chat now
+    // The primary action on the not-ready screen — start a simple first chat now
     // instead of waiting on the team.
     startAnyway: "Start chat",
   },

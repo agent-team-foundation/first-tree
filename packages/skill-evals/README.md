@@ -132,7 +132,7 @@ the currently implemented `first-tree-welcome` gate rows:
 
 - tree kickoff chat routes to the tree setup lane instead of welcome first-task
   options;
-- no repo connected / intro chat asks for a local clone path or GitHub URL
+- no repo connected / intro chat asks for a local project folder path or GitHub repo URL
   without requiring GitHub authorization first;
 - readable repo + populated Context Tree reads both evidence sources and offers
   two or three bounded first-task options without seeding or setting up the

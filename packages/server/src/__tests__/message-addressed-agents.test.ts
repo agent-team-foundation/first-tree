@@ -27,21 +27,20 @@ const AGENT_TWO: SendIntentParticipant = {
  * `metadata.addressedAgentIds` carries server-owned notify-worthy non-human
  * recipients so a web surface (the chat offline notice) can tell who a turn
  * awaits a reply from. `mentions` only covers explicit @s / receiverNames —
- * NOT the system `addressedToAgentIds` routing the onboarding kickoff bootstrap
- * uses — so the bootstrap case below is the one a `mentions`-only read would
- * miss.
+ * NOT system `addressedToAgentIds` routing — so the system-routed case below is
+ * the one a `mentions`-only read would miss.
  */
 describe("preflightMessageSendIntent — addressedAgentIds", () => {
-  it("persists the system addressedToAgentIds (onboarding bootstrap) even with no mentions", () => {
+  it("persists system addressedToAgentIds even with no mentions", () => {
     const result = preflightMessageSendIntent({
       chatId: "c1",
       senderId: "human-1",
       senderType: "human",
       data: {
         format: "text",
-        content: "Welcome — here are a few first tasks.",
+        content: "PR opened.",
         source: "api",
-        metadata: { systemSender: "first_tree_onboarding" },
+        metadata: { systemSender: "github" },
       },
       options: { addressedToAgentIds: ["agent-1"], allowSystemSender: true },
       participants: [HUMAN, AGENT],

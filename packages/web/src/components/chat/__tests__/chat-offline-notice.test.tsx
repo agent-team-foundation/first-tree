@@ -65,8 +65,8 @@ describe("awaitedAgentsFromMessage", () => {
     const bee = agent("b", "Bee");
     expect(awaitedAgentsFromMessage({ addressedAgentIds: ["a1"] }, [ARIA, bee])).toEqual([ARIA]);
   });
-  it("covers the onboarding bootstrap (systemSender + addressedAgentIds, no mentions)", () => {
-    const meta = { systemSender: "first_tree_onboarding", addressedAgentIds: ["a1"] };
+  it("covers legacy system-routed messages (systemSender + addressedAgentIds, no mentions)", () => {
+    const meta = { systemSender: "github", addressedAgentIds: ["a1"] };
     expect(awaitedAgentsFromMessage(meta, [ARIA])).toEqual([ARIA]);
   });
   it("returns [] when no agent was routed (empty / missing metadata)", () => {
