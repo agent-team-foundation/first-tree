@@ -1,19 +1,44 @@
-# Proposal：Chat Bootstrap Core 与 Growth Activation Foundation
+# Proposal：Onboarding 重构与 Growth 基础平台
 
 状态：架构评审草案
 
 ## 摘要
 
-First Tree 当前同时在推进两条相关但不应该混在一起的工作：
+First Tree 当前有两条正在并行推进的工程主线：
 
 - **Onboarding 重构**：把新用户首次体验收敛到 value-first 路径，即连接电脑、创建或复用用户自己的 agent，然后尽快打开第一个有价值的 chat。
-- **Growth 增长平台建设**：以 quickstart scan campaign 为第一条闭环链路，把外部 campaign/repo intent 带入应用，并复用现有 client、agent、skill、chat 能力完成一次可转化的价值展示。
+- **Growth 增长平台建设**：以 quickstart scan campaign 这条增长试点链路为起点，把外部 campaign/repo intent 带入应用，并复用现有 client、agent、skill、chat 能力完成一次可转化的价值展示。
 
-这两条线都需要同一个底层能力：幂等创建或复用一个普通 chat，发送且只发送一次服务端可信的 bootstrap message，然后通知目标 agent。
+这两条线现在遇到的是同一个架构问题：**业务已经从单一 onboarding 扩展到 onboarding + quickstart growth + Context Tree setup，但底层仍然通过 onboarding kickoff 命名和接口来启动这些 chat。**
 
-当前这套能力仍然挂在历史命名下：`/me/onboarding/kickoff`、`kickoffOnboarding`、`chats.onboarding_kickoff_key`。它的并发和幂等设计是有价值的，但命名和职责已经不准确，因为 quickstart growth、Context Tree setup recovery、未来外部集成触发的 chat 都可能复用同一类底层能力。
+当前代码里的 `/me/onboarding/kickoff`、`kickoffOnboarding`、`chats.onboarding_kickoff_key` 已经不只是 onboarding 逻辑。它们实际承担的是“创建或复用一个 chat，并发送第一条服务端可信消息”的基础动作。这个动作本身的并发和幂等设计是有价值的，但继续放在 onboarding 命名下，会让 growth 和 Context Tree setup 长期依赖错误的业务边界。
 
-本文建议抽出一个小而稳定的内部核心服务：`chatBootstrapService`。它只负责 chat bootstrap 的幂等基础能力，不理解 onboarding、growth、Context Tree、GitHub，也不引入 chat type 或全局 `kind`。业务意图由 domain service、绑定的 skill、bootstrap 内容和显式事件来表达。
+本文建议先完成一次必要的边界整理：onboarding 只负责首次设置和 membership lifecycle；growth 拥有自己的 campaign/service/event 基础；Context Tree setup 从 onboarding namespace 中退出。后文把那段“幂等创建 chat + 发送第一条系统消息”的内部机制暂称为 `chatBootstrapService`，它只是实现细节，不是新的产品概念。
+
+## 本 proposal 要解决的问题
+
+这个 proposal 不是为了抽象而抽象，也不是要引入一个新的通用聊天平台。它要解决的是一个已经发生的 ownership 问题：
+
+- Onboarding 的历史接口正在被 growth 和 Context Tree setup 复用。
+- Quickstart campaign 已经开始依赖 onboarding kickoff 管道。
+- Context Tree setup recovery 仍然挂在 onboarding namespace 下。
+- Campaign 数量一旦增加，更多增长入口会继续把业务逻辑写进 onboarding 周边代码。
+
+如果不处理，后续会出现三个直接风险：
+
+1. **Onboarding 继续变重**：本来应该只负责首次设置和完成状态，却会继续承载 campaign、repo scan、Context Tree setup 等非 onboarding 逻辑。
+2. **Growth 无法复用**：每增加一个 campaign，都要复制 quickstart 的特殊流程，或者继续往 onboarding kickoff 上加参数。
+3. **幂等和归因容易出错**：同一用户、同一 agent、同一 campaign 对不同 repo 重复运行时，如果 key 和事件模型仍然来自 onboarding，很容易复用错 chat 或无法准确分析转化。
+
+因此，这个改动的价值在于：
+
+- 让 onboarding 保持简单，降低新用户路径的维护成本。
+- 给 growth campaign 一个可复用的服务边界，而不是把每个 campaign 做成一次性入口。
+- 把“创建 chat 并发送第一条系统消息”的并发/幂等逻辑保留下来，但从 onboarding 命名中移出。
+- 为增长漏斗提供 Postgres 产品事实源，避免从 log、GA4 或 chat metadata 反推。
+- 保持单一 chat model，不引入 chat type、全局 `kind` 或新的 metadata 编排层。
+
+这件事现在有必要做，因为 quickstart campaign 已经进入代码主干，后续 growth 还会继续增加入口。如果等 campaign 数量变多再拆，迁移成本会更高，也更容易把 onboarding 改成事实上的业务杂物层。
 
 ## 背景
 
@@ -37,47 +62,33 @@ First Tree 当前同时在推进两条相关但不应该混在一起的工作：
 - 用户是否 finish later / suppressed。
 - 用户是否真正完成了 onboarding。
 
-它不应该长期拥有通用 chat bootstrap 能力。
+它不应该长期拥有“创建 chat 并发送第一条系统引导消息”的底层实现。
 
 ### Growth 平台背景
 
-quickstart scan campaign 已经是增长平台的第一条内部闭环链路。它不是用户可见的一组概念，而是当前系统中已经跑通的一套架构流程：
+quickstart scan campaign 是增长平台的第一条内部闭环链路。它的架构流程可以压缩成：
 
-1. 外部 landing 构造 quickstart handoff URL，携带 `campaign` slug 和目标 `repo` URL。
-2. Web 进入 `/quickstart` 后解析 handoff。
-3. 解析层只接受已知 campaign slug 和规范化后的 GitHub repo URL。
-4. 如果用户未登录，登录流程通过 safe redirect 把 quickstart intent 带回应用。
-5. Quickstart 页面复用现有 computer connection 逻辑，生成 connect token，并等待本地 client/daemon 注册上线。
-6. 本地 client 上报 runtime capabilities 后，Web 选择可用 runtime provider。
-7. Web 在当前 org 下创建或复用用户自己的 private agent。
-8. agent 在线后，Web 发起 campaign start-chat。
-9. 服务端在发送 bootstrap message 前，根据 campaign 绑定对应的 server-owned scan skill 到目标 agent。
-10. 服务端幂等创建或复用 chat，并发送第一条 bootstrap message。
-11. agent runtime 根据已绑定 skill 和 bootstrap 内容执行 scan。
-12. scan skill 负责产出报告、给出具体 deliverable，并通过 ask-user card 引导后续转化动作，例如打开 PR、设置 First Tree team 或构建 Context Tree。
+1. 外部 landing 把 `campaign` 和目标 `repo` 带到 `/quickstart`。
+2. Web 校验 intent，并在登录后恢复这份 intent。
+3. Web 复用现有 connect-computer 和 agent setup 能力，让本地 client 上线并创建或复用用户的 private agent。
+4. 服务端按 campaign 绑定对应的 server-owned scan skill。
+5. 服务端启动一个 scan chat，agent 根据已绑定 skill 和首条引导消息执行 repo scan。
+6. Skill 产出报告和具体 deliverable，并通过 ask-user card 承接后续转化动作，例如打开 PR、设置 team 或构建 Context Tree。
 
-这条链路已经包含长期 growth 平台所需的基础元素：
-
-- 外部入口和 intent handoff。
-- 登录回跳和 intent 延续。
-- 本地 client 连接。
-- agent provisioning。
-- campaign-specific skill binding。
-- value-first chat 启动。
-- 报告、deliverable 和转化动作。
+这条链路已经覆盖长期 growth 平台的核心元素：外部入口、intent 传递、登录回跳、本地 client 连接、agent provisioning、campaign skill binding、价值展示和转化动作。
 
 当前问题不是 quickstart 的产品方向，而是它仍然复用了 onboarding 命名的底层 start-chat/kickoff 管道。随着 campaign 数量增加，这会让增长平台继续依赖 onboarding 语义，长期不稳定。
 
-### 共同底层能力
+### 需要拆出的内部机制
 
-Onboarding、quickstart growth、Context Tree setup、未来 GitHub/Slack/Linear 等外部触发器，本质上都会需要一个共同底层动作：
+Onboarding、quickstart growth、Context Tree setup、未来 GitHub/Slack/Linear 等外部触发器，都会遇到同一个内部动作：
 
 1. 根据业务提供的唯一 key 找到或创建一个 chat。
-2. 确保同一个 key 只对应一个 bootstrap chat。
-3. 确保第一条 bootstrap message 只发一次。
+2. 确保同一个 key 不会重复创建多个 chat。
+3. 确保第一条服务端可信消息只发一次。
 4. 通知目标 agent。
 
-这个能力应该独立出来，成为一个和具体业务无关的内部基础服务。
+这个动作应该从 onboarding 命名中拆出来，成为一个和具体业务无关的内部服务。本文后续把它称为 `chatBootstrapService`。
 
 ## 当前架构问题
 
@@ -191,7 +202,7 @@ Context Tree setup recovery 本质是 org-level capability，不是 onboarding m
 
 ### 1. 抽出 `chatBootstrapService`
 
-新增内部服务 `chatBootstrapService`，作为通用的 chat bootstrap 原语。
+新增内部服务 `chatBootstrapService`，封装“按 key 创建或复用 chat，并发送第一条系统引导消息”的实现细节。
 
 建议输入：
 
