@@ -9,7 +9,7 @@ soft_links:
 # 提案:Agent 在 computer / runtime provider 间的受控迁移
 
 **日期:** 2026-07-02
-**状态:** 提案阶段(修订 v3:操作入口仅 Web/API,CLI 不新增命令;v2:去掉 placement_id / 审计表,零 DB 变更)
+**状态:** 提案阶段(修订 v4:残余窗口写 fence,堵住 stale ack 吞消息;v3:操作入口仅 Web/API,CLI 不新增命令;v2:去掉 placement_id / 审计表,零 DB 变更)
 **范围:** `packages/server`(service / API / WS,无 schema 变更)、`packages/shared`(仅请求 DTO)、`packages/client` + `apps/cli`(仅被动运行时行为,无新命令)、`packages/web`(唯一操作入口)、相关文档与测试。
 
 ---
@@ -177,7 +177,7 @@ Web 入口:Agent 详情页(manager / admin 视角)加 "Migrate" 操作:
    c. presence: unbindAgent(tx, agentId)   -- 清 ephemeral client_id / runtime 字段
 4. 事务提交后(不回滚业务副作用):
    a. 源端下线:forceDisconnect(agentId, "migrated")
-      + 跨实例广播(见 §9.2)。
+      + 跨实例广播(见 §8.3);残余窗口的正确性由写 fence 承载(见 §8.2)。
    b. 目标端通知:notifyClientAgentPinned(agent)   -- 复用现有 agent:pinned 推送;
       目标 client 离线则静默,靠 client:register 时的 pinned backfill 补投。
    c. 结构化审计日志(§3)。
@@ -256,16 +256,36 @@ Web 入口:Agent 详情页(manager / admin 视角)加 "Migrate" 操作:
 | 两个 migrate 并发 | §5.3a 的 CAS UPDATE(WHERE 带旧 client_id + 旧 provider),只赢一个;"无变化则 400"保证新旧二元组必不同 |
 | migrate 与首绑 claim 并发 | claim 是 `WHERE client_id IS NULL`,migrate 要求 `client_id = 旧值`;互斥,各自原子 |
 | 旧 client 在 migrate 提交后 re-bind | bind 每次从 DB 重读 → `wrong_client`,现有机制,同时触发 F2 会话作废 |
-| 旧 client 已 bind、migrate 后继续发帧 | 主防线:提交后立即 forceDisconnect(本实例)+ 跨实例广播(§8.2)。残余窗口内旧帧只污染 presence/会话状态,而这两者都已在事务里重置;广播到达后即断流。不追求逐帧查 DB(成本不值) |
+| 旧 client 已 bind、migrate 后继续发帧(残余窗口) | **分级处理,见 §8.2**:破坏性写入(`inbox:ack`)在事务内 fence 到持久 placement,窗口大小与正确性无关;advisory 写入(`session:state`/`runtime:state`)加同款谓词 fence;纯下行(deliver)不 fence,靠目标 bind recovery 兜底。forceDisconnect + 跨实例广播(§8.3)只负责尽快断流,不承载正确性 |
 | 目标 client 恰好持有同 agent 的旧 alias 且 daemon 在跑 | `agent:pinned` 增强路径(§6.1,含 `failed`/`idle` 态重启)+ F1–F3 会话作废 |
 | migrate 事务提交后、通知发出前 server 崩溃 | DB 已是新 placement:旧 client 下次任何 bind 被拒(F2 兜底会话作废);目标 client 下次 `client:register` 收到 pinned backfill。通知只是加速,不承载正确性 |
 | A→B→A 回迁且 A 全程离线 | F3(`updatedAt` 快照)兜底 |
 
-### 8.2 多实例下线广播
+### 8.2 残余窗口的写 fence(修订 v4:堵住 stale ack 吞消息)
 
-`forceDisconnect` 是实例内存操作;源 client 的 WS 可能挂在另一个 server 实例上。沿用"PostgreSQL 是唯一通知后端"的架构规则:复用现有 pg NOTIFY notifier 基础设施,新增一个 `agent_placement` 频道,payload `{ agentId }`;每个实例订阅,收到后若本实例 `connectionManager` 里有该 agent 的绑定则执行 `forceDisconnect(agentId, "migrated")`。这与 inbox 唤醒同构,不引入新组件,也不需要任何持久化。(现有 `/disconnect`、suspend 端点存在同样的单实例盲区,本频道顺带修复它们——同一 handler,reason 参数化。)
+**问题**(评审发现):migrate 提交后、跨实例 force_disconnect 到达旧 socket 前,旧 socket 所在实例的进程内路由(`boundAgents` + `connectionManager`,即 `isAgentStillRoutedHere`)仍视该 agent 为本地路由。此时旧 client 发来的 `inbox:ack` 会把 `delivered` 前缀置为 `acked`——**acked 是终态,目标机 bind 时的 `resetDeliveredForInboxes` 只回收 `delivered` 行**。旧 runtime 随即被杀、本地数据按契约丢弃,这条被 ack 的消息就被永久吞掉了。这是对 at-least-once 的实质破坏,不能靠"广播够快"来赌。
 
-### 8.3 目标 client 离线
+**修复原则:进程内路由只用于路由,合法性一律以 `agents.client_id` 为准;所有按破坏程度分级的上行写入,在其已有的 DB 事务/语句内 fence 到持久 placement。**
+
+按帧分级:
+
+| 上行写入 | 破坏性 | fence 方式 |
+|----------|--------|-----------|
+| `inbox:ack`(delivered → acked,终态) | **不可逆,丢消息** | `ackThroughEntryIdForBoundAgents` 本就是单事务且对条目行 `FOR UPDATE`;在**同一事务**开头对 `agents` 行按 `inbox_id` 加 **`FOR SHARE`** 读,校验 `client_id = 本连接 clientId`,不匹配 → 新增拒绝原因 `stale_placement`(复用现有 `inbox:ack:rejected` 通道)。共享锁给出严格线性化:ack 读到旧 placement 时持有 FOR SHARE,migrate 的 CAS UPDATE 行锁必须等它提交——所以每个 ack 要么**整体先于** migrate 提交(此刻旧 client 仍是合法 placement,归入 §5 已接受的 pre-commit 损失),要么在 CAS 之后必然读到新值而被拒。窗口多长都不影响正确性 |
+| `session:state` / `runtime:state` / `session:event` | 可逆但有害:一个 stale `working` 帧会写进 `agent_chat_sessions.runtime_state`,**卡住下一次 migrate 的 working 检查(§4.1 / A17)**,且若目标机不再打开该 chat 会永久残留 | 各自的 UPSERT/INSERT 语句追加 `WHERE EXISTS (SELECT 1 FROM agents WHERE uuid = :agentId AND client_id = :clientId)` 谓词(`agents` 主键点查,无锁,同语句内无额外往返);0 行受影响则丢弃帧并 debug 日志 |
+| presence 心跳 / lastSeen | 轻度污染(可能短暂复活 online 表象) | presence 写入已有 `expectedClientId` 模式(`unbindAgent` 同款);心跳 UPDATE 补 `WHERE client_id = :clientId`——migrate 事务已把 `agent_presence.client_id` 清 NULL,stale 心跳自然落空 |
+| `inbox:recover`(delivered → pending) | 安全方向(pending 是可恢复态,最多造成重复投递) | 不 fence |
+| 下行 deliver(pending → delivered,发给旧 socket) | 安全:旧 client 收了不 ack(ack 被 fence 拒),行停在 `delivered`,目标 bind recovery 重置重投 | 不 fence,浪费可接受 |
+
+成本:ack 路径多一个主键行的共享锁读(与并发 ack 互不冲突,只与 migrate 的 UPDATE 互斥);状态写入路径多一个主键 EXISTS 谓词。没有新增独立查询往返,不改任何帧结构。
+
+**边界的明示**:fence 无法(也不试图)挽救"migrate 提交**前**已被旧 client ack、但旧 runtime 没跑完"的消息——ack 语义就是客户端宣告接管,这部分属于 §7 数据丢失契约中"飞行中的 turn"一类,由未 force 时的 working 检查压缩到最小。fence 保证的是:**从 CAS 提交那一刻起,旧 placement 再也无法对服务端状态做任何不可逆写入**。
+
+### 8.3 多实例下线广播
+
+`forceDisconnect` 是实例内存操作;源 client 的 WS 可能挂在另一个 server 实例上。沿用"PostgreSQL 是唯一通知后端"的架构规则:复用现有 pg NOTIFY notifier 基础设施,新增一个 `agent_placement` 频道,payload `{ agentId }`;每个实例订阅,收到后若本实例 `connectionManager` 里有该 agent 的绑定则执行 `forceDisconnect(agentId, "migrated")`。这与 inbox 唤醒同构,不引入新组件,也不需要任何持久化。(现有 `/disconnect`、suspend 端点存在同样的单实例盲区,本频道顺带修复它们——同一 handler,reason 参数化。)广播只负责尽快断流与用户体验;正确性由 §8.2 的写 fence 承载。
+
+### 8.4 目标 client 离线
 
 允许。迁移即时生效(DB 层),agent 表现为 offline,`agent test` 端点如实报告;目标机上线注册时 pinned backfill 自动落地。Web 在目标 client `status: disconnected` 时提示但不阻止。
 
@@ -296,7 +316,7 @@ Web 入口:Agent 详情页(manager / admin 视角)加 "Migrate" 操作:
 
 按依赖顺序,每步可独立 PR、独立测试:
 
-1. **Shared + Server**:`migrateAgentRequestSchema`;`migrateAgent` 服务(CAS 事务 + 会话重置 + 前置校验)、`POST /agents/:uuid/migrate` 路由、`agent_placement` NOTIFY 频道与各实例订阅(顺带接入 `/disconnect` / suspend)。
+1. **Shared + Server**:`migrateAgentRequestSchema`;`migrateAgent` 服务(CAS 事务 + 会话重置 + 前置校验)、`POST /agents/:uuid/migrate` 路由、`agent_placement` NOTIFY 频道与各实例订阅(顺带接入 `/disconnect` / suspend)、§8.2 写 fence(ack 事务 FOR SHARE 校验 + `stale_placement` 拒绝原因、session/runtime/presence 写入的 placement 谓词)。
 2. **Client 运行时(全部被动,无新命令)**:F1(`reason: "migrated"` 处理 + 会话作废)、F2(`wrong_client` 触发作废)、F3(registry 记录 `updatedAt` 快照)、`handleAgentPinned` 的 provider 改写/`failed`/`idle` 态重启路径、daemon 收到 `migrated` 后的 `agent prune` 提示(§13-4 若采纳)。
 3. **Web + 文档收尾**:Web 迁移入口(§4.3)、全部文档更新、`retireClient` 文案、旧测试更新。
 
@@ -374,8 +394,12 @@ Web 入口:Agent 详情页(manager / admin 视角)加 "Migrate" 操作:
 | E1 | migrate 前有 `pending` 的 inbox 行 | 目标机 bind 后照常收到 `inbox:deliver` |
 | E2 | 旧 client 收到 `inbox:deliver` 但未 ack 即被 migrate 踢下线(stuck `delivered`) | 目标机首次 bind 时恢复逻辑重置重投;消息不丢 |
 | E3 | migrate 后向该 agent 发新消息(目标未上线) | 入队 pending;目标上线 bind 后投递 |
-| E4 | 残余窗口:旧 client 在 force_disconnect 到达前发出 ack | ack 幂等处理,不破坏 inbox 状态机(at-least-once 语义)**[回归]** |
-| E5 | 旧 client 在残余窗口发 `session:state`/`runtime:state` 帧 | 不使 agent 出现"双活"可见状态;广播到达后断流(允许短暂污染,B6/B7 的重置保证终态干净) |
+| E4 | 残余窗口:migrate 提交后、force_disconnect 到达前,旧 socket 发 `inbox:ack`(进程内 `isAgentStillRoutedHere` 仍视为 routed) | ack 被 §8.2 事务内 fence 拒绝(`inbox:ack:rejected`,reason `stale_placement`);条目停在 `delivered`;目标机 bind recovery 重投,**消息不丢** |
+| E5 | ack 事务与 migrate CAS 并发(FOR SHARE 与行锁交错) | 严格线性化:ack 要么整体先于 CAS 提交(合法,pre-commit 损失),要么被拒;不存在"CAS 后仍 ack 成功"的交错 |
+| E6 | migrate 提交前旧 client 已 ack、turn 未跑完 | 消息丢失(§7 契约内);非 force 被 working 检查挡住——用例断言该损失只在 force 路径出现 |
+| E7 | 旧 client 在残余窗口发 `session:state`/`runtime:state`(含 `working`) | 被 EXISTS 谓词 fence 丢弃 + debug 日志;`agent_chat_sessions` 不残留 stale `working`,下一次 migrate 不被 A17 卡住 |
+| E8 | 旧 client 在残余窗口触发 `inbox:recover` / 收到下行 deliver | 允许(安全方向):最多重复投递/行停 `delivered`;目标 bind recovery 收敛,消息不丢 |
+| E9 | 旧 socket 心跳在残余窗口刷新 presence | `WHERE client_id = :clientId` 落空(migrate 事务已清 NULL),不复活 online 表象 |
 
 ### F. 客户端会话 fence(client/CLI 单测)
 
