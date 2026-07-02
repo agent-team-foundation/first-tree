@@ -9,8 +9,8 @@ soft_links:
 # 提案:Agent 在 computer / runtime provider 间的受控迁移
 
 **日期:** 2026-07-02
-**状态:** 提案阶段(修订 v2:去掉 placement_id / 审计表,零 DB 变更)
-**范围:** `packages/server`(service / API / WS,无 schema 变更)、`packages/shared`(仅请求 DTO)、`packages/client` + `apps/cli`(运行时与命令)、`packages/web`(管理入口)、相关文档与测试。
+**状态:** 提案阶段(修订 v3:操作入口仅 Web/API,CLI 不新增命令;v2:去掉 placement_id / 审计表,零 DB 变更)
+**范围:** `packages/server`(service / API / WS,无 schema 变更)、`packages/shared`(仅请求 DTO)、`packages/client` + `apps/cli`(仅被动运行时行为,无新命令)、`packages/web`(唯一操作入口)、相关文档与测试。
 
 ---
 
@@ -140,19 +140,19 @@ export const migrateAgentRequestSchema = z.object({
 
 `clientId` 保持一次性 NULL → ID。理由:PATCH 是通用更新面,迁移是带副作用(强制下线、会话重置)的操作,混进 PATCH 会让"改个 displayName 顺手把 agent 迁走"成为可能。service 层的 immutable 报错信息更新为指向 migrate 端点。
 
-### 4.3 CLI
+### 4.3 操作入口:仅 Web(不新增 CLI 命令)
 
-```
-first-tree agent migrate <name-or-uuid> --to-client <clientId> [--provider <p>] [--force] [--yes]
-```
+迁移的唯一操作面是 Admin API + Web。**CLI 不新增任何命令**——agent 生命周期管理(create / suspend / delete)本来就以 Admin API + Web 为主面,迁移与之同类;CLI 侧全部改动都是**被动的运行时行为**(§6 的 fence、pinned handler 增强、`prune`/`doctor` 既有通道),不引入新的用户命令面。
 
-- 业务逻辑放 `apps/cli/src/core/agent-migrate.ts`,命令层薄封装(仓库惯例);
-- 交互式确认必须复述数据丢失边界(§7 的清单),`--yes` 跳过;
-- `first-tree computers`(已有 `/me/clients`)辅助用户找 targetClientId。
+Web 入口:Agent 详情页(manager / admin 视角)加 "Migrate" 操作:
 
-### 4.4 Web
+- 目标 computer 选择器,数据来自该 agent manager user 的 clients 列表(admin 视角下也只列 manager 的机器,与 §4.1 的鉴权前置一致,选不出会被 400 的目标);
+- provider 下拉(默认保持当前);
+- 目标 client 离线时提示但不阻止(§8.3);
+- 确认对话框完整复述数据丢失边界(§7 的清单),**点名"未提交/未 push 改动会丢"**;
+- 409-working 时提示等待或勾选 force 重试。
 
-Agent 详情页(admin/manager 视角)加 "Migrate" 操作:选择目标 computer(来自该 manager user 的 clients 列表)+ provider 下拉,展示与 CLI 相同的数据丢失警告。v1 可以只做 CLI,Web 作为紧随的增量。
+脚本化/自动化场景直接调 `POST /api/v1/agents/:uuid/migrate`,不为此包装命令。
 
 ---
 
@@ -241,7 +241,7 @@ Agent 详情页(admin/manager 视角)加 "Migrate" 操作:选择目标 computer(
 | server 管理的 agent config(model、env、repos、skills) | 保留,新机自动拉取落地 | `agent_configs` |
 | Context Tree | 保留(git 重新 clone) | |
 | provider 会话 transcript(claude-code / codex 本地会话) | **丢失** | 所有 chat 的会话冷启动,agent 失去会话内记忆 |
-| workspace 工作区(含源 repo **未提交/未 push 的改动**) | **丢失**(留在源机,不搬) | CLI 确认文案必须点名这一条 |
+| workspace 工作区(含源 repo **未提交/未 push 的改动**) | **丢失**(留在源机,不搬) | Web 确认对话框必须点名这一条 |
 | `data/sessions/<name>.json` 会话映射 | 作废 | §6 fence |
 | 飞行中的 turn(force 迁移时) | **丢失** | 非 force 被 working 检查挡住 |
 
@@ -267,7 +267,7 @@ Agent 详情页(admin/manager 视角)加 "Migrate" 操作:选择目标 computer(
 
 ### 8.3 目标 client 离线
 
-允许。迁移即时生效(DB 层),agent 表现为 offline,`agent test` 端点如实报告;目标机上线注册时 pinned backfill 自动落地。CLI 在目标 client `status: disconnected` 时提示但不阻止。
+允许。迁移即时生效(DB 层),agent 表现为 offline,`agent test` 端点如实报告;目标机上线注册时 pinned backfill 自动落地。Web 在目标 client `status: disconnected` 时提示但不阻止。
 
 ---
 
@@ -297,8 +297,8 @@ Agent 详情页(admin/manager 视角)加 "Migrate" 操作:选择目标 computer(
 按依赖顺序,每步可独立 PR、独立测试:
 
 1. **Shared + Server**:`migrateAgentRequestSchema`;`migrateAgent` 服务(CAS 事务 + 会话重置 + 前置校验)、`POST /agents/:uuid/migrate` 路由、`agent_placement` NOTIFY 频道与各实例订阅(顺带接入 `/disconnect` / suspend)。
-2. **Client + CLI**:F1(`reason: "migrated"` 处理 + 会话作废)、F2(`wrong_client` 触发作废)、F3(registry 记录 `updatedAt` 快照)、`handleAgentPinned` 的 provider 改写/重启路径、`first-tree agent migrate` 命令(core + command + 确认文案)。
-3. **Web + 文档收尾**:Web 迁移入口、全部文档更新、`retireClient` 文案、旧测试更新。
+2. **Client 运行时(全部被动,无新命令)**:F1(`reason: "migrated"` 处理 + 会话作废)、F2(`wrong_client` 触发作废)、F3(registry 记录 `updatedAt` 快照)、`handleAgentPinned` 的 provider 改写/`failed`/`idle` 态重启路径、daemon 收到 `migrated` 后的 `agent prune` 提示(§13-4 若采纳)。
+3. **Web + 文档收尾**:Web 迁移入口(§4.3)、全部文档更新、`retireClient` 文案、旧测试更新。
 
 风险最高的是第 1 步的竞态正确性和第 2 步的 pinned-handler 改造(它同时服务首绑与迁移两个场景)。没有任何一步动 DB 结构。
 
@@ -443,17 +443,16 @@ Agent 详情页(admin/manager 视角)加 "Migrate" 操作:选择目标 computer(
 | K3 | 旧 CLI 目标机,已有 alias + provider 变化 | 以旧 provider bind → `runtime_provider_mismatch` 永久跳过 + 一条 warn;状态可见、无损坏;升级 CLI 后恢复 |
 | K4 | server 回滚到无 migrate 版本 | 已迁移 agent 的新 pin 是合法数据,R-RUN 正常;无 schema 依赖 |
 
-### L. CLI 命令(`agent migrate` 单测)
+### L. Web 迁移入口(web 单测 / 组件测试)
 
 | # | 场景 | 期望 |
 |---|------|------|
-| L1 | 按 name 解析 agent(本地 alias / 服务端查询) | 解析到正确 uuid |
-| L2 | 交互确认文案 | 完整复述 §7 数据丢失清单,**点名"未提交/未 push 改动会丢"** |
-| L3 | `--yes` | 跳过确认 |
-| L4 | 目标 client `status: disconnected` | 提示但不阻止 |
-| L5 | 服务端各错误码(400/403/404/409) | 映射为可读文案;409-working 提示等待或 `--force` |
-| L6 | `--provider` 传非法值 | 本地 Zod 拒绝,不发请求 |
-| L7 | 迁移成功输出 | 展示 from→to、提示源机可运行 `agent prune` 清理(§13-4 若采纳) |
+| L1 | 目标 computer 选择器数据源 | 只列该 agent manager user 的 clients(不含其他成员的机器,与 §4.1 鉴权一致) |
+| L2 | 确认对话框文案 | 完整复述 §7 数据丢失清单,**点名"未提交/未 push 改动会丢"** |
+| L3 | 目标 client `status: disconnected` | 提示但不阻止提交 |
+| L4 | 服务端各错误码(400/403/404/409) | 映射为可读文案;409-working 提示等待或勾选 force 重试 |
+| L5 | 无变化提交(目标 == 当前) | 前端预校验禁用提交按钮(后端 400 兜底) |
+| L6 | 迁移成功 | 详情页立即反映新 placement(client + provider),presence 显示 offline 直至目标机 bind |
 
 ### M. 周边非回归 **[回归]**
 
