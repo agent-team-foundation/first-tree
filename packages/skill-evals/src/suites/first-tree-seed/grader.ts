@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs";
-import { isAbsolute, join, normalize, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, normalize, resolve } from "node:path";
 
 import { runCommand } from "../../core/commands.js";
 import { isRecord, isStringArray } from "../../core/events.js";
@@ -396,38 +396,62 @@ function stripQuotes(value: string): string {
   return value.replace(/^['"]|['"]$/gu, "");
 }
 
-// Resolve a path to its real (symlink-followed) form when it exists, otherwise
-// fall back to the normalized string. The eval shim blocks real `tree init`, so
-// the target `context-tree` checkout usually does NOT exist on disk — hence the
-// ENOENT-tolerant fallback. This exists to defeat the macOS symlinked-root
-// caveat (e.g. `/var` -> `/private/var`, `/tmp` -> `/private/tmp`): the captured
-// absolute `--dir` and the derived workspace path can print differently yet
-// point at the same location, so we realpath BOTH sides before comparing.
-function realpathOrNormalized(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return normalize(path);
+// Canonicalize an absolute path for equality comparison, tolerating a
+// non-existent leaf. The eval shim BLOCKS real `tree init`, and the unbound
+// fixture returns `<workspace>/context-tree` WITHOUT creating it, so the target
+// (and any candidate aimed at it) does NOT exist on disk. A plain
+// `realpathSync(path)` therefore ENOENTs and never canonicalizes the symlinked
+// ROOT (macOS `/var` -> `/private/var`, `/tmp` -> `/private/tmp`), which would
+// wrongly reject a VALID managed path whose parents are symlinked. Instead we
+// walk up to the deepest EXISTING ancestor, `realpathSync` that, and re-append
+// the remaining non-existent suffix. The workspace root itself exists in the
+// fixture, so `<workspacePath>/context-tree` canonicalizes to
+// `realpath(<workspacePath>) + "/context-tree"`.
+function canonicalizeExistingAncestor(inputPath: string): string {
+  const normalized = normalize(inputPath);
+  let existing = normalized;
+  const trailing: string[] = [];
+  // Walk up until we hit a path that exists (or the filesystem root).
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) {
+      // Reached the root without finding an existing ancestor; nothing to
+      // canonicalize — fall back to the normalized string.
+      return normalized;
+    }
+    trailing.unshift(basename(existing));
+    existing = parent;
   }
+  let canonical: string;
+  try {
+    canonical = realpathSync(existing);
+  } catch {
+    return normalized;
+  }
+  return trailing.length === 0 ? canonical : join(canonical, ...trailing);
 }
 
 // True when a captured `--dir` value resolves to the workspace-managed
-// `<workspacePath>/context-tree`, NOT merely shares its basename. `tree init`
-// otherwise clones to `<cwd>/<repo>`; the model runs with cwd = workspacePath,
-// so a RELATIVE `--dir` (e.g. `./context-tree`, `context-tree`) resolves
-// against the workspace, while an absolute `--dir` must equal the target
-// outright. This ACCEPTS `./context-tree` / `context-tree` / an absolute
+// `<baseDir>/context-tree`, NOT merely shares its basename. `tree init`
+// otherwise clones to `<cwd>/<repo>`. A RELATIVE `--dir` (e.g. `./context-tree`,
+// `context-tree`) is resolved against `baseDir` — which the CALLER supplies as
+// the captured invocation cwd, falling back to workspacePath only when no cwd
+// was recorded — while an absolute `--dir` is compared outright. Both the
+// candidate and the target are canonicalized (symlinked-root aware) before the
+// equality check. This ACCEPTS `./context-tree` / `context-tree` / an absolute
 // `<workspacePath>/context-tree`; it REJECTS `/tmp/context-tree`,
-// `../context-tree`, and `<other>/context-tree` — all of which would land the
-// checkout outside the workspace-managed path.
-function dirResolvesToWorkspaceContextTree(dirValue: string, workspacePath: string): boolean {
+// `../context-tree`, `<other>/context-tree`, and a relative `--dir` launched
+// from a cwd outside the workspace — all of which land the checkout outside the
+// workspace-managed path.
+function dirResolvesToWorkspaceContextTree(dirValue: string, baseDir: string, workspacePath: string): boolean {
   const cleaned = stripQuotes(dirValue).replace(/\/+$/u, "");
   if (cleaned.length === 0) return false;
   const target = join(workspacePath, TREE_INIT_DIR_TARGET);
-  const candidate = isAbsolute(cleaned) ? normalize(cleaned) : resolve(workspacePath, cleaned);
+  const candidate = isAbsolute(cleaned) ? normalize(cleaned) : resolve(baseDir, cleaned);
   if (normalize(candidate) === normalize(target)) return true;
-  // Symlinked-root fallback (macOS /var, /tmp, /private/*): compare realpaths.
-  return realpathOrNormalized(candidate) === realpathOrNormalized(target);
+  // Symlinked-root aware compare (macOS /var, /tmp, /private/*) that tolerates
+  // the non-existent `context-tree` leaf.
+  return canonicalizeExistingAncestor(candidate) === canonicalizeExistingAncestor(target);
 }
 
 // Detect a `tree init` invocation from a captured first-tree argv vector.
@@ -436,18 +460,34 @@ function argvIsTreeInit(argv: readonly string[]): boolean {
 }
 
 // Detect `tree init --dir <workspacePath>/context-tree` from a captured argv
-// vector — the `--dir` must resolve to the workspace-managed context-tree path.
-function argvIsTreeInitWithContextTreeDir(argv: readonly string[], workspacePath: string): boolean {
+// vector. A relative `--dir` is resolved against the invocation's captured
+// `cwd` (the shim records `process.cwd()` on every `first_tree_call`) — so
+// `cd /tmp && first-tree tree init --dir ./context-tree` resolves against
+// `/tmp`, NOT the workspace, and is correctly rejected. When no cwd was
+// captured we fall back to workspacePath.
+function argvIsTreeInitWithContextTreeDir(argv: readonly string[], cwd: string | null, workspacePath: string): boolean {
   if (!argvIsTreeInit(argv)) return false;
   const dirIndex = argv.indexOf("--dir");
   if (dirIndex < 0) return false;
   const dirValue = argv[dirIndex + 1];
-  return typeof dirValue === "string" && dirResolvesToWorkspaceContextTree(dirValue, workspacePath);
+  return (
+    typeof dirValue === "string" && dirResolvesToWorkspaceContextTree(dirValue, cwd ?? workspacePath, workspacePath)
+  );
 }
 
 // Detect a `first-tree[-staging] tree init` invocation inside a raw command
 // string captured from a real command/exec event. Returns whether it is present
 // and whether its `--dir` resolves to the workspace-managed `context-tree`.
+//
+// A raw command string carries NO structured cwd (the model may prefix it with
+// `cd /tmp && ...`), so a relative `--dir` here cannot be resolved soundly.
+// Therefore this path credits `withContextTreeDir` ONLY for an ABSOLUTE `--dir`
+// resolving to the target (cwd-independent); a relative `--dir` counts toward
+// `present`/`observed` but NEVER toward `withContextTreeDir`. That is safe
+// because the authoritative cwd-aware signal is the shim `first_tree_call`
+// argv event, which fires for every real invocation regardless of how it was
+// launched — so relative-`--dir` correctness rides entirely on the argv path.
+//
 // This must only ever be fed captured COMMAND strings, never free-text prose:
 // a run where the model merely describes the command in its final response
 // (without invoking it) must NOT satisfy the invocation signal.
@@ -460,17 +500,22 @@ function commandTreeInitSignal(text: string, workspacePath: string): { present: 
     const rest = text.slice(match.index);
     const dirMatch = rest.match(/--dir(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/u);
     const dirValue = dirMatch?.[1] ?? dirMatch?.[2] ?? dirMatch?.[3] ?? null;
-    if (dirValue !== null && dirResolvesToWorkspaceContextTree(dirValue, workspacePath)) {
+    if (dirValue === null) continue;
+    const cleaned = stripQuotes(dirValue).replace(/\/+$/u, "");
+    // Absolute-only: a relative --dir has no trustworthy base here.
+    if (isAbsolute(cleaned) && dirResolvesToWorkspaceContextTree(cleaned, workspacePath, workspacePath)) {
       withContextTreeDir = true;
     }
   }
   return { present, withContextTreeDir };
 }
 
+type FirstTreeCall = { argv: readonly string[]; cwd: string | null };
+
 type TreeInitObservation = { observed: boolean; withContextTreeDir: boolean };
 
 // The tree-init signal is derived ONLY from captured invocation evidence — the
-// shimmed `first-tree` argv vectors and the real codex exec/command-string
+// shimmed `first-tree` argv+cwd vectors and the real codex exec/command-string
 // events. The model's final response prose is deliberately NOT consulted here:
 // describing `tree init --dir .../context-tree` without invoking it must not
 // pass a gate whose whole point is to prove a real `tree init` invocation. The
@@ -478,15 +523,15 @@ type TreeInitObservation = { observed: boolean; withContextTreeDir: boolean };
 // basename, so a checkout aimed outside the workspace fails the gate.
 function deriveTreeInitObservation(
   events: readonly unknown[],
-  firstTreeArgv: readonly (readonly string[])[],
+  firstTreeCalls: readonly FirstTreeCall[],
   workspacePath: string,
 ): TreeInitObservation {
   let observed = false;
   let withContextTreeDir = false;
 
-  for (const argv of firstTreeArgv) {
-    if (argvIsTreeInit(argv)) observed = true;
-    if (argvIsTreeInitWithContextTreeDir(argv, workspacePath)) withContextTreeDir = true;
+  for (const call of firstTreeCalls) {
+    if (argvIsTreeInit(call.argv)) observed = true;
+    if (argvIsTreeInitWithContextTreeDir(call.argv, call.cwd, workspacePath)) withContextTreeDir = true;
   }
 
   for (const event of events) {
@@ -570,6 +615,7 @@ export function deriveMetrics(
   let workspaceManifestReadObserved = false;
   let sourceEvidenceReadObserved = false;
   const firstTreeArgv: string[][] = [];
+  const firstTreeCalls: FirstTreeCall[] = [];
   const modelOutputTexts: string[] = [];
 
   for (const event of events) {
@@ -598,7 +644,13 @@ export function deriveMetrics(
     const type = eventType(event);
     if ((type === "first_tree_call" || type === "first_tree_staging_call") && isModelPhase(event)) {
       const argv = firstTreeArgvFromEvent(event);
-      if (argv !== null) firstTreeArgv.push(argv);
+      if (argv !== null) {
+        firstTreeArgv.push(argv);
+        // The shim records the invocation cwd (`process.cwd()`) alongside argv;
+        // keep it so a relative `--dir` resolves against the real launch cwd.
+        const cwd = typeof event.cwd === "string" ? event.cwd : null;
+        firstTreeCalls.push({ argv, cwd });
+      }
     }
   }
 
@@ -608,7 +660,7 @@ export function deriveMetrics(
   const sourceWorktreeWasCreated = sourceWorktreeCreated(paths);
   const skeletonHints = evalCase.expected.skeletonHints ?? [];
   const approvalHints = evalCase.expected.approvalHints ?? [];
-  const treeInit = deriveTreeInitObservation(events, firstTreeArgv, paths.workspacePath);
+  const treeInit = deriveTreeInitObservation(events, firstTreeCalls, paths.workspacePath);
 
   const partialMetrics = {
     approvalRequestObserved: approvalHints.length === 0 || containsAny(finalResponse, approvalHints),
