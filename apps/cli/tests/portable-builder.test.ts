@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -15,6 +16,57 @@ function tempDir(name: string): string {
   const dir = mkdtempSync(join(tmpdir(), name));
   tmpDirs.push(dir);
   return dir;
+}
+
+function currentPlatform(): string | null {
+  if (process.platform !== "linux" && process.platform !== "darwin") return null;
+  if (process.arch !== "x64" && process.arch !== "arm64") return null;
+  return `${process.platform}-${process.arch}`;
+}
+
+function sha256(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function commandPath(command: string): string {
+  const result = spawnSync("sh", ["-c", `command -v ${command}`], { encoding: "utf8" });
+  if (result.status !== 0) throw new Error(result.stderr || `failed to resolve ${command}`);
+  return result.stdout.trim();
+}
+
+function writeMvWrapper(dir: string): void {
+  const wrapper = join(dir, "mv");
+  writeFileSync(
+    wrapper,
+    `#!/bin/sh
+set -eu
+target=""
+saw_flag=0
+for arg in "$@"; do
+  target="$arg"
+  if [ "$arg" = "$FT_TEST_REQUIRED_MV_FLAG" ]; then
+    saw_flag=1
+  fi
+done
+if [ "$target" = "$FT_TEST_CURRENT_LINK" ]; then
+  current_version="$(cat "$FT_TEST_CURRENT_LINK/VERSION" 2>/dev/null || true)"
+  if [ "$current_version" != "$FT_TEST_OLD_VERSION" ]; then
+    echo "expected current to remain readable as $FT_TEST_OLD_VERSION before mv, got $current_version" >&2
+    exit 41
+  fi
+  if [ "$saw_flag" != "1" ]; then
+    echo "expected current switch to use $FT_TEST_REQUIRED_MV_FLAG" >&2
+    exit 42
+  fi
+  if [ "\${FT_TEST_FAIL_CURRENT_SWITCH:-}" = "1" ]; then
+    echo "simulated current switch failure" >&2
+    exit 43
+  fi
+fi
+exec "$FT_TEST_REAL_MV" "$@"
+`,
+    { mode: 0o755 },
+  );
 }
 
 afterEach(() => {
@@ -44,7 +96,7 @@ describe("portable builder helpers", () => {
 });
 
 describe("portable installer", () => {
-  async function writeFixtureVersion(root: string, version: string): Promise<void> {
+  async function writeFixtureVersion(root: string, version: string, platform: string): Promise<void> {
     const channelDir = join(root, "prod");
     const versionDir = join(channelDir, version);
     const payload = join(root, `payload-${version}`);
@@ -71,7 +123,7 @@ describe("portable installer", () => {
         binName: "first-tree",
         aliasName: "ft",
         generatedAt: new Date().toISOString(),
-        platform: "linux-x64",
+        platform,
         installMode: "portable",
         appEntry: "app/cli/index.mjs",
       }),
@@ -87,10 +139,9 @@ describe("portable installer", () => {
       { mode: 0o755 },
     );
     await mkdir(versionDir, { recursive: true });
-    const tarball = join(versionDir, `first-tree-${version}-linux-x64.tar.gz`);
+    const tarball = join(versionDir, `first-tree-${version}-${platform}.tar.gz`);
     const tar = spawnSync("tar", ["-czf", tarball, "-C", payload, "."], { encoding: "utf8" });
     if (tar.status !== 0) throw new Error(tar.stderr);
-    const sha = spawnSync("sha256sum", [tarball], { encoding: "utf8" }).stdout.split(/\s+/)[0];
     const latest = {
       schemaVersion: 1,
       channel: "prod",
@@ -104,11 +155,11 @@ describe("portable installer", () => {
       manifestUrl: `file://${versionDir}/manifest.json`,
       assets: [
         {
-          platform: "linux-x64",
-          fileName: `first-tree-${version}-linux-x64.tar.gz`,
+          platform,
+          fileName: `first-tree-${version}-${platform}.tar.gz`,
           url: `file://${tarball}`,
-          sha256: sha,
-          size: Number.parseInt(spawnSync("wc", ["-c", tarball], { encoding: "utf8" }).stdout, 10),
+          sha256: sha256(tarball),
+          size: statSync(tarball).size,
         },
       ],
     };
@@ -116,15 +167,16 @@ describe("portable installer", () => {
     writeFileSync(join(versionDir, "manifest.json"), JSON.stringify({ ...latest, manifestUrl: undefined }, null, 2));
   }
 
-  async function makeFixture(): Promise<string> {
+  async function makeFixture(platform: string): Promise<string> {
     const root = tempDir("first-tree-install-test-");
-    await writeFixtureVersion(root, "1.2.3");
+    await writeFixtureVersion(root, "1.2.3", platform);
     return root;
   }
 
   it("installs from a local manifest and writes portable shims", async () => {
-    if (process.platform !== "linux" || process.arch !== "x64") return;
-    const fixture = await makeFixture();
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makeFixture(platform);
     const home = tempDir("first-tree-home-");
     const prefix = join(home, "prefix");
     const binDir = join(home, "bin");
@@ -150,8 +202,9 @@ describe("portable installer", () => {
   });
 
   it("replaces the current symlink itself when upgrading with the shell installer", async () => {
-    if (process.platform !== "linux" || process.arch !== "x64") return;
-    const fixture = await makeFixture();
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makeFixture(platform);
     const home = tempDir("first-tree-home-");
     const prefix = join(home, "prefix");
     const binDir = join(home, "bin");
@@ -174,17 +227,83 @@ describe("portable installer", () => {
     expect(firstInstall.status, firstInstall.stderr || firstInstall.stdout).toBe(0);
     expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("1.2.3\n");
 
-    await writeFixtureVersion(fixture, "1.2.4");
-    const secondInstall = spawnSync("sh", installArgs, { cwd: REPO_ROOT, env, encoding: "utf8" });
+    await writeFixtureVersion(fixture, "1.2.4", platform);
+    const realMv = commandPath("mv");
+    const wrapperDir = tempDir("first-tree-mv-wrapper-");
+    writeMvWrapper(wrapperDir);
+    const secondInstall = spawnSync("sh", installArgs, {
+      cwd: REPO_ROOT,
+      env: {
+        ...env,
+        PATH: `${wrapperDir}:${process.env.PATH ?? ""}`,
+        FT_TEST_CURRENT_LINK: join(prefix, "current"),
+        FT_TEST_FAIL_CURRENT_SWITCH: "0",
+        FT_TEST_OLD_VERSION: "1.2.3",
+        FT_TEST_REAL_MV: realMv,
+        FT_TEST_REQUIRED_MV_FLAG: process.platform === "darwin" ? "-h" : "-T",
+      },
+      encoding: "utf8",
+    });
 
     expect(secondInstall.status, secondInstall.stderr || secondInstall.stdout).toBe(0);
     expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("1.2.4\n");
     expect(readdirSync(join(prefix, "versions", "1.2.3")).filter((entry) => entry.startsWith(".current."))).toEqual([]);
   });
 
+  it("leaves the previous current symlink intact when atomic current replacement fails", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makeFixture(platform);
+    const home = tempDir("first-tree-home-");
+    const prefix = join(home, "prefix");
+    const binDir = join(home, "bin");
+    const installArgs = [
+      join(REPO_ROOT, "scripts", "portable", "install.sh"),
+      "--prefix",
+      prefix,
+      "--bin-dir",
+      binDir,
+      "--no-path-edit",
+    ];
+    const env = {
+      ...process.env,
+      HOME: home,
+      FIRST_TREE_PORTABLE_CHANNEL: "prod",
+      FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: `file://${fixture}`,
+    };
+
+    const firstInstall = spawnSync("sh", installArgs, { cwd: REPO_ROOT, env, encoding: "utf8" });
+    expect(firstInstall.status, firstInstall.stderr || firstInstall.stdout).toBe(0);
+    expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("1.2.3\n");
+
+    await writeFixtureVersion(fixture, "1.2.4", platform);
+    const realMv = commandPath("mv");
+    const wrapperDir = tempDir("first-tree-mv-wrapper-");
+    writeMvWrapper(wrapperDir);
+    const secondInstall = spawnSync("sh", installArgs, {
+      cwd: REPO_ROOT,
+      env: {
+        ...env,
+        PATH: `${wrapperDir}:${process.env.PATH ?? ""}`,
+        FT_TEST_CURRENT_LINK: join(prefix, "current"),
+        FT_TEST_FAIL_CURRENT_SWITCH: "1",
+        FT_TEST_OLD_VERSION: "1.2.3",
+        FT_TEST_REAL_MV: realMv,
+        FT_TEST_REQUIRED_MV_FLAG: process.platform === "darwin" ? "-h" : "-T",
+      },
+      encoding: "utf8",
+    });
+
+    expect(secondInstall.status).not.toBe(0);
+    expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("1.2.3\n");
+    expect(readdirSync(prefix).filter((entry) => entry.startsWith(".current."))).toEqual([]);
+    expect(readdirSync(join(prefix, "versions", "1.2.3")).filter((entry) => entry.startsWith(".current."))).toEqual([]);
+  });
+
   it("leaves the previous current symlink intact on checksum failure", async () => {
-    if (process.platform !== "linux" || process.arch !== "x64") return;
-    const fixture = await makeFixture();
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makeFixture(platform);
     const latestPath = join(fixture, "prod", "latest.json");
     const latest = JSON.parse(readFileSync(latestPath, "utf8")) as { assets: Array<{ sha256: string }> };
     latest.assets[0].sha256 = "0".repeat(64);

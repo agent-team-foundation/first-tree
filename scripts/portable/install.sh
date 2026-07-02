@@ -167,6 +167,31 @@ EOF
   mv -f "$tmp" "$path"
 }
 
+atomic_replace_current_link() {
+  new_link="$1"
+  current_link="$2"
+  os="$(uname -s 2>/dev/null || true)"
+  case "$os" in
+    Linux)
+      if mv -f -T "$new_link" "$current_link"; then
+        return 0
+      fi
+      ;;
+    Darwin)
+      if mv -f -h "$new_link" "$current_link"; then
+        return 0
+      fi
+      ;;
+    *)
+      rm -f "$new_link"
+      die "unsupported platform for atomic current replacement: ${os:-unknown}"
+      ;;
+  esac
+
+  rm -f "$new_link"
+  die "failed to atomically replace $current_link"
+}
+
 path_contains_bin_dir() {
   case ":${PATH:-}:" in
     *:"$BIN_DIR":*) return 0 ;;
@@ -310,8 +335,7 @@ fi
 NEW_LINK="$PREFIX/.current.$$"
 rm -f "$NEW_LINK"
 ln -s "$FINAL_VERSION_DIR" "$NEW_LINK"
-rm -f "$CURRENT_LINK"
-mv "$NEW_LINK" "$CURRENT_LINK"
+atomic_replace_current_link "$NEW_LINK" "$CURRENT_LINK"
 
 write_shim "$BIN_DIR/$BIN_NAME" "$CURRENT_LINK"
 write_shim "$BIN_DIR/$ALIAS_NAME" "$CURRENT_LINK"

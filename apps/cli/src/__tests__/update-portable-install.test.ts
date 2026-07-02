@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,11 +29,11 @@ function currentPlatform(): string | null {
 }
 
 function bytes(path: string): number {
-  return Number.parseInt(spawnSync("wc", ["-c", path], { encoding: "utf8" }).stdout, 10);
+  return statSync(path).size;
 }
 
 function sha256(path: string): string {
-  return spawnSync("sha256sum", [path], { encoding: "utf8" }).stdout.split(/\s+/)[0] ?? "";
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 async function makeArtifactPayload(options: {
