@@ -66,6 +66,16 @@ describe("Markdown quote continuation", () => {
     expect(container.textContent).toContain("A");
   });
 
+  it("keeps a single-column table outside a preceding blockquote", () => {
+    renderMarkdown("> quoted\n| Col A\n| ---\n| A");
+
+    const blockquote = container.querySelector("blockquote");
+    expect(blockquote).not.toBeNull();
+    expect(blockquote?.textContent?.trim()).toBe("quoted");
+    expect(container.querySelector("table")).not.toBeNull();
+    expect(container.textContent).toContain("Col A");
+  });
+
   it("leaves quote-like lines inside fenced code blocks untouched", () => {
     renderMarkdown("```\n> quoted\n| quoted\n```\noutside");
 

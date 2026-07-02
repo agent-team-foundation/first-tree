@@ -61,6 +61,11 @@ function startsPipeTable(lines: string[], index: number): boolean {
   return isPipeTableRow(lines[index] ?? "") && isPipeTableDelimiter(lines[index + 1]);
 }
 
+function isQuoteContinuationLine(lines: string[], index: number): boolean {
+  if (startsPipeTable(lines, index)) return false;
+  return quoteLineKind(lines[index] ?? "") !== null;
+}
+
 function fenceMarker(line: string): { char: "`" | "~"; length: number } | null {
   const match = /^(?: {0,3})(`{3,}|~{3,})/.exec(line);
   if (!match) return null;
@@ -109,7 +114,7 @@ function normalizeQuoteContinuations(markdown: string): string {
 
     if (kind) {
       const nextLine = lines[index + 1];
-      if (nextLine?.trim() && quoteLineKind(nextLine) === null) {
+      if (nextLine?.trim() && !isQuoteContinuationLine(lines, index + 1)) {
         normalized.push("");
       }
       continue;
