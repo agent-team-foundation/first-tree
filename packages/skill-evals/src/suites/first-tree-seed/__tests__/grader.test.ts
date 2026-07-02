@@ -584,6 +584,65 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("accepts the equals form tree init --dir=<workspace>/context-tree from captured argv", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-eq-"));
+    try {
+      // Commander declares `.option("--dir <path>")`, which accepts BOTH
+      // `--dir <path>` and `--dir=<path>`. The shim records raw argv before
+      // Commander parses it, so an equals-form invocation appears as the single
+      // token `--dir=<path>`; the structured parser must credit it (now that
+      // raw command strings are presence-only, this is the only load-bearing
+      // path).
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", `--dir=${join(tempRoot, "context-tree")}`],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+      expect(metrics.forbiddenSideEffectHits).toEqual([]);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects the equals form tree init --dir=/tmp/context-tree that resolves outside the workspace", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-eq-outside-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir=/tmp/context-tree"],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("detects a tree init without a context-tree --dir as the regression", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-nodir-"));
     try {

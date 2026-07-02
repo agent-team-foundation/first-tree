@@ -459,6 +459,22 @@ function argvIsTreeInit(argv: readonly string[]): boolean {
   return argv[0] === "tree" && argv[1] === "init";
 }
 
+// Extract the `--dir` value from a captured argv vector, accepting BOTH the
+// space form (`--dir <value>`, two tokens) and the equals form (`--dir=<value>`,
+// one token) — Commander accepts either, so the grader must too, else a valid
+// `tree init --dir=<managed>/context-tree` would be wrongly rejected. Scanning
+// the whole vector is safe here (unlike a raw command string): it is a single
+// invocation's argv, so any `--dir` in it belongs to this `tree init`.
+function treeInitDirValueFromArgv(argv: readonly string[]): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    if (token === undefined) continue;
+    if (token === "--dir") return argv[i + 1] ?? null;
+    if (token.startsWith("--dir=")) return token.slice("--dir=".length);
+  }
+  return null;
+}
+
 // Detect `tree init --dir <workspacePath>/context-tree` from a captured argv
 // vector. A relative `--dir` is resolved against the invocation's captured
 // `cwd` (the shim records `process.cwd()` on every `first_tree_call`) — so
@@ -467,12 +483,8 @@ function argvIsTreeInit(argv: readonly string[]): boolean {
 // captured we fall back to workspacePath.
 function argvIsTreeInitWithContextTreeDir(argv: readonly string[], cwd: string | null, workspacePath: string): boolean {
   if (!argvIsTreeInit(argv)) return false;
-  const dirIndex = argv.indexOf("--dir");
-  if (dirIndex < 0) return false;
-  const dirValue = argv[dirIndex + 1];
-  return (
-    typeof dirValue === "string" && dirResolvesToWorkspaceContextTree(dirValue, cwd ?? workspacePath, workspacePath)
-  );
+  const dirValue = treeInitDirValueFromArgv(argv);
+  return dirValue !== null && dirResolvesToWorkspaceContextTree(dirValue, cwd ?? workspacePath, workspacePath);
 }
 
 // Detect a `first-tree[-staging] tree init` invocation inside a raw command
