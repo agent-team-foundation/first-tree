@@ -860,6 +860,38 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("event-detects a search-tool READ of a worktree path (rg Apollo seed-source-repo/README.md)", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-worktree-search-read-"));
+    try {
+      // A search tool also takes PATH operands: reading a worktree file with
+      // rg/grep (a `seed-source-repo/<file>` sub-path) IS worktree access, unlike
+      // a bare name search or a quoted-pattern search of the docs. The trailing
+      // slash distinguishes the two.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
+            event: { command: "rg Apollo seed-source-repo/README.md", type: "command_execution" },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.sourceWorktreeAccessObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("detects tree init --dir context-tree from captured first-tree argv", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-"));
     try {

@@ -110,19 +110,26 @@ const WORKTREE_SEARCH_TOOLS = new Set(["grep", "egrep", "fgrep", "rg", "ripgrep"
 function segmentTouchesSourceWorktree(segment: string): boolean {
   const trimmed = segment.trim();
   if (trimmed.length === 0) return false;
-  // A search tool's arguments are patterns, not worktree operands — skip it so a
-  // quoted pattern that names/quotes a worktree command is not a false positive.
-  const program = (trimmed.split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
-  if (WORKTREE_SEARCH_TOOLS.has(program)) return false;
-  // A path under the source worktree — full `worktrees/seed-source-repo…` or a
-  // relative `seed-source-repo/…` after `cd worktrees`.
-  if (/worktrees\/seed-source-repo\b/u.test(trimmed)) return true;
+  // A sub-path UNDER the worktree (`seed-source-repo/<file>`) is a real path
+  // operand for ANY program — including a search-tool read of a worktree file
+  // like `rg Apollo seed-source-repo/README.md`. The trailing slash marks a
+  // path, so this does NOT fire on a bare name search
+  // (`grep seed-source-repo AGENTS.md`) or a quoted pattern
+  // (`rg 'worktree add .*seed-source-repo' AGENTS.md`) — neither has it.
   if (/\bseed-source-repo\//u.test(trimmed)) return true;
-  // A `git worktree add|remove|move … seed-source-repo` — materialization or
-  // teardown, even with no trailing slash (the relative-path evasion).
-  if (/\bworktree\s+(?:add|remove|move)\b[^\n]*\bseed-source-repo\b/u.test(trimmed)) return true;
-  // A `cd` INTO the worktree directory.
+  // A `cd` INTO the worktree directory (`cd` is never a search tool).
   if (/\bcd\s+[^\s&|;]*seed-source-repo\b/u.test(trimmed)) return true;
+  // A `git worktree add|remove|move … seed-source-repo` — materialization or
+  // teardown, even with no trailing slash (the relative-path evasion). Skip
+  // search tools here: their quoted PATTERN could otherwise spoof this regex
+  // (`rg 'worktree add .*seed-source-repo' AGENTS.md`).
+  const program = (trimmed.split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
+  if (
+    !WORKTREE_SEARCH_TOOLS.has(program) &&
+    /\bworktree\s+(?:add|remove|move)\b[^\n]*\bseed-source-repo\b/u.test(trimmed)
+  ) {
+    return true;
+  }
   return false;
 }
 
