@@ -7,6 +7,8 @@ import { cn } from "../../lib/utils.js";
 
 type RehypePlugins = ComponentProps<typeof ReactMarkdown>["rehypePlugins"];
 
+type QuoteLineKind = "standard" | "pipe";
+
 /**
  * react-markdown's `defaultUrlTransform` sanitizes hrefs and STRIPS any
  * unrecognized scheme to an empty string before our `a` component override
@@ -19,6 +21,66 @@ type RehypePlugins = ComponentProps<typeof ReactMarkdown>["rehypePlugins"];
 function previewSafeUrlTransform(url: string): string {
   if (url.startsWith("attachment:") || url.startsWith("#doc-failed")) return url;
   return defaultUrlTransform(url);
+}
+
+function quoteLineKind(line: string): QuoteLineKind | null {
+  if (/^ {0,3}>/.test(line)) return "standard";
+
+  const trimmed = line.trimStart();
+  if (!trimmed.startsWith("|")) return null;
+  if (trimmed.length > 1 && !/\s/.test(trimmed[1] ?? "")) return null;
+
+  const content = trimmed.slice(1).trimEnd();
+  return content.includes("|") ? null : "pipe";
+}
+
+function normalizePipeQuoteLine(line: string): string {
+  return line.replace(/^([ \t]{0,3})\|[ \t]?/, "$1> ");
+}
+
+function fenceMarker(line: string): { char: "`" | "~"; length: number } | null {
+  const match = /^(?: {0,3})(`{3,}|~{3,})/.exec(line);
+  if (!match) return null;
+  const marker = match[1] ?? "";
+  const char = marker[0] as "`" | "~";
+  return { char, length: marker.length };
+}
+
+function closesFence(line: string, fence: { char: "`" | "~"; length: number }): boolean {
+  const match = /^(?: {0,3})(`{3,}|~{3,})\s*$/.exec(line);
+  return Boolean(match?.[1]?.startsWith(fence.char) && match[1].length >= fence.length);
+}
+
+function normalizeQuoteContinuations(markdown: string): string {
+  const lines = markdown.split(/\r?\n/);
+  const normalized: string[] = [];
+  let openFence: { char: "`" | "~"; length: number } | null = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+
+    if (openFence) {
+      normalized.push(line);
+      if (closesFence(line, openFence)) openFence = null;
+      continue;
+    }
+
+    const kind = quoteLineKind(line);
+    const normalizedLine = kind === "pipe" ? normalizePipeQuoteLine(line) : line;
+    normalized.push(normalizedLine);
+
+    if (kind) {
+      const nextLine = lines[index + 1];
+      if (nextLine?.trim() && quoteLineKind(nextLine) === null) {
+        normalized.push("");
+      }
+      continue;
+    }
+
+    openFence = fenceMarker(line);
+  }
+
+  return normalized.join("\n");
 }
 
 export type MarkdownProps = {
@@ -38,6 +100,8 @@ export type MarkdownProps = {
  * detail page without a theme switch.
  */
 export function Markdown({ children, className, components, rehypePlugins }: MarkdownProps) {
+  const normalizedChildren = normalizeQuoteContinuations(children);
+
   return (
     <div
       className={cn(
@@ -81,7 +145,7 @@ export function Markdown({ children, className, components, rehypePlugins }: Mar
           ...components,
         }}
       >
-        {children}
+        {normalizedChildren}
       </ReactMarkdown>
     </div>
   );
