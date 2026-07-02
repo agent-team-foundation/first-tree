@@ -266,8 +266,13 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
   app.post("/me/onboarding/kickoff", async (request, reply) => {
     const { userId } = requireUser(request);
     const body = kickoffOnboardingSchema.parse(request.body);
-    const { memberId, humanAgentId } = await resolveOnboardingMember(app, userId, body.organizationId);
     const campaign = body.campaign;
+    if (campaign && !app.config.growth.landingPagesEnabled) {
+      return reply
+        .status(404)
+        .send({ error: "Growth landing pages are disabled on this First Tree deployment.", code: "feature_disabled" });
+    }
+    const { memberId, humanAgentId } = await resolveOnboardingMember(app, userId, body.organizationId);
     const result = await kickoffOnboarding(app.db, {
       memberId,
       humanAgentId,

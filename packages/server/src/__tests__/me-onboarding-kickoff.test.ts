@@ -39,7 +39,8 @@ const KICKOFF_URL = "/api/v1/me/onboarding/kickoff";
 const TREE_STATUS_URL = "/api/v1/me/onboarding/tree-setup-status";
 
 describe("POST /me/onboarding/kickoff", () => {
-  const getApp = useTestApp();
+  const getApp = useTestApp({ growthLandingPagesEnabled: true });
+  const getGrowthDisabledApp = useTestApp();
 
   it("creates the chat, sends the bootstrap, and stamps completion", async () => {
     const app = getApp();
@@ -331,6 +332,33 @@ describe("POST /me/onboarding/kickoff", () => {
     const [readyChat] = await app.db.select().from(chats).where(eq(chats.id, readyChatId)).limit(1);
     expect(scanChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work:production-scan`);
     expect(readyChat?.onboardingKickoffKey).toBe(`${admin.humanAgentUuid}:${agent.uuid}:work:agent-readiness`);
+  });
+
+  it("rejects campaign kickoff when growth landing pages are disabled", async () => {
+    const app = getGrowthDisabledApp();
+    const admin = await createTestAdmin(app);
+    const agent = await createOrgAgent(app, admin);
+
+    const res = await app.inject({
+      method: "POST",
+      url: KICKOFF_URL,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        organizationId: admin.organizationId,
+        agentUuid: agent.uuid,
+        bootstrap: "Campaign work kickoff.",
+        kind: "work",
+        campaign: "production-scan",
+      },
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ code: "feature_disabled" });
+    const rows = await app.db
+      .select()
+      .from(chats)
+      .where(eq(chats.onboardingKickoffKey, `${admin.humanAgentUuid}:${agent.uuid}:work:production-scan`));
+    expect(rows).toHaveLength(0);
   });
 
   it("omits the campaign segment when no campaign is passed, keeping the legacy key", async () => {
