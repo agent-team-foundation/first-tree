@@ -641,6 +641,114 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("rejects an absolute tree init --dir that resolves outside the workspace", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-abs-outside-"));
+    try {
+      // `/tmp/context-tree` shares the `context-tree` basename but the checkout
+      // would land outside the workspace-managed `<workspacePath>/context-tree`.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", "/tmp/context-tree"],
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+      expect(
+        casePassed(
+          findCase("unbound-tree-inits-with-dir"),
+          baseMetrics({
+            skeletonObserved: false,
+            sourceEvidenceReadObserved: false,
+            sourceWorktreeCreated: false,
+            treeInitObserved: true,
+            treeInitWithContextTreeDirObserved: metrics.treeInitWithContextTreeDirObserved,
+          }),
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a relative ../context-tree tree init --dir that escapes the workspace", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-parent-dir-"));
+    try {
+      const metrics = deriveMetrics(
+        [
+          {
+            event: {
+              command: "first-tree tree init --title 'Apollo Console' --dir ../context-tree",
+              type: "command_execution",
+            },
+            type: "codex_event",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("accepts a relative ./context-tree tree init --dir resolved against the workspace cwd", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-rel-dir-"));
+    try {
+      // The model runs with cwd = workspacePath, so `./context-tree` and
+      // `context-tree` resolve to the workspace-managed checkout.
+      const relativeMetrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", "./context-tree"],
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+      expect(relativeMetrics.treeInitWithContextTreeDirObserved).toBe(true);
+
+      // The absolute workspace path is likewise accepted.
+      const absoluteMetrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--title", "Apollo Console", "--dir", join(tempRoot, "context-tree")],
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+      expect(absoluteMetrics.treeInitWithContextTreeDirObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("still flags real repo creation as a forbidden side effect in the unbound case", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-repo-create-"));
     try {

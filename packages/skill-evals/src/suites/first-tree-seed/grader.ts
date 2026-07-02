@@ -1,5 +1,5 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 
 import { runCommand } from "../../core/commands.js";
 import { isRecord, isStringArray } from "../../core/events.js";
@@ -396,11 +396,38 @@ function stripQuotes(value: string): string {
   return value.replace(/^['"]|['"]$/gu, "");
 }
 
-function dirBasenameIsContextTree(dirValue: string): boolean {
+// Resolve a path to its real (symlink-followed) form when it exists, otherwise
+// fall back to the normalized string. The eval shim blocks real `tree init`, so
+// the target `context-tree` checkout usually does NOT exist on disk — hence the
+// ENOENT-tolerant fallback. This exists to defeat the macOS symlinked-root
+// caveat (e.g. `/var` -> `/private/var`, `/tmp` -> `/private/tmp`): the captured
+// absolute `--dir` and the derived workspace path can print differently yet
+// point at the same location, so we realpath BOTH sides before comparing.
+function realpathOrNormalized(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return normalize(path);
+  }
+}
+
+// True when a captured `--dir` value resolves to the workspace-managed
+// `<workspacePath>/context-tree`, NOT merely shares its basename. `tree init`
+// otherwise clones to `<cwd>/<repo>`; the model runs with cwd = workspacePath,
+// so a RELATIVE `--dir` (e.g. `./context-tree`, `context-tree`) resolves
+// against the workspace, while an absolute `--dir` must equal the target
+// outright. This ACCEPTS `./context-tree` / `context-tree` / an absolute
+// `<workspacePath>/context-tree`; it REJECTS `/tmp/context-tree`,
+// `../context-tree`, and `<other>/context-tree` — all of which would land the
+// checkout outside the workspace-managed path.
+function dirResolvesToWorkspaceContextTree(dirValue: string, workspacePath: string): boolean {
   const cleaned = stripQuotes(dirValue).replace(/\/+$/u, "");
   if (cleaned.length === 0) return false;
-  const segments = cleaned.split("/");
-  return segments[segments.length - 1] === TREE_INIT_DIR_TARGET;
+  const target = join(workspacePath, TREE_INIT_DIR_TARGET);
+  const candidate = isAbsolute(cleaned) ? normalize(cleaned) : resolve(workspacePath, cleaned);
+  if (normalize(candidate) === normalize(target)) return true;
+  // Symlinked-root fallback (macOS /var, /tmp, /private/*): compare realpaths.
+  return realpathOrNormalized(candidate) === realpathOrNormalized(target);
 }
 
 // Detect a `tree init` invocation from a captured first-tree argv vector.
@@ -408,22 +435,23 @@ function argvIsTreeInit(argv: readonly string[]): boolean {
   return argv[0] === "tree" && argv[1] === "init";
 }
 
-// Detect `tree init --dir <...>/context-tree` from a captured argv vector.
-function argvIsTreeInitWithContextTreeDir(argv: readonly string[]): boolean {
+// Detect `tree init --dir <workspacePath>/context-tree` from a captured argv
+// vector — the `--dir` must resolve to the workspace-managed context-tree path.
+function argvIsTreeInitWithContextTreeDir(argv: readonly string[], workspacePath: string): boolean {
   if (!argvIsTreeInit(argv)) return false;
   const dirIndex = argv.indexOf("--dir");
   if (dirIndex < 0) return false;
   const dirValue = argv[dirIndex + 1];
-  return typeof dirValue === "string" && dirBasenameIsContextTree(dirValue);
+  return typeof dirValue === "string" && dirResolvesToWorkspaceContextTree(dirValue, workspacePath);
 }
 
 // Detect a `first-tree[-staging] tree init` invocation inside a raw command
 // string captured from a real command/exec event. Returns whether it is present
-// and whether it carries a `--dir` resolving to a `context-tree` checkout.
+// and whether its `--dir` resolves to the workspace-managed `context-tree`.
 // This must only ever be fed captured COMMAND strings, never free-text prose:
 // a run where the model merely describes the command in its final response
 // (without invoking it) must NOT satisfy the invocation signal.
-function commandTreeInitSignal(text: string): { present: boolean; withContextTreeDir: boolean } {
+function commandTreeInitSignal(text: string, workspacePath: string): { present: boolean; withContextTreeDir: boolean } {
   const initPattern = /\bfirst-tree(?:-staging)?\s+tree\s+init\b/gu;
   let present = false;
   let withContextTreeDir = false;
@@ -432,7 +460,7 @@ function commandTreeInitSignal(text: string): { present: boolean; withContextTre
     const rest = text.slice(match.index);
     const dirMatch = rest.match(/--dir(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/u);
     const dirValue = dirMatch?.[1] ?? dirMatch?.[2] ?? dirMatch?.[3] ?? null;
-    if (dirValue !== null && dirBasenameIsContextTree(dirValue)) {
+    if (dirValue !== null && dirResolvesToWorkspaceContextTree(dirValue, workspacePath)) {
       withContextTreeDir = true;
     }
   }
@@ -445,23 +473,26 @@ type TreeInitObservation = { observed: boolean; withContextTreeDir: boolean };
 // shimmed `first-tree` argv vectors and the real codex exec/command-string
 // events. The model's final response prose is deliberately NOT consulted here:
 // describing `tree init --dir .../context-tree` without invoking it must not
-// pass a gate whose whole point is to prove a real `tree init` invocation.
+// pass a gate whose whole point is to prove a real `tree init` invocation. The
+// `--dir` must RESOLVE to `<workspacePath>/context-tree`, not merely share a
+// basename, so a checkout aimed outside the workspace fails the gate.
 function deriveTreeInitObservation(
   events: readonly unknown[],
   firstTreeArgv: readonly (readonly string[])[],
+  workspacePath: string,
 ): TreeInitObservation {
   let observed = false;
   let withContextTreeDir = false;
 
   for (const argv of firstTreeArgv) {
     if (argvIsTreeInit(argv)) observed = true;
-    if (argvIsTreeInitWithContextTreeDir(argv)) withContextTreeDir = true;
+    if (argvIsTreeInitWithContextTreeDir(argv, workspacePath)) withContextTreeDir = true;
   }
 
   for (const event of events) {
     if (!isRecord(event) || eventType(event) !== "codex_event") continue;
     for (const command of collectCommandStrings(event.event)) {
-      const signal = commandTreeInitSignal(command);
+      const signal = commandTreeInitSignal(command, workspacePath);
       if (signal.present) observed = true;
       if (signal.withContextTreeDir) withContextTreeDir = true;
     }
@@ -577,7 +608,7 @@ export function deriveMetrics(
   const sourceWorktreeWasCreated = sourceWorktreeCreated(paths);
   const skeletonHints = evalCase.expected.skeletonHints ?? [];
   const approvalHints = evalCase.expected.approvalHints ?? [];
-  const treeInit = deriveTreeInitObservation(events, firstTreeArgv);
+  const treeInit = deriveTreeInitObservation(events, firstTreeArgv, paths.workspacePath);
 
   const partialMetrics = {
     approvalRequestObserved: approvalHints.length === 0 || containsAny(finalResponse, approvalHints),
