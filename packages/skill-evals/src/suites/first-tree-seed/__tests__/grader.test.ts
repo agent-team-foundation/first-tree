@@ -822,14 +822,26 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("credits an absolute --dir to the workspace context-tree from a command string", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-cmd-abs-"));
+  it("does not credit a later command-string --dir to a real tree init that lacks --dir (cross-segment false green)", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-cmd-crosssegment-"));
     try {
+      // `first-tree tree init --title X && echo --dir <ws>/context-tree`: the
+      // real shimmed argv has NO --dir, but the raw command string carries a
+      // later, unrelated absolute --dir in a separate `echo` segment. A naive
+      // scan of the whole string would mis-attribute that --dir to the tree
+      // init. withContextTreeDir must come SOLELY from the structured
+      // first_tree_call argv, so the later --dir must NOT be credited.
       const metrics = deriveMetrics(
         [
           {
+            argv: ["tree", "init", "--title", "Apollo Console"],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+          {
             event: {
-              command: `first-tree tree init --title 'Apollo Console' --dir ${join(tempRoot, "context-tree")}`,
+              command: `first-tree tree init --title 'Apollo Console' && echo --dir ${join(tempRoot, "context-tree")}`,
               type: "command_execution",
             },
             type: "codex_event",
@@ -843,7 +855,8 @@ describe("first-tree-seed grader", () => {
       );
 
       expect(metrics.treeInitObserved).toBe(true);
-      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+      expect(casePassed(findCase("unbound-tree-inits-with-dir"), metrics)).toBe(false);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }

@@ -476,38 +476,25 @@ function argvIsTreeInitWithContextTreeDir(argv: readonly string[], cwd: string |
 }
 
 // Detect a `first-tree[-staging] tree init` invocation inside a raw command
-// string captured from a real command/exec event. Returns whether it is present
-// and whether its `--dir` resolves to the workspace-managed `context-tree`.
+// string captured from a real command/exec event. Reports ONLY presence — it
+// deliberately does NOT parse `--dir` or credit `withContextTreeDir`.
 //
-// A raw command string carries NO structured cwd (the model may prefix it with
-// `cd /tmp && ...`), so a relative `--dir` here cannot be resolved soundly.
-// Therefore this path credits `withContextTreeDir` ONLY for an ABSOLUTE `--dir`
-// resolving to the target (cwd-independent); a relative `--dir` counts toward
-// `present`/`observed` but NEVER toward `withContextTreeDir`. That is safe
-// because the authoritative cwd-aware signal is the shim `first_tree_call`
-// argv event, which fires for every real invocation regardless of how it was
-// launched — so relative-`--dir` correctness rides entirely on the argv path.
+// A raw command string cannot soundly bind a `--dir` token to the matched
+// `tree init`: the model may chain unrelated commands
+// (`first-tree tree init --title X && echo --dir <ws>/context-tree`), so a later
+// `--dir` in the same string is not necessarily an option of that `tree init`;
+// and the string carries no structured cwd for resolving a relative `--dir`.
+// The authoritative, cwd-aware, per-invocation `--dir` signal is the shim
+// `first_tree_call` argv event, which fires for EVERY real invocation with the
+// exact argv vector — so `withContextTreeDir` is derived SOLELY from that
+// structured path (see `deriveTreeInitObservation`). This path only backstops
+// `observed` (a `tree init` was attempted).
 //
 // This must only ever be fed captured COMMAND strings, never free-text prose:
 // a run where the model merely describes the command in its final response
 // (without invoking it) must NOT satisfy the invocation signal.
-function commandTreeInitSignal(text: string, workspacePath: string): { present: boolean; withContextTreeDir: boolean } {
-  const initPattern = /\bfirst-tree(?:-staging)?\s+tree\s+init\b/gu;
-  let present = false;
-  let withContextTreeDir = false;
-  for (let match = initPattern.exec(text); match !== null; match = initPattern.exec(text)) {
-    present = true;
-    const rest = text.slice(match.index);
-    const dirMatch = rest.match(/--dir(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/u);
-    const dirValue = dirMatch?.[1] ?? dirMatch?.[2] ?? dirMatch?.[3] ?? null;
-    if (dirValue === null) continue;
-    const cleaned = stripQuotes(dirValue).replace(/\/+$/u, "");
-    // Absolute-only: a relative --dir has no trustworthy base here.
-    if (isAbsolute(cleaned) && dirResolvesToWorkspaceContextTree(cleaned, workspacePath, workspacePath)) {
-      withContextTreeDir = true;
-    }
-  }
-  return { present, withContextTreeDir };
+function commandMentionsTreeInit(text: string): boolean {
+  return /\bfirst-tree(?:-staging)?\s+tree\s+init\b/u.test(text);
 }
 
 type FirstTreeCall = { argv: readonly string[]; cwd: string | null };
@@ -537,9 +524,10 @@ function deriveTreeInitObservation(
   for (const event of events) {
     if (!isRecord(event) || eventType(event) !== "codex_event") continue;
     for (const command of collectCommandStrings(event.event)) {
-      const signal = commandTreeInitSignal(command, workspacePath);
-      if (signal.present) observed = true;
-      if (signal.withContextTreeDir) withContextTreeDir = true;
+      // Command strings backstop `observed` only; `withContextTreeDir` comes
+      // solely from the structured argv+cwd path above (see the comment on
+      // `commandMentionsTreeInit`).
+      if (commandMentionsTreeInit(command)) observed = true;
     }
   }
 
