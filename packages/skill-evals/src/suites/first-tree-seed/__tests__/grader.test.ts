@@ -840,6 +840,12 @@ describe("first-tree-seed grader", () => {
             event: { command: "rg seed-source-repo", type: "command_execution" },
             type: "codex_event",
           },
+          {
+            // A search whose PATTERN quotes a worktree command must not count as
+            // a worktree operation — the program is a search tool.
+            event: { command: "rg 'worktree add .*seed-source-repo' AGENTS.md", type: "command_execution" },
+            type: "codex_event",
+          },
         ],
         findCase("unbound-tree-inits-with-dir"),
         fixtureValidation(),

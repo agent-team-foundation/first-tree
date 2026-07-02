@@ -97,23 +97,40 @@ function containsPathAccess(event: unknown, patterns: readonly string[]): boolea
   return collectToolInputStrings(event.event).some((value) => patterns.some((pattern) => value.includes(pattern)));
 }
 
-// True when a command string OPERATES ON the source worktree `seed-source-repo`
-// as a path or `git worktree` operand — NOT when it merely mentions the name.
-// The generated fixture's AGENTS.md documents the `worktrees/seed-source-repo`
-// protocol, so a compliant Step-0 search of the instructions
-// (`grep seed-source-repo AGENTS.md`, `rg seed-source-repo`) must not count as
-// worktree access. Distinguish real touches structurally:
-function commandTouchesSourceWorktree(text: string): boolean {
-  // A path UNDER the worktree — `worktrees/seed-source-repo/...` or a relative
-  // `seed-source-repo/...` after `cd worktrees`. The trailing slash marks a path
-  // operand, not a search term.
-  if (/seed-source-repo\//u.test(text)) return true;
-  // A `git worktree add|remove|move ... seed-source-repo` — materialization or
+// Search tools whose operands are PATTERNS, not paths — a doc search with any of
+// these (even one whose pattern quotes `git worktree add … seed-source-repo`)
+// must not count as a worktree operation.
+const WORKTREE_SEARCH_TOOLS = new Set(["grep", "egrep", "fgrep", "rg", "ripgrep", "ag", "ack"]);
+
+// True when a single shell SEGMENT operates on the source worktree
+// `seed-source-repo` as a path / `git worktree` operand — not when it merely
+// mentions the name (e.g. `grep seed-source-repo AGENTS.md` or
+// `rg 'worktree add .*seed-source-repo' AGENTS.md`, which search the documented
+// protocol in the fixture's AGENTS.md).
+function segmentTouchesSourceWorktree(segment: string): boolean {
+  const trimmed = segment.trim();
+  if (trimmed.length === 0) return false;
+  // A search tool's arguments are patterns, not worktree operands — skip it so a
+  // quoted pattern that names/quotes a worktree command is not a false positive.
+  const program = (trimmed.split(/\s+/u)[0] ?? "").split("/").pop() ?? "";
+  if (WORKTREE_SEARCH_TOOLS.has(program)) return false;
+  // A path under the source worktree — full `worktrees/seed-source-repo…` or a
+  // relative `seed-source-repo/…` after `cd worktrees`.
+  if (/worktrees\/seed-source-repo\b/u.test(trimmed)) return true;
+  if (/\bseed-source-repo\//u.test(trimmed)) return true;
+  // A `git worktree add|remove|move … seed-source-repo` — materialization or
   // teardown, even with no trailing slash (the relative-path evasion).
-  if (/\bworktree\s+(?:add|remove|move)\b[^\n]*\bseed-source-repo\b/u.test(text)) return true;
+  if (/\bworktree\s+(?:add|remove|move)\b[^\n]*\bseed-source-repo\b/u.test(trimmed)) return true;
   // A `cd` INTO the worktree directory.
-  if (/\bcd\s+[^\s&|;]*seed-source-repo\b/u.test(text)) return true;
+  if (/\bcd\s+[^\s&|;]*seed-source-repo\b/u.test(trimmed)) return true;
   return false;
+}
+
+// True when a captured command string operates on the source worktree. Split on
+// shell operators first so a search sub-command's quoted pattern is not
+// attributed to a neighboring real operation.
+function commandTouchesSourceWorktree(text: string): boolean {
+  return text.split(/&&|\|\||[;|\n]/u).some((segment) => segmentTouchesSourceWorktree(segment));
 }
 
 function eventTouchesSourceWorktree(event: unknown): boolean {
