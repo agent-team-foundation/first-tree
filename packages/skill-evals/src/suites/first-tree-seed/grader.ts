@@ -459,20 +459,32 @@ function argvIsTreeInit(argv: readonly string[]): boolean {
   return argv[0] === "tree" && argv[1] === "init";
 }
 
-// Extract the `--dir` value from a captured argv vector, accepting BOTH the
-// space form (`--dir <value>`, two tokens) and the equals form (`--dir=<value>`,
-// one token) — Commander accepts either, so the grader must too, else a valid
-// `tree init --dir=<managed>/context-tree` would be wrongly rejected. Scanning
-// the whole vector is safe here (unlike a raw command string): it is a single
-// invocation's argv, so any `--dir` in it belongs to this `tree init`.
+// Extract the EFFECTIVE `--dir` value from a captured argv vector, mirroring
+// Commander's parsing of `.option("--dir <path>")` so the grader sees the same
+// target the real CLI would use:
+//   - accept BOTH spellings: space form (`--dir <value>`) and equals form
+//     (`--dir=<value>`) — else a valid `--dir=<managed>/context-tree` is wrongly
+//     rejected;
+//   - LAST occurrence wins (Commander overwrites a scalar option), so a later
+//     outside-workspace `--dir` overrides an earlier managed one and must not
+//     false-green;
+//   - stop at a `--` terminator: tokens after it are positionals, not options.
+// Scanning the vector is safe (unlike a raw command string): it is a single
+// invocation's argv, so any option `--dir` in it belongs to this `tree init`.
 function treeInitDirValueFromArgv(argv: readonly string[]): string | null {
+  let dirValue: string | null = null;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
     if (token === undefined) continue;
-    if (token === "--dir") return argv[i + 1] ?? null;
-    if (token.startsWith("--dir=")) return token.slice("--dir=".length);
+    if (token === "--") break; // option terminator; the rest are positionals
+    if (token === "--dir") {
+      dirValue = argv[i + 1] ?? null;
+      i++; // consume the value token Commander binds to --dir
+    } else if (token.startsWith("--dir=")) {
+      dirValue = token.slice("--dir=".length);
+    }
   }
-  return null;
+  return dirValue;
 }
 
 // Detect `tree init --dir <workspacePath>/context-tree` from a captured argv

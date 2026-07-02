@@ -643,6 +643,88 @@ describe("first-tree-seed grader", () => {
     }
   });
 
+  it("uses the LAST --dir when repeated (Commander overwrites), so a later outside path fails", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-dup-outside-"));
+    try {
+      // `--dir <ws>/context-tree --dir /tmp/context-tree`: Commander keeps the
+      // LAST scalar value, so the effective target is the outside `/tmp` path.
+      // The grader must mirror that and NOT credit the earlier managed value.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--dir", join(tempRoot, "context-tree"), "--dir", "/tmp/context-tree"],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitObserved).toBe(true);
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(false);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the LAST --dir when repeated so a later managed path is credited", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-dup-inside-"));
+    try {
+      // Reverse order: outside first, managed last -> last wins -> accepted.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--dir=/tmp/context-tree", `--dir=${join(tempRoot, "context-tree")}`],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("stops --dir scanning at a -- terminator (later --dir is a positional, not an option)", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-argv-terminator-"));
+    try {
+      // After `--`, tokens are positionals: the managed `--dir` before the
+      // terminator is the effective option; the `/tmp` one after it is not.
+      const metrics = deriveMetrics(
+        [
+          {
+            argv: ["tree", "init", "--dir", join(tempRoot, "context-tree"), "--", "--dir", "/tmp/context-tree"],
+            cwd: tempRoot,
+            phase: "model",
+            type: "first_tree_call",
+          },
+        ],
+        findCase("unbound-tree-inits-with-dir"),
+        fixtureValidation(),
+        0,
+        baseRunPaths(tempRoot),
+        join(tempRoot, "context-tree"),
+      );
+
+      expect(metrics.treeInitWithContextTreeDirObserved).toBe(true);
+    } finally {
+      rmSync(tempRoot, { force: true, recursive: true });
+    }
+  });
+
   it("detects a tree init without a context-tree --dir as the regression", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-tree-init-nodir-"));
     try {
