@@ -157,7 +157,7 @@ export async function getCallerEngagement(
 // The conversation-list filter popover splits chats by coarse-grained
 // origin — Manual / GitHub / Agent (one per integration/workflow, not one
 // per entity type within an integration). The per-entity GitHub granularity
-// (PR / Issue / Discussion / Commit) is preserved on the row via the
+// (PR / Issue / Discussion) is preserved on the row via the
 // separate `entity_type` SELECT so the rail's leading icon can still
 // render the right glyph.
 //

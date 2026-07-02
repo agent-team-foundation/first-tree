@@ -356,7 +356,7 @@ describe("normalizeGithubEvent — issues", () => {
   });
 });
 
-describe("normalizeGithubEvent — discussion / discussion_comment / commit_comment", () => {
+describe("normalizeGithubEvent — discussion / discussion_comment", () => {
   it("discussion.created → kind=opened with body mentions", () => {
     const event = normalize("discussion", {
       action: "created",
@@ -387,24 +387,19 @@ describe("normalizeGithubEvent — discussion / discussion_comment / commit_comm
     expect(event?.kind).toBe("commented");
   });
 
-  it("commit_comment.created → entity is commit keyed on sha", () => {
-    const event = normalize("commit_comment", {
-      action: "created",
-      sender: senderUser,
-      repository,
-      comment: {
-        body: "nit",
-        commit_id: "abc1234",
-        html_url: "https://github.com/owner/repo/commit/abc1234#comment-1",
-      },
-    });
-    expect(event?.entity).toEqual({
-      type: "commit",
-      repo: "owner/repo",
-      key: "owner/repo@abc1234",
-      url: "https://github.com/owner/repo/commit/abc1234#comment-1",
-    });
-    expect(event?.kind).toBe("commit_commented");
+  it("commit_comment.created → null because commit entities are unsupported", () => {
+    expect(
+      normalize("commit_comment", {
+        action: "created",
+        sender: senderUser,
+        repository,
+        comment: {
+          body: "nit",
+          commit_id: "abc1234",
+          html_url: "https://github.com/owner/repo/commit/abc1234#comment-1",
+        },
+      }),
+    ).toBeNull();
   });
 });
 

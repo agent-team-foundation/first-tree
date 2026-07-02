@@ -20,14 +20,14 @@ import { z } from "zod";
  * `packages/web/src/components/chat/source-icon.tsx`; the SQL classifier
  * does not need to be touched.
  */
-export const GITHUB_ENTITY_TYPES = ["issue", "pull_request", "discussion", "commit"] as const;
+export const GITHUB_ENTITY_TYPES = ["issue", "pull_request", "discussion"] as const;
 export const githubEntityTypeSchema = z.enum(GITHUB_ENTITY_TYPES);
 export type GithubEntityType = z.infer<typeof githubEntityTypeSchema>;
 
 export const githubChatMetadataSchema = z.object({
   source: z.literal("github"),
   entityType: githubEntityTypeSchema,
-  /** Stable cluster key, e.g. "owner/repo#42" or "owner/repo@<sha>". */
+  /** Stable cluster key, e.g. "owner/repo#42". */
   entityKey: z.string().min(1),
   /** Optional canonical URL back to the GitHub entity (for UI deep-link). */
   entityUrl: z.string().url().optional(),
@@ -65,7 +65,7 @@ export type OptionalChatMetadata = z.infer<typeof optionalChatMetadataSchema>;
 /**
  * Conversation-list origin tag. Coarse-grained "where does this chat come
  * from" classifier — one per integration, NOT per entity type within an
- * integration. GitHub PR / Issue / Discussion / Commit all collapse to
+ * integration. GitHub PR / Issue / Discussion all collapse to
  * `github`; the per-entity granularity is preserved via the separate
  * `MeChatRow.entityType` field (so the row's leading icon can still
  * render a PR vs Issue glyph even though the filter popover only

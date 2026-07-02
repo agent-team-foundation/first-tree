@@ -7,7 +7,7 @@
  *      values — `manual` / `github` / `agent` — by inspecting `chats.metadata`
  *      (no schema migration; the field already existed and was only
  *      written by the github-entity-chat path). Phase C collapsed the
- *      GitHub entity types (PR / Issue / Discussion / Commit) into a
+ *      GitHub entity types (PR / Issue / Discussion) into a
  *      single `github` origin; the per-entity granularity lives on
  *      `MeChatRow.entityType` (drives the leading icon, not the filter
  *      dimension).

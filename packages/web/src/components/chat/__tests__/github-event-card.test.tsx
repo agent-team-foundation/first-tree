@@ -95,7 +95,6 @@ describe("GitHub event card", () => {
       "reviewed",
       "review_comment",
       "synchronized",
-      "commit_commented",
       "assigned",
       "edited",
       "other",

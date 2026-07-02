@@ -60,7 +60,7 @@ async function seedMapping(
     orgId: string;
     humanId: string;
     delegateId: string;
-    entityType: "issue" | "pull_request" | "discussion" | "commit";
+    entityType: "issue" | "pull_request" | "discussion";
     entityKey: string;
     chatId: string;
     boundVia?: "direct" | "fixes_link" | "agent_declared" | "human_declared" | "human_fallback";
@@ -94,21 +94,19 @@ const KIND_TO_ACTION: Record<NormalizedEvent["kind"], string> = {
   review_requested: "review_requested",
   synchronized: "synchronize",
   assigned: "assigned",
-  commit_commented: "created",
   other: "other",
 };
 
-const ENTITY_TO_EVENT_TYPE: Record<"issue" | "pull_request" | "discussion" | "commit", string> = {
+const ENTITY_TO_EVENT_TYPE: Record<"issue" | "pull_request" | "discussion", string> = {
   issue: "issues",
   pull_request: "pull_request",
   discussion: "discussion",
-  commit: "commit_comment",
 };
 
 function makeEvent(opts: {
   orgId: string;
   installationId?: number;
-  entityType: "issue" | "pull_request" | "discussion" | "commit";
+  entityType: "issue" | "pull_request" | "discussion";
   entityKey: string;
   actorLogin: string;
   actorIsBot?: boolean;

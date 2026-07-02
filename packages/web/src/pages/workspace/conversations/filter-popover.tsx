@@ -5,7 +5,7 @@ import type { GroupMode } from "./group-rows.js";
 
 /**
  * Canonical order of origin filters shown in the popover. Phase C
- * collapsed the GitHub entity types (PR / Issue / Discussion / Commit)
+ * collapsed the GitHub entity types (PR / Issue / Discussion)
  * into a single `github` entry — the per-entity granularity lives on
  * `MeChatRow.entityType` and drives the row's leading icon, not a
  * separate filter dimension.

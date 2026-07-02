@@ -214,9 +214,9 @@ export const meChatRowSchema = z.object({
   source: chatSourceSchema.default("manual"),
   /**
    * Within-origin sub-type. Only meaningful when `source === "github"`,
-   * in which case it's one of `pull_request | issue | discussion | commit`
+   * in which case it's one of `pull_request | issue | discussion`
    * — drives the per-row leading icon so users still get a PR vs Issue
-   * vs Commit glyph even though the filter popover collapses every
+   * vs Discussion glyph even though the filter popover collapses every
    * GitHub entity into a single "GitHub" origin. Null for `manual` rows.
    *
    * Server projects this straight from `chats.metadata->>'entityType'`

@@ -457,12 +457,11 @@ first-tree github
 # Inside an agent session the chat is inferred from FIRST_TREE_CHAT_ID
 first-tree github follow https://github.com/acme/api/pull/42
 first-tree github follow acme/api#42        # issue vs PR resolved automatically
-first-tree github follow acme/api@3f2a91c   # commit
 first-tree github following
 first-tree github unfollow acme/api#42
 ```
 
-`<entity>` accepts a full GitHub URL, `owner/repo#N`, or `owner/repo@<sha>`.
+`<entity>` accepts a full GitHub PR / Issue / Discussion URL, or `owner/repo#N`.
 A `409` means the same (human, delegate) line already lives in another chat
 — `--rebind` MOVES it here (a line is never duplicated). `unfollow` is
 idempotent: `removed: 0` is success, not an error. Requires the org's
