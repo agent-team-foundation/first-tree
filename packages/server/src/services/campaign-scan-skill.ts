@@ -39,8 +39,9 @@ GitHub URL is in the opening chat message ("connected to your code: …") —
 \`git clone\` it read-only into a temp dir and scan that (one step, no write). If
 a repo is instead already bound into your workspace as a source repo, note it is
 a **bare** clone (no working tree) — you'd \`git worktree add\` to get files; for a
-one-off read-only scan, cloning the URL is simpler. Don't ask the user where the
-repo is; get it from these signals and proceed.
+one-off read-only scan, cloning the URL is simpler. Get it from these signals and
+proceed — don't ask when a signal is present. Only if neither signal exists, ask the
+user for the repo URL rather than guessing or scanning the wrong repo.
 
 ## Hard rules (non-negotiable)
 1. **EVIDENCE FIRST.** Every finding cites concrete evidence from THIS repo — a
@@ -144,15 +145,15 @@ already done — their team, their agent, and the context tree — skipping anyt
 the current flow already handled. This is the confident default, tied to their
 demonstrated pain, not a soft footnote.
 
-**Secondary (lighter):** if they decline the team but want to keep going, or if a
-next blocker is the more natural fit for where they are, offer one of these instead
-— turn the next blocker into a fix, or scan another (or a private) repo. This is
-still the single ask, not a second one after a no.
+**Secondary (lighter) — only if they decline the team AND explicitly want to keep
+going:** offer exactly one lighter next step instead — turn the next blocker into a
+fix, or scan another (or a private) repo. This is offered instead of re-pitching
+the team; it is never a second ask stacked after a no.
 
-Still just ONE ask at a time, and **know when to stop**: if the apply offer is
-unanswered, or the user seems done, goes quiet, or declines, stop — don't
-re-pitch. A single unanswered offer is the ceiling. You convert by being genuinely
-useful, never by nagging.
+Otherwise, **stop.** ONE ask at a time is the rule, and the stop condition is
+explicit: if the apply offer is still unanswered, or the user is done, goes quiet,
+or declines without asking for more — stop and don't re-pitch. A single unanswered
+offer is the ceiling. You convert by being genuinely useful, not by nagging.
 `;
 
 const AGENT_READINESS_BODY = `# Agent Readiness Scan
@@ -167,8 +168,9 @@ GitHub URL is in the opening chat message ("connected to your code: …") —
 \`git clone\` it read-only into a temp dir and scan that (one step, no write). If
 a repo is instead already bound into your workspace as a source repo, note it is
 a **bare** clone (no working tree) — you'd \`git worktree add\` to get files; for a
-one-off read-only scan, cloning the URL is simpler. Don't ask the user where the
-repo is; get it from these signals and proceed.
+one-off read-only scan, cloning the URL is simpler. Get it from these signals and
+proceed — don't ask when a signal is present. Only if neither signal exists, ask the
+user for the repo URL rather than guessing or scanning the wrong repo.
 
 ## Hard rules (non-negotiable)
 1. **EVIDENCE FIRST.** Every finding cites concrete evidence from THIS repo (file
@@ -271,15 +273,15 @@ already done — their team, their agent, and the context tree — skipping anyt
 the current flow already handled. This is the confident default, tied to their
 demonstrated pain, not a soft footnote.
 
-**Secondary (lighter):** if they decline the team but want to keep going, or if a
-next blocker is the more natural fit for where they are, offer one of these instead
-— turn the next blocker into a fix, or scan another (or a private) repo. This is
-still the single ask, not a second one after a no.
+**Secondary (lighter) — only if they decline the team AND explicitly want to keep
+going:** offer exactly one lighter next step instead — turn the next blocker into a
+fix, or scan another (or a private) repo. This is offered instead of re-pitching
+the team; it is never a second ask stacked after a no.
 
-Still just ONE ask at a time, and **know when to stop**: if the apply offer is
-unanswered, or the user seems done, goes quiet, or declines, stop — don't
-re-pitch. A single unanswered offer is the ceiling. You convert by being genuinely
-useful, never by nagging.
+Otherwise, **stop.** ONE ask at a time is the rule, and the stop condition is
+explicit: if the apply offer is still unanswered, or the user is done, goes quiet,
+or declines without asking for more — stop and don't re-pitch. A single unanswered
+offer is the ceiling. You convert by being genuinely useful, not by nagging.
 `;
 
 const CAMPAIGN_SCAN_SKILLS: Record<string, CampaignScanSkill> = {
