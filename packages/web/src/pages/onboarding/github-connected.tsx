@@ -2,15 +2,18 @@ import { Check } from "lucide-react";
 import { useEffect } from "react";
 
 /**
- * Landing page for the connect-code install popup. The connect-code step opens
- * the GitHub App install in a new tab with `next=/onboarding/connected`, so
- * GitHub's callback lands the popup here. We confirm and auto-close the tab (it
- * was script-opened, so `window.close()` is allowed); the original setup tab
- * detects the new installation via its poll and advances on its own. If the
- * browser refuses to close the tab, the message tells the user to close it.
+ * Landing page for the GitHub App install popup — shared by every surface that
+ * opens the install in a new tab with `next=/onboarding/connected`: onboarding
+ * connect-code, the Context tab build entry, and Settings → GitHub. GitHub's
+ * callback lands the popup here; we confirm and auto-close the tab (it was
+ * script-opened, so `window.close()` is allowed) while the original tab detects
+ * the new installation via its poll and updates on its own. If the browser
+ * refuses to close the tab, the message tells the user to close it. Copy is kept
+ * surface-neutral ("the other tab will update") so it reads correctly whether the
+ * origin tab is an onboarding wizard or a settings page.
  *
  * Public route (no auth gate): it does nothing sensitive, and gating it would
- * risk the onboarding redirect bouncing this throwaway tab elsewhere.
+ * risk the redirect bouncing this throwaway tab elsewhere.
  */
 export function GithubConnectedPage() {
   useEffect(() => {
@@ -42,7 +45,7 @@ export function GithubConnectedPage() {
         Connected
       </p>
       <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: "22rem" }}>
-        You can close this tab — setup continues in your other tab.
+        You can close this tab — the other tab will update.
       </p>
     </div>
   );
