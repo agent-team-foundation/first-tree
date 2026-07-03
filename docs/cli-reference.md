@@ -603,7 +603,16 @@ shown in human output. Hidden paths and common generated directories
 (`node_modules`, `__pycache__`, `dist`, `build`, `.next`, `.turbo`) are
 skipped.
 
-Human output is written as a tree whose node labels use:
+Human output starts with the Context Tree git checkout branch, then the
+rendered tree. When the current branch is not exactly `main`, `master`, or
+`origin/main`, the branch line is followed by a stale-tree warning:
+
+```text
+Branch: feature/stale-tree
+Warning: current branch "feature/stale-tree" is not main/master; it may be stale. Switch to main/master.
+```
+
+The rendered tree's node labels use:
 
 ```text
 relative/path/ [Title] -> Description
@@ -624,11 +633,15 @@ With global `--json` or `FIRST_TREE_JSON=1`, `first-tree tree tree`
 emits a single `{ ok: true, data }` envelope on stdout. `data.root` is the
 git repo root, `data.target` is the resolved target directory relative to
 that root, and `data.options` records the parsed `level`, `pattern`, and
-effective `path`. `data.tree` contains the same filtered hierarchy as
+effective `path`. `data.branch` reports the current tree checkout as
+`{ name, isMainline, warning }`; `warning` is `null` for `main`, `master`,
+and `origin/main`, otherwise it contains the same stale-tree warning string
+shown in human mode. `data.tree` contains the same filtered hierarchy as
 structured nodes with `kind`, `name`, `relativePath`, `depth`, `metadata`,
 `hasNode`, and `children` fields; `metadata` includes `title`, optional
-`description`, and `owners`. Human tree text is written to stderr so stdout
-stays reserved for machine-readable JSON.
+`description`, and `owners`. Human tree text and branch warnings are not
+written to stderr in JSON mode, so stdout stays reserved for machine-readable
+JSON.
 
 ## Environment variables
 
