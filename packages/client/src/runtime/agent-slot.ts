@@ -32,6 +32,13 @@ const MAX_CONFIG_FETCH_ATTEMPTS = 8;
 const ACTIVE_RUNTIME_CHAT_IDS_REFRESH_MS = 60 * 60 * 1000;
 const ACTIVE_RUNTIME_CHAT_IDS_REFRESH_JITTER_RATIO = 0.1;
 const SESSION_RECONCILE_BATCH_SIZE = 500;
+const RUNTIME_SWITCH_UNBOUND_REASON = "agent_runtime_switch";
+const RUNTIME_SWITCH_STOP_OPTIONS = {
+  sessionShutdown: {
+    clearPersistedRegistry: true,
+    reportSuspendedSessions: false,
+  },
+} satisfies AgentSlotStopOptions;
 
 /**
  * Sleep `ms`, resolving early if `signal` aborts. Lets a stop()/unbind during
@@ -210,7 +217,8 @@ export class AgentSlot {
     };
     const onUnbound = (agentId: string, reason?: string) => {
       if (agentId !== this.config.agentId || !reason) return;
-      this.stop().catch((err) => {
+      const stopOptions = reason === RUNTIME_SWITCH_UNBOUND_REASON ? RUNTIME_SWITCH_STOP_OPTIONS : undefined;
+      this.stop(reason, stopOptions).catch((err) => {
         this.logger.error({ err, reason }, "forced agent stop failed");
       });
     };

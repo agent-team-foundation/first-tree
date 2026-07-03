@@ -706,6 +706,38 @@ describe("AgentSlot", () => {
     expect(session.dispatch).not.toHaveBeenCalled();
   });
 
+  it("uses destructive shutdown for a runtime-switch force unbind before pinned reconfigure joins the stop", async () => {
+    const { slot, connection, state } = await makeSlot();
+    await slot.start();
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+
+    const unbind = deferred<void>();
+    connection.unbindAgent.mockImplementationOnce(() => unbind.promise);
+
+    connection.emit("agent:unbound", "agent-1", "agent_runtime_switch");
+    await Promise.resolve();
+
+    const joinedStop = slot.stop("runtime switched by server", {
+      sessionShutdown: {
+        clearPersistedRegistry: true,
+        reportSuspendedSessions: false,
+      },
+    });
+    await Promise.resolve();
+    expect(session.shutdown).not.toHaveBeenCalled();
+
+    unbind.resolve();
+    await joinedStop;
+
+    expect(connection.unbindAgent).toHaveBeenCalledWith("agent-1");
+    expect(session.shutdown).toHaveBeenCalledTimes(1);
+    expect(session.shutdown).toHaveBeenCalledWith("agent_runtime_switch", {
+      clearPersistedRegistry: true,
+      reportSuspendedSessions: false,
+    });
+  });
+
   it("logs optional context-tree, push-dispatch, and session-command failures without crashing", async () => {
     const { slot, connection, state } = await makeSlot({ syncResult: null, omitReconcileInterval: true });
     await slot.start();
