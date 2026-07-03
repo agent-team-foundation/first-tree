@@ -16,9 +16,17 @@ import { organizations } from "./organizations.js";
  * we mint at `/install-url`), and complete the bind when the initiator
  * returns after approval.
  *
- * Keyed by `initiator_github_id` (one active request per initiator,
- * last-write-wins) rather than by installation, because at request time no
- * installation exists yet. `expires_at` bounds staleness.
+ * Keyed by `(initiator_github_id, target_organization_id)` rather than by
+ * installation, because at request time no installation exists yet. One active
+ * request per (initiator, target Hub org), last-write-wins on re-kick. The key
+ * is deliberately NOT `initiator_github_id` alone: a single initiator can have
+ * concurrent outstanding requests to different Hub orgs, and collapsing them to
+ * one row would let a later request silently overwrite an earlier one — so an
+ * approval for the earlier installation would bind to the later request's org
+ * (cross-org webhook routing). Keeping a row per target org lets the completion
+ * path DETECT that ambiguity (>1 fresh request for an initiator ⇒ it cannot
+ * tell which org an approval belongs to) and refuse to auto-bind instead of
+ * mis-binding. `expires_at` bounds staleness.
  *
  * Authorization to complete a bind from this record is "the caller is the
  * initiator who requested it" (their GitHub id + First Tree admin of the
@@ -48,8 +56,12 @@ export const githubAppInstallRequests = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    // One active request per initiator — a new kickoff UPSERTs (last-wins).
-    uniqueIndex("uq_github_app_install_requests_initiator").on(table.initiatorGithubId),
+    // One active request per (initiator, target org) — a re-kick for the same
+    // pair UPSERTs (last-wins); a different target org adds a distinct row so
+    // the completion path can detect the ambiguous multi-request case.
+    uniqueIndex("uq_github_app_install_requests_initiator_org").on(table.initiatorGithubId, table.targetOrganizationId),
+    // Lookup + ambiguity count by initiator.
+    index("idx_github_app_install_requests_initiator").on(table.initiatorGithubId),
     index("idx_github_app_install_requests_expires").on(table.expiresAt),
   ],
 );

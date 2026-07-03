@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
+import { githubAppInstallRequests } from "../db/schema/github-app-install-requests.js";
 import { githubAppInstallations } from "../db/schema/github-app-installations.js";
 import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappings.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
@@ -461,6 +462,55 @@ describe("POST /webhooks/github-app", () => {
       .limit(1);
     // Original binding is preserved — never reassigned to the initiator.
     expect(row?.hubOrganizationId).toBe(otherOrgId);
+  });
+
+  it("installation.created approval-flow refuses to auto-bind when the initiator has >1 outstanding request (#1392 ambiguity guard)", async () => {
+    const app = getApp();
+    const initiator = await createTestAdmin(app); // admin of the default org (orgA)
+    const requesterGithubId = 787878;
+    // A second org the initiator also targets. Two concurrent approval requests
+    // from the same initiator → we cannot tell which one an approval fulfils.
+    const orgBId = uuidv7();
+    await app.db.insert(organizations).values({ id: orgBId, name: `orgb-${orgBId}`, displayName: "Org B" });
+    await recordInstallRequest(app.db, {
+      initiatorGithubId: requesterGithubId,
+      targetOrganizationId: initiator.organizationId,
+      kickoffUserId: initiator.userId,
+    });
+    await recordInstallRequest(app.db, {
+      initiatorGithubId: requesterGithubId,
+      targetOrganizationId: orgBId,
+      kickoffUserId: initiator.userId,
+    });
+
+    const installationId = 100024;
+    const res = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: installationId,
+        account: { id: 4254, login: "ambiguous-org", type: "Organization" },
+        permissions: { contents: "read" },
+        events: ["pull_request"],
+        suspended_at: null,
+      },
+      sender: { id: 999004, login: "owner-who-approved", type: "User" },
+      requester: { id: requesterGithubId, login: "multi-request-initiator", type: "User" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().lifecycle).toBe("created:request-ambiguous");
+
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.hubOrganizationId).toBeNull();
+    // Both requests are left intact (not consumed) — recoverable via /claim.
+    const remaining = await app.db
+      .select()
+      .from(githubAppInstallRequests)
+      .where(eq(githubAppInstallRequests.initiatorGithubId, requesterGithubId));
+    expect(remaining).toHaveLength(2);
   });
 
   it("installation.created with a `requester` but no captured request stays unbound (#1392)", async () => {

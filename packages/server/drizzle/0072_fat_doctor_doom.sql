@@ -8,5 +8,6 @@ CREATE TABLE "github_app_install_requests" (
 );
 --> statement-breakpoint
 ALTER TABLE "github_app_install_requests" ADD CONSTRAINT "github_app_install_requests_target_organization_id_organizations_id_fk" FOREIGN KEY ("target_organization_id") REFERENCES "public"."organizations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "uq_github_app_install_requests_initiator" ON "github_app_install_requests" USING btree ("initiator_github_id");--> statement-breakpoint
+CREATE UNIQUE INDEX "uq_github_app_install_requests_initiator_org" ON "github_app_install_requests" USING btree ("initiator_github_id","target_organization_id");--> statement-breakpoint
+CREATE INDEX "idx_github_app_install_requests_initiator" ON "github_app_install_requests" USING btree ("initiator_github_id");--> statement-breakpoint
 CREATE INDEX "idx_github_app_install_requests_expires" ON "github_app_install_requests" USING btree ("expires_at");

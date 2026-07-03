@@ -1,5 +1,5 @@
 {
-  "id": "c57fd755-91e7-4c54-92d7-4e6ae0283cfa",
+  "id": "71a58b36-b826-438e-b301-274d6974eb6f",
   "prevId": "083d9670-24d8-45c4-8a59-9216d5a971bd",
   "version": "7",
   "dialect": "postgresql",
@@ -2087,8 +2087,29 @@
         }
       },
       "indexes": {
-        "uq_github_app_install_requests_initiator": {
-          "name": "uq_github_app_install_requests_initiator",
+        "uq_github_app_install_requests_initiator_org": {
+          "name": "uq_github_app_install_requests_initiator_org",
+          "columns": [
+            {
+              "expression": "initiator_github_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "target_organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_github_app_install_requests_initiator": {
+          "name": "idx_github_app_install_requests_initiator",
           "columns": [
             {
               "expression": "initiator_github_id",
@@ -2097,7 +2118,7 @@
               "nulls": "last"
             }
           ],
-          "isUnique": true,
+          "isUnique": false,
           "concurrently": false,
           "method": "btree",
           "with": {}
