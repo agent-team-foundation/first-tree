@@ -138,6 +138,7 @@ describe("QuickstartPage — landing campaign trial flow", () => {
   });
 
   it("ignores unsupported campaign handoffs", async () => {
+    seedIntent("production-scan");
     const container = await renderPage([
       "/quickstart?campaign=agent-readiness&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
     ]);

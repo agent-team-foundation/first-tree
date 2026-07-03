@@ -10,6 +10,7 @@ import { getCampaign } from "./campaigns.js";
 import {
   type CampaignIntent,
   clearCampaignIntent,
+  hasCampaignHandoff,
   readCampaignHandoff,
   readCampaignIntent,
   writeCampaignIntent,
@@ -34,6 +35,10 @@ export function QuickstartPage() {
     if (fromUrl) {
       writeCampaignIntent(fromUrl);
       return fromUrl;
+    }
+    if (hasCampaignHandoff(location)) {
+      clearCampaignIntent();
+      return null;
     }
     return readCampaignIntent();
   }, [location]);
