@@ -13,7 +13,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, wri
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installFirstTreeSkills, TREE_SKILL_NAMES } from "../runtime/first-tree-skills/installer.js";
+import { CORE_SKILL_NAMES, installFirstTreeSkills, TREE_SKILL_NAMES } from "../runtime/first-tree-skills/installer.js";
 import { readManagedState, writeManagedState } from "../runtime/managed-state.js";
 
 /**
@@ -109,9 +109,32 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
       expect(existsSync(join(workspace, ".agents", "skills", name))).toBe(false);
       expect(() => lstatSync(join(workspace, ".claude", "skills", name))).toThrow();
     }
-    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-write", "SKILL.md"))).toBe(true);
-    expect(lstatSync(join(workspace, ".claude", "skills", "first-tree-write")).isSymbolicLink()).toBe(true);
+    // A current tree skill survives the reconcile (first-tree-read is the sole
+    // TREE_SKILL_NAMES member; seed/write are core, covered separately below).
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-read", "SKILL.md"))).toBe(true);
+    expect(lstatSync(join(workspace, ".claude", "skills", "first-tree-read")).isSymbolicLink()).toBe(true);
     expect(readManagedState(workspace)?.skills).toEqual([...TREE_SKILL_NAMES].sort());
+  });
+
+  it("does NOT remove a core skill listed in prev state but absent from TREE_SKILL_NAMES", () => {
+    // Regression for the seed/write → core promotion. A previously tree-bound
+    // agent's managed.json still lists first-tree-seed / first-tree-write under
+    // the old TREE tier. installCoreSkills installs them first; the tree
+    // reconcile MUST NOT delete them just because they left TREE_SKILL_NAMES.
+    for (const name of CORE_SKILL_NAMES) plantManagedSkill(workspace, name);
+    writeManagedState(workspace, {
+      schemaVersion: 1,
+      cliVersion: "test",
+      updatedAt: new Date(0).toISOString(),
+      skills: [...TREE_SKILL_NAMES, ...CORE_SKILL_NAMES],
+    });
+
+    installFirstTreeSkills({ workspacePath: workspace, bundledSkillsRoot });
+
+    for (const name of CORE_SKILL_NAMES) {
+      expect(existsSync(join(workspace, ".agents", "skills", name, "SKILL.md")), `${name} must survive`).toBe(true);
+      expect(lstatSync(join(workspace, ".claude", "skills", name)).isSymbolicLink()).toBe(true);
+    }
   });
 
   it("leaves a user-added skill alone — only names in the recorded prev state are removed", () => {

@@ -383,12 +383,14 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(contextTreeIdx).toBeGreaterThan(requiredIdx);
   });
 
-  it("omits # Required Reading for tree-less agents (the skill payloads are not installed on disk for them)", () => {
-    // `installFirstTreeIntegration` is short-circuited when
-    // `contextTreePath === null`, so the SKILL.md payloads under
-    // `<workspace>/.agents/skills/` never get materialised. Mandating
-    // a load would point at files that aren't there. The Tree
-    // Location stub already surfaces the gap to a human.
+  it("omits # Required Reading for tree-less agents (tree-oriented guidance is gated on a binding)", () => {
+    // The `# Required Reading` mandate + family map are gated on
+    // `contextTreePath !== null` — Context-Tree-oriented guidance surfaced
+    // only once the agent is tree-bound. (Since seed/write are core, their
+    // payloads DO exist on disk in tree-less workspaces; the gate is a
+    // scoping choice, not a missing-file guard. Tree-less build-tree chats
+    // reach write's rules via `first-tree-seed`'s own reference to it.)
+    // The Tree Location stub already surfaces the no-tree state to a human.
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     expect(briefing).not.toContain("# Required Reading");
   });

@@ -190,12 +190,13 @@ export function ensureAgentBootstrap(params: AgentBootstrapParams): void {
 
   // Only pin the CLI version when integration ACTUALLY RAN and succeeded —
   // i.e. the agent is tree-bound. A tree-less session skips
-  // `installFirstTreeIntegration` (so no skills land) but `integrationOk` stays
-  // `true`; pinning here would set `cachedCliVersion` non-null, which then
-  // defeats the `integrationNeverPinned` trigger when the agent later becomes
-  // tree-bound (new-tree onboarding) — `ensureAgentBootstrap` would take the
-  // fast path and never install `first-tree-seed`. Gating on `contextTreePath`
-  // keeps the upgrade path's slow-bootstrap trigger intact.
+  // `installFirstTreeIntegration` (so no tree-only skills land — core skills,
+  // including `first-tree-seed`, are installed separately above) but
+  // `integrationOk` stays `true`; pinning here would set `cachedCliVersion`
+  // non-null, which then defeats the `integrationNeverPinned` trigger when the
+  // agent later becomes tree-bound (new-tree onboarding) — `ensureAgentBootstrap`
+  // would take the fast path and never install `first-tree-read`. Gating on
+  // `contextTreePath` keeps the upgrade path's slow-bootstrap trigger intact.
   if (contextTreePath !== null && integrationOk) {
     writeBundledCliVersion(workspace, currentCliVersion);
   }

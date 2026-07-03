@@ -146,11 +146,15 @@ function buildAgentBriefingRenderModel(opts: BuildAgentBriefingOptions): AgentBr
   // before doing any real work. Placing it
   // immediately before `# Context Tree` also keeps the mandate adjacent
   // to the content domains the two skills cover. Gated on
-  // `contextTreePath !== null` for the same reason `skillsSection`
-  // gates `firstTreeFamilyMap`: a tree-less agent has no First Tree
-  // skill payloads installed on disk (`installFirstTreeIntegration`
-  // is short-circuited in `agent-bootstrap.ts`), so mandating a load
-  // would point at files that don't exist.
+  // `contextTreePath !== null`, mirroring `skillsSection`'s
+  // `firstTreeFamilyMap` gate: the mandate + family map are
+  // Context-Tree-oriented guidance, surfaced only once the agent is
+  // tree-bound. NOTE: since seed/write were promoted to
+  // `CORE_SKILL_NAMES`, the `first-tree-write` payload IS on disk even in
+  // tree-less workspaces — so the old "would point at files that don't
+  // exist" rationale no longer holds; the gate is now a scoping choice.
+  // Tree-less build-tree chats still reach write's Hard Rules because
+  // `first-tree-seed` loads `../first-tree-write/SKILL.md` by reference.
   const requiredReading = requiredReadingSection(opts.contextTreePath, opts.workspacePath);
   const contextTreeBlock = contextTreeSection(
     opts.contextTreePath,
