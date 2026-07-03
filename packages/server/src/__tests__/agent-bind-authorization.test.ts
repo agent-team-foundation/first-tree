@@ -1,15 +1,9 @@
 import { AGENT_RUNTIME_SESSION_HEADER } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
-import WebSocket from "ws";
+import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
-import {
-  bindAgentToClient,
-  forceDisconnectClient,
-  setClientConnection,
-  unbindAgentFromClient,
-} from "../services/connection-manager.js";
+import { bindAgentRuntimeSession, revokeAgentRuntimeSession } from "../services/agent-runtime-session.js";
 import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
 
 /**
@@ -23,22 +17,6 @@ import { createTestAdmin, createTestAgent, useTestApp } from "./helpers.js";
  */
 describe("Rule R-RUN on agent-scoped HTTP", () => {
   const getApp = useTestApp();
-  const cleanupClientIds = new Set<string>();
-
-  afterEach(() => {
-    for (const clientId of cleanupClientIds) forceDisconnectClient(clientId);
-    cleanupClientIds.clear();
-  });
-
-  function mockWs(): WebSocket {
-    return { readyState: WebSocket.OPEN, close: () => {}, send: () => {} } as unknown as WebSocket;
-  }
-
-  function bindRuntimeSession(clientId: string, agentId: string): string {
-    cleanupClientIds.add(clientId);
-    setClientConnection(clientId, mockWs());
-    return bindAgentToClient(clientId, agentId);
-  }
 
   it("accepts a request pinned to the caller's client", async () => {
     const app = getApp();
@@ -57,7 +35,7 @@ describe("Rule R-RUN on agent-scoped HTTP", () => {
   it("accepts a valid runtime session token before enforcement is enabled", async () => {
     const app = getApp();
     const { agent, clientId, accessToken } = await createTestAgent(app);
-    const runtimeSessionToken = bindRuntimeSession(clientId, agent.uuid);
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
 
     const res = await app.inject({
       method: "GET",
@@ -75,7 +53,7 @@ describe("Rule R-RUN on agent-scoped HTTP", () => {
   it("rejects an invalid runtime session token even before enforcement is enabled", async () => {
     const app = getApp();
     const { agent, clientId, accessToken } = await createTestAgent(app);
-    bindRuntimeSession(clientId, agent.uuid);
+    await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
 
     const res = await app.inject({
       method: "GET",
@@ -169,22 +147,6 @@ describe("Rule R-RUN on agent-scoped HTTP", () => {
 
 describe("runtime-bound agent HTTP enforcement", () => {
   const getApp = useTestApp({ runtimeHttpTokenEnforcement: true });
-  const cleanupClientIds = new Set<string>();
-
-  afterEach(() => {
-    for (const clientId of cleanupClientIds) forceDisconnectClient(clientId);
-    cleanupClientIds.clear();
-  });
-
-  function mockWs(): WebSocket {
-    return { readyState: WebSocket.OPEN, close: () => {}, send: () => {} } as unknown as WebSocket;
-  }
-
-  function bindRuntimeSession(clientId: string, agentId: string): string {
-    cleanupClientIds.add(clientId);
-    setClientConnection(clientId, mockWs());
-    return bindAgentToClient(clientId, agentId);
-  }
 
   it("rejects non-human agent HTTP without a runtime session token", async () => {
     const app = getApp();
@@ -205,7 +167,7 @@ describe("runtime-bound agent HTTP enforcement", () => {
   it("accepts non-human agent HTTP with the current runtime session token", async () => {
     const app = getApp();
     const { agent, clientId, accessToken } = await createTestAgent(app);
-    const runtimeSessionToken = bindRuntimeSession(clientId, agent.uuid);
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
 
     const res = await app.inject({
       method: "GET",
@@ -220,11 +182,29 @@ describe("runtime-bound agent HTTP enforcement", () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it("rejects stale runtime session tokens after unbind", async () => {
+  it("accepts runtime session tokens from durable DB state without local WS ownership", async () => {
     const app = getApp();
     const { agent, clientId, accessToken } = await createTestAgent(app);
-    const runtimeSessionToken = bindRuntimeSession(clientId, agent.uuid);
-    unbindAgentFromClient(agent.uuid, clientId);
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/agent/me",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "x-agent-id": agent.uuid,
+        [AGENT_RUNTIME_SESSION_HEADER]: runtimeSessionToken,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("rejects stale runtime session tokens after DB revocation", async () => {
+    const app = getApp();
+    const { agent, clientId, accessToken } = await createTestAgent(app);
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, clientId);
+    await revokeAgentRuntimeSession(app.db, agent.uuid, clientId);
 
     const res = await app.inject({
       method: "GET",

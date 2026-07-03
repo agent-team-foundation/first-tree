@@ -59,6 +59,7 @@ export {
   type CreateAgent,
   contextTreeInfoSchema,
   createAgentSchema,
+  findReservedAgentMetadataKey,
   isReservedAgentName,
   type LegacyWireAgentType,
   type ListAgentsQuery,
@@ -70,11 +71,13 @@ export {
   newChatDefaultCandidateAgentSchema,
   newChatDefaultCandidatesRequestSchema,
   newChatDefaultCandidatesResponseSchema,
+  RESERVED_AGENT_METADATA_KEYS,
   RESERVED_AGENT_NAMES,
   type SwitchAgentRuntime,
   switchAgentRuntimeSchema,
   type UpdateAgent,
   updateAgentSchema,
+  userAgentMetadataSchema,
 } from "./schemas/agent.js";
 export {
   type AgentRuntimeConfig,

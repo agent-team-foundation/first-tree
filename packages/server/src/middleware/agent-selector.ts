@@ -6,7 +6,7 @@ import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { ForbiddenError, UnauthorizedError } from "../errors.js";
-import { validateAgentRuntimeSession } from "../services/connection-manager.js";
+import { validateAgentRuntimeSession } from "../services/agent-runtime-session.js";
 
 type AgentSelectorOptions = {
   enforceRuntimeSession?: boolean;
@@ -102,7 +102,7 @@ export function agentSelectorHook(db: Database, options: AgentSelectorOptions = 
     } else {
       const runtimeSessionToken = request.headers[AGENT_RUNTIME_SESSION_HEADER];
       if (typeof runtimeSessionToken === "string" && runtimeSessionToken.length > 0) {
-        if (!validateAgentRuntimeSession(row.uuid, row.clientId, runtimeSessionToken)) {
+        if (!(await validateAgentRuntimeSession(db, row.uuid, row.clientId, runtimeSessionToken))) {
           throw new ForbiddenError("Invalid agent runtime session");
         }
       } else if (options.enforceRuntimeSession) {

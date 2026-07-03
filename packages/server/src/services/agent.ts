@@ -13,11 +13,13 @@ import {
   AGENT_VISIBILITY,
   DEFAULT_RUNTIME_PROVIDER,
   defaultRuntimeConfigPayload,
+  findReservedAgentMetadataKey,
   isReservedAgentName,
+  RESERVED_AGENT_METADATA_KEYS,
   runtimeProviderSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, asc, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
@@ -54,6 +56,28 @@ export type NewChatDefaultCandidateAgent = {
   managerId: string | null;
   createdAt: Date;
 };
+
+export function assertUserAgentMetadataHasNoReservedKeys(metadata: Record<string, unknown> | undefined): void {
+  const key = findReservedAgentMetadataKey(metadata);
+  if (!key) return;
+  throw new BadRequestError(`metadata.${key} is reserved for First Tree internal runtime state`);
+}
+
+export function stripReservedAgentMetadata(metadata: unknown): Record<string, unknown> {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return {};
+  const publicMetadata = { ...(metadata as Record<string, unknown>) };
+  for (const key of RESERVED_AGENT_METADATA_KEYS) {
+    delete publicMetadata[key];
+  }
+  return publicMetadata;
+}
+
+function userMetadataUpdateExpression(metadata: Record<string, unknown>) {
+  return sql`${JSON.stringify(metadata)}::jsonb || jsonb_strip_nulls(jsonb_build_object(
+    'runtimeSwitch', ${agents.metadata}->'runtimeSwitch',
+    'runtimeSession', ${agents.metadata}->'runtimeSession'
+  ))`;
+}
 
 /**
  * Derive the relative URL clients should use to fetch a manager-uploaded
@@ -390,6 +414,7 @@ export async function createAgent(
   const uuid = uuidv7();
   const name = data.name ?? null;
   const runtimeProvider: RuntimeProvider = data.runtimeProvider ?? DEFAULT_RUNTIME_PROVIDER;
+  assertUserAgentMetadataHasNoReservedKeys(data.metadata);
   if (name?.startsWith(RESERVED_AGENT_NAME_PREFIX)) {
     throw new BadRequestError(
       `Agent name "${name}" is reserved — names starting with "${RESERVED_AGENT_NAME_PREFIX}" are First Tree-internal`,
@@ -1040,7 +1065,10 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
     updates.delegateMention = data.delegateMention;
   }
   if (data.visibility !== undefined) updates.visibility = data.visibility;
-  if (data.metadata !== undefined) updates.metadata = data.metadata;
+  if (data.metadata !== undefined) {
+    assertUserAgentMetadataHasNoReservedKeys(data.metadata);
+    (updates as Record<string, unknown>).metadata = userMetadataUpdateExpression(data.metadata);
+  }
   // Explicit null clears the override (renderer falls back to djb2 hash).
   // Omitting the field leaves the column untouched.
   if (data.avatarColorToken !== undefined) updates.avatarColorToken = data.avatarColorToken;

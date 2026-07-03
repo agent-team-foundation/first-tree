@@ -16,6 +16,7 @@ import { members } from "../db/schema/members.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 import { ensureClientSupportsRuntimeProvider, selectAgentRowWithRuntime } from "./agent.js";
+import { revokeAgentRuntimeSession } from "./agent-runtime-session.js";
 import { forceDisconnect } from "./connection-manager.js";
 import type { Notifier } from "./notifier.js";
 import { setOffline } from "./presence.js";
@@ -308,6 +309,7 @@ export async function switchAgentRuntime(
 
   try {
     maybeInjectRuntimeSwitchFault(options, "after_claim");
+    await revokeAgentRuntimeSession(db, current.uuid, oldClientId);
     forceDisconnect(current.uuid, "agent_runtime_switch", oldClientId);
     await setOffline(db, current.uuid);
 

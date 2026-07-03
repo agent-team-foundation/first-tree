@@ -8,6 +8,7 @@ import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { sessionEvents } from "../db/schema/session-events.js";
 import { createAgent } from "../services/agent.js";
+import { bindAgentRuntimeSession } from "../services/agent-runtime-session.js";
 import { createChat } from "../services/chat.js";
 import * as sessionEventService from "../services/session-event.js";
 import { createAdminContext, seedClient, useTestApp } from "./helpers.js";
@@ -69,6 +70,7 @@ describe("POST /agents/:uuid/switch-runtime", () => {
       kind: "error",
       payload: { source: "sdk", message: "stale-evicted" },
     });
+    const oldRuntimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, ctx.clientId);
 
     const res = await app.inject({
       method: "POST",
@@ -97,6 +99,18 @@ describe("POST /agents/:uuid/switch-runtime", () => {
     expect(row?.status).toBe("active");
     expect(row?.runtimeProvider).toBe("codex");
     expect(row?.metadata.runtimeSwitch).toBeUndefined();
+    expect(row?.metadata.runtimeSession).toBeUndefined();
+
+    const staleRuntimeHttp = await app.inject({
+      method: "GET",
+      url: "/api/v1/agent/me",
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "x-agent-id": agent.uuid,
+        "x-agent-runtime-session": oldRuntimeSessionToken,
+      },
+    });
+    expect(staleRuntimeHttp.statusCode).toBe(403);
 
     const [cfg] = await app.db
       .select({ payload: agentConfigs.payload })

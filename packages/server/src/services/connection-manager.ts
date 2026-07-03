@@ -96,7 +96,11 @@ export function hasClientConnection(clientId: string): boolean {
   return entry !== undefined && entry.ws.readyState <= 1;
 }
 
-export function bindAgentToClient(clientId: string, agentId: string): string {
+export function bindAgentToClient(
+  clientId: string,
+  agentId: string,
+  runtimeSessionToken = mintRuntimeSessionToken(),
+): string {
   // Remove agent from previous client if it was bound elsewhere
   const prevClientId = agentToClient.get(agentId);
   if (prevClientId && prevClientId !== clientId) {
@@ -112,7 +116,6 @@ export function bindAgentToClient(clientId: string, agentId: string): string {
     activeConnections.set(agentId, entry.ws);
   }
   agentToClient.set(agentId, clientId);
-  const runtimeSessionToken = mintRuntimeSessionToken();
   agentRuntimeSessions.set(agentId, { clientId, runtimeSessionToken });
   return runtimeSessionToken;
 }

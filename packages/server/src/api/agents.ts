@@ -15,6 +15,7 @@ import {
   resolveAvatarImageUrl,
   SUPPORTED_AVATAR_IMAGE_MIMES,
 } from "../services/agent.js";
+import * as agentRuntimeSessionService from "../services/agent-runtime-session.js";
 import * as agentRuntimeSwitchService from "../services/agent-runtime-switch.js";
 import { createChat } from "../services/chat.js";
 import * as clientService from "../services/client.js";
@@ -56,6 +57,7 @@ function serializeAgent(agent: AgentRow, userAvatarUrl: string | null): Record<s
   const { avatarImageData: _data, avatarImageMime: _mime, avatarImageUpdatedAt, createdAt, updatedAt, ...rest } = agent;
   return {
     ...rest,
+    metadata: agentService.stripReservedAgentMetadata(rest.metadata),
     createdAt: createdAt.toISOString(),
     updatedAt: updatedAt.toISOString(),
     avatarImageUrl: resolveAvatarImageUrl({
@@ -121,6 +123,41 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     sendToClient(agent.clientId, parsed.data);
   }
 
+  function notifyAgentRuntimeRouteChanged(result: {
+    agent: {
+      uuid: string;
+      name: string | null;
+      displayName: string;
+      type: string;
+      clientId: string | null;
+      runtimeProvider: string;
+    };
+    oldClientId: string;
+    recoveryAction?: "aborted" | "forwarded";
+  }): void {
+    if (!result.agent.clientId) return;
+    app.notifier
+      .notifyAgentRouteChange({
+        agentId: result.agent.uuid,
+        name: result.agent.name,
+        displayName: result.agent.displayName,
+        agentType: agentService.legacyWireAgentType(result.agent.type),
+        oldClientId: result.recoveryAction === "aborted" ? null : result.oldClientId,
+        targetClientId: result.agent.clientId,
+        runtimeProvider: result.agent.runtimeProvider,
+        reason: "agent_runtime_switch",
+      })
+      .catch(() => {});
+  }
+
+  function shouldSendImmediatePinnedAfterRuntimeRouteChange(result: {
+    agent: { clientId: string | null };
+    oldClientId: string;
+    recoveryAction?: "aborted" | "forwarded";
+  }): boolean {
+    return result.recoveryAction === "aborted" || result.agent.clientId !== result.oldClientId;
+  }
+
   app.get<{ Params: { uuid: string } }>("/:uuid", async (request) => {
     const { agent } = await requireAgentAccess(request, app.db, "visible");
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
@@ -172,7 +209,10 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
           fault: readRuntimeSwitchFaultHeader(request),
         },
       );
-      notifyClientAgentPinned(result.agent);
+      notifyAgentRuntimeRouteChanged(result);
+      if (shouldSendImmediatePinnedAfterRuntimeRouteChange(result)) {
+        notifyClientAgentPinned(result.agent);
+      }
       for (const chatId of result.terminatedChatIds) {
         sendToAgent(result.agent.uuid, { type: "session:terminate", chatId });
       }
@@ -192,7 +232,10 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
         notifier: app.notifier,
         fault: readRuntimeSwitchFaultHeader(request),
       });
-      notifyClientAgentPinned(result.agent);
+      notifyAgentRuntimeRouteChanged(result);
+      if (shouldSendImmediatePinnedAfterRuntimeRouteChange(result)) {
+        notifyClientAgentPinned(result.agent);
+      }
       for (const chatId of result.terminatedChatIds) {
         sendToAgent(result.agent.uuid, { type: "session:terminate", chatId });
       }
@@ -205,6 +248,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     const { agent } = await requireAgentAccess(request, app.db, "manage");
     assertMutableAgentIsNotLandingCampaignTrial(agent);
     agentRuntimeSwitchService.assertNoRuntimeSwitchInProgress(agent);
+    await agentRuntimeSessionService.revokeAgentRuntimeSession(app.db, request.params.uuid);
     const wasConnected = forceDisconnect(request.params.uuid);
     await presenceService.setOffline(app.db, request.params.uuid);
     return reply.status(200).send({ disconnected: wasConnected });
@@ -215,6 +259,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     assertMutableAgentIsNotLandingCampaignTrial(existingAgent);
     agentRuntimeSwitchService.assertNoRuntimeSwitchInProgress(existingAgent);
     const agent = await agentService.suspendAgent(app.db, request.params.uuid);
+    await agentRuntimeSessionService.revokeAgentRuntimeSession(app.db, request.params.uuid);
     forceDisconnect(request.params.uuid, "agent_suspended");
     await presenceService.setOffline(app.db, request.params.uuid);
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);

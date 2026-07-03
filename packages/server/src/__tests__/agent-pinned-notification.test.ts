@@ -456,6 +456,77 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
     }
   }, 15000);
 
+  it("fans runtime route changes to the instance that owns the client socket", async () => {
+    const seed = await seedConnectedClient("route-change");
+    const agent = await createAgent(app.db, {
+      name: `pin-route-change-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Route Changed",
+      source: "admin-api",
+      managerId: seed.memberId,
+      organizationId: seed.organizationId,
+      clientId: seed.clientId,
+      runtimeProvider: "claude-code",
+    });
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "agent:bind",
+          ref: "bind-route-change",
+          agentId: agent.uuid,
+          runtimeType: "claude-code",
+          runtimeVersion: "test",
+        }),
+      );
+      await waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:bound" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+
+      const forcePromise = waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:force_disconnect" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+      const pinnedPromise = waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:pinned" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+
+      await app.notifier.notifyAgentRouteChange({
+        agentId: agent.uuid,
+        name: agent.name,
+        displayName: agent.displayName,
+        agentType: "personal_assistant",
+        oldClientId: seed.clientId,
+        targetClientId: seed.clientId,
+        runtimeProvider: "codex",
+        reason: "agent_runtime_switch",
+      });
+
+      await expect(forcePromise).resolves.toMatchObject({
+        type: "agent:force_disconnect",
+        agentId: agent.uuid,
+        reason: "agent_runtime_switch",
+      });
+      await expect(pinnedPromise).resolves.toMatchObject({
+        type: "agent:pinned",
+        agentId: agent.uuid,
+        runtimeProvider: "codex",
+      });
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
   it("does NOT push agent:pinned on PATCHes that don't transition NULL → ID", async () => {
     const seed = await seedConnectedClient("rename");
     const ws = await openRegisteredSocket(seed);

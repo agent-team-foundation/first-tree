@@ -67,6 +67,28 @@ export type AgentSource = z.infer<typeof agentSourceSchema>;
 export const agentStatusSchema = z.enum(["active", "suspended"]);
 export type AgentStatus = z.infer<typeof agentStatusSchema>;
 
+export const RESERVED_AGENT_METADATA_KEYS = ["runtimeSwitch", "runtimeSession"] as const;
+
+const reservedAgentMetadataKeySet: ReadonlySet<string> = new Set(RESERVED_AGENT_METADATA_KEYS);
+
+export function findReservedAgentMetadataKey(metadata: Record<string, unknown> | undefined): string | null {
+  if (!metadata) return null;
+  for (const key of Object.keys(metadata)) {
+    if (reservedAgentMetadataKeySet.has(key)) return key;
+  }
+  return null;
+}
+
+export const userAgentMetadataSchema = z.record(z.string(), z.unknown()).superRefine((metadata, ctx) => {
+  const key = findReservedAgentMetadataKey(metadata);
+  if (!key) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: `metadata.${key} is reserved for First Tree internal runtime state`,
+    path: [key],
+  });
+});
+
 /**
  * Agent-name rules (see first-tree-context:agent-hub/agent-naming.md §3.1):
  *   - Lowercase ASCII slug, hyphens + underscores allowed.
@@ -129,7 +151,7 @@ export const createAgentSchema = z.object({
   source: agentSourceSchema.optional(),
   /** Agent visibility: "private" (manager only) or "organization" (all members) */
   visibility: agentVisibilitySchema.optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  metadata: userAgentMetadataSchema.optional(),
   /** Member who manages this agent */
   managerId: z.string().optional(),
   /**
@@ -161,7 +183,7 @@ export const updateAgentSchema = z.object({
   displayName: z.string().min(1).max(200).optional(),
   delegateMention: z.string().max(100).nullable().optional(),
   visibility: agentVisibilitySchema.optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  metadata: userAgentMetadataSchema.optional(),
   /** Admin-only: reassign the manager */
   managerId: z.string().nullable().optional(),
   /**
