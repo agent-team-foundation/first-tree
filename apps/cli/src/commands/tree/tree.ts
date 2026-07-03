@@ -516,6 +516,18 @@ function readCurrentBranchName(root: string): string {
   }
 
   try {
+    const head = runCommand("git", ["rev-parse", "--verify", "HEAD"], root);
+    const originMain = runCommand("git", ["rev-parse", "--verify", "refs/remotes/origin/main"], root);
+
+    if (head.length > 0 && head === originMain) {
+      return "origin/main";
+    }
+  } catch {
+    // Detached checkouts without an origin/main ref still fall through to the
+    // stable detached:<shortSha> label below.
+  }
+
+  try {
     const shortSha = runCommand("git", ["rev-parse", "--short", "HEAD"], root);
 
     if (shortSha.length > 0) {

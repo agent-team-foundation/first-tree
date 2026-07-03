@@ -102,6 +102,20 @@ function makeTreeFixture(): string {
   return root;
 }
 
+function makeRemoteBackedTreeFixture(): { clone: string; seed: string } {
+  const seed = makeTreeFixture();
+  const base = makeTempDir("ft-tree-remote-");
+  const origin = join(base, "origin.git");
+  const clone = join(base, "clone");
+
+  execFileSync("git", ["init", "--bare", "-b", "main", origin], { stdio: "ignore" });
+  git(seed, "remote", "add", "origin", origin);
+  git(seed, "push", "-u", "origin", "main");
+  execFileSync("git", ["clone", origin, clone], { stdio: "ignore" });
+
+  return { clone, seed };
+}
+
 function commandWithOptions(options: Record<string, unknown>, args: string[] = []): Command {
   const command = new Command("test");
   command.args = args;
@@ -268,12 +282,12 @@ describe("tree tree command action", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it("does not warn for origin/main as a mainline branch", () => {
-    const root = makeTreeFixture();
+  it("does not warn for a detached origin/main checkout", () => {
+    const { clone } = makeRemoteBackedTreeFixture();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    git(root, "switch", "-c", "origin/main");
-    process.chdir(root);
+    git(clone, "checkout", "origin/main");
+    process.chdir(clone);
 
     runTreeTreeCommand(context(commandWithOptions({}, ["docs/development"])));
 
@@ -281,6 +295,30 @@ describe("tree tree command action", () => {
     expect(readMockOutput(stdout)).toBe("");
     expect(output).toContain("Branch: origin/main");
     expect(output).not.toContain("Warning: current branch");
+  });
+
+  it("warns for detached commits that do not match origin/main", () => {
+    const { clone } = makeRemoteBackedTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    git(clone, "config", "user.email", "agent@example.com");
+    git(clone, "config", "user.name", "Agent");
+    writeLeaf(join(clone, "local-only.md"), "Local Only", "Detached commit");
+    git(clone, "add", ".");
+    git(clone, "commit", "-m", "local-only commit");
+    const shortSha = git(clone, "rev-parse", "--short", "HEAD");
+    git(clone, "checkout", "--detach", "HEAD");
+    process.chdir(clone);
+
+    runTreeTreeCommand(context(commandWithOptions({}, ["docs/development"])));
+
+    const output = readMockOutput(stderr);
+    const branchName = `detached:${shortSha}`;
+    expect(readMockOutput(stdout)).toBe("");
+    expect(output).toContain(`Branch: ${branchName}`);
+    expect(output).toContain(
+      `Warning: current branch "${branchName}" is not main/master; it may be stale. Switch to main/master.`,
+    );
   });
 
   it("warns when the current tree branch is not mainline", () => {
@@ -439,6 +477,28 @@ describe("tree tree command action", () => {
           isMainline: false,
           warning:
             'Warning: current branch "feature/stale-tree" is not main/master; it may be stale. Switch to main/master.',
+        },
+      },
+    });
+  });
+
+  it("reports a detached origin/main checkout as mainline in JSON", () => {
+    const { clone } = makeRemoteBackedTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    git(clone, "checkout", "origin/main");
+    process.chdir(clone);
+
+    runTreeTreeCommand(context(commandWithOptions({}, ["docs/development"]), { json: true }));
+
+    expect(readMockOutput(stderr)).toBe("");
+    expect(JSON.parse(readMockOutput(stdout))).toMatchObject({
+      ok: true,
+      data: {
+        branch: {
+          name: "origin/main",
+          isMainline: true,
+          warning: null,
         },
       },
     });
