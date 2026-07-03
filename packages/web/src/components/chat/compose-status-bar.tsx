@@ -51,6 +51,11 @@ function isAlert(s: AgentChatStatus): boolean {
   return s.main === "failed" || isFatalStatusReason(s);
 }
 
+function visibleStatusReason(status: AgentChatStatus): AgentChatStatus["statusReason"] {
+  if (status.main === "working" && status.statusReason?.kind === "terminal") return undefined;
+  return status.statusReason;
+}
+
 function activityStartedMs(s: AgentChatStatus): number {
   return s.activity ? new Date(s.activity.startedAt).getTime() : 0;
 }
@@ -62,21 +67,23 @@ function activityStartedMs(s: AgentChatStatus): number {
  */
 export function selectAttention(statuses: AgentChatStatus[]): AgentChatStatus[] {
   return statuses
-    .filter((s) => ATTENTION.has(s.main) || s.statusReason !== undefined)
+    .filter((s) => ATTENTION.has(s.main) || visibleStatusReason(s) !== undefined)
     .sort((a, b) => attentionRank(a) - attentionRank(b) || compareMainStatus(a.main, b.main));
 }
 
 function attentionRank(status: AgentChatStatus): number {
+  const reason = visibleStatusReason(status);
   if (status.main === "failed" || isFatalStatusReason(status)) return 0;
   if (status.main === "working") return 1;
-  if (status.statusReason?.kind === "terminal") return 2;
-  if (status.statusReason?.kind === "waiting") return 3;
-  if (status.statusReason?.kind === "retrying") return 4;
+  if (reason?.kind === "terminal") return 2;
+  if (reason?.kind === "waiting") return 3;
+  if (reason?.kind === "retrying") return 4;
   return 5;
 }
 
 function isFatalStatusReason(status: AgentChatStatus): boolean {
-  return status.statusReason?.kind === "terminal" && status.statusReason.severity === "error";
+  const reason = visibleStatusReason(status);
+  return reason?.kind === "terminal" && reason.severity === "error";
 }
 
 /**
@@ -259,11 +266,12 @@ function RailRow({
 /** The detail after the name: a short reason (failed) or the live activity
  *  (working). */
 function LeadDetail({ status }: { status: AgentChatStatus }) {
-  if (status.statusReason) {
-    const detail = status.statusReason.detail ?? status.statusReason.reasonCode;
+  const reason = visibleStatusReason(status);
+  if (reason) {
+    const detail = reason.detail ?? reason.reasonCode;
     return (
       <span className="truncate" title={detail}>
-        {status.statusReason.label}
+        {reason.label}
       </span>
     );
   }
@@ -272,7 +280,7 @@ function LeadDetail({ status }: { status: AgentChatStatus }) {
 }
 
 export function statusReasonView(status: AgentChatStatus) {
-  const reason = status.statusReason;
+  const reason = visibleStatusReason(status);
   if (!reason) return null;
   if (reason.kind === "terminal") {
     return {

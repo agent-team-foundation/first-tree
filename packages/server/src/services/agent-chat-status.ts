@@ -454,12 +454,12 @@ export async function resolveAgentChatStatuses(
       //
       // Scoped strictly to `provider_turn`: a `session_start` / `session_resume`
       // terminal reason is session-scoped, not turn-scoped, so a turn-level
-      // "working" signal must NOT hide it (doing so would make it flicker —
-      // hidden while working, reappearing when idle). Those keep their own
-      // lifecycle. `retrying` / `waiting` reasons legitimately co-occur with
-      // working (an in-turn foreground retry) and are kept. Failed agents
-      // (errored ⇒ main "failed", working=false) also keep the reason — that is
-      // the correct co-display on the failure row.
+      // "working" signal must NOT erase it from the status projection. Web
+      // surfaces that should prefer live working over the stale-looking banner
+      // can choose to suppress it at presentation time. `retrying` / `waiting`
+      // reasons legitimately co-occur with working (an in-turn foreground retry)
+      // and are kept. Failed agents (errored ⇒ main "failed", working=false)
+      // also keep the reason — that is the correct co-display on the failure row.
       const reason = perAgentStatusReason?.get(agentId);
       const isStaleTurnTerminal = reason?.kind === "terminal" && reason.scope === "provider_turn";
       const statusReason = working && isStaleTurnTerminal ? undefined : reason;

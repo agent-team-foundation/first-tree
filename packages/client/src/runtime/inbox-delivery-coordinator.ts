@@ -14,6 +14,8 @@ export type DeliveryDecision =
   | { kind: "duplicate-in-flight" }
   | { kind: "recovering" };
 
+export type DeliveryRouteOwnership = "owned" | "settled" | "lost";
+
 export type WorkSnapshot = {
   entries: Array<{
     entryId: number;
@@ -67,6 +69,7 @@ type InboxDeliveryCoordinatorConfig = {
 export class InboxDeliveryCoordinator {
   private readonly config: InboxDeliveryCoordinatorConfig;
   private readonly deduplicator = new Deduplicator(1000);
+  private readonly recentlySettled = new Deduplicator(1000);
   private readonly ledgers = new Map<string, ChatInboxLedger>();
   private readonly recoveringChats = new Map<string, Promise<void>>();
 
@@ -203,18 +206,20 @@ export class InboxDeliveryCoordinator {
     return next;
   }
 
-  markOwned(work: DeliveryWork): boolean {
+  markOwned(work: DeliveryWork): DeliveryRouteOwnership {
     const tracked = this.findEntry(work.chatId, work.entryId);
-    if (!tracked) return false;
+    if (!tracked) {
+      return this.recentlySettled.has(this.settledKey(work)) ? "settled" : "lost";
+    }
     if (tracked.phase === "open") {
       tracked.phase = "owned";
       this.emitWorkChanged(work.chatId);
     }
-    return true;
+    return "owned";
   }
 
   hasEntry(work: DeliveryWork): boolean {
-    return this.findEntry(work.chatId, work.entryId) !== null;
+    return this.findEntry(work.chatId, work.entryId)?.messageId === work.messageId;
   }
 
   markProcessingStarted(chatId: string, messages: SessionMessage | readonly SessionMessage[]): void {
@@ -501,6 +506,9 @@ export class InboxDeliveryCoordinator {
     current.entries = current.entries.filter((tracked) => tracked.entryId > throughEntryId);
     for (const tracked of committed) {
       this.deduplicator.drop(tracked.dedupKey);
+      this.recentlySettled.isDuplicate(
+        this.settledKey({ chatId, entryId: tracked.entryId, messageId: tracked.messageId }),
+      );
     }
     if (current.entries.length === 0 && current.recoveryDebt === "required") {
       current.recoveryDebt = "none";
@@ -630,5 +638,9 @@ export class InboxDeliveryCoordinator {
 
   private dedupKey(chatId: string, messageId: string): string {
     return `${chatId}:${messageId}`;
+  }
+
+  private settledKey(work: DeliveryWork): string {
+    return `${work.chatId}:${work.entryId}:${work.messageId}`;
   }
 }

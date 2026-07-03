@@ -228,6 +228,90 @@ describe("Agent WS — session event protocol (S10)", () => {
     }
   }, 15000);
 
+  it("accepts a confirmed `session:event` only after persistence succeeds", async () => {
+    const seed = await seedBoundAgent("confirm-accept");
+    const ws = await openBoundSocket(seed);
+    const chatId = `chat-${crypto.randomUUID()}`;
+    const ref = `event-${crypto.randomUUID()}`;
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          ref,
+          agentId: seed.agent.uuid,
+          chatId,
+          event: {
+            kind: "error",
+            payload: { source: "runtime", message: "confirmed failure" },
+          },
+        }),
+      );
+
+      const accepted = (await waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; ref?: string }).type === "session:event:accepted" &&
+          (m as { ref?: string }).ref === ref,
+      )) as { type: string; ref: string; agentId: string; chatId: string };
+
+      expect(accepted).toMatchObject({
+        type: "session:event:accepted",
+        ref,
+        agentId: seed.agent.uuid,
+        chatId,
+      });
+      const { items } = await sessionEventService.listEvents(app.db, seed.agent.uuid, chatId, { limit: 10 });
+      expect(items).toHaveLength(1);
+      expect(items[0]?.kind).toBe("error");
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("rejects a confirmed `session:event` when persistence fails", async () => {
+    const seed = await seedBoundAgent("confirm-reject");
+    const ws = await openBoundSocket(seed);
+    const chatId = `chat-${crypto.randomUUID()}`;
+    const ref = `event-${crypto.randomUUID()}`;
+    const appendSpy = vi.spyOn(sessionEventService, "appendEvent").mockRejectedValueOnce(new Error("db down"));
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          ref,
+          agentId: seed.agent.uuid,
+          chatId,
+          event: {
+            kind: "error",
+            payload: { source: "runtime", message: "rejected failure" },
+          },
+        }),
+      );
+
+      const rejected = (await waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; ref?: string }).type === "session:event:rejected" &&
+          (m as { ref?: string }).ref === ref,
+      )) as { type: string; ref: string; agentId: string; chatId: string; reason: string };
+
+      expect(rejected).toMatchObject({
+        type: "session:event:rejected",
+        ref,
+        agentId: seed.agent.uuid,
+        chatId,
+        reason: "persist_failed",
+      });
+    } finally {
+      appendSpy.mockRestore();
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
   it("persists Context Tree IO derived from a `session:event` frame", async () => {
     const seed = await seedBoundAgent("context-io");
     const ws = await openBoundSocket(seed);

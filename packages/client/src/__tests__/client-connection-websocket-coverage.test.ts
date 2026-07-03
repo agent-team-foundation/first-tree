@@ -336,6 +336,65 @@ describe("ClientConnection — WebSocket edge coverage", () => {
     ]);
   });
 
+  it("sends confirmed session events and settles on accepted or rejected frames", async () => {
+    const connection = await makeConnection();
+    const internal = priv(connection);
+    const socket = await openRegisteredConnection(connection, { wsSessionEventConfirm: true });
+
+    const bindPromise = internal.sendBind("agent-1", "codex");
+    const bindFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "agent:bound",
+      ref: bindFrame.ref,
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+    });
+    await bindPromise;
+
+    const accepted = connection.reportSessionEventConfirmed("agent-1", "chat-1", {
+      kind: "error",
+      payload: { source: "runtime", message: "confirmed" },
+    });
+    const acceptedFrame = parseSent(socket, socket.sent.length - 1);
+    expect(acceptedFrame).toMatchObject({ type: "session:event", agentId: "agent-1", chatId: "chat-1" });
+    expect(typeof acceptedFrame.ref).toBe("string");
+
+    socket.emitMessage({
+      type: "session:event:accepted",
+      ref: acceptedFrame.ref,
+      agentId: "agent-1",
+      chatId: "chat-1",
+    });
+    await expect(accepted).resolves.toBeUndefined();
+
+    const rejected = connection.reportSessionEventConfirmed("agent-1", "chat-2", {
+      kind: "error",
+      payload: { source: "runtime", message: "rejected" },
+    });
+    const rejectedFrame = parseSent(socket, socket.sent.length - 1);
+    socket.emitMessage({
+      type: "session:event:rejected",
+      ref: rejectedFrame.ref,
+      agentId: "agent-1",
+      chatId: "chat-2",
+      reason: "persist_failed",
+    });
+    await expect(rejected).rejects.toThrow("persist_failed");
+  });
+
+  it("rejects confirmed session events when the agent is not bound on the current socket", async () => {
+    const connection = await makeConnection();
+    await openRegisteredConnection(connection, { wsSessionEventConfirm: true });
+
+    await expect(
+      connection.reportSessionEventConfirmed("agent-1", "chat-1", {
+        kind: "error",
+        payload: { source: "runtime", message: "not bound" },
+      }),
+    ).rejects.toThrow("socket not bound");
+  });
+
   it("covers non-Error initial connect failures and paused-after-backoff exit", async () => {
     vi.useFakeTimers();
     const connection = await makeConnection();

@@ -93,6 +93,30 @@ describe("selectAttention — the bar surfaces only actionable/active states, mo
     expect(statusReasonView(terminal)?.colorVar).toBe("var(--state-error)");
     expect(statusReasonView(terminalWarning)?.colorVar).toBe("var(--state-blocked)");
   });
+
+  it("suppresses stale-looking terminal reasons while the agent is visibly working", () => {
+    const workingWithTerminalReason = mk("working-terminal", {
+      working: true,
+      activity: {
+        agentId: "working-terminal",
+        kind: "tool_call",
+        label: "Bash",
+        startedAt: "2026-07-03T10:00:00.000Z",
+      },
+      statusReason: {
+        kind: "terminal",
+        severity: "error",
+        provider: "codex",
+        scope: "session_resume",
+        category: "credential",
+        reasonCode: "invalid_runtime_session",
+        label: "Provider failure",
+      },
+    });
+
+    expect(selectAttention([workingWithTerminalReason]).map((s) => s.agentId)).toEqual(["working-terminal"]);
+    expect(statusReasonView(workingWithTerminalReason)).toBeNull();
+  });
 });
 
 const workingAt = (id: string, startedAt: string) =>

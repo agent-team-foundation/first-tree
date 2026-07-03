@@ -294,10 +294,10 @@ describe("agent-chat-status", () => {
 
     it("keeps a session-scoped terminal statusReason even while the agent is working", async () => {
       // The working-gate is scoped strictly to `provider_turn`. A
-      // `session_resume` / `session_start` terminal reason is session-scoped, not
-      // turn-scoped, so a turn-level "working" signal must NOT hide it — otherwise
-      // it would flicker (hidden while working, reappearing when idle). It keeps
-      // its own lifecycle.
+      // `session_resume` / `session_start` terminal reason is session-scoped,
+      // not turn-scoped, so a turn-level "working" signal must not erase it
+      // from the server-side status projection. Individual Web surfaces can
+      // choose to suppress it when showing a live working affordance.
       const { app, peer, chatId } = await newChatWithAgent();
       await bindPresence(peer.agent.uuid, peer.clientId);
       await setSession(peer.agent.uuid, chatId, "active");
@@ -412,6 +412,29 @@ describe("agent-chat-status", () => {
       const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
       expect(s?.main).toBe("ready");
       expect(s?.statusReason).toBeUndefined();
+    });
+
+    it("keeps session-scoped terminal statusReason when a later turn_end succeeds", async () => {
+      const { app, peer, chatId } = await newChatWithAgent();
+      await bindPresence(peer.agent.uuid, peer.clientId);
+      await setSession(peer.agent.uuid, chatId, "active");
+      await insertEvent(peer.agent.uuid, chatId, 1, "error", {
+        message: encodeProviderRetryEventMessage({
+          event: "provider_failure_terminal",
+          provider: "codex",
+          scope: "session_start",
+          category: "credential",
+          reasonCode: "invalid_runtime_session",
+          replaySafety: "pre_provider",
+          userSeverity: "error",
+        }),
+      });
+      await insertEvent(peer.agent.uuid, chatId, 2, "turn_end", { status: "success" });
+
+      const s = (await getChatAgentStatuses(app.db, chatId)).find((x) => x.agentId === peer.agent.uuid);
+      expect(s?.main).toBe("ready");
+      expect(s?.statusReason?.kind).toBe("terminal");
+      expect(s?.statusReason?.scope).toBe("session_start");
     });
   });
 

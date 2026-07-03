@@ -14,6 +14,7 @@ import {
   inboxRecoverFrameSchema,
   runtimeStateMessageSchema,
   sessionEventMessageSchema,
+  sessionEventRejectedReasonSchema,
   sessionReconcileRequestSchema,
   sessionRuntimeMessageSchema,
   sessionStateMessageSchema,
@@ -929,7 +930,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               type: "server:welcome",
               serverCommandVersion: app.commandVersion(),
               serverTimeMs: Date.now(),
-              capabilities: { wsInboxDeliver: true, wsInboxAckConfirm: true },
+              capabilities: { wsInboxDeliver: true, wsInboxAckConfirm: true, wsSessionEventConfirm: true },
             });
             setAuthWsAttrs(socket, {
               phase: "post_auth_welcome",
@@ -1407,13 +1408,44 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 notificationService.markAgentFaultsResolved(app.db, agentId).catch(() => {});
               }
             } else if (type === "session:event") {
+              const rawMsg = msg as Record<string, unknown>;
               const agentId = parsed.data.agentId;
               if (!agentId || !(await ensureAgentStillRoutedHere(agentId))) {
-                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                const rawRef = typeof rawMsg.ref === "string" && rawMsg.ref.length > 0 ? rawMsg.ref : null;
+                if (rawRef && agentId) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "session:event:rejected",
+                      ref: rawRef,
+                      agentId,
+                      reason: sessionEventRejectedReasonSchema.enum.agent_not_bound,
+                    }),
+                  );
+                } else {
+                  socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                }
                 return;
               }
 
-              const payload = sessionEventMessageSchema.parse(msg);
+              const payloadResult = sessionEventMessageSchema.safeParse(msg);
+              if (!payloadResult.success) {
+                const rawRef = typeof rawMsg.ref === "string" && rawMsg.ref.length > 0 ? rawMsg.ref : null;
+                if (rawRef) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "session:event:rejected",
+                      ref: rawRef,
+                      agentId,
+                      chatId: typeof rawMsg.chatId === "string" ? rawMsg.chatId : undefined,
+                      reason: sessionEventRejectedReasonSchema.enum.malformed,
+                    }),
+                  );
+                } else {
+                  socket.send(JSON.stringify({ type: "error", message: "Malformed session:event frame" }));
+                }
+                return;
+              }
+              const payload = payloadResult.data;
               const boundInfo = boundAgents.get(agentId);
               chainSessionOp(agentId, payload.chatId, async () => {
                 try {
@@ -1448,13 +1480,35 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                       .notifySessionEvent(agentId, payload.chatId, payload.event.kind, boundInfo.organizationId)
                       .catch(() => {});
                   }
+                  if (payload.ref) {
+                    socket.send(
+                      JSON.stringify({
+                        type: "session:event:accepted",
+                        ref: payload.ref,
+                        agentId,
+                        chatId: payload.chatId,
+                      }),
+                    );
+                  }
                 } catch (err) {
-                  socket.send(
-                    JSON.stringify({
-                      type: "error",
-                      message: `Failed to persist session event: ${err instanceof Error ? err.message : String(err)}`,
-                    }),
-                  );
+                  if (payload.ref) {
+                    socket.send(
+                      JSON.stringify({
+                        type: "session:event:rejected",
+                        ref: payload.ref,
+                        agentId,
+                        chatId: payload.chatId,
+                        reason: sessionEventRejectedReasonSchema.enum.persist_failed,
+                      }),
+                    );
+                  } else {
+                    socket.send(
+                      JSON.stringify({
+                        type: "error",
+                        message: `Failed to persist session event: ${err instanceof Error ? err.message : String(err)}`,
+                      }),
+                    );
+                  }
                 }
               });
             } else if (type === "inbox:ack") {

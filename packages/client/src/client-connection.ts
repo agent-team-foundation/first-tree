@@ -25,6 +25,8 @@ import {
   type SessionEvent,
   type SessionState,
   serverWelcomeFrameSchema,
+  sessionEventAcceptedFrameSchema,
+  sessionEventRejectedFrameSchema,
   type UpdateAttempt,
 } from "@first-tree/shared";
 import WebSocket from "ws";
@@ -57,6 +59,17 @@ type PendingInboxAck = {
 };
 
 type PendingInboxRecover = {
+  agentId: string;
+  chatId: string;
+  ref: string;
+  firstSentAt: number;
+  timer: ReturnType<typeof setTimeout> | null;
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (err: Error) => void;
+};
+
+type PendingSessionEvent = {
   agentId: string;
   chatId: string;
   ref: string;
@@ -291,6 +304,7 @@ const WS_CONNECT_TIMEOUT_MS = 10_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const INBOX_ACK_CONFIRM_TIMEOUT_MS = 3_000;
 const INBOX_RECOVER_CONFIRM_TIMEOUT_MS = 3_000;
+const SESSION_EVENT_CONFIRM_TIMEOUT_MS = 3_000;
 const INBOX_RECOVER_TIMEOUT_CLOSE_CODE = 1011;
 const INBOX_RECOVER_TIMEOUT_CLOSE_REASON = "inbox recover timeout";
 /**
@@ -443,6 +457,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   /** Count of `server:welcome` frames received; drives `isReconnect` flag. */
   private welcomeFramesReceived = 0;
   private serverSupportsInboxAckConfirm = false;
+  private serverSupportsSessionEventConfirm = false;
   /**
    * Last handshake error, stashed for the `close` handler to surface a typed
    * reason (e.g. {@link ClientOrgMismatchError}) instead of a generic
@@ -481,6 +496,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private readonly bindRetryRecords = new Map<string, BindRetryRecord>();
   private readonly pendingInboxAcks = new Map<number, PendingInboxAck>();
   private readonly pendingInboxRecovers = new Map<string, PendingInboxRecover>();
+  private readonly pendingSessionEvents = new Map<string, PendingSessionEvent>();
   private readonly socketBoundAgentIds = new Set<string>();
 
   constructor(config: ClientConnectionConfig) {
@@ -832,6 +848,46 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     }
   }
 
+  private resolvePendingSessionEvent(pending: PendingSessionEvent): void {
+    this.clearPendingSessionEventTimer(pending);
+    this.pendingSessionEvents.delete(pending.ref);
+    this.wsLogger.debug(
+      {
+        agentId: pending.agentId,
+        chatId: pending.chatId,
+        ref: pending.ref,
+        latencyMs: Date.now() - pending.firstSentAt,
+        sessionEvent: "session_event_accepted",
+      },
+      "session:event accepted",
+    );
+    pending.resolve();
+  }
+
+  private rejectPendingSessionEvent(pending: PendingSessionEvent, reason: string): void {
+    this.clearPendingSessionEventTimer(pending);
+    this.pendingSessionEvents.delete(pending.ref);
+    this.wsLogger.warn(
+      {
+        agentId: pending.agentId,
+        chatId: pending.chatId,
+        ref: pending.ref,
+        reason,
+        latencyMs: Date.now() - pending.firstSentAt,
+        sessionEvent: "session_event_rejected",
+      },
+      "session:event rejected",
+    );
+    pending.reject(new Error(`session:event rejected (${reason})`));
+  }
+
+  private clearPendingSessionEventTimer(pending: PendingSessionEvent): void {
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+      pending.timer = null;
+    }
+  }
+
   private inboxAckConnectionState(): string {
     if (!this.ws) return "no_socket";
     if (this.ws.readyState !== WebSocket.OPEN) return `socket_${this.ws.readyState}`;
@@ -908,6 +964,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.socketBoundAgentIds.delete(agentId);
     this.rejectPendingInboxAcksForAgent(agentId, "agent_unbound");
     this.rejectPendingInboxRecoversForAgent(agentId, "agent_unbound");
+    this.rejectPendingSessionEventsForAgent(agentId, "agent_unbound");
     if (!shouldNotifyServer || !this.ws) return;
     this.ws.send(JSON.stringify({ type: "agent:unbind", agentId }));
   }
@@ -941,6 +998,49 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.ws.send(JSON.stringify({ type: "session:event", agentId, chatId, event: sanitized }));
   }
 
+  reportSessionEventConfirmed(agentId: string, chatId: string, event: SessionEvent): Promise<void> {
+    if (!this.serverSupportsSessionEventConfirm) {
+      this.reportSessionEvent(agentId, chatId, event);
+      return Promise.reject(new Error("session:event confirmation unsupported by server"));
+    }
+    if (!this.canSendAgentFrame(agentId) || !this.ws) {
+      return Promise.reject(new Error("session:event unavailable; socket not bound"));
+    }
+
+    const pending: PendingSessionEvent = {
+      agentId,
+      chatId,
+      ref: `session_event_${randomUUID().slice(0, 12)}`,
+      firstSentAt: Date.now(),
+      timer: null,
+      promise: Promise.resolve(),
+      resolve: () => {},
+      reject: () => {},
+    };
+    pending.promise = new Promise<void>((resolve, reject) => {
+      pending.resolve = resolve;
+      pending.reject = reject;
+    });
+    this.pendingSessionEvents.set(pending.ref, pending);
+    const sanitized = sanitizeSessionEventForTransport(event);
+    this.ws.send(JSON.stringify({ type: "session:event", agentId, chatId, event: sanitized, ref: pending.ref }));
+    this.wsLogger.debug(
+      {
+        agentId,
+        chatId,
+        ref: pending.ref,
+        eventKind: sanitized.kind,
+        sessionEvent: "session_event_sent",
+      },
+      "session:event sent",
+    );
+    pending.timer = setTimeout(() => {
+      if (!this.pendingSessionEvents.has(pending.ref)) return;
+      this.rejectPendingSessionEvent(pending, "timeout");
+    }, SESSION_EVENT_CONFIRM_TIMEOUT_MS);
+    return pending.promise;
+  }
+
   /** Ask the server which of the supplied chatIds the client should drop. */
   sendSessionReconcile(agentId: string, chatIds: string[]): void {
     if (!this.canSendAgentFrame(agentId) || !this.ws) return;
@@ -954,6 +1054,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
     this.rejectAllPendingBinds("Client disconnected");
     this.rejectAllPendingInboxAcks("Client disconnected");
     this.rejectAllPendingInboxRecovers("Client disconnected");
+    this.rejectAllPendingSessionEvents("Client disconnected");
     if (this.ws) {
       this.ws.removeAllListeners();
       if (this.ws.readyState === WebSocket.OPEN) {
@@ -1112,11 +1213,13 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.clearAuthRefreshTimer();
         this.clearPendingInboxAckTimers();
         this.clearPendingInboxRecoverTimers();
+        this.clearPendingSessionEventTimers();
         const wasRegistered = this.registered;
         this.registered = false;
         this.socketBoundAgentIds.clear();
         this.rejectAllPendingBinds("WebSocket closed");
         this.rejectAllPendingInboxRecovers("WebSocket closed");
+        this.rejectAllPendingSessionEvents("WebSocket closed");
 
         if (!settled) {
           this.wsLogger.warn({ code }, "closed before ready");
@@ -1192,6 +1295,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const isReconnect = this.welcomeFramesReceived > 0;
       this.welcomeFramesReceived++;
       this.serverSupportsInboxAckConfirm = parsed.data.capabilities?.wsInboxAckConfirm === true;
+      this.serverSupportsSessionEventConfirm = parsed.data.capabilities?.wsSessionEventConfirm === true;
       this.emit("server:welcome", { frame: parsed.data, isReconnect });
       return;
     }
@@ -1374,6 +1478,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.bindRetryRecords.set(pending.agentId, record);
         this.rejectPendingInboxAcksForAgent(pending.agentId, `agent_bind_rejected:${reason}`);
         this.rejectPendingInboxRecoversForAgent(pending.agentId, `agent_bind_rejected:${reason}`);
+        this.rejectPendingSessionEventsForAgent(pending.agentId, `agent_bind_rejected:${reason}`);
         this.emit("agent:bind:rejected", reason, pending.agentId);
         pending.reject(new Error(`agent:bind rejected (${reason})`));
       }
@@ -1386,6 +1491,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       this.socketBoundAgentIds.delete(agentId);
       this.rejectPendingInboxAcksForAgent(agentId, "agent_unbound");
       this.rejectPendingInboxRecoversForAgent(agentId, "agent_unbound");
+      this.rejectPendingSessionEventsForAgent(agentId, "agent_unbound");
       this.emit("agent:unbound", agentId);
       return;
     }
@@ -1409,6 +1515,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         this.socketBoundAgentIds.delete(agentId);
         this.rejectPendingInboxAcksForAgent(agentId, "agent_force_disconnect");
         this.rejectPendingInboxRecoversForAgent(agentId, "agent_force_disconnect");
+        this.rejectPendingSessionEventsForAgent(agentId, "agent_force_disconnect");
         this.emit("agent:unbound", agentId, typeof msg.reason === "string" ? msg.reason : "server_forced");
       }
       return;
@@ -1438,6 +1545,58 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       if (agentId && staleChatIds) {
         this.emit("session:reconcile:result", { agentId, staleChatIds });
       }
+      return;
+    }
+
+    if (type === "session:event:accepted") {
+      const parsed = sessionEventAcceptedFrameSchema.safeParse(msg);
+      if (!parsed.success) {
+        this.wsLogger.warn(
+          { issues: parsed.error.issues.map((i) => i.message) },
+          "ignoring malformed session:event:accepted frame",
+        );
+        return;
+      }
+      const pending = this.pendingSessionEvents.get(parsed.data.ref);
+      if (!pending || pending.agentId !== parsed.data.agentId || pending.chatId !== parsed.data.chatId) {
+        this.wsLogger.debug(
+          {
+            agentId: parsed.data.agentId,
+            chatId: parsed.data.chatId,
+            ref: parsed.data.ref,
+            sessionEvent: "session_event_no_match",
+          },
+          "session:event:accepted matched no pending event",
+        );
+        return;
+      }
+      this.resolvePendingSessionEvent(pending);
+      return;
+    }
+
+    if (type === "session:event:rejected") {
+      const parsed = sessionEventRejectedFrameSchema.safeParse(msg);
+      if (!parsed.success) {
+        this.wsLogger.warn(
+          { issues: parsed.error.issues.map((i) => i.message) },
+          "ignoring malformed session:event:rejected frame",
+        );
+        return;
+      }
+      const pending = this.pendingSessionEvents.get(parsed.data.ref);
+      if (!pending || pending.agentId !== parsed.data.agentId) {
+        this.wsLogger.debug(
+          {
+            agentId: parsed.data.agentId,
+            chatId: parsed.data.chatId ?? null,
+            ref: parsed.data.ref,
+            sessionEvent: "session_event_no_match",
+          },
+          "session:event:rejected matched no pending event",
+        );
+        return;
+      }
+      this.rejectPendingSessionEvent(pending, parsed.data.reason);
       return;
     }
 
@@ -1622,6 +1781,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
         });
         this.rejectPendingInboxAcksForAgent(desired.agentId, "agent_rebind_skipped");
         this.rejectPendingInboxRecoversForAgent(desired.agentId, "agent_rebind_skipped");
+        this.rejectPendingSessionEventsForAgent(desired.agentId, "agent_rebind_skipped");
         continue;
       }
       const previousAttempts = record?.attempts ?? 0;
@@ -1824,6 +1984,26 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
   private rejectPendingInboxRecoversForAgent(agentId: string, reason: string): void {
     for (const pending of [...this.pendingInboxRecovers.values()]) {
       if (pending.agentId === agentId) this.rejectPendingInboxRecover(pending, reason);
+    }
+  }
+
+  private rejectAllPendingSessionEvents(reason: string): void {
+    for (const pending of this.pendingSessionEvents.values()) {
+      this.clearPendingSessionEventTimer(pending);
+      pending.reject(new Error(reason));
+    }
+    this.pendingSessionEvents.clear();
+  }
+
+  private rejectPendingSessionEventsForAgent(agentId: string, reason: string): void {
+    for (const pending of [...this.pendingSessionEvents.values()]) {
+      if (pending.agentId === agentId) this.rejectPendingSessionEvent(pending, reason);
+    }
+  }
+
+  private clearPendingSessionEventTimers(): void {
+    for (const pending of this.pendingSessionEvents.values()) {
+      this.clearPendingSessionEventTimer(pending);
     }
   }
 
