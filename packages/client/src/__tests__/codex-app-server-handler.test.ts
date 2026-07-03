@@ -436,10 +436,11 @@ afterEach(() => {
 describe("codex app-server handler", () => {
   it("wraps landing campaign trial app-server startup in workspace-only sandbox mode", async () => {
     const firstTreeHome = join(workspaceRoot, "first-tree-home");
-    const cliBinDir = join(firstTreeHome, "bin");
+    const cliBinDir = join(workspaceRoot, "first-tree-cli-bin");
     mkdirSync(cliBinDir, { recursive: true });
     writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
     vi.stubEnv("FIRST_TREE_HOME", firstTreeHome);
+    vi.stubEnv("FIRST_TREE_CLI_BIN_DIR", cliBinDir);
     vi.stubEnv("OPENAI_API_KEY", "secret-openai");
     vi.stubEnv("GITHUB_TOKEN", "secret-github");
 

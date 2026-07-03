@@ -131,14 +131,33 @@ function isCoveredBySystemBind(path: string): boolean {
   return READ_ONLY_SYSTEM_DIRS.some((dir) => existsSync(dir) && pathIsWithin(dir, path));
 }
 
-function validateChannelCliBin(binDir: string): void {
+function validateChannelCliBin(binDir: string, source: string): void {
   const { binName } = getCliBinding();
   const cliPath = join(binDir, binName);
   try {
     accessSync(cliPath, process.platform === "win32" ? constants.F_OK : constants.X_OK);
   } catch {
-    throw new Error(`workspace-only sandbox requires channel-local First Tree CLI at ${cliPath}`);
+    throw new Error(`workspace-only sandbox ${source} must contain channel-local First Tree CLI at ${cliPath}`);
   }
+}
+
+function resolveChannelCliBinDir(parentEnv: NodeJS.ProcessEnv): string {
+  const explicit = parentEnv.FIRST_TREE_CLI_BIN_DIR;
+  if (explicit) {
+    const binDir = isAbsolute(explicit) ? explicit : resolve(explicit);
+    validateChannelCliBin(binDir, "FIRST_TREE_CLI_BIN_DIR");
+    return binDir;
+  }
+
+  const home = parentEnv.FIRST_TREE_HOME;
+  if (!home) {
+    throw new Error(
+      "workspace-only sandbox requires FIRST_TREE_CLI_BIN_DIR, or FIRST_TREE_HOME with a legacy bin shim fallback",
+    );
+  }
+  const binDir = join(isAbsolute(home) ? home : resolve(home), "bin");
+  validateChannelCliBin(binDir, "legacy FIRST_TREE_HOME/bin fallback");
+  return binDir;
 }
 
 function writePrivateFile(path: string, content: string): void {
@@ -151,12 +170,7 @@ export function prepareWorkspaceOnlyOutboxHome(options: WorkspaceOnlyOutboxHomeO
   cliBinDir: string;
 } {
   const realWorkspace = realpathExisting(options.workspaceRoot, "workspaceRoot");
-  const sourceHome = options.parentEnv.FIRST_TREE_HOME;
-  if (!sourceHome) {
-    throw new Error("workspace-only sandbox requires host FIRST_TREE_HOME so the channel-local CLI can be mounted");
-  }
-  const cliBinDir = join(isAbsolute(sourceHome) ? sourceHome : resolve(sourceHome), "bin");
-  validateChannelCliBin(cliBinDir);
+  const cliBinDir = resolveChannelCliBinDir(options.parentEnv);
 
   const home = join(realWorkspace, ".first-tree-workspace", "outbox-home");
   const configDir = join(home, "config");
@@ -203,9 +217,10 @@ export function buildWorkspaceOnlyEnvironment(
     throw new Error("workspace-only sandbox requires FIRST_TREE_HOME for sandbox-local First Tree config");
   }
   const resolvedHome = isAbsolute(firstTreeHome) ? firstTreeHome : resolve(firstTreeHome);
-  const cliBinDirValue = parentEnv.FIRST_TREE_CLI_BIN_DIR ?? join(resolvedHome, "bin");
-  const cliBinDir = isAbsolute(cliBinDirValue) ? cliBinDirValue : resolve(cliBinDirValue);
-  validateChannelCliBin(cliBinDir);
+  const cliBinDir = resolveChannelCliBinDir({
+    FIRST_TREE_HOME: resolvedHome,
+    FIRST_TREE_CLI_BIN_DIR: parentEnv.FIRST_TREE_CLI_BIN_DIR,
+  });
 
   const env: NodeJS.ProcessEnv = {};
   for (const key of SAFE_PASS_ENV_KEYS) {
