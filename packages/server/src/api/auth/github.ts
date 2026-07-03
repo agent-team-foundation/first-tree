@@ -542,7 +542,7 @@ async function completeOauthFlow(
       resolved = true;
       resolvedOrganizationId = personal.organizationId;
       orgPinned = true;
-      next = "/";
+      next = shouldPreserveSoloSignupNext(next) ? next : "/";
       // Onboarding funnel: structured log marker. Picked up by logfire/otel
       // pipelines via `event: "onboarding.team_created"` for funnel views.
       app.log.info(
@@ -608,4 +608,9 @@ async function completeOauthFlow(
   if (orgPinned) fragmentParams.orgPinned = "1";
   const fragment = new URLSearchParams(fragmentParams).toString();
   return reply.redirect(`/auth/github/complete#${fragment}`, 302);
+}
+
+function shouldPreserveSoloSignupNext(next: string): boolean {
+  const parsed = new URL(next, "http://first-tree.local");
+  return parsed.pathname === "/quickstart" && parsed.searchParams.get("campaign") === "production-scan";
 }
