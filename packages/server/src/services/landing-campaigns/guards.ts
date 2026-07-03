@@ -6,8 +6,21 @@ import { agents } from "../../db/schema/agents.js";
 import { members } from "../../db/schema/members.js";
 import { ForbiddenError } from "../../errors.js";
 
-export function isLandingCampaignOfficialUser(config: Config, userId: string | null | undefined): boolean {
-  return !!userId && userId === config.growth.landingCampaigns?.serviceUserId;
+export function isLandingCampaignServiceOrg(config: Config, organizationId: string | null | undefined): boolean {
+  const serviceOrgId = config.growth.landingCampaigns?.serviceOrgId;
+  return !!organizationId && !!serviceOrgId && organizationId === serviceOrgId;
+}
+
+export function isLandingCampaignServiceMembership(
+  config: Config,
+  row: { userId: string | null | undefined; organizationId: string | null | undefined },
+): boolean {
+  const serviceConfig = config.growth.landingCampaigns;
+  const serviceUserId = serviceConfig?.serviceUserId;
+  const serviceOrgId = serviceConfig?.serviceOrgId;
+  if (!serviceUserId || !serviceOrgId || row.userId !== serviceUserId) return false;
+  if (!row.organizationId) return false;
+  return row.organizationId !== serviceOrgId;
 }
 
 export function assertMetadataDoesNotClaimLandingCampaignTrial(metadata: Record<string, unknown> | undefined): void {
@@ -41,11 +54,14 @@ export async function assertMemberIsNotLandingCampaignServiceMember(
   db: Database,
   config: Config,
   memberId: string,
+  organizationId: string,
 ): Promise<void> {
-  const serviceUserId = config.growth.landingCampaigns?.serviceUserId;
-  if (!serviceUserId) return;
-  const [member] = await db.select({ userId: members.userId }).from(members).where(eq(members.id, memberId)).limit(1);
-  if (member?.userId === serviceUserId) {
+  const [member] = await db
+    .select({ userId: members.userId, organizationId: members.organizationId })
+    .from(members)
+    .where(and(eq(members.id, memberId), eq(members.organizationId, organizationId)))
+    .limit(1);
+  if (member && isLandingCampaignServiceMembership(config, member)) {
     throw new ForbiddenError("First Tree landing campaign service member is managed by First Tree.");
   }
 }

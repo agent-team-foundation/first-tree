@@ -100,6 +100,7 @@ describe("server config", () => {
     resetConfig();
     const configuredDir = makeTempConfigDir();
     vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID", "  user_service  ");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_ORG_ID", "  org_service  ");
     vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID", "  client_official  ");
 
     const configured = await initConfig({
@@ -110,6 +111,7 @@ describe("server config", () => {
 
     expect(configured.growth.landingCampaigns).toEqual({
       serviceUserId: "user_service",
+      serviceOrgId: "org_service",
       clientId: "client_official",
       runtimeProvider: "codex",
     });
@@ -119,6 +121,7 @@ describe("server config", () => {
     const defaultDir = makeTempConfigDir();
     stubRequiredProductionConfig();
     vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID", "user_service");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_ORG_ID", "org_service");
     vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID", "client_official");
 
     const defaultProvider = await initConfig({
@@ -131,6 +134,7 @@ describe("server config", () => {
 
     resetConfig();
     const claudeDir = makeTempConfigDir();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_ORG_ID", "org_service");
     vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_RUNTIME_PROVIDER", "claude-code");
 
     const claudeProvider = await initConfig({
@@ -146,6 +150,7 @@ describe("server config", () => {
     const configDir = makeTempConfigDir();
     stubRequiredProductionConfig();
     vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID", "user_service");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_ORG_ID", "org_service");
     vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID", "client_official");
     vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_RUNTIME_PROVIDER", "claude-code-tui");
 
