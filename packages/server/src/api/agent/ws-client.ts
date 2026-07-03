@@ -44,6 +44,7 @@ import {
 import * as activityService from "../../services/activity.js";
 import * as agentService from "../../services/agent.js";
 import * as agentRuntimeSessionService from "../../services/agent-runtime-session.js";
+import * as agentRuntimeSwitchService from "../../services/agent-runtime-switch.js";
 import * as clientService from "../../services/client.js";
 import * as connectionManager from "../../services/connection-manager.js";
 import * as contextTreeIoService from "../../services/context-tree-io.js";
@@ -346,6 +347,46 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       let inboxOperationQueue: Promise<void> = Promise.resolve();
       const lastInboxRepairDrainAtByAgent = new Map<string, number>();
 
+      function sendPinnedAgentFrame(agent: {
+        uuid: string;
+        name: string | null;
+        displayName: string;
+        type: string;
+        runtimeProvider: string;
+      }): void {
+        const parsed = agentPinnedMessageSchema.safeParse({
+          type: "agent:pinned",
+          agentId: agent.uuid,
+          name: agent.name,
+          displayName: agent.displayName,
+          // Wire-compat: translate `type=agent` back to the pre-merge
+          // `personal_assistant` so clients on ≤ 0.5.1 (strict zod)
+          // still decode the frame. See agentService.legacyWireAgentType.
+          agentType: agentService.legacyWireAgentType(agent.type),
+          runtimeProvider: agent.runtimeProvider,
+        });
+        if (!parsed.success) {
+          app.log.warn(
+            { err: parsed.error.flatten(), agentId: agent.uuid, clientId },
+            "agent:pinned backfill frame failed schema validation — skipping",
+          );
+          return;
+        }
+        socket.send(JSON.stringify(parsed.data));
+      }
+
+      async function reconcilePinnedAgentsForClient(): Promise<void> {
+        if (!clientId || socket.readyState !== socket.OPEN) return;
+        const pinned = await clientService.listActiveAgentsPinnedToClient(app.db, clientId);
+        for (const agent of pinned) {
+          const local = boundAgents.get(agent.uuid);
+          if (local?.runtimeProvider === agent.runtimeProvider && isAgentStillRoutedHere(agent.uuid)) {
+            continue;
+          }
+          sendPinnedAgentFrame(agent);
+        }
+      }
+
       function isAgentStillRoutedHere(agentId: string): boolean {
         return (
           boundAgents.has(agentId) && clientId !== null && connectionManager.getAgentClientId(agentId) === clientId
@@ -371,12 +412,26 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
         const info = boundAgents.get(agentId);
         if (!info || !clientId) return false;
         const [row] = await app.db
-          .select({ clientId: agents.clientId, runtimeProvider: agents.runtimeProvider, status: agents.status })
+          .select({
+            clientId: agents.clientId,
+            runtimeProvider: agents.runtimeProvider,
+            status: agents.status,
+            metadata: agents.metadata,
+          })
           .from(agents)
           .where(eq(agents.uuid, agentId))
           .limit(1);
         if (row?.clientId === clientId && row.status === "active" && row.runtimeProvider === info.runtimeProvider) {
           return true;
+        }
+        const switchClaim = agentRuntimeSwitchService.getRuntimeSwitchClaim(row?.metadata);
+        if (
+          row?.status === "suspended" &&
+          switchClaim?.phase === "claimed" &&
+          switchClaim.oldClientId === clientId &&
+          switchClaim.oldRuntimeProvider === info.runtimeProvider
+        ) {
+          return false;
         }
         dropLocalAgentBinding(agentId, "authoritative_route_changed");
         return false;
@@ -986,28 +1041,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // admin/agents.ts only fires for live sockets. The client dedupes
               // on agentId, so re-firing on every reconnect is safe.
               try {
-                const pinned = await clientService.listActiveAgentsPinnedToClient(app.db, data.clientId);
-                for (const agent of pinned) {
-                  const parsed = agentPinnedMessageSchema.safeParse({
-                    type: "agent:pinned",
-                    agentId: agent.uuid,
-                    name: agent.name,
-                    displayName: agent.displayName,
-                    // Wire-compat: translate `type=agent` back to the pre-merge
-                    // `personal_assistant` so clients on ≤ 0.5.1 (strict zod)
-                    // still decode the frame. See agentService.legacyWireAgentType.
-                    agentType: agentService.legacyWireAgentType(agent.type),
-                    runtimeProvider: agent.runtimeProvider,
-                  });
-                  if (!parsed.success) {
-                    app.log.warn(
-                      { err: parsed.error.flatten(), agentId: agent.uuid, clientId: data.clientId },
-                      "agent:pinned backfill frame failed schema validation — skipping",
-                    );
-                    continue;
-                  }
-                  socket.send(JSON.stringify(parsed.data));
-                }
+                await reconcilePinnedAgentsForClient();
               } catch (err) {
                 app.log.error(
                   { err, clientId: data.clientId },
@@ -1601,6 +1635,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     maybeRepairInboxBacklog(info.agentId, info.inboxId);
                   }
                 }
+                await reconcilePinnedAgentsForClient();
               }
               socket.send(JSON.stringify({ type: "heartbeat:ack" }));
             }

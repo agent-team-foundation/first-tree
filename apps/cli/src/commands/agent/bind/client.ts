@@ -9,7 +9,7 @@ import { resolveAgent } from "../../_shared/resolve-agent.js";
 export function registerAgentBindClientCommand(bind: Command): void {
   bind
     .command("client <agentName>")
-    .description("Bind an unbound agent to a client machine (first-time bind only — ID is immutable once set)")
+    .description("Bind an unbound agent to a client machine (first-time bind only; use runtime switch to move later)")
     .requiredOption(
       "--client-id <id>",
       `Client (machine) ID — must be owned by you. Run \`${channelConfig.binName} login <token>\` on that machine first.`,

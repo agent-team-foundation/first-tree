@@ -189,8 +189,8 @@ export const updateAgentSchema = z.object({
   /**
    * One-shot bind. NULL → ID still allowed (admin claims an unbound agent for
    * a known client). ID → another ID and ID → null are rejected at the
-   * service layer — once bound, an agent's client is immutable (there is no
-   * move/re-bind path; provision a new agent instead).
+   * generic PATCH service layer; moving a bound runtime must go through the
+   * managed switch-runtime endpoint.
    */
   clientId: z.string().min(1).max(100).nullable().optional(),
   /**

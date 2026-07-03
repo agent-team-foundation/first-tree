@@ -48,8 +48,9 @@ export const agents = pgTable(
     /**
      * Physical client this agent is pinned to. Nullable for human agents (no
      * runtime). For non-human agents it is set once (NULL → ID, on creation or
-     * first claim) and immutable thereafter (Rule R-RUN) — there is no
-     * move/re-bind path. To run on a different client, provision a new agent.
+     * first claim) through the generic bind/PATCH paths. Later moves are only
+     * allowed through the managed runtime-switch flow, which suspends the
+     * agent, evicts sessions, and re-converges the local runtime.
      */
     clientId: text("client_id").references(() => clients.id, { onDelete: "restrict" }),
     /**

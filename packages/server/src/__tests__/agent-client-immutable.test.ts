@@ -4,9 +4,9 @@ import { agents } from "../db/schema/agents.js";
 import { createTestAgent, useTestApp } from "./helpers.js";
 
 /**
- * `agents.client_id` is one-shot:
+ * Generic PATCH writes for `agents.client_id` are one-shot:
  *   - NULL → ID is allowed (admin claims an unbound agent for a known client).
- *   - ID → another ID is rejected (would orphan the running runtime).
+ *   - ID → another ID is rejected here; managed moves use switch-runtime.
  *   - ID → null is rejected (no point exposing an unbind path).
  */
 describe("PATCH /admin/agents/:uuid { clientId } — one-shot", () => {
@@ -24,7 +24,7 @@ describe("PATCH /admin/agents/:uuid { clientId } — one-shot", () => {
     });
 
     expect(res.statusCode).toBe(400);
-    expect(res.json<{ error: string }>().error).toMatch(/immutable/i);
+    expect(res.json<{ error: string }>().error).toMatch(/managed runtime switch/i);
   });
 
   it("returns 400 when clearing clientId to null", async () => {

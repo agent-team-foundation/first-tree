@@ -193,6 +193,16 @@ async function reactivateCommittedRuntimeSwitch(
   return reactivated !== undefined;
 }
 
+async function detachOldRuntimeAfterCommittedRoute(
+  db: Database,
+  agentId: string,
+  claim: Pick<RuntimeSwitchClaim, "oldClientId">,
+): Promise<void> {
+  await revokeAgentRuntimeSession(db, agentId, claim.oldClientId);
+  forceDisconnect(agentId, "agent_runtime_switch", claim.oldClientId);
+  await setOffline(db, agentId);
+}
+
 export async function switchAgentRuntime(
   db: Database,
   agentId: string,
@@ -309,10 +319,6 @@ export async function switchAgentRuntime(
 
   try {
     maybeInjectRuntimeSwitchFault(options, "after_claim");
-    await revokeAgentRuntimeSession(db, current.uuid, oldClientId);
-    forceDisconnect(current.uuid, "agent_runtime_switch", oldClientId);
-    await setOffline(db, current.uuid);
-
     const committed = await db.transaction(async (tx) => {
       const committedClaim: RuntimeSwitchClaim = { ...claim, phase: "committed" };
       const [row] = await tx
@@ -364,6 +370,7 @@ export async function switchAgentRuntime(
     throw err;
   }
 
+  await detachOldRuntimeAfterCommittedRoute(db, current.uuid, claim);
   maybeInjectRuntimeSwitchFault(options, "after_commit");
 
   const committedClaim: RuntimeSwitchClaim = { ...claim, phase: "committed" };
@@ -434,6 +441,7 @@ export async function recoverAgentRuntimeSwitch(
     };
   }
 
+  await detachOldRuntimeAfterCommittedRoute(db, current.uuid, claim);
   maybeInjectRuntimeSwitchFault(options, "after_commit");
   const archived = await archiveAllSessionsForAgent(db, current.uuid, current.organizationId, options.notifier, {
     runtimeSwitchClaimId: claim.claimId,

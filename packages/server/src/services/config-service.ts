@@ -197,9 +197,9 @@ export function createConfigService(opts: ConfigServiceOptions): ConfigService {
     }
     // Re-stamp `kind` from the authoritative agents.runtime_provider on every
     // commit so the discriminator stays in lockstep with the provider and any
-    // legacy row that predates `kind` is backfilled on its next write. The
-    // provider is fixed for an agent's lifetime (no re-bind), so this can only
-    // ever re-affirm or backfill the value, never switch it.
+    // legacy row that predates `kind` is backfilled on its next write. Generic
+    // config writes do not choose providers; the managed switch-runtime flow
+    // retags the stored payload when it changes the authoritative provider.
     const provider = await readRuntimeProviderFor(agentId);
     const merged = applyPatch(current.payload, patch);
     const synced = { ...merged, kind: provider } as AgentRuntimeConfigPayload;

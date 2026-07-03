@@ -1036,18 +1036,17 @@ export async function getNewChatDefaultCandidate(
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {
   const agent = await getAgent(db, uuid);
 
-  // `clientId` is one-shot via this entry: NULL → ID is allowed (admin
-  // claiming an unbound agent for a known client). Once bound, an agent's
-  // client is immutable — there is no move/re-bind path. ID → null and
-  // ID → another ID are both rejected.
+  // `clientId` is one-shot via this generic PATCH entry: NULL → ID is allowed
+  // (admin claiming an unbound agent for a known client). Once bound, direct
+  // ID → null and ID → another ID updates are rejected; runtime moves must go
+  // through the managed switch-runtime flow so sessions and local slots converge.
   if (data.clientId !== undefined) {
     if (data.clientId === null) {
       throw new BadRequestError("clientId cannot be cleared — once bound, an agent stays bound to its client");
     }
     if (agent.clientId !== null && agent.clientId !== data.clientId) {
       throw new BadRequestError(
-        "clientId is immutable once set — an agent cannot be moved to another client. " +
-          "Provision a new agent on the target client instead.",
+        "clientId cannot be changed through PATCH once set — use the managed runtime switch flow instead.",
       );
     }
   }

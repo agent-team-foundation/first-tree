@@ -338,6 +338,7 @@ describe("POST /agents/:uuid/switch-runtime recovery", () => {
       kind: "error",
       payload: { source: "sdk", message: "pre-switch" },
     });
+    const oldRuntimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, ctx.clientId);
 
     const res = await app.inject({
       method: "POST",
@@ -381,6 +382,17 @@ describe("POST /agents/:uuid/switch-runtime recovery", () => {
       .from(sessionEvents)
       .where(eq(sessionEvents.agentId, agent.uuid));
     expect(events).toHaveLength(1);
+
+    const oldRuntimeHttp = await app.inject({
+      method: "GET",
+      url: "/api/v1/agent/me",
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "x-agent-id": agent.uuid,
+        "x-agent-runtime-session": oldRuntimeSessionToken,
+      },
+    });
+    expect(oldRuntimeHttp.statusCode).toBe(200);
   });
 
   it("forward-recovers a committed claim and evicts sessions", async () => {
