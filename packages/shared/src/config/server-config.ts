@@ -398,6 +398,26 @@ export const serverConfigSchema = defineConfig({
    * deploy manifest (systemd / docker-compose / Fly.toml / Render env).
    */
   runtime: {
+    /**
+     * Require non-human agent-scoped HTTP requests to carry the ephemeral
+     * runtime-session token minted by the current successful WS `agent:bind`.
+     *
+     * Rollout is expand-then-enforce: token-aware clients can start sending the
+     * header while this remains false; once the fleet is upgraded, operators
+     * flip this to true so legacy user-JWT + X-Agent-Id calls are rejected.
+     */
+    agentHttpTokenEnforcement: field(z.boolean().default(false), {
+      env: "FIRST_TREE_AGENT_HTTP_RUNTIME_SESSION_ENFORCEMENT",
+    }),
+    /**
+     * Local/test-only runtime-switch fault injection. When enabled, the
+     * switch-runtime route accepts an explicit fault header so QA can
+     * deterministically exercise claim abort and forward-recovery paths. The
+     * default is off and production should leave it off.
+     */
+    runtimeSwitchFaultInjection: field(z.boolean().default(false), {
+      env: "FIRST_TREE_RUNTIME_SWITCH_FAULT_INJECTION",
+    }),
     pollingIntervalSeconds: field(z.coerce.number().int().positive().default(5), {
       env: "FIRST_TREE_POLLING_INTERVAL_SECONDS",
     }),

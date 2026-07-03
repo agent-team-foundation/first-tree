@@ -179,6 +179,22 @@ export const updateAgentSchema = z.object({
 });
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
 
+export const switchAgentRuntimeSchema = z.object({
+  /**
+   * Target computer/client id. This is intentionally a required explicit
+   * choice: runtime switches may move local workspace state between machines.
+   */
+  clientId: z.string().min(1).max(100),
+  runtimeProvider: runtimeProviderSchema,
+  /**
+   * Product-level confirmation that the user accepts interruption of active
+   * sessions and possible local-runtime state loss. This is not a safety-check
+   * bypass; server preconditions still run.
+   */
+  confirmLocalDataLoss: z.literal(true),
+});
+export type SwitchAgentRuntime = z.infer<typeof switchAgentRuntimeSchema>;
+
 export const agentSchema = z.object({
   uuid: z.string(),
   name: z.string().nullable(),

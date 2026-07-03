@@ -36,7 +36,7 @@ import { findImagePath } from "./image-store.js";
 export function buildAgentEnv(
   parentEnv: NodeJS.ProcessEnv,
   ctx: {
-    sdk: Pick<FirstTreeHubSDK, "serverUrl">;
+    sdk: Pick<FirstTreeHubSDK, "serverUrl"> & { runtimeSessionToken?: string | undefined };
     agent: AgentIdentity;
     chatId: string;
     clientId?: string;
@@ -82,6 +82,7 @@ export function buildAgentEnv(
     ...env,
     FIRST_TREE_SERVER_URL: ctx.sdk.serverUrl,
     FIRST_TREE_AGENT_ID: ctx.agent.agentId,
+    ...(ctx.sdk.runtimeSessionToken ? { FIRST_TREE_RUNTIME_SESSION_TOKEN: ctx.sdk.runtimeSessionToken } : {}),
     FIRST_TREE_INBOX_ID: ctx.agent.inboxId,
     FIRST_TREE_CHAT_ID: ctx.chatId,
     ...(ctx.clientId ? { FIRST_TREE_CLIENT_ID: ctx.clientId } : {}),

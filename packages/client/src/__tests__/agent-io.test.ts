@@ -451,6 +451,24 @@ describe("buildAgentEnv", () => {
     expect(env.FIRST_TREE_CHAT_ID).toBe("chat-1");
   });
 
+  it("injects the runtime session token without persisting it in agent config", () => {
+    const env = buildAgentEnv({ PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
+      sdk: { serverUrl: "http://first-tree", runtimeSessionToken: "runtime-token-1" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+    });
+
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBe("runtime-token-1");
+  });
+
   it("adds client switch drain markers when provider context is available", () => {
     const env = buildAgentEnv({ PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
       sdk: { serverUrl: "http://first-tree" },

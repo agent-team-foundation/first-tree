@@ -45,6 +45,7 @@ vi.mock("../cli/output.js", () => outputMocks);
 vi.mock("../core/cli-fetch.js", () => ({ cliFetch: cliFetchMock }));
 
 const originalAgentId = process.env.FIRST_TREE_AGENT_ID;
+const originalRuntimeSessionToken = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN;
 const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
 
 function restoreEnv(): void {
@@ -57,6 +58,11 @@ function restoreEnv(): void {
     delete process.env.FIRST_TREE_SERVER_URL;
   } else {
     process.env.FIRST_TREE_SERVER_URL = originalServerUrl;
+  }
+  if (originalRuntimeSessionToken === undefined) {
+    delete process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN;
+  } else {
+    process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN = originalRuntimeSessionToken;
   }
 }
 
@@ -99,6 +105,20 @@ describe("local agent shared helpers", () => {
         serverUrl: "https://hub.example",
         agentId: "agent-1",
         userAgent: expect.stringContaining("first-tree-cli/"),
+      }),
+    );
+  });
+
+  it("passes the runtime session token from the agent subprocess env into the SDK", async () => {
+    const { createSdk } = await import("../commands/_shared/local-agent.js");
+
+    process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN = "runtime-token-1";
+    createSdk("nova");
+
+    expect(clientMocks.FirstTreeHubSDK).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "agent-1",
+        runtimeSessionToken: "runtime-token-1",
       }),
     );
   });

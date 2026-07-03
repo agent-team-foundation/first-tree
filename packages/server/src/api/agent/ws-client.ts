@@ -1069,7 +1069,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // instead of lingering across the offline gap.
               notificationService.markAgentFaultsResolved(app.db, agent.id).catch(() => {});
 
-              connectionManager.bindAgentToClient(clientId, agent.id);
+              const runtimeSessionToken = connectionManager.bindAgentToClient(clientId, agent.id);
               boundAgents.set(agent.id, {
                 agentId: agent.id,
                 inboxId: agent.inboxId,
@@ -1113,6 +1113,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   agentId: agent.id,
                   displayName: agent.displayName,
                   agentType: agent.type,
+                  runtimeSessionToken,
                 }),
               );
 

@@ -1,6 +1,7 @@
 import { updateAgentResourcesSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { requireAgentAccess } from "../scope/require-resource.js";
+import { assertNoRuntimeSwitchInProgress } from "../services/agent-runtime-switch.js";
 import { assertMutableAgentIsNotLandingCampaignTrial } from "../services/landing-campaigns/guards.js";
 
 export async function agentResourcesRoutes(app: FastifyInstance): Promise<void> {
@@ -12,6 +13,7 @@ export async function agentResourcesRoutes(app: FastifyInstance): Promise<void> 
   app.patch<{ Params: { uuid: string } }>("/:uuid/resources", { config: { otelRecordBody: true } }, async (request) => {
     const { agent, scope } = await requireAgentAccess(request, app.db, "manage");
     assertMutableAgentIsNotLandingCampaignTrial(agent);
+    assertNoRuntimeSwitchInProgress(agent);
     const body = updateAgentResourcesSchema.parse(request.body);
     return app.resourcesService.replaceAgentResources(request.params.uuid, body, scope.memberId);
   });

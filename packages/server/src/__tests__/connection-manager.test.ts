@@ -5,11 +5,13 @@ import {
   forceDisconnect,
   forceDisconnectClient,
   getAgentClientId,
+  getAgentRuntimeSession,
   getClientAgentIds,
   hasClientConnection,
   removeClientConnection,
   setClientConnection,
   unbindAgentFromClient,
+  validateAgentRuntimeSession,
 } from "../services/connection-manager.js";
 
 /**
@@ -50,10 +52,13 @@ describe("connection-manager: bindAgentToClient", () => {
   });
 
   it("binds agent to client and updates both maps", () => {
-    bindAgentToClient(clientA, agent1);
+    const token = bindAgentToClient(clientA, agent1);
 
     expect(getAgentClientId(agent1)).toBe(clientA);
     expect(getClientAgentIds(clientA)).toContain(agent1);
+    expect(token).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(getAgentRuntimeSession(agent1)).toEqual({ clientId: clientA, runtimeSessionToken: token });
+    expect(validateAgentRuntimeSession(agent1, clientA, token)).toBe(true);
   });
 
   it("rebind to new client removes agent from old client agentIds", () => {
@@ -83,11 +88,14 @@ describe("connection-manager: bindAgentToClient", () => {
   });
 
   it("binding same agent to same client is idempotent", () => {
-    bindAgentToClient(clientA, agent1);
-    bindAgentToClient(clientA, agent1);
+    const firstToken = bindAgentToClient(clientA, agent1);
+    const secondToken = bindAgentToClient(clientA, agent1);
 
     expect(getAgentClientId(agent1)).toBe(clientA);
     expect(getClientAgentIds(clientA)).toEqual([agent1]);
+    expect(secondToken).not.toBe(firstToken);
+    expect(validateAgentRuntimeSession(agent1, clientA, firstToken)).toBe(false);
+    expect(validateAgentRuntimeSession(agent1, clientA, secondToken)).toBe(true);
   });
 
   it("does not unbind when expected client does not own the agent", () => {
@@ -98,6 +106,16 @@ describe("connection-manager: bindAgentToClient", () => {
     expect(removed).toBe(false);
     expect(getAgentClientId(agent1)).toBe(clientB);
     expect(getClientAgentIds(clientB)).toContain(agent1);
+  });
+
+  it("clears the runtime session token on unbind", () => {
+    const token = bindAgentToClient(clientA, agent1);
+
+    const removed = unbindAgentFromClient(agent1, clientA);
+
+    expect(removed).toBe(true);
+    expect(getAgentRuntimeSession(agent1)).toBeUndefined();
+    expect(validateAgentRuntimeSession(agent1, clientA, token)).toBe(false);
   });
 });
 
@@ -117,6 +135,8 @@ describe("connection-manager: removeClientConnection", () => {
     expect(removed.sort()).toEqual([agent1, agent2].sort());
     expect(getAgentClientId(agent1)).toBeUndefined();
     expect(getAgentClientId(agent2)).toBeUndefined();
+    expect(getAgentRuntimeSession(agent1)).toBeUndefined();
+    expect(getAgentRuntimeSession(agent2)).toBeUndefined();
     expect(hasClientConnection(clientA)).toBe(false);
   });
 
@@ -144,6 +164,7 @@ describe("connection-manager: forceDisconnectClient", () => {
     const removed = forceDisconnectClient(clientA);
     expect(removed).toEqual([agent1]);
     expect(getAgentClientId(agent1)).toBeUndefined();
+    expect(getAgentRuntimeSession(agent1)).toBeUndefined();
   });
 });
 
@@ -170,6 +191,7 @@ describe("connection-manager: setClientConnection takeover protection", () => {
     expect(closeCalled).toBe(true);
     // Old agent bindings should be cleaned up
     expect(getAgentClientId(agent1)).toBeUndefined();
+    expect(getAgentRuntimeSession(agent1)).toBeUndefined();
 
     // Cleanup
     forceDisconnectClient(clientId);
@@ -232,6 +254,7 @@ describe("connection-manager: forceDisconnect M1 mode", () => {
     // agent1 unbound, agent2 still bound
     expect(getAgentClientId(agent1)).toBeUndefined();
     expect(getAgentClientId(agent2)).toBe(clientId);
+    expect(getAgentRuntimeSession(agent1)).toBeUndefined();
     expect(getClientAgentIds(clientId)).toEqual([agent2]);
 
     // Cleanup

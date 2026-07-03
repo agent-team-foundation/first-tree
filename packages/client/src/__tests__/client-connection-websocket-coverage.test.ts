@@ -308,8 +308,11 @@ describe("ClientConnection — WebSocket edge coverage", () => {
       agentId: "agent-1",
       displayName: "Agent One",
       agentType: "agent",
+      runtimeSessionToken: "runtime-token-1",
     });
-    await bindPromise;
+    const bound = await bindPromise;
+    expect(bound.runtimeSessionToken).toBe("runtime-token-1");
+    expect(bound.sdk.runtimeSessionToken).toBe("runtime-token-1");
 
     const start = socket.sent.length;
     connection.reportSessionState("agent-1", "chat-1", "active");

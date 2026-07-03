@@ -71,6 +71,8 @@ export {
   newChatDefaultCandidatesRequestSchema,
   newChatDefaultCandidatesResponseSchema,
   RESERVED_AGENT_NAMES,
+  type SwitchAgentRuntime,
+  switchAgentRuntimeSchema,
   type UpdateAgent,
   updateAgentSchema,
 } from "./schemas/agent.js";
@@ -652,6 +654,7 @@ export {
 export {
   type ActivityOverview,
   AGENT_BIND_REJECT_REASONS,
+  AGENT_RUNTIME_SESSION_HEADER,
   AGENT_SELECTOR_HEADER,
   type AgentBindRejectReason,
   type AgentBindRequest,

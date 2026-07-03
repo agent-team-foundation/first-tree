@@ -65,6 +65,8 @@ export type CreateTestAppOptions = {
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
   connectBootstrap?: Config["connectBootstrap"];
   inbox?: Partial<NonNullable<Config["inbox"]>>;
+  runtimeHttpTokenEnforcement?: boolean;
+  runtimeSwitchFaultInjection?: boolean;
   allowedOrganizationId?: string;
   /**
    * Drop `oauth.githubApp.slug` from the test config. Used by the
@@ -157,6 +159,8 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       logging: { level: "error", format: "json", bridgeToSpanLevel: "off" },
     },
     runtime: {
+      agentHttpTokenEnforcement: opts.runtimeHttpTokenEnforcement ?? false,
+      runtimeSwitchFaultInjection: opts.runtimeSwitchFaultInjection ?? false,
       pollingIntervalSeconds: 5,
       presenceCleanupSeconds: 60,
       // Disabled by default in tests — suites that exercise the sweeper

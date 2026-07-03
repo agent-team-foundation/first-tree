@@ -228,7 +228,7 @@ export function legacyWireAgentType(type: string): "human" | "personal_assistant
  * Skipped entirely for human agents (no clientId) and when `force` is set
  * (e.g. operator overrides for an offline client).
  */
-async function ensureClientSupportsRuntimeProvider(
+export async function ensureClientSupportsRuntimeProvider(
   db: SelectDbLike,
   clientId: string | null,
   runtimeProvider: RuntimeProvider,

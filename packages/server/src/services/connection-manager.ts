@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { WebSocket } from "ws";
 
 /** WS close code: agent already connected from another client. */
@@ -5,6 +6,17 @@ export const WS_CLOSE_ALREADY_CONNECTED = 4009;
 
 /** Track active WS connections per agentId. At most one entry per agent. */
 const activeConnections = new Map<string, WebSocket>();
+
+export type AgentRuntimeSessionBinding = {
+  clientId: string;
+  runtimeSessionToken: string;
+};
+
+const agentRuntimeSessions = new Map<string, AgentRuntimeSessionBinding>();
+
+function mintRuntimeSessionToken(): string {
+  return randomBytes(32).toString("base64url");
+}
 
 /** Check if an agent already has an active WS connection. */
 export function hasActiveConnection(agentId: string): boolean {
@@ -45,6 +57,7 @@ export function forceDisconnect(agentId: string, reason?: string, expectedClient
   if (!ws) return false;
   ws.close(WS_CLOSE_ALREADY_CONNECTED, "Disconnected by admin");
   activeConnections.delete(agentId);
+  agentRuntimeSessions.delete(agentId);
   return true;
 }
 
@@ -66,6 +79,7 @@ export function setClientConnection(clientId: string, ws: WebSocket): void {
     // Clean up agent bindings from the old connection
     for (const agentId of existing.agentIds) {
       agentToClient.delete(agentId);
+      agentRuntimeSessions.delete(agentId);
       activeConnections.delete(agentId);
     }
   }
@@ -82,7 +96,7 @@ export function hasClientConnection(clientId: string): boolean {
   return entry !== undefined && entry.ws.readyState <= 1;
 }
 
-export function bindAgentToClient(clientId: string, agentId: string): void {
+export function bindAgentToClient(clientId: string, agentId: string): string {
   // Remove agent from previous client if it was bound elsewhere
   const prevClientId = agentToClient.get(agentId);
   if (prevClientId && prevClientId !== clientId) {
@@ -98,6 +112,9 @@ export function bindAgentToClient(clientId: string, agentId: string): void {
     activeConnections.set(agentId, entry.ws);
   }
   agentToClient.set(agentId, clientId);
+  const runtimeSessionToken = mintRuntimeSessionToken();
+  agentRuntimeSessions.set(agentId, { clientId, runtimeSessionToken });
+  return runtimeSessionToken;
 }
 
 export function unbindAgentFromClient(agentId: string, expectedClientId?: string): boolean {
@@ -111,6 +128,7 @@ export function unbindAgentFromClient(agentId: string, expectedClientId?: string
     agentToClient.delete(agentId);
   }
   activeConnections.delete(agentId);
+  agentRuntimeSessions.delete(agentId);
   return clientId !== undefined;
 }
 
@@ -123,6 +141,19 @@ export function getAgentClientId(agentId: string): string | undefined {
   return agentToClient.get(agentId);
 }
 
+export function getAgentRuntimeSession(agentId: string): AgentRuntimeSessionBinding | undefined {
+  const binding = agentRuntimeSessions.get(agentId);
+  if (!binding) return undefined;
+  const entry = clientConnections.get(binding.clientId);
+  if (!entry || entry.ws.readyState !== 1) return undefined;
+  return binding;
+}
+
+export function validateAgentRuntimeSession(agentId: string, clientId: string, token: string): boolean {
+  const binding = getAgentRuntimeSession(agentId);
+  return binding?.clientId === clientId && binding.runtimeSessionToken === token;
+}
+
 export function removeClientConnection(clientId: string, ws: WebSocket): string[] {
   const entry = clientConnections.get(clientId);
   if (!entry || entry.ws !== ws) return [];
@@ -130,6 +161,7 @@ export function removeClientConnection(clientId: string, ws: WebSocket): string[
   const agentIds = [...entry.agentIds];
   for (const agentId of agentIds) {
     agentToClient.delete(agentId);
+    agentRuntimeSessions.delete(agentId);
     activeConnections.delete(agentId);
   }
   clientConnections.delete(clientId);
@@ -183,6 +215,7 @@ export function forceDisconnectClient(clientId: string): string[] {
 
   for (const agentId of agentIds) {
     agentToClient.delete(agentId);
+    agentRuntimeSessions.delete(agentId);
     activeConnections.delete(agentId);
   }
   clientConnections.delete(clientId);
