@@ -28,6 +28,10 @@ async function ensureTreeBindingForSetup(args: {
   treeBindingPlan: TreeBindingPlan;
   detectedTreeUrl: string | null;
 }): Promise<string | null> {
+  // Only `createBinding` provisions the tree server-side (Cloud one-click).
+  // `agentSeed` (the build CTA default) and `useBoundTree` skip provisioning —
+  // the agent sets the tree up — and here just resolve any existing binding URL
+  // to pass as a hint; the agent (first-tree-seed) re-checks the real state.
   if (args.treeBindingPlan === "createBinding") {
     await provisionNewTree(args.organizationId);
   }
