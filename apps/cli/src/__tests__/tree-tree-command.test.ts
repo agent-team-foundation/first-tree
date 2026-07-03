@@ -19,6 +19,14 @@ function makeTempDir(prefix: string): string {
   return dir;
 }
 
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+}
+
 function frontmatter(fields: string): string {
   return `---\n${fields}---\n`;
 }
@@ -56,7 +64,6 @@ function makeTreeFixture(): string {
   mkdirSync(missingOwners, { recursive: true });
   mkdirSync(emptyOwners, { recursive: true });
   mkdirSync(scratch, { recursive: true });
-  mkdirSync(join(root, ".git"), { recursive: true });
 
   writeNode(root, "Root Node", "Root description");
   writeNode(docs, "Docs", "Documentation");
@@ -86,7 +93,27 @@ function makeTreeFixture(): string {
     writeLeaf(join(ignored, "ignored.md"), "Should Skip Leaf", "Generated");
   }
 
+  git(root, "init", "-b", "main");
+  git(root, "config", "user.email", "agent@example.com");
+  git(root, "config", "user.name", "Agent");
+  git(root, "add", ".");
+  git(root, "commit", "-m", "seed tree");
+
   return root;
+}
+
+function makeRemoteBackedTreeFixture(): { clone: string; seed: string } {
+  const seed = makeTreeFixture();
+  const base = makeTempDir("ft-tree-remote-");
+  const origin = join(base, "origin.git");
+  const clone = join(base, "clone");
+
+  execFileSync("git", ["init", "--bare", "-b", "main", origin], { stdio: "ignore" });
+  git(seed, "remote", "add", "origin", origin);
+  git(seed, "push", "-u", "origin", "main");
+  execFileSync("git", ["clone", origin, clone], { stdio: "ignore" });
+
+  return { clone, seed };
 }
 
 function commandWithOptions(options: Record<string, unknown>, args: string[] = []): Command {
@@ -243,6 +270,7 @@ describe("tree tree command action", () => {
     expect(readMockOutput(stdout)).toBe("");
     expect(readMockOutput(stderr)).toBe(
       `${[
+        "Branch: main",
         "knowledge/ [Root Node] -> Root description",
         "└── docs/ [Docs] -> Documentation",
         "    └── docs/development/ [Development]",
@@ -252,6 +280,62 @@ describe("tree tree command action", () => {
       ].join("\n")}\n`,
     );
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("does not warn for a detached origin/main checkout", () => {
+    const { clone } = makeRemoteBackedTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    git(clone, "checkout", "origin/main");
+    process.chdir(clone);
+
+    runTreeTreeCommand(context(commandWithOptions({}, ["docs/development"])));
+
+    const output = readMockOutput(stderr);
+    expect(readMockOutput(stdout)).toBe("");
+    expect(output).toContain("Branch: origin/main");
+    expect(output).not.toContain("Warning: current branch");
+  });
+
+  it("warns for detached commits that do not match origin/main", () => {
+    const { clone } = makeRemoteBackedTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    git(clone, "config", "user.email", "agent@example.com");
+    git(clone, "config", "user.name", "Agent");
+    writeLeaf(join(clone, "local-only.md"), "Local Only", "Detached commit");
+    git(clone, "add", ".");
+    git(clone, "commit", "-m", "local-only commit");
+    const shortSha = git(clone, "rev-parse", "--short", "HEAD");
+    git(clone, "checkout", "--detach", "HEAD");
+    process.chdir(clone);
+
+    runTreeTreeCommand(context(commandWithOptions({}, ["docs/development"])));
+
+    const output = readMockOutput(stderr);
+    const branchName = `detached:${shortSha}`;
+    expect(readMockOutput(stdout)).toBe("");
+    expect(output).toContain(`Branch: ${branchName}`);
+    expect(output).toContain(
+      `Warning: current branch "${branchName}" is not main/master; it may be stale. Switch to main/master.`,
+    );
+  });
+
+  it("warns when the current tree branch is not mainline", () => {
+    const root = makeTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    git(root, "switch", "-c", "feature/stale-tree");
+    process.chdir(root);
+
+    runTreeTreeCommand(context(commandWithOptions({}, ["docs/development"])));
+
+    const output = readMockOutput(stderr);
+    expect(readMockOutput(stdout)).toBe("");
+    expect(output).toContain("Branch: feature/stale-tree");
+    expect(output).toContain(
+      'Warning: current branch "feature/stale-tree" is not main/master; it may be stale. Switch to main/master.',
+    );
   });
 
   it("treats a non-numeric -L value as a path only when no positional path is present", () => {
@@ -278,6 +362,7 @@ describe("tree tree command action", () => {
     expect(readMockOutput(stdout)).toBe("");
     expect(readMockOutput(stderr)).toBe(
       `${[
+        "Branch: main",
         "knowledge/ [Root Node] -> Root description",
         "└── docs/ [Docs] -> Documentation",
         "    └── docs/development/ [Development]",
@@ -310,6 +395,11 @@ describe("tree tree command action", () => {
           level: 1,
           pattern: "HTTP*",
           path: "docs/development",
+        },
+        branch: {
+          name: "main",
+          isMainline: true,
+          warning: null,
         },
         tree: {
           kind: "directory",
@@ -369,6 +459,51 @@ describe("tree tree command action", () => {
     ]);
   });
 
+  it("includes non-mainline branch details in JSON without human stderr", () => {
+    const root = makeTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    git(root, "switch", "-c", "feature/stale-tree");
+    process.chdir(root);
+
+    runTreeTreeCommand(context(commandWithOptions({}, ["docs/development"]), { json: true }));
+
+    expect(readMockOutput(stderr)).toBe("");
+    expect(JSON.parse(readMockOutput(stdout))).toMatchObject({
+      ok: true,
+      data: {
+        branch: {
+          name: "feature/stale-tree",
+          isMainline: false,
+          warning:
+            'Warning: current branch "feature/stale-tree" is not main/master; it may be stale. Switch to main/master.',
+        },
+      },
+    });
+  });
+
+  it("reports a detached origin/main checkout as mainline in JSON", () => {
+    const { clone } = makeRemoteBackedTreeFixture();
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    git(clone, "checkout", "origin/main");
+    process.chdir(clone);
+
+    runTreeTreeCommand(context(commandWithOptions({}, ["docs/development"]), { json: true }));
+
+    expect(readMockOutput(stderr)).toBe("");
+    expect(JSON.parse(readMockOutput(stdout))).toMatchObject({
+      ok: true,
+      data: {
+        branch: {
+          name: "origin/main",
+          isMainline: true,
+          warning: null,
+        },
+      },
+    });
+  });
+
   it("prints JSON when the global Print layer is already in JSON mode", () => {
     const root = makeTreeFixture();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -389,6 +524,11 @@ describe("tree tree command action", () => {
         options: {
           level: 0,
           path: "docs/development",
+        },
+        branch: {
+          name: "main",
+          isMainline: true,
+          warning: null,
         },
         tree: {
           name: "knowledge",
@@ -507,10 +647,6 @@ describe("tree tree command action", () => {
 });
 
 describe("tree tree pull refresh", () => {
-  function git(cwd: string, ...args: string[]): void {
-    execFileSync("git", args, { cwd, stdio: "ignore" });
-  }
-
   // A real origin (bare) + a regular working-tree clone tracking it, so a
   // `git pull --ff-only` against the clone genuinely advances the working
   // tree. Mirrors the production tree model: the agent maintains a regular
