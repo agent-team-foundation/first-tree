@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionEvent } from "@first-tree/shared";
@@ -424,7 +424,7 @@ function activeTurnNotSteerableError(): CodexAppServerRpcError {
 }
 
 beforeEach(() => {
-  workspaceRoot = mkdtempSync(join(tmpdir(), "ft-codex-app-server-"));
+  workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "ft-codex-app-server-")));
   setCliBinding({ binName: "first-tree-test", packageName: null });
 });
 
