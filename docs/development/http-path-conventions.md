@@ -9,11 +9,16 @@
 
 ## JWT scope
 
-JWT carries **only** `userId`. `request.user` is `{ userId }`. Anything beyond that — org, role, member — is resolved per-request via `scope/require-*` helpers, which probe the DB in real time. Reading `request.user.organizationId / memberId / role` is impossible (the fields don't exist) — that is the type-level enforcement of the rule.
+Normal user JWTs carry **only** `userId`. `request.user` is `{ userId }`. Anything beyond that — org, role, member — is resolved per-request via `scope/require-*` helpers, which probe the DB in real time. Reading `request.user.organizationId / memberId / role` is impossible (the fields don't exist) — that is the type-level enforcement of the rule.
 
 ```ts
 type AccessTokenPayload = { sub: string; type: "access"; iat: number; exp: number; jti: string };
 ```
+
+The only exception is the `agent_outbox` token used by workspace-only trial
+sandboxes. It is not a general user access token: it is accepted only for the
+current agent's `POST /api/v1/agent/chats/:chatId/messages` route in the
+current chat, and route middleware must reject it everywhere else.
 
 ## Decision tree
 
@@ -81,7 +86,7 @@ Example: `GET /api/v1/agent/me`, `POST /api/v1/agent/chats/:chatId/messages`, `W
 ## Forbidden
 
 - ❌ `/admin/...` prefix anywhere — role lives in middleware, not URL
-- ❌ Reading `request.user.organizationId` / `memberId` / `role` — these fields don't exist; JWT carries only `sub`
+- ❌ Reading `request.user.organizationId` / `memberId` / `role` — these fields don't exist; normal user JWTs carry only `sub`
 - ❌ `?organizationId=` query param for org scope — use `:orgId` path param
 - ❌ Class B route without `:orgId` in path — `requireOrgMembership` will fail to type-check
 - ❌ Class C route with `:orgId` in path — redundant; resource UUID locates the org

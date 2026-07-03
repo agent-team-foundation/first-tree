@@ -121,6 +121,42 @@ function validateMessageContent(data: { format: string; content: unknown }): voi
   }
 }
 
+function assertLandingCampaignTrialMessageAllowed(input: {
+  chat: { metadata: Record<string, unknown> | null } | null | undefined;
+  senderId: string;
+  senderType: string;
+  data: SendMessage;
+  metadataToStore: Record<string, unknown>;
+  options: SendMessageOptions;
+}): void {
+  const trial = getLandingCampaignTrialChat(input.chat);
+  if (!trial) return;
+
+  if (trial.state === "completed" || trial.state === "failed") {
+    throw new ForbiddenError("Landing campaign trial chat is already complete.");
+  }
+
+  if (input.senderId === trial.agentId && input.senderType !== "human") {
+    if (trial.state !== "running") {
+      throw new ForbiddenError("Landing campaign trial agent can only send while the trial is running.");
+    }
+    return;
+  }
+
+  if (input.senderType === "human") {
+    const isSystemBootstrap =
+      input.options.allowSystemSender === true &&
+      input.metadataToStore.systemSender === "first_tree_onboarding" &&
+      trial.state === "running";
+    if (isSystemBootstrap) return;
+
+    const resolvesRequest = requestResolutionSchema.safeParse(input.metadataToStore.resolves).success;
+    if (trial.state === "awaiting_user" && resolvesRequest) return;
+  }
+
+  throw new ForbiddenError("Landing campaign trial chat is locked.");
+}
+
 export type SendMessageResult = {
   message: typeof messages.$inferSelect;
   /** Inbox IDs that received this message (for notification). */
@@ -500,7 +536,7 @@ async function sendMessageInner(
     //    v2: `chat_membership.mode` is **not** SELECTed — fan-out no longer
     //    reads it. Likewise `chats.type` is locked to 'group' since
     //    first-tree-context PR #465 and no longer drives any decision here.
-    const [participants, [senderRow], [chatRow]] = await Promise.all([
+    const [participants, [senderRow], [chatRowSnapshot]] = await Promise.all([
       tx
         .select({
           agentId: chatMembership.agentId,
@@ -523,6 +559,15 @@ async function sendMessageInner(
     if (!senderRow) {
       throw new NotFoundError(`Sender agent "${senderId}" not found`);
     }
+    const initialTrial = getLandingCampaignTrialChat(chatRowSnapshot);
+    // Trial chat state is a server-owned single-run state machine. Lock and
+    // re-read only those rows so concurrent outbox writes cannot apply stale
+    // running-state transitions after another send completes the trial.
+    const chatRow = initialTrial
+      ? (
+          await tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).for("update").limit(1)
+        )[0]
+      : chatRowSnapshot;
 
     const prepared = preflightMessageSendIntent({
       chatId,
@@ -533,6 +578,15 @@ async function sendMessageInner(
       participants,
     });
     const { content: outboundContent, metadata: metadataToStore, mentionedAgentIds: mergedMentions } = prepared;
+
+    assertLandingCampaignTrialMessageAllowed({
+      chat: chatRow,
+      senderId,
+      senderType: senderRow.type,
+      data,
+      metadataToStore,
+      options,
+    });
 
     // 2b. Validate generic attachment refs (`metadata.attachments[]`) against
     //     the blob store: each referenced attachment must exist and its

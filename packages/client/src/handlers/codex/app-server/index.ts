@@ -2,6 +2,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   type AgentRuntimeConfigPayload,
   encodeProviderRetryEventMessage,
+  isLandingCampaignTrialAgentMetadata,
   type SessionEvent,
   type ToolFileRef,
 } from "@first-tree/shared";
@@ -62,6 +63,11 @@ import {
   type CodexAppServerTransportError,
   isCodexAppServerTransientError,
 } from "./client.js";
+import {
+  buildWorkspaceOnlyEnvironment,
+  createWorkspaceOnlySpawnProcess,
+  prepareWorkspaceOnlyOutboxHome,
+} from "./workspace-sandbox.js";
 
 type CodexConfigValue = string | number | boolean | null | CodexConfigValue[] | CodexConfigObject;
 type CodexConfigObject = { [key: string]: CodexConfigValue };
@@ -175,6 +181,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let sourceReposForPrompt: PredeclaredSourceRepo[] = [];
   let latestThreadUsageTotal: TokenUsageBreakdown | null = null;
   let latestCurrentSessionUsageTurnId: string | null = null;
+  let workspaceOnly = false;
 
   const pendingInputs: QueueEntry[] = [];
   const pendingNotificationsByTurn = new Map<string, CodexAppServerNotification[]>();
@@ -373,6 +380,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     briefingFingerprint: string;
   }> {
     cwd = acquireAgentHome(workspaceRoot);
+    workspaceOnly = isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata);
     const { payload, resolved } = await resolvePayload(sessionCtx);
     const chatContext = await fetchChatContextOrLog(sessionCtx);
     pendingChatContextPrompt = renderChatContextPrompt(chatContext);
@@ -383,13 +391,35 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     markWorkspaceInitComplete(cwd);
     currentModel = payload.model || "";
     currentReasoningEffort = payload.kind === "codex" ? payload.reasoningEffort : "high";
-    return { payload, env: buildEnv(sessionCtx), briefingFingerprint: computeBriefingFingerprint(briefing) };
+    let env = buildEnv(sessionCtx);
+    if (workspaceOnly) {
+      const { accessToken } = await sessionCtx.sdk.createAgentOutboxToken(sessionCtx.chatId);
+      env = prepareWorkspaceOnlyOutboxHome({
+        parentEnv: env,
+        workspaceRoot: cwd,
+        agentId: sessionCtx.agent.agentId,
+        runtimeProvider: payload.kind,
+        accessToken,
+        serverUrl: env.FIRST_TREE_SERVER_URL ?? sessionCtx.sdk.serverUrl,
+      }).env;
+    }
+    return { payload, env, briefingFingerprint: computeBriefingFingerprint(briefing) };
   }
 
   async function startAppServer(sessionCtx: SessionContext, env: NodeJS.ProcessEnv): Promise<void> {
+    const workspacePath = cwd ?? workspaceRoot;
+    let workspaceSandbox: ReturnType<typeof buildWorkspaceOnlyEnvironment> | null = null;
+    if (workspaceOnly) {
+      try {
+        workspaceSandbox = buildWorkspaceOnlyEnvironment(env, workspacePath);
+      } catch (err) {
+        throw new CodexAppServerStartupError("workspace-sandbox", err);
+      }
+    }
+    const appServerEnv = workspaceSandbox?.env ?? env;
     let resolution: CodexBinaryResolution;
     try {
-      resolution = await resolveRuntimeBinary(env);
+      resolution = await resolveRuntimeBinary(appServerEnv);
     } catch (err) {
       throw new CodexAppServerStartupError("resolve-binary", err);
     }
@@ -397,8 +427,16 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     try {
       appServer = await clientFactory({
         binary: resolution.binary,
-        cwd: cwd ?? workspaceRoot,
-        env,
+        cwd: workspacePath,
+        env: appServerEnv,
+        ...(workspaceOnly
+          ? {
+              spawnProcess: createWorkspaceOnlySpawnProcess({
+                workspaceRoot: workspacePath,
+                readOnlyPaths: workspaceSandbox?.readOnlyPaths,
+              }),
+            }
+          : {}),
         onNotification: handleNotification,
         onClose: handleTransportClose,
         onLog: (message) => sessionCtx.log(message),
@@ -409,7 +447,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   }
 
   function threadParams(payload: AgentRuntimeConfigPayload): JsonRecord {
-    const opts = buildCodexThreadOptions(payload, cwd ?? workspaceRoot);
+    const opts = buildCodexThreadOptions(payload, cwd ?? workspaceRoot, { workspaceOnly });
     return {
       cwd: opts.workingDirectory,
       approvalPolicy: opts.approvalPolicy,
@@ -1611,6 +1649,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       await appServer?.shutdown();
       appServer = null;
       pendingChatContextPrompt = null;
+      workspaceOnly = false;
       resetThreadUsageTracking(null);
     },
 
@@ -1629,6 +1668,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       threadId = null;
       ctx = null;
       pendingChatContextPrompt = null;
+      workspaceOnly = false;
       resetThreadUsageTracking(null);
     },
   } satisfies AgentHandler;

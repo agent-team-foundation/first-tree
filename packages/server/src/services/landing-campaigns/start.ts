@@ -4,6 +4,7 @@ import {
   type LandingCampaignRepoMetadata,
   type LandingCampaignStartRequest,
   type LandingCampaignStartResponse,
+  type RuntimeProvider,
   type SendMessage,
 } from "@first-tree/shared";
 import { and, asc, eq, ne, sql } from "drizzle-orm";
@@ -43,13 +44,28 @@ type ActiveMembership = {
   createdAt: Date;
 };
 
-function requireLandingCampaignConfig(app: FastifyInstance): { serviceUserId: string; clientId: string } {
+function requireLandingCampaignConfig(app: FastifyInstance): {
+  serviceUserId: string;
+  clientId: string;
+  runtimeProvider: Extract<RuntimeProvider, "codex" | "claude-code">;
+} {
   const serviceUserId = app.config.growth.landingCampaigns?.serviceUserId;
   const clientId = app.config.growth.landingCampaigns?.clientId;
   if (!serviceUserId || !clientId) {
     throw new ServiceUnavailableError("Landing campaign official runtime is not configured");
   }
-  return { serviceUserId, clientId };
+  return { serviceUserId, clientId, runtimeProvider: app.config.growth.landingCampaigns?.runtimeProvider ?? "codex" };
+}
+
+function assertLandingCampaignRuntimeProviderSupported(provider: RuntimeProvider): void {
+  if (provider === "claude-code") {
+    throw new ServiceUnavailableError(
+      "Landing campaign Claude Code runtime is not available until Claude Code workspace-only is implemented.",
+    );
+  }
+  if (provider !== "codex") {
+    throw new ServiceUnavailableError(`Landing campaign runtime provider "${provider}" is not supported.`);
+  }
 }
 
 function parseRepo(repoUrl: string): LandingCampaignRepoMetadata {
@@ -215,6 +231,7 @@ async function ensureTrialAgent(
     organizationId: string;
     serviceMemberId: string;
     officialClientId: string;
+    runtimeProvider: RuntimeProvider;
     campaign: string;
     skillSet: NonNullable<ReturnType<typeof getLandingCampaignSkillSet>>;
     repo: LandingCampaignRepoMetadata;
@@ -245,7 +262,7 @@ async function ensureTrialAgent(
     if (
       existing.managerId !== input.serviceMemberId ||
       existing.clientId !== input.officialClientId ||
-      existing.runtimeProvider !== input.skillSet.runtimeProvider
+      existing.runtimeProvider !== input.runtimeProvider
     ) {
       throw new ConflictError(
         "Existing landing campaign trial agent is pinned to a different manager, client, or runtime provider.",
@@ -274,7 +291,7 @@ async function ensureTrialAgent(
     managerId: input.serviceMemberId,
     organizationId: input.organizationId,
     clientId: input.officialClientId,
-    runtimeProvider: input.skillSet.runtimeProvider,
+    runtimeProvider: input.runtimeProvider,
     metadata,
   });
 }
@@ -285,6 +302,7 @@ async function provisionTrialAgent(
     organizationId: string;
     serviceUserId: string;
     officialClientId: string;
+    runtimeProvider: RuntimeProvider;
     campaign: string;
     skillSet: NonNullable<ReturnType<typeof getLandingCampaignSkillSet>>;
     repo: LandingCampaignRepoMetadata;
@@ -302,6 +320,7 @@ async function provisionTrialAgent(
       organizationId: input.organizationId,
       serviceMemberId: serviceMember.id,
       officialClientId: input.officialClientId,
+      runtimeProvider: input.runtimeProvider,
       campaign: input.campaign,
       skillSet: input.skillSet,
       repo: input.repo,
@@ -416,6 +435,7 @@ export async function startLandingCampaignTrial(
   setupUrl: string,
 ): Promise<LandingCampaignStartResponse> {
   const config = requireLandingCampaignConfig(app);
+  assertLandingCampaignRuntimeProviderSupported(config.runtimeProvider);
   const skillSet = getLandingCampaignSkillSet(body.campaign);
   if (!skillSet) throw new NotFoundError(`Landing campaign "${body.campaign}" not found`);
   const repo = parseRepo(body.repoUrl);
@@ -429,6 +449,7 @@ export async function startLandingCampaignTrial(
     organizationId: caller.organizationId,
     serviceUserId: config.serviceUserId,
     officialClientId: config.clientId,
+    runtimeProvider: config.runtimeProvider,
     campaign: body.campaign,
     skillSet,
     repo,

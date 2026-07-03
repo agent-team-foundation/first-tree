@@ -206,7 +206,11 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
  * can lock the auth-mode-friendly defaults (notably `model` only set when
  * the operator chose one).
  */
-export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, workspaceCwd: string): ThreadOptions {
+export function buildCodexThreadOptions(
+  payload: AgentRuntimeConfigPayload,
+  workspaceCwd: string,
+  options: { workspaceOnly?: boolean } = {},
+): ThreadOptions {
   const additionalDirectories: string[] = [];
   for (const repo of payload.gitRepos) {
     const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
@@ -224,16 +228,14 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   // matches the user's auth mode (e.g. ChatGPT-account auth rejects the
   // `gpt-5-codex` family, while API-key auth accepts it). Hard-coding a
   // default here would force one auth mode and silently fail on the other.
-  // Sandbox: codex is the agent's primary local-execution surface (docker,
-  // cross-directory writes, host tools all flow through it). `workspace-write`
-  // blocks unix sockets outside the workspace (notably ~/.docker/run/docker.sock)
-  // and any out-of-tree write the agent legitimately needs. We run with
-  // `danger-full-access` and rely on the agent to gate irreversible actions
-  // itself instead of a sandbox-level wall.
+  // Sandbox: ordinary codex agents remain `danger-full-access` because codex is
+  // their primary local-execution surface. Landing campaign trials run inside a
+  // process-level workspace-only sandbox; use codex's own workspace-write mode
+  // there as a second, scoped belt without changing the ordinary path.
   const opts: ThreadOptions = {
     workingDirectory: workspaceCwd,
     skipGitRepoCheck: true,
-    sandboxMode: "danger-full-access",
+    sandboxMode: options.workspaceOnly ? "workspace-write" : "danger-full-access",
     approvalPolicy: "never",
     // Operator-configured reasoning effort. Defaults to "high" (the value this
     // previously hard-coded). The codex variant's enum (low|medium|high|xhigh)

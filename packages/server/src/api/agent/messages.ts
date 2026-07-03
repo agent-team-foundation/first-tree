@@ -2,6 +2,8 @@ import { paginationQuerySchema, sendMessageSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { requireAgent } from "../../middleware/require-identity.js";
+import { requireUser } from "../../scope/require-user.js";
+import { expiryToSeconds, signAgentOutboxToken } from "../../services/auth.js";
 import * as chatService from "../../services/chat.js";
 import * as messageService from "../../services/message.js";
 import { notifyRecipients } from "../../services/notifier.js";
@@ -12,6 +14,21 @@ const editMessageSchema = z.object({
 });
 
 export async function agentMessageRoutes(app: FastifyInstance): Promise<void> {
+  app.post<{ Params: { chatId: string } }>("/:chatId/outbox-token", async (request) => {
+    const identity = requireAgent(request);
+    const user = requireUser(request);
+    await chatService.assertParticipant(app.db, request.params.chatId, identity.uuid);
+    return {
+      accessToken: await signAgentOutboxToken(
+        app.config.secrets.jwtSecret,
+        user.userId,
+        { agentId: identity.uuid, chatId: request.params.chatId },
+        app.config.auth.accessTokenExpiry,
+      ),
+      expiresIn: expiryToSeconds(app.config.auth.accessTokenExpiry),
+    };
+  });
+
   app.post<{ Params: { chatId: string } }>(
     "/:chatId/messages",
     { config: { otelRecordBody: true } },

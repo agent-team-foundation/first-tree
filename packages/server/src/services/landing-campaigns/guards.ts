@@ -6,10 +6,6 @@ import { agents } from "../../db/schema/agents.js";
 import { members } from "../../db/schema/members.js";
 import { ForbiddenError } from "../../errors.js";
 
-export function isLandingCampaignOfficialClient(config: Config, clientId: string | null | undefined): boolean {
-  return !!clientId && clientId === config.growth.landingCampaigns?.clientId;
-}
-
 export function isLandingCampaignOfficialUser(config: Config, userId: string | null | undefined): boolean {
   return !!userId && userId === config.growth.landingCampaigns?.serviceUserId;
 }

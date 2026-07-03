@@ -63,6 +63,12 @@ describe("buildCodexThreadOptions", () => {
     );
   });
 
+  it("uses codex workspace-write only when the caller already wrapped the process workspace-only", () => {
+    const opts = buildCodexThreadOptions(basePayload(), "/tmp/wsk", { workspaceOnly: true });
+
+    expect(opts.sandboxMode).toBe("workspace-write");
+  });
+
   it("derives additionalDirectories from gitRepos (with deriveRepoLocalPath fallback)", () => {
     const opts = buildCodexThreadOptions(
       basePayload({
