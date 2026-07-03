@@ -63,6 +63,35 @@ describe("GitHub OAuth onboarding flow", () => {
     expect(memberRows[0]?.status).toBe("active");
   });
 
+  it("preserves quickstart campaign next for first-time solo signup", async () => {
+    const app = getApp();
+    const next = `/quickstart?campaign=production-scan&repo=${encodeURIComponent("https://github.com/acme/backend")}`;
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/github/dev-callback?githubId=43&login=quickstarter&next=${encodeURIComponent(next)}`,
+    });
+
+    expect(res.statusCode).toBe(302);
+    const fragment = res.headers.location?.split("#")[1] ?? "";
+    const params = new URLSearchParams(fragment);
+    expect(params.get("next")).toBe(next);
+    expect(params.get("joinPath")).toBe("solo");
+  });
+
+  it("still sends first-time solo signup with ordinary protected next to onboarding entry", async () => {
+    const app = getApp();
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/github/dev-callback?githubId=44&login=settingsnext&next=${encodeURIComponent("/settings/github")}`,
+    });
+
+    expect(res.statusCode).toBe(302);
+    const fragment = res.headers.location?.split("#")[1] ?? "";
+    const params = new URLSearchParams(fragment);
+    expect(params.get("next")).toBe("/");
+    expect(params.get("joinPath")).toBe("solo");
+  });
+
   it("second sign-in for same github id reuses the user", async () => {
     const app = getApp();
     await app.inject({

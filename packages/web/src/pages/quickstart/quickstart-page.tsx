@@ -6,6 +6,7 @@ import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { useGrowthLandingPagesState } from "../../hooks/use-server-channel.js";
 import { FlowHint, StatusRow, WorkingState } from "../onboarding/flow-ui.js";
+import { ChatByIdView } from "../workspace/center/chat-by-id.js";
 import { getCampaign } from "./campaigns.js";
 import {
   type CampaignIntent,
@@ -29,8 +30,10 @@ export function QuickstartPage() {
   const location = useLocation();
   const { organizationId, refreshMe } = useAuth();
   const { enabled: growthLandingPagesEnabled, settled } = useGrowthLandingPagesState();
+  const chatId = useMemo(() => new URLSearchParams(location.search).get("chat"), [location.search]);
 
   const intent = useMemo<CampaignIntent | null>(() => {
+    if (chatId) return null;
     const fromUrl = readCampaignHandoff(location);
     if (fromUrl) {
       writeCampaignIntent(fromUrl);
@@ -41,30 +44,30 @@ export function QuickstartPage() {
       return null;
     }
     return readCampaignIntent();
-  }, [location]);
+  }, [chatId, location]);
   const campaign = intent ? getCampaign(intent.campaign) : null;
 
   const startStartedRef = useRef(false);
   const [startError, setStartError] = useState<string | null>(null);
 
   const startTrial = useCallback(async () => {
-    if (!intent || !campaign || startStartedRef.current || !growthLandingPagesEnabled) return;
+    if (chatId || !intent || !campaign || startStartedRef.current || !growthLandingPagesEnabled) return;
     startStartedRef.current = true;
     setStartError(null);
     try {
-      const { chatId } = await startLandingCampaign({
+      const { chatId: trialChatId } = await startLandingCampaign({
         ...(organizationId ? { organizationId } : {}),
         campaign: intent.campaign,
         repoUrl: intent.url,
       });
       clearCampaignIntent();
       await refreshMe();
-      navigate(`/?c=${encodeURIComponent(chatId)}`);
+      navigate(`/quickstart?chat=${encodeURIComponent(trialChatId)}`, { replace: true });
     } catch (err) {
       startStartedRef.current = false;
       setStartError(err instanceof Error ? err.message : "Couldn't open your trial chat. Please try again.");
     }
-  }, [intent, campaign, organizationId, growthLandingPagesEnabled, refreshMe, navigate]);
+  }, [chatId, intent, campaign, organizationId, growthLandingPagesEnabled, refreshMe, navigate]);
 
   useEffect(() => {
     if (!settled || !growthLandingPagesEnabled) return;
@@ -72,12 +75,15 @@ export function QuickstartPage() {
   }, [settled, growthLandingPagesEnabled, startTrial]);
 
   useEffect(() => {
+    if (chatId) return;
     if (settled && !growthLandingPagesEnabled) navigate("/", { replace: true });
-  }, [settled, growthLandingPagesEnabled, navigate]);
+  }, [chatId, settled, growthLandingPagesEnabled, navigate]);
 
   const retryStart = useCallback(() => {
     void startTrial();
   }, [startTrial]);
+
+  if (chatId) return <QuickstartTrialChat chatId={chatId} />;
 
   if (!settled || !growthLandingPagesEnabled) {
     return (
@@ -130,6 +136,14 @@ export function QuickstartPage() {
         />
       )}
     </QuickstartShell>
+  );
+}
+
+function QuickstartTrialChat({ chatId }: { chatId: string }) {
+  return (
+    <div className="flex min-h-screen flex-col" style={{ background: "var(--bg)", color: "var(--fg)" }}>
+      <ChatByIdView chatId={chatId} narrow={false} onShowConversations={null} />
+    </div>
   );
 }
 

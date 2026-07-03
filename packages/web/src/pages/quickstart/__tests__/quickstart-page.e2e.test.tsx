@@ -42,6 +42,9 @@ vi.mock("../../../hooks/use-server-channel.js", () => ({
   useGrowthLandingPagesEnabled: () => growthLandingMock.value.enabled,
 }));
 vi.mock("../../../api/landing-campaigns.js", () => landingCampaignMock);
+vi.mock("../../workspace/center/chat-by-id.js", () => ({
+  ChatByIdView: ({ chatId }: { chatId: string }) => <div data-testid="quickstart-trial-chat">{chatId}</div>,
+}));
 
 function createStorage(): Storage {
   const data = new Map<string, string>();
@@ -134,7 +137,16 @@ describe("QuickstartPage — landing campaign trial flow", () => {
     });
     expect(authMock.value.refreshMe).toHaveBeenCalled();
     expect(readCampaignIntent()).toBeNull();
-    expect(navigateMock).toHaveBeenCalledWith("/?c=chat-1");
+    expect(navigateMock).toHaveBeenCalledWith("/quickstart?chat=chat-1", { replace: true });
+  });
+
+  it("renders an existing trial chat directly and does not restart the trial", async () => {
+    seedIntent("production-scan");
+    const container = await renderPage(["/quickstart?chat=chat-1"]);
+
+    expect(container.querySelector('[data-testid="quickstart-trial-chat"]')?.textContent).toBe("chat-1");
+    expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
   it("ignores unsupported campaign handoffs", async () => {
@@ -203,6 +215,6 @@ describe("QuickstartPage — landing campaign trial flow", () => {
     await flush();
 
     expect(landingCampaignMock.startLandingCampaign).toHaveBeenCalledTimes(2);
-    expect(navigateMock).toHaveBeenCalledWith("/?c=chat-2");
+    expect(navigateMock).toHaveBeenCalledWith("/quickstart?chat=chat-2", { replace: true });
   });
 });
