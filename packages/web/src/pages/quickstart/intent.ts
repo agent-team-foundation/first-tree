@@ -76,6 +76,13 @@ export function readCampaignHandoff(location: Pick<Location, "search" | "hash">)
   return null;
 }
 
+/** Whether the current location explicitly attempted a campaign handoff. */
+export function hasCampaignHandoff(location: Pick<Location, "search" | "hash">): boolean {
+  return [new URLSearchParams(location.search ?? ""), paramsFromHash(location.hash ?? "")].some(
+    (params) => params.has("campaign") || params.has("intent"),
+  );
+}
+
 export function writeCampaignIntent(intent: CampaignIntent): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.setItem(INTENT_KEY, JSON.stringify(intent));

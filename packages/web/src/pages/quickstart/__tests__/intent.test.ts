@@ -77,12 +77,9 @@ describe("readCampaignHandoff", () => {
     expect(readCampaignHandoff({ search: `?campaign=production-scan&repo=${REPO_ENC}`, hash: "" })).toEqual(INTENT);
   });
 
-  it("supports the legacy intent= alias and the agent-readiness campaign", () => {
+  it("supports the legacy intent= alias for production scan", () => {
     expect(readCampaignHandoff({ search: `?intent=production-scan&repo=${REPO_ENC}`, hash: "" })?.campaign).toBe(
       "production-scan",
-    );
-    expect(readCampaignHandoff({ search: `?campaign=agent-readiness&repo=${REPO_ENC}`, hash: "" })?.campaign).toBe(
-      "agent-readiness",
     );
   });
 
@@ -94,6 +91,7 @@ describe("readCampaignHandoff", () => {
 
   it("returns null for an unknown campaign or a missing/invalid repo", () => {
     expect(readCampaignHandoff({ search: `?campaign=nope&repo=${REPO_ENC}`, hash: "" })).toBeNull();
+    expect(readCampaignHandoff({ search: `?campaign=agent-readiness&repo=${REPO_ENC}`, hash: "" })).toBeNull();
     expect(readCampaignHandoff({ search: "?campaign=production-scan", hash: "" })).toBeNull();
     expect(
       readCampaignHandoff({ search: "?campaign=production-scan&repo=https://gitlab.com/x/y", hash: "" }),

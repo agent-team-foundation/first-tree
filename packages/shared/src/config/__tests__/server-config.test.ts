@@ -96,6 +96,7 @@ describe("server config", () => {
     });
 
     expect(defaultConfig.growth.landingCampaigns).toBeUndefined();
+    expect(defaultConfig.growth).not.toHaveProperty("landingCampaignEnabledSlugs");
 
     resetConfig();
     const configuredDir = makeTempConfigDir();

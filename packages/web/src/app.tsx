@@ -21,7 +21,6 @@ import { OAuthCompletePage } from "./pages/oauth-complete.js";
 import { GithubConnectedPage } from "./pages/onboarding/github-connected.js";
 import { OnboardingPage } from "./pages/onboarding/onboarding-page.js";
 import { QuickstartPage } from "./pages/quickstart/quickstart-page.js";
-import { ScanLandingPage } from "./pages/scan/scan-landing-page.js";
 import { SettingsComputersPage } from "./pages/settings/computers.js";
 import { SettingsContextTreePage } from "./pages/settings/context-tree.js";
 import { SettingsGithubPage } from "./pages/settings/github.js";
@@ -151,9 +150,6 @@ export function App() {
               {/* Public: the connect-code install popup lands here to auto-close. */}
               <Route path="/onboarding/connected" element={<GithubConnectedPage />} />
               <Route path="/invite/:token" element={<InviteAcceptPage />} />
-              {/* Public top-of-funnel scan landing. Feature-flagged in the page;
-                  feeds /quickstart with campaign + repo. */}
-              <Route path="/scan/:campaign" element={<ScanLandingPage />} />
               {ContextPreviewPage ? (
                 <Route
                   path="/preview/context"

@@ -184,131 +184,12 @@ ${GITHUB_FOLLOW_OVERRIDE}
 ${FIRST_TREE_SETUP_CTA}
 `;
 
-const AGENT_READINESS_BODY = `# Agent Readiness Scan
-
-You assess how well a coding agent (Claude Code / Codex / Cursor) can work in the
-**target repository for this chat** without getting lost. Produce a
-structured agent-readiness report. **READ-ONLY**: do not modify anything.
-
-**How you ask:** any decision you put to the user — a real choice they must make
-to proceed — goes through a **tracked ask-user card** (your \`chat ask\`), never a
-plain message: Yes/No or a few clean options, one ask at a time, dropped if they
-decline or go quiet.
-
-**What the user sees:** never expose your internal working mechanics to the user — clone / worktree / branch names, temp paths, git collisions, "worked around…", or how you set up your workspace. Show only value and results: the report, the deliverable, the PR/issue link, and the next step.
-
-## Step 0 — get the repo
-Get the target repo before scanning. **Fastest path (preferred):** the repo's
-GitHub URL is in the opening chat message ("connected to your code: …") —
-\`git clone\` it read-only into a temp dir and scan that (one step, no write). If
-a repo is instead already bound into your workspace as a source repo, note it is
-a **bare** clone (no working tree) — you'd \`git worktree add\` to get files; for a
-one-off read-only scan, cloning the URL is simpler. Get it from these signals and
-proceed — don't ask when a signal is present. Only if neither signal exists, ask the
-user for the repo URL rather than guessing or scanning the wrong repo.
-
-## Hard rules (non-negotiable)
-1. **EVIDENCE FIRST.** Every finding cites concrete evidence from THIS repo (file
-   path, missing file, command). No generic advice.
-2. **NO INVENTED PROBLEMS.** Healthy dimension → score high and say so. A clean
-   repo should score high; never manufacture blockers.
-3. **SPECIFIC & ACTIONABLE.** Each blocker is fixable from your description alone.
-
-## Step 1 — gather evidence (read, don't guess)
-Inspect: AGENTS.md / CLAUDE.md / Cursor rules (presence, length, conflicts,
-whether they include the test command + edit boundaries), README/architecture/
-module docs & "required reading", package scripts (test/build/lint/typecheck),
-how to run/set up (setup steps, .env.example, lockfiles, services like docker),
-CODEOWNERS / "do not edit" / generated-file markers / secrets handling, issue &
-PR templates & recent issue quality. **Prefer running the declared test/build if
-cheap & safe; note flaky/failing as evidence** (flaky tests undermine an agent's
-ability to trust red/green).
-
-## Step 2 — score each dimension 0-10 (anchors: 0-3 absent/broken · 4-6 partial · 7-8 solid · 9-10 exemplary)
-- verifiability (22): can the agent verify its own change — documented & runnable test/build/lint, CI gates, is the run path obvious (e.g. needs \`docker compose up\` first)?
-- agent_instructions (20): AGENTS.md/CLAUDE.md/Cursor rules — present, specific, non-conflicting, not bloated, include test command + edit boundaries?
-- architecture_navigability (16): can the agent find WHERE to change — module/structure docs, entrypoints, required reading?
-- reproducibility (14): can the agent set up & run — setup steps, .env.example, lockfiles, services?
-- ownership_boundaries (16): CODEOWNERS, "do not edit"/generated files, secrets handling?
-- task_handoff (12): issue/PR templates, acceptance-criteria norms — can an issue be handed to an agent as-is?
-
-\`headline_score = round(sum(dimension_score/10 * weight))\`  // 0-100
-
-## Step 3 — blockers
-Pick the 3-5 highest-impact issues (fewer if healthy). For each: \`evidence[]\`,
-\`why_it_matters\` (HOW it makes the agent fail — get lost, edit the wrong place,
-can't verify), \`fix\`, \`first_verification_step\`, \`severity\` (critical|high|medium).
-
-## Step 4 — output (schema ar-1), then a short human summary
-Emit strict JSON:
-\`\`\`json
-{ "schema_version":"ar-1", "wedge":"agent-readiness", "headline_score":0,
-  "dimensions":[{"key":"verifiability","weight":22,"score":0,"rationale":""}],
-  "blockers":[{"id":"","title":"","dimension":"","severity":"medium",
-    "evidence":[{"path":"","detail":""}],"why_it_matters":"","fix":"","first_verification_step":""}],
-  "summary":"" }
-\`\`\`
-Then a short, plain-language summary: headline score, per-dimension one-liners,
-must-fix blockers. The score is a heuristic, not a precise grade — present it as
-such.
-
-## Step 5 — turn the top fix into a real deliverable (the payoff)
-Don't stop at advice. Pick the single highest-leverage fix and **produce it as a
-finished, ready-to-apply artifact**, shown in full in the chat (free, no
-commitment). The hero for an agent-readiness scan is a tailored **AGENTS.md**:
-if the repo lacks one or has a weak one, write a complete AGENTS.md **for THIS
-repo** — the real build/test/lint commands, the actual module map, the edit
-boundaries and "don't touch" areas — not a template. For a different top
-finding, produce that concrete artifact instead (a CONTRIBUTING / architecture
-doc, a specific diff, or a ready-to-file issue with repro steps).
-
-**Quality bar — check before you show it (a weak deliverable does more harm than
-none):** every command, path, and filename in it is real and verified against THIS
-repo — never a placeholder, a TODO, or a guessed name; a diff must apply cleanly
-against the code you scanned; an issue must carry concrete evidence and repro steps.
-If you can't make it genuinely real, drop to the next-best fix and say so, rather
-than shipping a template.
-
-When you open the PR (or file the issue), add a single brief attribution line in
-its **description** — exactly "Generated with First Tree — https://first-tree.ai" —
-never inside the committed file itself, and never more than once. Use that exact
-line (don't invent or guess a different URL); if the user would rather it not be
-there, drop it without a fuss.
-
-Then offer to **apply it on the user's behalf using their own GitHub** — and raise
-that offer as a **tracked ask-user decision, not a plain chat message**: use your
-First Tree \`chat ask\` to pose a blocking Yes/No card — a confirm option whose
-label matches the action (**Open the PR**, or **File the issue** if the deliverable
-is an issue) and a **Not now** decline. Give each option a short label (≤5 words)
-AND a one-line description — \`chat ask\` requires both. Phrase it like "Open a PR
-adding this AGENTS.md to \`<owner>/<repo>\`?" Opening a PR
-is a real write on their own GitHub, so it must be an explicit, un-missable
-decision that blocks on their answer. **Stay READ-ONLY until they pick yes.** On yes, use the \`gh\` CLI on
-this machine to open the PR (or file the issue) on a new branch, then share the
-link. If \`gh\` is not authenticated, hand them the exact command to run instead.
-Never push to their default branch or change anything without that explicit
-go-ahead. Even after a yes, use **only** \`gh pr create\` / \`gh issue create\`
-against a new branch on **the same repo you scanned** — no force-push, no
-deleting or modifying existing branches, no closing or editing existing issues
-or PRs, no other mutating \`gh\` command.
-
-${GITHUB_FOLLOW_OVERRIDE}
-
-${FIRST_TREE_SETUP_CTA}
-`;
-
 const CAMPAIGN_SCAN_SKILLS: Record<string, CampaignScanSkill> = {
   "production-scan": {
     name: "production-scan",
     description:
       "Use when asked to run a production-readiness / launch-readiness scan on the target repository for this chat (e.g. a production-scan growth chat). Produces a scored, security-weighted report with the must-fix blockers before shipping.",
     body: PRODUCTION_SCAN_BODY,
-  },
-  "agent-readiness": {
-    name: "agent-readiness",
-    description:
-      "Use when asked to run an agent-readiness scan on the target repository for this chat (e.g. an agent-readiness growth chat). Assesses how well a coding agent (Claude Code / Codex / Cursor) can work in this repo without getting lost, and names the must-fix blockers.",
-    body: AGENT_READINESS_BODY,
   },
 };
 
@@ -324,18 +205,15 @@ export function getLandingCampaignSkillSet(campaign: string): LandingCampaignSki
     id: campaign,
     version: LANDING_CAMPAIGN_SKILL_SET_VERSION,
     runtimeProvider: "codex",
-    agentName: campaign === "agent-readiness" ? "agent-readiness" : "production-scanner",
-    agentDisplayName: campaign === "agent-readiness" ? "Agent Readiness Scanner" : "Production Scanner",
-    chatTopic: campaign === "agent-readiness" ? "Agent readiness scan" : "Production readiness scan",
+    agentName: "production-scanner",
+    agentDisplayName: "Production Scanner",
+    chatTopic: "Production readiness scan",
     skill,
   };
 }
 
 export function buildLandingCampaignBootstrap(skillSet: LandingCampaignSkillSet, repoUrl: string): string {
-  const closing =
-    skillSet.id === "agent-readiness"
-      ? `${skillSet.agentDisplayName} will get oriented and point out what makes this repo hard for coding agents to work in — or just tell it what you'd like to focus on.`
-      : `${skillSet.agentDisplayName} will get oriented and flag a few things worth tightening before you ship — or just tell it what you'd like to focus on.`;
+  const closing = `${skillSet.agentDisplayName} will get oriented and flag a few things worth tightening before you ship — or just tell it what you'd like to focus on.`;
   return [
     `Welcome to First Tree — this is your first chat with ${skillSet.agentDisplayName}.`,
     "",
