@@ -25,7 +25,7 @@ type FakeSessionState = {
     typeof vi.fn<(chatId: string, type: "session:suspend" | "session:terminate") => Promise<void>>
   >;
   applyStaleChatIds: ReturnType<typeof vi.fn<(chatIds: string[]) => void>>;
-  shutdown: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  shutdown: ReturnType<typeof vi.fn<(reason?: string, opts?: unknown) => Promise<void>>>;
 };
 
 type MockState = {
@@ -246,8 +246,8 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
         return this.state.heldChatIds.filter((chatId) => activeChatIds.has(chatId));
       }
 
-      shutdown(): Promise<void> {
-        return this.state.shutdown();
+      shutdown(reason?: string, opts?: unknown): Promise<void> {
+        return this.state.shutdown(reason, opts);
       }
     },
   }));
@@ -631,6 +631,32 @@ describe("AgentSlot", () => {
 
     unbind.resolve();
     await stopPromise;
+  });
+
+  it("shuts down sessions even when unbind fails during stop", async () => {
+    const { slot, connection, state } = await makeSlot();
+
+    await slot.start();
+    const err = new Error("unbind failed");
+    connection.unbindAgent.mockRejectedValueOnce(err);
+
+    await expect(
+      slot.stop("runtime switched by server", {
+        sessionShutdown: {
+          clearPersistedRegistry: true,
+          reportSuspendedSessions: false,
+        },
+      }),
+    ).rejects.toThrow("unbind failed");
+
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+    expect(session.shutdown).toHaveBeenCalledWith("runtime switched by server", {
+      clearPersistedRegistry: true,
+      reportSuspendedSessions: false,
+    });
+    expect(state.logger.warn).toHaveBeenCalledWith({ err }, "failed to unbind agent while stopping");
+    expect(state.logger.info).toHaveBeenCalledWith("stopped");
   });
 
   it("starts the bind-time reconcile grace window after startup full state sync", async () => {

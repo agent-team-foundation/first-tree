@@ -18,7 +18,7 @@ import type { SessionConfig } from "./config.js";
 import { clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./error-taxonomy.js";
 import type { HandlerFactory } from "./handler.js";
 import { PsSubprocessProbe } from "./process-tree-probe.js";
-import { SessionManager } from "./session-manager.js";
+import { SessionManager, type SessionManagerShutdownOptions } from "./session-manager.js";
 
 /**
  * Max attempts to fetch the agent's runtime config during bring-up before a
@@ -73,6 +73,10 @@ export type AgentSlotConfig = {
   clientConnection: ClientConnection;
   runtimeType?: string;
   runtimeVersion?: string;
+};
+
+export type AgentSlotStopOptions = {
+  sessionShutdown?: SessionManagerShutdownOptions;
 };
 
 type ConnectionListener =
@@ -427,9 +431,9 @@ export class AgentSlot {
     }
   }
 
-  async stop(reason?: string): Promise<void> {
+  async stop(reason?: string, opts: AgentSlotStopOptions = {}): Promise<void> {
     if (this.stopping) return this.stopping;
-    this.stopping = this.stopOnce(reason);
+    this.stopping = this.stopOnce(reason, opts);
     try {
       await this.stopping;
     } finally {
@@ -437,7 +441,7 @@ export class AgentSlot {
     }
   }
 
-  private async stopOnce(reason?: string): Promise<void> {
+  private async stopOnce(reason?: string, opts: AgentSlotStopOptions = {}): Promise<void> {
     this.bringupAbort?.abort();
     this.activeRuntimeChatIdsRefreshGeneration++;
     if (this.reconcileTimer) {
@@ -456,8 +460,19 @@ export class AgentSlot {
       this.clientConnection.off(entry.event, entry.fn);
     }
     this.listeners = [];
-    await this.clientConnection.unbindAgent(this.config.agentId);
-    await this.sessionManager?.shutdown(reason);
+    let firstError: unknown = null;
+    try {
+      await this.clientConnection.unbindAgent(this.config.agentId);
+    } catch (err) {
+      firstError = err;
+      this.logger.warn({ err }, "failed to unbind agent while stopping");
+    }
+    try {
+      await this.sessionManager?.shutdown(reason, opts.sessionShutdown);
+    } catch (err) {
+      firstError ??= err;
+      this.logger.warn({ err }, "failed to shut down sessions while stopping");
+    }
     this.sessionManager = null;
     this.agentConfigCache = null;
     this.sdk = null;
@@ -465,6 +480,7 @@ export class AgentSlot {
     this.activeRuntimeChatIdsRefreshInFlight = null;
     this.inboxId = null;
     this.logger.info("stopped");
+    if (firstError) throw firstError;
   }
 
   private async cleanupFailedStart(opts: { unbind: boolean }): Promise<void> {

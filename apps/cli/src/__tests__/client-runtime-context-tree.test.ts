@@ -474,6 +474,12 @@ describe("ClientRuntime context-tree wiring", () => {
 
     await vi.waitFor(() => expect(slotInstances).toHaveLength(2));
     await vi.waitFor(() => expect(slotInstances[1]?.start).toHaveBeenCalled());
+    expect(slotInstances[0]?.stop).toHaveBeenCalledWith("runtime switched by server", {
+      sessionShutdown: {
+        clearPersistedRegistry: true,
+        reportSuspendedSessions: false,
+      },
+    });
     const text = readFileSync(join(alphaDir, "agent.yaml"), "utf8");
     expect(text).toContain("runtime: claude-code");
     expect(text).toContain("qaLocalNote: preserve-me");
@@ -515,7 +521,12 @@ describe("ClientRuntime context-tree wiring", () => {
 
     await vi.waitFor(() => expect(cliFetchMock).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(slotInstances).toHaveLength(2));
-    expect(slotInstances[0]?.stop).toHaveBeenCalledWith("runtime switched by server");
+    expect(slotInstances[0]?.stop).toHaveBeenCalledWith("runtime switched by server", {
+      sessionShutdown: {
+        clearPersistedRegistry: true,
+        reportSuspendedSessions: false,
+      },
+    });
     expect(slotInstances[1]?.start).toHaveBeenCalled();
     expect(print.status).toHaveBeenCalledWith(
       "⚠️",

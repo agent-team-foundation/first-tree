@@ -582,13 +582,19 @@ export class ClientRuntime {
   }
 
   private async reconfigurePinnedAgent(existing: AgentEntry, runtimeProvider: RuntimeProvider): Promise<void> {
+    const runtimeSwitchStopOptions = {
+      sessionShutdown: {
+        clearPersistedRegistry: true,
+        reportSuspendedSessions: false,
+      },
+    };
     if (!hasHandler(runtimeProvider)) {
       this.output.status(
         "⚠️",
         `agent "${existing.name}" switched to runtime "${runtimeProvider}" which this client build does not support yet — update the client to run it.`,
       );
       try {
-        await existing.slot.stop("runtime switched to unsupported provider by server");
+        await existing.slot.stop("runtime switched to unsupported provider by server", runtimeSwitchStopOptions);
       } catch (err) {
         this.output.status(
           "⚠️",
@@ -603,7 +609,7 @@ export class ClientRuntime {
 
     this.output.status("", `agent runtime switched: ${existing.name} → ${runtimeProvider}`);
     try {
-      await existing.slot.stop("runtime switched by server");
+      await existing.slot.stop("runtime switched by server", runtimeSwitchStopOptions);
     } catch (err) {
       this.output.status(
         "⚠️",
