@@ -1,3 +1,4 @@
+import { RUNTIME_NOTICE_METADATA_KEY } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
@@ -100,6 +101,30 @@ describe("sendMessage — agent-final-text bypass (v1 §四 改造 4 b)", () => 
     });
 
     expect(r.message.metadata.agentFinalText).toBe(true);
+  });
+
+  it("does not mark runtime notices as agent final text even though they use the silent delivery profile", async () => {
+    const app = getApp();
+    const owner = await createTestAgent(app, { type: "human" });
+    const peerA = await createTestAgent(app, { type: "agent" });
+    const peerB = await createTestAgent(app, { type: "agent" });
+
+    const chat = await createChat(app.db, owner.agent.uuid, {
+      type: "group",
+      participantIds: [peerA.agent.uuid, peerB.agent.uuid],
+    });
+
+    const r = await sendMessage(app.db, chat.id, peerA.agent.uuid, {
+      source: "api",
+      format: "text",
+      content: "provider failed after retry handling",
+      metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
+      purpose: "agent-final-text",
+    });
+
+    expect(r.recipients).toEqual([]);
+    expect(r.message.metadata[RUNTIME_NOTICE_METADATA_KEY]).toBe(true);
+    expect(r.message.metadata.agentFinalText).toBeUndefined();
   });
 
   it("does NOT mark a normal agent send, and strips a client-smuggled agentFinalText flag", async () => {

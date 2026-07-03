@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { SessionEvent } from "@first-tree/shared";
+import { RUNTIME_NOTICE_METADATA_KEY, type SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatContext } from "../runtime/chat-context.js";
 import type { SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -199,6 +199,7 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("usage limit");
     expect(sendMessage.mock.calls[0]?.[1].purpose).toBe("agent-final-text");
+    expect(sendMessage.mock.calls[0]?.[1].metadata).toMatchObject({ [RUNTIME_NOTICE_METADATA_KEY]: true });
 
     // Layer 2: an `error` event is emitted (daemon log + admin stream), and a
     // warn-style log line is recorded — not a phantom success.

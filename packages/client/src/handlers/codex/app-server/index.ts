@@ -3,6 +3,7 @@ import {
   type AgentRuntimeConfigPayload,
   encodeProviderRetryEventMessage,
   isLandingCampaignTrialAgentMetadata,
+  RUNTIME_NOTICE_METADATA_KEY,
   type SessionEvent,
   type ToolFileRef,
 } from "@first-tree/shared";
@@ -1182,6 +1183,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           source: "api",
           format: "text",
           content: USAGE_LIMIT_NOTICE,
+          metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
           purpose: "agent-final-text",
         });
         consumedErrorReason = "usage_limit_notice_posted";

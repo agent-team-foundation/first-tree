@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseProviderRetryEventMessage, type SessionEvent } from "@first-tree/shared";
+import { parseProviderRetryEventMessage, RUNTIME_NOTICE_METADATA_KEY, type SessionEvent } from "@first-tree/shared";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 /**
@@ -111,6 +111,7 @@ describe("claude-code handler — turn_end on SDK-reported subtype error", () =>
     expect(sendMessage.mock.calls[0]?.[1]).toMatchObject({
       source: "api",
       format: "text",
+      metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
       purpose: "agent-final-text",
     });
     expect(String(sendMessage.mock.calls[0]?.[1].content)).toContain("exceeded max turns");

@@ -23,6 +23,7 @@ import {
   encodeProviderRetryEventMessage,
   isImageBatchRefContent,
   isImageRefContent,
+  RUNTIME_NOTICE_METADATA_KEY,
   runtimeProviderSchema,
   SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
 } from "@first-tree/shared";
@@ -877,6 +878,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         source: "api",
         format: "text",
         content: formatClaudeProviderFailureNotice(settlement.classification, settlement.messagePreview),
+        metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
         purpose: "agent-final-text",
       });
       return true;

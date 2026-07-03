@@ -3,6 +3,7 @@ import {
   type AgentRuntimeConfigPayload,
   deriveRepoLocalPath,
   encodeProviderRetryEventMessage,
+  RUNTIME_NOTICE_METADATA_KEY,
   runtimeProviderSchema,
   type SessionEvent,
   type ToolFileRef,
@@ -1074,6 +1075,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
           source: "api",
           format: "text",
           content: USAGE_LIMIT_NOTICE,
+          metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
           purpose: "agent-final-text",
         });
         consumedErrorReason = "usage_limit_notice_posted";

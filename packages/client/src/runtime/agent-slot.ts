@@ -564,13 +564,19 @@ export class AgentSlot {
     for (const chatId of this.sessionManager.getEvictedChatIds(activeChatIds)) {
       this.clientConnection.reportSessionState(this.config.agentId, chatId, "suspended");
     }
-    // Re-assert the *real* per-chat runtime of every still-live session.
-    // On a network reconnect (process intact) a session mid-turn is still
-    // `working` and must stay so — this is what distinguishes a reconnect
-    // from a process restart (where `sessions` is empty, so nothing here
-    // reports `working` and the agent-global reset below settles
-    // everything to idle).
-    for (const { chatId, runtimeState } of this.sessionManager.getSessionRuntimeStates(activeChatIds)) {
+    // Re-assert the *real* per-chat runtime of every still-live local session,
+    // not only the active chat set. This is the reconnect repair path for a
+    // lost `working -> idle` transition: the local process may have already
+    // closed the turn while the WS was half-open, so the one idle frame can be
+    // dropped before the disconnect is observed. A later bind must therefore
+    // re-send every held runtime projection and let the server's active-row
+    // gate ignore irrelevant/stale chats.
+    //
+    // This intentionally differs from the lifecycle sync above: lifecycle rows
+    // stay filtered to the user's active working set, while runtime rows are
+    // cheap idempotent repairs for any chat the local SessionManager still
+    // holds.
+    for (const { chatId, runtimeState } of this.sessionManager.getSessionRuntimeStates(null)) {
       this.clientConnection.reportSessionRuntime(this.config.agentId, chatId, runtimeState);
     }
     // Explicit "idle" clears any stale `working`/`blocked` on the server:
