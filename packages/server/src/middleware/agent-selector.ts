@@ -61,6 +61,10 @@ export function agentSelectorHook(db: Database) {
       throw new ForbiddenError("Agent is not active");
     }
 
+    if (user.agentOutbox && user.agentOutbox.agentId !== row.uuid) {
+      throw new ForbiddenError("Agent outbox token is not valid for this agent");
+    }
+
     // Verify the caller has an active membership in the agent's own org.
     // No JWT default-org coupling — cross-org under a single user is
     // allowed; a revoked membership refuses immediately.

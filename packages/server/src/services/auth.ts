@@ -25,15 +25,18 @@ const consumedConnectJtis = new Map<string, number>();
 const CONNECT_JTI_TTL_MS = 600_000;
 
 /**
- * JWT payload shape. Carries ONLY the user identity — no org / member /
- * role. Anything beyond `userId` is resolved per-request via the
- * `scope/require-*` helpers, which forces every authz decision through a
- * real-time DB probe (kills the JWT-ambient-scope bug class).
+ * JWT payload shape. Normal access/refresh/connect tokens carry only the user
+ * identity — no org / member / role. The `agent_outbox` token is a narrow
+ * route-scoped exception for workspace-only trial sandboxes: it may carry the
+ * current agent/chat ids, and `userAuthHook` accepts it only for that agent's
+ * message POST in that chat.
  */
 type TokenPayload = {
   sub: string;
-  type: "access" | "refresh" | "connect";
+  type: "access" | "refresh" | "connect" | "agent_outbox";
   iss?: string;
+  agentId?: string;
+  chatId?: string;
 };
 
 async function signToken(
@@ -72,6 +75,16 @@ export async function signTokensForUser(
   const accessToken = await signToken(secret, { sub: userId, type: "access" }, expiries.accessTokenExpiry);
   const refreshToken = await signToken(secret, { sub: userId, type: "refresh" }, expiries.refreshTokenExpiry);
   return { accessToken, refreshToken };
+}
+
+export async function signAgentOutboxToken(
+  jwtSecretKey: string,
+  userId: string,
+  scope: { agentId: string; chatId: string },
+  expiry: string,
+): Promise<string> {
+  const secret = new TextEncoder().encode(jwtSecretKey);
+  return signToken(secret, { sub: userId, type: "agent_outbox", agentId: scope.agentId, chatId: scope.chatId }, expiry);
 }
 
 /**

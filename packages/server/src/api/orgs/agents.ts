@@ -12,10 +12,7 @@ import { requireOrgMembership } from "../../scope/require-org.js";
 import * as agentService from "../../services/agent.js";
 import { resolveAvatarImageUrl } from "../../services/agent.js";
 import { sendToClient } from "../../services/connection-manager.js";
-import {
-  assertMetadataDoesNotClaimLandingCampaignTrial,
-  isLandingCampaignOfficialClient,
-} from "../../services/landing-campaigns/guards.js";
+import { assertMetadataDoesNotClaimLandingCampaignTrial } from "../../services/landing-campaigns/guards.js";
 
 function serializeNewChatDefaultCandidate(agent: agentService.NewChatDefaultCandidateAgent) {
   return { ...agent, createdAt: agent.createdAt.toISOString() };
@@ -144,9 +141,6 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
       throw new BadRequestError("Human agents are created through the member lifecycle");
     }
     assertMetadataDoesNotClaimLandingCampaignTrial(body.metadata);
-    if (isLandingCampaignOfficialClient(app.config, body.clientId)) {
-      throw new ForbiddenError("First Tree landing campaign client is not available for user-created agents");
-    }
     // member role: managerId forced to caller's member; admin role may
     // specify any managerId in the same org.
     const managerId = scope.role === "admin" ? (body.managerId ?? scope.memberId) : scope.memberId;

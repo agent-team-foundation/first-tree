@@ -1,3 +1,4 @@
+import { AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { jwtVerify } from "jose";
@@ -29,10 +30,10 @@ export function userAuthHook(db: Database, jwtSecret: string) {
 
     const token = header.slice(7);
 
-    let payload: { sub?: string; type?: string };
+    let payload: { sub?: string; type?: string; agentId?: unknown; chatId?: unknown };
     try {
       const { payload: p } = await jwtVerify(token, secret);
-      payload = p as typeof payload;
+      payload = p as typeof payload & { agentId?: unknown; chatId?: unknown };
     } catch (err) {
       // see jwt-trace.ts for the trace-only safety contract
       const untrusted = decodeJwtForTrace(token);
@@ -42,10 +43,22 @@ export function userAuthHook(db: Database, jwtSecret: string) {
       });
     }
 
-    if (payload.type !== "access" || !payload.sub) {
+    if ((payload.type !== "access" && payload.type !== "agent_outbox") || !payload.sub) {
       throw new UnauthorizedError("Invalid token type", {
         "auth.failure_reason": "wrong_token_type",
         "auth.token_type": String(payload.type ?? "<missing>"),
+      });
+    }
+
+    const agentOutbox = payload.type === "agent_outbox" ? parseAgentOutboxScope(payload.agentId, payload.chatId) : null;
+    if (payload.type === "agent_outbox" && !agentOutbox) {
+      throw new UnauthorizedError("Invalid agent outbox token", {
+        "auth.failure_reason": "invalid_agent_outbox_scope",
+      });
+    }
+    if (agentOutbox && !isAllowedAgentOutboxRequest(request, agentOutbox)) {
+      throw new UnauthorizedError("Agent outbox token is not valid for this request", {
+        "auth.failure_reason": "agent_outbox_scope_mismatch",
       });
     }
 
@@ -69,6 +82,30 @@ export function userAuthHook(db: Database, jwtSecret: string) {
       });
     }
 
-    request.user = { userId: user.id };
+    request.user = agentOutbox ? { userId: user.id, agentOutbox } : { userId: user.id };
   };
+}
+
+function parseAgentOutboxScope(agentId: unknown, chatId: unknown): { agentId: string; chatId: string } | null {
+  if (typeof agentId !== "string" || agentId.length === 0) return null;
+  if (typeof chatId !== "string" || chatId.length === 0) return null;
+  return { agentId, chatId };
+}
+
+function isAllowedAgentOutboxRequest(request: FastifyRequest, scope: { agentId: string; chatId: string }): boolean {
+  if (request.method !== "POST") return false;
+  if (request.headers[AGENT_SELECTOR_HEADER] !== scope.agentId) return false;
+
+  const pathname = new URL(request.url, "http://first-tree.local").pathname;
+  const marker = "/agent/chats/";
+  const markerIndex = pathname.indexOf(marker);
+  if (markerIndex < 0) return false;
+  const tail = pathname.slice(markerIndex + marker.length);
+  const parts = tail.split("/");
+  if (parts.length !== 2 || parts[1] !== "messages") return false;
+  try {
+    return decodeURIComponent(parts[0] ?? "") === scope.chatId;
+  } catch {
+    return false;
+  }
 }

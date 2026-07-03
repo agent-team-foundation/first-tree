@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionEvent } from "@first-tree/shared";
@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, CodexAppServerTransportError } from "../handlers/codex/app-server/client.js";
 import { createCodexAppServerHandler } from "../handlers/codex/app-server/index.js";
 import { writeAgentBriefing } from "../runtime/bootstrap.js";
+import { setCliBinding } from "../runtime/cli-binding.js";
 import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
 import { mockCtxPlumbing } from "./test-helpers.js";
 
@@ -190,11 +191,21 @@ function makeContext(
     emitEvent?: SessionContext["emitEvent"];
     formatInboundContent?: SessionContext["formatInboundContent"];
     sendMessage?: ReturnType<typeof vi.fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>>;
+    createAgentOutboxToken?: ReturnType<
+      typeof vi.fn<(chatId: string) => Promise<{ accessToken: string; expiresIn: number }>>
+    >;
+    agentMetadata?: Record<string, unknown>;
   } = {},
 ): SessionContext {
   const sendMessage =
     opts.sendMessage ??
     vi.fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>().mockResolvedValue(undefined);
+  const createAgentOutboxToken =
+    opts.createAgentOutboxToken ??
+    vi.fn<(chatId: string) => Promise<{ accessToken: string; expiresIn: number }>>().mockResolvedValue({
+      accessToken: "scoped-outbox-token",
+      expiresIn: 900,
+    });
   return {
     agent: {
       agentId: AGENT_ID,
@@ -203,9 +214,9 @@ function makeContext(
       type: "agent",
       visibility: "organization",
       delegateMention: null,
-      metadata: {},
+      metadata: opts.agentMetadata ?? {},
     },
-    sdk: { serverUrl: "http://test", sendMessage } as unknown as SessionContext["sdk"],
+    sdk: { serverUrl: "http://test", sendMessage, createAgentOutboxToken } as unknown as SessionContext["sdk"],
     chatId: "chat-app-server",
     log: () => {},
     recordProviderActivity: () => {},
@@ -414,13 +425,104 @@ function activeTurnNotSteerableError(): CodexAppServerRpcError {
 
 beforeEach(() => {
   workspaceRoot = mkdtempSync(join(tmpdir(), "ft-codex-app-server-"));
+  setCliBinding({ binName: "first-tree-test", packageName: null });
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
 describe("codex app-server handler", () => {
+  it("wraps landing campaign trial app-server startup in workspace-only sandbox mode", async () => {
+    const firstTreeHome = join(workspaceRoot, "first-tree-home");
+    const cliBinDir = join(firstTreeHome, "bin");
+    mkdirSync(cliBinDir, { recursive: true });
+    writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
+    vi.stubEnv("FIRST_TREE_HOME", firstTreeHome);
+    vi.stubEnv("OPENAI_API_KEY", "secret-openai");
+    vi.stubEnv("GITHUB_TOKEN", "secret-github");
+
+    const fake = new FakeAppServerClient();
+    let capturedSpawnProcess: unknown;
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    const createAgentOutboxToken = vi
+      .fn<(chatId: string) => Promise<{ accessToken: string; expiresIn: number }>>()
+      .mockResolvedValue({ accessToken: "trial-outbox-token", expiresIn: 900 });
+    const handler = makeHandler(fake, {
+      codexAppServerClientFactory: async (options: {
+        env?: NodeJS.ProcessEnv;
+        spawnProcess?: unknown;
+        onNotification?: NotificationHandler;
+        onClose?: CloseHandler;
+      }) => {
+        capturedSpawnProcess = options.spawnProcess;
+        capturedEnv = options.env;
+        fake.onNotification = options.onNotification ?? null;
+        fake.onClose = options.onClose ?? null;
+        return fake;
+      },
+    });
+    const ctx = makeContext({
+      createAgentOutboxToken,
+      agentMetadata: {
+        landingCampaignTrial: true,
+        campaign: "production-scan",
+        skillSetId: "production-scan",
+        skillSetVersion: "2026.07.02.1",
+        repo: {
+          url: "https://github.com/acme/backend",
+          canonicalKey: "github.com/acme/backend",
+        },
+      },
+    });
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    expect(typeof capturedSpawnProcess).toBe("function");
+    expect(createAgentOutboxToken).toHaveBeenCalledWith("chat-app-server");
+    expect(capturedEnv?.FIRST_TREE_HOME).toBe(join(workspaceRoot, ".first-tree-workspace", "outbox-home"));
+    expect(capturedEnv?.PATH?.split(":")[0]).toBe(cliBinDir);
+    expect(capturedEnv?.OPENAI_API_KEY).toBeUndefined();
+    expect(capturedEnv?.GITHUB_TOKEN).toBeUndefined();
+    const threadStart = fake.requests.find((request) => request.method === "thread/start");
+    expect(threadStart?.params).toMatchObject({ sandbox: "workspace-write" });
+
+    completeTurn(fake, "turn-1", "final answer");
+    await startPromise;
+    await handler.shutdown();
+  });
+
+  it("leaves ordinary app-server startup unsandboxed", async () => {
+    const fake = new FakeAppServerClient();
+    let capturedSpawnProcess: unknown = "unset";
+    const handler = makeHandler(fake, {
+      codexAppServerClientFactory: async (options: {
+        spawnProcess?: unknown;
+        onNotification?: NotificationHandler;
+        onClose?: CloseHandler;
+      }) => {
+        capturedSpawnProcess = options.spawnProcess;
+        fake.onNotification = options.onNotification ?? null;
+        fake.onClose = options.onClose ?? null;
+        return fake;
+      },
+    });
+    const ctx = makeContext();
+
+    const startPromise = handler.start(makeMessage("m1", "first"), ctx);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    expect(capturedSpawnProcess).toBeUndefined();
+    const threadStart = fake.requests.find((request) => request.method === "thread/start");
+    expect(threadStart?.params).toMatchObject({ sandbox: "danger-full-access" });
+
+    completeTurn(fake, "turn-1", "final answer");
+    await startPromise;
+    await handler.shutdown();
+  });
+
   it("steers active-turn injects and acks the injected message with the current turn", async () => {
     const fake = new FakeAppServerClient();
     const finished: SessionMessage[][] = [];

@@ -16,7 +16,7 @@ type PendingRequest = {
   timer: ReturnType<typeof setTimeout>;
 };
 
-type SpawnProcess = (
+export type SpawnProcess = (
   command: string,
   args: readonly string[],
   options: {

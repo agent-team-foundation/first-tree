@@ -111,7 +111,51 @@ describe("server config", () => {
     expect(configured.growth.landingCampaigns).toEqual({
       serviceUserId: "user_service",
       clientId: "client_official",
+      runtimeProvider: "codex",
     });
+  });
+
+  it("defaults landing campaign runtime provider to codex and accepts claude-code", async () => {
+    const defaultDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID", "user_service");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID", "client_official");
+
+    const defaultProvider = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: defaultDir,
+    });
+
+    expect(defaultProvider.growth.landingCampaigns?.runtimeProvider).toBe("codex");
+
+    resetConfig();
+    const claudeDir = makeTempConfigDir();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_RUNTIME_PROVIDER", "claude-code");
+
+    const claudeProvider = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: claudeDir,
+    });
+
+    expect(claudeProvider.growth.landingCampaigns?.runtimeProvider).toBe("claude-code");
+  });
+
+  it("rejects unsupported landing campaign runtime providers", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID", "user_service");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID", "client_official");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_RUNTIME_PROVIDER", "claude-code-tui");
+
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/Landing campaign runtime provider must be codex or claude-code/);
   });
 
   it("does not auto-generate server secrets when disabled", async () => {

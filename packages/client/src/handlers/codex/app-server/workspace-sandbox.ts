@@ -1,0 +1,302 @@
+import { spawn } from "node:child_process";
+import { accessSync, constants, existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { getCliBinding } from "../../../runtime/cli-binding.js";
+import type { SpawnProcess } from "./client.js";
+
+type BuildBubblewrapArgsOptions = {
+  command: string;
+  args: readonly string[];
+  workspaceRoot: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  readOnlyPaths?: readonly string[];
+};
+
+type WorkspaceOnlySpawnOptions = {
+  workspaceRoot: string;
+  sandboxBinary?: string;
+  readOnlyPaths?: readonly string[];
+};
+
+type WorkspaceOnlyEnvironment = {
+  env: NodeJS.ProcessEnv;
+  readOnlyPaths: string[];
+};
+
+type WorkspaceOnlyOutboxHomeOptions = {
+  parentEnv: NodeJS.ProcessEnv;
+  workspaceRoot: string;
+  agentId: string;
+  runtimeProvider: string;
+  accessToken: string;
+  serverUrl: string;
+};
+
+const DEFAULT_SANDBOX_BINARY = "bwrap";
+const READ_ONLY_SYSTEM_DIRS = ["/usr", "/bin", "/sbin", "/lib", "/lib64"] as const;
+const READ_ONLY_ETC_PATHS = [
+  "/etc/ssl",
+  "/etc/ca-certificates",
+  "/etc/pki",
+  "/etc/hosts",
+  "/etc/resolv.conf",
+  "/etc/nsswitch.conf",
+  "/etc/protocols",
+  "/etc/services",
+] as const;
+const WORKSPACE_ONLY_PATH_DIRS = ["/usr/local/bin", "/usr/bin", "/bin"] as const;
+const SAFE_PASS_ENV_KEYS = new Set([
+  "FIRST_TREE_HOME",
+  "FIRST_TREE_SERVER_URL",
+  "FIRST_TREE_AGENT_ID",
+  "FIRST_TREE_INBOX_ID",
+  "FIRST_TREE_CHAT_ID",
+  "FIRST_TREE_CLIENT_ID",
+  "FIRST_TREE_PROVIDER",
+  "FIRST_TREE_SWITCH_DRAIN_VERSION",
+  "FIRST_TREE_CLI_BIN_DIR",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TERM",
+  "TZ",
+]);
+
+function pathIsWithin(parent: string, child: string): boolean {
+  return child === parent || child.startsWith(parent.endsWith(sep) ? parent : `${parent}${sep}`);
+}
+
+function realpathExisting(path: string, label: string): string {
+  try {
+    return realpathSync(path);
+  } catch (err) {
+    throw new Error(`${label} does not exist: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+export function assertPathInsideWorkspace(path: string, workspaceRoot: string, label: string): string {
+  const realWorkspace = realpathExisting(workspaceRoot, "workspaceRoot");
+  const target = isAbsolute(path) ? path : resolve(realWorkspace, path);
+  const realTarget = realpathExisting(target, label);
+  if (!pathIsWithin(realWorkspace, realTarget)) {
+    throw new Error(`${label} escapes workspace-only sandbox: ${path}`);
+  }
+  return realTarget;
+}
+
+function findExecutableOnPath(command: string, env: NodeJS.ProcessEnv | undefined): string | null {
+  if (isAbsolute(command)) return existsSync(command) ? command : null;
+  const pathValue = env?.PATH ?? process.env.PATH ?? "";
+  for (const dir of pathValue.split(delimiter)) {
+    if (!dir) continue;
+    const candidate = resolve(dir, command);
+    if (!existsSync(candidate)) continue;
+    try {
+      const stat = statSync(candidate);
+      if (stat.isFile()) return candidate;
+    } catch {
+      // Ignore unreadable PATH entries; another entry may resolve.
+    }
+  }
+  return null;
+}
+
+function addExistingReadOnlyBind(args: string[], path: string): void {
+  if (!existsSync(path)) return;
+  args.push("--ro-bind", path, path);
+}
+
+function addReadOnlyBind(args: string[], path: string): void {
+  if (!existsSync(path)) return;
+  const source = realpathExisting(path, "readOnlyPath");
+  addParentDirs(args, path);
+  args.push("--ro-bind", source, path);
+}
+
+function addParentDirs(args: string[], path: string): void {
+  const alreadyPresent = new Set(["/tmp", "/proc", "/dev", "/run", "/etc", ...READ_ONLY_SYSTEM_DIRS]);
+  const dirs: string[] = [];
+  let current = dirname(path);
+  while (current && current !== "/") {
+    if (!alreadyPresent.has(current)) dirs.push(current);
+    current = dirname(current);
+  }
+  for (const dir of dirs.reverse()) {
+    args.push("--dir", dir);
+  }
+}
+
+function isCoveredBySystemBind(path: string): boolean {
+  return READ_ONLY_SYSTEM_DIRS.some((dir) => existsSync(dir) && pathIsWithin(dir, path));
+}
+
+function validateChannelCliBin(binDir: string): void {
+  const { binName } = getCliBinding();
+  const cliPath = join(binDir, binName);
+  try {
+    accessSync(cliPath, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+  } catch {
+    throw new Error(`workspace-only sandbox requires channel-local First Tree CLI at ${cliPath}`);
+  }
+}
+
+function writePrivateFile(path: string, content: string): void {
+  writeFileSync(path, content, { mode: 0o600 });
+}
+
+export function prepareWorkspaceOnlyOutboxHome(options: WorkspaceOnlyOutboxHomeOptions): {
+  env: NodeJS.ProcessEnv;
+  home: string;
+  cliBinDir: string;
+} {
+  const realWorkspace = realpathExisting(options.workspaceRoot, "workspaceRoot");
+  const sourceHome = options.parentEnv.FIRST_TREE_HOME;
+  if (!sourceHome) {
+    throw new Error("workspace-only sandbox requires host FIRST_TREE_HOME so the channel-local CLI can be mounted");
+  }
+  const cliBinDir = join(isAbsolute(sourceHome) ? sourceHome : resolve(sourceHome), "bin");
+  validateChannelCliBin(cliBinDir);
+
+  const home = join(realWorkspace, ".first-tree-workspace", "outbox-home");
+  const configDir = join(home, "config");
+  const agentDir = join(configDir, "agents", "landing-campaign-trial");
+  mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+  writePrivateFile(
+    join(configDir, "credentials.json"),
+    JSON.stringify(
+      {
+        accessToken: options.accessToken,
+        // Outbox tokens are deliberately non-refreshable. This placeholder
+        // satisfies the existing CLI credentials shape without exposing the
+        // service user's refresh token inside the sandbox.
+        refreshToken: options.accessToken,
+        serverUrl: options.serverUrl,
+      },
+      null,
+      2,
+    ),
+  );
+  writePrivateFile(
+    join(agentDir, "agent.yaml"),
+    `agentId: "${options.agentId}"\nruntime: ${options.runtimeProvider}\n`,
+  );
+
+  return {
+    env: {
+      ...options.parentEnv,
+      FIRST_TREE_HOME: home,
+      FIRST_TREE_CLI_BIN_DIR: cliBinDir,
+    },
+    home,
+    cliBinDir,
+  };
+}
+
+export function buildWorkspaceOnlyEnvironment(
+  parentEnv: NodeJS.ProcessEnv,
+  workspaceRoot: string,
+): WorkspaceOnlyEnvironment {
+  const realWorkspace = realpathExisting(workspaceRoot, "workspaceRoot");
+  const firstTreeHome = parentEnv.FIRST_TREE_HOME;
+  if (!firstTreeHome) {
+    throw new Error("workspace-only sandbox requires FIRST_TREE_HOME for sandbox-local First Tree config");
+  }
+  const resolvedHome = isAbsolute(firstTreeHome) ? firstTreeHome : resolve(firstTreeHome);
+  const cliBinDirValue = parentEnv.FIRST_TREE_CLI_BIN_DIR ?? join(resolvedHome, "bin");
+  const cliBinDir = isAbsolute(cliBinDirValue) ? cliBinDirValue : resolve(cliBinDirValue);
+  validateChannelCliBin(cliBinDir);
+
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of SAFE_PASS_ENV_KEYS) {
+    const value = parentEnv[key];
+    if (typeof value === "string") env[key] = value;
+  }
+  env.FIRST_TREE_HOME = resolvedHome;
+  env.HOME = realWorkspace;
+  env.TMPDIR = "/tmp";
+  env.PATH = [cliBinDir, ...WORKSPACE_ONLY_PATH_DIRS].filter((entry) => existsSync(entry)).join(delimiter);
+
+  return { env, readOnlyPaths: [cliBinDir] };
+}
+
+export function buildWorkspaceOnlyBubblewrapArgs(options: BuildBubblewrapArgsOptions): string[] {
+  const workspaceRoot = realpathExisting(options.workspaceRoot, "workspaceRoot");
+  const cwd = options.cwd ? assertPathInsideWorkspace(options.cwd, workspaceRoot, "cwd") : workspaceRoot;
+  const commandPath = findExecutableOnPath(options.command, options.env);
+  if (!commandPath) {
+    throw new Error(`workspace-only sandbox could not resolve executable: ${options.command}`);
+  }
+  const commandRealpath = realpathExisting(commandPath, "command");
+  if (!statSync(commandRealpath).isFile()) {
+    throw new Error(`workspace-only sandbox executable is not a file: ${commandRealpath}`);
+  }
+
+  const args = [
+    "--die-with-parent",
+    "--new-session",
+    "--clearenv",
+    "--unshare-all",
+    "--share-net",
+    "--proc",
+    "/proc",
+    "--dev",
+    "/dev",
+    "--tmpfs",
+    "/tmp",
+    "--dir",
+    "/run",
+    "--dir",
+    "/etc",
+  ];
+
+  for (const dir of READ_ONLY_SYSTEM_DIRS) {
+    addExistingReadOnlyBind(args, dir);
+  }
+  for (const path of READ_ONLY_ETC_PATHS) {
+    addExistingReadOnlyBind(args, path);
+  }
+  for (const path of options.readOnlyPaths ?? []) {
+    addReadOnlyBind(args, path);
+  }
+
+  args.push("--bind", workspaceRoot, workspaceRoot);
+  if (!pathIsWithin(workspaceRoot, commandRealpath) && !isCoveredBySystemBind(commandRealpath)) {
+    addParentDirs(args, commandRealpath);
+    args.push("--ro-bind", commandRealpath, commandRealpath);
+  }
+  args.push("--chdir", cwd);
+  for (const [key, value] of Object.entries({ ...(options.env ?? {}), HOME: workspaceRoot, TMPDIR: "/tmp" })) {
+    if (typeof value === "string") args.push("--setenv", key, value);
+  }
+  return [...args, "--", commandRealpath, ...options.args];
+}
+
+export function createWorkspaceOnlySpawnProcess(options: WorkspaceOnlySpawnOptions): SpawnProcess {
+  const workspaceRoot = realpathExisting(options.workspaceRoot, "workspaceRoot");
+  return (command, args, spawnOptions) => {
+    if (process.platform !== "linux") {
+      throw new Error("workspace-only sandbox requires Linux bubblewrap support");
+    }
+    const sandboxBinary = options.sandboxBinary ?? DEFAULT_SANDBOX_BINARY;
+    const resolvedSandbox = findExecutableOnPath(sandboxBinary, spawnOptions.env);
+    if (!resolvedSandbox) {
+      throw new Error("workspace-only sandbox requires bubblewrap (`bwrap`) on PATH");
+    }
+    const sandboxEnv = buildWorkspaceOnlyEnvironment(spawnOptions.env ?? {}, workspaceRoot);
+    const readOnlyPaths = [...new Set([...sandboxEnv.readOnlyPaths, ...(options.readOnlyPaths ?? [])])];
+    const sandboxArgs = buildWorkspaceOnlyBubblewrapArgs({
+      command,
+      args,
+      workspaceRoot,
+      cwd: spawnOptions.cwd,
+      env: sandboxEnv.env,
+      readOnlyPaths,
+    });
+    return spawn(resolvedSandbox, sandboxArgs, {
+      ...spawnOptions,
+      env: sandboxEnv.env,
+      cwd: workspaceRoot,
+    });
+  };
+}

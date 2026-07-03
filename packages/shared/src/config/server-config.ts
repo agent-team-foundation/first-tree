@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
+import { runtimeProviderSchema } from "../schemas/runtime-provider.js";
 import { defaultDataDir } from "./resolver.js";
 import { defineConfig, field, optional } from "./schema.js";
 import { getConfig } from "./singleton.js";
@@ -11,6 +12,12 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }, z.string().min(1).optional());
+
+const landingCampaignRuntimeProviderSchema = runtimeProviderSchema
+  .refine((provider) => provider === "codex" || provider === "claude-code", {
+    message: "Landing campaign runtime provider must be codex or claude-code",
+  })
+  .default("codex");
 
 function serverSecretOptions(env: string, auto: string, autoGenerateSecrets: boolean) {
   return autoGenerateSecrets ? { env, auto, secret: true } : { env, secret: true };
@@ -71,6 +78,16 @@ export const serverConfigSchema = defineConfig({
        */
       clientId: field(optionalTrimmedStringSchema, {
         env: "FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID",
+      }),
+      /**
+       * Runtime provider assigned to newly provisioned landing campaign trial
+       * agents. The official client can advertise multiple providers; this
+       * switch only selects which provider the server pins on the agent row.
+       * Claude Code is accepted by config parsing but the start API remains
+       * fail-closed until its workspace-only runtime path exists.
+       */
+      runtimeProvider: field(landingCampaignRuntimeProviderSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_RUNTIME_PROVIDER",
       }),
     }),
   },

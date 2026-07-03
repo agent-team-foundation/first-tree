@@ -299,6 +299,12 @@ export class FirstTreeHubSDK {
     });
   }
 
+  async createAgentOutboxToken(chatId: string): Promise<{ accessToken: string; expiresIn: number }> {
+    return this.requestJson(`/api/v1/agent/chats/${encodeURIComponent(chatId)}/outbox-token`, {
+      method: "POST",
+    });
+  }
+
   async createTaskChat(data: CreateTaskChat): Promise<{
     chatId: string;
     messageId: string;
