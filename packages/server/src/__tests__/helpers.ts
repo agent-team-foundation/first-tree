@@ -59,6 +59,8 @@ type AgentRequestFn = (
 export type CreateTestAppOptions = {
   channel?: Config["channel"];
   growthLandingPagesEnabled?: boolean;
+  landingCampaignServiceUserId?: string;
+  landingCampaignClientId?: string;
   commandVersion?: string;
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
   connectBootstrap?: Config["connectBootstrap"];
@@ -90,6 +92,14 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     channel: opts.channel ?? "dev",
     growth: {
       landingPagesEnabled: opts.growthLandingPagesEnabled ?? false,
+      ...(opts.landingCampaignServiceUserId !== undefined || opts.landingCampaignClientId !== undefined
+        ? {
+            landingCampaigns: {
+              serviceUserId: opts.landingCampaignServiceUserId,
+              clientId: opts.landingCampaignClientId,
+            },
+          }
+        : {}),
     },
     database: {
       url: process.env.DATABASE_URL ?? "",

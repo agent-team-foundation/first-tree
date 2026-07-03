@@ -85,6 +85,35 @@ describe("server config", () => {
     expect(enabledConfig.growth.landingPagesEnabled).toBe(true);
   });
 
+  it("resolves landing campaign official service ids only when configured", async () => {
+    const defaultConfigDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+
+    const defaultConfig = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: defaultConfigDir,
+    });
+
+    expect(defaultConfig.growth.landingCampaigns).toBeUndefined();
+
+    resetConfig();
+    const configuredDir = makeTempConfigDir();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID", "  user_service  ");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID", "  client_official  ");
+
+    const configured = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: configuredDir,
+    });
+
+    expect(configured.growth.landingCampaigns).toEqual({
+      serviceUserId: "user_service",
+      clientId: "client_official",
+    });
+  });
+
   it("does not auto-generate server secrets when disabled", async () => {
     const configDir = makeTempConfigDir();
     vi.stubEnv("FIRST_TREE_DATABASE_URL", "postgres://first-tree:test@localhost:5432/firsttree");

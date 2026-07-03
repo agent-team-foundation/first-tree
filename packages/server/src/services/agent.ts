@@ -30,7 +30,11 @@ import { users } from "../db/schema/users.js";
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from "../errors.js";
 import type { OrgScope } from "../scope/types.js";
 import { uuidv7 } from "../uuid.js";
-import { agentAddressableCondition, agentVisibilityCondition } from "./access-control.js";
+import {
+  agentAddressableCondition,
+  agentNotLandingCampaignTrialCondition,
+  agentVisibilityCondition,
+} from "./access-control.js";
 import { resolveDefaultOrgId } from "./organization.js";
 import { recomputeWatchersForAgent } from "./watcher.js";
 
@@ -980,6 +984,7 @@ export async function getNewChatDefaultCandidate(
         eq(agents.managerId, scope.memberId),
         eq(agents.type, AGENT_TYPES.AGENT),
         eq(agents.status, AGENT_STATUSES.ACTIVE),
+        agentNotLandingCampaignTrialCondition(),
       ),
     )
     .orderBy(asc(agents.createdAt))

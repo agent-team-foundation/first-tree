@@ -12,6 +12,7 @@ import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import { assertAllAgentsVisibleInOrg } from "../../scope/require-resource.js";
 import { createChat, listChatsForMember, resolveAgentIdsByNameInOrg } from "../../services/chat.js";
+import { assertNoLandingCampaignTrialAgents } from "../../services/landing-campaigns/guards.js";
 import { createMeChat, listMeChatSourceCounts, listMeChats } from "../../services/me-chat.js";
 import { notifyRecipients } from "../../services/notifier.js";
 
@@ -130,6 +131,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
         (id) => id !== scope.humanAgentId,
       );
       await assertAllAgentsVisibleInOrg(app.db, scope, visibleTargetIds);
+      await assertNoLandingCampaignTrialAgents(app.db, visibleTargetIds);
       const result = await createChat(app.db, {
         mode: "task",
         initiatorAgentId: scope.humanAgentId,
@@ -160,6 +162,7 @@ export async function orgChatRoutes(app: FastifyInstance): Promise<void> {
       throw new BadRequestError("At least one non-self participant required");
     }
     await assertAllAgentsVisibleInOrg(app.db, scope, targetIds);
+    await assertNoLandingCampaignTrialAgents(app.db, targetIds);
 
     const result = await createMeChat(app.db, scope.humanAgentId, scope.organizationId, body);
     return reply.status(201).send(result);

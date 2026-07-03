@@ -18,6 +18,11 @@ import {
   hasActiveConnection,
   sendToClient,
 } from "../services/connection-manager.js";
+import {
+  assertMetadataDoesNotClaimLandingCampaignTrial,
+  assertMutableAgentIsNotLandingCampaignTrial,
+  assertNoLandingCampaignTrialAgents,
+} from "../services/landing-campaigns/guards.js";
 import { WIRE_RECIPIENT_MODE } from "../services/message-dispatcher.js";
 import * as presenceService from "../services/presence.js";
 
@@ -99,8 +104,10 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.patch<{ Params: { uuid: string } }>("/:uuid", { config: { otelRecordBody: true } }, async (request) => {
-    const { scope } = await requireAgentAccess(request, app.db, "manage");
+    const { agent: existingAgent, scope } = await requireAgentAccess(request, app.db, "manage");
     const body = updateAgentSchema.parse(request.body);
+    assertMutableAgentIsNotLandingCampaignTrial(existingAgent);
+    assertMetadataDoesNotClaimLandingCampaignTrial(body.metadata);
     if (body.managerId !== undefined && scope.role !== "admin") {
       throw new ForbiddenError("Only admins can reassign an agent's manager");
     }
@@ -122,14 +129,16 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { uuid: string } }>("/:uuid/disconnect", async (request, reply) => {
-    await requireAgentAccess(request, app.db, "manage");
+    const { agent } = await requireAgentAccess(request, app.db, "manage");
+    assertMutableAgentIsNotLandingCampaignTrial(agent);
     const wasConnected = forceDisconnect(request.params.uuid);
     await presenceService.setOffline(app.db, request.params.uuid);
     return reply.status(200).send({ disconnected: wasConnected });
   });
 
   app.post<{ Params: { uuid: string } }>("/:uuid/suspend", async (request) => {
-    await requireAgentAccess(request, app.db, "manage");
+    const { agent: existingAgent } = await requireAgentAccess(request, app.db, "manage");
+    assertMutableAgentIsNotLandingCampaignTrial(existingAgent);
     const agent = await agentService.suspendAgent(app.db, request.params.uuid);
     forceDisconnect(request.params.uuid, "agent_suspended");
     await presenceService.setOffline(app.db, request.params.uuid);
@@ -138,7 +147,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { uuid: string } }>("/:uuid/reactivate", async (request) => {
-    await requireAgentAccess(request, app.db, "manage");
+    const { agent: existingAgent } = await requireAgentAccess(request, app.db, "manage");
+    assertMutableAgentIsNotLandingCampaignTrial(existingAgent);
     const agent = await agentService.reactivateAgent(app.db, request.params.uuid);
     notifyClientAgentPinned(agent);
     const userAvatarUrl = await fetchUserAvatarForHumanAgent(app.db, agent);
@@ -146,7 +156,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.delete<{ Params: { uuid: string } }>("/:uuid", async (request, reply) => {
-    await requireAgentAccess(request, app.db, "manage");
+    const { agent } = await requireAgentAccess(request, app.db, "manage");
+    assertMutableAgentIsNotLandingCampaignTrial(agent);
     await agentService.deleteAgent(app.db, request.params.uuid);
     return reply.status(204).send();
   });
@@ -169,7 +180,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     "/:uuid/avatar",
     { bodyLimit: agentService.MAX_AVATAR_IMAGE_BYTES + 1024 },
     async (request, reply) => {
-      await requireAgentAccess(request, app.db, "manage");
+      const { agent } = await requireAgentAccess(request, app.db, "manage");
+      assertMutableAgentIsNotLandingCampaignTrial(agent);
       const contentType = request.headers["content-type"];
       if (typeof contentType !== "string" || !contentType.startsWith("image/")) {
         throw new BadRequestError(
@@ -189,7 +201,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   );
 
   app.delete<{ Params: { uuid: string } }>("/:uuid/avatar", async (request, reply) => {
-    await requireAgentAccess(request, app.db, "manage");
+    const { agent } = await requireAgentAccess(request, app.db, "manage");
+    assertMutableAgentIsNotLandingCampaignTrial(agent);
     await agentService.clearAgentAvatarImage(app.db, request.params.uuid);
     return reply.status(204).send();
   });
@@ -215,7 +228,8 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.patch<{ Params: { uuid: string } }>("/:uuid/skills", async (request, reply) => {
-    await requireAgentAccess(request, app.db, "manage");
+    const { agent } = await requireAgentAccess(request, app.db, "manage");
+    assertMutableAgentIsNotLandingCampaignTrial(agent);
     const body = updateAgentSkillsSchema.parse(request.body);
     await agentService.updateAgentSkills(app.db, request.params.uuid, body.skills);
     return reply.status(204).send();
@@ -307,6 +321,7 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
   app.post<{ Params: { uuid: string } }>("/:uuid/chats", async (request, reply) => {
     const { agent: targetAgent, scope } = await requireAgentAccess(request, app.db, "visible");
     await assertAllAgentsVisibleInOrg(app.db, scope, [targetAgent.uuid]);
+    await assertNoLandingCampaignTrialAgents(app.db, [targetAgent.uuid]);
     const result = await createChat(app.db, scope.humanAgentId, {
       type: "group",
       participantIds: [targetAgent.uuid],
