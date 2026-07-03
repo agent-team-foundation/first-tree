@@ -675,7 +675,7 @@ function UnavailableState({
             {canInitialize ? (
               <div style={{ marginTop: "var(--sp-3)" }}>
                 <ContextTreeBuildEntry
-                  treeBindingPlan={snapshot.repo ? "useBoundTree" : "createBinding"}
+                  treeBindingPlan={snapshot.repo ? "useBoundTree" : "agentSeed"}
                   detectedTreeUrl={snapshot.repo}
                 />
               </div>
