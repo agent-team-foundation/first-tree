@@ -7,12 +7,6 @@ export type StartOnboardingChatArgs = {
   bootstrap: string;
   topic?: string;
   complete?: boolean;
-  /**
-   * Optional campaign slug for reusable quickstart growth entries. Appended to
-   * the server-side kickoff idempotency key so two campaigns for the same
-   * (human, agent) pair get distinct chats. Onboarding omits it.
-   */
-  campaign?: string;
 };
 
 export type StartOnboardingChatResult = {

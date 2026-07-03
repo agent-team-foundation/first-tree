@@ -64,9 +64,10 @@ export const kickoffOnboardingSchema = z
     bootstrap: z.string().min(1),
     topic: z.string().trim().min(1).max(120).optional(),
     complete: z.boolean().optional(),
-    // Optional campaign slug (reusable quickstart growth entries). Appended to
-    // the kickoff idempotency key so two campaigns for the same (human, agent)
-    // get distinct chats. Slug form keeps the colon-delimited key unambiguous.
+    // Retained only so stale quickstart clients receive a controlled
+    // moved/disabled response from /me/onboarding/kickoff. Current campaign
+    // quickstart uses /me/landing-campaigns/start; this field must not create an
+    // onboarding kickoff chat or campaign idempotency key.
     campaign: z
       .string()
       .regex(/^[a-z0-9][a-z0-9-]*$/)

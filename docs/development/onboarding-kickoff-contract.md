@@ -1,20 +1,24 @@
 # Onboarding Kickoff Contract
 
 This note defines the compatibility boundary for web-created onboarding kickoff
-chats.
+chats and the adjacent campaign quickstart handoff.
 
 ## Current Contract
 
-- `POST /api/v1/me/onboarding/kickoff` starts the user's first onboarding or
-  quickstart chat.
+- `POST /api/v1/me/onboarding/kickoff` starts the user's first onboarding chat.
 - The first message is visible task text sent through task `createChat`; the
   agent sees the same message the user sees.
 - Skill activation comes from the visible message, bound resources, and skill
   descriptions. The client must not append hidden onboarding directives from
   message metadata.
-- The first-chat endpoint accepts `campaign` for quickstart idempotency and
-  server-side managed-skill binding. It does not accept the retired `kind`
-  discriminator.
+- Campaign quickstart starts through `POST /api/v1/me/landing-campaigns/start`.
+  That server-owned path creates the trial chat, binds managed campaign skills,
+  and wakes the agent from visible task text plus bound skills/resources.
+- A `/me/onboarding/kickoff` request carrying `campaign` is a stale quickstart
+  request. It must not create an onboarding kickoff chat or campaign idempotency
+  key; it returns `410 campaign_kickoff_moved` when landing campaigns are enabled
+  and `404 feature_disabled` when they are disabled.
+- The first-chat endpoint does not accept the retired `kind` discriminator.
 - `POST /api/v1/me/onboarding/tree-setup/kickoff` is the only tree setup
   kickoff entry. It uses the org-level `tree-setup` idempotency key.
 
@@ -31,11 +35,12 @@ Those request and prompt contracts are intentionally retired:
   `409 stale_onboarding_kickoff_contract`. The recovery is to refresh the web app
   and retry through the current endpoint contract.
 - The client renders legacy onboarding metadata as ordinary message metadata; it
-  does not append hidden instructions to the agent prompt.
+  does not append hidden instructions to the agent prompt. Campaign skill
+  activation must not rely on a client-appended directive.
 - Historical database rows whose `onboarding_kickoff_key` ends in `:tree` remain
   recognized by tree setup status reads so existing completed tree setup chats do
   not reappear as setup debt.
 
-Do not reintroduce a compatibility shim that maps retired `kind` requests or
-turns legacy onboarding metadata into agent-only prompt text without a new
-product decision.
+Do not reintroduce a compatibility shim that maps retired `kind` requests, routes
+campaign quickstart through onboarding kickoff, or turns legacy onboarding
+metadata into agent-only prompt text without a new product decision.

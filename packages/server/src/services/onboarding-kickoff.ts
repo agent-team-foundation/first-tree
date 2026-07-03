@@ -27,10 +27,9 @@ export type KickoffOnboardingArgs = {
    * Optional side effect to run once the kickoff chat exists AND its
    * participants are validated — createChat enforces the cross-org / active /
    * private-target checks on first creation; an existing chat was validated
-   * when it was created — but BEFORE the bootstrap is sent. Quickstart uses it
-   * to provision + bind the campaign scan skill onto the target agent. Running
-   * it earlier would let an unauthorized kickoff mutate another org/agent's
-   * resources before the chat is rejected.
+   * when it was created — but BEFORE the bootstrap is sent. Running it earlier
+   * would let an unauthorized kickoff mutate another org/agent's resources
+   * before the chat is rejected.
    */
   onChatReady?: () => Promise<void>;
 };
@@ -76,7 +75,7 @@ export async function hasTreeSetupKickoffMessage(db: Database, organizationId: s
  *   3. optionally stamp `onboarding_completed_at` (+ suppressed/reason) only
  *      after the chat exists, and only if not already stamped.
  *
- * Re-running it — a reopened tab, a network retry, or the build-tree recovery
+ * Re-running it — a reopened tab, a network retry, or the tree setup recovery
  * surface — converges on the same chat. Single-chat onboarding paths keep
  * `complete: true`; support/background paths use `complete: false` and stamp
  * completion only after all required chats exist.
