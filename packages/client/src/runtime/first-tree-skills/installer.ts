@@ -47,7 +47,8 @@ import { readManagedState, updateManagedState } from "../managed-state.js";
  *
  *   - `first-tree-welcome` launches onboarding, which can start before a team
  *     has a Context Tree (especially the no-repo path).
- *   - `first-tree-seed` builds a tree from zero. Onboarding runs the build in a
+ *   - `first-tree-seed` bootstraps a tree that has no domain structure yet
+ *     (creating + binding it when none exists). Onboarding runs the build in a
  *     still-tree-less session (the welcome launcher spawns a dedicated
  *     tree-build chat, which has no binding yet), so seed must ship there too —
  *     gating it on a binding would hide the very skill whose job is to create

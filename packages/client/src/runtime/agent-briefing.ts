@@ -1193,7 +1193,7 @@ to build the team's Context Tree from the connected code, load
 | Skill | Load when |
 |---|---|
 | \`first-tree-welcome\` | a First Tree onboarding welcome / intro / value-first first chat |
-| \`first-tree-seed\` | building the team's Context Tree from zero — it creates + binds the repo and seeds it; refuses once a tree exists |
+| \`first-tree-seed\` | set up the team's Context Tree from the connected sources when it has no domain structure yet — creates + binds the repo if none exists, else fills a bound-but-empty tree; refuses once the tree has domain structure |
 | \`first-tree-write\` | pulled in by \`first-tree-seed\` as its authoring dependency (source-driven tree writes) |`;
   }
   return `## First Tree Family
@@ -1210,7 +1210,7 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 | \`first-tree-welcome\` | First Tree onboarding system messages ask for welcome, setup guidance, or the value-first first chat |
 | \`first-tree-write\`   | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
-| \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |`;
+| \`first-tree-seed\`    | no domain structure yet — bootstrap the team's Context Tree from its sources (create + bind if none exists, else fill a bound-but-empty tree); refuses once the tree has domain structure |`;
 }
 
 /**

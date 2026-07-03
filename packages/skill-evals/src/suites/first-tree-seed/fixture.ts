@@ -27,7 +27,7 @@ function workspaceAgentsMarkdown(
         : `The manifest source \`source-repo\` exists as a bare clone at \`${sourceRepoPath}\`.`;
   const treeLine =
     evalCase.fixture.treeState === "unbound"
-      ? 'The workspace is NOT bound to a Context Tree yet: `./.first-tree/workspace.json` has no `tree` field and no `./context-tree` exists. Per Step 0 state A, the tree must be created and bound with `first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/context-tree"` (the `--dir` pin is load-bearing so the created clone lands where the workspace expects it).'
+      ? 'The workspace is NOT bound to a Context Tree yet: `./.first-tree/workspace.json` has no `tree` field and no `./context-tree` exists. Per state A, the tree must be created and bound with `first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/context-tree"` (the `--dir` pin is load-bearing so the created clone lands where the workspace expects it).'
       : evalCase.fixture.treeState === "empty"
         ? "The Context Tree at `./context-tree` is newly provisioned and empty."
         : "The Context Tree at `./context-tree` is already populated with durable domains.";
@@ -192,7 +192,7 @@ function writeContextTreeFixture(paths: RunPaths, evalCase: FirstTreeSeedEvalCas
   const contextTreePath = join(paths.workspacePath, "context-tree");
   if (evalCase.fixture.treeState === "unbound") {
     // State A: the workspace is genuinely unbound. Do NOT provision a
-    // context-tree; Step 0 must create + bind it with `tree init --dir`.
+    // context-tree; the state check must create + bind it with `tree init --dir`.
     return contextTreePath;
   }
   mkdirSync(contextTreePath, { recursive: true });
@@ -457,7 +457,7 @@ export function validateFixture(
 ): FixtureValidation {
   const errors: string[] = [];
   const manifestPath = join(paths.workspacePath, ".first-tree", "workspace.json");
-  // An unbound workspace (Step 0 state A) has no provisioned context tree, so
+  // An unbound workspace (state A) has no provisioned context tree, so
   // the tree's `.first-tree` metadata files do not exist yet by design.
   const requiredFiles =
     evalCase.fixture.treeState === "unbound"

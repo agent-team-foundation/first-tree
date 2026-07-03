@@ -471,7 +471,7 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("passes unbound-tree case when Step 0 runs tree init with a context-tree --dir", () => {
+  it("passes unbound-tree case when the state check runs tree init with a context-tree --dir", () => {
     expect(
       casePassed(
         findCase("unbound-tree-inits-with-dir"),
@@ -555,9 +555,9 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("passes the unbound-tree case when Step 0 incidentally reads source but touches no worktree", () => {
+  it("passes the unbound-tree case when the state check incidentally reads source but touches no worktree", () => {
     // Relaxation (2026-07, liuchao-approved): an incidental source read during
-    // Step 0 — e.g. glancing at a file to derive the team name for --title,
+    // the state check — e.g. glancing at a file to derive the team name for --title,
     // WITHOUT touching a source worktree — no longer fails the gate. The real
     // invariant is the `tree init --dir` routing; touching a source worktree or
     // reading the bare clone still fail (next cases). Fixes a ~1/3 model-flake
@@ -579,7 +579,7 @@ describe("first-tree-seed grader", () => {
     ).toBe(true);
   });
 
-  it("fails the unbound-tree case when Step 0 materializes a source worktree (final filesystem)", () => {
+  it("fails the unbound-tree case when the state check materializes a source worktree (final filesystem)", () => {
     expect(
       casePassed(
         findCase("unbound-tree-inits-with-dir"),
@@ -596,11 +596,11 @@ describe("first-tree-seed grader", () => {
     ).toBe(false);
   });
 
-  it("fails the unbound-tree case when Step 0 touched a source worktree even if it was removed before grading", () => {
+  it("fails the unbound-tree case when the state check touched a source worktree even if it was removed before grading", () => {
     // The add/read/`git worktree remove` evasion: the final filesystem is clean
     // (`sourceWorktreeCreated=false`), but the event-level
     // `sourceWorktreeAccessObserved` records the worktree touch, so this Phase-1
-    // path still fails Step 0.
+    // path still fails the state check.
     expect(
       casePassed(
         findCase("unbound-tree-inits-with-dir"),
@@ -617,7 +617,7 @@ describe("first-tree-seed grader", () => {
     ).toBe(false);
   });
 
-  it("fails the unbound-tree case when Step 0 reads the bare source clone directly", () => {
+  it("fails the unbound-tree case when the state check reads the bare source clone directly", () => {
     expect(
       casePassed(
         findCase("unbound-tree-inits-with-dir"),
@@ -635,9 +635,9 @@ describe("first-tree-seed grader", () => {
   });
 
   it("keeps buildGrading process_pass aligned with the relaxed gate for an incidental source read", () => {
-    // The relaxed casePassed gate accepts an incidental Step 0 source read, so
+    // The relaxed casePassed gate accepts an incidental state-check source read, so
     // the grading `process_pass` dimension must not contradict it (no
-    // `passed=true` / `process_pass=false` artifact). The stronger past-Step-0
+    // `passed=true` / `process_pass=false` artifact). The stronger past-state-check
     // signals still fail process.
     const incidentalRead = buildGrading(
       findCase("unbound-tree-inits-with-dir"),
@@ -743,7 +743,7 @@ describe("first-tree-seed grader", () => {
       // Evasion via relative paths: the model cds into `worktrees` and refers to
       // the worktree as `seed-source-repo` (no `worktrees/` prefix appears in any
       // command). Matching the worktree NAME still catches the add/read/remove
-      // Phase-1 sequence, so it fails Step 0 even though no command contains
+      // Phase-1 sequence, so it fails the state check even though no command contains
       // `worktrees/seed-source-repo` and the final filesystem is clean.
       const metrics = deriveMetrics(
         [
@@ -822,7 +822,7 @@ describe("first-tree-seed grader", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-worktree-name-search-"));
     try {
       // The fixture's AGENTS.md documents the worktrees/seed-source-repo protocol,
-      // so a compliant Step 0 self-check may grep the instructions for the name.
+      // so a compliant state check may grep the instructions for the name.
       // Searching docs does not touch a worktree, so it must NOT flip
       // sourceWorktreeAccessObserved (else an otherwise-correct run false-fails).
       const metrics = deriveMetrics(
