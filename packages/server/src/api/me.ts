@@ -30,6 +30,7 @@ import * as clientService from "../services/client.js";
 import { GithubApiError, listUserRepos } from "../services/github-oauth.js";
 import { GithubUserTokenError, getFreshGithubUserToken } from "../services/github-user-token.js";
 import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
+import { isLandingCampaignServiceMembership } from "../services/landing-campaigns/guards.js";
 import { updateOwnProfile } from "../services/member.js";
 import {
   countActiveMembersByOrgs,
@@ -116,7 +117,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     const serviceUserId = app.config.growth.landingCampaigns?.serviceUserId;
     if (serviceUserId && memberships.length > 0) {
       const serviceMemberRows = await app.db
-        .select({ organizationId: members.organizationId })
+        .select({ userId: members.userId, organizationId: members.organizationId })
         .from(members)
         .where(
           and(
@@ -129,6 +130,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
           ),
         );
       for (const row of serviceMemberRows) {
+        if (!isLandingCampaignServiceMembership(app.config, row)) continue;
         memberCounts.set(row.organizationId, Math.max(0, (memberCounts.get(row.organizationId) ?? 0) - 1));
       }
     }

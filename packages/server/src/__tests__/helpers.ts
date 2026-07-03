@@ -60,6 +60,7 @@ export type CreateTestAppOptions = {
   channel?: Config["channel"];
   growthLandingPagesEnabled?: boolean;
   landingCampaignServiceUserId?: string;
+  landingCampaignServiceOrgId?: string;
   landingCampaignClientId?: string;
   landingCampaignRuntimeProvider?: "codex" | "claude-code";
   commandVersion?: string;
@@ -94,11 +95,13 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     growth: {
       landingPagesEnabled: opts.growthLandingPagesEnabled ?? false,
       ...(opts.landingCampaignServiceUserId !== undefined ||
+      opts.landingCampaignServiceOrgId !== undefined ||
       opts.landingCampaignClientId !== undefined ||
       opts.landingCampaignRuntimeProvider !== undefined
         ? {
             landingCampaigns: {
               serviceUserId: opts.landingCampaignServiceUserId,
+              serviceOrgId: opts.landingCampaignServiceOrgId,
               clientId: opts.landingCampaignClientId,
               runtimeProvider: opts.landingCampaignRuntimeProvider ?? "codex",
             },

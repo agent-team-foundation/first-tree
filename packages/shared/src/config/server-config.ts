@@ -66,11 +66,19 @@ export const serverConfigSchema = defineConfig({
       /**
        * First Tree official service user that manages landing campaign trial
        * agents inside customer orgs. Optional at boot so the feature flag can
-       * remain off by default; the start API checks both ids before creating
-       * anything.
+       * remain off by default; the start API checks the official service user,
+       * service org, and client ids before creating anything.
        */
       serviceUserId: field(optionalTrimmedStringSchema, {
         env: "FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID",
+      }),
+      /**
+       * Organization where the official service user is a normal team member.
+       * In every other org, that same user is treated as the campaign-managed
+       * service membership created only to host landing trial agents.
+       */
+      serviceOrgId: field(optionalTrimmedStringSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_SERVICE_ORG_ID",
       }),
       /**
        * Official client row owned by `serviceUserId`. Trial agents are pinned

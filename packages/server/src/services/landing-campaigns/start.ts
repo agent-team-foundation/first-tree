@@ -31,6 +31,7 @@ import { sendToClient } from "../connection-manager.js";
 import { MEMBER_STATUSES, reactivateMembership } from "../membership.js";
 import { sendMessage } from "../message.js";
 import { notifyRecipients } from "../notifier.js";
+import { isLandingCampaignServiceOrg } from "./guards.js";
 import { buildLandingCampaignAgentMetadata, buildLandingCampaignChatMetadata } from "./metadata.js";
 import { buildLandingCampaignBootstrap, getLandingCampaignSkillSet } from "./skills/catalog.js";
 
@@ -46,15 +47,22 @@ type ActiveMembership = {
 
 function requireLandingCampaignConfig(app: FastifyInstance): {
   serviceUserId: string;
+  serviceOrgId: string;
   clientId: string;
   runtimeProvider: Extract<RuntimeProvider, "codex" | "claude-code">;
 } {
   const serviceUserId = app.config.growth.landingCampaigns?.serviceUserId;
+  const serviceOrgId = app.config.growth.landingCampaigns?.serviceOrgId;
   const clientId = app.config.growth.landingCampaigns?.clientId;
-  if (!serviceUserId || !clientId) {
+  if (!serviceUserId || !serviceOrgId || !clientId) {
     throw new ServiceUnavailableError("Landing campaign official runtime is not configured");
   }
-  return { serviceUserId, clientId, runtimeProvider: app.config.growth.landingCampaigns?.runtimeProvider ?? "codex" };
+  return {
+    serviceUserId,
+    serviceOrgId,
+    clientId,
+    runtimeProvider: app.config.growth.landingCampaigns?.runtimeProvider ?? "codex",
+  };
 }
 
 function assertLandingCampaignRuntimeProviderSupported(provider: RuntimeProvider): void {
@@ -193,14 +201,19 @@ async function ensureServiceMember(
   return created;
 }
 
-async function assertOfficialClient(db: Database, clientId: string, serviceUserId: string): Promise<void> {
+async function assertOfficialClient(
+  db: Database,
+  clientId: string,
+  serviceUserId: string,
+  serviceOrgId: string,
+): Promise<void> {
   const [client] = await db
-    .select({ id: clients.id, userId: clients.userId })
+    .select({ id: clients.id, userId: clients.userId, organizationId: clients.organizationId })
     .from(clients)
     .where(eq(clients.id, clientId))
     .limit(1);
-  if (!client || client.userId !== serviceUserId) {
-    throw new ServiceUnavailableError("Landing campaign official client is not configured");
+  if (!client || client.userId !== serviceUserId || client.organizationId !== serviceOrgId) {
+    throw new ServiceUnavailableError("Landing campaign official client is not configured in the service organization");
   }
 }
 
@@ -443,8 +456,11 @@ export async function startLandingCampaignTrial(
   if (caller.role !== "admin") {
     throw new ForbiddenError("Only organization admins can start a First Tree landing campaign trial.");
   }
+  if (isLandingCampaignServiceOrg(app.config, caller.organizationId)) {
+    throw new ForbiddenError("Landing campaign trials cannot be started in the First Tree service organization.");
+  }
 
-  await assertOfficialClient(app.db, config.clientId, config.serviceUserId);
+  await assertOfficialClient(app.db, config.clientId, config.serviceUserId, config.serviceOrgId);
   const { serviceMember, trialAgent } = await provisionTrialAgent(app, {
     organizationId: caller.organizationId,
     serviceUserId: config.serviceUserId,

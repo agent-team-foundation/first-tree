@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { requireOrgAdmin } from "../../scope/require-org.js";
 import { expiryToSeconds } from "../../services/auth.js";
 import * as clientService from "../../services/client.js";
+import { isLandingCampaignServiceMembership } from "../../services/landing-campaigns/guards.js";
 import { serializeDate } from "../../utils.js";
 import { clientCommandVersionHint } from "../client-command-version.js";
 
@@ -15,7 +16,13 @@ export async function orgClientRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { orgId: string } }>("/", async (request) => {
     // Listing this collection requires admin in the target org.
     const scope = await requireOrgAdmin(request, app.db);
-    const clients = await clientService.listClientsForOrgAdmin(app.db, scope.organizationId);
+    const clients = (await clientService.listClientsForOrgAdmin(app.db, scope.organizationId)).filter(
+      (client) =>
+        !isLandingCampaignServiceMembership(app.config, {
+          userId: client.userId,
+          organizationId: scope.organizationId,
+        }),
+    );
     const refreshExpirySeconds = expiryToSeconds(app.config.auth.refreshTokenExpiry);
     const binName = getChannelConfig(app.config.channel).binName;
     return clients.map((c) => ({

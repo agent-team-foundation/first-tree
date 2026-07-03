@@ -12,20 +12,34 @@ import { chats } from "../db/schema/chats.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { organizations } from "../db/schema/organizations.js";
 import { resources } from "../db/schema/resources.js";
 import { users } from "../db/schema/users.js";
+import { createAgent } from "../services/agent.js";
 import { signTokensForUser } from "../services/auth.js";
+import { createMember } from "../services/member.js";
 import { sendMessage } from "../services/message.js";
+import { uuidv7 } from "../uuid.js";
 import { agentRequest, createTestAdmin, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
 
 const SERVICE_USER_ID = "landing-campaign-service-user-test";
+const SERVICE_ORG_ID = "landing-campaign-service-org-test";
 const OFFICIAL_CLIENT_ID = "landing-campaign-client-test";
 const START_URL = "/api/v1/me/landing-campaigns/start";
 
 async function seedOfficialRuntime(
   app: ReturnType<ReturnType<typeof useTestApp>>,
-  organizationId: string,
+  _organizationId: string,
 ): Promise<void> {
+  const serviceOrgId = app.config.growth.landingCampaigns?.serviceOrgId ?? SERVICE_ORG_ID;
+  await app.db
+    .insert(organizations)
+    .values({
+      id: serviceOrgId,
+      name: `landing-campaign-service-${serviceOrgId.slice(-8)}`,
+      displayName: "Landing Campaign Service",
+    })
+    .onConflictDoNothing();
   await app.db
     .insert(users)
     .values({
@@ -43,14 +57,44 @@ async function seedOfficialRuntime(
     .values({
       id: OFFICIAL_CLIENT_ID,
       userId: SERVICE_USER_ID,
-      organizationId,
+      organizationId: serviceOrgId,
       status: "connected",
       hostname: "landing-campaign-host",
     })
     .onConflictDoUpdate({
       target: clients.id,
-      set: { userId: SERVICE_USER_ID, organizationId, status: "connected", hostname: "landing-campaign-host" },
+      set: {
+        userId: SERVICE_USER_ID,
+        organizationId: serviceOrgId,
+        status: "connected",
+        hostname: "landing-campaign-host",
+      },
     });
+}
+
+async function attachOrg(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  userId: string,
+  role: "admin" | "member",
+): Promise<{ orgId: string; memberId: string; humanAgentId: string }> {
+  const orgId = `org-lc-${crypto.randomUUID().slice(0, 8)}`;
+  const memberId = uuidv7();
+  let humanAgentId = "";
+  await app.db.transaction(async (tx) => {
+    await tx
+      .insert(organizations)
+      .values({ id: orgId, name: `lc-${crypto.randomUUID().slice(0, 6)}`, displayName: "Landing Side" });
+    const human = await createAgent(tx as unknown as typeof app.db, {
+      name: `lc-h-${crypto.randomUUID().slice(0, 6)}`,
+      type: "human",
+      displayName: "Landing Side Human",
+      managerId: memberId,
+      organizationId: orgId,
+    });
+    humanAgentId = human.uuid;
+    await tx.insert(members).values({ id: memberId, userId, organizationId: orgId, agentId: human.uuid, role });
+  });
+  return { orgId, memberId, humanAgentId };
 }
 
 async function startProductionScan(
@@ -106,15 +150,18 @@ describe("POST /me/landing-campaigns/start", () => {
   const getApp = useTestApp({
     growthLandingPagesEnabled: true,
     landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
     landingCampaignClientId: OFFICIAL_CLIENT_ID,
   });
   const getDisabledApp = useTestApp({
     landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
     landingCampaignClientId: OFFICIAL_CLIENT_ID,
   });
   const getClaudeProviderApp = useTestApp({
     growthLandingPagesEnabled: true,
     landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
     landingCampaignClientId: OFFICIAL_CLIENT_ID,
     landingCampaignRuntimeProvider: "claude-code",
   });
@@ -169,6 +216,20 @@ describe("POST /me/landing-campaigns/start", () => {
         ),
       );
     expect(trialAgents).toHaveLength(0);
+  });
+
+  it("rejects an official client registered outside the service org", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    await app.db
+      .update(clients)
+      .set({ organizationId: admin.organizationId })
+      .where(eq(clients.id, OFFICIAL_CLIENT_ID));
+
+    const res = await startProductionScan(app, admin);
+
+    expect(res.statusCode).toBe(503);
   });
 
   it("creates the service-managed trial agent, installs the agent-scoped campaign skill, and starts a locked chat", async () => {
@@ -824,7 +885,7 @@ describe("POST /me/landing-campaigns/start", () => {
     });
   });
 
-  it("hides the service member but treats the official client as an ordinary admin-visible client", async () => {
+  it("hides the service member and service client outside the service org", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     await seedOfficialRuntime(app, admin.organizationId);
@@ -844,7 +905,7 @@ describe("POST /me/landing-campaigns/start", () => {
       headers: { authorization: `Bearer ${admin.accessToken}` },
     });
     expect(clientsRes.statusCode).toBe(200);
-    expect(clientsRes.json<Array<{ id: string }>>().some((row) => row.id === OFFICIAL_CLIENT_ID)).toBe(true);
+    expect(clientsRes.json<Array<{ id: string }>>().some((row) => row.id === OFFICIAL_CLIENT_ID)).toBe(false);
 
     const meRes = await app.inject({
       method: "GET",
@@ -856,6 +917,58 @@ describe("POST /me/landing-campaigns/start", () => {
       .json<{ memberships: Array<{ organizationId: string; orgHasOtherMembers: boolean }> }>()
       .memberships.find((row) => row.organizationId === admin.organizationId);
     expect(currentOrg?.orgHasOtherMembers).toBe(false);
+  });
+
+  it("treats the service user and client as ordinary inside the service org", async () => {
+    const app = getApp();
+    if (!app.config.growth.landingCampaigns) throw new Error("landing campaign config missing");
+    const previousServiceOrgId = app.config.growth.landingCampaigns.serviceOrgId;
+    try {
+      const admin = await createTestAdmin(app);
+      app.config.growth.landingCampaigns.serviceOrgId = admin.organizationId;
+      await seedOfficialRuntime(app, admin.organizationId);
+      const [existingServiceMember] = await app.db
+        .select()
+        .from(members)
+        .where(and(eq(members.userId, SERVICE_USER_ID), eq(members.organizationId, admin.organizationId)))
+        .limit(1);
+      const serviceMember =
+        existingServiceMember ??
+        (await createMember(app.db, admin.organizationId, {
+          username: "first-tree-landing-service-test",
+          displayName: "First Tree",
+          role: "member",
+        }));
+
+      const membersRes = await app.inject({
+        method: "GET",
+        url: `/api/v1/orgs/${admin.organizationId}/members`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(membersRes.statusCode).toBe(200);
+      expect(membersRes.json<Array<{ userId: string }>>().some((row) => row.userId === SERVICE_USER_ID)).toBe(true);
+
+      const patchMember = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/orgs/${admin.organizationId}/members/${serviceMember.id}`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload: { displayName: "First Tree Service" },
+      });
+      expect(patchMember.statusCode).toBe(200);
+
+      const clientsRes = await app.inject({
+        method: "GET",
+        url: `/api/v1/orgs/${admin.organizationId}/clients`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(clientsRes.statusCode).toBe(200);
+      expect(clientsRes.json<Array<{ id: string }>>().some((row) => row.id === OFFICIAL_CLIENT_ID)).toBe(true);
+
+      const startInServiceOrg = await startProductionScan(app, admin);
+      expect(startInServiceOrg.statusCode).toBe(403);
+    } finally {
+      app.config.growth.landingCampaigns.serviceOrgId = previousServiceOrgId;
+    }
   });
 
   it("prevents deleting the service member and editing the trial agent through ordinary management APIs", async () => {
@@ -889,5 +1002,32 @@ describe("POST /me/landing-campaigns/start", () => {
       payload: { resources: [] },
     });
     expect(patchResources.statusCode).toBe(403);
+  });
+
+  it("returns scoped 404 when another org admin targets the campaign service member id", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ agentUuid: string }>();
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, body.agentUuid)).limit(1);
+    if (!trialAgent?.managerId) throw new Error("trial agent manager missing");
+
+    const otherAdmin = await createTestAdmin(app);
+    const otherOrg = await attachOrg(app, otherAdmin.userId, "admin");
+    const patchMember = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/orgs/${otherOrg.orgId}/members/${trialAgent.managerId}`,
+      headers: { authorization: `Bearer ${otherAdmin.accessToken}` },
+      payload: { displayName: "Renamed" },
+    });
+    expect(patchMember.statusCode).toBe(404);
+
+    const deleteMember = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/orgs/${otherOrg.orgId}/members/${trialAgent.managerId}`,
+      headers: { authorization: `Bearer ${otherAdmin.accessToken}` },
+    });
+    expect(deleteMember.statusCode).toBe(404);
   });
 });
