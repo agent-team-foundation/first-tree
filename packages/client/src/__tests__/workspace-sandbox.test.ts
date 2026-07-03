@@ -140,13 +140,14 @@ describe("workspace-only sandbox", () => {
 
   it("builds a workspace-local First Tree home with only scoped outbox credentials", () => {
     const hostHome = join(root, "host-first-tree-home");
-    const cliBinDir = join(hostHome, "bin");
+    const cliBinDir = join(root, "explicit-cli-bin");
     mkdirSync(cliBinDir, { recursive: true });
     writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
 
     const prepared = prepareWorkspaceOnlyOutboxHome({
       parentEnv: {
         FIRST_TREE_HOME: hostHome,
+        FIRST_TREE_CLI_BIN_DIR: cliBinDir,
         FIRST_TREE_SERVER_URL: "https://first-tree.test",
         OPENAI_API_KEY: "secret",
       },

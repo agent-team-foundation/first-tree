@@ -27,11 +27,14 @@ import { findImagePath } from "./image-store.js";
 
 /**
  * Build the env for CLI sub-processes that need to call `<binName> ...`.
- * Layers the First Tree envelope variables on top of the parent env, and keeps
- * the channel-local CLI binary ahead of any globally installed sibling. Handlers
+ * Layers the First Tree envelope variables on top of the parent env. Handlers
  * that start sub-processes should call this so every one of them sees the same
  * envelope — enabling replyTo inference, access-token propagation, agent-id
- * binding, and channel-correct CLI calls without per-handler duplication.
+ * binding, and channel-correct CLI command text without per-handler duplication.
+ *
+ * `FIRST_TREE_HOME` is state/config storage, not a CLI install prefix. Only an
+ * explicit `FIRST_TREE_CLI_BIN_DIR` asks this helper to put a channel-specific
+ * CLI directory ahead of the parent PATH.
  */
 export function buildAgentEnv(
   parentEnv: NodeJS.ProcessEnv,
@@ -77,7 +80,7 @@ export function buildAgentEnv(
     log?: (msg: string) => void;
   },
 ): NodeJS.ProcessEnv {
-  const env = withChannelCliOnPath(parentEnv, ctx.log);
+  const env = withExplicitCliBinDirOnPath(parentEnv, ctx.log);
   return {
     ...env,
     FIRST_TREE_SERVER_URL: ctx.sdk.serverUrl,
@@ -108,30 +111,24 @@ export function buildAgentEnv(
 
 const warnedCliResolutionKeys = new Set<string>();
 
-function withChannelCliOnPath(parentEnv: NodeJS.ProcessEnv, log?: (msg: string) => void): NodeJS.ProcessEnv {
-  const firstTreeHome = parentEnv.FIRST_TREE_HOME;
-  if (!firstTreeHome) {
-    warnCliResolutionOnce(
-      "missing-home",
-      log,
-      "FIRST_TREE_HOME is not set; spawned agents cannot receive the channel-local CLI on PATH",
-    );
+function withExplicitCliBinDirOnPath(parentEnv: NodeJS.ProcessEnv, log?: (msg: string) => void): NodeJS.ProcessEnv {
+  const cliBinDir = parentEnv.FIRST_TREE_CLI_BIN_DIR;
+  if (!cliBinDir) {
     return { ...parentEnv };
   }
 
-  const binDir = join(firstTreeHome, "bin");
   const pathKey = resolvePathKey(parentEnv);
   const currentPath = parentEnv[pathKey] ?? "";
-  const existing = currentPath.split(delimiter).filter((part) => part.length > 0 && part !== binDir);
-  const nextPath = [binDir, ...existing].join(delimiter);
+  const existing = currentPath.split(delimiter).filter((part) => part.length > 0 && part !== cliBinDir);
+  const nextPath = [cliBinDir, ...existing].join(delimiter);
   const env = { ...parentEnv, [pathKey]: nextPath };
 
   const { binName } = getCliBinding();
-  if (!canResolveExecutable(binDir, binName, parentEnv)) {
+  if (!canResolveExecutable(cliBinDir, binName, parentEnv)) {
     warnCliResolutionOnce(
-      `missing-bin:${binDir}:${binName}`,
+      `missing-explicit-bin:${cliBinDir}:${binName}`,
       log,
-      `channel-local CLI ${binName} was not found at ${binDir}; spawned agents may resolve a stale or wrong-channel CLI from PATH`,
+      `FIRST_TREE_CLI_BIN_DIR is set to ${cliBinDir}, but ${binName} was not found there`,
     );
   }
 
