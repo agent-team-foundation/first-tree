@@ -174,19 +174,29 @@ jobs:
           node-version: "24"
           cache: "pnpm"
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @first-tree/shared build
-      - run: pnpm --filter @first-tree/client build
-      - run: pnpm --filter first-tree-dev build
       - name: Build linux-x64 portable artifact
         run: |
-          node scripts/portable/build-portable.mjs \
+          ./scripts/portable/build-release.sh \
             --channel prod \
             --version 0.0.0 \
-            --git-sha "$GITHUB_SHA" \
             --node-version latest-v24.x \
             --download-base-url "https://downloads.first-tree.ai" \
             --out-dir .portable-smoke \
             --platform linux-x64
+      - name: Dry-run portable S3 upload
+        run: |
+          mkdir -p .portable-smoke-bin
+          printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > .portable-smoke-bin/aws
+          chmod +x .portable-smoke-bin/aws
+          PATH="$PWD/.portable-smoke-bin:$PATH" ./scripts/portable/upload-s3.sh \
+            --channel prod \
+            --out-dir .portable-smoke \
+            --bucket first-tree-portable-smoke \
+            --prefix releases \
+            --endpoint-url https://s3.example.test \
+            --region us-east-1 \
+            --download-base-url "https://downloads.first-tree.ai" \
+            --dry-run
       - name: Verify linux-x64 portable artifact
         run: |
           node scripts/portable/verify-portable-artifact.mjs \

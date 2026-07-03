@@ -168,6 +168,23 @@ jobs:
         working-directory: apps/cli
         run: npm publish --tag latest --access public
 
+      - name: Publish portable release to S3
+        env:
+          FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: ${{ vars.FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL }}
+          FIRST_TREE_PORTABLE_S3_BUCKET: ${{ vars.FIRST_TREE_PORTABLE_S3_BUCKET }}
+          FIRST_TREE_PORTABLE_S3_PREFIX: ${{ vars.FIRST_TREE_PORTABLE_S3_PREFIX }}
+          FIRST_TREE_PORTABLE_S3_ENDPOINT_URL: ${{ vars.FIRST_TREE_PORTABLE_S3_ENDPOINT_URL }}
+          FIRST_TREE_PORTABLE_S3_REGION: ${{ vars.FIRST_TREE_PORTABLE_S3_REGION }}
+          FIRST_TREE_PORTABLE_PLATFORMS: ${{ vars.FIRST_TREE_PORTABLE_PLATFORMS }}
+          FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID: ${{ secrets.FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID }}
+          FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY: ${{ secrets.FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY }}
+          FIRST_TREE_PORTABLE_S3_SESSION_TOKEN: ${{ secrets.FIRST_TREE_PORTABLE_S3_SESSION_TOKEN }}
+        run: |
+          ./scripts/portable/release-s3.sh \
+            --channel prod \
+            --version "${{ steps.release.outputs.package_version }}" \
+            --skip-workspace-build
+
       - name: Send feishu message
         if: always()
         env:
@@ -328,6 +345,24 @@ jobs:
         if: steps.version.outputs.publish == 'true'
         working-directory: apps/cli
         run: npm publish --tag latest --access public
+
+      - name: Publish portable release to S3
+        if: steps.version.outputs.publish == 'true'
+        env:
+          FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: ${{ vars.FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL }}
+          FIRST_TREE_PORTABLE_S3_BUCKET: ${{ vars.FIRST_TREE_PORTABLE_S3_BUCKET }}
+          FIRST_TREE_PORTABLE_S3_PREFIX: ${{ vars.FIRST_TREE_PORTABLE_S3_PREFIX }}
+          FIRST_TREE_PORTABLE_S3_ENDPOINT_URL: ${{ vars.FIRST_TREE_PORTABLE_S3_ENDPOINT_URL }}
+          FIRST_TREE_PORTABLE_S3_REGION: ${{ vars.FIRST_TREE_PORTABLE_S3_REGION }}
+          FIRST_TREE_PORTABLE_PLATFORMS: ${{ vars.FIRST_TREE_PORTABLE_PLATFORMS }}
+          FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID: ${{ secrets.FIRST_TREE_PORTABLE_S3_ACCESS_KEY_ID }}
+          FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY: ${{ secrets.FIRST_TREE_PORTABLE_S3_SECRET_ACCESS_KEY }}
+          FIRST_TREE_PORTABLE_S3_SESSION_TOKEN: ${{ secrets.FIRST_TREE_PORTABLE_S3_SESSION_TOKEN }}
+        run: |
+          ./scripts/portable/release-s3.sh \
+            --channel staging \
+            --version "${{ steps.version.outputs.staging_version }}" \
+            --skip-workspace-build
 
       - name: Send feishu message
         if: ${{ failure() || steps.version.outputs.publish == 'true' }}
