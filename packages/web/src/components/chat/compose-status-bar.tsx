@@ -5,8 +5,8 @@ import {
   type LiveActivity,
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
-import { Brain, ChevronDown, Pencil, Wrench } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Brain, ChevronDown, ChevronsUpDown, Pencil, Wrench } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { viewOf } from "../../lib/agent-status-view.js";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
@@ -126,6 +126,15 @@ export function ComposeStatusBar({
   agents: ChatParticipantDetail[];
 }) {
   const [expanded, setExpanded] = useState(false);
+  // Which agent's full-narration card is open (its agentId), or null. Keyed by
+  // agent — not a bare boolean — so the card auto-hides when the lead switches
+  // (no reset effect), and its trigger chevron (outside the card) is excluded
+  // from the outside-press close.
+  const [cardOpenFor, setCardOpenFor] = useState<string | null>(null);
+  const cardTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // Stable so TurnTextCard's document-listener effect doesn't re-subscribe on
+  // every parent re-render (query refetch / elapsed tick).
+  const closeCard = useCallback(() => setCardOpenFor(null), []);
   const [lead, setLead] = useState<{ agentId: string; since: number } | null>(null);
   const { data: statuses } = useQuery({
     queryKey: chatAgentStatusQueryKey(chatId),
@@ -153,26 +162,68 @@ export function ComposeStatusBar({
   }, [statuses]);
 
   const attention = selectAttention(statuses ?? []);
-  if (attention.length === 0) return null; // all quiet → hidden
-
   // Resolve the held lead to a live row; fall back to the top of `attention`
   // before the effect has settled (or if the held agent just dropped out).
+  // Computed before the early returns so the stale-card effect below runs
+  // unconditionally (Rules of Hooks).
   const leadRow = (lead && attention.find((s) => s.agentId === lead.agentId)) ?? attention[0];
+  // The lead's full narration — present only when the server attached
+  // `turnTextFull` (strictly more than the one-line goal). Only working leads
+  // carry live activity.
+  const leadFull = leadRow?.main === "working" ? leadRow.activity?.turnTextFull : undefined;
+  // Forget a stale open-card key so the card never silently re-opens on its own:
+  // once the agent that owned it is no longer a working lead with a full
+  // narration (it switched away, or its narration shrank back below the
+  // "has more" threshold mid-turn), drop the open state instead of letting a
+  // later re-cross of that threshold re-materialize the card.
+  useEffect(() => {
+    if (cardOpenFor !== null && !(leadFull && leadRow?.agentId === cardOpenFor)) {
+      setCardOpenFor(null);
+    }
+  }, [cardOpenFor, leadFull, leadRow?.agentId]);
+
+  if (attention.length === 0) return null; // all quiet → hidden
   if (!leadRow) return null; // unreachable (attention is non-empty) — narrows the type
   const others = attention.filter((s) => s.agentId !== leadRow.agentId);
+  const cardOpen = cardOpenFor === leadRow.agentId;
 
   return (
     <div
       className="fade-in flex flex-col"
       style={{
+        position: "relative", // anchor for the full-narration card floating above
         marginBottom: "var(--sp-1)",
         paddingBottom: "var(--sp-1)",
         gap: "var(--sp-1)",
         borderBottom: "var(--hairline) solid var(--border-faint)",
       }}
     >
+      {cardOpen && leadFull ? (
+        <TurnTextCard
+          status={leadRow}
+          name={nameFor(agents)(leadRow.agentId)}
+          full={leadFull}
+          triggerRef={cardTriggerRef}
+          onClose={closeCard}
+        />
+      ) : null}
       <div className="flex items-center" style={{ gap: "var(--sp-1_5)" }}>
         <RailRow status={leadRow} nameOf={nameFor(agents)} mounted={mounted} />
+        {leadFull ? (
+          <button
+            type="button"
+            ref={cardTriggerRef}
+            aria-label={cardOpen ? "Collapse full narration" : "Expand full narration"}
+            aria-expanded={cardOpen}
+            onClick={() => setCardOpenFor((cur) => (cur === leadRow.agentId ? null : leadRow.agentId))}
+            className="inline-flex shrink-0 items-center"
+            style={{ border: 0, background: "transparent", padding: 0, cursor: "pointer", color: "var(--fg-4)" }}
+          >
+            {/* A distinct unfold glyph (not a single chevron) so it never reads
+                as, or collides with, the adjacent `+N` expand chevron. */}
+            <ChevronsUpDown className="h-3.5 w-3.5" />
+          </button>
+        ) : null}
         {others.length > 0 ? (
           <button
             type="button"
@@ -400,5 +451,111 @@ function Sep() {
     <span aria-hidden="true" className="shrink-0" style={{ color: "var(--fg-4)" }}>
       ·
     </span>
+  );
+}
+
+/**
+ * Floating card that expands the lead's full multi-line narration (`turnTextFull`)
+ * over the message stream, anchored to the status bar and floating upward. It is
+ * absolutely positioned (out of flow) so opening it — and the live refresh while
+ * it's open — never reflows the conversation. A non-modal awareness surface (like
+ * the chat-summary popover), not a focus-trapping dialog: dismisses on Escape, a
+ * press outside it (ignoring the trigger, which owns the toggle), or the lead
+ * ceasing to be a working agent with a full narration (handled by the parent).
+ */
+function TurnTextCard({
+  status,
+  name,
+  full,
+  triggerRef,
+  onClose,
+}: {
+  status: AgentChatStatus;
+  name: string;
+  full: string;
+  triggerRef: React.RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+}) {
+  const cardRef = useRef<HTMLElement | null>(null);
+  const elapsed = useLiveElapsed(status.activity?.startedAt ?? null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (!t || cardRef.current?.contains(t) || triggerRef.current?.contains(t)) return;
+      onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    // Capture so the outside-press is seen before message-row handlers.
+    document.addEventListener("pointerdown", onDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown, true);
+    };
+  }, [onClose, triggerRef]);
+
+  // Strip inline markdown per line so the block's line breaks survive.
+  const body = full
+    .split("\n")
+    .map((line) => stripInlineMarkdown(line))
+    .join("\n");
+
+  return (
+    <section
+      ref={cardRef}
+      aria-label={`${name} — full narration`}
+      className="fade-in flex flex-col"
+      style={{
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: "calc(100% + var(--sp-1))",
+        zIndex: 20,
+        background: "var(--bg-raised)",
+        border: "var(--hairline) solid var(--border)",
+        borderRadius: "var(--radius-dialog)",
+        boxShadow: "var(--shadow-md)",
+        maxHeight: "min(46vh, 26rem)",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        className="text-caption flex items-center"
+        style={{
+          gap: "var(--sp-1_5)",
+          padding: "var(--sp-1_5) var(--sp-2)",
+          borderBottom: "var(--hairline) solid var(--border-faint)",
+          color: "var(--fg-3)",
+        }}
+      >
+        <StatusGlyph colorVar="var(--state-working)" shape="dot" pulse="working" size={7} ariaLabel="working" />
+        <span className="shrink-0 font-semibold" style={{ color: "var(--fg-2)" }}>
+          {name}
+        </span>
+        {/* Same live "means" segment the rail uses (goal-suppression off), so the
+            card header and the rail read identically — no bespoke duplicate. */}
+        {status.activity ? activityAction(status.activity, false) : null}
+        {elapsed ? (
+          <span className="mono shrink-0" style={{ marginLeft: "auto", color: "var(--fg-4)" }}>
+            {elapsed}
+          </span>
+        ) : null}
+      </div>
+      <div
+        className="text-body"
+        style={{
+          padding: "var(--sp-2)",
+          overflowY: "auto",
+          overscrollBehavior: "contain",
+          whiteSpace: "pre-wrap",
+          wordBreak: "break-word",
+          color: "var(--fg)",
+        }}
+      >
+        {body}
+      </div>
+    </section>
   );
 }

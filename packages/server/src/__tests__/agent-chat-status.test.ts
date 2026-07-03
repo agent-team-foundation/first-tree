@@ -12,6 +12,7 @@ import {
   computeWorking,
   getChatAgentStatuses,
   isRuntimeFresh,
+  previewAssistantTextFull,
   resolveAgentChatStatuses,
   withTurnNarration,
 } from "../services/agent-chat-status.js";
@@ -434,11 +435,49 @@ describe("agent-chat-status", () => {
     });
 
     it("attaches a collapsed narration as turnText without touching kind / label / detail", () => {
-      const out = withTurnNarration(base, "  Let me   check\nthe file  ");
+      const out = withTurnNarration(base, "  Let me   check the file  ");
       expect(out?.kind).toBe("tool_call");
       expect(out?.label).toBe("Bash");
       expect(out?.detail).toBe("npm test");
       expect(out?.turnText).toBe("Let me check the file");
+    });
+
+    it("omits turnTextFull for a short single-line narration (nothing more to expand)", () => {
+      const out = withTurnNarration(base, "Reworking the status bar");
+      expect(out?.turnText).toBe("Reworking the status bar");
+      expect(out?.turnTextFull).toBeUndefined();
+    });
+
+    it("attaches turnTextFull when the narration has line breaks turnText flattened", () => {
+      const out = withTurnNarration(base, "Plan:\n1. read\n2. edit");
+      expect(out?.turnText).toBe("Plan: 1. read 2. edit"); // flattened one-line
+      expect(out?.turnTextFull).toBe("Plan:\n1. read\n2. edit"); // newline-preserving
+    });
+
+    it("attaches turnTextFull when the narration is longer than the 120-char one-line preview", () => {
+      const long = `${"a".repeat(200)}`;
+      const out = withTurnNarration(base, long);
+      expect(out?.turnText).toHaveLength(120);
+      expect(out?.turnTextFull).toBe(long); // full up to 2000, no truncation at 200
+    });
+  });
+
+  describe("previewAssistantTextFull — newline-preserving full narration", () => {
+    it("returns undefined for non-strings and whitespace-only blocks", () => {
+      expect(previewAssistantTextFull(undefined)).toBeUndefined();
+      expect(previewAssistantTextFull(42)).toBeUndefined();
+      expect(previewAssistantTextFull("   \n\t ")).toBeUndefined();
+    });
+
+    it("preserves line breaks while collapsing intra-line whitespace and blank-line runs", () => {
+      expect(previewAssistantTextFull("  Step   one \n\n\n  Step  two  ")).toBe("Step one\n\nStep two");
+      expect(previewAssistantTextFull("a\r\nb")).toBe("a\nb"); // CRLF normalized
+    });
+
+    it("caps at ASSISTANT_TEXT_FULL_MAX with a trailing ellipsis", () => {
+      const out = previewAssistantTextFull("b".repeat(2500));
+      expect(out).toHaveLength(2000);
+      expect(out?.endsWith("…")).toBe(true);
     });
   });
 
