@@ -54,10 +54,10 @@ export const serverConfigSchema = defineConfig({
   }),
   growth: {
     /**
-     * Enables public growth landing pages such as `/scan/:campaign` and their
-     * `/quickstart?campaign=...` handoff. This is a product feature flag, not
-     * a release-channel property: dev/staging/prod all default to off until an
-     * operator explicitly enables the funnel.
+     * Enables the Cloud side of public growth funnels handed off from website
+     * landing pages via `/quickstart?campaign=...`. This is a product feature
+     * flag, not a release-channel property: dev/staging/prod all default to off
+     * until an operator explicitly enables the funnel.
      */
     landingPagesEnabled: field(z.boolean().default(false), {
       env: "FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED",

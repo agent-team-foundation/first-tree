@@ -137,14 +137,13 @@ describe("QuickstartPage — landing campaign trial flow", () => {
     expect(navigateMock).toHaveBeenCalledWith("/?c=chat-1");
   });
 
-  it("reads the URL handoff and persists it across the login round-trip shape", async () => {
-    await renderPage(["/quickstart?campaign=agent-readiness&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend"]);
+  it("ignores unsupported campaign handoffs", async () => {
+    const container = await renderPage([
+      "/quickstart?campaign=agent-readiness&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
+    ]);
 
-    expect(landingCampaignMock.startLandingCampaign).toHaveBeenCalledWith({
-      organizationId: "org-1",
-      campaign: "agent-readiness",
-      repoUrl: "https://github.com/acme/backend",
-    });
+    expect(container.textContent).toContain("Start from a First Tree scan");
+    expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
     expect(readCampaignIntent()).toBeNull();
   });
 

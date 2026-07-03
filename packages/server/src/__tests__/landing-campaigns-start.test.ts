@@ -102,11 +102,20 @@ async function startProductionScan(
   admin: Awaited<ReturnType<typeof createTestAdmin>>,
   repoUrl = "https://github.com/acme/backend",
 ) {
+  return startCampaign(app, admin, "production-scan", repoUrl);
+}
+
+async function startCampaign(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  campaign: string,
+  repoUrl = "https://github.com/acme/backend",
+) {
   return app.inject({
     method: "POST",
     url: START_URL,
     headers: { authorization: `Bearer ${admin.accessToken}` },
-    payload: { organizationId: admin.organizationId, campaign: "production-scan", repoUrl },
+    payload: { organizationId: admin.organizationId, campaign, repoUrl },
   });
 }
 
@@ -165,7 +174,6 @@ describe("POST /me/landing-campaigns/start", () => {
     landingCampaignClientId: OFFICIAL_CLIENT_ID,
     landingCampaignRuntimeProvider: "claude-code",
   });
-
   it("feature flag off rejects before creating service member, trial agent, chat, or resource", async () => {
     const app = getDisabledApp();
     const admin = await createTestAdmin(app);
@@ -230,6 +238,33 @@ describe("POST /me/landing-campaigns/start", () => {
     const res = await startProductionScan(app, admin);
 
     expect(res.statusCode).toBe(503);
+  });
+
+  it("rejects unsupported campaigns before provisioning", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await startCampaign(app, admin, "agent-readiness");
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({
+      error: expect.stringContaining('Landing campaign "agent-readiness" not found'),
+    });
+    const serviceMembers = await app.db
+      .select()
+      .from(members)
+      .where(and(eq(members.userId, SERVICE_USER_ID), eq(members.organizationId, admin.organizationId)));
+    expect(serviceMembers).toHaveLength(0);
+    const trialAgents = await app.db
+      .select()
+      .from(agents)
+      .where(
+        and(
+          eq(agents.organizationId, admin.organizationId),
+          sql`${agents.metadata} ->> 'landingCampaignTrial' = 'true'`,
+        ),
+      );
+    expect(trialAgents).toHaveLength(0);
   });
 
   it("creates the service-managed trial agent, installs the agent-scoped campaign skill, and starts a locked chat", async () => {
