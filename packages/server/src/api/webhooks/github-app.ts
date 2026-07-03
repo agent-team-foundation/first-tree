@@ -7,7 +7,10 @@ import { handleContextReviewerPrEvent } from "../../services/context-reviewer-pr
 import { claimEvent, unclaimEvent } from "../../services/event-dedup.js";
 import type { AppInstallation } from "../../services/github-app.js";
 import { completeInstallBind, deleteExpiredPendingBinds } from "../../services/github-app-install-intents.js";
-import { completeInstallRequestBind } from "../../services/github-app-install-requests.js";
+import {
+  completeInstallRequestBind,
+  deleteExpiredInstallRequests,
+} from "../../services/github-app-install-requests.js";
 import {
   deleteInstallationByGithubId,
   findInstallationByGithubId,
@@ -248,11 +251,14 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
         installation: metadata,
         ...(installerGithubId !== null ? { installerGithubId } : {}),
       });
-      // Opportunistic sweep of stale pending binds (keeps the table + index
-      // honest; not required for correctness — completeInstallBind filters by
-      // freshness anyway).
+      // Opportunistic sweep of stale pending binds + install-requests (keeps
+      // the tables + expiry indexes honest; not required for correctness —
+      // both completion paths filter by freshness anyway).
       await deleteExpiredPendingBinds(app.db).catch((err) =>
         log.warn({ err }, "install-intent expiry sweep failed (non-fatal)"),
+      );
+      await deleteExpiredInstallRequests(app.db).catch((err) =>
+        log.warn({ err }, "install-request expiry sweep failed (non-fatal)"),
       );
       // Self-install completion: `sender` is the installer == the kickoff
       // admin, matched to the per-install pending bind recorded on the
