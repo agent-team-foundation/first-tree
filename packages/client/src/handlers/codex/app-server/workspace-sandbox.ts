@@ -24,6 +24,12 @@ type WorkspaceOnlyEnvironment = {
   readOnlyPaths: string[];
 };
 
+type WorkspaceOnlyCliResolution = {
+  cliBinDir: string;
+  pathDirs: string[];
+  readOnlyPaths: string[];
+};
+
 type WorkspaceOnlyOutboxHomeOptions = {
   parentEnv: NodeJS.ProcessEnv;
   workspaceRoot: string;
@@ -131,6 +137,26 @@ function isCoveredBySystemBind(path: string): boolean {
   return READ_ONLY_SYSTEM_DIRS.some((dir) => existsSync(dir) && pathIsWithin(dir, path));
 }
 
+function existingDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function uniqueExistingDirs(paths: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+  for (const path of paths) {
+    const dir = isAbsolute(path) ? path : resolve(path);
+    if (!existingDirectory(dir) || seen.has(dir)) continue;
+    seen.add(dir);
+    dirs.push(dir);
+  }
+  return dirs;
+}
+
 function validateChannelCliBin(binDir: string, source: string): void {
   const { binName } = getCliBinding();
   const cliPath = join(binDir, binName);
@@ -141,23 +167,33 @@ function validateChannelCliBin(binDir: string, source: string): void {
   }
 }
 
-function resolveChannelCliBinDir(parentEnv: NodeJS.ProcessEnv): string {
+function resolveWorkspaceOnlyCli(parentEnv: NodeJS.ProcessEnv): WorkspaceOnlyCliResolution {
+  const defaultPathDirs = uniqueExistingDirs(WORKSPACE_ONLY_PATH_DIRS);
   const explicit = parentEnv.FIRST_TREE_CLI_BIN_DIR;
   if (explicit) {
     const binDir = isAbsolute(explicit) ? explicit : resolve(explicit);
     validateChannelCliBin(binDir, "FIRST_TREE_CLI_BIN_DIR");
-    return binDir;
+    return {
+      cliBinDir: binDir,
+      pathDirs: uniqueExistingDirs([binDir, ...WORKSPACE_ONLY_PATH_DIRS]),
+      readOnlyPaths: isCoveredBySystemBind(binDir) ? [] : [binDir],
+    };
   }
 
-  const home = parentEnv.FIRST_TREE_HOME;
-  if (!home) {
-    throw new Error(
-      "workspace-only sandbox requires FIRST_TREE_CLI_BIN_DIR, or FIRST_TREE_HOME with a legacy bin shim fallback",
-    );
+  for (const binDir of defaultPathDirs) {
+    try {
+      validateChannelCliBin(binDir, "controlled PATH");
+      return { cliBinDir: binDir, pathDirs: defaultPathDirs, readOnlyPaths: [] };
+    } catch {
+      // Keep searching the controlled tool PATH.
+    }
   }
-  const binDir = join(isAbsolute(home) ? home : resolve(home), "bin");
-  validateChannelCliBin(binDir, "legacy FIRST_TREE_HOME/bin fallback");
-  return binDir;
+
+  const { binName } = getCliBinding();
+  const searched = defaultPathDirs.length > 0 ? defaultPathDirs.join(", ") : "(no existing standard tool dirs)";
+  throw new Error(
+    `workspace-only sandbox could not find channel-local First Tree CLI ${binName} in controlled PATH directories: ${searched}. Install ${binName} in /usr/local/bin, /usr/bin, or /bin, or set FIRST_TREE_CLI_BIN_DIR to its directory.`,
+  );
 }
 
 function writePrivateFile(path: string, content: string): void {
@@ -170,7 +206,7 @@ export function prepareWorkspaceOnlyOutboxHome(options: WorkspaceOnlyOutboxHomeO
   cliBinDir: string;
 } {
   const realWorkspace = realpathExisting(options.workspaceRoot, "workspaceRoot");
-  const cliBinDir = resolveChannelCliBinDir(options.parentEnv);
+  const { cliBinDir } = resolveWorkspaceOnlyCli(options.parentEnv);
 
   const home = join(realWorkspace, ".first-tree-workspace", "outbox-home");
   const configDir = join(home, "config");
@@ -217,10 +253,7 @@ export function buildWorkspaceOnlyEnvironment(
     throw new Error("workspace-only sandbox requires FIRST_TREE_HOME for sandbox-local First Tree config");
   }
   const resolvedHome = isAbsolute(firstTreeHome) ? firstTreeHome : resolve(firstTreeHome);
-  const cliBinDir = resolveChannelCliBinDir({
-    FIRST_TREE_HOME: resolvedHome,
-    FIRST_TREE_CLI_BIN_DIR: parentEnv.FIRST_TREE_CLI_BIN_DIR,
-  });
+  const cli = resolveWorkspaceOnlyCli(parentEnv);
 
   const env: NodeJS.ProcessEnv = {};
   for (const key of SAFE_PASS_ENV_KEYS) {
@@ -230,9 +263,10 @@ export function buildWorkspaceOnlyEnvironment(
   env.FIRST_TREE_HOME = resolvedHome;
   env.HOME = realWorkspace;
   env.TMPDIR = "/tmp";
-  env.PATH = [cliBinDir, ...WORKSPACE_ONLY_PATH_DIRS].filter((entry) => existsSync(entry)).join(delimiter);
+  env.FIRST_TREE_CLI_BIN_DIR = cli.cliBinDir;
+  env.PATH = cli.pathDirs.join(delimiter);
 
-  return { env, readOnlyPaths: [cliBinDir] };
+  return { env, readOnlyPaths: cli.readOnlyPaths };
 }
 
 export function buildWorkspaceOnlyBubblewrapArgs(options: BuildBubblewrapArgsOptions): string[] {
