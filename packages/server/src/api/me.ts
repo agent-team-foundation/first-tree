@@ -6,6 +6,7 @@ import {
   type OnboardingStep,
   onboardingEventSchema,
   patchOnboardingSchema,
+  treeSetupKickoffSchema,
   updateMyProfileSchema,
 } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
@@ -278,12 +279,19 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * Folds the three steps the browser used to orchestrate sequentially (create
    * the first chat → send the bootstrap message → stamp completion) into one
    * resumable request. Re-running it (reopened tab, network retry, build-tree
-   * recovery) reuses the same kickoff chat and stamps completion only once,
+   * recovery) reuses the same first chat and stamps completion only once,
    * instead of leaving the orphan-chat / duplicate-bootstrap / completed-stamp-
    * decoupled-from-reality states the client-orchestrated flow could produce.
    */
   app.post("/me/onboarding/kickoff", async (request, reply) => {
     const { userId } = requireUser(request);
+    if (hasRetiredKickoffKind(request.body)) {
+      return reply.status(409).send({
+        error:
+          'This onboarding kickoff request uses the retired "kind" contract. Refresh the First Tree web app and retry.',
+        code: "stale_onboarding_kickoff_contract",
+      });
+    }
     const body = kickoffOnboardingSchema.parse(request.body);
     const campaign = body.campaign;
     if (campaign) {
@@ -298,13 +306,15 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         code: "campaign_kickoff_moved",
       });
     }
-    const { memberId, humanAgentId } = await resolveOnboardingMember(app, userId, body.organizationId);
+    const { memberId, humanAgentId, organizationId } = await resolveOnboardingMember(app, userId, body.organizationId);
     const result = await kickoffOnboarding(app.db, {
       memberId,
       humanAgentId,
+      organizationId,
       targetAgentId: body.agentUuid,
       bootstrap: body.bootstrap,
-      kind: body.kind,
+      topic: body.topic ?? "Get started with First Tree",
+      kickoffKey: `${humanAgentId}:${body.agentUuid}:onboarding`,
       complete: body.complete ?? true,
     });
     if (result.sent) {
@@ -314,13 +324,37 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({ chatId: result.chatId });
   });
 
+  app.post("/me/onboarding/tree-setup/kickoff", async (request, reply) => {
+    const { userId } = requireUser(request);
+    const body = treeSetupKickoffSchema.parse(request.body);
+    const { memberId, humanAgentId, organizationId } = await resolveOnboardingMember(app, userId, body.organizationId);
+    const result = await kickoffOnboarding(app.db, {
+      memberId,
+      humanAgentId,
+      organizationId,
+      targetAgentId: body.agentUuid,
+      bootstrap: body.bootstrap,
+      topic: body.topic ?? "Set up shared context",
+      kickoffKey: `${organizationId}:tree-setup`,
+      complete: body.complete ?? true,
+    });
+    if (result.sent) {
+      notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
+      app.log.info(
+        { event: "onboarding.tree_setup_kickoff", userId, chatId: result.chatId },
+        "onboarding funnel: tree setup kickoff",
+      );
+    }
+    return reply.status(200).send({ chatId: result.chatId });
+  });
+
   /**
    * GET /me/onboarding/tree-setup-status — recovery probe for the standalone
    * `/build-tree` surface and Settings nav. A missing tree binding still needs
-   * setup. A binding created after the org's value-first work chat completed
-   * also needs setup until a tree kickoff bootstrap message exists; this covers
+   * setup. A binding created after the org's value-first first chat completed
+   * also needs setup until a tree setup bootstrap message exists; this covers
    * the recoverable edge where Cloud wrote `context_tree` but the background
-   * tree kickoff failed before notifying the agent. The recovery decision is
+   * tree setup kickoff failed before notifying the agent. The recovery decision is
    * org-level: different admins in the same org must not see different setup
    * debt just because their own onboarding completion timestamps differ.
    */
@@ -788,13 +822,17 @@ async function resolveOnboardingMember(
   app: FastifyInstance,
   userId: string,
   organizationId?: string,
-): Promise<{ memberId: string; humanAgentId: string }> {
+): Promise<{ memberId: string; humanAgentId: string; organizationId: string }> {
   const memberId = await resolveOnboardingMembershipId(app, userId, organizationId);
   const [row] = await app.db
-    .select({ agentId: members.agentId })
+    .select({ agentId: members.agentId, organizationId: members.organizationId })
     .from(members)
     .where(eq(members.id, memberId))
     .limit(1);
   if (!row) throw new NotFoundError("Membership not found");
-  return { memberId, humanAgentId: row.agentId };
+  return { memberId, humanAgentId: row.agentId, organizationId: row.organizationId };
+}
+
+function hasRetiredKickoffKind(body: unknown): boolean {
+  return typeof body === "object" && body !== null && "kind" in body;
 }

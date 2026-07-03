@@ -35,14 +35,14 @@ export const chats = pgTable(
      */
     parentChatId: text("parent_chat_id"),
     /**
-     * Idempotency key for the onboarding kickoff chat (`POST /me/onboarding/kickoff`).
-     * Set to `<humanAgentId>:<targetAgentId>` ONLY for the chat created by the
-     * onboarding finale; NULL for every other chat. The unique index below makes
-     * re-running kickoff (reopened tab, retry, build-tree recovery) reuse the one
-     * existing chat via `INSERT ... ON CONFLICT DO NOTHING` instead of creating a
-     * duplicate. Postgres treats multiple NULLs as distinct, so ordinary chats —
-     * including additional chats a user opens with the same agent later — never
-     * collide. Mirrors the 1:1 binding pattern used by
+     * Idempotency key for server-owned kickoff chats: onboarding first chat,
+     * tree setup, and landing-campaign trial chats. NULL for ordinary chats.
+     * The unique index below makes re-running a kickoff (reopened tab, retry,
+     * tree setup recovery) reuse the existing chat via
+     * `INSERT ... ON CONFLICT DO NOTHING` instead of creating a duplicate.
+     * Postgres treats multiple NULLs as distinct, so ordinary chats — including
+     * additional chats a user opens with the same agent later — never collide.
+     * Mirrors the 1:1 binding pattern used by
      * `github_app_installations.hub_organization_id`.
      */
     onboardingKickoffKey: text("onboarding_kickoff_key"),

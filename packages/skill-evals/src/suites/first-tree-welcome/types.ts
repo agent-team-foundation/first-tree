@@ -3,7 +3,7 @@ import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
 export type WelcomeRole = "admin" | "invitee";
-export type WelcomeKickoffKind = "intro" | "work" | "tree";
+export type WelcomeChatScenario = "onboarding" | "team-onboarding" | "tree-setup";
 export type WelcomeRepoState = "none" | "local-readable" | "selected-readable" | "selected-auth-fails" | "unknown";
 export type WelcomeTreeState = "none" | "empty" | "populated" | "unknown";
 export type WelcomeGithubAppState = "installed" | "missing" | "unknown";
@@ -24,7 +24,7 @@ export type WelcomeExpectedAction =
 
 export type FirstTreeWelcomeFixture = {
   githubAppState: WelcomeGithubAppState;
-  kickoffKind: WelcomeKickoffKind;
+  chatScenario: WelcomeChatScenario;
   repoState: WelcomeRepoState;
   role: WelcomeRole;
   treeSetupChat: WelcomeTreeSetupChatState;

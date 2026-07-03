@@ -500,10 +500,8 @@ export {
   type CreateOrgFromMe,
   completeOnboardingSchema,
   createOrgFromMeSchema,
-  type KickoffKind,
   type KickoffOnboarding,
   type KickoffOnboardingResult,
-  kickoffKindSchema,
   kickoffOnboardingResultSchema,
   kickoffOnboardingSchema,
   type MeMembership,
@@ -518,6 +516,8 @@ export {
   orgBriefSchema,
   type PatchOnboarding,
   patchOnboardingSchema,
+  type TreeSetupKickoff,
+  treeSetupKickoffSchema,
 } from "./schemas/me-extras.js";
 export {
   type CreateMember,

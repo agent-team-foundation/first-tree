@@ -14,13 +14,14 @@
  * every quickstart user without widening that HTTP boundary, and makes the
  * skill content trusted (the client never supplies the body).
  *
- * The slug is ALSO the skill's resource name, so the client's campaign-aware
- * onboarding directive can name it ("load and follow the `<campaign>` skill")
- * and the agent finds it under "## Team Skills" in its briefing.
+ * The slug is ALSO the managed skill resource name. The landing-campaign start
+ * service binds that resource to the trial agent; activation comes from the
+ * visible task text plus the bound skill description/resources, not a
+ * client-appended onboarding directive.
  */
 
 export type CampaignScanSkill = {
-  /** Resource name === campaign slug; the directive and briefing key on it. */
+  /** Resource name === campaign slug; the materialized skill listing keys on it. */
   name: string;
   description: string;
   /** SKILL.md body; the runtime materializer re-adds YAML frontmatter. */

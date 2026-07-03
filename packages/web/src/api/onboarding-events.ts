@@ -1,20 +1,12 @@
 import type { OnboardingEvent, OnboardingEventName } from "@first-tree/shared";
 import { api } from "./client.js";
 
-export type StartChatKind = "intro" | "work" | "tree";
-
 export type StartOnboardingChatArgs = {
   organizationId?: string;
   agentUuid: string;
   bootstrap: string;
-  kind: StartChatKind;
+  topic?: string;
   complete?: boolean;
-  /**
-   * Optional campaign slug for reusable quickstart growth entries. Appended to
-   * the server-side kickoff idempotency key so two campaigns for the same
-   * (human, agent, kind) get distinct chats. Onboarding omits it.
-   */
-  campaign?: string;
 };
 
 export type StartOnboardingChatResult = {
@@ -65,16 +57,25 @@ export async function markOnboardingCompleted(organizationId?: string): Promise<
 /**
  * Run the idempotent server-side onboarding start-chat operation: create-or-reuse
  * the first chat, send the bootstrap message if the chat is empty, and
- * optionally stamp completion. Single-chat paths use the default stamp;
- * multi-chat paths defer it until every required start-chat side effect has
- * succeeded.
+ * optionally stamp completion. Single-chat paths use the default stamp.
  *
  * NOT best-effort: a failure here means start-chat didn't happen, so the caller
- * surfaces it and lets the user retry. The server endpoint still uses the
- * legacy `/kickoff` path while web-facing code uses start-chat language.
+ * surfaces it and lets the user retry.
  */
 export async function postOnboardingStartChat(args: StartOnboardingChatArgs): Promise<StartOnboardingChatResult> {
   return api.post<StartOnboardingChatResult>("/me/onboarding/kickoff", args);
+}
+
+export type TreeSetupStartChatArgs = {
+  organizationId: string;
+  agentUuid: string;
+  bootstrap: string;
+  topic?: string;
+  complete?: boolean;
+};
+
+export async function postTreeSetupStartChat(args: TreeSetupStartChatArgs): Promise<StartOnboardingChatResult> {
+  return api.post<StartOnboardingChatResult>("/me/onboarding/tree-setup/kickoff", args);
 }
 
 export type TreeSetupStatus = {
