@@ -229,20 +229,31 @@ The website already has the right foundation:
 - Save as PNG
 - Redis-backed report storage API
 
-The missing product/technical link is that the hub scan skill does not yet
-clearly generate and publish the website report payload.
+The missing product/technical link is that the scan system does not yet have an
+explicit report publishing boundary. The scan skill should generate a validated
+report payload, but the owner of publish credentials, storage writes, abuse
+controls, and audit logs is still a Phase 1 decision.
 
-The complete flow should be:
+Until that decision is made, the complete flow should stay boundary-neutral:
 
 ```text
 Trial Scan Agent completes scan
--> builds report payload
--> POSTs to first-tree-website /api/reports
--> receives report URL
+-> emits validated report payload to the chosen report publisher
+-> publisher stores the report in the chosen report store
+-> publisher returns public Scan Report URL
 -> shares URL in chat
 -> user can share report URL or PNG
 -> shared report has CTA back to First Tree setup
 ```
+
+The likely publishing options are:
+
+- Direct Trial Scan Agent to website report API: fastest, but requires scoped
+  write credentials, payload validation, and abuse controls at the website edge.
+- Hub server publishes reports: centralizes auth, validation, audit, and
+  attribution, but adds hub-to-website or hub-owned report rendering work.
+- Dedicated report service: cleaner long-term boundary, but more infrastructure
+  than the first scan flow likely needs.
 
 Report pages should carry attribution parameters where possible, so a shared
 report can connect downstream signup and onboarding completion back to the
@@ -267,13 +278,17 @@ The positioning:
 > This scan was a one-time patch. Set up First Tree to have this kind of agent
 > help available on every task, for your own team, on your own machine.
 
-The setup CTA leads into the normal onboarding path:
+The setup CTA should not change the current Cloud onboarding contract. It leads
+into normal onboarding first:
 
 - team setup
 - computer connection
 - user-owned agent creation
-- code connection
-- first real workspace task
+- first chat
+
+After onboarding, the user can continue into a first-chat or code-task handoff.
+Repo/code access should come from Settings or from a concrete task that needs it,
+not from the critical onboarding path.
 
 ## Current Implementation State
 
@@ -422,13 +437,15 @@ Minimum report payload:
   - `originChatId`
   - `originAgentId`
 
-The scan skill should treat report publishing as part of the deliverable:
+The scan system should treat report publishing as part of the deliverable. The
+skill does not need to POST directly to the website; it should emit or hand off
+the payload through the chosen publisher contract.
 
 ```text
 1. Produce scan result.
 2. Produce action recommendation.
-3. Publish report.
-4. Give user report URL.
+3. Emit validated report payload to the chosen publisher.
+4. Receive and share report URL.
 5. Offer/complete one action.
 6. Send setup CTA.
 ```
@@ -533,8 +550,11 @@ Tasks:
 - Commit/ship website handoff to Cloud quickstart.
 - Define the production scan report payload contract.
 - Update `production-scan` skill to build the report payload.
-- Add report API endpoint URL/config to the trial agent environment or skill
-  instructions.
+- Choose the report publishing boundary: direct agent publish, hub server
+  publish, or a dedicated report service.
+- Document the chosen publisher's credentials, validation, abuse-control, and
+  storage ownership assumptions.
+- Expose only the resulting publisher contract to the scan skill/runtime.
 - Make the Trial Scan Agent return the report URL in chat.
 - Manually test the full path.
 
