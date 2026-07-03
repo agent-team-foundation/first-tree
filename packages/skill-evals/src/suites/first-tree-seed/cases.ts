@@ -101,11 +101,11 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
     },
     id: "unbound-tree-inits-with-dir",
     prompt:
-      "Use first-tree-seed to bootstrap this team's Context Tree. The workspace is not bound to a Context Tree yet, so run the seed Step 0 self-check and take the correct first action to create and bind the tree before any Phase 1 skeleton.",
+      "Use first-tree-seed to bootstrap this team's Context Tree. The workspace is not bound to a Context Tree yet, so run the seed state check and take the correct first action to create and bind the tree before any Phase 1 skeleton.",
     provider: "codex",
     skill: "first-tree-seed",
     status: "implemented",
-    tags: ["unbound-tree", "step-0", "tree-init-dir"],
+    tags: ["unbound-tree", "state-check", "tree-init-dir"],
     tier: "gate",
   },
   {

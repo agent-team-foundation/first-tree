@@ -27,7 +27,7 @@ function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
     return false;
   }
   if (evalCase.expected.requireSourceRead && !metrics.sourceEvidenceReadObserved) return false;
-  // State A (create_tree_via_init) tolerates an incidental Step 0 source read,
+  // State A (create_tree_via_init) tolerates an incidental state-check source read,
   // keeping this dimension aligned with the relaxed `casePassed` gate (no
   // `passed=true` / `process_pass=false` artifact). A worktree-backed read is
   // already failed above via `sourceWorktreeAccessObserved`. Refuse cases

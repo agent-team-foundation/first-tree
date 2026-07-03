@@ -1,20 +1,22 @@
 ---
 name: first-tree-seed
-version: 0.2.0
+version: 0.2.1
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: One-time bootstrap for a brand-new, still-unseeded Context Tree. When the team has no tree yet, creates and binds the repo with `first-tree tree init` (Step 0); then delivers an initial top + second-level domain skeleton drawn from the bound source repos (PR1, user approves), then initial leaf-node content for each approved domain with explicit coverage reporting (PR2). Use right after onboarding, before any domain structure exists. Refuses on any already-seeded tree. Do not use to write an incremental update from a specific PR / doc / note — that is `first-tree-write`. Do not use for broad maintenance or drift-audit work on an existing tree.
+description: Bootstrap a team's Context Tree from its connected source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Reads the sources, proposes an initial top-level + second-level domain structure for the user to approve, then drafts initial leaf content — each as a reviewable PR. Refuses a tree that already has domain structure: send incremental, source-driven writes to `first-tree-write`, and broad maintenance / drift-audit to a focused task.
 ---
 
 # First Tree — Seed
 
-Read this skill **before** drafting the first content into a new Context
-Tree. It owns the one-time bootstrap from "the team has no tree yet (or a
-freshly created empty one)" to "the tree has real top + second level
-structure plus initial leaf nodes drawn from the bound source repos" —
-including creating the repo itself with `first-tree tree init` when none
-exists (Step 0). Every subsequent write — one PR at a time, one decision
-at a time — belongs to `first-tree-write`, not here.
+Read this skill **before** drafting the first content into a Context Tree
+that has no domain structure yet. It owns the bootstrap from "the tree has
+no domain structure — either none exists, or a bound-but-empty one" to "the
+tree has real top + second level structure plus initial leaf nodes drawn
+from the bound source repos". It first resolves the tree's state, then — for
+a tree that needs building — creates the repo with `first-tree tree init`
+when none exists (see *Resolve the tree's state*). Every subsequent write —
+one PR at a time, one decision at a time — belongs to `first-tree-write`,
+not here.
 
 ## When To Use This Skill
 
@@ -22,11 +24,11 @@ at a time — belongs to `first-tree-write`, not here.
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
 | The team has no tree yet, **or** a bound tree with no domain structure (no top-level dirs) | The tree already has a domain structure → `first-tree-write` (incremental source-driven write)       |
 | First content pass on the bound sources                               | Broad maintenance or drift-audit work on an existing tree                                            |
-| Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Trigger + Step 0) | Not an org admin, or `gh` unauthenticated, and the team has no tree — Step 0 can't create it; surface the gap to a human |
+| Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin, or `gh` unauthenticated, and the team has no tree — seed can't create it; surface the gap to a human |
 
-The skill is **single-shot per tree**. If a previous seed already
-landed (PR1 merged), do not re-run; route any further work through
-`first-tree-write` or a focused maintenance task.
+The skill is **single-shot per tree**: once the tree has domain structure,
+*Resolve the tree's state* (state C below) refuses and routes further work
+through `first-tree-write` or a focused maintenance task.
 
 ## Required Reading
 
@@ -39,23 +41,14 @@ rules, it observes the existing ones during a special lifecycle phase.
    Content Model (what / why / who), Node Shape, Hard Rules 1–9.
    **Every node this skill creates must satisfy those hard rules.**
 
-## Trigger
+## Resolve the tree's state (three states; stop on refuse)
 
-This skill runs whenever a human or another agent invokes it. **Step 0
-below is the gate** — it resolves whether the team already has a Context
-Tree, creates one with `first-tree tree init` when they do not, and
-confirms the tree is still unseeded before Phase 1 begins. The prompt's
-origin is not the gate; the tree's state is.
-
-Once the seed has landed (PR1 merged), Step 0's already-seeded check
-fires and the skill refuses; route subsequent source-driven work through
-`first-tree-write`, or handle maintenance with a focused, explicitly-scoped
-task.
-
-## Step 0 — Ensure an unseeded tree exists (three states; stop on refuse)
-
-Before reading any source, resolve which of three states the team's
-Context Tree is in and act accordingly.
+This skill runs whenever a human or another agent invokes it — **the tree's
+state is the gate, not the prompt's origin.** Before reading any source,
+resolve which of three states the team's Context Tree is in and act
+accordingly: create it when none exists, fill it when it is bound but empty,
+and refuse when it already has domain structure (state C below), routing
+that work to `first-tree-write` or a focused maintenance task.
 
 **A — No tree yet.** The workspace is not bound to a tree: either
 `<workspaceRoot>/.first-tree/workspace.json` has no non-empty `tree`
@@ -79,7 +72,7 @@ status`. After it succeeds the tree is bound and in state **B** — proceed.
 init` defaults its local clone to `<cwd>/<repo-name>`, but a managed
 workspace reads and writes the tree at `<workspaceRoot>/<manifest.tree>`
 (usually `context-tree`), and seed does **not** rewrite `workspace.json`.
-Without `--dir`, Step 0 would create + bind `<workspaceRoot>/<team>-context-tree`
+Without `--dir`, state A would create + bind `<workspaceRoot>/<team>-context-tree`
 while Phase 1 then operates on a missing/stale `<workspaceRoot>/<manifest.tree>`.
 Passing `--dir "<workspaceRoot>/<manifest.tree>"` puts the freshly created
 clone exactly where Phase 1 (and the runtime) expect it. If the manifest
@@ -89,7 +82,7 @@ carries no tree name yet (a fully unbound workspace), use the conventional
 **B — Bound but unseeded.** The tree is bound and holds at most the
 bootstrap set — a root `NODE.md`, a `members/` index, and creator member
 node(s) — with **no top-level domain directory** yet. This is the normal
-seed entry, whether the bootstrap came from Step 0's `tree init` above or
+seed entry, whether the bootstrap came from state A's `tree init` above or
 from an earlier provision. Proceed to Phase 1. Phase 1 layers the domain
 skeleton + `raw-context` **on top of** whatever bootstrap nodes already
 exist: **extend** the root `NODE.md` index and the `members/` tree rather
@@ -143,6 +136,10 @@ these read worktrees, not the bare clone paths. Remove them
 (`git -C <source-clone> worktree remove <path>`) once both PRs are open.
 
 ## The Two Phases
+
+Resolving the tree's state comes first; the two phases below are the build
+itself — they run for a tree that needs building (states A and B). State C
+refuses before reaching them.
 
 ```
 Phase 1 — Structure  (~3–10 min, main agent only)
@@ -218,7 +215,7 @@ Aggregate observations across all sources, then abstract:
 - **Supporting structure is automatic, not a candidate.** Ensure
   `members/<owner>/NODE.md` (owner = most-active recent
   contributor of the largest source) and `raw-context/NODE.md` (the
-  intake bucket for meeting notes and explorations) exist — Step 0's
+  intake bucket for meeting notes and explorations) exist — state A's
   `tree init` may have already created a `members/` index and the
   creator's member node, so **extend those rather than recreating
   them** (add the computed owner if it differs from the creator). These
@@ -675,8 +672,8 @@ explicit scope.
 A user may merge PR1 and then never come back for Phase 2 (life
 happens, the team is busy, the kickoff agent crashed). The tree
 ends up with real structure but zero leaves. **This is not a
-re-seed condition** — Step 0 sees an already-seeded tree
-(`<tree>/<domain>/NODE.md` files exist, state C) and refuses. Instead:
+re-seed condition** — resolving the tree's state sees an already-seeded
+tree (`<tree>/<domain>/NODE.md` files exist, state C) and refuses. Instead:
 
 - Future writes go through `first-tree-write` one source at a
   time, exactly as they would on any other live tree.
@@ -720,7 +717,7 @@ make them visible at the seed-specific surface.
 ## What This Skill Does NOT Do
 
 - Run the Cloud one-click **server** bootstrap. When the team has no tree
-  (Step 0 state A), seed creates and binds it with `first-tree tree init`
+  (state A), seed creates and binds it with `first-tree tree init`
   (the user's local `gh`), not the server `/initialize` path — the two
   coexist. Seed does not write the workspace-root `workspace.json`; that
   stays a runtime concern.
@@ -732,8 +729,8 @@ make them visible at the seed-specific surface.
 - Generate content beyond what the signals support. If a candidate
   domain has weak evidence and the user does not opt it in, leave it
   out.
-- Run twice on the same tree. If PR1 has already merged, hand off
-  to `first-tree-write` or a focused maintenance task.
+- Run twice on the same tree. Once the tree has domain structure (state C),
+  hand off to `first-tree-write` or a focused maintenance task.
 
 ## References
 

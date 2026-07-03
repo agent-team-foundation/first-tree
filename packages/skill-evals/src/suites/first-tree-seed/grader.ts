@@ -372,7 +372,7 @@ function forbiddenSideEffectHits(
   evalCase: FirstTreeSeedEvalCase,
 ): string[] {
   const hits: string[] = [];
-  // In Step 0 state A (create_tree_via_init) `first-tree tree init` is the
+  // In state A (create_tree_via_init) `first-tree tree init` is the
   // EXPECTED action, not a forbidden side effect: the eval shim blocks it from
   // any real side effect, and real repo creation is still caught via
   // `gh repo create` / `git push` / `git commit` below. Every other tree setup
@@ -435,7 +435,7 @@ function directBareSourceContentRead(events: readonly unknown[]): boolean {
   return false;
 }
 
-// The unbound (Step 0 state A) case must route to `first-tree tree init` with a
+// The unbound (state A) case must route to `first-tree tree init` with a
 // `--dir` that resolves to the workspace's `context-tree` checkout. `tree init`
 // otherwise defaults its clone to `<cwd>/<repo>`, so a missing/wrong `--dir` is
 // exactly the regression this case guards against.
@@ -702,7 +702,7 @@ export function deriveMetrics(
     // Any operation ON the source worktree (`git worktree add/remove`, reading a
     // `seed-source-repo/...` path, `cd` into it) — an event-level signal that
     // survives a later `git worktree remove`, so a Phase-1 add/read/cleanup
-    // cannot pass Step 0 by leaving the final filesystem clean. Detected
+    // cannot pass the state check by leaving the final filesystem clean. Detected
     // structurally (see `commandTouchesSourceWorktree`) so both full-path and
     // `cd worktrees && … seed-source-repo …` relative forms are caught, while a
     // mere name search of the docs (`grep seed-source-repo AGENTS.md`) and the
@@ -819,13 +819,13 @@ export function casePassed(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics
   }
 
   if (evalCase.expected.action === "create_tree_via_init") {
-    // PASS only when Step 0 routes to `tree init` WITH a `--dir` resolving to
+    // PASS only when the state check routes to `tree init` WITH a `--dir` resolving to
     // the workspace `context-tree`. `tree init` without that `--dir` (or with a
     // default/wrong dir) leaves `treeInitWithContextTreeDirObserved` false and
     // fails — that omission is the regression this case guards.
     //
-    // Step 0's real invariant is the `tree init --dir <managed>` routing above.
-    // Going past Step 0 into Phase 1 source exploration still fails, via three
+    // The state check's real invariant is the `tree init --dir <managed>` routing above.
+    // Going past the state check into Phase 1 source exploration still fails, via three
     // signals: materializing a source worktree (`sourceWorktreeCreated`, final
     // filesystem), TOUCHING a source worktree at all (`sourceWorktreeAccessObserved`,
     // event-level — so an add/read/`git worktree remove` sequence cannot pass by

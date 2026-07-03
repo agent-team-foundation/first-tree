@@ -1,4 +1,4 @@
 interface:
   display_name: "First Tree — Seed"
-  short_description: "One-time initial seeding for a freshly minted Context Tree"
-  default_prompt: "Use $first-tree-seed to draft the first structure and leaves into this fresh tree, in two phases."
+  short_description: "Bootstrap a team's Context Tree from its source repos when it has no domain structure yet"
+  default_prompt: "Use $first-tree-seed to set up the team's Context Tree from the connected source repos when it has no domain structure yet — create + bind it if none exists, else fill a bound-but-empty tree: propose an initial domain structure for approval, then draft initial leaves, in two phases."
