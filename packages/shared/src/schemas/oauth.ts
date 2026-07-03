@@ -19,7 +19,16 @@ export const githubCallbackQuerySchema = z.object({
    * handler requires `code` for every path except `setup_action=request`.
    */
   code: z.string().min(1).optional(),
-  state: z.string().min(1),
+  /**
+   * Signed state minted by our `/start` or `/install-url`. Optional because
+   * GitHub-initiated setup landings — most notably an org owner completing /
+   * approving an install from GitHub's own UI — redirect here with
+   * `setup_action=install` + `installation_id` but NO `state` (they never went
+   * through our state-minting flow). The route treats a missing state as a
+   * setup landing (binding is webhook-driven) and lands the browser somewhere
+   * friendly instead of failing validation.
+   */
+  state: z.string().min(1).optional(),
   /**
    * GitHub App installation ID. Present when the user landed in callback
    * via the install flow ("first install of the App by this user / org").

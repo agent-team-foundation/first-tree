@@ -114,6 +114,21 @@ export async function githubOauthRoutes(app: FastifyInstance): Promise<void> {
     const { code, state, installation_id: installationIdRaw, setup_action: setupAction } = parsed;
     const cookieNonce = parseCookieHeader(request.headers.cookie, OAUTH_STATE_COOKIE);
 
+    if (!state) {
+      // GitHub-initiated setup landing (no signed state) — most commonly an org
+      // owner completing / approving an install from GitHub's own UI, which
+      // redirects here with `setup_action=install` + `installation_id` but no
+      // `state` (they never went through our `/start` or `/install-url`). The
+      // install binding is handled by the `installation.created` webhook (the
+      // approval flow), so there is nothing to do here except land the browser
+      // somewhere friendly instead of the old `state` validation error.
+      app.log.info(
+        { event: "github_app.setup_landing", setupAction, installationId: installationIdRaw ?? null },
+        "github callback: no-state setup landing — webhook owns binding; friendly redirect",
+      );
+      return reply.redirect("/?github_app=installed", 302);
+    }
+
     let next: string;
     let targetOrganizationId: string | null = null;
     let kickoffUserId: string | null = null;

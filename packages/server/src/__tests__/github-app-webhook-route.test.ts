@@ -9,8 +9,10 @@ import { githubEntityChatMappings } from "../db/schema/github-entity-chat-mappin
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
+import { organizations } from "../db/schema/organizations.js";
 import { users } from "../db/schema/users.js";
 import { recordPendingBind } from "../services/github-app-install-intents.js";
+import { recordInstallRequest } from "../services/github-app-install-requests.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
@@ -329,6 +331,157 @@ describe("POST /webhooks/github-app", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().lifecycle).toBe("created:kickoff-not-admin");
+
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.hubOrganizationId).toBeNull();
+  });
+
+  it("installation.created via owner-approval binds to the requester's captured install-request (#1392)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100020;
+    const requesterGithubId = 78813320; // the non-owner First Tree admin who initiated
+    const approverGithubId = 225318128; // the org owner who approved (webhook `sender`)
+    // The `setup_action=request` callback captured the pending request keyed by
+    // the initiator's github id (from our signed state).
+    await recordInstallRequest(app.db, {
+      initiatorGithubId: requesterGithubId,
+      targetOrganizationId: admin.organizationId,
+      kickoffUserId: admin.userId,
+    });
+
+    const res = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: installationId,
+        account: { id: 4250, login: "agent-team-foundation", type: "Organization" },
+        permissions: { contents: "read" },
+        events: ["pull_request"],
+        suspended_at: null,
+      },
+      // `sender` is the APPROVER (org owner), NOT the initiator...
+      sender: { id: approverGithubId, login: "owner-who-approved", type: "User" },
+      // ...and `requester` carries the ORIGINAL initiator — the trusted anchor.
+      requester: { id: requesterGithubId, login: "non-owner-admin", type: "User" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().lifecycle).toBe("created:request-bound");
+
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.hubOrganizationId).toBe(admin.organizationId);
+    // The installer recorded on the row is the approver (sender), per the row's
+    // "who installed the account" semantics.
+    expect(row?.installerGithubId).toBe(approverGithubId);
+  });
+
+  it("installation.created approval-flow does NOT bind when the initiator was revoked before approval (#1392)", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100021;
+    const requesterGithubId = 424242;
+    await recordInstallRequest(app.db, {
+      initiatorGithubId: requesterGithubId,
+      targetOrganizationId: admin.organizationId,
+      kickoffUserId: admin.userId,
+    });
+    // Initiator downgraded from admin to member between request and approval.
+    await app.db.update(members).set({ role: "member" }).where(eq(members.userId, admin.userId));
+
+    const res = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: installationId,
+        account: { id: 4251, login: "acme-org", type: "Organization" },
+        permissions: { contents: "read" },
+        events: ["pull_request"],
+        suspended_at: null,
+      },
+      sender: { id: 999001, login: "owner-who-approved", type: "User" },
+      requester: { id: requesterGithubId, login: "revoked-admin", type: "User" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().lifecycle).toBe("created:request-kickoff-not-admin");
+
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.hubOrganizationId).toBeNull();
+  });
+
+  it("installation.created approval-flow refuses to steal an installation already bound to another org (#1392)", async () => {
+    const app = getApp();
+    const initiator = await createTestAdmin(app); // admin of the request's target (default) org
+    // A DIFFERENT org that already owns the installation. `createTestAdmin`
+    // reuses the default org, so mint a distinct org row directly.
+    const otherOrgId = uuidv7();
+    await app.db
+      .insert(organizations)
+      .values({ id: otherOrgId, name: `other-${otherOrgId}`, displayName: "Other Org" });
+    const installationId = 100023;
+    const requesterGithubId = 313131;
+    // The installation is already bound to the OTHER org...
+    await seedInstallation(app, { installationId, orgId: otherOrgId });
+    // ...but a stale/forged-looking request points the same installation at the
+    // initiator's org. The bind must be refused (ConflictError → bind-conflict).
+    await recordInstallRequest(app.db, {
+      initiatorGithubId: requesterGithubId,
+      targetOrganizationId: initiator.organizationId,
+      kickoffUserId: initiator.userId,
+    });
+
+    const res = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: installationId,
+        account: { id: 4253, login: "owner", type: "Organization" },
+        permissions: { contents: "read" },
+        events: ["pull_request"],
+        suspended_at: null,
+      },
+      sender: { id: 999003, login: "owner-who-approved", type: "User" },
+      requester: { id: requesterGithubId, login: "would-be-thief", type: "User" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().lifecycle).toBe("created:request-bind-conflict");
+
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    // Original binding is preserved — never reassigned to the initiator.
+    expect(row?.hubOrganizationId).toBe(otherOrgId);
+  });
+
+  it("installation.created with a `requester` but no captured request stays unbound (#1392)", async () => {
+    const app = getApp();
+    const installationId = 100022;
+    // No recordInstallRequest → an unmatched requester must never trigger a bind
+    // (binding is only ever driven by a request we minted from a signed state).
+    const res = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: installationId,
+        account: { id: 4252, login: "unknown-org", type: "Organization" },
+        permissions: { contents: "read" },
+        events: ["pull_request"],
+        suspended_at: null,
+      },
+      sender: { id: 999002, login: "someone", type: "User" },
+      requester: { id: 555999, login: "no-request-here", type: "User" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().lifecycle).toBe("created:no-intent");
 
     const [row] = await app.db
       .select()

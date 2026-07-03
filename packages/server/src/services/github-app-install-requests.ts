@@ -1,7 +1,10 @@
 import { and, eq, gt, lte } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { githubAppInstallRequests } from "../db/schema/github-app-install-requests.js";
+import { ConflictError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
+import { bindInstallationToOrg } from "./github-app-installations.js";
+import { findActiveMembership } from "./membership.js";
 
 /**
  * Pending install-**request** layer — the approval-flow counterpart to
@@ -91,4 +94,53 @@ export async function deleteInstallRequest(db: Database, initiatorGithubId: numb
 /** Housekeeping: drop requests past their TTL. Safe to call opportunistically. */
 export async function deleteExpiredInstallRequests(db: Database, now: Date = new Date()): Promise<void> {
   await db.delete(githubAppInstallRequests).where(lte(githubAppInstallRequests.expiresAt, now));
+}
+
+export type CompleteInstallRequestResult = {
+  bound: boolean;
+  reason: "bound" | "no-request" | "kickoff-not-admin" | "bind-conflict";
+};
+
+/**
+ * Complete the **approval-flow** bind from the `installation.created` webhook.
+ * Called with the webhook's trusted `requester` (the original initiator, as
+ * GitHub records it — the org owner who approved is the `sender`, not the
+ * `requester`). Binds when ALL hold:
+ *   - a fresh install-request exists for this initiator (captured from our
+ *     signed state at request time); and
+ *   - the initiator (via the request's `kickoff_user_id`) is STILL an active
+ *     admin of the target org (live re-check — mirrors the self-install
+ *     bind-time admin recheck).
+ *
+ * Anti-forgery: the `requester` is GitHub-authenticated, and the request row
+ * could only be minted by an authenticated First Tree admin of the target org
+ * (via the admin-gated `/install-url` signed state). A caller cannot forge
+ * another user's request nor a non-approved installation. Consumes the
+ * request on success or on a permanent conflict.
+ */
+export async function completeInstallRequestBind(
+  db: Database,
+  installationId: number,
+  requesterGithubId: number,
+): Promise<CompleteInstallRequestResult> {
+  const request = await peekFreshInstallRequest(db, requesterGithubId);
+  if (!request) return { bound: false, reason: "no-request" };
+
+  const membership = await findActiveMembership(db, request.kickoffUserId, request.targetOrganizationId);
+  if (!membership || membership.role !== "admin") {
+    await deleteInstallRequest(db, requesterGithubId);
+    return { bound: false, reason: "kickoff-not-admin" };
+  }
+
+  try {
+    await bindInstallationToOrg(db, installationId, request.targetOrganizationId);
+  } catch (err) {
+    if (err instanceof ConflictError) {
+      await deleteInstallRequest(db, requesterGithubId);
+      return { bound: false, reason: "bind-conflict" };
+    }
+    throw err;
+  }
+  await deleteInstallRequest(db, requesterGithubId);
+  return { bound: true, reason: "bound" };
 }

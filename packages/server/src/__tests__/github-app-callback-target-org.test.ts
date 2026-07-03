@@ -4,6 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import { authIdentities } from "../db/schema/auth-identities.js";
 import { githubAppInstallIntents } from "../db/schema/github-app-install-intents.js";
+import { githubAppInstallRequests } from "../db/schema/github-app-install-requests.js";
 import { members } from "../db/schema/members.js";
 import { organizations } from "../db/schema/organizations.js";
 import { findInstallationByGithubId, upsertInstallationFromMetadata } from "../services/github-app-installations.js";
@@ -519,5 +520,59 @@ describe("/auth/github/callback honors targetOrganizationId in the state (codex 
     } finally {
       restore();
     }
+  });
+});
+
+describe("/auth/github/callback approval-flow capture + no-state setup landing (#1392)", () => {
+  const getApp = useTestApp({ githubAppPrivateKeyPem: TEST_APP_PRIVATE_KEY_PEM });
+
+  it("setup_action=request captures a pending install-request keyed by the initiator's GitHub id", async () => {
+    const app = getApp();
+    const githubId = 78_813_320; // the non-owner First Tree admin who initiated
+    const login = `req-initiator-${uuidv7().slice(0, 6)}`;
+    // Admin of their default org — the install target.
+    const admin = await createTestAdmin(app, { username: `${login}-u` });
+    await seedGithubIdentity(app, admin.userId, githubId, login);
+
+    // GitHub redirects the request callback here with `setup_action=request`,
+    // no `installation_id` and (as observed on staging) no OAuth `code` — just
+    // our own signed state carrying the initiator identity.
+    const { token, nonce } = await signOAuthState(TEST_JWT_SECRET, "/settings/github", {
+      targetOrganizationId: admin.organizationId,
+      kickoffUserId: admin.userId,
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/auth/github/callback?state=${token}&setup_action=request`,
+      headers: { cookie: `${OAUTH_STATE_COOKIE}=${nonce}` },
+    });
+    // Bounced back to the kickoff surface — no error, nothing to bind yet.
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe("/settings/github");
+
+    // The pending request is captured, keyed by the initiator's GitHub id, so
+    // the `installation.created` webhook can complete the bind on approval.
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallRequests)
+      .where(eq(githubAppInstallRequests.initiatorGithubId, githubId))
+      .limit(1);
+    expect(row).toBeTruthy();
+    expect(row?.targetOrganizationId).toBe(admin.organizationId);
+    expect(row?.kickoffUserId).toBe(admin.userId);
+  });
+
+  it("a no-state setup landing (owner completes install on github.com) lands friendly instead of a validation error", async () => {
+    const app = getApp();
+    // The bug: after an org owner approves/completes the install from GitHub's
+    // own UI, the browser is redirected here with `setup_action=install` +
+    // `installation_id` but NO `state`. The old schema required `state` and
+    // stranded the user on a raw Zod validation error page.
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/callback?code=a4debbed564123bf0d38&installation_id=144119633&setup_action=install",
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.location).toBe("/?github_app=installed");
   });
 });

@@ -7,6 +7,7 @@ import { handleContextReviewerPrEvent } from "../../services/context-reviewer-pr
 import { claimEvent, unclaimEvent } from "../../services/event-dedup.js";
 import type { AppInstallation } from "../../services/github-app.js";
 import { completeInstallBind, deleteExpiredPendingBinds } from "../../services/github-app-install-intents.js";
+import { completeInstallRequestBind } from "../../services/github-app-install-requests.js";
 import {
   deleteInstallationByGithubId,
   findInstallationByGithubId,
@@ -47,6 +48,20 @@ function readInstallationId(payload: unknown): number | null {
 function readSenderGithubId(payload: Record<string, unknown>): number | null {
   const sender = isRecord(payload.sender) ? payload.sender : null;
   const id = sender?.id;
+  return typeof id === "number" && Number.isFinite(id) ? id : null;
+}
+
+/**
+ * The GitHub-authenticated **original requester** on `installation.created`.
+ * Populated (verified on staging) when an org owner approves a non-owner's
+ * install request — the `sender` is the approving owner, but `requester` is
+ * the initiator. Null on a normal self-install. This is the trusted anchor
+ * that correlates an approval-flow installation back to the captured
+ * install-request (see `completeInstallRequestBind`).
+ */
+function readRequesterGithubId(payload: Record<string, unknown>): number | null {
+  const requester = isRecord(payload.requester) ? payload.requester : null;
+  const id = requester?.id;
   return typeof id === "number" && Number.isFinite(id) ? id : null;
 }
 
@@ -239,14 +254,28 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
       await deleteExpiredPendingBinds(app.db).catch((err) =>
         log.warn({ err }, "install-intent expiry sweep failed (non-fatal)"),
       );
+      // Self-install completion: `sender` is the installer == the kickoff
+      // admin, matched to the per-install pending bind recorded on the
+      // callback. If the callback hasn't arrived yet this no-ops and the
+      // callback completes the bind. A transient bind error rethrows → 500 →
+      // GitHub redelivers (pending bind is preserved).
+      const selfResult = installerGithubId !== null ? await completeInstallBind(app.db, installationId) : null;
+      if (selfResult?.bound) return `created:${selfResult.reason}`;
+
+      // Approval-flow completion (#1392): when an org owner approves a
+      // non-owner's install request, `sender` is the approver and `requester`
+      // is the original initiator. Match the trusted `requester` to a captured
+      // install-request and bind — this makes the approval flow fully automatic
+      // (no manual completion needed).
+      const requesterGithubId = readRequesterGithubId(payload);
+      if (requesterGithubId !== null) {
+        const reqResult = await completeInstallRequestBind(app.db, installationId, requesterGithubId);
+        if (reqResult.bound) return "created:request-bound";
+        if (reqResult.reason !== "no-request") return `created:request-${reqResult.reason}`;
+      }
+
       if (installerGithubId === null) return "created:no-sender";
-      // Bind iff the callback already recorded a pending bind for THIS
-      // installation whose kickoff admin == this installer (and is still an
-      // active admin). If the callback hasn't arrived yet this no-ops and the
-      // callback completes the bind when it does. A transient bind error
-      // rethrows → 500 → GitHub redelivers (pending bind is preserved).
-      const result = await completeInstallBind(app.db, installationId);
-      return `created:${result.reason}`;
+      return `created:${selfResult?.reason ?? "no-intent"}`;
     }
     case "new_permissions_accepted": {
       const metadata = parseInstallationMetadata(installation);
