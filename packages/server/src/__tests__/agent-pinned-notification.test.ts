@@ -1,7 +1,9 @@
+import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import WebSocket from "ws";
+import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
@@ -450,6 +452,130 @@ describe("Agent WS — agent:pinned push on create/bind", () => {
       );
       const error = await waitForFrame(ws, (m) => (m as { type?: string }).type === "error");
       expect(error.message).toBe("Agent not bound");
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("fans runtime route changes to the instance that owns the client socket", async () => {
+    const seed = await seedConnectedClient("route-change");
+    const agent = await createAgent(app.db, {
+      name: `pin-route-change-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Route Changed",
+      source: "admin-api",
+      managerId: seed.memberId,
+      organizationId: seed.organizationId,
+      clientId: seed.clientId,
+      runtimeProvider: "claude-code",
+    });
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "agent:bind",
+          ref: "bind-route-change",
+          agentId: agent.uuid,
+          runtimeType: "claude-code",
+          runtimeVersion: "test",
+        }),
+      );
+      await waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:bound" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+
+      const forcePromise = waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:force_disconnect" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+      const pinnedPromise = waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:pinned" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+
+      await app.notifier.notifyAgentRouteChange({
+        agentId: agent.uuid,
+        name: agent.name,
+        displayName: agent.displayName,
+        agentType: "personal_assistant",
+        oldClientId: seed.clientId,
+        targetClientId: seed.clientId,
+        runtimeProvider: "codex",
+        reason: "agent_runtime_switch",
+      });
+
+      await expect(forcePromise).resolves.toMatchObject({
+        type: "agent:force_disconnect",
+        agentId: agent.uuid,
+        reason: "agent_runtime_switch",
+      });
+      await expect(pinnedPromise).resolves.toMatchObject({
+        type: "agent:pinned",
+        agentId: agent.uuid,
+        runtimeProvider: "codex",
+      });
+    } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("replays agent:pinned on heartbeat when a missed route-change leaves the local runtime stale", async () => {
+    const seed = await seedConnectedClient("heartbeat-route-change");
+    const agent = await createAgent(app.db, {
+      name: `pin-heartbeat-route-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Heartbeat Route Changed",
+      source: "admin-api",
+      managerId: seed.memberId,
+      organizationId: seed.organizationId,
+      clientId: seed.clientId,
+      runtimeProvider: "claude-code",
+    });
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "agent:bind",
+          ref: "bind-heartbeat-route-change",
+          agentId: agent.uuid,
+          runtimeType: "claude-code",
+          runtimeVersion: "test",
+        }),
+      );
+      await waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string }).type === "agent:bound" &&
+          (m as { agentId?: string }).agentId === agent.uuid,
+      );
+
+      await app.db.update(agents).set({ runtimeProvider: "codex" }).where(eq(agents.uuid, agent.uuid));
+
+      const pinnedPromise = waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; agentId?: string; runtimeProvider?: string }).type === "agent:pinned" &&
+          (m as { agentId?: string }).agentId === agent.uuid &&
+          (m as { runtimeProvider?: string }).runtimeProvider === "codex",
+      );
+      ws.send(JSON.stringify({ type: "heartbeat" }));
+
+      await expect(pinnedPromise).resolves.toMatchObject({
+        type: "agent:pinned",
+        agentId: agent.uuid,
+        runtimeProvider: "codex",
+      });
     } finally {
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));

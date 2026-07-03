@@ -4,6 +4,7 @@ import type {
   CreateAgent,
   NewChatDefaultCandidatesRequest,
   NewChatDefaultCandidatesResponse,
+  SwitchAgentRuntime,
   UpdateAgent,
 } from "@first-tree/shared";
 import { ApiError, api, getStoredTokens, withOrg } from "./client.js";
@@ -125,6 +126,14 @@ export function checkAgentNameAvailability(name: string): Promise<AgentNameAvail
 
 export function updateAgent(uuid: string, data: UpdateAgent): Promise<Agent> {
   return api.patch<Agent>(`/agents/${encodeURIComponent(uuid)}`, data);
+}
+
+export function switchAgentRuntime(uuid: string, data: SwitchAgentRuntime): Promise<Agent> {
+  return api.post<Agent>(`/agents/${encodeURIComponent(uuid)}/switch-runtime`, data);
+}
+
+export function recoverAgentRuntimeSwitch(uuid: string): Promise<Agent> {
+  return api.post<Agent>(`/agents/${encodeURIComponent(uuid)}/switch-runtime/recover`, {});
 }
 
 export function deleteAgent(uuid: string): Promise<void> {

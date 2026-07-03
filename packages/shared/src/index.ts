@@ -59,6 +59,7 @@ export {
   type CreateAgent,
   contextTreeInfoSchema,
   createAgentSchema,
+  findReservedAgentMetadataKey,
   isReservedAgentName,
   type LegacyWireAgentType,
   type ListAgentsQuery,
@@ -70,9 +71,13 @@ export {
   newChatDefaultCandidateAgentSchema,
   newChatDefaultCandidatesRequestSchema,
   newChatDefaultCandidatesResponseSchema,
+  RESERVED_AGENT_METADATA_KEYS,
   RESERVED_AGENT_NAMES,
+  type SwitchAgentRuntime,
+  switchAgentRuntimeSchema,
   type UpdateAgent,
   updateAgentSchema,
+  userAgentMetadataSchema,
 } from "./schemas/agent.js";
 export {
   type AgentRuntimeConfig,
@@ -652,6 +657,7 @@ export {
 export {
   type ActivityOverview,
   AGENT_BIND_REJECT_REASONS,
+  AGENT_RUNTIME_SESSION_HEADER,
   AGENT_SELECTOR_HEADER,
   type AgentBindRejectReason,
   type AgentBindRequest,

@@ -109,6 +109,17 @@ type SessionEntry = {
   retryFromEvicted: { claudeSessionId: string; lastActivity: number } | null;
 };
 
+export type SessionManagerShutdownOptions = {
+  /**
+   * Runtime switches are destructive: server-side switch-runtime has already
+   * archived/evicted chat sessions, so the retiring local slot must not write
+   * old handler resume mappings back to disk.
+   */
+  clearPersistedRegistry?: boolean;
+  /** Ordinary daemon shutdown reports live sessions as suspended; runtime switches skip that. */
+  reportSuspendedSessions?: boolean;
+};
+
 type PendingMessage = {
   message: SessionMessage | null;
   chatId: string;
@@ -710,7 +721,7 @@ export class SessionManager {
   }
 
   /** Shut down all sessions gracefully. */
-  async shutdown(reason?: string): Promise<void> {
+  async shutdown(reason?: string, opts: SessionManagerShutdownOptions = {}): Promise<void> {
     this.config.subprocessProbe?.stop();
     if (this.idleTimer) {
       clearInterval(this.idleTimer);
@@ -735,15 +746,24 @@ export class SessionManager {
     );
     await Promise.allSettled(shutdowns);
 
-    // Report active sessions as suspended before clearing
-    for (const [chatId, session] of this.sessions) {
-      if (session.status === "active") {
-        this.notifySessionState(chatId, "suspended");
+    const reportSuspendedSessions = opts.reportSuspendedSessions ?? true;
+    if (reportSuspendedSessions) {
+      // Report active sessions as suspended before clearing.
+      for (const [chatId, session] of this.sessions) {
+        if (session.status === "active") {
+          this.notifySessionState(chatId, "suspended");
+        }
       }
     }
 
+    if (opts.clearPersistedRegistry) {
+      this.sessions.clear();
+      this.evictedMappings.clear();
+    }
+
     // Persist final state — flush synchronously so the last batch reaches
-    // disk before dispose() tears the timer down.
+    // disk before dispose() tears the timer down. For destructive runtime
+    // switches, the cleared maps make this an authoritative empty registry.
     this.persistRegistry({ immediate: true });
     this.registry?.dispose();
 

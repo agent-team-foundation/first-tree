@@ -67,6 +67,28 @@ export type AgentSource = z.infer<typeof agentSourceSchema>;
 export const agentStatusSchema = z.enum(["active", "suspended"]);
 export type AgentStatus = z.infer<typeof agentStatusSchema>;
 
+export const RESERVED_AGENT_METADATA_KEYS = ["runtimeSwitch", "runtimeSession"] as const;
+
+const reservedAgentMetadataKeySet: ReadonlySet<string> = new Set(RESERVED_AGENT_METADATA_KEYS);
+
+export function findReservedAgentMetadataKey(metadata: Record<string, unknown> | undefined): string | null {
+  if (!metadata) return null;
+  for (const key of Object.keys(metadata)) {
+    if (reservedAgentMetadataKeySet.has(key)) return key;
+  }
+  return null;
+}
+
+export const userAgentMetadataSchema = z.record(z.string(), z.unknown()).superRefine((metadata, ctx) => {
+  const key = findReservedAgentMetadataKey(metadata);
+  if (!key) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: `metadata.${key} is reserved for First Tree internal runtime state`,
+    path: [key],
+  });
+});
+
 /**
  * Agent-name rules (see first-tree-context:agent-hub/agent-naming.md §3.1):
  *   - Lowercase ASCII slug, hyphens + underscores allowed.
@@ -129,7 +151,7 @@ export const createAgentSchema = z.object({
   source: agentSourceSchema.optional(),
   /** Agent visibility: "private" (manager only) or "organization" (all members) */
   visibility: agentVisibilitySchema.optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  metadata: userAgentMetadataSchema.optional(),
   /** Member who manages this agent */
   managerId: z.string().optional(),
   /**
@@ -161,14 +183,14 @@ export const updateAgentSchema = z.object({
   displayName: z.string().min(1).max(200).optional(),
   delegateMention: z.string().max(100).nullable().optional(),
   visibility: agentVisibilitySchema.optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
+  metadata: userAgentMetadataSchema.optional(),
   /** Admin-only: reassign the manager */
   managerId: z.string().nullable().optional(),
   /**
    * One-shot bind. NULL → ID still allowed (admin claims an unbound agent for
    * a known client). ID → another ID and ID → null are rejected at the
-   * service layer — once bound, an agent's client is immutable (there is no
-   * move/re-bind path; provision a new agent instead).
+   * generic PATCH service layer; moving a bound runtime must go through the
+   * managed switch-runtime endpoint.
    */
   clientId: z.string().min(1).max(100).nullable().optional(),
   /**
@@ -178,6 +200,22 @@ export const updateAgentSchema = z.object({
   avatarColorToken: avatarColorTokenSchema.nullable().optional(),
 });
 export type UpdateAgent = z.infer<typeof updateAgentSchema>;
+
+export const switchAgentRuntimeSchema = z.object({
+  /**
+   * Target computer/client id. This is intentionally a required explicit
+   * choice: runtime switches may move local workspace state between machines.
+   */
+  clientId: z.string().min(1).max(100),
+  runtimeProvider: runtimeProviderSchema,
+  /**
+   * Product-level confirmation that the user accepts interruption of active
+   * sessions and possible local-runtime state loss. This is not a safety-check
+   * bypass; server preconditions still run.
+   */
+  confirmLocalDataLoss: z.literal(true),
+});
+export type SwitchAgentRuntime = z.infer<typeof switchAgentRuntimeSchema>;
 
 export const agentSchema = z.object({
   uuid: z.string(),

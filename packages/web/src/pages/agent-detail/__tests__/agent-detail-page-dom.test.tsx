@@ -29,7 +29,9 @@ const agentMocks = vi.hoisted(() => ({
   listAgents: vi.fn(),
   listAllAgents: vi.fn(),
   reactivateAgent: vi.fn(),
+  recoverAgentRuntimeSwitch: vi.fn(),
   suspendAgent: vi.fn(),
+  switchAgentRuntime: vi.fn(),
   testAgentConnection: vi.fn(),
   updateAgent: vi.fn(),
 }));
@@ -198,7 +200,7 @@ function client(overrides: Partial<HubClient> = {}): HubClient {
     status: overrides.status ?? "connected",
     authState: overrides.authState ?? "ok",
     binName: overrides.binName ?? "first-tree-dev",
-    sdkVersion: overrides.sdkVersion ?? "0.5.0",
+    sdkVersion: overrides.sdkVersion ?? "0.5.11",
     hostname: overrides.hostname ?? "gandy-macbook",
     os: overrides.os ?? "darwin",
     agentCount: overrides.agentCount ?? 1,
@@ -380,6 +382,8 @@ beforeEach(() => {
   agentMocks.listAgents.mockResolvedValue(switcherAgents);
   agentMocks.updateAgent.mockResolvedValue(agent());
   agentMocks.suspendAgent.mockResolvedValue(agent({ status: "suspended" }));
+  agentMocks.switchAgentRuntime.mockResolvedValue(agent({ runtimeProvider: "codex" }));
+  agentMocks.recoverAgentRuntimeSwitch.mockResolvedValue(agent());
   agentMocks.reactivateAgent.mockResolvedValue(agent());
   agentMocks.deleteAgent.mockResolvedValue(undefined);
   agentMocks.testAgentConnection.mockResolvedValue({
@@ -929,6 +933,35 @@ describe("AgentDetailPage", () => {
     await act(async () => first.root.unmount());
   });
 
+  it("switches an agent runtime from the Runtime tab", async () => {
+    const { RuntimeTab } = await import("../runtime-tab.js");
+    const view = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
+    await waitForText(view.container, "Switch runtime");
+
+    await click(buttonByText(view.container, "Switch runtime"));
+    await waitForText(document.body, "Switch runtime");
+    await click(buttonByText(document.body, "Codex"));
+    await click(exactButtonByText(document.body, "Review impact"));
+    await waitForText(document.body, "Existing runtime sessions stop");
+    const confirm = document.body.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (!confirm) throw new Error("Runtime switch confirmation checkbox missing");
+    const switchConfirmButton = () =>
+      [...document.body.querySelectorAll("button")]
+        .filter((button) => button.textContent?.trim() === "Switch runtime")
+        .at(-1) ?? null;
+    expect(switchConfirmButton()?.disabled).toBe(true);
+    await click(confirm);
+    await click(switchConfirmButton());
+    await waitForCondition(() => agentMocks.switchAgentRuntime.mock.calls.length > 0, "Expected runtime switch");
+    expect(agentMocks.switchAgentRuntime).toHaveBeenCalledWith("agent-1", {
+      clientId: "client-1",
+      runtimeProvider: "codex",
+      confirmLocalDataLoss: true,
+    });
+
+    await act(async () => view.root.unmount());
+  });
+
   it("renders load failures and profile lifecycle actions", async () => {
     const { ProfileTab } = await import("../profile-tab.js");
 
@@ -996,5 +1029,36 @@ describe("AgentDetailPage", () => {
     expect(view.container.querySelector('button[aria-label="Suspend"]')).toBeNull();
 
     await act(async () => view.root.unmount());
+  });
+
+  it("shows runtime-switch recovery state instead of ordinary lifecycle controls", async () => {
+    const { ProfileTab } = await import("../profile-tab.js");
+    const { RuntimeTab } = await import("../runtime-tab.js");
+    const stuck = agent({
+      status: "suspended",
+      runtimeState: null,
+      metadata: { runtimeSwitch: { claimId: "claim-web", phase: "committed" } },
+    });
+
+    agentMocks.getAgent.mockResolvedValueOnce(stuck);
+    const runtime = await renderDom("/agents/agent-1/runtime", <RuntimeTab />);
+    await waitForText(runtime.container, "Runtime switch recovery");
+    expect(runtime.container.textContent).toContain("claim-web");
+    expect(runtime.container.textContent).not.toContain("Switch runtime");
+    await click(exactButtonByText(runtime.container, "Recover"));
+    await waitForCondition(
+      () => agentMocks.recoverAgentRuntimeSwitch.mock.calls.length > 0,
+      "Expected runtime switch recovery mutation",
+    );
+    expect(agentMocks.recoverAgentRuntimeSwitch).toHaveBeenCalledWith("agent-1");
+    await act(async () => runtime.root.unmount());
+
+    agentMocks.getAgent.mockResolvedValueOnce(stuck);
+    const profile = await renderDom("/agents/agent-1/profile", <ProfileTab />);
+    await waitForText(profile.container, "Runtime switch claim claim-web");
+    expect(profile.container.textContent).toContain("Recover");
+    expect(profile.container.textContent).not.toContain("Reactivate");
+    expect(profile.container.textContent).not.toContain("Delete");
+    await act(async () => profile.root.unmount());
   });
 });

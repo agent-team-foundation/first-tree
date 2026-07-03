@@ -1,9 +1,10 @@
 import type { RuntimeProvider } from "@first-tree/shared";
-import { Link2 } from "lucide-react";
+import { AlertTriangle, Link2, RefreshCcw } from "lucide-react";
 import type { ReactNode } from "react";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
 import { ConfigRow } from "./flat-section.js";
+import type { RuntimeSwitchClaimView } from "./layout-context.js";
 import { titleWithSemantics } from "./save-semantics.js";
 
 // Execution (computer + runtime) is the immediate-save half of the Environment
@@ -20,6 +21,9 @@ export type RuntimeSectionProps = {
   canBindComputer: boolean;
   bindComputerPending?: boolean;
   onBindComputer?: () => void;
+  canSwitchRuntime?: boolean;
+  runtimeSwitchPending?: boolean;
+  onSwitchRuntime?: () => void;
 };
 
 const RUNTIME_NAME: Record<RuntimeProvider, string> = {
@@ -39,14 +43,86 @@ export function RuntimeSection(props: RuntimeSectionProps) {
         bindPending={props.bindComputerPending ?? false}
         onBindComputer={props.onBindComputer}
       />
-      <RuntimeRow name={RUNTIME_NAME[props.runtimeProvider]} />
+      <RuntimeRow
+        name={RUNTIME_NAME[props.runtimeProvider]}
+        canSwitch={props.canSwitchRuntime ?? false}
+        switchPending={props.runtimeSwitchPending ?? false}
+        onSwitch={props.onSwitchRuntime}
+      />
     </Section>
   );
 }
 
-// Runtime is fixed at creation, so it's a read-only label.
-function RuntimeRow({ name }: { name: string }) {
-  return <ConfigRow label="Runtime" value={name} />;
+export function RuntimeSwitchRecoveryNotice({
+  claim,
+  pending,
+  error,
+  onRecover,
+}: {
+  claim: RuntimeSwitchClaimView;
+  pending: boolean;
+  error: string | null;
+  onRecover: () => void;
+}) {
+  return (
+    <Section title="Runtime switch recovery">
+      <div
+        className="flex items-start gap-3"
+        style={{
+          padding: "var(--sp-3)",
+          border: "var(--hairline) solid var(--state-blocked)",
+          borderRadius: "var(--radius-panel)",
+        }}
+      >
+        <AlertTriangle className="h-4 w-4 shrink-0" style={{ color: "var(--state-blocked)", marginTop: 2 }} />
+        <div className="min-w-0 flex-1">
+          <p className="m-0 text-body font-medium" style={{ color: "var(--fg)" }}>
+            Runtime switch is waiting for recovery
+          </p>
+          <p className="m-0 text-caption" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
+            Claim {claim.claimId ?? "unknown"} is in phase {claim.phase ?? "unknown"}. Ordinary lifecycle and runtime
+            edits stay locked until recovery completes.
+          </p>
+          {error && (
+            <p className="m-0 text-caption" style={{ color: "var(--state-error)", marginTop: "var(--sp-1)" }}>
+              {error}
+            </p>
+          )}
+        </div>
+        <Button size="xs" variant="outline" onClick={onRecover} disabled={pending}>
+          <RefreshCcw className="h-3 w-3" />
+          {pending ? "Recovering…" : "Recover"}
+        </Button>
+      </div>
+    </Section>
+  );
+}
+
+function RuntimeRow({
+  name,
+  canSwitch,
+  switchPending,
+  onSwitch,
+}: {
+  name: string;
+  canSwitch: boolean;
+  switchPending: boolean;
+  onSwitch: (() => void) | undefined;
+}) {
+  const action =
+    canSwitch && onSwitch ? (
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={onSwitch}
+        disabled={switchPending}
+        title={switchPending ? "Switching runtime…" : "Move this agent to another runtime"}
+      >
+        <RefreshCcw className="h-3 w-3" />
+        {switchPending ? "Switching…" : "Switch runtime"}
+      </Button>
+    ) : null;
+  return <ConfigRow label="Runtime" value={name} action={action} />;
 }
 
 function ComputerRow(props: {

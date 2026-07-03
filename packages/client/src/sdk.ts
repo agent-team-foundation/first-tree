@@ -1,5 +1,6 @@
 import {
   type ActiveRuntimeChatIdsResponse,
+  AGENT_RUNTIME_SESSION_HEADER,
   AGENT_SELECTOR_HEADER,
   type Agent,
   type AgentRuntimeConfig,
@@ -50,6 +51,12 @@ export type SdkConfig = {
    * `request.agent`. Omit for admin/member-only calls (/me, /auth/*).
    */
   agentId?: string;
+  /**
+   * Ephemeral token returned by the current successful WS `agent:bind`.
+   * Agent-scoped HTTP includes it to prove the request comes from the active
+   * runtime binding, not merely from a user JWT that knows `X-Agent-Id`.
+   */
+  runtimeSessionToken?: string;
   /**
    * Optional `User-Agent` header sent on every request. Without it Node's
    * default `User-Agent: node` lands in trace backends — useless for forensics
@@ -208,6 +215,7 @@ export class FirstTreeHubSDK {
   private readonly _baseUrl: string;
   private readonly getAccessToken: AccessTokenProvider;
   private readonly _agentId: string | undefined;
+  private readonly _runtimeSessionToken: string | undefined;
   private readonly _userAgent: string | undefined;
   private readonly logger = createLogger("sdk");
 
@@ -215,6 +223,7 @@ export class FirstTreeHubSDK {
     this._baseUrl = config.serverUrl.replace(/\/+$/, "");
     this.getAccessToken = config.getAccessToken;
     this._agentId = config.agentId;
+    this._runtimeSessionToken = config.runtimeSessionToken;
     this._userAgent = config.userAgent;
   }
 
@@ -226,6 +235,11 @@ export class FirstTreeHubSDK {
   /** The agent UUID this SDK is scoped to, if any. */
   get agentId(): string | undefined {
     return this._agentId;
+  }
+
+  /** Ephemeral runtime-session token scoped to the current WS bind, if any. */
+  get runtimeSessionToken(): string | undefined {
+    return this._runtimeSessionToken;
   }
 
   /** Validate current JWT + X-Agent-Id, return agent identity. */
@@ -587,6 +601,9 @@ export class FirstTreeHubSDK {
     };
     if (this._agentId) {
       headers[AGENT_SELECTOR_HEADER] = this._agentId;
+      if (this._runtimeSessionToken) {
+        headers[AGENT_RUNTIME_SESSION_HEADER] = this._runtimeSessionToken;
+      }
     }
     if (this._userAgent) {
       headers["User-Agent"] = this._userAgent;

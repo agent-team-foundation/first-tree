@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { requireAgentAccess } from "../scope/require-resource.js";
+import { assertNoRuntimeSwitchInProgress } from "../services/agent-runtime-switch.js";
 import { assertMutableAgentIsNotLandingCampaignTrial } from "../services/landing-campaigns/guards.js";
 
 /**
@@ -19,6 +20,7 @@ export async function agentConfigRoutes(app: FastifyInstance): Promise<void> {
   app.patch<{ Params: { uuid: string } }>("/:uuid/config", { config: { otelRecordBody: true } }, async (request) => {
     const { agent, scope } = await requireAgentAccess(request, app.db, "manage");
     assertMutableAgentIsNotLandingCampaignTrial(agent);
+    assertNoRuntimeSwitchInProgress(agent);
     const body = updateAgentRuntimeConfigSchema.parse(request.body);
     const cfg = await app.configService.update(request.params.uuid, body, scope.memberId);
     return app.resourcesService.resolveRuntimeConfig(cfg);

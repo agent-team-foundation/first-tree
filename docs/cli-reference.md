@@ -249,7 +249,7 @@ first-tree agent config
 
 ```
 first-tree agent bind
-└── client <agentName> --client-id <id>             # first-time bind only; id is immutable once set
+└── client <agentName> --client-id <id>             # first-time bind only; later moves use managed runtime switch
 ```
 
 ### agent workspace

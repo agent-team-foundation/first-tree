@@ -13,11 +13,13 @@ import {
   AGENT_VISIBILITY,
   DEFAULT_RUNTIME_PROVIDER,
   defaultRuntimeConfigPayload,
+  findReservedAgentMetadataKey,
   isReservedAgentName,
+  RESERVED_AGENT_METADATA_KEYS,
   runtimeProviderSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, asc, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, ilike, isNull, lt, ne, or, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
@@ -54,6 +56,28 @@ export type NewChatDefaultCandidateAgent = {
   managerId: string | null;
   createdAt: Date;
 };
+
+export function assertUserAgentMetadataHasNoReservedKeys(metadata: Record<string, unknown> | undefined): void {
+  const key = findReservedAgentMetadataKey(metadata);
+  if (!key) return;
+  throw new BadRequestError(`metadata.${key} is reserved for First Tree internal runtime state`);
+}
+
+export function stripReservedAgentMetadata(metadata: unknown): Record<string, unknown> {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return {};
+  const publicMetadata = { ...(metadata as Record<string, unknown>) };
+  for (const key of RESERVED_AGENT_METADATA_KEYS) {
+    delete publicMetadata[key];
+  }
+  return publicMetadata;
+}
+
+function userMetadataUpdateExpression(metadata: Record<string, unknown>) {
+  return sql`${JSON.stringify(metadata)}::jsonb || jsonb_strip_nulls(jsonb_build_object(
+    'runtimeSwitch', ${agents.metadata}->'runtimeSwitch',
+    'runtimeSession', ${agents.metadata}->'runtimeSession'
+  ))`;
+}
 
 /**
  * Derive the relative URL clients should use to fetch a manager-uploaded
@@ -228,7 +252,7 @@ export function legacyWireAgentType(type: string): "human" | "personal_assistant
  * Skipped entirely for human agents (no clientId) and when `force` is set
  * (e.g. operator overrides for an offline client).
  */
-async function ensureClientSupportsRuntimeProvider(
+export async function ensureClientSupportsRuntimeProvider(
   db: SelectDbLike,
   clientId: string | null,
   runtimeProvider: RuntimeProvider,
@@ -390,6 +414,7 @@ export async function createAgent(
   const uuid = uuidv7();
   const name = data.name ?? null;
   const runtimeProvider: RuntimeProvider = data.runtimeProvider ?? DEFAULT_RUNTIME_PROVIDER;
+  assertUserAgentMetadataHasNoReservedKeys(data.metadata);
   if (name?.startsWith(RESERVED_AGENT_NAME_PREFIX)) {
     throw new BadRequestError(
       `Agent name "${name}" is reserved — names starting with "${RESERVED_AGENT_NAME_PREFIX}" are First Tree-internal`,
@@ -1011,18 +1036,17 @@ export async function getNewChatDefaultCandidate(
 export async function updateAgent(db: Database, uuid: string, data: UpdateAgent) {
   const agent = await getAgent(db, uuid);
 
-  // `clientId` is one-shot via this entry: NULL → ID is allowed (admin
-  // claiming an unbound agent for a known client). Once bound, an agent's
-  // client is immutable — there is no move/re-bind path. ID → null and
-  // ID → another ID are both rejected.
+  // `clientId` is one-shot via this generic PATCH entry: NULL → ID is allowed
+  // (admin claiming an unbound agent for a known client). Once bound, direct
+  // ID → null and ID → another ID updates are rejected; runtime moves must go
+  // through the managed switch-runtime flow so sessions and local slots converge.
   if (data.clientId !== undefined) {
     if (data.clientId === null) {
       throw new BadRequestError("clientId cannot be cleared — once bound, an agent stays bound to its client");
     }
     if (agent.clientId !== null && agent.clientId !== data.clientId) {
       throw new BadRequestError(
-        "clientId is immutable once set — an agent cannot be moved to another client. " +
-          "Provision a new agent on the target client instead.",
+        "clientId cannot be changed through PATCH once set — use the managed runtime switch flow instead.",
       );
     }
   }
@@ -1040,7 +1064,10 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
     updates.delegateMention = data.delegateMention;
   }
   if (data.visibility !== undefined) updates.visibility = data.visibility;
-  if (data.metadata !== undefined) updates.metadata = data.metadata;
+  if (data.metadata !== undefined) {
+    assertUserAgentMetadataHasNoReservedKeys(data.metadata);
+    (updates as Record<string, unknown>).metadata = userMetadataUpdateExpression(data.metadata);
+  }
   // Explicit null clears the override (renderer falls back to djb2 hash).
   // Omitting the field leaves the column untouched.
   if (data.avatarColorToken !== undefined) updates.avatarColorToken = data.avatarColorToken;

@@ -1,4 +1,4 @@
-import { AGENT_SELECTOR_HEADER } from "@first-tree/shared";
+import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Database } from "../db/connection.js";
@@ -6,6 +6,16 @@ import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
 import { ForbiddenError, UnauthorizedError } from "../errors.js";
+import { validateAgentRuntimeSession } from "../services/agent-runtime-session.js";
+
+type AgentSelectorOptions = {
+  enforceRuntimeSession?: boolean;
+  logger?: {
+    warn: (obj: Record<string, unknown>, msg: string) => void;
+  };
+};
+
+const legacyRuntimeHttpWarnedAgentIds = new Set<string>();
 
 /**
  * Agent-scoped HTTP authentication hook. Must run **after** userAuthHook
@@ -23,7 +33,7 @@ import { ForbiddenError, UnauthorizedError } from "../errors.js";
  *   5. Populates `request.agent` so downstream handlers can keep using the
  *      same `AgentIdentity` shape.
  */
-export function agentSelectorHook(db: Database) {
+export function agentSelectorHook(db: Database, options: AgentSelectorOptions = {}) {
   return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
     const user = request.user;
     if (!user) {
@@ -93,6 +103,21 @@ export function agentSelectorHook(db: Database) {
       // Rule R-RUN: non-human agents must be pinned to a client owned by the
       // caller's user.
       throw new ForbiddenError("Agent not runnable by this user");
+    } else {
+      const runtimeSessionToken = request.headers[AGENT_RUNTIME_SESSION_HEADER];
+      if (typeof runtimeSessionToken === "string" && runtimeSessionToken.length > 0) {
+        if (!(await validateAgentRuntimeSession(db, row.uuid, row.clientId, runtimeSessionToken))) {
+          throw new ForbiddenError("Invalid agent runtime session");
+        }
+      } else if (options.enforceRuntimeSession) {
+        throw new ForbiddenError(`Missing ${AGENT_RUNTIME_SESSION_HEADER} header`);
+      } else if (!legacyRuntimeHttpWarnedAgentIds.has(row.uuid)) {
+        legacyRuntimeHttpWarnedAgentIds.add(row.uuid);
+        options.logger?.warn(
+          { agentId: row.uuid, clientId: row.clientId },
+          "legacy agent-scoped HTTP without runtime session token accepted",
+        );
+      }
     }
 
     request.agent = {

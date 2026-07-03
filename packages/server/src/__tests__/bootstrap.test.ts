@@ -47,6 +47,8 @@ const baseServerConfig: ServerConfig = {
   },
   observability: { logging: { level: "error", format: "json", bridgeToSpanLevel: "off" } },
   runtime: {
+    agentHttpTokenEnforcement: false,
+    runtimeSwitchFaultInjection: false,
     pollingIntervalSeconds: 5,
     presenceCleanupSeconds: 60,
     archiveSweepIntervalSeconds: 0,

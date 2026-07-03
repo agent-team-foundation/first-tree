@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -388,6 +388,51 @@ describe("SessionManager edge coverage", () => {
     internals(sm).evictedMappings.set("chat-extra", { claudeSessionId: "evicted-extra", lastActivity: 2_000 });
     internals(sm).persistRegistry();
     await sm.shutdown();
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("clears persisted mappings on destructive runtime-switch shutdown", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ft-session-registry-switch-"));
+    const registryPath = join(dir, "sessions.json");
+    writeFileSync(
+      registryPath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "chat-persisted": {
+            claudeSessionId: "persisted-session",
+            lastActivity: new Date(1_000).toISOString(),
+            status: "evicted",
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const onStateChange = vi.fn();
+    const activeHandler = handler();
+    const sm = makeManager({ handlers: [activeHandler], registryPath, onStateChange });
+    expect(sm.getEvictedChatIds()).toContain("chat-persisted");
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-active" }));
+    expect(activeHandler.start).toHaveBeenCalled();
+    onStateChange.mockClear();
+    internals(sm).evictedMappings.set("chat-extra", { claudeSessionId: "extra-session", lastActivity: 2_000 });
+    internals(sm).persistRegistry();
+
+    await sm.shutdown("runtime switched by server", {
+      clearPersistedRegistry: true,
+      reportSuspendedSessions: false,
+    });
+
+    const data = JSON.parse(readFileSync(registryPath, "utf-8")) as { entries: Record<string, unknown> };
+    expect(data.entries).toEqual({});
+    expect(onStateChange).not.toHaveBeenCalledWith("chat-active", "suspended");
+
+    const reloaded = makeManager({ registryPath });
+    expect(reloaded.getEvictedChatIds()).toEqual([]);
+    await reloaded.shutdown();
 
     rmSync(dir, { recursive: true, force: true });
   });

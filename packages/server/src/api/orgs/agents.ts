@@ -61,6 +61,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     return {
       items: result.items.map(({ avatarImageUpdatedAt, userAvatarUrl, ...a }) => ({
         ...a,
+        metadata: agentService.stripReservedAgentMetadata(a.metadata),
         managerId: a.managerId ?? null,
         presenceStatus: a.presenceStatus ?? "offline",
         createdAt: a.createdAt.toISOString(),
@@ -96,6 +97,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     return {
       items: result.items.map(({ avatarImageUpdatedAt, userAvatarUrl, ...a }) => ({
         ...a,
+        metadata: agentService.stripReservedAgentMetadata(a.metadata),
         managerId: a.managerId ?? null,
         presenceStatus: a.presenceStatus ?? "offline",
         createdAt: a.createdAt.toISOString(),
@@ -162,6 +164,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     notifyClientAgentPinned(agent);
     return reply.status(201).send({
       ...agent,
+      metadata: agentService.stripReservedAgentMetadata(agent.metadata),
       createdAt: agent.createdAt.toISOString(),
       updatedAt: agent.updatedAt.toISOString(),
     });

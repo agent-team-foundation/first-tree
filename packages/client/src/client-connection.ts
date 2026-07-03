@@ -123,6 +123,8 @@ export type BoundAgent = {
    */
   displayName: string;
   agentType: string;
+  /** Ephemeral token returned by the current successful WS `agent:bind`. */
+  runtimeSessionToken?: string;
   sdk: FirstTreeHubSDK;
 };
 
@@ -1305,10 +1307,15 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
       const pending = ref ? this.pendingBinds.get(ref) : undefined;
       if (ref) this.pendingBinds.delete(ref);
       if (pending) {
+        const runtimeSessionToken =
+          typeof msg.runtimeSessionToken === "string" && msg.runtimeSessionToken.length > 0
+            ? msg.runtimeSessionToken
+            : undefined;
         const sdk = new FirstTreeHubSDK({
           serverUrl: this.serverUrl,
           getAccessToken: this.getAccessToken,
           agentId,
+          runtimeSessionToken,
           userAgent: this.userAgent,
         });
         const agent: BoundAgent = {
@@ -1318,6 +1325,7 @@ export class ClientConnection extends EventEmitter<ClientConnectionEvents> {
           // older server doesn't crash the runtime.
           displayName: (msg.displayName as string | null) ?? agentId,
           agentType: (msg.agentType as string) ?? "agent",
+          runtimeSessionToken,
           sdk,
         };
         this.boundAgents.set(agentId, agent);
