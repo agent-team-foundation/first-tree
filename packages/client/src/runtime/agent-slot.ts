@@ -318,6 +318,7 @@ export class AgentSlot {
         onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
         onRuntimeStateChange: (state) => this.reportRuntimeState(state),
         onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
+        confirmSessionEvent: (chatId, event) => this.confirmSessionEvent(chatId, event),
         onSessionRuntimeChange: (chatId, state) => this.reportSessionRuntime(chatId, state),
       });
 
@@ -536,6 +537,10 @@ export class AgentSlot {
 
   private reportSessionEvent(chatId: string, event: SessionEvent): void {
     this.clientConnection.reportSessionEvent(this.config.agentId, chatId, event);
+  }
+
+  private confirmSessionEvent(chatId: string, event: SessionEvent): Promise<void> {
+    return this.clientConnection.reportSessionEventConfirmed(this.config.agentId, chatId, event);
   }
 
   private reportSessionRuntime(chatId: string, state: RuntimeState): void {

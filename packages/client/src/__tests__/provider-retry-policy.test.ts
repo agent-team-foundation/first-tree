@@ -49,6 +49,31 @@ describe("classifyProviderFailure", () => {
     ).toMatchObject({ category: "provider_capacity", reasonCode: "provider_rate_limited" });
   });
 
+  it("carries Retry-After into session capacity retry scheduling", () => {
+    const err = Object.assign(new Error("Rate limit exceeded, retry in 53 seconds"), {
+      statusCode: 429,
+      retryAfterMs: 53_000,
+    });
+    const c = classifyProviderFailure(err, {
+      provider: "codex",
+      scope: "session_start",
+      source: "sdk",
+    });
+    expect(c).toMatchObject({
+      category: "provider_capacity",
+      reasonCode: "provider_rate_limited",
+      retryAfterMs: 53_000,
+    });
+    expect(
+      decideProviderRetry({
+        classification: c,
+        scope: "session_start",
+        attempt: 1,
+        replaySafety: "pre_provider",
+      }),
+    ).toMatchObject({ action: "retry", delayMs: 53_000, retryMode: "background" });
+  });
+
   it("maps Claude session limits to unrecoverable provider capacity", () => {
     const c = classifyProviderFailure(new Error("You've hit your session limit \u00b7 resets 9:50pm (Asia/Shanghai)"), {
       provider: "claude-code",

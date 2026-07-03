@@ -633,7 +633,11 @@ export class FirstTreeHubSDK {
     } catch {
       message = body;
     }
-    return new SdkError(response.status, message);
+    const retryAfter = response.headers.get("retry-after") ?? undefined;
+    return new SdkError(response.status, message, {
+      retryAfter,
+      retryAfterMs: parseRetryAfterMs(retryAfter),
+    });
   }
 }
 
@@ -641,10 +645,25 @@ export class SdkError extends Error {
   constructor(
     public readonly statusCode: number,
     message: string,
+    opts: { retryAfter?: string; retryAfterMs?: number } = {},
   ) {
     super(message);
     this.name = "SdkError";
+    this.retryAfter = opts.retryAfter;
+    this.retryAfterMs = opts.retryAfterMs;
   }
+
+  public readonly retryAfter?: string;
+  public readonly retryAfterMs?: number;
+}
+
+function parseRetryAfterMs(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.floor(seconds * 1000);
+  const dateMs = Date.parse(value);
+  if (!Number.isFinite(dateMs)) return undefined;
+  return Math.max(0, dateMs - Date.now());
 }
 
 /**

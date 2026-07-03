@@ -31,6 +31,11 @@ export class Deduplicator {
     return false;
   }
 
+  /** Check without recording a new id. */
+  has(id: string): boolean {
+    return this.seen.has(id);
+  }
+
   /**
    * Drop every recorded id that starts with `prefix`. Used by the runtime
    * when a chat is LRU-evicted: the in-flight entries for that chat won't

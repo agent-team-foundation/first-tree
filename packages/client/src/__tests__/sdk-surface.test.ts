@@ -193,6 +193,23 @@ describe("FirstTreeHubSDK public surface", () => {
     });
   });
 
+  it("preserves Retry-After on SDK errors for provider backoff policy", async () => {
+    makeFetchMock([
+      new Response(JSON.stringify({ error: "Rate limit exceeded, retry in 53 seconds" }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "53" },
+      }),
+    ]);
+
+    await expect(makeSdk().listChats()).rejects.toMatchObject({
+      name: "SdkError",
+      statusCode: 429,
+      message: "Rate limit exceeded, retry in 53 seconds",
+      retryAfter: "53",
+      retryAfterMs: 53_000,
+    });
+  });
+
   it("checks anonymous health reachability with optional user agent", async () => {
     const fetchMock = makeFetchMock([new Response(null, { status: 200 }), new Response(null, { status: 503 })]);
     const sdk = makeSdk();
