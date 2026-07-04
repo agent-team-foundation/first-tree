@@ -17,6 +17,7 @@ import { Identicon } from "../components/identicon.js";
 import { PageHeader } from "../components/ui/page-header.js";
 import { Panel, PanelBody } from "../components/ui/panel.js";
 import { ContextTreeBuildEntry } from "./context-tree-build-entry.js";
+import { ContextSectionTabs } from "./docs/context-section-tabs.js";
 
 const CONTEXT_WINDOW = "7d";
 // Live-feed refetch cadence. The usage feed inside the snapshot is what wants
@@ -64,6 +65,7 @@ export function ContextPage({ previewSnapshot }: { previewSnapshot?: ContextTree
         subtitle="Your team's Context Tree."
         right={liveStatusReady ? <LiveStatus snapshot={snapshot} /> : null}
       />
+      {!preview && <ContextSectionTabs active="tree" />}
       <div className="context-live-page">
         {!preview && query.isLoading ? <LoadingState /> : null}
         {!preview && query.error ? (
