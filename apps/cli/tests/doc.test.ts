@@ -1,0 +1,55 @@
+import { Command } from "commander";
+import { describe, expect, it } from "vitest";
+
+import { registerDocCommands } from "../src/commands/doc/index.js";
+import { slugFromFilename, titleFromMarkdown } from "../src/core/doc-review.js";
+
+describe("slugFromFilename", () => {
+  it("uses the basename without its extension", () => {
+    expect(slugFromFilename("/tmp/designs/Chat Rename Plan.md")).toBe("chat-rename-plan");
+    expect(slugFromFilename("proposal.md")).toBe("proposal");
+    expect(slugFromFilename("doc-review.v2.md")).toBe("doc-review-v2");
+  });
+
+  it("collapses non-alphanumeric runs and trims edge dashes", () => {
+    expect(slugFromFilename("__My  (Draft)__.md")).toBe("my-draft");
+    expect(slugFromFilename("设计文档.md")).toBeNull();
+    expect(slugFromFilename("---.md")).toBeNull();
+  });
+});
+
+describe("titleFromMarkdown", () => {
+  it("returns the first ATX heading at any level", () => {
+    expect(titleFromMarkdown("# Top Title\n\nbody")).toBe("Top Title");
+    expect(titleFromMarkdown("intro paragraph\n\n## Second-Level First\n# Later H1")).toBe("Second-Level First");
+  });
+
+  it("trims trailing whitespace and returns null without a heading", () => {
+    expect(titleFromMarkdown("### Padded Title   \n")).toBe("Padded Title");
+    expect(titleFromMarkdown("no headings here\njust prose")).toBeNull();
+    expect(titleFromMarkdown("")).toBeNull();
+    // A fence-like or #-less line must not match.
+    expect(titleFromMarkdown("#not-a-heading (no space)")).toBeNull();
+  });
+});
+
+describe("registerDocCommands", () => {
+  it("wires the doc namespace with every subcommand", () => {
+    const program = new Command();
+    registerDocCommands(program);
+
+    const doc = program.commands.find((c) => c.name() === "doc");
+    expect(doc).toBeDefined();
+    const names = (doc?.commands ?? []).map((c) => c.name()).sort();
+    expect(names).toEqual(["comment", "comments", "get", "list", "publish", "reply", "resolve", "status"]);
+  });
+
+  it("keeps subcommand descriptions non-empty (agents discover the surface via --help)", () => {
+    const program = new Command();
+    registerDocCommands(program);
+    const doc = program.commands.find((c) => c.name() === "doc");
+    for (const sub of doc?.commands ?? []) {
+      expect(sub.description().length, `description of ${sub.name()}`).toBeGreaterThan(10);
+    }
+  });
+});

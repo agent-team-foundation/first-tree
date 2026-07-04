@@ -58,6 +58,8 @@ type AgentRequestFn = (
  */
 export type CreateTestAppOptions = {
   channel?: Config["channel"];
+  /** Document review (docloop) routes. Defaults to enabled in tests. */
+  docsEnabled?: boolean;
   growthLandingPagesEnabled?: boolean;
   landingCampaignServiceUserId?: string;
   landingCampaignServiceOrgId?: string;
@@ -109,6 +111,11 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
             },
           }
         : {}),
+    },
+    docs: {
+      // Docloop is off by default in production config but on in tests so
+      // the document routes are exercised without per-test wiring.
+      enabled: opts.docsEnabled ?? true,
     },
     database: {
       url: process.env.DATABASE_URL ?? "",
