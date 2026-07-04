@@ -184,6 +184,17 @@ export function buildDocAnchor(input: BuildDocAnchorInput): DocAnchor | null {
   };
 }
 
+function locateInNormalized(norm: NormalizedText, anchor: DocAnchor): DocAnchorRange | null {
+  const normExact = normalize(anchor.exact);
+  if (normExact.length === 0) return null;
+
+  const occurrences = findAllOccurrences(norm.text, normExact);
+  if (occurrences.length === 0) return null;
+
+  const picked = pickOccurrence(norm.text, occurrences, normExact.length, anchor.prefix, anchor.suffix);
+  return toRawRange(norm, picked.normStart, picked.normEnd);
+}
+
 /**
  * Locate an anchor inside (a possibly different version of) the source.
  * Whitespace-insensitive; ambiguity resolves through the stored
@@ -191,13 +202,15 @@ export function buildDocAnchor(input: BuildDocAnchorInput): DocAnchor | null {
  * exists — the caller decides what "outdated" means.
  */
 export function locateDocAnchor(source: string, anchor: DocAnchor): DocAnchorRange | null {
-  const normExact = normalize(anchor.exact);
-  if (normExact.length === 0) return null;
+  return locateInNormalized(normalizeWithMap(source), anchor);
+}
 
+/**
+ * Locate many anchors against ONE source, normalizing the source once —
+ * the read-time re-anchor pass over a comment list would otherwise pay
+ * O(anchors × source length) in repeated normalization.
+ */
+export function locateDocAnchors(source: string, anchors: DocAnchor[]): Array<DocAnchorRange | null> {
   const norm = normalizeWithMap(source);
-  const occurrences = findAllOccurrences(norm.text, normExact);
-  if (occurrences.length === 0) return null;
-
-  const picked = pickOccurrence(norm.text, occurrences, normExact.length, anchor.prefix, anchor.suffix);
-  return toRawRange(norm, picked.normStart, picked.normEnd);
+  return anchors.map((anchor) => locateInNormalized(norm, anchor));
 }

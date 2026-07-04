@@ -13,6 +13,7 @@ export {
   buildDocAnchor,
   type DocAnchorRange,
   locateDocAnchor,
+  locateDocAnchors,
 } from "./doc-anchor.js";
 // -- Mention extraction (shared by the server fan-out resolver and other readers) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";

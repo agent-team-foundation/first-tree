@@ -10,7 +10,7 @@ import type {
   PublishDocRequest,
   PublishDocResponse,
 } from "@first-tree/shared";
-import { docCommentStatusSchema, docStatusSchema, locateDocAnchor } from "@first-tree/shared";
+import { docCommentStatusSchema, docStatusSchema, locateDocAnchors } from "@first-tree/shared";
 import { and, asc, desc, eq, isNull, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { docComments, docDocuments, docVersions } from "../db/schema/index.js";
@@ -446,8 +446,13 @@ async function markOutdatedAnchors(db: Database, document: DocDocumentRow, comme
     .limit(1);
   if (!latest) return;
 
-  for (const comment of candidates) {
-    if (!comment.anchor) continue;
-    comment.outdated = locateDocAnchor(latest.content, comment.anchor) === null;
-  }
+  // Batch locate: the latest content is normalized once for all candidates.
+  const anchored = candidates.filter((c) => c.anchor !== null);
+  const ranges = locateDocAnchors(
+    latest.content,
+    anchored.map((c) => c.anchor).filter((a) => a !== null),
+  );
+  anchored.forEach((comment, i) => {
+    comment.outdated = ranges[i] === null;
+  });
 }

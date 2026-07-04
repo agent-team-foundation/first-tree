@@ -37,7 +37,13 @@ export function planMarkdownImport(filePaths: string[]): DocImportPlan {
     }
     const slug = slugFromFilename(filePath);
     if (!slug || !docSlugSchema.safeParse(slug).success) {
-      skipped.push({ path: filePath, reason: "cannot derive a valid slug from the filename" });
+      skipped.push({
+        path: filePath,
+        // Non-latin filenames (e.g. CJK) land here — the document itself is
+        // importable, it just needs an explicit slug.
+        reason:
+          "cannot derive a valid slug from the filename; publish it individually with `doc publish --slug <slug>`",
+      });
       continue;
     }
     const holder = taken.get(slug);

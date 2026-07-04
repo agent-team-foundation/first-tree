@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { planMarkdownImport, titleFromMarkdown } from "../../core/doc-review.js";
-import { createSdk, handleSdkError } from "../_shared/local-agent.js";
+import { createSdk } from "../_shared/local-agent.js";
 import { parseDocStatus } from "./_shared.js";
 
 interface ImportOptions {
@@ -45,10 +45,10 @@ export function registerDocImportCommand(doc: Command): void {
         return;
       }
 
-      try {
-        const sdk = createSdk(options.agent);
-        const imported = [];
-        for (const candidate of plan.candidates) {
+      const sdk = createSdk(options.agent);
+      const imported = [];
+      for (const candidate of plan.candidates) {
+        try {
           const content = readFileSync(candidate.path, "utf8");
           const result = await sdk.publishDoc({
             slug: candidate.slug,
@@ -67,10 +67,20 @@ export function registerDocImportCommand(doc: Command): void {
             createdDocument: result.createdDocument,
             createdVersion: result.createdVersion,
           });
+        } catch (error) {
+          // Fail fast, but never lose the progress report: publishes are
+          // idempotent, so fixing the cause and re-running resumes cleanly.
+          const msg = error instanceof Error ? error.message : String(error);
+          const done =
+            imported.length > 0 ? imported.map((entry) => `${entry.slug}@v${entry.version}`).join(", ") : "none";
+          fail(
+            "IMPORT_PARTIAL",
+            `Failed at "${candidate.path}": ${msg}. Imported before the failure: ${done}. ` +
+              "Imports are idempotent — fix the cause and re-run to resume.",
+            1,
+          );
         }
-        success({ imported, skipped: plan.skipped });
-      } catch (error) {
-        handleSdkError(error);
       }
+      success({ imported, skipped: plan.skipped });
     });
 }
