@@ -60,12 +60,17 @@ export type DocAnchor = z.infer<typeof docAnchorSchema>;
 
 export const DOC_SLUG_MAX = 200;
 
-/** Org-unique, URL-safe document key; the idempotent publish handle. */
+/**
+ * Org-unique, URL-safe document key; the idempotent publish handle. No dots:
+ * a slug rides in the share URL path (`/context/docs/<slug>`), and the
+ * server's SPA fallback treats any path with an extension-like suffix as a
+ * static asset — a dotted slug would 404 on direct load / refresh.
+ */
 export const docSlugSchema = z
   .string()
   .min(1)
   .max(DOC_SLUG_MAX)
-  .regex(/^[a-z0-9]+(?:[-._][a-z0-9]+)*$/, "slug must be lowercase alphanumerics separated by single '-', '.' or '_'");
+  .regex(/^[a-z0-9]+(?:[-_][a-z0-9]+)*$/, "slug must be lowercase alphanumerics separated by single '-' or '_'");
 
 export const DOC_TITLE_MAX = 500;
 export const DOC_PROJECT_MAX = 200;

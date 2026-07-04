@@ -49,7 +49,7 @@ export function registerDocPublishCommand(doc: Command): void {
         fail(
           "INVALID_SLUG",
           `Cannot derive a valid slug from "${options.slug ?? file}". Pass --slug with lowercase ` +
-            "alphanumerics separated by '-', '.' or '_'.",
+            "alphanumerics separated by '-' or '_'.",
           2,
         );
       }
