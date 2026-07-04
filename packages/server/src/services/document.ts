@@ -10,7 +10,7 @@ import type {
   PublishDocRequest,
   PublishDocResponse,
 } from "@first-tree/shared";
-import { docCommentStatusSchema, docStatusSchema } from "@first-tree/shared";
+import { docCommentStatusSchema, docStatusSchema, locateDocAnchor } from "@first-tree/shared";
 import { and, asc, desc, eq, isNull, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { docComments, docDocuments, docVersions } from "../db/schema/index.js";
@@ -400,10 +400,10 @@ export async function setCommentStatus(
 
 export async function listComments(
   db: Database,
-  documentId: string,
+  document: DocDocumentRow,
   query: ListDocCommentsQuery,
 ): Promise<DocComment[]> {
-  const conditions = [eq(docComments.documentId, documentId)];
+  const conditions = [eq(docComments.documentId, document.id)];
   if (query.versionNumber !== undefined) conditions.push(eq(docComments.versionNumber, query.versionNumber));
 
   const rows = await db
@@ -412,15 +412,42 @@ export async function listComments(
     .where(and(...conditions))
     .orderBy(asc(docComments.createdAt));
 
-  if (query.status === undefined) return rows.map(toDocComment);
-
-  // Status filters operate on threads: a reply has no independent status, so
-  // it follows its top-level comment's.
-  const topLevelStatus = new Map<string, string>();
-  for (const row of rows) {
-    if (!row.parentId) topLevelStatus.set(row.id, row.status);
+  let filtered = rows;
+  if (query.status !== undefined) {
+    // Status filters operate on threads: a reply has no independent status,
+    // so it follows its top-level comment's.
+    const topLevelStatus = new Map<string, string>();
+    for (const row of rows) {
+      if (!row.parentId) topLevelStatus.set(row.id, row.status);
+    }
+    filtered = rows.filter((row) => (row.parentId ? topLevelStatus.get(row.parentId) : row.status) === query.status);
   }
-  return rows
-    .filter((row) => (row.parentId ? topLevelStatus.get(row.parentId) : row.status) === query.status)
-    .map(toDocComment);
+
+  const comments = filtered.map(toDocComment);
+  await markOutdatedAnchors(db, document, comments);
+  return comments;
+}
+
+/**
+ * Read-time re-anchoring: an anchored top-level comment made against an
+ * older version is "outdated" when its quote no longer locates in the
+ * LATEST version (whitespace-insensitive; same `locateDocAnchor` the web
+ * highlight path uses). Computed on read and never stored, so it always
+ * reflects the current head version.
+ */
+async function markOutdatedAnchors(db: Database, document: DocDocumentRow, comments: DocComment[]): Promise<void> {
+  const candidates = comments.filter((c) => c.anchor && !c.parentId && c.versionNumber !== document.latestVersion);
+  if (candidates.length === 0) return;
+
+  const [latest] = await db
+    .select({ content: docVersions.content })
+    .from(docVersions)
+    .where(and(eq(docVersions.documentId, document.id), eq(docVersions.number, document.latestVersion)))
+    .limit(1);
+  if (!latest) return;
+
+  for (const comment of candidates) {
+    if (!comment.anchor) continue;
+    comment.outdated = locateDocAnchor(latest.content, comment.anchor) === null;
+  }
 }

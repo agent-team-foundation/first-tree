@@ -183,6 +183,13 @@ export const docCommentSchema = z.object({
   body: z.string(),
   anchor: docAnchorSchema.nullable(),
   status: docCommentStatusSchema,
+  /**
+   * Computed on read, never stored: true when the comment's anchor no longer
+   * locates in the document's LATEST version (the quoted text was edited
+   * away). Only set for anchored top-level comments made against an older
+   * version; readers treat absence as false.
+   */
+  outdated: z.boolean().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

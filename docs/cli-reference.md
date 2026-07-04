@@ -453,11 +453,14 @@ first-tree doc
 │                  [--note <n>] [--status <s>] [--if-changed]   # create or append a version
 ├── get <slug> [--version <n>]                                  # read metadata + markdown content
 ├── list [--project <p>] [--status <s>] [--limit <n>] [--cursor <c>]
-├── comments <slug> [--status open|resolved] [--version <n>]    # list review comments
+├── comments <slug> [--status open|resolved] [--version <n>]
+│                   [--watch [seconds]]                         # list; --watch streams new ones as JSON lines
 ├── comment <slug> <body> [--quote <exact> [--prefix <t>] [--suffix <t>]] [--version <n>]
 ├── reply <commentId> <body>                                    # reply in a thread
 ├── resolve <commentId> [--reopen]                              # close (or reopen) a thread
-└── status <slug> [--set draft|in_review|approved|archived]     # show or move status
+├── status <slug> [--set draft|in_review|approved|archived]     # show or move status
+├── import <dir> [--project <p>] [--status <s>] [--dry-run]     # bulk-publish a directory of .md files
+└── export <dir> [--project <p>] [--status <s>]                 # dump library to <slug>.md files + manifest.json
 ```
 
 ```bash
@@ -473,7 +476,11 @@ Slug defaults to the slugified filename; title defaults to the file's first
 markdown heading (required on the first publish). Comment anchors are
 TextQuoteSelector-style (`exact` / `prefix` / `suffix`) against the markdown
 source, so an agent can locate every comment in the file it holds without
-line-number conventions.
+line-number conventions. Comments whose quote no longer exists in the latest
+version come back with `outdated: true` (computed on read). `import` skips
+`NODE.md` / `README.md` index files and is idempotent (re-runs only add
+versions for changed content); `export` is the guaranteed way out — plain
+markdown files plus a `manifest.json` of metadata.
 
 ---
 
