@@ -138,15 +138,12 @@ function ThreadCard({
         <button
           type="button"
           onClick={() => scrollToQuote(contentRef.current, root.anchor?.exact ?? "")}
-          className="block w-full text-left text-caption truncate"
+          className="block w-full border-0 border-l-2 border-solid border-l-[var(--primary)] text-left text-caption truncate"
           style={{
             color: "var(--fg-3)",
-            borderLeft: "2px solid var(--primary)",
             paddingLeft: "var(--sp-2)",
             marginBottom: "var(--sp-2)",
             background: "none",
-            border: "none",
-            borderInlineStart: "2px solid var(--primary)",
             cursor: "pointer",
           }}
           title="Locate in document"
@@ -262,12 +259,18 @@ function scrollToQuote(container: HTMLDivElement | null, quote: string): void {
     const parent = node.parentElement;
     if (parent && (parent.textContent ?? "").replace(/\s+/g, " ").toLowerCase().includes(needle)) {
       parent.scrollIntoView({ behavior: "smooth", block: "center" });
-      const previous = parent.style.backgroundColor;
-      parent.style.backgroundColor = "var(--bg-active)";
-      parent.style.transition = "background-color 1.2s ease";
-      window.setTimeout(() => {
-        parent.style.backgroundColor = previous;
-      }, 1200);
+      // A re-click during an active flash must not capture the highlight
+      // color as the value to restore.
+      if (parent.dataset.docFlash !== "1") {
+        parent.dataset.docFlash = "1";
+        const previous = parent.style.backgroundColor;
+        parent.style.backgroundColor = "var(--bg-active)";
+        parent.style.transition = "background-color 1.2s ease";
+        window.setTimeout(() => {
+          parent.style.backgroundColor = previous;
+          delete parent.dataset.docFlash;
+        }, 1200);
+      }
       return;
     }
     node = walker.nextNode();

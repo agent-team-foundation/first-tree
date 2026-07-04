@@ -2,7 +2,7 @@ import type { DocStatus, DocSummary } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { FileText, MessageSquare } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { Navigate, useNavigate } from "react-router";
 import { listDocs } from "../../api/docs.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Input } from "../../components/ui/input.js";
@@ -27,7 +27,7 @@ const STATUS_FILTERS: Array<{ value: string; label: string }> = [
  */
 export function DocsListPage() {
   const navigate = useNavigate();
-  const { organizationId } = useAuth();
+  const { organizationId, docsEnabled } = useAuth();
   const [statusFilter, setStatusFilter] = useState("all");
   const [search, setSearch] = useState("");
 
@@ -35,7 +35,7 @@ export function DocsListPage() {
   const query = useQuery({
     queryKey: ["docs", organizationId, status ?? "all"],
     queryFn: () => listDocs({ status, limit: 200 }),
-    enabled: !!organizationId,
+    enabled: !!organizationId && docsEnabled,
   });
 
   const items = useMemo(() => {
@@ -46,6 +46,12 @@ export function DocsListPage() {
       [doc.title, doc.slug, doc.project ?? ""].some((field) => field.toLowerCase().includes(needle)),
     );
   }, [query.data, search]);
+
+  // Deep links while the deployment flag is off land on the Context tree
+  // view instead of a half-broken page (the server 404s the API anyway).
+  if (!docsEnabled) {
+    return <Navigate to="/context" replace />;
+  }
 
   return (
     <>
@@ -77,7 +83,7 @@ export function DocsListPage() {
           </p>
         ) : null}
         {query.error ? (
-          <p className="text-label" style={{ color: "var(--destructive, #b91c1c)" }}>
+          <p className="text-label" style={{ color: "var(--danger)" }}>
             {query.error instanceof Error ? query.error.message : "Failed to load documents"}
           </p>
         ) : null}

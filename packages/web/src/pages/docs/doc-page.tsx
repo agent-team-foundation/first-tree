@@ -3,8 +3,9 @@ import { buildDocAnchor } from "@first-tree/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, MessageSquarePlus } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router";
+import { Link, Navigate, useParams } from "react-router";
 import { createDocComment, findDocBySlug, getDoc, listDocComments, setDocStatus } from "../../api/docs.js";
+import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { Markdown } from "../../components/ui/markdown.js";
 import { PageHeader } from "../../components/ui/page-header.js";
@@ -32,13 +33,14 @@ type PendingSelection = {
  */
 export function DocPage() {
   const { slug } = useParams<{ slug: string }>();
+  const { docsEnabled } = useAuth();
   const queryClient = useQueryClient();
   const [viewVersion, setViewVersion] = useState<number | null>(null);
 
   const summaryQuery = useQuery({
     queryKey: ["doc-by-slug", slug],
     queryFn: () => findDocBySlug(slug ?? ""),
-    enabled: !!slug,
+    enabled: !!slug && docsEnabled,
   });
   const summary = summaryQuery.data ?? null;
 
@@ -72,7 +74,6 @@ export function DocPage() {
   const [pending, setPending] = useState<PendingSelection | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerBody, setComposerBody] = useState("");
-  const [anchorFallback, setAnchorFallback] = useState(false);
 
   const captureSelection = useCallback(() => {
     if (composerOpen) return;
@@ -93,13 +94,18 @@ export function DocPage() {
       return;
     }
     // Rendered context on both sides of the selection, for anchor scoring
-    // when the quoted text appears more than once in the source.
+    // when the quoted text appears more than once in the source. Bound the
+    // ranges by the selection's own endpoints rather than slicing by
+    // `text.length` — Range vs Selection whitespace serialization differs
+    // across browsers, and endpoint-bounded ranges cannot drift.
     const before = range.cloneRange();
     before.setStart(wrap, 0);
-    const renderedPrefix = before.toString().slice(0, -text.length).slice(-SELECTION_CONTEXT_CHARS);
+    before.setEnd(range.startContainer, range.startOffset);
+    const renderedPrefix = before.toString().slice(-SELECTION_CONTEXT_CHARS);
     const after = range.cloneRange();
+    after.setStart(range.endContainer, range.endOffset);
     after.setEnd(wrap, wrap.childNodes.length);
-    const renderedSuffix = after.toString().slice(text.length).slice(0, SELECTION_CONTEXT_CHARS);
+    const renderedSuffix = after.toString().slice(0, SELECTION_CONTEXT_CHARS);
 
     const rect = range.getBoundingClientRect();
     const wrapRect = wrap.getBoundingClientRect();
@@ -112,15 +118,25 @@ export function DocPage() {
     });
   }, [composerOpen]);
 
+  // Built once per selection — the composer hint and the submit path share it
+  // (a large document would otherwise pay for two full normalizations).
+  const pendingAnchor = useMemo(
+    () =>
+      pending && doc
+        ? buildDocAnchor({
+            source: doc.version.content,
+            selectedText: pending.text,
+            renderedPrefix: pending.renderedPrefix,
+            renderedSuffix: pending.renderedSuffix,
+          })
+        : null,
+    [pending, doc],
+  );
+
   const commentMutation = useMutation({
     mutationFn: async () => {
       if (!doc || !pending) throw new Error("Nothing selected");
-      const anchor = buildDocAnchor({
-        source: doc.version.content,
-        selectedText: pending.text,
-        renderedPrefix: pending.renderedPrefix,
-        renderedSuffix: pending.renderedSuffix,
-      });
+      const anchor = pendingAnchor;
       const body = composerBody.trim();
       if (anchor) {
         return createDocComment(doc.id, { body, anchor, versionNumber: doc.version.number });
@@ -137,7 +153,6 @@ export function DocPage() {
       setComposerOpen(false);
       setComposerBody("");
       setPending(null);
-      setAnchorFallback(false);
       window.getSelection()?.removeAllRanges();
       invalidate();
     },
@@ -151,6 +166,11 @@ export function DocPage() {
     });
   }, [summary?.latestVersion]);
 
+  // Deep links while the deployment flag is off land on the Context tree
+  // view instead of a half-broken page (the server 404s the API anyway).
+  if (!docsEnabled) {
+    return <Navigate to="/context" replace />;
+  }
   if (summaryQuery.isLoading) {
     return <PageHeader title="Documents" subtitle="Loading…" />;
   }
@@ -171,7 +191,7 @@ export function DocPage() {
   }
 
   const shownVersion = doc?.version.number ?? summary.latestVersion;
-  const readOnlyOldVersion = shownVersion !== summary.latestVersion;
+  const viewingOldVersion = shownVersion !== summary.latestVersion;
 
   return (
     <>
@@ -231,7 +251,7 @@ export function DocPage() {
           onMouseUp={captureSelection}
           onKeyUp={captureSelection}
         >
-          {readOnlyOldVersion ? (
+          {viewingOldVersion ? (
             <p
               className="text-caption"
               style={{
@@ -259,22 +279,7 @@ export function DocPage() {
 
           {pending && !composerOpen ? (
             <div style={{ position: "absolute", top: pending.top, left: pending.left, zIndex: 20 }}>
-              <Button
-                size="sm"
-                onClick={() => {
-                  setAnchorFallback(
-                    doc
-                      ? buildDocAnchor({
-                          source: doc.version.content,
-                          selectedText: pending.text,
-                          renderedPrefix: pending.renderedPrefix,
-                          renderedSuffix: pending.renderedSuffix,
-                        }) === null
-                      : false,
-                  );
-                  setComposerOpen(true);
-                }}
-              >
+              <Button size="sm" onClick={() => setComposerOpen(true)}>
                 <MessageSquarePlus size={14} style={{ marginRight: 4 }} />
                 Comment
               </Button>
@@ -292,15 +297,15 @@ export function DocPage() {
                 background: "var(--bg-raised)",
                 border: "var(--hairline) solid var(--border)",
                 borderRadius: "var(--radius-input)",
-                boxShadow: "var(--shadow-overlay, 0 8px 24px rgba(0,0,0,0.16))",
+                boxShadow: "var(--shadow-md)",
                 padding: "var(--sp-3)",
               }}
             >
               <p className="m-0 text-caption truncate" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-2)" }}>
                 “{pending.text.length > 120 ? `${pending.text.slice(0, 120)}…` : pending.text}”
               </p>
-              {anchorFallback ? (
-                <p className="m-0 text-caption" style={{ color: "var(--warning-fg, #a16207)" }}>
+              {pendingAnchor === null ? (
+                <p className="m-0 text-caption" style={{ color: "var(--fg-warn-strong)" }}>
                   This selection spans formatting, so it will post as a document-level comment quoting the text.
                 </p>
               ) : null}

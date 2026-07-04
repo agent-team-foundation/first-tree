@@ -11,8 +11,8 @@ export const DOC_STATUS_LABELS: Record<DocStatus, string> = {
 
 const DOC_STATUS_COLORS: Record<DocStatus, { fg: string; bg: string }> = {
   draft: { fg: "var(--fg-3)", bg: "var(--bg-active)" },
-  in_review: { fg: "var(--warning-fg, #a16207)", bg: "var(--warning-bg, rgba(234,179,8,0.12))" },
-  approved: { fg: "var(--success-fg, #15803d)", bg: "var(--success-bg, rgba(34,197,94,0.12))" },
+  in_review: { fg: "var(--fg-warn-strong)", bg: "var(--bg-warn-soft)" },
+  approved: { fg: "var(--fg-success-strong)", bg: "var(--bg-success-soft)" },
   archived: { fg: "var(--fg-3)", bg: "transparent" },
 };
 
