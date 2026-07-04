@@ -29,7 +29,11 @@ export function registerDocPublishCommand(doc: Command): void {
     .option("--project <project>", "Project / grouping label")
     .option("--note <note>", "What changed in this version — shown in the version history")
     .option("--status <status>", "Set document status: draft | in_review | approved | archived")
-    .option("--if-changed", "Skip creating a new version when content is identical to the latest one")
+    .option(
+      "--if-changed",
+      "Skip creating a new version when content is identical to the latest one " +
+        "(--title/--project/--status still apply)",
+    )
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .action(async (file: string, options: PublishOptions) => {
       let content: string;

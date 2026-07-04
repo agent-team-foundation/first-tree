@@ -24,6 +24,15 @@ describe("titleFromMarkdown", () => {
     expect(titleFromMarkdown("intro paragraph\n\n## Second-Level First\n# Later H1")).toBe("Second-Level First");
   });
 
+  it("skips headings inside fenced code blocks", () => {
+    const fenced = ["```bash", "# not a title, a shell comment", "```", "", "## Real Title"].join("\n");
+    expect(titleFromMarkdown(fenced)).toBe("Real Title");
+    const tildeFenced = ["~~~", "# still code", "~~~", "# After Fence"].join("\n");
+    expect(titleFromMarkdown(tildeFenced)).toBe("After Fence");
+    // An unclosed fence swallows the rest of the doc.
+    expect(titleFromMarkdown("```\n# inside forever")).toBeNull();
+  });
+
   it("trims trailing whitespace and returns null without a heading", () => {
     expect(titleFromMarkdown("### Padded Title   \n")).toBe("Padded Title");
     expect(titleFromMarkdown("no headings here\njust prose")).toBeNull();

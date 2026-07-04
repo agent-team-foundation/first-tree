@@ -71,18 +71,22 @@ export const DOC_TITLE_MAX = 500;
 export const DOC_PROJECT_MAX = 200;
 export const DOC_VERSION_NOTE_MAX = 2_000;
 export const DOC_COMMENT_BODY_MAX = 20_000;
-/** Markdown source cap per version. Generous for design docs, bounded for abuse. */
-export const DOC_CONTENT_MAX_BYTES = 2_000_000;
+/**
+ * Markdown source cap per version, in UTF-16 code units (what
+ * `z.string().max` counts) — NOT bytes: all-CJK content can reach ~3× this
+ * in UTF-8. Generous for design docs, bounded for abuse.
+ */
+export const DOC_CONTENT_MAX_CHARS = 2_000_000;
 
 /**
  * Route-level body limit for the publish endpoints. Fastify's default JSON
- * body limit (~1 MiB) would reject documents the schema cap allows. The 2×
- * factor covers JSON-escaping and UTF-8 inflation of a max-size `content`
- * (quotes/backslashes/newlines escape to two bytes, astral characters encode
- * to two bytes per UTF-16 unit); the tail is headroom for the other fields.
+ * body limit (~1 MiB) would reject documents the schema cap allows. The 4×
+ * factor covers UTF-8 and JSON-escape inflation of a max-char `content`
+ * (BMP CJK encodes to 3 bytes per UTF-16 unit, astral pairs to 2 bytes per
+ * unit, common escapes to 2); the tail is headroom for the other fields.
  * The real content cap is enforced by `publishDocRequestSchema`.
  */
-export const DOC_PUBLISH_BODY_LIMIT = DOC_CONTENT_MAX_BYTES * 2 + 64 * 1024;
+export const DOC_PUBLISH_BODY_LIMIT = DOC_CONTENT_MAX_CHARS * 4 + 64 * 1024;
 
 export const publishDocRequestSchema = z.object({
   slug: docSlugSchema,
@@ -90,7 +94,7 @@ export const publishDocRequestSchema = z.object({
   title: z.string().trim().min(1).max(DOC_TITLE_MAX).optional(),
   /** Optional grouping label; null clears it, undefined keeps the current value. */
   project: z.string().trim().min(1).max(DOC_PROJECT_MAX).nullish(),
-  content: z.string().max(DOC_CONTENT_MAX_BYTES),
+  content: z.string().max(DOC_CONTENT_MAX_CHARS),
   /** What changed in this version — shown in the version history. */
   note: z.string().trim().max(DOC_VERSION_NOTE_MAX).optional(),
   status: docStatusSchema.optional(),

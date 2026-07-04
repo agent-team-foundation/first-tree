@@ -184,12 +184,31 @@ async function publishDocumentOnce(
         .where(and(eq(docVersions.documentId, existing.id), eq(docVersions.number, existing.latestVersion)))
         .limit(1);
       if (latest && latest.content === input.content) {
+        // `ifChanged` only skips the VERSION — metadata carried on the same
+        // call (title/project/status) still applies, so e.g.
+        // `doc publish --if-changed --status in_review` moves the status
+        // even when the content is untouched.
+        let row = existing;
+        if (input.title !== undefined || input.project !== undefined || input.status !== undefined) {
+          const [updated] = await tx
+            .update(docDocuments)
+            .set({
+              ...(input.title !== undefined ? { title: input.title } : {}),
+              ...(input.project !== undefined ? { project: input.project } : {}),
+              ...(input.status !== undefined ? { status: input.status } : {}),
+              updatedAt: new Date(),
+            })
+            .where(eq(docDocuments.id, existing.id))
+            .returning();
+          if (!updated) throw new Error("doc_documents update returned no row");
+          row = updated;
+        }
         return {
-          id: existing.id,
-          slug: existing.slug,
-          title: existing.title,
-          project: existing.project,
-          status: docStatusSchema.parse(existing.status),
+          id: row.id,
+          slug: row.slug,
+          title: row.title,
+          project: row.project,
+          status: docStatusSchema.parse(row.status),
           version: existing.latestVersion,
           createdDocument: false,
           createdVersion: false,

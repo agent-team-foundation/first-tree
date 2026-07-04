@@ -25,14 +25,23 @@ export function slugFromFilename(filePath: string): string | null {
 
 /**
  * Derive a title from markdown content: the first ATX heading wins,
- * whatever its level. Returns null when the document has no heading.
+ * whatever its level. Lines inside fenced code blocks are skipped so a
+ * `# comment` in a leading code sample is not mistaken for the title.
+ * Returns null when the document has no heading.
  */
 export function titleFromMarkdown(content: string): string | null {
+  let inFence = false;
   for (const line of content.split("\n")) {
     // trimEnd() + an unanchored-tail regex keeps matching linear: the lazy
     // `(.+?)\s*$` form backtracks quadratically on long whitespace runs
     // (CodeQL js/polynomial-redos).
-    const match = line.trimEnd().match(/^#{1,6}[ \t]+(.+)$/);
+    const trimmed = line.trimEnd();
+    if (/^ {0,3}(```|~~~)/.test(trimmed)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const match = trimmed.match(/^#{1,6}[ \t]+(.+)$/);
     if (match?.[1]) return match[1];
   }
   return null;

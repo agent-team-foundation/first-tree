@@ -131,6 +131,21 @@ describe("documents API", () => {
       const unchanged = await publishDoc(app, ctx, { slug: s, content: "two", ifChanged: true });
       expect(unchanged).toMatchObject({ version: 2, createdVersion: false });
 
+      // ifChanged only skips the version — metadata on the same call still applies.
+      const metaOnly = await publishDoc(app, ctx, {
+        slug: s,
+        content: "two",
+        ifChanged: true,
+        title: "V renamed",
+        status: "in_review",
+      });
+      expect(metaOnly).toMatchObject({
+        version: 2,
+        createdVersion: false,
+        title: "V renamed",
+        status: "in_review",
+      });
+
       const read = await humanRequest(app, ctx.accessToken)("GET", `/api/v1/documents/${v1.id}?version=2`);
       expect(read.json().version.note).toBe("second pass");
       const readV1 = await humanRequest(app, ctx.accessToken)("GET", `/api/v1/documents/${v1.id}?version=1`);
