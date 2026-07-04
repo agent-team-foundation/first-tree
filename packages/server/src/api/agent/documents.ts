@@ -1,5 +1,6 @@
 import {
   createDocCommentRequestSchema,
+  DOC_PUBLISH_BODY_LIMIT,
   listDocCommentsQuerySchema,
   listDocsQuerySchema,
   publishDocRequestSchema,
@@ -72,7 +73,7 @@ export async function agentDocumentRoutes(app: FastifyInstance): Promise<void> {
     return { comment, document };
   }
 
-  app.post("/documents", async (request) => {
+  app.post("/documents", { bodyLimit: DOC_PUBLISH_BODY_LIMIT }, async (request) => {
     const identity = requireAgent(request);
     const payload = publishDocRequestSchema.parse(request.body);
     const author = await docAuthorForAgentUuid(app.db, identity.uuid);

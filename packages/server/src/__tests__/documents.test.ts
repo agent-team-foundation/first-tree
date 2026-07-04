@@ -139,6 +139,59 @@ describe("documents API", () => {
       expect(missing.statusCode).toBe(404);
     });
 
+    it("serializes concurrent first publishes of one slug", async () => {
+      const app = getApp();
+      const ctx = await createAdminContext(app);
+      const s = slug("race");
+      const req = humanRequest(app, ctx.accessToken);
+
+      // No row exists yet, so FOR UPDATE cannot serialize these — the
+      // unique-violation retry in publishDocument must absorb the race.
+      const results = await Promise.all(
+        Array.from({ length: 5 }, (_, i) =>
+          req("POST", `/api/v1/orgs/${ctx.organizationId}/documents`, {
+            slug: s,
+            title: "Race",
+            content: `variant ${i}`,
+          }),
+        ),
+      );
+
+      for (const res of results) expect(res.statusCode).toBe(200);
+      const bodies = results.map((r) => {
+        const body: PublishDocResponse = r.json();
+        return body;
+      });
+      expect(bodies.filter((b) => b.createdDocument)).toHaveLength(1);
+      expect(new Set(bodies.map((b) => b.version)).size).toBe(5);
+
+      const read = await req("GET", `/api/v1/documents/${bodies[0]?.id}`);
+      expect(read.json().latestVersion).toBe(5);
+    });
+
+    it("accepts documents beyond Fastify's default body limit up to the content cap", async () => {
+      const app = getApp();
+      const ctx = await createAdminContext(app);
+      const req = humanRequest(app, ctx.accessToken);
+
+      // ~1.5M chars: over the ~1 MiB default JSON body limit, under the cap.
+      const large = await req("POST", `/api/v1/orgs/${ctx.organizationId}/documents`, {
+        slug: slug("large"),
+        title: "Large",
+        content: "x".repeat(1_500_000),
+      });
+      expect(large.statusCode).toBe(200);
+
+      // Over the schema cap: the body still arrives (route bodyLimit is
+      // higher) and Zod rejects it as a 400, not a transport-level 413.
+      const overCap = await req("POST", `/api/v1/orgs/${ctx.organizationId}/documents`, {
+        slug: slug("overcap"),
+        title: "Too Large",
+        content: "x".repeat(2_000_001),
+      });
+      expect(overCap.statusCode).toBe(400);
+    });
+
     it("lists with slug/status/project filters and paginates", async () => {
       const app = getApp();
       const ctx = await createAdminContext(app);

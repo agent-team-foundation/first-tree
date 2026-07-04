@@ -88,13 +88,40 @@ async function openCommentCount(db: Database, documentId: string): Promise<numbe
   return row?.count ?? 0;
 }
 
+/** Postgres `unique_violation` SQLSTATE — emitted on UNIQUE constraint trips. */
+const PG_UNIQUE_VIOLATION = "23505";
+
+function isUniqueViolation(err: unknown): boolean {
+  const code = (err as { code?: string })?.code ?? (err as { cause?: { code?: string } })?.cause?.code;
+  return code === PG_UNIQUE_VIOLATION;
+}
+
 /**
  * Idempotent publish: creates the document on first publish of a slug,
  * appends the next version otherwise. Runs in a transaction with the
  * document row locked so concurrent publishes of the same slug serialize
  * (the unique (document_id, number) index is the backstop).
+ *
+ * Concurrent FIRST publishes of one slug have no row for `FOR UPDATE` to
+ * lock, so both take the create branch and the loser trips
+ * `doc_documents_org_slug_unique` (Postgres reports it only after the
+ * winner's transaction commits). One retry then sees the committed row and
+ * takes the locked append path, so the loser publishes version 2 instead of
+ * surfacing a 500.
  */
 export async function publishDocument(
+  db: Database,
+  input: PublishDocRequest & { organizationId: string; author: DocAuthor },
+): Promise<PublishDocResponse> {
+  try {
+    return await publishDocumentOnce(db, input);
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    return await publishDocumentOnce(db, input);
+  }
+}
+
+async function publishDocumentOnce(
   db: Database,
   input: PublishDocRequest & { organizationId: string; author: DocAuthor },
 ): Promise<PublishDocResponse> {

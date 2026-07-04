@@ -544,10 +544,16 @@ export class FirstTreeHubSDK {
 
   /** Publish a markdown document: creates it on first publish of a slug, appends the next version after. */
   public async publishDoc(body: PublishDocRequest): Promise<PublishDocResponse> {
-    return this.requestJson<PublishDocResponse>("/api/v1/agent/documents", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    // No transport retry: publish is non-idempotent (a lost response +
+    // retry would append a duplicate version), same as createTaskChat.
+    return this.requestJson<PublishDocResponse>(
+      "/api/v1/agent/documents",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      { retry: false },
+    );
   }
 
   /** List the org's documents. `slug` filter is the slug→id resolution path for the CLI. */
@@ -585,18 +591,29 @@ export class FirstTreeHubSDK {
   }
 
   public async createDocComment(docId: string, body: CreateDocCommentRequest): Promise<DocComment> {
-    return this.requestJson<DocComment>(`/api/v1/agent/documents/${encodeURIComponent(docId)}/comments`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    // No transport retry: comment creation is non-idempotent (duplicate
+    // comments would pollute the review thread).
+    return this.requestJson<DocComment>(
+      `/api/v1/agent/documents/${encodeURIComponent(docId)}/comments`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      { retry: false },
+    );
   }
 
   /** Reply in a comment thread. The comment id alone addresses it — no document id needed. */
   public async replyDocComment(commentId: string, body: string): Promise<DocComment> {
-    return this.requestJson<DocComment>(`/api/v1/agent/document-comments/${encodeURIComponent(commentId)}/replies`, {
-      method: "POST",
-      body: JSON.stringify({ body }),
-    });
+    // No transport retry — same non-idempotency as createDocComment.
+    return this.requestJson<DocComment>(
+      `/api/v1/agent/document-comments/${encodeURIComponent(commentId)}/replies`,
+      {
+        method: "POST",
+        body: JSON.stringify({ body }),
+      },
+      { retry: false },
+    );
   }
 
   /** Resolve or reopen a top-level comment (replies follow their thread). */

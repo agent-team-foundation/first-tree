@@ -1,4 +1,4 @@
-import { listDocsQuerySchema, publishDocRequestSchema } from "@first-tree/shared";
+import { DOC_PUBLISH_BODY_LIMIT, listDocsQuerySchema, publishDocRequestSchema } from "@first-tree/shared";
 import type { FastifyInstance } from "fastify";
 import { requireOrgMembership } from "../../scope/require-org.js";
 import { docAuthorForAgentUuid } from "../../services/doc-author.js";
@@ -23,7 +23,7 @@ export async function orgDocumentRoutes(app: FastifyInstance): Promise<void> {
     return listDocuments(app.db, scope.organizationId, query);
   });
 
-  app.post<{ Params: { orgId: string } }>("/", async (request) => {
+  app.post<{ Params: { orgId: string } }>("/", { bodyLimit: DOC_PUBLISH_BODY_LIMIT }, async (request) => {
     const scope = await requireOrgMembership(request, app.db);
     const payload = publishDocRequestSchema.parse(request.body);
     const author = await docAuthorForAgentUuid(app.db, scope.humanAgentId);

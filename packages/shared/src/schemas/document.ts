@@ -74,6 +74,16 @@ export const DOC_COMMENT_BODY_MAX = 20_000;
 /** Markdown source cap per version. Generous for design docs, bounded for abuse. */
 export const DOC_CONTENT_MAX_BYTES = 2_000_000;
 
+/**
+ * Route-level body limit for the publish endpoints. Fastify's default JSON
+ * body limit (~1 MiB) would reject documents the schema cap allows. The 2×
+ * factor covers JSON-escaping and UTF-8 inflation of a max-size `content`
+ * (quotes/backslashes/newlines escape to two bytes, astral characters encode
+ * to two bytes per UTF-16 unit); the tail is headroom for the other fields.
+ * The real content cap is enforced by `publishDocRequestSchema`.
+ */
+export const DOC_PUBLISH_BODY_LIMIT = DOC_CONTENT_MAX_BYTES * 2 + 64 * 1024;
+
 export const publishDocRequestSchema = z.object({
   slug: docSlugSchema,
   /** Required on first publish; optional afterwards (existing title kept). */
