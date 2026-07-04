@@ -12,10 +12,14 @@ import { basename } from "node:path";
  */
 export function slugFromFilename(filePath: string): string | null {
   const base = basename(filePath).replace(/\.[^.]+$/, "");
+  // split + filter instead of a trim-dashes regex: every piece is matched by
+  // one unambiguous quantifier, so runtime stays linear on adversarial names
+  // (CodeQL js/polynomial-redos).
   const slug = base
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean)
+    .join("-");
   return slug.length > 0 ? slug : null;
 }
 
@@ -25,7 +29,10 @@ export function slugFromFilename(filePath: string): string | null {
  */
 export function titleFromMarkdown(content: string): string | null {
   for (const line of content.split("\n")) {
-    const match = line.match(/^#{1,6}\s+(.+?)\s*$/);
+    // trimEnd() + an unanchored-tail regex keeps matching linear: the lazy
+    // `(.+?)\s*$` form backtracks quadratically on long whitespace runs
+    // (CodeQL js/polynomial-redos).
+    const match = line.trimEnd().match(/^#{1,6}[ \t]+(.+)$/);
     if (match?.[1]) return match[1];
   }
   return null;
