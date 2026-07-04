@@ -46,6 +46,17 @@ describe("buildDocAnchor", () => {
     expect(buildDocAnchor({ source: SOURCE, selectedText: "not in the document" })).toBeNull();
     expect(buildDocAnchor({ source: SOURCE, selectedText: "   " })).toBeNull();
   });
+
+  it("returns null when whitespace re-expansion pushes the raw exact past the schema cap", () => {
+    // Normalized selection is well under the cap, but the source stores the
+    // same words separated by huge whitespace runs — the raw slice would
+    // exceed DOC_ANCHOR_EXACT_MAX and be rejected server-side.
+    const words = Array.from({ length: 40 }, (_, i) => `word${i}`);
+    const source = `intro\n${words.join("\n".repeat(60))}\noutro`;
+    const selected = words.join(" ");
+    expect(selected.length).toBeLessThan(2_000);
+    expect(buildDocAnchor({ source, selectedText: selected })).toBeNull();
+  });
 });
 
 describe("locateDocAnchor", () => {

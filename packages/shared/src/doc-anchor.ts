@@ -169,10 +169,16 @@ export function buildDocAnchor(input: BuildDocAnchorInput): DocAnchor | null {
   );
   const range = toRawRange(norm, picked.normStart, picked.normEnd);
 
+  const exact = input.source.slice(range.start, range.end);
+  // The normalized selection fit the cap, but the RAW slice re-expands the
+  // collapsed whitespace — if that pushes past the schema limit the server
+  // would reject the comment, so degrade to the document-level fallback.
+  if (exact.length > DOC_ANCHOR_EXACT_MAX) return null;
+
   const prefix = input.source.slice(Math.max(0, range.start - ANCHOR_CONTEXT_CHARS), range.start);
   const suffix = input.source.slice(range.end, range.end + ANCHOR_CONTEXT_CHARS);
   return {
-    exact: input.source.slice(range.start, range.end),
+    exact,
     ...(prefix.length > 0 ? { prefix: prefix.slice(-DOC_ANCHOR_CONTEXT_MAX) } : {}),
     ...(suffix.length > 0 ? { suffix: suffix.slice(0, DOC_ANCHOR_CONTEXT_MAX) } : {}),
   };
