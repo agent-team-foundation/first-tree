@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDocAnchor, locateDocAnchor } from "../doc-anchor.js";
+import { buildDocAnchor, locateDocAnchor, locateDocAnchors } from "../doc-anchor.js";
 
 const SOURCE = [
   "# Design Doc",
@@ -102,5 +102,24 @@ describe("locateDocAnchor", () => {
     expect(range).not.toBeNull();
     if (!range) return;
     expect(reflowed.slice(range.start, range.end)).toBe("audit\n  trails   matter");
+  });
+});
+
+describe("locateDocAnchors", () => {
+  it("locates a batch against one source with per-anchor results", () => {
+    const ranges = locateDocAnchors(SOURCE, [
+      { exact: "soft delete" },
+      { exact: "no longer present" },
+      { exact: "The cache is per-tenant", suffix: " on purpose." },
+    ]);
+    expect(ranges).toHaveLength(3);
+    expect(ranges[0]).not.toBeNull();
+    expect(ranges[1]).toBeNull();
+    const third = ranges[2];
+    expect(third).not.toBeNull();
+    if (!third) return;
+    expect(SOURCE.slice(third.start, third.end)).toBe("The cache is per-tenant");
+    // Matches the single-anchor API result exactly.
+    expect(third).toEqual(locateDocAnchor(SOURCE, { exact: "The cache is per-tenant", suffix: " on purpose." }));
   });
 });

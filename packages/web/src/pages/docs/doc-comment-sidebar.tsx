@@ -161,6 +161,15 @@ function ThreadCard({
             on v{root.versionNumber}
           </span>
         ) : null}
+        {root.outdated ? (
+          <span
+            className="text-caption"
+            style={{ color: "var(--fg-warn-strong)" }}
+            title="The quoted text no longer exists in the latest version"
+          >
+            outdated
+          </span>
+        ) : null}
         <div style={{ flex: 1 }} />
         {root.status === "open" ? (
           <button

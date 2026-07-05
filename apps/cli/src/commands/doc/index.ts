@@ -1,7 +1,9 @@
 import type { Command } from "commander";
 import { registerDocCommentCommand } from "./comment.js";
 import { registerDocCommentsCommand } from "./comments.js";
+import { registerDocExportCommand } from "./export.js";
 import { registerDocGetCommand } from "./get.js";
+import { registerDocImportCommand } from "./import.js";
 import { registerDocListCommand } from "./list.js";
 import { registerDocPublishCommand } from "./publish.js";
 import { registerDocReplyCommand } from "./reply.js";
@@ -23,4 +25,6 @@ export function registerDocCommands(program: Command): void {
   registerDocReplyCommand(doc);
   registerDocResolveCommand(doc);
   registerDocStatusCommand(doc);
+  registerDocImportCommand(doc);
+  registerDocExportCommand(doc);
 }

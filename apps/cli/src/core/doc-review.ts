@@ -1,9 +1,61 @@
 import { basename } from "node:path";
+import { docSlugSchema } from "@first-tree/shared";
 
 /**
  * Document review (docloop) CLI helpers — the pure logic behind the `doc`
  * namespace commands (apps/cli/src/commands/doc/).
  */
+
+/** Index-style files a directory import skips by default. */
+const IMPORT_SKIP_NAMES = new Set(["node.md", "readme.md"]);
+
+export type DocImportCandidate = { path: string; slug: string };
+export type DocImportPlan = {
+  candidates: DocImportCandidate[];
+  skipped: Array<{ path: string; reason: string }>;
+};
+
+/**
+ * Turn a directory listing into an import plan: one candidate per markdown
+ * file with a derivable, unique slug. Index files (NODE.md / README.md —
+ * tree-style directories carry them) and slug collisions are skipped with a
+ * reason rather than silently dropped, so `--dry-run` shows the full story.
+ */
+export function planMarkdownImport(filePaths: string[]): DocImportPlan {
+  const candidates: DocImportCandidate[] = [];
+  const skipped: Array<{ path: string; reason: string }> = [];
+  const taken = new Map<string, string>();
+  for (const filePath of filePaths) {
+    const name = basename(filePath).toLowerCase();
+    if (!name.endsWith(".md")) {
+      skipped.push({ path: filePath, reason: "not a markdown file" });
+      continue;
+    }
+    if (IMPORT_SKIP_NAMES.has(name)) {
+      skipped.push({ path: filePath, reason: "index file (NODE.md / README.md)" });
+      continue;
+    }
+    const slug = slugFromFilename(filePath);
+    if (!slug || !docSlugSchema.safeParse(slug).success) {
+      skipped.push({
+        path: filePath,
+        // Non-latin filenames (e.g. CJK) land here — the document itself is
+        // importable, it just needs an explicit slug.
+        reason:
+          "cannot derive a valid slug from the filename; publish it individually with `doc publish --slug <slug>`",
+      });
+      continue;
+    }
+    const holder = taken.get(slug);
+    if (holder) {
+      skipped.push({ path: filePath, reason: `slug "${slug}" already taken by ${holder}` });
+      continue;
+    }
+    taken.set(slug, filePath);
+    candidates.push({ path: filePath, slug });
+  }
+  return { candidates, skipped };
+}
 
 /**
  * Derive a publishable slug from a file path: basename without the extension,

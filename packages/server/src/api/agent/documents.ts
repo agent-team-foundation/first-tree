@@ -104,7 +104,7 @@ export async function agentDocumentRoutes(app: FastifyInstance): Promise<void> {
     const identity = requireAgent(request);
     const document = await requireOrgDocument(app.db, identity.organizationId, request.params.docId);
     const query = listDocCommentsQuerySchema.parse(request.query);
-    return { items: await listComments(app.db, document.id, query) };
+    return { items: await listComments(app.db, document, query) };
   });
 
   app.post<{ Params: { docId: string } }>("/documents/:docId/comments", async (request) => {

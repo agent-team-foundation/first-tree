@@ -309,6 +309,44 @@ describe("documents API", () => {
       expect(summary.json().openCommentCount).toBe(0);
     });
 
+    it("marks anchored comments outdated when their quote disappears from the latest version", async () => {
+      const app = getApp();
+      const ctx = await createAdminContext(app);
+      const doc = await publishDoc(app, ctx, { slug: slug("anchored"), title: "A", content: "alpha beta gamma" });
+      const req = humanRequest(app, ctx.accessToken);
+
+      const kept = await req("POST", `/api/v1/documents/${doc.id}/comments`, {
+        body: "keep me",
+        anchor: { exact: "alpha" },
+      });
+      const dropped = await req("POST", `/api/v1/documents/${doc.id}/comments`, {
+        body: "drop me",
+        anchor: { exact: "beta" },
+      });
+      expect(kept.statusCode).toBe(200);
+      expect(dropped.statusCode).toBe(200);
+
+      // v2 rewrites the text: "beta" is edited away, "alpha" survives a reflow.
+      await publishDoc(app, ctx, { slug: doc.slug, content: "alpha\n  gamma delta" });
+
+      const list = await req("GET", `/api/v1/documents/${doc.id}/comments`);
+      const items: Array<{ id: string; outdated?: boolean }> = list.json().items;
+      expect(items.find((c) => c.id === kept.json().id)?.outdated).toBe(false);
+      expect(items.find((c) => c.id === dropped.json().id)?.outdated).toBe(true);
+
+      // Comments on the current latest version carry no outdated flag at all.
+      const fresh = await req("POST", `/api/v1/documents/${doc.id}/comments`, {
+        body: "current",
+        anchor: { exact: "delta" },
+      });
+      expect(fresh.statusCode).toBe(200);
+      const relist = await req("GET", `/api/v1/documents/${doc.id}/comments`);
+      const freshRow: { outdated?: boolean } | undefined = relist
+        .json()
+        .items.find((c: { id: string }) => c.id === fresh.json().id);
+      expect(freshRow?.outdated).toBeUndefined();
+    });
+
     it("rejects bad comment targets", async () => {
       const app = getApp();
       const ctx = await createAdminContext(app);

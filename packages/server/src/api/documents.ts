@@ -48,7 +48,7 @@ export async function documentRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { docId: string } }>("/:docId/comments", async (request) => {
     const { document } = await requireDocumentAccess(request, app.db);
     const query = listDocCommentsQuerySchema.parse(request.query);
-    return { items: await listComments(app.db, document.id, query) };
+    return { items: await listComments(app.db, document, query) };
   });
 
   app.post<{ Params: { docId: string } }>("/:docId/comments", async (request) => {

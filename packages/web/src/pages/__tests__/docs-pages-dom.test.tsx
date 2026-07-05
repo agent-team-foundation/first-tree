@@ -172,7 +172,10 @@ describe("DocPage", () => {
     docsApiMocks.findDocBySlug.mockResolvedValue(summary());
     docsApiMocks.getDoc.mockResolvedValue(docWithVersion());
     docsApiMocks.listDocComments.mockResolvedValue({
-      items: [comment(), comment({ id: "c-2", parentId: "c-1", body: "audit trail reasons", anchor: null })],
+      items: [
+        comment({ versionNumber: 1, outdated: true }),
+        comment({ id: "c-2", parentId: "c-1", body: "audit trail reasons", anchor: null, versionNumber: 1 }),
+      ],
     });
   });
   afterEach(() => h.cleanup());
@@ -196,6 +199,10 @@ describe("DocPage", () => {
     expect(h.container.textContent).toContain("why rename by slug?");
     expect(h.container.textContent).toContain("audit trail reasons"); // threaded reply
     expect(h.container.textContent).toContain("1 open");
+    // Cross-version comment shows its origin version and the outdated marker
+    // (the anchor no longer locates in the latest version).
+    expect(h.container.textContent).toContain("on v1");
+    expect(h.container.textContent).toContain("outdated");
     // Approve shortcut shows while in review.
     const buttons = Array.from(h.container.querySelectorAll("button"));
     expect(buttons.some((b) => b.textContent?.includes("Approve"))).toBe(true);

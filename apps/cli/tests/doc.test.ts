@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 
 import { registerDocCommands } from "../src/commands/doc/index.js";
-import { slugFromFilename, titleFromMarkdown } from "../src/core/doc-review.js";
+import { planMarkdownImport, slugFromFilename, titleFromMarkdown } from "../src/core/doc-review.js";
 
 describe("slugFromFilename", () => {
   it("uses the basename without its extension", () => {
@@ -42,6 +42,28 @@ describe("titleFromMarkdown", () => {
   });
 });
 
+describe("planMarkdownImport", () => {
+  it("plans unique-slug markdown files and skips the rest with reasons", () => {
+    const plan = planMarkdownImport([
+      "/p/NODE.md",
+      "/p/README.md",
+      "/p/design-doc.md",
+      "/p/notes.txt",
+      "/p/设计文档.md",
+      "/p/design doc.md",
+    ]);
+    expect(plan.candidates).toEqual([{ path: "/p/design-doc.md", slug: "design-doc" }]);
+    expect(plan.skipped.map((s) => s.path)).toEqual([
+      "/p/NODE.md", // index file
+      "/p/README.md", // index file
+      "/p/notes.txt", // not markdown
+      "/p/设计文档.md", // no derivable slug
+      "/p/design doc.md", // slug collision with design-doc.md
+    ]);
+    expect(plan.skipped.find((s) => s.path === "/p/design doc.md")?.reason).toContain("already taken");
+  });
+});
+
 describe("registerDocCommands", () => {
   it("wires the doc namespace with every subcommand", () => {
     const program = new Command();
@@ -50,7 +72,18 @@ describe("registerDocCommands", () => {
     const doc = program.commands.find((c) => c.name() === "doc");
     expect(doc).toBeDefined();
     const names = (doc?.commands ?? []).map((c) => c.name()).sort();
-    expect(names).toEqual(["comment", "comments", "get", "list", "publish", "reply", "resolve", "status"]);
+    expect(names).toEqual([
+      "comment",
+      "comments",
+      "export",
+      "get",
+      "import",
+      "list",
+      "publish",
+      "reply",
+      "resolve",
+      "status",
+    ]);
   });
 
   it("keeps subcommand descriptions non-empty (agents discover the surface via --help)", () => {
