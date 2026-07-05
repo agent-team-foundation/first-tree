@@ -17,12 +17,15 @@ import { UnauthorizedError } from "../errors.js";
  */
 export async function docAuthorForAgentUuid(db: Database, agentUuid: string): Promise<DocAuthor> {
   const [row] = await db
-    .select({ name: agents.name, type: agents.type })
+    .select({ name: agents.name, displayName: agents.displayName, type: agents.type })
     .from(agents)
     .where(eq(agents.uuid, agentUuid))
     .limit(1);
   if (!row) {
     throw new UnauthorizedError("Caller identity not found");
   }
-  return { kind: row.type === "human" ? "human" : "agent", id: agentUuid, name: row.name ?? "unknown" };
+  // Bylines prefer the user-facing display name over the unique slug — a
+  // renamed profile should not leave stale slug snapshots on every byline.
+  const name = row.displayName?.trim() ? row.displayName : (row.name ?? "unknown");
+  return { kind: row.type === "human" ? "human" : "agent", id: agentUuid, name };
 }

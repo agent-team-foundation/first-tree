@@ -294,9 +294,16 @@ describe("documents API", () => {
       });
       expect(resolveReply.statusCode).toBe(400);
 
+      const beforeResolve = await req("GET", `/api/v1/documents/${doc.id}`);
       const resolved = await req("PATCH", `/api/v1/document-comments/${comment.json().id}`, { status: "resolved" });
       expect(resolved.statusCode).toBe(200);
       expect(resolved.json().status).toBe("resolved");
+
+      // Resolving is review activity: the document's list-order key moves.
+      const afterResolve = await req("GET", `/api/v1/documents/${doc.id}`);
+      expect(new Date(afterResolve.json().updatedAt).getTime()).toBeGreaterThan(
+        new Date(beforeResolve.json().updatedAt).getTime(),
+      );
 
       // Status filtering is thread-scoped: the reply follows its parent.
       const openLeft = await req("GET", `/api/v1/documents/${doc.id}/comments?status=open`);
@@ -426,7 +433,7 @@ describe("documents API", () => {
       const docId = published.json().id;
       const read = await request("GET", `/api/v1/agent/documents/${docId}`);
       expect(read.statusCode).toBe(200);
-      expect(read.json().createdBy).toMatchObject({ kind: "agent", id: agent.uuid, name: agent.name });
+      expect(read.json().createdBy).toMatchObject({ kind: "agent", id: agent.uuid, name: agent.displayName });
       expect(read.json().version.content).toBe("agent draft");
 
       // Slug resolution via list filter — the CLI's slug→id path.
@@ -439,7 +446,7 @@ describe("documents API", () => {
         anchor: { exact: "draft" },
       });
       expect(comment.statusCode).toBe(200);
-      expect(comment.json().author).toMatchObject({ kind: "agent", name: agent.name });
+      expect(comment.json().author).toMatchObject({ kind: "agent", name: agent.displayName });
 
       const reply = await request("POST", `/api/v1/agent/document-comments/${comment.json().id}/replies`, {
         body: "answered",
