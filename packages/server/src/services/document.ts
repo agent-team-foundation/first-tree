@@ -395,6 +395,9 @@ export async function setCommentStatus(
     .where(eq(docComments.id, comment.id))
     .returning();
   if (!updated) throw new NotFoundError("Comment not found");
+  // Resolving/reopening changes the document's open-comment count and is
+  // review activity — bump the list-order key like comment creation does.
+  await db.update(docDocuments).set({ updatedAt: new Date() }).where(eq(docDocuments.id, comment.documentId));
   return toDocComment(updated);
 }
 
