@@ -250,7 +250,7 @@ export const serverConfigSchema = defineConfig({
     method: field(z.enum(["npm", "portable"]).default("npm"), {
       env: "FIRST_TREE_CONNECT_BOOTSTRAP_METHOD",
     }),
-    portableDownloadBaseUrl: field(z.string().url().default("https://downloads.first-tree.ai"), {
+    portableDownloadBaseUrl: field(z.string().url().default("https://download.first-tree.ai/releases"), {
       env: "FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL",
     }),
   },

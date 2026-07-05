@@ -6,7 +6,17 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { artifactFileName, parsePlatform, validateChannelVersion } from "../../../scripts/portable/build-portable.mjs";
+import {
+  artifactDownloadUrl,
+  artifactFileName,
+  buildPortableReleaseMetadata,
+  DEFAULT_DOWNLOAD_BASE_URL,
+  manifestDownloadUrl,
+  normalizeDownloadBaseUrl,
+  parsePlatform,
+  renderInstallerForChannel,
+  validateChannelVersion,
+} from "../../../scripts/portable/build-portable.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -92,6 +102,80 @@ describe("portable builder helpers", () => {
     expect(artifactFileName({ packageName: "first-tree", version: "1.2.3", platform: "linux-x64" })).toBe(
       "first-tree-1.2.3-linux-x64.tar.gz",
     );
+  });
+
+  it("uses the official release download base URL by default", () => {
+    expect(DEFAULT_DOWNLOAD_BASE_URL).toBe("https://download.first-tree.ai/releases");
+    expect(
+      artifactDownloadUrl({
+        downloadBaseUrl: DEFAULT_DOWNLOAD_BASE_URL,
+        channel: "prod",
+        version: "1.2.3",
+        fileName: "first-tree-1.2.3-linux-x64.tar.gz",
+      }),
+    ).toBe("https://download.first-tree.ai/releases/prod/1.2.3/first-tree-1.2.3-linux-x64.tar.gz");
+    expect(
+      manifestDownloadUrl({
+        downloadBaseUrl: DEFAULT_DOWNLOAD_BASE_URL,
+        channel: "prod",
+        version: "1.2.3",
+      }),
+    ).toBe("https://download.first-tree.ai/releases/prod/1.2.3/manifest.json");
+  });
+
+  it("normalizes custom download base URLs and rejects channel-scoped URLs", () => {
+    expect(normalizeDownloadBaseUrl("https://downloads.example.test/releases///")).toBe(
+      "https://downloads.example.test/releases",
+    );
+    expect(() => normalizeDownloadBaseUrl("https://downloads.example.test/releases/prod")).toThrow(
+      /must not include the channel segment/,
+    );
+    expect(() => normalizeDownloadBaseUrl("https://downloads.example.test/releases/staging/")).toThrow(
+      /must not include the channel segment/,
+    );
+  });
+
+  it("writes custom download base URLs into portable metadata", () => {
+    const downloadBaseUrl = "https://downloads.example.test/releases";
+    const fileName = "first-tree-1.2.3-linux-x64.tar.gz";
+    const asset = {
+      platform: "linux-x64",
+      fileName,
+      url: artifactDownloadUrl({ downloadBaseUrl, channel: "prod", version: "1.2.3", fileName }),
+      sha256: "a".repeat(64),
+      size: 7,
+    };
+    const { manifest, latest } = buildPortableReleaseMetadata({
+      channel: "prod",
+      channelConfig: {
+        packageName: "first-tree",
+        binName: "first-tree",
+        aliasName: "ft",
+      },
+      version: "1.2.3",
+      gitSha: "abc123",
+      nodeVersion: "v24.0.0",
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      downloadBaseUrl,
+      assets: [asset],
+    });
+
+    expect(manifest.assets[0]?.url).toBe(
+      "https://downloads.example.test/releases/prod/1.2.3/first-tree-1.2.3-linux-x64.tar.gz",
+    );
+    expect(latest.manifestUrl).toBe("https://downloads.example.test/releases/prod/1.2.3/manifest.json");
+    expect(latest.assets[0]?.url).toBe(manifest.assets[0]?.url);
+  });
+
+  it("bakes custom channel installer defaults while preserving runtime download override", () => {
+    const installer = renderInstallerForChannel("staging", "https://downloads.example.test/releases/");
+    const channelFallback = "$" + "{FIRST_TREE_PORTABLE_CHANNEL:-staging}";
+    const customBaseFallback = "$" + "{FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-https://downloads.example.test/releases}";
+    const defaultBaseFallback =
+      "$" + "{FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-https://download.first-tree.ai/releases}";
+    expect(installer).toContain(`PORTABLE_CHANNEL="${channelFallback}"`);
+    expect(installer).toContain(`DOWNLOAD_BASE_URL="${customBaseFallback}"`);
+    expect(installer).not.toContain(`DOWNLOAD_BASE_URL="${defaultBaseFallback}"`);
   });
 });
 

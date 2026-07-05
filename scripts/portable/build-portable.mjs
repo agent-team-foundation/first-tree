@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const PORTABLE_PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
 export const DEFAULT_NODE_VERSION = "latest-v24.x";
-export const DEFAULT_DOWNLOAD_BASE_URL = "https://downloads.first-tree.ai";
+export const DEFAULT_DOWNLOAD_BASE_URL = "https://download.first-tree.ai/releases";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..", "..");
@@ -61,6 +61,30 @@ export function parsePlatform(platform) {
 
 export function artifactFileName(options) {
   return `${options.packageName}-${options.version}-${options.platform}.tar.gz`;
+}
+
+export function normalizeDownloadBaseUrl(value) {
+  const trimmed = value.replace(/\/+$/, "");
+  if (!trimmed) fail("--download-base-url is required");
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    fail(`--download-base-url must be a valid URL, got ${value}`);
+  }
+  const lastSegment = parsed.pathname.split("/").filter(Boolean).at(-1);
+  if (lastSegment === "prod" || lastSegment === "staging") {
+    fail(`--download-base-url must not include the channel segment; got ${value}`);
+  }
+  return trimmed;
+}
+
+export function artifactDownloadUrl(options) {
+  return `${normalizeDownloadBaseUrl(options.downloadBaseUrl)}/${options.channel}/${options.version}/${options.fileName}`;
+}
+
+export function manifestDownloadUrl(options) {
+  return `${normalizeDownloadBaseUrl(options.downloadBaseUrl)}/${options.channel}/${options.version}/manifest.json`;
 }
 
 function parseArgs(argv) {
@@ -356,6 +380,19 @@ function buildMetadata({ channel, channelConfig, version, gitSha, nodeVersion, g
   };
 }
 
+export function buildPortableReleaseMetadata(options) {
+  const metadata = buildMetadata(options);
+  const manifestUrl = manifestDownloadUrl({
+    downloadBaseUrl: options.downloadBaseUrl,
+    channel: options.channel,
+    version: options.version,
+  });
+  return {
+    manifest: { ...metadata, assets: options.assets },
+    latest: { ...metadata, manifestUrl, assets: options.assets },
+  };
+}
+
 async function buildPlatformArtifact(options) {
   const artifactRoot = await mkdtemp(join(tmpdir(), "first-tree-portable-root-"));
   try {
@@ -388,7 +425,12 @@ async function buildPlatformArtifact(options) {
     return {
       platform: options.platform,
       fileName,
-      url: `${options.baseUrl}/${options.channel}/${options.version}/${fileName}`,
+      url: artifactDownloadUrl({
+        downloadBaseUrl: options.baseUrl,
+        channel: options.channel,
+        version: options.version,
+        fileName,
+      }),
       sha256: sha256File(tarballPath),
       size: statSync(tarballPath).size,
     };
@@ -397,18 +439,29 @@ async function buildPlatformArtifact(options) {
   }
 }
 
-function renderInstallerForChannel(channel) {
+export function renderInstallerForChannel(channel, downloadBaseUrl = DEFAULT_DOWNLOAD_BASE_URL) {
   const source = readFileSync(join(SCRIPT_DIR, "install.sh"), "utf8");
   const placeholder = `$${"{FIRST_TREE_PORTABLE_CHANNEL:-prod}"}`;
   const replacement = `\${FIRST_TREE_PORTABLE_CHANNEL:-${channel}}`;
-  return source.replace(`PORTABLE_CHANNEL="${placeholder}"`, `PORTABLE_CHANNEL="${replacement}"`);
+  const withChannel = source.replace(`PORTABLE_CHANNEL="${placeholder}"`, `PORTABLE_CHANNEL="${replacement}"`);
+  if (withChannel === source) fail("installer template is missing the portable channel fallback");
+
+  const normalizedDownloadBaseUrl = normalizeDownloadBaseUrl(downloadBaseUrl);
+  const withDownloadBaseUrl = withChannel.replace(
+    /DOWNLOAD_BASE_URL="\$\{FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-[^}]*\}"/,
+    () => `DOWNLOAD_BASE_URL="\${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-${normalizedDownloadBaseUrl}}"`,
+  );
+  if (withDownloadBaseUrl === withChannel) {
+    fail("installer template is missing the portable download base URL fallback");
+  }
+  return withDownloadBaseUrl;
 }
 
 export async function buildPortableDistribution(rawOptions) {
   const options = {
     ...rawOptions,
     outDir: resolve(rawOptions.outDir),
-    downloadBaseUrl: rawOptions.downloadBaseUrl.replace(/\/+$/, ""),
+    downloadBaseUrl: normalizeDownloadBaseUrl(rawOptions.downloadBaseUrl),
   };
   validateChannelVersion(options.channel, options.version);
   assertInputBuildExists();
@@ -450,24 +503,25 @@ export async function buildPortableDistribution(rawOptions) {
       );
     }
 
-    const metadata = buildMetadata({
+    const { manifest, latest } = buildPortableReleaseMetadata({
       channel: options.channel,
       channelConfig,
       version: options.version,
       gitSha: options.gitSha,
       nodeVersion,
       generatedAt,
+      downloadBaseUrl: options.downloadBaseUrl,
+      assets,
     });
-    const manifestUrl = `${options.downloadBaseUrl}/${options.channel}/${options.version}/manifest.json`;
-    const manifest = { ...metadata, assets };
-    const latest = { ...metadata, manifestUrl, assets };
     writeJson(join(versionDir, "manifest.json"), manifest);
     writeJson(join(channelDir, "latest.json"), latest);
     writeFileSync(
       join(versionDir, "SHA256SUMS"),
       `${assets.map((asset) => `${asset.sha256}  ${asset.fileName}`).join("\n")}\n`,
     );
-    writeFileSync(join(channelDir, "install.sh"), renderInstallerForChannel(options.channel), { mode: 0o755 });
+    writeFileSync(join(channelDir, "install.sh"), renderInstallerForChannel(options.channel, options.downloadBaseUrl), {
+      mode: 0o755,
+    });
 
     console.log(`[portable] wrote ${relative(REPO_ROOT, channelDir)}`);
     return { channelDir, versionDir, manifest, latest };

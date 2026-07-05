@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-DEFAULT_DOWNLOAD_BASE_URL="https://downloads.first-tree.ai"
+DEFAULT_DOWNLOAD_BASE_URL="https://download.first-tree.ai/releases"
 
 CHANNEL=""
 VERSION=""

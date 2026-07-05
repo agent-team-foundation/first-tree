@@ -166,7 +166,7 @@ async function importProdUpdateModule(): Promise<typeof import("../core/update.j
       portable: {
         channelPrefix: "prod",
         publicInstallerPath: "prod/install.sh",
-        downloadBaseUrl: "https://downloads.first-tree.ai",
+        downloadBaseUrl: "https://download.first-tree.ai/releases",
       },
     },
   }));

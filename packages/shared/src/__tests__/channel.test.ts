@@ -21,7 +21,7 @@ describe("getChannelConfig", () => {
       portable: {
         channelPrefix: "prod",
         publicInstallerPath: "prod/install.sh",
-        downloadBaseUrl: "https://downloads.first-tree.ai",
+        downloadBaseUrl: "https://download.first-tree.ai/releases",
       },
     });
   });
@@ -40,7 +40,7 @@ describe("getChannelConfig", () => {
     expect(c.portable).toEqual({
       channelPrefix: "staging",
       publicInstallerPath: "staging/install.sh",
-      downloadBaseUrl: "https://downloads.first-tree.ai",
+      downloadBaseUrl: "https://download.first-tree.ai/releases",
     });
   });
 

@@ -21,7 +21,7 @@ const base = {
 const asset = {
   platform: "linux-x64",
   fileName: "first-tree-1.2.3-linux-x64.tar.gz",
-  url: "https://downloads.first-tree.ai/prod/1.2.3/first-tree-1.2.3-linux-x64.tar.gz",
+  url: "https://download.first-tree.ai/releases/prod/1.2.3/first-tree-1.2.3-linux-x64.tar.gz",
   sha256: "a".repeat(64),
   size: 123,
 } as const;
@@ -36,10 +36,10 @@ describe("portable schemas", () => {
     expect(
       portableLatestSchema.parse({
         ...base,
-        manifestUrl: "https://downloads.first-tree.ai/prod/1.2.3/manifest.json",
+        manifestUrl: "https://download.first-tree.ai/releases/prod/1.2.3/manifest.json",
         assets: [asset],
       }).manifestUrl,
-    ).toBe("https://downloads.first-tree.ai/prod/1.2.3/manifest.json");
+    ).toBe("https://download.first-tree.ai/releases/prod/1.2.3/manifest.json");
   });
 
   it("rejects unsupported platforms and malformed hashes", () => {

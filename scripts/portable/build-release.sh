@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DEFAULT_PLATFORMS=("darwin-arm64" "darwin-x64" "linux-arm64" "linux-x64")
 DEFAULT_NODE_VERSION="latest-v24.x"
 DEFAULT_OUT_DIR=".portable-release"
-DEFAULT_DOWNLOAD_BASE_URL="https://downloads.first-tree.ai"
+DEFAULT_DOWNLOAD_BASE_URL="https://download.first-tree.ai/releases"
 
 CHANNEL=""
 VERSION=""

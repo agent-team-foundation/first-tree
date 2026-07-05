@@ -2,7 +2,7 @@
 set -eu
 
 PORTABLE_CHANNEL="${FIRST_TREE_PORTABLE_CHANNEL:-prod}"
-DOWNLOAD_BASE_URL="${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-https://downloads.first-tree.ai}"
+DOWNLOAD_BASE_URL="${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-https://download.first-tree.ai/releases}"
 DEFAULT_PREFIX="${HOME}/.local/share/first-tree/${PORTABLE_CHANNEL}"
 DEFAULT_BIN_DIR="${HOME}/.local/bin"
 PATH_MODE="auto"
