@@ -99,6 +99,17 @@ export const serverConfigSchema = defineConfig({
       }),
     }),
   },
+  docs: {
+    /**
+     * Enables the document review (docloop) surface: the org document
+     * library API, the `doc` CLI namespace endpoints, and (later) the web
+     * Docs section. Product feature flag with a staging-first rollout —
+     * off by default until an operator enables it.
+     */
+    enabled: field(z.boolean().default(false), {
+      env: "FIRST_TREE_DOCS_ENABLED",
+    }),
+  },
   database: {
     url: field(z.string(), {
       env: "FIRST_TREE_DATABASE_URL",
