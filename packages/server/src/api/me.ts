@@ -191,6 +191,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         completedAt: defaultRow?.onboardingCompletedAt ? defaultRow.onboardingCompletedAt.toISOString() : null,
       },
       inviteUrl,
+      // Deployment-level feature switches the web shell needs before it can
+      // decide what to render (e.g. the Context → Documents sub-tab). Server
+      // routes stay the enforcement point; this is presentation-only.
+      features: {
+        docs: app.config.docs.enabled,
+      },
     };
   });
 

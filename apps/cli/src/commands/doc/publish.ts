@@ -4,7 +4,7 @@ import type { Command } from "commander";
 import { fail, success } from "../../cli/output.js";
 import { channelConfig } from "../../core/channel.js";
 import { slugFromFilename, titleFromMarkdown } from "../../core/doc-review.js";
-import { createSdk, handleSdkError } from "../_shared/local-agent.js";
+import { createSdk, handleSdkError, resolveLocalAgent } from "../_shared/local-agent.js";
 import { parseDocStatus } from "./_shared.js";
 
 interface PublishOptions {
@@ -58,6 +58,7 @@ export function registerDocPublishCommand(doc: Command): void {
       const title = options.title ?? titleFromMarkdown(content) ?? undefined;
 
       try {
+        const { serverUrl } = resolveLocalAgent(options.agent);
         const sdk = createSdk(options.agent);
         const result = await sdk.publishDoc({
           slug,
@@ -68,11 +69,13 @@ export function registerDocPublishCommand(doc: Command): void {
           status,
           ifChanged: options.ifChanged === true,
         });
+        // Shareable reading view — paste it in chat so humans can review.
+        const url = `${serverUrl.replace(/\/+$/, "")}/context/docs/${encodeURIComponent(result.slug)}`;
         const hint = result.createdVersion
-          ? `Published as version ${result.version}. Pull review feedback later with ` +
+          ? `Published as version ${result.version}. Share ${url} for review; pull feedback later with ` +
             `\`${channelConfig.binName} doc comments ${result.slug} --status open\`.`
           : `Content unchanged — still at version ${result.version}, no new version created.`;
-        success({ ...result, hint });
+        success({ ...result, url, hint });
       } catch (error) {
         handleSdkError(error);
       }

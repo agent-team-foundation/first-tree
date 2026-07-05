@@ -7,6 +7,13 @@ export {
   findAssembledBriefingFingerprint,
 } from "./agent-briefing-guard.js";
 export { canonicalGitRepoUrl } from "./canonical-git-repo-url.js";
+// -- Document review (docloop) anchor building / locating --
+export {
+  type BuildDocAnchorInput,
+  buildDocAnchor,
+  type DocAnchorRange,
+  locateDocAnchor,
+} from "./doc-anchor.js";
 // -- Mention extraction (shared by the server fan-out resolver and other readers) --
 export { type BarePathMatch, scanBareDocPathTokens, stripDocPathLineSuffix } from "./lib/doc-link-scan.js";
 export {
