@@ -441,20 +441,22 @@ async function buildPlatformArtifact(options) {
 
 export function renderInstallerForChannel(channel, downloadBaseUrl = DEFAULT_DOWNLOAD_BASE_URL) {
   const source = readFileSync(join(SCRIPT_DIR, "install.sh"), "utf8");
-  const placeholder = `$${"{FIRST_TREE_PORTABLE_CHANNEL:-prod}"}`;
-  const replacement = `\${FIRST_TREE_PORTABLE_CHANNEL:-${channel}}`;
-  const withChannel = source.replace(`PORTABLE_CHANNEL="${placeholder}"`, `PORTABLE_CHANNEL="${replacement}"`);
-  if (withChannel === source) fail("installer template is missing the portable channel fallback");
+  const channelPattern = /PORTABLE_CHANNEL="\$\{FIRST_TREE_PORTABLE_CHANNEL:-[^}]+\}"/;
+  if (!channelPattern.test(source)) fail("installer template is missing the portable channel fallback");
+  const withChannel = source.replace(
+    channelPattern,
+    () => `PORTABLE_CHANNEL="\${FIRST_TREE_PORTABLE_CHANNEL:-${channel}}"`,
+  );
 
   const normalizedDownloadBaseUrl = normalizeDownloadBaseUrl(downloadBaseUrl);
-  const withDownloadBaseUrl = withChannel.replace(
-    /DOWNLOAD_BASE_URL="\$\{FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-[^}]*\}"/,
-    () => `DOWNLOAD_BASE_URL="\${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-${normalizedDownloadBaseUrl}}"`,
-  );
-  if (withDownloadBaseUrl === withChannel) {
+  const downloadBaseUrlPattern = /DOWNLOAD_BASE_URL="\$\{FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-[^}]*\}"/;
+  if (!downloadBaseUrlPattern.test(withChannel)) {
     fail("installer template is missing the portable download base URL fallback");
   }
-  return withDownloadBaseUrl;
+  return withChannel.replace(
+    downloadBaseUrlPattern,
+    () => `DOWNLOAD_BASE_URL="\${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-${normalizedDownloadBaseUrl}}"`,
+  );
 }
 
 export async function buildPortableDistribution(rawOptions) {

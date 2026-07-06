@@ -177,6 +177,20 @@ describe("portable builder helpers", () => {
     expect(installer).toContain(`DOWNLOAD_BASE_URL="${customBaseFallback}"`);
     expect(installer).not.toContain(`DOWNLOAD_BASE_URL="${defaultBaseFallback}"`);
   });
+
+  it("renders installer defaults when replacements match the template values", () => {
+    const prodInstaller = renderInstallerForChannel("prod", DEFAULT_DOWNLOAD_BASE_URL);
+    const prodChannelFallback = "$" + "{FIRST_TREE_PORTABLE_CHANNEL:-prod}";
+    const stagingInstaller = renderInstallerForChannel("staging", DEFAULT_DOWNLOAD_BASE_URL);
+    const stagingChannelFallback = "$" + "{FIRST_TREE_PORTABLE_CHANNEL:-staging}";
+    const downloadBaseFallback =
+      "$" + "{FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-https://download.first-tree.ai/releases}";
+
+    expect(prodInstaller).toContain(`PORTABLE_CHANNEL="${prodChannelFallback}"`);
+    expect(prodInstaller).toContain(`DOWNLOAD_BASE_URL="${downloadBaseFallback}"`);
+    expect(stagingInstaller).toContain(`PORTABLE_CHANNEL="${stagingChannelFallback}"`);
+    expect(stagingInstaller).toContain(`DOWNLOAD_BASE_URL="${downloadBaseFallback}"`);
+  });
 });
 
 describe("portable installer", () => {
