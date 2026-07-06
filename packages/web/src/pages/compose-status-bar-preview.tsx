@@ -107,8 +107,9 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    name: "working · long goal (truncates)",
-    subtitle: "goal truncates first; name, tool, and ticker always survive",
+    name: "working · long goal, clipped by width (offers expand)",
+    subtitle:
+      "no server turnTextFull, but the goal is clipped by the rail width → the ⇕ appears and the card shows the full line",
     chatId: "v-long",
     agents: [DEV],
     statuses: [
@@ -124,7 +125,7 @@ const VARIANTS: Variant[] = [
   },
   {
     name: "working · long multi-line goal (expand card)",
-    subtitle: "goal truncates on the rail; the ⌃ chevron opens the full turnText card (click to test)",
+    subtitle: "server sent turnTextFull; the ⇕ opens the full multi-line card (click to test)",
     chatId: "v-expand",
     agents: [DEV],
     statuses: [
