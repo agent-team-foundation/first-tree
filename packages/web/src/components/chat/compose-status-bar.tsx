@@ -36,10 +36,11 @@ import { formatElapsed } from "./working-chip.js";
  *     active agent (≤ ~5 visible, then internal scroll).
  *   - All quiet → the whole rail is hidden.
  *
- * Click zones: the lead/row text → jump to that agent's timeline anchor
- * (working → WorkingTurn, failed → ErrorRow); +N / chevron → expand. Data is
- * the shared /agent-status query (React-Query-deduped, admin-WS-live,
- * ~1s-throttled).
+ * Click zones: the lead row → toggle its full-narration card (the `⇕` glyph is
+ * the affordance); a `+N` row's text → jump to that agent's timeline anchor
+ * (working → WorkingTurn, failed → ErrorRow); the `+N` chevron → expand the
+ * list. Data is the shared /agent-status query (React-Query-deduped,
+ * admin-WS-live, ~1s-throttled).
  */
 const ATTENTION: ReadonlySet<string> = new Set(["failed", "working"]);
 const TICK_INTERVAL_MS = 1000;
@@ -139,7 +140,7 @@ export function ComposeStatusBar({
   // (no reset effect), and its trigger chevron (outside the card) is excluded
   // from the outside-press close.
   const [cardOpenFor, setCardOpenFor] = useState<string | null>(null);
-  const cardTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const cardTriggerRef = useRef<HTMLElement | null>(null);
   // Whether the lead's goal text is currently clipped on the rail (reported up
   // from WorkingDetail's measurement). Lets the expand affordance appear on
   // width-truncation, not only when the server flagged more content.
@@ -244,22 +245,13 @@ export function ComposeStatusBar({
           nameOf={nameFor(agents)}
           mounted={mounted}
           onGoalOverflowChange={setLeadGoalOverflow}
+          expand={{
+            canExpand,
+            open: cardOpen,
+            onToggle: () => setCardOpenFor((cur) => (cur === leadRow.agentId ? null : leadRow.agentId)),
+            triggerRef: cardTriggerRef,
+          }}
         />
-        {canExpand ? (
-          <button
-            type="button"
-            ref={cardTriggerRef}
-            aria-label={cardOpen ? "Collapse full narration" : "Expand full narration"}
-            aria-expanded={cardOpen}
-            onClick={() => setCardOpenFor((cur) => (cur === leadRow.agentId ? null : leadRow.agentId))}
-            className="inline-flex shrink-0 items-center"
-            style={{ border: 0, background: "transparent", padding: 0, cursor: "pointer", color: "var(--fg-4)" }}
-          >
-            {/* A distinct unfold glyph (not a single chevron) so it never reads
-                as, or collides with, the adjacent `+N` expand chevron. */}
-            <ChevronsUpDown className="h-3.5 w-3.5" />
-          </button>
-        ) : null}
         {others.length > 0 ? (
           <button
             type="button"
@@ -306,19 +298,31 @@ function nameFor(agents: ChatParticipantDetail[]) {
   return (id: string) => agents.find((a) => a.agentId === id)?.displayName ?? id.slice(0, 8);
 }
 
-/** One rail line: a single clickable text region that jumps to the agent's
- *  timeline anchor (working → WorkingTurn, failed → ErrorRow). */
+/** One rail line. By default a clickable text region that jumps to the agent's
+ *  timeline anchor (working → WorkingTurn, failed → ErrorRow). The lead row
+ *  passes `expand` instead: the WHOLE row toggles the full-narration card (the
+ *  jump is dropped there), with the `⇕` glyph as the affordance — or renders as
+ *  plain static text when there's nothing to expand. */
 function RailRow({
   status,
   nameOf,
   mounted,
   onGoalOverflowChange,
+  expand,
 }: {
   status: AgentChatStatus;
   nameOf: (id: string) => string;
   mounted: ReadonlySet<string>;
   /** Lead-only: reports whether the goal text is visibly clipped. */
   onGoalOverflowChange?: (overflowing: boolean) => void;
+  /** Lead-only: makes the whole row a toggle for the full-narration card
+   *  (replacing the timeline jump). Absent on the `+N` rows, which keep jump. */
+  expand?: {
+    canExpand: boolean;
+    open: boolean;
+    onToggle: () => void;
+    triggerRef: React.RefObject<HTMLElement | null>;
+  };
 }) {
   const view = viewOf(status.main);
   const reasonView = statusReasonView(status);
@@ -327,21 +331,61 @@ function RailRow({
   const pulse = reasonView?.pulse ?? view.pulse;
   const label = reasonView?.label ?? view.label;
   const jumpable = isJumpable(mounted, status.main, status.agentId);
+  const content = (
+    <>
+      <StatusGlyph colorVar={colorVar} shape={shape} pulse={pulse} size={8} ariaLabel={label} />
+      <span className="shrink-0">{nameOf(status.agentId)}</span>
+      <Sep />
+      <LeadDetail status={status} onGoalOverflowChange={onGoalOverflowChange} />
+    </>
+  );
   return (
     <div className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-1_5)" }}>
-      <TimelineJumpButton
-        agentId={status.agentId}
-        main={status.main}
-        anchored={jumpable}
-        ariaLabel={`Jump to ${nameOf(status.agentId)} in the timeline`}
-        className="flex-1 text-caption"
-        style={{ color: colorVar }}
-      >
-        <StatusGlyph colorVar={colorVar} shape={shape} pulse={pulse} size={8} ariaLabel={label} />
-        <span className="shrink-0">{nameOf(status.agentId)}</span>
-        <Sep />
-        <LeadDetail status={status} onGoalOverflowChange={onGoalOverflowChange} />
-      </TimelineJumpButton>
+      {expand ? (
+        // Lead row: the WHOLE line toggles the full-narration card (jump dropped).
+        // The row is ALWAYS a plain `<span>` — so it reads as static status text
+        // in the accessibility tree, and `WorkingDetail` (which measures the goal
+        // overflow) never remounts. When expandable, a transparent NATIVE
+        // `<button>` is overlaid (absolute, covering the row) to take the click:
+        // a real control for AT + free keyboard, and mounting only this sibling
+        // never remounts the measuring child. The ⇕ keeps its layout slot in both
+        // states (only its visibility toggles) so the goal's width — and thus the
+        // overflow measurement — stays constant and can't oscillate.
+        <span
+          ref={expand.triggerRef}
+          className="text-caption relative inline-flex min-w-0 flex-1 items-center"
+          style={{ gap: 4, color: colorVar }}
+        >
+          {content}
+          {/* A distinct unfold glyph (not a single chevron) so it never reads as,
+              or collides with, the adjacent `+N` chevron. */}
+          <ChevronsUpDown
+            className="h-3.5 w-3.5 shrink-0"
+            style={{ color: "var(--fg-4)", visibility: expand.canExpand ? "visible" : "hidden" }}
+          />
+          {expand.canExpand ? (
+            <button
+              type="button"
+              onClick={expand.onToggle}
+              aria-expanded={expand.open}
+              aria-label={expand.open ? "Collapse full narration" : "Expand full narration"}
+              className="absolute inset-0"
+              style={{ border: 0, background: "transparent", padding: 0, cursor: "pointer" }}
+            />
+          ) : null}
+        </span>
+      ) : (
+        <TimelineJumpButton
+          agentId={status.agentId}
+          main={status.main}
+          anchored={jumpable}
+          ariaLabel={`Jump to ${nameOf(status.agentId)} in the timeline`}
+          className="flex-1 text-caption"
+          style={{ color: colorVar }}
+        >
+          {content}
+        </TimelineJumpButton>
+      )}
     </div>
   );
 }
@@ -568,7 +612,7 @@ function TurnTextCard({
   status: AgentChatStatus;
   name: string;
   full: string;
-  triggerRef: React.RefObject<HTMLButtonElement | null>;
+  triggerRef: React.RefObject<HTMLElement | null>;
   onClose: () => void;
 }) {
   const cardRef = useRef<HTMLElement | null>(null);
