@@ -139,7 +139,7 @@ export function ComposeStatusBar({
   // (no reset effect), and its trigger chevron (outside the card) is excluded
   // from the outside-press close.
   const [cardOpenFor, setCardOpenFor] = useState<string | null>(null);
-  const cardTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const cardTriggerRef = useRef<HTMLElement | null>(null);
   // Whether the lead's goal text is currently clipped on the rail (reported up
   // from WorkingDetail's measurement). Lets the expand affordance appear on
   // width-truncation, not only when the server flagged more content.
@@ -311,7 +311,7 @@ function RailRow({
     canExpand: boolean;
     open: boolean;
     onToggle: () => void;
-    triggerRef: React.RefObject<HTMLButtonElement | null>;
+    triggerRef: React.RefObject<HTMLElement | null>;
   };
 }) {
   const view = viewOf(status.main);
@@ -333,47 +333,37 @@ function RailRow({
     <div className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-1_5)" }}>
       {expand ? (
         // Lead row: the WHOLE line toggles the full-narration card (jump dropped).
-        // ALWAYS the same <button> element and an always-present ⇕ slot — never
-        // switch element type or add/remove the glyph on `canExpand`: doing so
-        // would remount WorkingDetail (its unmount-reset then fights the mount
-        // re-measure) and change the goal's available width, oscillating both
-        // ways. So the type/width stay constant and only the interactivity +
-        // glyph visibility toggle. When there's nothing to expand it's an inert,
-        // untabbable button.
-        <button
-          type="button"
+        // The row is ALWAYS a plain `<span>` — so it reads as static status text
+        // in the accessibility tree, and `WorkingDetail` (which measures the goal
+        // overflow) never remounts. When expandable, a transparent NATIVE
+        // `<button>` is overlaid (absolute, covering the row) to take the click:
+        // a real control for AT + free keyboard, and mounting only this sibling
+        // never remounts the measuring child. The ⇕ keeps its layout slot in both
+        // states (only its visibility toggles) so the goal's width — and thus the
+        // overflow measurement — stays constant and can't oscillate.
+        <span
           ref={expand.triggerRef}
-          // Inert when there's nothing to expand: drop the button semantics so AT
-          // reads it as plain status text, not a dead button (the element type
-          // must stay `<button>` to avoid the remount described above).
-          role={expand.canExpand ? undefined : "presentation"}
-          onClick={expand.canExpand ? expand.onToggle : undefined}
-          tabIndex={expand.canExpand ? undefined : -1}
-          aria-expanded={expand.canExpand ? expand.open : undefined}
-          aria-label={
-            expand.canExpand ? (expand.open ? "Collapse full narration" : "Expand full narration") : undefined
-          }
-          className="text-caption inline-flex min-w-0 flex-1 items-center"
-          style={{
-            gap: 4,
-            border: 0,
-            background: "transparent",
-            padding: 0,
-            cursor: expand.canExpand ? "pointer" : "default",
-            textAlign: "left",
-            color: colorVar,
-          }}
+          className="text-caption relative inline-flex min-w-0 flex-1 items-center"
+          style={{ gap: 4, color: colorVar }}
         >
           {content}
           {/* A distinct unfold glyph (not a single chevron) so it never reads as,
-              or collides with, the adjacent `+N` chevron. Kept in the layout (only
-              its visibility toggles) so the goal's width — and thus the overflow
-              measurement — doesn't change when it appears/disappears. */}
+              or collides with, the adjacent `+N` chevron. */}
           <ChevronsUpDown
             className="h-3.5 w-3.5 shrink-0"
             style={{ color: "var(--fg-4)", visibility: expand.canExpand ? "visible" : "hidden" }}
           />
-        </button>
+          {expand.canExpand ? (
+            <button
+              type="button"
+              onClick={expand.onToggle}
+              aria-expanded={expand.open}
+              aria-label={expand.open ? "Collapse full narration" : "Expand full narration"}
+              className="absolute inset-0"
+              style={{ border: 0, background: "transparent", padding: 0, cursor: "pointer" }}
+            />
+          ) : null}
+        </span>
       ) : (
         <TimelineJumpButton
           agentId={status.agentId}
@@ -612,7 +602,7 @@ function TurnTextCard({
   status: AgentChatStatus;
   name: string;
   full: string;
-  triggerRef: React.RefObject<HTMLButtonElement | null>;
+  triggerRef: React.RefObject<HTMLElement | null>;
   onClose: () => void;
 }) {
   const cardRef = useRef<HTMLElement | null>(null);
