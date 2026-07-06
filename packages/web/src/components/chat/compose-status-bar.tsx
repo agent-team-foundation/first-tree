@@ -6,7 +6,7 @@ import {
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Brain, ChevronDown, ChevronsUpDown, Pencil, Wrench } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { viewOf } from "../../lib/agent-status-view.js";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
@@ -139,6 +139,10 @@ export function ComposeStatusBar({
   // from the outside-press close.
   const [cardOpenFor, setCardOpenFor] = useState<string | null>(null);
   const cardTriggerRef = useRef<HTMLButtonElement | null>(null);
+  // Whether the lead's goal text is currently clipped on the rail (reported up
+  // from WorkingDetail's measurement). Lets the expand affordance appear on
+  // width-truncation, not only when the server flagged more content.
+  const [leadGoalOverflow, setLeadGoalOverflow] = useState(false);
   // Stable so TurnTextCard's document-listener effect doesn't re-subscribe on
   // every parent re-render (query refetch / elapsed tick).
   const closeCard = useCallback(() => setCardOpenFor(null), []);
@@ -177,17 +181,22 @@ export function ComposeStatusBar({
   // The lead's full narration — present only when the server attached
   // `turnTextFull` (strictly more than the one-line goal). Only working leads
   // carry live activity.
-  const leadFull = leadRow?.main === "working" ? leadRow.activity?.turnTextFull : undefined;
-  // Forget a stale open-card key so the card never silently re-opens on its own:
-  // once the agent that owned it is no longer a working lead with a full
-  // narration (it switched away, or its narration shrank back below the
-  // "has more" threshold mid-turn), drop the open state instead of letting a
-  // later re-cross of that threshold re-materialize the card.
+  const leadGoal = leadRow?.main === "working" ? leadRow.activity?.turnText : undefined;
+  // The text the card shows: the full newline-preserving narration when the
+  // server sent one, else the one-line goal itself — so a goal that is merely
+  // too wide for the rail can still be read in full.
+  const leadFullText = leadRow?.main === "working" ? (leadRow.activity?.turnTextFull ?? leadGoal) : undefined;
+  // Offer expand when the goal is actually clipped on the rail OR the server
+  // sent strictly-more content (multi-line / >120 chars). Requires a goal.
+  const canExpand = !!leadGoal && (leadGoalOverflow || !!leadRow?.activity?.turnTextFull);
+  // Forget a stale open-card key so the card never silently re-opens on its own
+  // once the lead can no longer expand (switched away, goal gone, or it shrank
+  // to fit and carries no extra content).
   useEffect(() => {
-    if (cardOpenFor !== null && !(leadFull && leadRow?.agentId === cardOpenFor)) {
+    if (cardOpenFor !== null && !(canExpand && leadRow?.agentId === cardOpenFor)) {
       setCardOpenFor(null);
     }
-  }, [cardOpenFor, leadFull, leadRow?.agentId]);
+  }, [cardOpenFor, canExpand, leadRow?.agentId]);
 
   if (attention.length === 0) return null; // all quiet → hidden
   if (!leadRow) return null; // unreachable (attention is non-empty) — narrows the type
@@ -205,18 +214,23 @@ export function ComposeStatusBar({
         borderBottom: "var(--hairline) solid var(--border-faint)",
       }}
     >
-      {cardOpen && leadFull ? (
+      {cardOpen && canExpand && leadFullText ? (
         <TurnTextCard
           status={leadRow}
           name={nameFor(agents)(leadRow.agentId)}
-          full={leadFull}
+          full={leadFullText}
           triggerRef={cardTriggerRef}
           onClose={closeCard}
         />
       ) : null}
       <div className="flex items-center" style={{ gap: "var(--sp-1_5)" }}>
-        <RailRow status={leadRow} nameOf={nameFor(agents)} mounted={mounted} />
-        {leadFull ? (
+        <RailRow
+          status={leadRow}
+          nameOf={nameFor(agents)}
+          mounted={mounted}
+          onGoalOverflowChange={setLeadGoalOverflow}
+        />
+        {canExpand ? (
           <button
             type="button"
             ref={cardTriggerRef}
@@ -283,10 +297,13 @@ function RailRow({
   status,
   nameOf,
   mounted,
+  onGoalOverflowChange,
 }: {
   status: AgentChatStatus;
   nameOf: (id: string) => string;
   mounted: ReadonlySet<string>;
+  /** Lead-only: reports whether the goal text is visibly clipped. */
+  onGoalOverflowChange?: (overflowing: boolean) => void;
 }) {
   const view = viewOf(status.main);
   const reasonView = statusReasonView(status);
@@ -308,7 +325,7 @@ function RailRow({
         <StatusGlyph colorVar={colorVar} shape={shape} pulse={pulse} size={8} ariaLabel={label} />
         <span className="shrink-0">{nameOf(status.agentId)}</span>
         <Sep />
-        <LeadDetail status={status} />
+        <LeadDetail status={status} onGoalOverflowChange={onGoalOverflowChange} />
       </TimelineJumpButton>
     </div>
   );
@@ -316,7 +333,13 @@ function RailRow({
 
 /** The detail after the name: a short reason (failed) or the live activity
  *  (working). */
-function LeadDetail({ status }: { status: AgentChatStatus }) {
+function LeadDetail({
+  status,
+  onGoalOverflowChange,
+}: {
+  status: AgentChatStatus;
+  onGoalOverflowChange?: (overflowing: boolean) => void;
+}) {
   const reason = visibleStatusReason(status);
   if (reason) {
     const detail = reason.detail ?? reason.reasonCode;
@@ -327,7 +350,7 @@ function LeadDetail({ status }: { status: AgentChatStatus }) {
     );
   }
   if (status.main === "failed") return <span className="truncate">failed</span>;
-  return <WorkingDetail activity={status.activity} />;
+  return <WorkingDetail activity={status.activity} onGoalOverflowChange={onGoalOverflowChange} />;
 }
 
 export function statusReasonView(status: AgentChatStatus) {
@@ -357,15 +380,62 @@ export function statusReasonView(status: AgentChatStatus) {
  * turn has produced no prose yet (`turnText` absent — common when an agent opens
  * with tool calls), the means leads instead, so the line is never blank.
  */
-function WorkingDetail({ activity }: { activity: LiveActivity | null }) {
+/** True when a horizontally-truncating element is actually clipped (content
+ *  wider than its box). Re-measures when `dep` (the text) changes and on any
+ *  resize of the element, so the bar can offer "expand" exactly when the goal is
+ *  visibly cut off — not only when the server flagged more content. */
+function useIsOverflowing(dep: string | null): [React.RefObject<HTMLSpanElement | null>, boolean] {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  // `dep` (the text) is an intentional re-measure trigger, not used in the body:
+  // the goal span is `flex-1`, so its box size doesn't change when the text does
+  // and a ResizeObserver alone would miss the content-width change.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dep is a re-measure trigger
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) {
+      setOverflowing(false);
+      return;
+    }
+    const measure = () => {
+      const next = el.scrollWidth - el.clientWidth > 1;
+      setOverflowing((prev) => (prev === next ? prev : next));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [dep]);
+  return [ref, overflowing];
+}
+
+function WorkingDetail({
+  activity,
+  onGoalOverflowChange,
+}: {
+  activity: LiveActivity | null;
+  /** Reports whether the goal text is visibly clipped, so the parent can offer
+   *  expand on width-truncation too — not only when the server sent more. */
+  onGoalOverflowChange?: (overflowing: boolean) => void;
+}) {
   const elapsed = useLiveElapsed(activity?.startedAt ?? null);
+  const goal = activity?.turnText ? stripInlineMarkdown(activity.turnText) : null;
+  const [goalRef, goalOverflowing] = useIsOverflowing(goal);
+  // Report pre-paint (layout effect) so a lead switch to a shorter goal never
+  // paints a one-frame stale `⇕` before the parent's flag catches up.
+  useLayoutEffect(() => {
+    onGoalOverflowChange?.(goal !== null && goalOverflowing);
+  }, [goal, goalOverflowing, onGoalOverflowChange]);
+  // Reset the parent's overflow flag when this WorkingDetail unmounts — e.g. the
+  // still-`working` lead gains a statusReason and LeadDetail swaps to the reason
+  // branch — so a stale `⇕` never lingers beside a non-goal row.
+  useEffect(() => () => onGoalOverflowChange?.(false), [onGoalOverflowChange]);
   if (!activity) return <span className="truncate">Working</span>;
-  const goal = activity.turnText ? stripInlineMarkdown(activity.turnText) : null;
   const action = activityAction(activity, goal !== null);
   return (
     <span className="inline-flex min-w-0 flex-1 items-center" style={{ gap: 4 }}>
       {goal ? (
-        <span className="min-w-0 flex-1 truncate" title={goal}>
+        <span ref={goalRef} className="min-w-0 flex-1 truncate" title={goal}>
           {goal}
         </span>
       ) : null}
