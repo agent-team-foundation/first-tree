@@ -109,7 +109,7 @@ const VARIANTS: Variant[] = [
   {
     name: "working · long goal, clipped by width (offers expand)",
     subtitle:
-      "no server turnTextFull, but the goal is clipped by the rail width → the ⇕ appears and the card shows the full line",
+      "no server turnTextFull, but the goal is clipped by the rail width → the ⇕ appears and clicking anywhere on the row shows the full line",
     chatId: "v-long",
     agents: [DEV],
     statuses: [
@@ -125,7 +125,7 @@ const VARIANTS: Variant[] = [
   },
   {
     name: "working · long multi-line goal (expand card)",
-    subtitle: "server sent turnTextFull; the ⇕ opens the full multi-line card (click to test)",
+    subtitle: "server sent turnTextFull; click anywhere on the row (⇕) opens the full multi-line card (click to test)",
     chatId: "v-expand",
     agents: [DEV],
     statuses: [

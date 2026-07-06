@@ -234,22 +234,13 @@ export function ComposeStatusBar({
           nameOf={nameFor(agents)}
           mounted={mounted}
           onGoalOverflowChange={setLeadGoalOverflow}
+          expand={{
+            canExpand,
+            open: cardOpen,
+            onToggle: () => setCardOpenFor((cur) => (cur === leadRow.agentId ? null : leadRow.agentId)),
+            triggerRef: cardTriggerRef,
+          }}
         />
-        {canExpand ? (
-          <button
-            type="button"
-            ref={cardTriggerRef}
-            aria-label={cardOpen ? "Collapse full narration" : "Expand full narration"}
-            aria-expanded={cardOpen}
-            onClick={() => setCardOpenFor((cur) => (cur === leadRow.agentId ? null : leadRow.agentId))}
-            className="inline-flex shrink-0 items-center"
-            style={{ border: 0, background: "transparent", padding: 0, cursor: "pointer", color: "var(--fg-4)" }}
-          >
-            {/* A distinct unfold glyph (not a single chevron) so it never reads
-                as, or collides with, the adjacent `+N` expand chevron. */}
-            <ChevronsUpDown className="h-3.5 w-3.5" />
-          </button>
-        ) : null}
         {others.length > 0 ? (
           <button
             type="button"
@@ -296,19 +287,31 @@ function nameFor(agents: ChatParticipantDetail[]) {
   return (id: string) => agents.find((a) => a.agentId === id)?.displayName ?? id.slice(0, 8);
 }
 
-/** One rail line: a single clickable text region that jumps to the agent's
- *  timeline anchor (working → WorkingTurn, failed → ErrorRow). */
+/** One rail line. By default a clickable text region that jumps to the agent's
+ *  timeline anchor (working → WorkingTurn, failed → ErrorRow). The lead row
+ *  passes `expand` instead: the WHOLE row toggles the full-narration card (the
+ *  jump is dropped there), with the `⇕` glyph as the affordance — or renders as
+ *  plain static text when there's nothing to expand. */
 function RailRow({
   status,
   nameOf,
   mounted,
   onGoalOverflowChange,
+  expand,
 }: {
   status: AgentChatStatus;
   nameOf: (id: string) => string;
   mounted: ReadonlySet<string>;
   /** Lead-only: reports whether the goal text is visibly clipped. */
   onGoalOverflowChange?: (overflowing: boolean) => void;
+  /** Lead-only: makes the whole row a toggle for the full-narration card
+   *  (replacing the timeline jump). Absent on the `+N` rows, which keep jump. */
+  expand?: {
+    canExpand: boolean;
+    open: boolean;
+    onToggle: () => void;
+    triggerRef: React.RefObject<HTMLButtonElement | null>;
+  };
 }) {
   const view = viewOf(status.main);
   const reasonView = statusReasonView(status);
@@ -317,21 +320,67 @@ function RailRow({
   const pulse = reasonView?.pulse ?? view.pulse;
   const label = reasonView?.label ?? view.label;
   const jumpable = isJumpable(mounted, status.main, status.agentId);
+  const content = (
+    <>
+      <StatusGlyph colorVar={colorVar} shape={shape} pulse={pulse} size={8} ariaLabel={label} />
+      <span className="shrink-0">{nameOf(status.agentId)}</span>
+      <Sep />
+      <LeadDetail status={status} onGoalOverflowChange={onGoalOverflowChange} />
+    </>
+  );
   return (
     <div className="flex min-w-0 flex-1 items-center" style={{ gap: "var(--sp-1_5)" }}>
-      <TimelineJumpButton
-        agentId={status.agentId}
-        main={status.main}
-        anchored={jumpable}
-        ariaLabel={`Jump to ${nameOf(status.agentId)} in the timeline`}
-        className="flex-1 text-caption"
-        style={{ color: colorVar }}
-      >
-        <StatusGlyph colorVar={colorVar} shape={shape} pulse={pulse} size={8} ariaLabel={label} />
-        <span className="shrink-0">{nameOf(status.agentId)}</span>
-        <Sep />
-        <LeadDetail status={status} onGoalOverflowChange={onGoalOverflowChange} />
-      </TimelineJumpButton>
+      {expand ? (
+        // Lead row: the WHOLE line toggles the full-narration card (jump dropped).
+        // ALWAYS the same <button> element and an always-present ⇕ slot — never
+        // switch element type or add/remove the glyph on `canExpand`: doing so
+        // would remount WorkingDetail (its unmount-reset then fights the mount
+        // re-measure) and change the goal's available width, oscillating both
+        // ways. So the type/width stay constant and only the interactivity +
+        // glyph visibility toggle. When there's nothing to expand it's an inert,
+        // untabbable button.
+        <button
+          type="button"
+          ref={expand.triggerRef}
+          onClick={expand.canExpand ? expand.onToggle : undefined}
+          tabIndex={expand.canExpand ? undefined : -1}
+          aria-expanded={expand.canExpand ? expand.open : undefined}
+          aria-label={
+            expand.canExpand ? (expand.open ? "Collapse full narration" : "Expand full narration") : undefined
+          }
+          className="text-caption inline-flex min-w-0 flex-1 items-center"
+          style={{
+            gap: 4,
+            border: 0,
+            background: "transparent",
+            padding: 0,
+            cursor: expand.canExpand ? "pointer" : "default",
+            textAlign: "left",
+            color: colorVar,
+          }}
+        >
+          {content}
+          {/* A distinct unfold glyph (not a single chevron) so it never reads as,
+              or collides with, the adjacent `+N` chevron. Kept in the layout (only
+              its visibility toggles) so the goal's width — and thus the overflow
+              measurement — doesn't change when it appears/disappears. */}
+          <ChevronsUpDown
+            className="h-3.5 w-3.5 shrink-0"
+            style={{ color: "var(--fg-4)", visibility: expand.canExpand ? "visible" : "hidden" }}
+          />
+        </button>
+      ) : (
+        <TimelineJumpButton
+          agentId={status.agentId}
+          main={status.main}
+          anchored={jumpable}
+          ariaLabel={`Jump to ${nameOf(status.agentId)} in the timeline`}
+          className="flex-1 text-caption"
+          style={{ color: colorVar }}
+        >
+          {content}
+        </TimelineJumpButton>
+      )}
     </div>
   );
 }
