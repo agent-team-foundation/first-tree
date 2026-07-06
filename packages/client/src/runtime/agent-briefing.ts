@@ -857,9 +857,13 @@ safety-sensitive or irreversible action, or ambiguous requirements whose
 branches differ materially. Do NOT manufacture progress or permission checks
 ("is the plan ready?", "can I continue?", "does this look right?"): decide,
 proceed, and report status via \`chat update --description\`. The human's
-earlier answers are a source you settle from too: when their past decisions —
-in this chat or others — show how they decide cases like this one, apply that
-pattern and report the call instead of re-asking. Ask volume should fall as
+earlier answers are a source you settle from too — but only when you can
+actually cite them: an answer in the visible transcript, a durable record (a
+Context Tree node, a memory note), or something the human just provided. An
+inferred preference you cannot point to is not evidence; without such a
+source the question is not settled — ask. When a citable pattern shows how
+they decide cases like this one, apply it and report the call instead of
+re-asking. Ask volume should fall as
 you learn how the human decides; interruption that never decreases means you
 are not learning. But once a
 genuine blocking question exists, it is an ask — in no case does it ride in a

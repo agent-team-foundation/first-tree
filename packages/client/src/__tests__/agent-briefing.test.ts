@@ -789,6 +789,11 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toMatch(/Unpack every compressed\s+reference/);
     expect(briefing).toMatch(/meaning lives in\s+context the reader does not hold/);
     expect(briefing).toMatch(/cannot produce a good\s+decision/);
+    // Evidence boundary (codex-assistant): a prior answer suppresses an ask
+    // only when citable — visible transcript, durable record, or just-provided
+    // material; an inferred preference settles nothing.
+    expect(briefing).toMatch(/only when you can\s+actually cite them/);
+    expect(briefing).toMatch(/without such a\s+source the question is not settled — ask/);
     expect(briefing).toMatch(/Ask volume should fall as\s+you learn/);
 
     expect(briefing).toContain("## Chat Topic & Description");
