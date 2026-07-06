@@ -24,7 +24,7 @@ import {
   ServiceUnavailableError,
 } from "../../errors.js";
 import { uuidv7 } from "../../uuid.js";
-import { createAgent, legacyWireAgentType } from "../agent.js";
+import { agentMetadataUpdateExpressionPreservingRuntimeState, createAgent, legacyWireAgentType } from "../agent.js";
 import { pickDefaultMembership } from "../auth.js";
 import { createChat } from "../chat.js";
 import { sendToClient } from "../connection-manager.js";
@@ -286,7 +286,7 @@ async function ensureTrialAgent(
       .set({
         visibility: "organization",
         displayName: input.skillSet.agentDisplayName,
-        metadata,
+        metadata: agentMetadataUpdateExpressionPreservingRuntimeState(metadata),
         updatedAt: new Date(),
       })
       .where(eq(agents.uuid, existing.uuid))
