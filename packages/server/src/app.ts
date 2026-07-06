@@ -615,6 +615,13 @@ export async function buildApp(config: Config) {
           return reply.status(404).send({ error: "Not found" });
         }
         const requestPath = request.url.split("?")[0] ?? request.url;
+        // Tombstone for the retired Hearback feedback endpoint. The route is
+        // gone, but stale cached widgets (and any external caller) may still
+        // POST to `/feedback/*`; fail them deliberately with JSON instead of
+        // letting the SPA fallback below hand back a 200 index.html shell.
+        if (requestPath.startsWith("/feedback/")) {
+          return reply.status(410).send({ error: "Feedback has been removed" });
+        }
         if (requestPath.startsWith("/assets/") || extname(requestPath).length > 0) {
           return reply.status(404).send({ error: "Not found" });
         }
