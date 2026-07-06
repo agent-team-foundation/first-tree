@@ -67,6 +67,7 @@ export function ParticipantsSection({
   managedByMe,
   onAdded,
   readOnly,
+  liveTurnAgentIds,
 }: {
   chatId: string;
   participants: ChatParticipantDetail[];
@@ -74,6 +75,10 @@ export function ParticipantsSection({
   managedByMe: Map<string, boolean>;
   onAdded: () => void;
   readOnly: boolean;
+  /** Agents with a live (un-ended) turn in the timeline; forwarded to
+   *  AgentStatusPanel so a lapsed runtime heartbeat can't show Idle while the
+   *  conversation shows the turn running. */
+  liveTurnAgentIds?: ReadonlySet<string>;
 }) {
   const { role } = useAuth();
   const [showAll, setShowAll] = useState(false);
@@ -107,6 +112,7 @@ export function ParticipantsSection({
                 agents={visibleAgents}
                 canManage={(id) => isAdmin || (managedByMe.get(id) ?? false)}
                 compact
+                liveTurnAgentIds={liveTurnAgentIds}
               />
             ) : null}
             {visibleHumans.map((p) => (

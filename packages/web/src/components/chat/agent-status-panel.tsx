@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pause, Play } from "lucide-react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { resumeSession, suspendSession } from "../../api/sessions.js";
-import { viewOf } from "../../lib/agent-status-view.js";
+import { applyLiveTurn, viewOf } from "../../lib/agent-status-view.js";
 import { toneOf } from "../../lib/tones.js";
 import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { Avatar } from "../avatar.js";
@@ -31,6 +31,7 @@ export function AgentStatusPanel({
   canManage,
   order = "fixed",
   compact = false,
+  liveTurnAgentIds,
 }: {
   chatId: string;
   /** Non-human agent participants, in display order. */
@@ -43,6 +44,15 @@ export function AgentStatusPanel({
   /** Tighter row padding for the dense sidebar roster. The compose-bar usage
    *  keeps the roomier default. */
   compact?: boolean;
+  /** Agents with a live (un-ended) turn in the chat timeline — a mounted
+   *  WorkingTurn. When provided, `applyLiveTurn` ORs this into each row's
+   *  working axis so a lapsed runtime heartbeat can't show Idle while the
+   *  conversation still shows the turn running. Only ChatView (which holds the
+   *  timeline) passes it; a caller with no timeline in scope omits it and the
+   *  rows render the composite unchanged. Scope note: the timeline is
+   *  single-(primary-)agent, so this set only ever covers the primary agent —
+   *  see the derivation in chat-view.tsx. */
+  liveTurnAgentIds?: ReadonlySet<string>;
 }) {
   const { data: statuses } = useQuery({
     queryKey: chatAgentStatusQueryKey(chatId),
@@ -73,6 +83,7 @@ export function AgentStatusPanel({
           chatId={chatId}
           agent={agent}
           status={byAgent.get(agent.agentId) ?? null}
+          hasLiveTurn={liveTurnAgentIds?.has(agent.agentId) ?? false}
           canManage={canManage(agent.agentId)}
           mounted={mounted}
           compact={compact}
@@ -101,6 +112,7 @@ function AgentStatusRow({
   chatId,
   agent,
   status,
+  hasLiveTurn,
   canManage,
   mounted,
   compact,
@@ -108,6 +120,7 @@ function AgentStatusRow({
   chatId: string;
   agent: ChatParticipantDetail;
   status: AgentChatStatus | null;
+  hasLiveTurn: boolean;
   canManage: boolean;
   mounted: ReadonlySet<string>;
   compact: boolean;
@@ -130,9 +143,16 @@ function AgentStatusRow({
     },
   });
 
-  const view = status ? viewOf(status.main) : null;
-  const showPause = canManage && canPauseStatus(status);
-  const showResume = canManage && canResumeStatus(status);
+  // Reconcile a lapsed runtime heartbeat against the timeline's live-turn
+  // signal: a mounted WorkingTurn upgrades `ready → working` so the row can't
+  // read Idle while the conversation shows the agent working. Everything
+  // downstream (glyph, second line, Pause eligibility) reads this reconciled
+  // status so they stay internally consistent.
+  const displayStatus = status && hasLiveTurn ? { ...status, main: applyLiveTurn(status.main, true) } : status;
+
+  const view = displayStatus ? viewOf(displayStatus.main) : null;
+  const showPause = canManage && canPauseStatus(displayStatus);
+  const showResume = canManage && canResumeStatus(displayStatus);
 
   return (
     <div
@@ -147,6 +167,7 @@ function AgentStatusRow({
         agentId={agent.agentId}
         chatId={chatId}
         name={agent.displayName}
+        hasLiveTurn={hasLiveTurn}
         placement="left"
         triggerClassName="block shrink-0 cursor-pointer rounded-full"
       >
@@ -184,12 +205,13 @@ function AgentStatusRow({
           agentId={agent.agentId}
           chatId={chatId}
           name={agent.displayName}
+          hasLiveTurn={hasLiveTurn}
           placement="left"
           triggerClassName="block max-w-full cursor-pointer truncate text-left text-subtitle hover:underline"
         >
           {agent.displayName}
         </AgentHovercard>
-        <SecondLine status={status} mounted={mounted} />
+        <SecondLine status={displayStatus} mounted={mounted} />
       </div>
 
       {showPause ? <PauseButton onClick={() => suspendMut.mutate()} isPending={suspendMut.isPending} /> : null}

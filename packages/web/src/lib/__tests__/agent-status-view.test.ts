@@ -1,6 +1,6 @@
 import type { AgentMainStatus } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { type AgentStatusView, sessionStateToMain, viewOf } from "../agent-status-view.js";
+import { type AgentStatusView, applyLiveTurn, sessionStateToMain, viewOf } from "../agent-status-view.js";
 
 const ALL: AgentMainStatus[] = ["offline", "failed", "working", "paused", "ready"];
 
@@ -52,6 +52,33 @@ describe("viewOf — §9.1 visual vocabulary", () => {
       expect(v.colorVar.startsWith("var(--")).toBe(true);
       // A pulse kind always pairs with an animation class, and vice-versa.
       expect(v.pulse === null).toBe(v.animationClass === null);
+    }
+  });
+});
+
+describe("applyLiveTurn — reconcile heartbeat working axis with the timeline live turn", () => {
+  it("upgrades ready → working when a live turn exists (the idle-while-working fix)", () => {
+    expect(applyLiveTurn("ready", true)).toBe("working");
+  });
+
+  it("leaves ready as ready with no live turn", () => {
+    expect(applyLiveTurn("ready", false)).toBe("ready");
+  });
+
+  it("is upgrade-only: never downgrades or overrides the authoritative states", () => {
+    // working stays working; failed / paused / offline are authoritative and a
+    // live-turn signal must not mask them.
+    for (const main of ALL) {
+      if (main === "ready") continue;
+      expect(applyLiveTurn(main, true)).toBe(main);
+      expect(applyLiveTurn(main, false)).toBe(main);
+    }
+  });
+
+  it("only ever returns a real composite main", () => {
+    for (const main of ALL) {
+      expect(ALL).toContain(applyLiveTurn(main, true));
+      expect(ALL).toContain(applyLiveTurn(main, false));
     }
   });
 });

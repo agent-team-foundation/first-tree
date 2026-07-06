@@ -46,6 +46,28 @@ export function sessionStateToMain(state: SessionState | "none" | null | undefin
 }
 
 /**
+ * Reconcile the composite `working` axis with the timeline's live-turn signal.
+ *
+ * The composite `working` is a per-chat runtime heartbeat with a
+ * `RUNTIME_STALE_MS` freshness window; it can lapse mid-turn (e.g. a flapping
+ * client WS drops the ~20s re-affirm frames) and flip a genuinely-working agent
+ * to `ready` ("Idle") in the roster while the chat timeline still shows its live
+ * WorkingTurn. `hasLiveTurn` is that timeline's authoritative signal — a mounted
+ * WorkingTurn ⇔ the agent has session events since its last `turn_end`. OR it
+ * into the working axis so a roster row can never read Idle while the
+ * conversation visibly shows the turn running.
+ *
+ * Upgrade-only: `ready → working` when a live turn exists; every other main
+ * (already `working`, or the authoritative `failed` / `paused` / `offline`) is
+ * left untouched. It never downgrades, so it cannot hide genuine work — e.g. a
+ * turn that has begun reporting runtime `working` but not yet emitted a session
+ * event still shows `working` from the composite.
+ */
+export function applyLiveTurn(main: AgentMainStatus, hasLiveTurn: boolean): AgentMainStatus {
+  return hasLiveTurn && main === "ready" ? "working" : main;
+}
+
+/**
  * Indicator shape. Mirrors the existing StateDot shape+color double-encoding
  * (shape carries meaning too, so color-blind users can still distinguish the
  * non-dot states): `dot` solid circle, `pause` double-bar glyph, `hollow`

@@ -2370,6 +2370,33 @@ export function ChatView({
 
   const itemCount = items.length;
 
+  // Agents with a live (un-ended) turn: one workgroup == one in-progress turn
+  // (see the `items` builder above). This is the timeline's authoritative
+  // "working" signal — a mounted WorkingTurn. The right rail + compose bar
+  // reconcile it against the composite agent-status (`applyLiveTurn`) so a
+  // lapsed per-chat runtime heartbeat (or a missed composite invalidation)
+  // can't show Idle while a WorkingTurn is visibly on screen. Derived from
+  // `items` (not `visibleItems`) so a viewer-local blocking truncation never
+  // blanks an agent's work status.
+  //
+  // Scope: `eventsData` is a single-(primary-)agent feed (`["session-events",
+  // agentId, chatId]`), so `items` only ever carries the primary agent's
+  // workgroup and this set covers only that agent — exactly the agent whose
+  // WorkingTurn is on screen. `applyLiveTurn` is upgrade-only, so a secondary
+  // agent (no card) is never wrongly forced to working; it just keeps showing
+  // the composite. Fixing idle-while-working for secondary agents would need a
+  // multi-agent events feed and is out of this stopgap's scope.
+  const liveTurnAgentIds = useMemo(
+    () =>
+      new Set(
+        items
+          .filter((it): it is Extract<TimelineItem, { kind: "workgroup" }> => it.kind === "workgroup")
+          .map((it) => it.events[0]?.agentId)
+          .filter((id): id is string => id != null),
+      ),
+    [items],
+  );
+
   // Blocking truncation: while a question blocks me (the FIFO-oldest live
   // request directed at me), hide every timeline item AFTER that request's
   // card — the conversation does not continue until I answer. The block is
@@ -3808,6 +3835,7 @@ export function ChatView({
                     <ComposeStatusBar
                       chatId={chatId}
                       agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
+                      liveTurnAgentIds={liveTurnAgentIds}
                     />
                     {/* A blocking question is answered in the full-coverage
                         AskTakeover overlay (rendered over the workspace), not in
@@ -4258,6 +4286,7 @@ export function ChatView({
                   onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
                   readOnly={readOnly}
                   width="min(88vw, 20rem)"
+                  liveTurnAgentIds={liveTurnAgentIds}
                 />
               </div>
             </>
@@ -4269,6 +4298,7 @@ export function ChatView({
               managedByMe={managedByMeMap}
               onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
               readOnly={readOnly}
+              liveTurnAgentIds={liveTurnAgentIds}
             />
           )
         ) : null}
