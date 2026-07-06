@@ -344,6 +344,6 @@ export function buildLandingCampaignBootstrap(skillSet: LandingCampaignSkillSet,
   return [
     `Welcome to First Tree. ${skillSet.agentDisplayName} is connected to your code: ${repoUrl}`,
     "",
-    "It's running a read-only production-readiness scan and will come back with a security-weighted score, the must-fix blockers, and one fix ready to apply.",
+    "It's running a read-only production-readiness scan and will come back with a security-weighted score, any must-fix blockers, and — where there's a real fix worth making — one ready to apply.",
   ].join("\n");
 }
