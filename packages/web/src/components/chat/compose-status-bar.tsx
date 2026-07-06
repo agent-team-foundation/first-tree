@@ -35,10 +35,11 @@ import { formatElapsed } from "./working-chip.js";
  *     active agent (≤ ~5 visible, then internal scroll).
  *   - All quiet → the whole rail is hidden.
  *
- * Click zones: the lead/row text → jump to that agent's timeline anchor
- * (working → WorkingTurn, failed → ErrorRow); +N / chevron → expand. Data is
- * the shared /agent-status query (React-Query-deduped, admin-WS-live,
- * ~1s-throttled).
+ * Click zones: the lead row → toggle its full-narration card (the `⇕` glyph is
+ * the affordance); a `+N` row's text → jump to that agent's timeline anchor
+ * (working → WorkingTurn, failed → ErrorRow); the `+N` chevron → expand the
+ * list. Data is the shared /agent-status query (React-Query-deduped,
+ * admin-WS-live, ~1s-throttled).
  */
 const ATTENTION: ReadonlySet<string> = new Set(["failed", "working"]);
 const TICK_INTERVAL_MS = 1000;
@@ -342,6 +343,10 @@ function RailRow({
         <button
           type="button"
           ref={expand.triggerRef}
+          // Inert when there's nothing to expand: drop the button semantics so AT
+          // reads it as plain status text, not a dead button (the element type
+          // must stay `<button>` to avoid the remount described above).
+          role={expand.canExpand ? undefined : "presentation"}
           onClick={expand.canExpand ? expand.onToggle : undefined}
           tabIndex={expand.canExpand ? undefined : -1}
           aria-expanded={expand.canExpand ? expand.open : undefined}
