@@ -42,8 +42,11 @@ vi.mock("../../../hooks/use-server-channel.js", () => ({
   useGrowthLandingPagesEnabled: () => growthLandingMock.value.enabled,
 }));
 vi.mock("../../../api/landing-campaigns.js", () => landingCampaignMock);
-vi.mock("../../workspace/center/chat-by-id.js", () => ({
-  ChatByIdView: ({ chatId }: { chatId: string }) => <div data-testid="quickstart-trial-chat">{chatId}</div>,
+// The trial chat now renders the real workspace shell; stub it so this unit
+// test stays focused on QuickstartPage's launcher/routing, not the whole
+// three-pane workspace. WorkspaceBody reads the selected chat from `?c=`.
+vi.mock("../../workspace/index.js", () => ({
+  WorkspaceBody: () => <div data-testid="quickstart-trial-chat" />,
 }));
 
 function createStorage(): Storage {
@@ -137,27 +140,44 @@ describe("QuickstartPage — landing campaign trial flow", () => {
     });
     expect(authMock.value.refreshMe).toHaveBeenCalled();
     expect(readCampaignIntent()).toBeNull();
-    expect(navigateMock).toHaveBeenCalledWith("/quickstart?chat=chat-1", { replace: true });
+    expect(navigateMock).toHaveBeenCalledWith("/quickstart?c=chat-1", { replace: true });
   });
 
-  it("renders an existing trial chat directly and does not restart the trial", async () => {
+  it("renders the workspace shell for an existing trial chat and does not restart the trial", async () => {
     seedIntent("production-scan");
-    const container = await renderPage(["/quickstart?chat=chat-1"]);
+    const container = await renderPage(["/quickstart?c=chat-1"]);
 
-    expect(container.querySelector('[data-testid="quickstart-trial-chat"]')?.textContent).toBe("chat-1");
+    expect(container.querySelector('[data-testid="quickstart-trial-chat"]')).not.toBeNull();
     expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
-  it("ignores unsupported campaign handoffs", async () => {
+  it("shows the workspace (no dead-end) for an unsupported campaign handoff", async () => {
     seedIntent("production-scan");
     const container = await renderPage([
       "/quickstart?campaign=agent-readiness&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend",
     ]);
 
-    expect(container.textContent).toContain("Start from a First Tree scan");
+    expect(container.querySelector('[data-testid="quickstart-trial-chat"]')).not.toBeNull();
     expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
     expect(readCampaignIntent()).toBeNull();
+  });
+
+  it("canonicalizes a legacy ?chat= trial link to ?c= and starts nothing", async () => {
+    await renderPage(["/quickstart?chat=chat-legacy"]);
+
+    expect(navigateMock).toHaveBeenCalledWith("/quickstart?c=chat-legacy", { replace: true });
+    expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes a legacy ?chat= link even with a stored intent, without starting a new trial", async () => {
+    // A leftover valid intent in the same tab must NOT hijack a legacy
+    // selected-chat link into launching a fresh trial before the redirect.
+    seedIntent("production-scan");
+    await renderPage(["/quickstart?chat=chat-legacy"]);
+
+    expect(navigateMock).toHaveBeenCalledWith("/quickstart?c=chat-legacy", { replace: true });
+    expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
   });
 
   it("does not start anything when the feature flag is disabled", async () => {
@@ -181,10 +201,10 @@ describe("QuickstartPage — landing campaign trial flow", () => {
     expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
   });
 
-  it("missing campaign intent renders a pointer and starts nothing", async () => {
+  it("renders the workspace and starts nothing when there is no campaign intent", async () => {
     const container = await renderPage();
 
-    expect(container.textContent).toContain("Start from a First Tree scan");
+    expect(container.querySelector('[data-testid="quickstart-trial-chat"]')).not.toBeNull();
     expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
     expect(navigateMock).not.toHaveBeenCalled();
   });
@@ -215,6 +235,6 @@ describe("QuickstartPage — landing campaign trial flow", () => {
     await flush();
 
     expect(landingCampaignMock.startLandingCampaign).toHaveBeenCalledTimes(2);
-    expect(navigateMock).toHaveBeenCalledWith("/quickstart?chat=chat-2", { replace: true });
+    expect(navigateMock).toHaveBeenCalledWith("/quickstart?c=chat-2", { replace: true });
   });
 });

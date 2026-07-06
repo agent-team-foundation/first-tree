@@ -48,7 +48,12 @@ export function Layout() {
   }, []);
 
   const location = useLocation();
-  const isWorkspace = location.pathname === "/";
+  // The workspace shell (`WorkspaceBody`) needs the bare, full-height outlet so
+  // its `flex flex-1` three-pane layout fills the viewport. `/` is the gated
+  // index; `/quickstart` renders the SAME `WorkspaceBody` gate-free for the
+  // landing-campaign trial, so it needs the identical outlet — not the padded
+  // 960 admin canvas the `else` branch below wraps other routes in.
+  const isWorkspace = location.pathname === "/" || location.pathname === "/quickstart";
   // Settings owns its own two-column (sidebar + main) layout and centres a
   // ~1160 wrapper instead of the default 960 canvas — let it manage its
   // own width.

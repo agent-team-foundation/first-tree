@@ -157,6 +157,7 @@ async function renderLayout(route: string): Promise<{ container: HTMLElement; ro
           <Routes>
             <Route element={<Layout />}>
               <Route index element={<div>Workspace child</div>} />
+              <Route path="quickstart" element={<div>Quickstart child</div>} />
               <Route path="context" element={<div>Context child</div>} />
               <Route path="settings" element={<div>Settings child</div>} />
             </Route>
@@ -238,6 +239,22 @@ describe("Layout", () => {
     expect(container.textContent).not.toContain("Mock command palette");
 
     await act(async () => root.unmount());
+  });
+
+  it("renders /quickstart in the full-bleed workspace outlet, not the 960 admin canvas", async () => {
+    // The landing-campaign trial renders the real WorkspaceBody at /quickstart;
+    // it needs the same bare, full-height outlet as `/` so its three-pane
+    // `flex flex-1` shell fills the viewport — NOT the centered 960 canvas the
+    // admin routes (Context / Team / Agent Detail) use.
+    const quickstart = await renderLayout("/quickstart");
+    expect(quickstart.container.textContent).toContain("Quickstart child");
+    expect(quickstart.container.querySelector('[style*="960"]')).toBeNull();
+    await act(async () => quickstart.root.unmount());
+
+    // Control: an admin route DOES get wrapped in the 960 content canvas.
+    const context = await renderLayout("/context");
+    expect(context.container.querySelector('[style*="960"]')).not.toBeNull();
+    await act(async () => context.root.unmount());
   });
 
   it("keeps status chips in the right controls before the compact command palette entry", async () => {
