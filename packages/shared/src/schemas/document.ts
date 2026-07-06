@@ -157,7 +157,7 @@ export const listDocsQuerySchema = z.object({
   project: z.string().optional(),
   status: docStatusSchema.optional(),
   limit: z.coerce.number().int().min(1).max(200).optional().default(50),
-  /** Opaque cursor — the `updatedAt` ISO timestamp of the previous page's last item. */
+  /** Opaque keyset cursor — pass a previous page's `nextCursor` verbatim. */
   cursor: z.string().optional(),
 });
 export type ListDocsQuery = z.infer<typeof listDocsQuerySchema>;

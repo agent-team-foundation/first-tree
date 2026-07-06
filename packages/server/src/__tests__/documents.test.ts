@@ -154,6 +154,52 @@ describe("documents API", () => {
       expect(missing.statusCode).toBe(404);
     });
 
+    it("paginates stably across identical updatedAt timestamps", async () => {
+      const app = getApp();
+      const ctx = await createAdminContext(app);
+      const { docDocuments } = await import("../db/schema/index.js");
+
+      // Bulk-import shape: several documents sharing one exact timestamp. A
+      // timestamp-only cursor drops the tied rows at a page boundary.
+      const sameInstant = new Date("2026-07-05T12:00:00.123Z");
+      const tiedSlugs = Array.from({ length: 3 }, (_, i) => slug(`tied-${i}`));
+      for (const s of tiedSlugs) {
+        await app.db.insert(docDocuments).values({
+          id: uuidv7(),
+          organizationId: ctx.organizationId,
+          slug: s,
+          title: s,
+          status: "draft",
+          latestVersion: 1,
+          createdByKind: "human",
+          createdById: ctx.humanAgentUuid,
+          createdByName: "Test Admin",
+          createdAt: sameInstant,
+          updatedAt: sameInstant,
+        });
+      }
+
+      const req = humanRequest(app, ctx.accessToken);
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let i = 0; i < 100; i++) {
+        const url: string = `/api/v1/orgs/${ctx.organizationId}/documents?limit=1${
+          cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""
+        }`;
+        const page = await req("GET", url);
+        expect(page.statusCode).toBe(200);
+        for (const item of page.json().items) {
+          if (tiedSlugs.includes(item.slug)) seen.push(item.slug);
+        }
+        cursor = page.json().nextCursor;
+        if (cursor === null) break;
+      }
+
+      // Every tied document surfaces exactly once across the full walk.
+      expect([...seen].sort()).toEqual([...tiedSlugs].sort());
+      expect(new Set(seen).size).toBe(tiedSlugs.length);
+    });
+
     it("serializes concurrent first publishes of one slug", async () => {
       const app = getApp();
       const ctx = await createAdminContext(app);

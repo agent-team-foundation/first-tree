@@ -11,7 +11,7 @@ import type {
   PublishDocResponse,
 } from "@first-tree/shared";
 import { docCommentStatusSchema, docStatusSchema, locateDocAnchors } from "@first-tree/shared";
-import { and, asc, desc, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { docComments, docDocuments, docVersions } from "../db/schema/index.js";
 import { BadRequestError, NotFoundError } from "../errors.js";
@@ -278,6 +278,23 @@ export async function getDocumentWithVersion(
   };
 }
 
+/**
+ * Keyset cursor: `<updatedAt ISO>|<id>`. The id tie-breaker keeps pagination
+ * stable when several documents share one `updated_at` (e.g. a bulk import) —
+ * a timestamp-only cursor silently drops same-timestamp rows at a page
+ * boundary, which would break `doc export`'s completeness guarantee.
+ */
+function parseDocListCursor(cursor: string): { date: Date; id: string } {
+  const separator = cursor.lastIndexOf("|");
+  const iso = separator === -1 ? cursor : cursor.slice(0, separator);
+  const id = separator === -1 ? "" : cursor.slice(separator + 1);
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime()) || id.length === 0) {
+    throw new BadRequestError("cursor must be the nextCursor value from a previous page");
+  }
+  return { date, id };
+}
+
 export async function listDocuments(
   db: Database,
   organizationId: string,
@@ -288,11 +305,18 @@ export async function listDocuments(
   if (query.project) conditions.push(eq(docDocuments.project, query.project));
   if (query.status) conditions.push(eq(docDocuments.status, query.status));
   if (query.cursor) {
-    const cursorDate = new Date(query.cursor);
-    if (Number.isNaN(cursorDate.getTime())) {
-      throw new BadRequestError("cursor must be an ISO timestamp from a previous page");
-    }
-    conditions.push(lt(docDocuments.updatedAt, cursorDate));
+    const { date, id } = parseDocListCursor(query.cursor);
+    // Row-wise tuple comparison, with updated_at truncated to milliseconds on
+    // the database side: Postgres stores microseconds but a JS Date (and the
+    // ISO cursor) carries only milliseconds, so comparing raw column values
+    // against the round-tripped cursor would skip rows sharing the cursor's
+    // millisecond. Truncation makes the equality leg of the tuple comparison
+    // exact, and the id leg breaks the tie deterministically.
+    // Raw-fragment params bypass drizzle's column mapping, so the Date must
+    // go over the wire as an ISO string with an explicit cast.
+    conditions.push(
+      sql`(date_trunc('milliseconds', ${docDocuments.updatedAt}), ${docDocuments.id}) < (${date.toISOString()}::timestamptz, ${id}::text)`,
+    );
   }
 
   const rows = await db
@@ -307,7 +331,7 @@ export async function listDocuments(
     })
     .from(docDocuments)
     .where(and(...conditions))
-    .orderBy(desc(docDocuments.updatedAt))
+    .orderBy(desc(docDocuments.updatedAt), desc(docDocuments.id))
     .limit(query.limit + 1);
 
   const hasMore = rows.length > query.limit;
@@ -315,7 +339,7 @@ export async function listDocuments(
   const last = page[page.length - 1];
   return {
     items: page.map(({ doc, openComments }) => toSummary(doc, openComments)),
-    nextCursor: hasMore && last ? last.doc.updatedAt.toISOString() : null,
+    nextCursor: hasMore && last ? `${last.doc.updatedAt.toISOString()}|${last.doc.id}` : null,
   };
 }
 
