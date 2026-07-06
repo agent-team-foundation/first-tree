@@ -181,13 +181,18 @@ export function ComposeStatusBar({
   // The lead's full narration — present only when the server attached
   // `turnTextFull` (strictly more than the one-line goal). Only working leads
   // carry live activity.
-  const leadGoal = leadRow?.main === "working" ? leadRow.activity?.turnText : undefined;
+  // Expand only when the goal is the actually-rendered detail: LeadDetail shows a
+  // visible statusReason (waiting/retrying/…) *instead* of the goal when one
+  // exists, so the affordance must never appear beside a reason label — mirror
+  // that same predicate here rather than keying off `main === "working"` alone.
+  const leadShowsGoal = leadRow !== undefined && leadRow.main === "working" && !visibleStatusReason(leadRow);
+  const leadGoal = leadShowsGoal ? leadRow.activity?.turnText : undefined;
   // The text the card shows: the full newline-preserving narration when the
   // server sent one, else the one-line goal itself — so a goal that is merely
   // too wide for the rail can still be read in full.
-  const leadFullText = leadRow?.main === "working" ? (leadRow.activity?.turnTextFull ?? leadGoal) : undefined;
+  const leadFullText = leadShowsGoal ? (leadRow.activity?.turnTextFull ?? leadGoal) : undefined;
   // Offer expand when the goal is actually clipped on the rail OR the server
-  // sent strictly-more content (multi-line / >120 chars). Requires a goal.
+  // sent strictly-more content (multi-line / >120 chars). Requires a rendered goal.
   const canExpand = !!leadGoal && (leadGoalOverflow || !!leadRow?.activity?.turnTextFull);
   // Forget a stale open-card key so the card never silently re-opens on its own
   // once the lead can no longer expand (switched away, goal gone, or it shrank
@@ -428,8 +433,10 @@ function WorkingDetail({
   }, [goal, goalOverflowing, onGoalOverflowChange]);
   // Reset the parent's overflow flag when this WorkingDetail unmounts — e.g. the
   // still-`working` lead gains a statusReason and LeadDetail swaps to the reason
-  // branch — so a stale `⇕` never lingers beside a non-goal row.
-  useEffect(() => () => onGoalOverflowChange?.(false), [onGoalOverflowChange]);
+  // branch — so a stale `⇕` never lingers beside a non-goal row. Layout effect
+  // (not passive) so the cleanup runs synchronously in the commit that removes
+  // WorkingDetail, clearing the flag before paint — no one-frame stale button.
+  useLayoutEffect(() => () => onGoalOverflowChange?.(false), [onGoalOverflowChange]);
   if (!activity) return <span className="truncate">Working</span>;
   const action = activityAction(activity, goal !== null);
   return (
