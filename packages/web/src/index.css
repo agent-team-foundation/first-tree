@@ -1736,31 +1736,6 @@ tr[data-interactive]:hover {
   }
 }
 
-/* Hide the third-party hearback-widget feedback FAB on narrow viewports.
-   Matches the workspace's `narrow` breakpoint (use-viewport.ts) — at <48rem
-   the chrome collapses to tabs-only and the bottom-right bubble would
-   overlap the composer / sit on top of the home-indicator zone. The widget
-   element is injected at the end of <body> by widget.js (see index.html). */
-@media (max-width: 47.999rem) {
-  hearback-widget {
-    display: none;
-  }
-}
-
-/* Hide the third-party feedback FAB while any modal dialog is open. It's
-   injected at the end of <body> (outside the Radix portal) with a very high
-   z-index, so it otherwise floats above the scrim and can overlap a dialog's
-   footer. Radix sets role="dialog" + data-state="open" on Dialog content. */
-body:has([role="dialog"][data-state="open"]) hearback-widget {
-  display: none;
-}
-
-/* Onboarding preview is a visual-review surface; the injected feedback FAB
-   overlaps the mocked app chrome and pollutes review screenshots. */
-body:has(#onboarding-preview-root) hearback-widget {
-  display: none;
-}
-
 /* Mention chip — pill style for rendered sent messages (rehype-mentions
  * plugin). The composer mirror overlay uses `.mention-text` instead
  * (see below) because any horizontal padding / background offset on

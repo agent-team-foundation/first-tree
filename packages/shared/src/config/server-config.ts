@@ -321,30 +321,6 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT",
     }),
   }),
-  feedback: optional(
-    {
-      /**
-       * GitHub repo where feedback issues are filed (owner/name).
-       * HEARBACK_FEEDBACK_REPO is distinct from FIRST_TREE_GITHUB_* vars so
-       * the feedback token can be scoped narrowly (issues:write on a single repo)
-       * without widening First Tree's Context Tree access.
-       */
-      repo: field(z.string(), { env: "HEARBACK_FEEDBACK_REPO" }),
-      githubToken: field(z.string(), { env: "HEARBACK_GITHUB_TOKEN", secret: true }),
-      llm: optional({
-        apiKey: field(z.string(), { env: "LLM_API_KEY", secret: true }),
-        baseUrl: field(z.string().optional(), { env: "LLM_BASE_URL" }),
-        model: field(z.string().optional(), { env: "LLM_MODEL" }),
-      }),
-      /**
-       * Trust x-forwarded-for for rate-limit attribution. Default false; set true
-       * when First Tree sits behind a proxy you control (CDN, ingress). Otherwise
-       * clients can spoof the header and bypass per-ip limits.
-       */
-      trustProxyHeaders: field(z.boolean().default(false), { env: "HEARBACK_TRUST_PROXY_HEADERS" }),
-    },
-    { activateBy: ["repo", "githubToken"] },
-  ),
   observability: {
     logging: {
       level: field(logLevelSchema.default("info"), {

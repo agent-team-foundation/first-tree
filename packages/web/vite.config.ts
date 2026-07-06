@@ -134,7 +134,6 @@ export default defineConfig({
   server: {
     proxy: {
       "/api/v1": { target: HUB_TARGET, changeOrigin: true, ws: true },
-      "/feedback": { target: HUB_TARGET, changeOrigin: true },
     },
   },
 });

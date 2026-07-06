@@ -33,7 +33,6 @@ import { clientRoutes } from "./api/clients.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { contextTreeSnapshotRoutes } from "./api/context-tree-snapshot.js";
 import { documentCommentRoutes, documentRoutes } from "./api/documents.js";
-import { feedbackRoutes } from "./api/feedback.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
 import { publicInvitationRoutes } from "./api/invitations.js";
@@ -268,7 +267,6 @@ export async function buildApp(config: Config) {
     },
     // Skip tracing for:
     //   - static SPA assets, fonts, healthchecks → volume without value
-    //   - hearback feedback widget endpoints → outside the API surface
     //   - WebSocket upgrade routes → fastify hijacks the reply, so an HTTP
     //     root span here would never see `onResponse` and would leak.
     //     We emit a dedicated long-running `ws.connection` span from
@@ -276,7 +274,6 @@ export async function buildApp(config: Config) {
     ignoreRoutes: (path: string) => {
       if (path === "/" || path === "/healthz") return true;
       if (path.startsWith("/assets/") || path.startsWith("/fonts/")) return true;
-      if (path.startsWith("/feedback/")) return true;
       if (path === "/api/v1/agent/ws/client") return true;
       // Org WS upgrade: `/api/v1/orgs/:orgId/ws/`. Use a startsWith check so
       // every org's socket-upgrade path is excluded.
@@ -607,31 +604,6 @@ export async function buildApp(config: Config) {
     { prefix: "/api/v1" },
   );
 
-  // Hearback feedback endpoint — mounted outside /api/v1 because the widget's
-  // default `data-endpoint="/feedback"` expects `/feedback/chat`, `/feedback/submit`,
-  // `/feedback/upload`, etc. Registered in an encapsulated scope so its
-  // image/* content-type parser doesn't affect the rest of the app.
-  if (config.feedback) {
-    const feedbackConfig = config.feedback;
-    await app.register(
-      namePlugin("feedbackScope", async (scope) => {
-        await scope.register(feedbackRoutes, {
-          repo: feedbackConfig.repo,
-          githubToken: feedbackConfig.githubToken,
-          llm: feedbackConfig.llm
-            ? {
-                apiKey: feedbackConfig.llm.apiKey,
-                baseUrl: feedbackConfig.llm.baseUrl,
-                model: feedbackConfig.llm.model,
-              }
-            : undefined,
-          trustProxyHeaders: feedbackConfig.trustProxyHeaders,
-        });
-      }),
-      { prefix: "/feedback" },
-    );
-  }
-
   // Serve Web static files
   const webDistPath = config.webDistPath;
   if (webDistPath) {
@@ -643,9 +615,6 @@ export async function buildApp(config: Config) {
           return reply.status(404).send({ error: "Not found" });
         }
         const requestPath = request.url.split("?")[0] ?? request.url;
-        if (requestPath.startsWith("/feedback/")) {
-          return reply.status(501).send({ error: "Feedback is not configured" });
-        }
         if (requestPath.startsWith("/assets/") || extname(requestPath).length > 0) {
           return reply.status(404).send({ error: "Not found" });
         }
