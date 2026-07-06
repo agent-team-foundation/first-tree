@@ -74,7 +74,6 @@ export function ChatRightSidebar({
   onAdded,
   readOnly,
   width,
-  liveTurnAgentIds,
 }: {
   chatId: string;
   participants: ChatParticipantDetail[];
@@ -88,10 +87,6 @@ export function ChatRightSidebar({
    *  narrow-viewport overlay branch in `ChatView` (`min(88vw, 20rem)`). When
    *  omitted, the rail is drag-resizable and restores its persisted width. */
   width?: number | string;
-  /** Agents with a live (un-ended) turn in the timeline; forwarded to the
-   *  participant roster so its work status follows the visible turn, not just
-   *  the runtime heartbeat. */
-  liveTurnAgentIds?: ReadonlySet<string>;
 }) {
   const isFixed = width !== undefined;
   const [resizableWidth, setResizableWidth] = useState<number>(loadWidth);
@@ -136,7 +131,6 @@ export function ChatRightSidebar({
           managedByMe={managedByMe}
           onAdded={onAdded}
           readOnly={readOnly}
-          liveTurnAgentIds={liveTurnAgentIds}
         />
         <GitHubSection chatId={chatId} />
       </div>

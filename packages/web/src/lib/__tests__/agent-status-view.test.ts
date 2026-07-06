@@ -1,8 +1,19 @@
-import type { AgentMainStatus } from "@first-tree/shared";
+import { type AgentChatStatus, type AgentMainStatus, deriveMainStatus } from "@first-tree/shared";
 import { describe, expect, it } from "vitest";
-import { type AgentStatusView, applyLiveTurn, sessionStateToMain, viewOf } from "../agent-status-view.js";
+import { type AgentStatusView, reconcileLiveTurn, sessionStateToMain, viewOf } from "../agent-status-view.js";
 
 const ALL: AgentMainStatus[] = ["offline", "failed", "working", "paused", "ready"];
+
+/** A schema-valid `ready` status (reachable, engaged, not working/errored). */
+const READY: AgentChatStatus = {
+  agentId: "a1",
+  main: "ready",
+  reachable: true,
+  engagement: "active",
+  working: false,
+  errored: false,
+  activity: null,
+};
 
 describe("viewOf — §9.1 visual vocabulary", () => {
   it("working = green solid dot with the working pulse", () => {
@@ -56,29 +67,37 @@ describe("viewOf — §9.1 visual vocabulary", () => {
   });
 });
 
-describe("applyLiveTurn — reconcile heartbeat working axis with the timeline live turn", () => {
-  it("upgrades ready → working when a live turn exists (the idle-while-working fix)", () => {
-    expect(applyLiveTurn("ready", true)).toBe("working");
+describe("reconcileLiveTurn — reconcile the working axis with the timeline live turn", () => {
+  it("upgrades a ready status to working at the AXIS level, keeping the object valid", () => {
+    const out = reconcileLiveTurn(READY, true);
+    expect(out.main).toBe("working");
+    // The whole object stays a valid AgentChatStatus: main must equal
+    // deriveMainStatus(axes), which the shared schema's superRefine enforces.
+    expect(out.working).toBe(true);
+    expect(deriveMainStatus(out)).toBe(out.main);
+    // Nothing else is touched (activity stays null → "Working, no tool detail").
+    expect(out.activity).toBeNull();
+    expect(out.engagement).toBe(READY.engagement);
+    expect(out.reachable).toBe(READY.reachable);
   });
 
-  it("leaves ready as ready with no live turn", () => {
-    expect(applyLiveTurn("ready", false)).toBe("ready");
+  it("leaves a ready status untouched when there is no live turn", () => {
+    expect(reconcileLiveTurn(READY, false)).toBe(READY);
   });
 
-  it("is upgrade-only: never downgrades or overrides the authoritative states", () => {
-    // working stays working; failed / paused / offline are authoritative and a
-    // live-turn signal must not mask them.
-    for (const main of ALL) {
-      if (main === "ready") continue;
-      expect(applyLiveTurn(main, true)).toBe(main);
-      expect(applyLiveTurn(main, false)).toBe(main);
-    }
-  });
-
-  it("only ever returns a real composite main", () => {
-    for (const main of ALL) {
-      expect(ALL).toContain(applyLiveTurn(main, true));
-      expect(ALL).toContain(applyLiveTurn(main, false));
+  it("is upgrade-only: never downgrades or masks the authoritative states", () => {
+    // A live turn must not override an already-working, failed, paused, or
+    // offline status. Build a valid status per main and assert identity.
+    const cases: AgentChatStatus[] = [
+      { ...READY, main: "working", working: true },
+      { ...READY, main: "failed", errored: true },
+      { ...READY, main: "paused", engagement: "suspended" },
+      { ...READY, main: "offline", reachable: false },
+    ];
+    for (const s of cases) {
+      expect(deriveMainStatus(s)).toBe(s.main); // fixture is itself valid
+      expect(reconcileLiveTurn(s, true)).toBe(s);
+      expect(reconcileLiveTurn(s, false)).toBe(s);
     }
   });
 });

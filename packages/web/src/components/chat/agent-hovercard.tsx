@@ -1,18 +1,19 @@
 import type { AgentChatStatus } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, MessageSquare } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useContext } from "react";
 import { useNavigate } from "react-router";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { getAgent } from "../../api/agents.js";
 import { getChat } from "../../api/chats.js";
-import { applyLiveTurn, viewOf } from "../../lib/agent-status-view.js";
+import { reconcileLiveTurn, viewOf } from "../../lib/agent-status-view.js";
 import { useClientMap } from "../../lib/use-client-map.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
 import { Avatar } from "../avatar.js";
 import { Button } from "../ui/button.js";
 import { HoverCard, type HoverCardPlacement } from "../ui/hover-card.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
+import { LiveTurnAgentsContext } from "./live-turn-context.js";
 import { WorkingChip } from "./working-chip.js";
 
 /**
@@ -32,7 +33,6 @@ export function AgentHovercard({
   agentId,
   chatId,
   name,
-  hasLiveTurn = false,
   placement = "bottom",
   triggerClassName,
   children,
@@ -45,9 +45,6 @@ export function AgentHovercard({
    * override the visible name text and read identically for every agent.
    */
   name: string;
-  /** The agent has a live (un-ended) turn in the timeline; upgrades the card's
-   *  working axis via `applyLiveTurn`, matching the roster row. */
-  hasLiveTurn?: boolean;
   placement?: HoverCardPlacement;
   triggerClassName?: string;
   children: ReactNode;
@@ -63,26 +60,14 @@ export function AgentHovercard({
         width: "var(--sp-70)",
         maxWidth: "calc(100vw - var(--sp-4))",
       }}
-      content={({ close }) => (
-        <AgentHovercardBody agentId={agentId} chatId={chatId} hasLiveTurn={hasLiveTurn} onAction={close} />
-      )}
+      content={({ close }) => <AgentHovercardBody agentId={agentId} chatId={chatId} onAction={close} />}
     >
       {children}
     </HoverCard>
   );
 }
 
-function AgentHovercardBody({
-  agentId,
-  chatId,
-  hasLiveTurn,
-  onAction,
-}: {
-  agentId: string;
-  chatId: string;
-  hasLiveTurn: boolean;
-  onAction: () => void;
-}) {
+function AgentHovercardBody({ agentId, chatId, onAction }: { agentId: string; chatId: string; onAction: () => void }) {
   const navigate = useNavigate();
   const resolveMember = useMemberNameMap();
   const { resolve: resolveClient } = useClientMap();
@@ -105,10 +90,12 @@ function AgentHovercardBody({
 
   const participant = chatQ.data?.participants.find((p) => p.agentId === agentId);
   const rawStatus: AgentChatStatus | null = statusQ.data?.find((s) => s.agentId === agentId) ?? null;
-  // Match the roster row: a live timeline turn upgrades `ready → working` so the
-  // card's status dot / LIVE pill can't disagree with a visibly-working turn.
-  const status: AgentChatStatus | null =
-    rawStatus && hasLiveTurn ? { ...rawStatus, main: applyLiveTurn(rawStatus.main, true) } : rawStatus;
+  // Match the roster row from the same context: a live timeline turn upgrades
+  // `ready → working` (at the axis level) so the card's status dot / LIVE pill
+  // can't disagree with a visibly-working turn — for every hovercard entry
+  // point (roster rows AND message avatars/names) by construction.
+  const liveTurnAgentIds = useContext(LiveTurnAgentsContext);
+  const status: AgentChatStatus | null = rawStatus ? reconcileLiveTurn(rawStatus, liveTurnAgentIds.has(agentId)) : null;
 
   // Pass B — lazy: this body only mounts while the card is open. Gated on the
   // chat (Pass A) resolving so the human check is decided from real data —

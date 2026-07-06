@@ -88,6 +88,7 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
+import { LiveTurnAgentsContext } from "../../../components/chat/live-turn-context.js";
 import {
   findBlockingRequest,
   findThreadableRequestId,
@@ -2372,9 +2373,10 @@ export function ChatView({
 
   // Agents with a live (un-ended) turn: one workgroup == one in-progress turn
   // (see the `items` builder above). This is the timeline's authoritative
-  // "working" signal — a mounted WorkingTurn. The right rail + compose bar
-  // reconcile it against the composite agent-status (`applyLiveTurn`) so a
-  // lapsed per-chat runtime heartbeat (or a missed composite invalidation)
+  // "working" signal — a mounted WorkingTurn. Provided via LiveTurnAgentsContext
+  // so every chat-scoped status surface (roster, compose bar, hovercard)
+  // reconciles the composite against it (`reconcileLiveTurn`) from one source —
+  // a lapsed per-chat runtime heartbeat (or a missed composite invalidation)
   // can't show Idle while a WorkingTurn is visibly on screen. Derived from
   // `items` (not `visibleItems`) so a viewer-local blocking truncation never
   // blanks an agent's work status.
@@ -2382,8 +2384,8 @@ export function ChatView({
   // Scope: `eventsData` is a single-(primary-)agent feed (`["session-events",
   // agentId, chatId]`), so `items` only ever carries the primary agent's
   // workgroup and this set covers only that agent — exactly the agent whose
-  // WorkingTurn is on screen. `applyLiveTurn` is upgrade-only, so a secondary
-  // agent (no card) is never wrongly forced to working; it just keeps showing
+  // WorkingTurn is on screen. `reconcileLiveTurn` is upgrade-only, so a
+  // secondary agent (no card) is never wrongly forced to working; it just shows
   // the composite. Fixing idle-while-working for secondary agents would need a
   // multi-agent events feed and is out of this stopgap's scope.
   const liveTurnAgentIds = useMemo(
@@ -3332,7 +3334,9 @@ export function ChatView({
     },
   });
 
-  return (
+  // Wrapped via a variable (not nested inline) so introducing the provider
+  // doesn't re-indent the entire chat body — keeps the diff about the fix.
+  const body = (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Chat body: left column owns header + timeline + composer; right
           rail (chat details) sits as an independent column when open.
@@ -3835,7 +3839,6 @@ export function ChatView({
                     <ComposeStatusBar
                       chatId={chatId}
                       agents={(chatDetail?.participants ?? []).filter((p) => p.type !== "human")}
-                      liveTurnAgentIds={liveTurnAgentIds}
                     />
                     {/* A blocking question is answered in the full-coverage
                         AskTakeover overlay (rendered over the workspace), not in
@@ -4286,7 +4289,6 @@ export function ChatView({
                   onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
                   readOnly={readOnly}
                   width="min(88vw, 20rem)"
-                  liveTurnAgentIds={liveTurnAgentIds}
                 />
               </div>
             </>
@@ -4298,13 +4300,13 @@ export function ChatView({
               managedByMe={managedByMeMap}
               onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
               readOnly={readOnly}
-              liveTurnAgentIds={liveTurnAgentIds}
             />
           )
         ) : null}
       </div>
     </div>
   );
+  return <LiveTurnAgentsContext.Provider value={liveTurnAgentIds}>{body}</LiveTurnAgentsContext.Provider>;
 }
 
 /**

@@ -46,25 +46,32 @@ export function sessionStateToMain(state: SessionState | "none" | null | undefin
 }
 
 /**
- * Reconcile the composite `working` axis with the timeline's live-turn signal.
+ * Reconcile an agent's composite status against the timeline's live-turn signal.
  *
- * The composite `working` is a per-chat runtime heartbeat with a
+ * The composite `working` axis is a per-chat runtime heartbeat with a
  * `RUNTIME_STALE_MS` freshness window; it can lapse mid-turn (e.g. a flapping
- * client WS drops the ~20s re-affirm frames) and flip a genuinely-working agent
- * to `ready` ("Idle") in the roster while the chat timeline still shows its live
+ * client WS drops the ~20s re-affirm frames) — or a missed `idle → working`
+ * invalidation can leave a cached status stale — and show a genuinely-working
+ * agent as `ready` ("Idle") while the chat timeline still shows its live
  * WorkingTurn. `hasLiveTurn` is that timeline's authoritative signal — a mounted
- * WorkingTurn ⇔ the agent has session events since its last `turn_end`. OR it
- * into the working axis so a roster row can never read Idle while the
- * conversation visibly shows the turn running.
+ * WorkingTurn ⇔ the agent has session events since its last `turn_end`.
  *
- * Upgrade-only: `ready → working` when a live turn exists; every other main
- * (already `working`, or the authoritative `failed` / `paused` / `offline`) is
- * left untouched. It never downgrades, so it cannot hide genuine work — e.g. a
- * turn that has begun reporting runtime `working` but not yet emitted a session
- * event still shows `working` from the composite.
+ * Reconciles at the AXIS level, not just the `main` token: when a live turn
+ * upgrades a `ready` status it sets `working: true` so the returned object is a
+ * VALID `AgentChatStatus` — `main` still equals `deriveMainStatus(...)`, which
+ * the schema's `superRefine` enforces — rather than a self-contradictory object
+ * whose `main` says working while its axes say otherwise.
+ *
+ * Upgrade-only: acts only on `main === "ready"`; a status that is already
+ * `working`, or the authoritative `failed` / `paused` / `offline`, is returned
+ * unchanged. It never downgrades, so it cannot hide genuine work — e.g. a turn
+ * reporting runtime `working` before its first session event still shows
+ * `working` from the composite. `activity` is left as-is: `working: true` with
+ * `activity: null` is the schema-valid "Working, no tool detail" shape.
  */
-export function applyLiveTurn(main: AgentMainStatus, hasLiveTurn: boolean): AgentMainStatus {
-  return hasLiveTurn && main === "ready" ? "working" : main;
+export function reconcileLiveTurn(status: AgentChatStatus, hasLiveTurn: boolean): AgentChatStatus {
+  if (!hasLiveTurn || status.main !== "ready") return status;
+  return { ...status, working: true, main: "working" };
 }
 
 /**

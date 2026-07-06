@@ -6,12 +6,13 @@ import {
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Brain, ChevronDown, ChevronsUpDown, Pencil, Wrench } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
-import { applyLiveTurn, viewOf } from "../../lib/agent-status-view.js";
+import { reconcileLiveTurn, viewOf } from "../../lib/agent-status-view.js";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
 import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
+import { LiveTurnAgentsContext } from "./live-turn-context.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
 import { formatElapsed } from "./working-chip.js";
 
@@ -127,17 +128,10 @@ function useLiveElapsed(startedAt: string | null): string | null {
 export function ComposeStatusBar({
   chatId,
   agents,
-  liveTurnAgentIds,
 }: {
   chatId: string;
   /** Non-human agent participants (for name lookup). */
   agents: ChatParticipantDetail[];
-  /** Agents with a live (un-ended) turn in the timeline. Reconciled into the
-   *  composite via `applyLiveTurn` (upgrade-only `ready → working`) so this bar
-   *  raises "Working" for an agent whose runtime heartbeat has lapsed but whose
-   *  turn is visibly still running — keeping it in step with the roster and the
-   *  timeline WorkingTurn rather than going quiet. */
-  liveTurnAgentIds?: ReadonlySet<string>;
 }) {
   const [expanded, setExpanded] = useState(false);
   // Which agent's full-narration card is open (its agentId), or null. Keyed by
@@ -159,14 +153,13 @@ export function ComposeStatusBar({
     queryFn: () => fetchChatAgentStatuses(chatId),
     refetchInterval: 30_000,
   });
-  // Reconcile the composite against the timeline's live-turn signal once, at the
-  // source, so every downstream reader (lead pick, attention, WorkingDetail)
-  // sees the same upgraded status as the sidebar roster.
+  // Reconcile the composite against the timeline's live-turn signal (from
+  // ChatView via context) once, at the source, so every downstream reader (lead
+  // pick, attention, WorkingDetail) sees the same upgraded status as the sidebar
+  // roster and the hovercard.
+  const liveTurnAgentIds = useContext(LiveTurnAgentsContext);
   const statuses = useMemo(
-    () =>
-      (rawStatuses ?? []).map((s) =>
-        liveTurnAgentIds?.has(s.agentId) ? { ...s, main: applyLiveTurn(s.main, true) } : s,
-      ),
+    () => (rawStatuses ?? []).map((s) => reconcileLiveTurn(s, liveTurnAgentIds.has(s.agentId))),
     [rawStatuses, liveTurnAgentIds],
   );
   const mounted = useMountedAnchors();
