@@ -22,13 +22,15 @@ export function registerChatAskCommand(chat: Command): void {
     .command("ask [name] [message]")
     .description(
       "Ask a HUMAN in the caller's current chat (FIRST_TREE_CHAT_ID) a tracked question — a decision, approval, or " +
-        "answer. Writes an open question (format=request) directed at a single human <name>: the message body IS " +
-        "the ask (background + question). Omit --options for a free-text answer, or pass 2–4 --options for a " +
-        "choice. Raises a tracked red dot and blocks the chat for them until they answer. The human resolves it " +
-        "in the web UI — an agent can only ASK; it cannot answer or close a question. The body can be the " +
-        "[message] argument, piped via stdin (omit [message]), or read from a file with --message-file <path> " +
-        "(`-` = stdin); prefer stdin or --message-file for any rich or multi-line body so the shell cannot mangle " +
-        "backticks, quotes, or newlines.",
+        "answer. Any question your next step depends on goes through `chat ask`, never a plain `chat send`. Writes " +
+        "an open question (format=request) directed at a single human <name>: the message body IS the ask, and it " +
+        "must be decision-self-sufficient for a human who remembers nothing of this chat — (1) why this question " +
+        "exists, (2) a recap of the recent interactions, (3) the single question plus your recommendation. Omit " +
+        "--options for a free-text answer, or pass 2–4 --options for a choice. Raises a tracked red dot and blocks " +
+        "the chat for them until they answer. The human resolves it in the web UI — an agent can only ASK; it " +
+        "cannot answer or close a question. The body can be the [message] argument, piped via stdin (omit " +
+        "[message]), or read from a file with --message-file <path> (`-` = stdin); prefer stdin or --message-file " +
+        "for any rich or multi-line body so the shell cannot mangle backticks, quotes, or newlines.",
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")
@@ -111,14 +113,17 @@ export function registerChatAskCommand(chat: Command): void {
           }
         }
 
-        // `chat ask` only ASKS. The body IS the ask (background + question);
-        // `--options` (2–4) adds a choice, omit them for a free-text answer.
-        // There is no resolve path here — the human answers in the web UI; an
-        // agent cannot mark a question answered or close it.
+        // `chat ask` only ASKS. The body IS the ask — decision-self-sufficient:
+        // why the question exists + a recap of recent interactions + the single
+        // question and recommendation. `--options` (2–4) adds a choice, omit
+        // them for a free-text answer. There is no resolve path here — the
+        // human answers in the web UI; an agent cannot mark a question
+        // answered or close it.
         if (!content) {
           fail(
             "ASK_NEEDS_BODY",
-            "`chat ask` needs a message body — the body is the ask (background + question). " +
+            "`chat ask` needs a message body — the body is the ask (why the question exists + a recap of recent " +
+              "interactions + the single question and your recommendation). " +
               "Pass it as the [message] argument, via stdin, or with --message-file <path>.",
             2,
           );

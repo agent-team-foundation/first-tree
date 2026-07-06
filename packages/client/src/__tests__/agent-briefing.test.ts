@@ -717,6 +717,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // scoped to agents only.
     expect(briefing).toContain("Replying to a human is required, not optional");
     expect(briefing).toContain("no loop risk in always answering");
+    // The send/ask boundary routes by dependency, not importance: a send is
+    // self-sufficient (readable, then ignorable); a turn that ends blocked on
+    // the human ends with a `chat ask` — a blocking question never rides in a
+    // plain send (liuchao-001 2026-07-06).
+    expect(briefing).toMatch(/A send must be self-sufficient/);
+    expect(briefing).toMatch(/never a send with a blocking question\s+folded in/);
+    expect(briefing).toMatch(/Route by\s+dependency, not importance/);
     expect(briefing).toMatch(/This brake is for agents/);
     // Anti-spam discipline: at most one plain human reply per turn; ongoing
     // progress goes to `chat update --description`. The only skip-the-reply case
@@ -753,11 +760,22 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).not.toContain("--answer");
     expect(briefing).not.toContain("--question");
     expect(briefing).not.toContain("--close");
-    // Usage discipline: `chat ask` is ONLY for a genuine user decision that
-    // can't be inferred — never a progress / permission check.
+    // Usage discipline: importance governs whether a question should exist at
+    // all (never manufacture progress / permission checks); dependency governs
+    // routing — a genuine blocking question is ALWAYS an ask, never a question
+    // folded into a plain send (liuchao-001 2026-07-06).
+    expect(briefing).toMatch(/The routing test is \*\*dependency, not importance\*\*/);
     expect(briefing).toMatch(/genuinely the user's to make/);
-    expect(briefing).toMatch(/Do NOT use it for progress or[\s\n]+permission checks/);
+    expect(briefing).toMatch(/Do NOT manufacture progress or[\s\n]+permission checks/);
     expect(briefing).toContain("can I continue?");
+    // The ask body is decision-self-sufficient: three fixed markdown sections
+    // a human who remembers nothing of this chat can decide from — they run
+    // many chats in parallel, and a future cross-chat review surface may show
+    // the ask alone, outside the chat.
+    expect(briefing).toContain("decision-self-sufficient");
+    expect(briefing).toContain("Why this question exists");
+    expect(briefing).toContain("Recent context");
+    expect(briefing).toMatch(/The question \+ your recommendation/);
 
     expect(briefing).toContain("## Chat Topic & Description");
     expect(briefing).toContain("first-tree chat update");
