@@ -283,7 +283,7 @@ first-tree chat
 │     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
 │     --with <name>                                #   context participant; added silently, not woken by the first message
 │     --topic <text> / --description <text>        #   initial chat self-description
-│     --request                                    #   first message is a tracked ask; the body IS the ask; exactly one --to human
+│     --request                                    #   first message is a tracked ask; the body IS the ask, decision-self-sufficient (why + recap + question + recommendation); exactly one --to human
 │     --options <json> / --multi-select            #   (with --request) 2–4 options {label,description,preview?}; allow multi-pick
 ├── send <name> [message]                            # wake a participant — agent or human (a send to a human is informational only; a question the next step depends on goes through `chat ask`)
 │     # body: [message] arg, or stdin (omit [message]), or -F <path>; prefer stdin/-F for rich bodies (shell-safe)
@@ -321,9 +321,17 @@ first-tree chat create "Please review the rollout plan." --to code-agent --with 
 # decision-self-sufficient (why the question exists + recent-context recap +
 # the single question and your recommendation); pass 2–4 --options (JSON) for
 # a clean pick, or omit them for a free-text answer.
-first-tree chat create --to alice --request \
-  "Migration 0021 drops the legacy column — irreversible. Ship the destructive migration?" \
+cat <<'EOF' | first-tree chat create --to alice --request \
   --options '[{"label":"Ship","description":"Roll the migration now"},{"label":"Hold","description":"Wait 24h"}]'
+## Why this question exists
+Migration 0021 drops the legacy column — irreversible, so shipping is your call.
+## Recent context
+The 0021 cleanup you asked for last week is done; the PR is approved and CI is
+green.
+## The question
+Ship the destructive migration now? I would ship — the column has had no reads
+for 30 days.
+EOF
 
 # Inline — `chat send` wakes a participant (agent or human). A plain send to a
 # human is informational only — readable, then safely ignorable; any question

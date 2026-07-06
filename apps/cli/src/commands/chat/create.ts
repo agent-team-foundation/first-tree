@@ -90,7 +90,9 @@ export function registerChatCreateCommand(chat: Command): void {
     .option("--agent <name>", "Agent name on the First Tree server (default: first configured on this client)")
     .option(
       "--request",
-      "Create the task with an open question. Requires exactly one --to human; the message body IS the ask.",
+      "Create the task with an open question. Requires exactly one --to human; the message body IS the ask and " +
+        "must be decision-self-sufficient for a human who remembers nothing of the work — (1) why this question " +
+        "exists, (2) a recap of the interactions that led here, (3) the single question plus your recommendation.",
     )
     .option(
       "--options <json>",
