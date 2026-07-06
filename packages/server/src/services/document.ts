@@ -331,7 +331,12 @@ export async function listDocuments(
     })
     .from(docDocuments)
     .where(and(...conditions))
-    .orderBy(desc(docDocuments.updatedAt), desc(docDocuments.id))
+    // The sort key MUST be the same expression the cursor predicate compares
+    // (millisecond-truncated), or rows inside one millisecond are ordered by
+    // raw microseconds on page N and paged by truncated values on page N+1 —
+    // which can exclude them entirely. Team-scale lists don't need an index
+    // on the truncated expression yet.
+    .orderBy(sql`date_trunc('milliseconds', ${docDocuments.updatedAt}) DESC`, desc(docDocuments.id))
     .limit(query.limit + 1);
 
   const hasMore = rows.length > query.limit;
