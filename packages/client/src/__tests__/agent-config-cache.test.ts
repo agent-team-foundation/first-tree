@@ -55,6 +55,20 @@ describe("AgentConfigCache (Step 4)", () => {
     expect(sdk.fetchAgentConfig).toHaveBeenCalledTimes(2);
   });
 
+  it("uses the replacement SDK after a runtime rebind", async () => {
+    const firstSdk = makeSdkWithConfigs([makeConfig(1)]);
+    const secondSdk = makeSdkWithConfigs([makeConfig(2)]);
+    const cache = createAgentConfigCache({ sdk: firstSdk });
+
+    await cache.refresh("agent-1");
+    cache.updateSdk(secondSdk);
+    const updated = await cache.refresh("agent-1");
+
+    expect(updated.version).toBe(2);
+    expect(firstSdk.fetchAgentConfig).toHaveBeenCalledTimes(1);
+    expect(secondSdk.fetchAgentConfig).toHaveBeenCalledTimes(1);
+  });
+
   it("refreshIfNewer is no-op when incoming <= local", async () => {
     const cfg = makeConfig(5);
     const sdk = makeSdkWithConfigs([cfg]);

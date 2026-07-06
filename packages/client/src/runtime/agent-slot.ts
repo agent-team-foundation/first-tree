@@ -9,7 +9,7 @@ import type {
 } from "@first-tree/shared";
 import { runtimeProviderSchema } from "@first-tree/shared";
 import { defaultDataDir } from "@first-tree/shared/config";
-import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
+import type { BoundAgent, ClientConnection, SessionReconcileResult } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
 import type { FirstTreeHubSDK, RegisterResult } from "../sdk.js";
 import { type AgentConfigCache, createAgentConfigCache } from "./agent-config-cache.js";
@@ -88,7 +88,7 @@ export type AgentSlotStopOptions = {
 
 type ConnectionListener =
   | { event: "inbox:deliver"; fn: (inboxId: string, frame: InboxDeliverFrame) => void }
-  | { event: "agent:bound"; fn: (agent: { agentId: string }) => void }
+  | { event: "agent:bound"; fn: (agent: BoundAgent) => void }
   | { event: "agent:unbound"; fn: (agentId: string, reason?: string) => void }
   | {
       event: "session:command";
@@ -188,8 +188,9 @@ export class AgentSlot {
         this.logger.warn({ err, entryId: frame.entryId }, "inbox:deliver dispatch error");
       });
     };
-    const onBound = (boundAgent: { agentId: string }) => {
+    const onBound = (boundAgent: BoundAgent) => {
       if (boundAgent.agentId === this.config.agentId) {
+        if (boundAgent.sdk) this.adoptRuntimeTransport(boundAgent.sdk);
         if (typeof this.sessionManager?.noteBindRecoveryComplete === "function") {
           this.sessionManager.noteBindRecoveryComplete();
         }
@@ -239,7 +240,7 @@ export class AgentSlot {
       const bound = await this.clientConnection.bindAgent(this.config.agentId, runtimeType, this.config.runtimeVersion);
       bindSucceeded = true;
       const sdk = bound.sdk;
-      this.sdk = sdk;
+      this.adoptRuntimeTransport(sdk);
       this.activeRuntimeChatIdsRefreshGeneration++;
       const agent = await sdk.register();
 
@@ -251,6 +252,7 @@ export class AgentSlot {
       }
 
       this.agentConfigCache = createAgentConfigCache({ sdk, log: this.logger });
+      this.adoptRuntimeTransport(sdk);
       const cfg = await this.loadAgentConfigWithRetry(agent.agentId);
       this.logger.info({ version: cfg.version }, "runtime config loaded");
 
@@ -438,6 +440,12 @@ export class AgentSlot {
         if (signal?.aborted) throw new Error("agent config fetch aborted — slot stopping");
       }
     }
+  }
+
+  private adoptRuntimeTransport(sdk: FirstTreeHubSDK): void {
+    this.sdk = sdk;
+    this.agentConfigCache?.updateSdk(sdk);
+    this.sessionManager?.updateTransport(sdk, this.agentConfigCache ?? undefined);
   }
 
   async stop(reason?: string, opts: AgentSlotStopOptions = {}): Promise<void> {

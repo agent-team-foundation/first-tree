@@ -125,6 +125,7 @@ function makeCache(
         }),
     ),
     refresh: vi.fn(),
+    updateSdk: vi.fn(),
     updateUrls: vi.fn(),
     allReferencedUrls: vi.fn(() => new Set<string>()),
     forget: vi.fn(),

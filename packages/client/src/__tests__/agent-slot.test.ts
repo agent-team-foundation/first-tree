@@ -25,6 +25,7 @@ type FakeSessionState = {
     typeof vi.fn<(chatId: string, type: "session:suspend" | "session:terminate") => Promise<void>>
   >;
   applyStaleChatIds: ReturnType<typeof vi.fn<(chatIds: string[]) => void>>;
+  updateTransport: ReturnType<typeof vi.fn<(sdk: unknown, agentConfigCache?: unknown) => void>>;
   shutdown: ReturnType<typeof vi.fn<(reason?: string, opts?: unknown) => Promise<void>>>;
 };
 
@@ -201,6 +202,7 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
           dispatch: vi.fn(async () => {}),
           handleCommand: vi.fn(async () => {}),
           applyStaleChatIds: vi.fn(),
+          updateTransport: vi.fn(),
           shutdown: vi.fn(async () => {}),
         };
         state.sessions.push(this.state);
@@ -239,6 +241,10 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
 
       applyStaleChatIds(chatIds: string[]): void {
         this.state.applyStaleChatIds(chatIds);
+      }
+
+      updateTransport(sdk: unknown, agentConfigCache?: unknown): void {
+        this.state.updateTransport(sdk, agentConfigCache);
       }
 
       getHeldChatIds(activeChatIds?: ReadonlySet<string> | null): string[] {
@@ -579,6 +585,32 @@ describe("AgentSlot", () => {
     connection.sendSessionReconcile.mockClear();
     reconcile.call(slot);
     expect(connection.sendSessionReconcile).toHaveBeenCalledWith("agent-1", ["chat-1", "chat-2"]);
+
+    await slot.stop();
+  });
+
+  it("adopts the latest runtime SDK after a reconnect rebind", async () => {
+    const { slot, connection, sdk, state } = await makeSlot({ activeRuntimeChatIds: ["chat-1"] });
+    await slot.start();
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+
+    const nextSdk = makeSdk({ activeRuntimeChatIds: ["chat-2"] });
+    vi.mocked(sdk.listActiveRuntimeChatIds).mockClear();
+
+    connection.emit("agent:bound", {
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+      sdk: nextSdk,
+      runtimeSessionToken: "runtime-token-2",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(vi.mocked(nextSdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sdk.listActiveRuntimeChatIds)).not.toHaveBeenCalled();
+    expect(session.updateTransport).toHaveBeenCalledWith(nextSdk, expect.anything());
 
     await slot.stop();
   });

@@ -475,6 +475,13 @@ export class SessionManager {
     this.loadPersistedSessions();
   }
 
+  updateTransport(sdk: FirstTreeHubSDK, agentConfigCache?: AgentConfigCache): void {
+    this.config.sdk = sdk;
+    if (agentConfigCache) {
+      this.config.agentConfigCache = agentConfigCache;
+    }
+  }
+
   /**
    * Dispatch an inbox entry. ACK is deferred until the handler reports a
    * completed turn via `ctx.finishTurn(...)`.
@@ -2095,6 +2102,7 @@ export class SessionManager {
 
   private buildSessionContext(chatId: string): SessionContext {
     const sessionLog = this.config.log.child({ chatId });
+    const currentSdk = () => this.config.sdk;
     // Runtime-facing string log (handler + result-sink expect a simple
     // `(msg: string) => void` signature). The child pino logger still goes
     // to other places that want structured fields.
@@ -2105,7 +2113,7 @@ export class SessionManager {
     // calls hit memory. v1 §四 改造 4 removed result-sink's dependency on
     // this cache (the trigger-sender mention branch is gone), so the cache
     // now flows only into the inbound-formatter path.
-    const participants = createParticipantCache(this.config.sdk, chatId, log);
+    const participants = createParticipantCache(currentSdk, chatId, log);
 
     // Cross-agent doc preview: `workspaceRoot` is `<workspaces>/<agentSlug>`
     // (see agent-slot.ts), so the shared common root is its parent and this
@@ -2146,7 +2154,14 @@ export class SessionManager {
     });
 
     const envCtx = {
-      sdk: this.config.sdk,
+      sdk: {
+        get serverUrl() {
+          return currentSdk().serverUrl;
+        },
+        get runtimeSessionToken() {
+          return currentSdk().runtimeSessionToken;
+        },
+      },
       agent: this.config.agentIdentity,
       chatId,
       clientId: typeof this.config.handlerConfig.clientId === "string" ? this.config.handlerConfig.clientId : undefined,
@@ -2166,7 +2181,9 @@ export class SessionManager {
 
     return {
       agent: this.config.agentIdentity,
-      sdk: this.config.sdk,
+      get sdk() {
+        return currentSdk();
+      },
       log,
       chatId,
       recordProviderActivity: () => {

@@ -17,6 +17,8 @@ export type AgentConfigCacheLogger = pino.Logger;
 export interface AgentConfigCache {
   /** Snapshot of the currently cached config, if any. */
   get(agentId: string): AgentRuntimeConfig | undefined;
+  /** Swap the SDK transport after a WebSocket rebind mints a new runtime-session token. */
+  updateSdk(sdk: FirstTreeHubSDK): void;
   /**
    * Refresh from the server if `incomingVersion > local`; no-op otherwise.
    * Returns the in-cache value after the operation.
@@ -45,7 +47,8 @@ export type AgentConfigCacheOptions = {
 };
 
 export function createAgentConfigCache(opts: AgentConfigCacheOptions): AgentConfigCache {
-  const { sdk } = opts;
+  let sdk = opts.sdk;
+  let sdkGeneration = 0;
   const log = opts.log;
   const entries = new Map<string, CachedEntry>();
 
@@ -53,13 +56,15 @@ export function createAgentConfigCache(opts: AgentConfigCacheOptions): AgentConf
     return new Set(cfg.payload.gitRepos.map((r) => r.url));
   }
 
-  async function doFetch(agentId: string): Promise<AgentRuntimeConfig> {
-    const fetched = await sdk.fetchAgentConfig();
+  async function doFetch(agentId: string, generation: number): Promise<AgentRuntimeConfig> {
+    const fetchSdk = sdk;
+    const fetched = await fetchSdk.fetchAgentConfig();
     if (fetched.agentId !== agentId) {
       // Defensive: SDK token always maps to one agent, but this guards against
       // future multi-agent SDKs sharing a cache.
       throw new Error(`AgentConfigCache: fetched config for "${fetched.agentId}" but expected "${agentId}"`);
     }
+    if (generation !== sdkGeneration) return fetched;
     const entry: CachedEntry = entries.get(agentId) ?? { config: fetched, urls: new Set(), inflight: null };
     entry.config = fetched;
     entry.urls = urlsFromConfig(fetched);
@@ -71,6 +76,14 @@ export function createAgentConfigCache(opts: AgentConfigCacheOptions): AgentConf
   return {
     get(agentId) {
       return entries.get(agentId)?.config;
+    },
+
+    updateSdk(nextSdk) {
+      sdk = nextSdk;
+      sdkGeneration++;
+      for (const entry of entries.values()) {
+        entry.inflight = null;
+      }
     },
 
     async refresh(agentId) {
@@ -96,7 +109,8 @@ export function createAgentConfigCache(opts: AgentConfigCacheOptions): AgentConf
         urls: new Set(),
         inflight: null,
       };
-      slot.inflight = doFetch(agentId).catch((err) => {
+      const generation = sdkGeneration;
+      slot.inflight = doFetch(agentId, generation).catch((err) => {
         slot.inflight = null;
         log?.warn({ agentId, err }, "agent config fetch failed");
         throw err;

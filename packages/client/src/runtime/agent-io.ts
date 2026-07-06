@@ -180,7 +180,7 @@ export type ParticipantCache = {
 };
 
 export function createParticipantCache(
-  sdk: Pick<FirstTreeHubSDK, "listChatParticipants">,
+  sdk: Pick<FirstTreeHubSDK, "listChatParticipants"> | (() => Pick<FirstTreeHubSDK, "listChatParticipants">),
   chatId: string,
   log: (msg: string) => void,
 ): ParticipantCache {
@@ -192,7 +192,8 @@ export function createParticipantCache(
       if (!inflight) {
         inflight = (async () => {
           try {
-            const rows = await sdk.listChatParticipants(chatId);
+            const currentSdk = typeof sdk === "function" ? sdk() : sdk;
+            const rows = await currentSdk.listChatParticipants(chatId);
             cached = rows;
             return rows;
           } catch (err) {

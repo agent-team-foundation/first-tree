@@ -89,6 +89,22 @@ describe("formatInboundContent", () => {
     expect(await formatInboundContent(msg, cache)).toBe("[From: alice · type=agent]\n\nhello");
   });
 
+  it("resolves the participant SDK lazily so rebound sessions use the current transport", async () => {
+    const firstSdk = mkSdk(async () => []);
+    const secondSdk = mkSdk(async () => participants);
+    let currentSdk = firstSdk;
+    const cache = createParticipantCache(
+      () => currentSdk,
+      "chat-1",
+      () => {},
+    );
+    currentSdk = secondSdk;
+
+    expect(await cache.get()).toEqual(participants);
+    expect(firstSdk.listChatParticipants).not.toHaveBeenCalled();
+    expect(secondSdk.listChatParticipants).toHaveBeenCalledWith("chat-1");
+  });
+
   it("does not append an agent-only directive for legacy First Tree onboarding metadata", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
