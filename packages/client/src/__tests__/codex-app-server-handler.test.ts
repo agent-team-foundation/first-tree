@@ -434,19 +434,26 @@ afterEach(() => {
 });
 
 describe("codex app-server handler", () => {
-  it("wraps landing campaign trial app-server startup in workspace-only sandbox mode", async () => {
+  it("starts landing campaign trial app-server with host Codex auth and managed workspace-only permissions", async () => {
+    const hostHome = join(workspaceRoot, "..", "host-home");
+    const codexHome = join(hostHome, ".codex");
     const firstTreeHome = join(workspaceRoot, "first-tree-home");
     const cliBinDir = join(workspaceRoot, "first-tree-cli-bin");
     mkdirSync(cliBinDir, { recursive: true });
+    mkdirSync(codexHome, { recursive: true });
     writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
+    vi.stubEnv("HOME", hostHome);
     vi.stubEnv("FIRST_TREE_HOME", firstTreeHome);
     vi.stubEnv("FIRST_TREE_CLI_BIN_DIR", cliBinDir);
     vi.stubEnv("OPENAI_API_KEY", "secret-openai");
+    vi.stubEnv("CODEX_API_KEY", "secret-codex");
     vi.stubEnv("GITHUB_TOKEN", "secret-github");
+    vi.stubEnv("FIRST_TREE_RUNTIME_SESSION_TOKEN", "runtime-session-token");
 
     const fake = new FakeAppServerClient();
     let capturedSpawnProcess: unknown;
     let capturedEnv: NodeJS.ProcessEnv | undefined;
+    let capturedAppServerArgs: readonly string[] | undefined;
     const createAgentOutboxToken = vi
       .fn<(chatId: string) => Promise<{ accessToken: string; expiresIn: number }>>()
       .mockResolvedValue({ accessToken: "trial-outbox-token", expiresIn: 900 });
@@ -454,11 +461,13 @@ describe("codex app-server handler", () => {
       codexAppServerClientFactory: async (options: {
         env?: NodeJS.ProcessEnv;
         spawnProcess?: unknown;
+        appServerArgs?: readonly string[];
         onNotification?: NotificationHandler;
         onClose?: CloseHandler;
       }) => {
         capturedSpawnProcess = options.spawnProcess;
         capturedEnv = options.env;
+        capturedAppServerArgs = options.appServerArgs;
         fake.onNotification = options.onNotification ?? null;
         fake.onClose = options.onClose ?? null;
         return fake;
@@ -481,14 +490,45 @@ describe("codex app-server handler", () => {
     const startPromise = handler.start(makeMessage("m1", "first"), ctx);
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
-    expect(typeof capturedSpawnProcess).toBe("function");
+    expect(capturedSpawnProcess).toBeUndefined();
+    expect(capturedAppServerArgs?.[0]).toBe("-c");
+    expect(capturedAppServerArgs?.[1]).toContain("permissions=");
+    expect(capturedAppServerArgs?.[1]).toContain("first-tree-landing-trial");
+    expect(capturedAppServerArgs?.[1]).toContain(codexHome);
+    expect(capturedAppServerArgs?.[1]).toContain(workspaceRoot);
     expect(createAgentOutboxToken).toHaveBeenCalledWith("chat-app-server");
     expect(capturedEnv?.FIRST_TREE_HOME).toBe(join(workspaceRoot, ".first-tree-workspace", "outbox-home"));
+    expect(capturedEnv?.HOME).toBe(workspaceRoot);
+    expect(capturedEnv?.CODEX_HOME).toBe(codexHome);
     expect(capturedEnv?.PATH?.split(":")[0]).toBe(cliBinDir);
     expect(capturedEnv?.OPENAI_API_KEY).toBeUndefined();
+    expect(capturedEnv?.CODEX_API_KEY).toBeUndefined();
     expect(capturedEnv?.GITHUB_TOKEN).toBeUndefined();
+    expect(capturedEnv?.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBeUndefined();
     const threadStart = fake.requests.find((request) => request.method === "thread/start");
-    expect(threadStart?.params).toMatchObject({ sandbox: "workspace-write" });
+    const threadStartParams = threadStart?.params as Record<string, unknown> | undefined;
+    expect(threadStartParams).toMatchObject({
+      permissions: "first-tree-landing-trial",
+      runtimeWorkspaceRoots: [workspaceRoot],
+    });
+    expect(threadStartParams?.sandbox).toBeUndefined();
+    expect(threadStartParams?.config).toMatchObject({
+      permissions: {
+        "first-tree-landing-trial": {
+          workspace_roots: {
+            [workspaceRoot]: true,
+          },
+          filesystem: {
+            ":minimal": "read",
+            [workspaceRoot]: "write",
+            [codexHome]: "deny",
+          },
+          network: {
+            enabled: true,
+          },
+        },
+      },
+    });
 
     completeTurn(fake, "turn-1", "final answer");
     await startPromise;
@@ -498,13 +538,16 @@ describe("codex app-server handler", () => {
   it("leaves ordinary app-server startup unsandboxed", async () => {
     const fake = new FakeAppServerClient();
     let capturedSpawnProcess: unknown = "unset";
+    let capturedAppServerArgs: readonly string[] | undefined;
     const handler = makeHandler(fake, {
       codexAppServerClientFactory: async (options: {
         spawnProcess?: unknown;
+        appServerArgs?: readonly string[];
         onNotification?: NotificationHandler;
         onClose?: CloseHandler;
       }) => {
         capturedSpawnProcess = options.spawnProcess;
+        capturedAppServerArgs = options.appServerArgs;
         fake.onNotification = options.onNotification ?? null;
         fake.onClose = options.onClose ?? null;
         return fake;
@@ -516,8 +559,10 @@ describe("codex app-server handler", () => {
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     expect(capturedSpawnProcess).toBeUndefined();
+    expect(capturedAppServerArgs).toBeUndefined();
     const threadStart = fake.requests.find((request) => request.method === "thread/start");
     expect(threadStart?.params).toMatchObject({ sandbox: "danger-full-access" });
+    expect((threadStart?.params as Record<string, unknown> | undefined)?.permissions).toBeUndefined();
 
     completeTurn(fake, "turn-1", "final answer");
     await startPromise;

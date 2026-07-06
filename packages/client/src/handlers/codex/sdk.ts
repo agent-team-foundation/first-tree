@@ -206,11 +206,7 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
  * can lock the auth-mode-friendly defaults (notably `model` only set when
  * the operator chose one).
  */
-export function buildCodexThreadOptions(
-  payload: AgentRuntimeConfigPayload,
-  workspaceCwd: string,
-  options: { workspaceOnly?: boolean } = {},
-): ThreadOptions {
+export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, workspaceCwd: string): ThreadOptions {
   const additionalDirectories: string[] = [];
   for (const repo of payload.gitRepos) {
     const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
@@ -229,13 +225,13 @@ export function buildCodexThreadOptions(
   // `gpt-5-codex` family, while API-key auth accepts it). Hard-coding a
   // default here would force one auth mode and silently fail on the other.
   // Sandbox: ordinary codex agents remain `danger-full-access` because codex is
-  // their primary local-execution surface. Landing campaign trials run inside a
-  // process-level workspace-only sandbox; use codex's own workspace-write mode
-  // there as a second, scoped belt without changing the ordinary path.
+  // their primary local-execution surface. Landing campaign trials are forced
+  // through the app-server handler, which supplies a custom managed permissions
+  // profile instead of this SDK-only legacy sandbox field.
   const opts: ThreadOptions = {
     workingDirectory: workspaceCwd,
     skipGitRepoCheck: true,
-    sandboxMode: options.workspaceOnly ? "workspace-write" : "danger-full-access",
+    sandboxMode: "danger-full-access",
     approvalPolicy: "never",
     // Operator-configured reasoning effort. Defaults to "high" (the value this
     // previously hard-coded). The codex variant's enum (low|medium|high|xhigh)
