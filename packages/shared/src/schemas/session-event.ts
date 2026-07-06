@@ -80,6 +80,7 @@ export type ThinkingEventPayload = z.infer<typeof thinkingEventPayload>;
  */
 export const turnEndEventPayload = z.object({
   status: z.enum(["success", "error"]),
+  turnCompletionId: z.string().min(1).optional(),
 });
 export type TurnEndEventPayload = z.infer<typeof turnEndEventPayload>;
 

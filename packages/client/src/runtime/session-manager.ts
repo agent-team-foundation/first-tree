@@ -2198,6 +2198,7 @@ export class SessionManager {
       emitEvent: (event) => {
         this.config.onSessionEvent?.(chatId, event);
       },
+      emitEventConfirmed: (event) => this.confirmSessionEventOrThrow(chatId, event),
       forwardResult,
       markMessagesConsumed: (messages) => {
         this.inboxDelivery.markProcessingStarted(chatId, messages);
@@ -2217,6 +2218,14 @@ export class SessionManager {
       resolveSenderLabel: async (senderId) => resolveSenderLabel(senderId, await participants.get()),
       formatFromHeader: (message) => buildFromHeader(message, participants),
     };
+  }
+
+  private async confirmSessionEventOrThrow(chatId: string, event: SessionEvent): Promise<void> {
+    if (!this.config.confirmSessionEvent) {
+      this.config.onSessionEvent?.(chatId, event);
+      throw new Error("confirmed session event channel unavailable");
+    }
+    await this.config.confirmSessionEvent(chatId, event);
   }
 
   private async resolveSelfFence(log: (msg: string) => void, chatId: string): Promise<SelfFence> {

@@ -3,6 +3,7 @@ import {
   type AgentRuntimeConfigPayload,
   deriveRepoLocalPath,
   encodeProviderRetryEventMessage,
+  isLandingCampaignTrialAgentMetadata,
   runtimeProviderSchema,
   type SessionEvent,
   type ToolFileRef,
@@ -65,6 +66,11 @@ import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/works
 import { chunkAssistantText } from "../assistant-text.js";
 import { formatAuthHint, isCodexAuthError } from "../auth-error-hint.js";
 import { resolveTurnSettlement } from "../turn-settlement.js";
+import {
+  LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED,
+  LandingTrialTurnCompletionConfirmError,
+  turnCompletionIdForMessages,
+} from "./turn-completion.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -75,6 +81,24 @@ type CodexConfigValue = string | number | boolean | CodexConfigValue[] | CodexCo
 type CodexConfigObject = { [key: string]: CodexConfigValue };
 
 const RESULT_PREVIEW_LIMIT = 400;
+
+async function emitTurnEnd(
+  sessionCtx: SessionContext,
+  event: Extract<SessionEvent, { kind: "turn_end" }>,
+): Promise<void> {
+  if (event.payload.status === "success" && isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata)) {
+    if (!sessionCtx.emitEventConfirmed) {
+      throw new LandingTrialTurnCompletionConfirmError("confirmed session event channel unavailable");
+    }
+    try {
+      await sessionCtx.emitEventConfirmed(event);
+    } catch (err) {
+      throw new LandingTrialTurnCompletionConfirmError(err);
+    }
+    return;
+  }
+  sessionCtx.emitEvent(event);
+}
 
 /**
  * Chat-visible notice posted when a turn is detected as a usage-limit empty
@@ -1186,14 +1210,32 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         sessionCtx.log(`Failed to emit token_usage: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    sessionCtx.emitEvent({
-      kind: "turn_end",
-      payload: { status: settlement.status },
-    });
     const turnDelivered = settlement.action.kind === "complete";
     if (settlement.action.kind === "complete") {
+      const isLandingTrial = isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata);
+      try {
+        await emitTurnEnd(sessionCtx, {
+          kind: "turn_end",
+          payload: {
+            status: settlement.status,
+            ...(settlement.status === "success" && isLandingTrial
+              ? { turnCompletionId: turnCompletionIdForMessages(messages) }
+              : {}),
+          },
+        });
+      } catch (err) {
+        if (!(err instanceof LandingTrialTurnCompletionConfirmError)) throw err;
+        sessionCtx.log(`landing trial turn completion confirmation failed after provider completion: ${err.message}`);
+        token.retry(messages, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+        await closeSdkSessionAfterUncommittablePrefix(sessionCtx, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+        return false;
+      }
       await token.complete(messages, settlement.action.outcome);
     } else {
+      sessionCtx.emitEvent({
+        kind: "turn_end",
+        payload: { status: settlement.status },
+      });
       token.retry(messages, settlement.action.reason);
     }
 
@@ -1333,6 +1375,19 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     for (const queued of drained) {
       queued.token.retry(queued.message, reason);
     }
+  }
+
+  async function closeSdkSessionAfterUncommittablePrefix(sessionCtx: SessionContext, reason: string): Promise<void> {
+    retryQueuedMessages(reason);
+    currentAbort?.abort();
+    currentAbort = null;
+    currentTurnPromise = null;
+    const resumeThreadId = threadId ?? undefined;
+    thread = null;
+    codex = null;
+    initialTurnPreparing = false;
+    pendingChatContextPrompt = null;
+    sessionCtx.failSessionForRecovery?.(reason, resumeThreadId);
   }
 
   function ensureCodexBootstrap(

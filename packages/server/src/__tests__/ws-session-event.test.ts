@@ -1,3 +1,4 @@
+import { parseLandingCampaignTrialChatMetadata } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
@@ -10,6 +11,7 @@ import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
 import * as contextTreeIoService from "../services/context-tree-io.js";
+import { buildLandingCampaignChatMetadata } from "../services/landing-campaigns/metadata.js";
 import { putOrgSetting } from "../services/org-settings.js";
 import { resolveDefaultOrgId } from "../services/organization.js";
 import * as sessionEventService from "../services/session-event.js";
@@ -265,6 +267,114 @@ describe("Agent WS — session event protocol (S10)", () => {
       expect(items).toHaveLength(1);
       expect(items[0]?.kind).toBe("error");
     } finally {
+      ws.close();
+      await new Promise<void>((r) => ws.once("close", () => r()));
+    }
+  }, 15000);
+
+  it("advances landing trial chat state once per confirmed turn completion id", async () => {
+    const seed = await seedBoundAgent("landing-turn-end", "codex");
+    const ws = await openBoundSocket(seed);
+    const chatId = `chat-${crypto.randomUUID()}`;
+    const notifySpy = vi.spyOn(app.notifier, "notifyChatUpdated").mockResolvedValue();
+
+    async function sendTurnEnd(ref: string, turnCompletionId: string) {
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          ref,
+          agentId: seed.agent.uuid,
+          chatId,
+          event: { kind: "turn_end", payload: { status: "success", turnCompletionId } },
+        }),
+      );
+      await waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; ref?: string }).type === "session:event:accepted" &&
+          (m as { ref?: string }).ref === ref,
+      );
+    }
+
+    try {
+      await app.db.insert(chats).values({
+        id: chatId,
+        organizationId: seed.organizationId,
+        type: "group",
+        metadata: buildLandingCampaignChatMetadata({
+          campaign: "production-scan",
+          agentId: seed.agent.uuid,
+          skillSetId: "production-scan",
+          skillSetVersion: "test",
+          repo: {
+            url: "https://github.com/acme/backend",
+            owner: "acme",
+            name: "backend",
+            canonicalKey: "github.com/acme/backend",
+          },
+          state: "running",
+          inputLocked: false,
+          maxAgentTurns: 2,
+          completedAgentTurns: 0,
+        }),
+      });
+
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          agentId: seed.agent.uuid,
+          chatId,
+          event: { kind: "turn_end", payload: { status: "success", turnCompletionId: "inbox:unconfirmed" } },
+        }),
+      );
+      await waitForCondition(async () => {
+        const { items } = await sessionEventService.listEvents(app.db, seed.agent.uuid, chatId, { limit: 10 });
+        return items.some((item) => item.kind === "turn_end") ? true : null;
+      });
+      const [unconfirmedChat] = await app.db
+        .select({ metadata: chats.metadata })
+        .from(chats)
+        .where(eq(chats.id, chatId));
+      expect(parseLandingCampaignTrialChatMetadata(unconfirmedChat?.metadata)).toMatchObject({
+        state: "running",
+        inputLocked: false,
+        completedAgentTurns: 0,
+        completedAgentTurnIds: [],
+      });
+
+      await sendTurnEnd("landing-turn-end-1", "inbox:101");
+      const [runningChat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId));
+      expect(parseLandingCampaignTrialChatMetadata(runningChat?.metadata)).toMatchObject({
+        state: "running",
+        inputLocked: false,
+        completedAgentTurns: 1,
+        completedAgentTurnIds: ["inbox:101"],
+        maxAgentTurns: 2,
+      });
+
+      await sendTurnEnd("landing-turn-end-1-duplicate", "inbox:101");
+      const [duplicateChat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId));
+      expect(parseLandingCampaignTrialChatMetadata(duplicateChat?.metadata)).toMatchObject({
+        state: "running",
+        inputLocked: false,
+        completedAgentTurns: 1,
+        completedAgentTurnIds: ["inbox:101"],
+        maxAgentTurns: 2,
+      });
+
+      await sendTurnEnd("landing-turn-end-2", "inbox:102");
+      const [completedChat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId));
+      expect(parseLandingCampaignTrialChatMetadata(completedChat?.metadata)).toMatchObject({
+        state: "completed",
+        inputLocked: true,
+        completedAgentTurns: 2,
+        completedAgentTurnIds: ["inbox:101", "inbox:102"],
+        maxAgentTurns: 2,
+      });
+      expect(notifySpy).toHaveBeenCalledTimes(2);
+      expect(notifySpy).toHaveBeenCalledWith(chatId);
+    } finally {
+      notifySpy.mockRestore();
       ws.close();
       await new Promise<void>((r) => ws.once("close", () => r()));
     }
