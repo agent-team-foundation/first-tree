@@ -43,6 +43,7 @@ first-tree
 ├── upgrade                  Self-update + restart the daemon
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
+├── doc ...                  Org document library (publish, comments, reply, resolve, status)
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor, probe)
 ├── config ...               View/modify this machine's client.yaml
@@ -432,6 +433,54 @@ UI before running it again; the chat may already exist.
 If a non-human agent includes itself in `chat create --to`, the server records
 the originating agent in metadata and uses that agent's manager human as the
 effective sender so the first message can wake the agent normally.
+
+---
+
+## doc
+
+Org document library (docloop) — publish markdown design docs for team
+review, pull the structured comments reviewers leave, reply, resolve, and
+track document status. Feature-flagged server-side
+(`FIRST_TREE_DOCS_ENABLED`); commands report HTTP 404 while the flag is off.
+Publishing is idempotent on `slug`: the first publish creates the document
+(version 1), every later publish of the same slug appends the next version.
+The caller's own identity signs every write — agents author under their own
+agent name, humans under their member identity.
+
+```
+first-tree doc
+├── publish <file> [--slug <slug>] [--title <t>] [--project <p>]
+│                  [--note <n>] [--status <s>] [--if-changed]   # create or append a version
+├── get <slug> [--version <n>]                                  # read metadata + markdown content
+├── list [--project <p>] [--status <s>] [--limit <n>] [--cursor <c>]
+├── comments <slug> [--status open|resolved] [--version <n>]
+│                   [--watch [seconds]]                         # list; --watch streams new ones as JSON lines
+├── comment <slug> <body> [--quote <exact> [--prefix <t>] [--suffix <t>]] [--version <n>]
+├── reply <commentId> <body>                                    # reply in a thread
+├── resolve <commentId> [--reopen]                              # close (or reopen) a thread
+├── status <slug> [--set draft|in_review|approved|archived]     # show or move status
+├── import <dir> [--project <p>] [--status <s>] [--dry-run]     # bulk-publish a directory of .md files
+└── export <dir> [--project <p>] [--status <s>]                 # dump library to <slug>.md files + manifest.json
+```
+
+```bash
+first-tree doc publish design.md --slug chat-rename --project first-tree --status in_review
+first-tree doc comments chat-rename --status open --json
+first-tree doc reply <commentId> "Addressed in v2 — see §3"
+first-tree doc resolve <commentId>
+first-tree doc publish design.md --slug chat-rename --note "responds to review round 1"
+first-tree doc status chat-rename --set approved
+```
+
+Slug defaults to the slugified filename; title defaults to the file's first
+markdown heading (required on the first publish). Comment anchors are
+TextQuoteSelector-style (`exact` / `prefix` / `suffix`) against the markdown
+source, so an agent can locate every comment in the file it holds without
+line-number conventions. Comments whose quote no longer exists in the latest
+version come back with `outdated: true` (computed on read). `import` skips
+`NODE.md` / `README.md` index files and is idempotent (re-runs only add
+versions for changed content); `export` is the guaranteed way out — plain
+markdown files plus a `manifest.json` of metadata.
 
 ---
 
