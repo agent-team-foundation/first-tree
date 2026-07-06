@@ -33,6 +33,11 @@ export function QuickstartPage() {
   // The trial chat is selected with the normal workspace `?c=` param so
   // `WorkspaceBody` picks it up unchanged — no bespoke `?chat=` handoff.
   const chatId = useMemo(() => new URLSearchParams(location.search).get("c"), [location.search]);
+  // Back-compat: trials minted before this migration used `?chat=<id>`.
+  // Canonicalize such a legacy URL to `?c=` (effect below) so an already-open
+  // trial tab, bookmark, copied link, or reload still opens the trial chat
+  // instead of silently falling through to the conversation rail.
+  const legacyChatId = useMemo(() => new URLSearchParams(location.search).get("chat"), [location.search]);
 
   const intent = useMemo<CampaignIntent | null>(() => {
     if (chatId) return null;
@@ -81,6 +86,14 @@ export function QuickstartPage() {
     if (settled && !growthLandingPagesEnabled) navigate("/", { replace: true });
   }, [chatId, settled, growthLandingPagesEnabled, navigate]);
 
+  // Canonicalize a legacy `?chat=<id>` trial link to `?c=<id>` (only when no
+  // `?c=` is already present) so pre-migration URLs keep opening the trial chat.
+  useEffect(() => {
+    if (!chatId && legacyChatId) {
+      navigate(`/quickstart?c=${encodeURIComponent(legacyChatId)}`, { replace: true });
+    }
+  }, [chatId, legacyChatId, navigate]);
+
   const retryStart = useCallback(() => {
     void startTrial();
   }, [startTrial]);
@@ -91,6 +104,17 @@ export function QuickstartPage() {
   // user sees the normal workspace here instead of being bounced to
   // /onboarding — and there is no bespoke trial-chat page to maintain.
   if (chatId) return <WorkspaceBody />;
+
+  // A legacy `?chat=` link is being canonicalized to `?c=` (effect above) —
+  // hold a neutral screen for the one tick before the `?c=` URL renders, so we
+  // don't flash the no-selection rail.
+  if (legacyChatId) {
+    return (
+      <QuickstartShell>
+        <StatusRow state="waiting" label="Loading..." />
+      </QuickstartShell>
+    );
+  }
 
   if (!settled || !growthLandingPagesEnabled) {
     return (

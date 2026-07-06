@@ -163,6 +163,13 @@ describe("QuickstartPage — landing campaign trial flow", () => {
     expect(readCampaignIntent()).toBeNull();
   });
 
+  it("canonicalizes a legacy ?chat= trial link to ?c= and starts nothing", async () => {
+    await renderPage(["/quickstart?chat=chat-legacy"]);
+
+    expect(navigateMock).toHaveBeenCalledWith("/quickstart?c=chat-legacy", { replace: true });
+    expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
+  });
+
   it("does not start anything when the feature flag is disabled", async () => {
     growthLandingMock.value = { enabled: false, settled: true };
     seedIntent("production-scan");
