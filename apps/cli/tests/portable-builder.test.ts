@@ -13,10 +13,12 @@ import {
   DEFAULT_DOWNLOAD_BASE_URL,
   manifestDownloadUrl,
   normalizeDownloadBaseUrl,
+  normalizeGeneratedAt,
   parsePlatform,
   portableTarCreateArgs,
   renderInstallerForChannel,
   validateChannelVersion,
+  writeDeterministicTarGz,
 } from "../../../scripts/portable/build-portable.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -137,15 +139,34 @@ describe("portable builder helpers", () => {
     );
   });
 
-  it("builds portable archives without platform xattrs", () => {
-    expect(portableTarCreateArgs({ tarballPath: "payload.tar.gz", sourceDir: "payload" })).toEqual([
-      "--no-xattrs",
-      "-czf",
-      "payload.tar.gz",
-      "-C",
-      "payload",
-      ".",
-    ]);
+  it("builds portable archives from a deterministic file list without platform xattrs", () => {
+    expect(
+      portableTarCreateArgs({ tarballPath: "payload.tar", sourceDir: "payload", fileListPath: "files.txt" }),
+    ).toEqual(["--no-recursion", "--no-xattrs", "-cf", "payload.tar", "-C", "payload", "-T", "files.txt"]);
+  });
+
+  it("normalizes generatedAt timestamps for release metadata", () => {
+    expect(normalizeGeneratedAt("2026-01-01T08:00:00+08:00")).toBe("2026-01-01T00:00:00.000Z");
+    expect(() => normalizeGeneratedAt("not-a-date")).toThrow(/valid timestamp/);
+  });
+
+  it("writes deterministic portable archive bytes for the same inputs", async () => {
+    const source = tempDir("first-tree-portable-archive-source-");
+    const output = tempDir("first-tree-portable-archive-output-");
+    await mkdir(join(source, "bin"), { recursive: true });
+    await mkdir(join(source, "app", "cli"), { recursive: true });
+    await writeFile(join(source, "VERSION"), "1.2.3\n");
+    await writeFile(join(source, "bin", "first-tree"), "#!/bin/sh\necho first-tree\n", { mode: 0o755 });
+    await writeFile(join(source, "app", "cli", "index.mjs"), "console.log('first-tree');\n");
+
+    const generatedAt = "2026-01-01T00:00:00.000Z";
+    const first = join(output, "first.tar.gz");
+    const second = join(output, "second.tar.gz");
+    await writeDeterministicTarGz({ sourceDir: source, tarballPath: first, generatedAt });
+    await writeFile(join(source, "app", "cli", "index.mjs"), "console.log('first-tree');\n");
+    await writeDeterministicTarGz({ sourceDir: source, tarballPath: second, generatedAt });
+
+    expect(sha256(second)).toBe(sha256(first));
   });
 
   it("uses the official release download base URL by default", () => {

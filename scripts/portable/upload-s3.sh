@@ -18,6 +18,7 @@ REGION="${FIRST_TREE_PORTABLE_S3_REGION:-$DEFAULT_REGION}"
 PROFILE="${FIRST_TREE_PORTABLE_S3_PROFILE:-}"
 DOWNLOAD_BASE_URL="${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-}"
 DRY_RUN=0
+PREFLIGHT_ONLY=0
 
 log() {
   printf '[portable upload] %s\n' "$*"
@@ -40,7 +41,8 @@ Options:
   --region <region>             AWS region. Defaults to us-east-1.
   --profile <profile>           AWS profile for local credentials.
   --download-base-url <url>     Public release base URL, without prod/staging.
-  --dry-run                     Pass --dryrun to aws and skip public URL checks.
+  --preflight-only              Check immutable prefix compatibility without writing objects.
+  --dry-run                     Exercise upload commands with aws s3 cp --dryrun and skip remote checks.
   --help                        Show this help.
 
 Environment:
@@ -161,6 +163,53 @@ s3_uri() {
   fi
 }
 
+s3_key() {
+  local key="$1"
+  if [[ -n "$PREFIX" ]]; then
+    printf '%s/%s' "$PREFIX" "$key"
+  else
+    printf '%s' "$key"
+  fi
+}
+
+sha256_file() {
+  local file="$1"
+  node -e '
+const { createHash } = require("node:crypto");
+const { readFileSync } = require("node:fs");
+process.stdout.write(createHash("sha256").update(readFileSync(process.argv[1])).digest("hex"));
+' "$file"
+}
+
+file_size() {
+  local file="$1"
+  node -e '
+const { statSync } = require("node:fs");
+process.stdout.write(String(statSync(process.argv[1]).size));
+' "$file"
+}
+
+content_type_for_file() {
+  local file_name="$1"
+  case "$file_name" in
+    manifest.json|latest.json)
+      printf 'application/json'
+      ;;
+    SHA256SUMS)
+      printf 'text/plain; charset=utf-8'
+      ;;
+    *.tar.gz)
+      printf 'application/gzip'
+      ;;
+    *.sh)
+      printf 'text/x-shellscript; charset=utf-8'
+      ;;
+    *)
+      printf 'application/octet-stream'
+      ;;
+  esac
+}
+
 aws_args() {
   AWS_ARGS=()
   [[ -n "$REGION" ]] && AWS_ARGS+=(--region "$REGION")
@@ -172,14 +221,6 @@ aws_args() {
 run_aws() {
   aws_args
   aws "${AWS_ARGS[@]}" "$@"
-}
-
-run_aws_maybe_dryrun() {
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    run_aws "$@" --dryrun
-  else
-    run_aws "$@"
-  fi
 }
 
 export_aws_credentials_from_portable_env() {
@@ -244,6 +285,222 @@ verify_remote_release() {
   )
 }
 
+write_expected_objects() {
+  local output_path="$1"
+  : > "$output_path"
+
+  local file_name
+  for file_name in manifest.json SHA256SUMS; do
+    local local_path="$VERSION_DIR/$file_name"
+    [[ -f "$local_path" ]] || die "missing immutable release object: $local_path"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$file_name" \
+      "$local_path" \
+      "$(sha256_file "$local_path")" \
+      "$(file_size "$local_path")" \
+      "$(content_type_for_file "$file_name")" \
+      "$(s3_key "$CHANNEL/$VERSION/$file_name")" >> "$output_path"
+  done
+
+  while IFS= read -r file_name; do
+    [[ -n "$file_name" ]] || continue
+    if [[ "$file_name" == */* || "$file_name" == "." || "$file_name" == ".." || "$file_name" == *$'\t'* ]]; then
+      die "manifest asset fileName must be a simple file name, got: $file_name"
+    fi
+    local local_path="$VERSION_DIR/$file_name"
+    [[ -f "$local_path" ]] || die "manifest asset is missing from version directory: $file_name"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$file_name" \
+      "$local_path" \
+      "$(sha256_file "$local_path")" \
+      "$(file_size "$local_path")" \
+      "$(content_type_for_file "$file_name")" \
+      "$(s3_key "$CHANNEL/$VERSION/$file_name")" >> "$output_path"
+  done < <(asset_files "$MANIFEST_PATH")
+}
+
+write_expected_keys() {
+  local expected_objects_path="$1"
+  local expected_keys_path="$2"
+  awk -F '\t' '{ print $6 }' "$expected_objects_path" > "$expected_keys_path"
+}
+
+list_remote_version_keys() {
+  local output_path="$1"
+  local version_prefix
+  version_prefix="$(s3_key "$CHANNEL/$VERSION/")"
+  run_aws s3api list-objects-v2 \
+    --bucket "$BUCKET" \
+    --prefix "$version_prefix" \
+    --output json |
+    node -e '
+const fs = require("node:fs");
+const input = fs.readFileSync(0, "utf8").trim();
+const data = input ? JSON.parse(input) : {};
+const contents = Array.isArray(data.Contents) ? data.Contents : [];
+for (const item of contents) {
+  if (typeof item?.Key === "string") console.log(item.Key);
+}
+' > "$output_path"
+}
+
+remote_key_exists() {
+  local key="$1"
+  local remote_keys_path="$2"
+  grep -Fxq -- "$key" "$remote_keys_path"
+}
+
+validate_no_extra_remote_objects() {
+  local remote_keys_path="$1"
+  local expected_keys_path="$2"
+  local key
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    if ! grep -Fxq -- "$key" "$expected_keys_path"; then
+      die "remote version prefix contains unexpected object: $key"
+    fi
+  done < "$remote_keys_path"
+}
+
+read_head_field() {
+  local head_json="$1"
+  local field="$2"
+  node -e '
+const data = JSON.parse(process.argv[1]);
+const field = process.argv[2];
+if (field === "size") {
+  const value = data.ContentLength;
+  if (typeof value !== "number") process.exit(2);
+  process.stdout.write(String(value));
+} else if (field === "sha256") {
+  const metadata = data.Metadata && typeof data.Metadata === "object" ? data.Metadata : {};
+  const value = metadata.sha256 ?? metadata.SHA256 ?? metadata.Sha256;
+  if (typeof value !== "string") process.exit(2);
+  process.stdout.write(value);
+} else {
+  process.exit(2);
+}
+' "$head_json" "$field"
+}
+
+check_remote_object_matches() {
+  local key="$1"
+  local expected_size="$2"
+  local expected_sha="$3"
+  local head_json
+  head_json="$(run_aws s3api head-object --bucket "$BUCKET" --key "$key" --output json)"
+  local remote_size
+  local remote_sha
+  remote_size="$(read_head_field "$head_json" "size" || true)"
+  remote_sha="$(read_head_field "$head_json" "sha256" || true)"
+  if [[ "$remote_size" != "$expected_size" ]]; then
+    die "remote immutable object size mismatch for $key: expected $expected_size, got ${remote_size:-missing}"
+  fi
+  if [[ "$remote_sha" != "$expected_sha" ]]; then
+    die "remote immutable object sha256 metadata mismatch for $key: expected $expected_sha, got ${remote_sha:-missing}"
+  fi
+}
+
+check_remote_immutable_prefix() {
+  local mode="$1"
+  local expected_objects_path="$2"
+  local missing_objects_path="$3"
+  local remote_keys_path
+  local expected_keys_path
+  remote_keys_path="$(mktemp "${TMPDIR:-/tmp}/first-tree-s3-remote-keys.XXXXXX")"
+  expected_keys_path="$(mktemp "${TMPDIR:-/tmp}/first-tree-s3-expected-keys.XXXXXX")"
+
+  write_expected_keys "$expected_objects_path" "$expected_keys_path"
+  list_remote_version_keys "$remote_keys_path"
+  validate_no_extra_remote_objects "$remote_keys_path" "$expected_keys_path"
+  : > "$missing_objects_path"
+
+  local file_name
+  local local_path
+  local expected_sha
+  local expected_size
+  local content_type
+  local key
+  while IFS=$'\t' read -r file_name local_path expected_sha expected_size content_type key; do
+    [[ -n "$file_name" ]] || continue
+    if remote_key_exists "$key" "$remote_keys_path"; then
+      check_remote_object_matches "$key" "$expected_size" "$expected_sha"
+    elif [[ "$mode" == "require-complete" ]]; then
+      die "remote immutable object is missing after upload: $key"
+    else
+      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$file_name" "$local_path" "$expected_sha" "$expected_size" "$content_type" "$key" >> "$missing_objects_path"
+    fi
+  done < "$expected_objects_path"
+  rm -f "$remote_keys_path" "$expected_keys_path"
+}
+
+upload_immutable_object() {
+  local file_name="$1"
+  local local_path="$2"
+  local expected_sha="$3"
+  local content_type="$4"
+  local key="$5"
+  log "uploading immutable object: $key"
+  run_aws s3api put-object \
+    --bucket "$BUCKET" \
+    --key "$key" \
+    --body "$local_path" \
+    --cache-control "$IMMUTABLE_CACHE_CONTROL" \
+    --content-type "$content_type" \
+    --metadata "sha256=$expected_sha" \
+    --if-none-match "*"
+}
+
+upload_mutable_object() {
+  local label="$1"
+  local local_path="$2"
+  local content_type="$3"
+  local key="$4"
+  local expected_sha
+  expected_sha="$(sha256_file "$local_path")"
+  log "uploading mutable $label to $(s3_uri "$key")"
+  run_aws s3api put-object \
+    --bucket "$BUCKET" \
+    --key "$(s3_key "$key")" \
+    --body "$local_path" \
+    --cache-control "$MUTABLE_CACHE_CONTROL" \
+    --content-type "$content_type" \
+    --metadata "sha256=$expected_sha"
+}
+
+dry_run_uploads() {
+  local expected_objects_path="$1"
+  local file_name
+  local local_path
+  local expected_sha
+  local expected_size
+  local content_type
+  local key
+  while IFS=$'\t' read -r file_name local_path expected_sha expected_size content_type key; do
+    [[ -n "$file_name" ]] || continue
+    log "dry-run immutable object upload: $key"
+    run_aws s3 cp "$local_path" "$(s3_uri "$CHANNEL/$VERSION/$file_name")" \
+      --cache-control "$IMMUTABLE_CACHE_CONTROL" \
+      --content-type "$content_type" \
+      --metadata "sha256=$expected_sha" \
+      --dryrun
+  done < "$expected_objects_path"
+
+  log "dry-run mutable latest.json upload"
+  run_aws s3 cp "$LATEST_PATH" "$(s3_uri "$CHANNEL/latest.json")" \
+    --cache-control "$MUTABLE_CACHE_CONTROL" \
+    --content-type "application/json" \
+    --metadata "sha256=$(sha256_file "$LATEST_PATH")" \
+    --dryrun
+
+  log "dry-run mutable install.sh upload"
+  run_aws s3 cp "$INSTALLER_PATH" "$(s3_uri "$CHANNEL/install.sh")" \
+    --cache-control "$MUTABLE_CACHE_CONTROL" \
+    --content-type "text/x-shellscript; charset=utf-8" \
+    --metadata "sha256=$(sha256_file "$INSTALLER_PATH")" \
+    --dryrun
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --channel)
@@ -292,6 +549,10 @@ while [[ $# -gt 0 ]]; do
       DRY_RUN=1
       shift
       ;;
+    --preflight-only)
+      PREFLIGHT_ONLY=1
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -315,7 +576,7 @@ fi
 if ! command -v aws >/dev/null 2>&1; then
   die "aws CLI is required"
 fi
-if [[ "$DRY_RUN" -eq 0 ]] && ! command -v curl >/dev/null 2>&1; then
+if [[ "$DRY_RUN" -eq 0 && "$PREFLIGHT_ONLY" -eq 0 ]] && ! command -v curl >/dev/null 2>&1; then
   die "curl is required for public release verification"
 fi
 
@@ -352,25 +613,41 @@ fi
 validate_download_base_url "$DOWNLOAD_BASE_URL"
 export_aws_credentials_from_portable_env
 
-VERSION_S3_URI="$(s3_uri "$CHANNEL/$VERSION")/"
-CHANNEL_S3_URI="$(s3_uri "$CHANNEL")"
-
-log "uploading immutable version files to $VERSION_S3_URI"
-run_aws_maybe_dryrun s3 sync "$VERSION_DIR/" "$VERSION_S3_URI" \
-  --cache-control "$IMMUTABLE_CACHE_CONTROL"
-
-log "uploading mutable latest.json to $CHANNEL_S3_URI/latest.json"
-run_aws_maybe_dryrun s3 cp "$LATEST_PATH" "$CHANNEL_S3_URI/latest.json" \
-  --cache-control "$MUTABLE_CACHE_CONTROL" \
-  --content-type "application/json"
-
-log "uploading mutable install.sh to $CHANNEL_S3_URI/install.sh"
-run_aws_maybe_dryrun s3 cp "$INSTALLER_PATH" "$CHANNEL_S3_URI/install.sh" \
-  --cache-control "$MUTABLE_CACHE_CONTROL" \
-  --content-type "text/x-shellscript; charset=utf-8"
+EXPECTED_OBJECTS_PATH="$(mktemp "${TMPDIR:-/tmp}/first-tree-s3-expected-objects.XXXXXX")"
+MISSING_OBJECTS_PATH="$(mktemp "${TMPDIR:-/tmp}/first-tree-s3-missing-objects.XXXXXX")"
+trap 'rm -f "$EXPECTED_OBJECTS_PATH" "$MISSING_OBJECTS_PATH"' EXIT
+write_expected_objects "$EXPECTED_OBJECTS_PATH"
 
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  log "dry run completed; skipping public URL verification"
-else
-  verify_remote_release "$VERSION"
+  dry_run_uploads "$EXPECTED_OBJECTS_PATH"
+  log "dry run completed; skipping S3 preflight and public URL verification"
+  exit 0
 fi
+
+log "checking immutable version prefix compatibility: $(s3_uri "$CHANNEL/$VERSION")/"
+check_remote_immutable_prefix "allow-missing" "$EXPECTED_OBJECTS_PATH" "$MISSING_OBJECTS_PATH"
+
+if [[ "$PREFLIGHT_ONLY" -eq 1 ]]; then
+  if [[ -s "$MISSING_OBJECTS_PATH" ]]; then
+    log "preflight found missing immutable objects that can be uploaded by the final release step"
+  fi
+  log "preflight completed without immutable prefix conflicts"
+  exit 0
+fi
+
+if [[ -s "$MISSING_OBJECTS_PATH" ]]; then
+  while IFS=$'\t' read -r file_name local_path expected_sha expected_size content_type key; do
+    [[ -n "$file_name" ]] || continue
+    upload_immutable_object "$file_name" "$local_path" "$expected_sha" "$content_type" "$key"
+  done < "$MISSING_OBJECTS_PATH"
+else
+  log "all immutable version objects already exist and match local artifacts"
+fi
+
+log "rechecking immutable version prefix before mutable channel updates"
+check_remote_immutable_prefix "require-complete" "$EXPECTED_OBJECTS_PATH" "$MISSING_OBJECTS_PATH"
+
+upload_mutable_object "latest.json" "$LATEST_PATH" "application/json" "$CHANNEL/latest.json"
+upload_mutable_object "install.sh" "$INSTALLER_PATH" "text/x-shellscript; charset=utf-8" "$CHANNEL/install.sh"
+
+verify_remote_release "$VERSION"

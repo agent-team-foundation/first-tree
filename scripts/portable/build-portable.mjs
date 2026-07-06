@@ -1,11 +1,23 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  lstatSync,
+  lutimesSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { gzipSync } from "node:zlib";
 
 export const PORTABLE_PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
 export const DEFAULT_NODE_VERSION = "latest-v24.x";
@@ -63,8 +75,11 @@ export function artifactFileName(options) {
   return `${options.packageName}-${options.version}-${options.platform}.tar.gz`;
 }
 
-export function portableTarCreateArgs({ tarballPath, sourceDir }) {
-  return ["--no-xattrs", "-czf", tarballPath, "-C", sourceDir, "."];
+export function portableTarCreateArgs({ tarballPath, sourceDir, fileListPath = null }) {
+  const args = ["--no-recursion", "--no-xattrs", "-cf", tarballPath, "-C", sourceDir];
+  if (fileListPath) args.push("-T", fileListPath);
+  else args.push(".");
+  return args;
 }
 
 export function normalizeDownloadBaseUrl(value) {
@@ -98,6 +113,7 @@ function parseArgs(argv) {
     gitSha: null,
     nodeVersion: DEFAULT_NODE_VERSION,
     downloadBaseUrl: DEFAULT_DOWNLOAD_BASE_URL,
+    generatedAt: null,
     outDir: null,
     platforms: [],
   };
@@ -114,6 +130,7 @@ function parseArgs(argv) {
     else if (arg === "--git-sha") options.gitSha = next();
     else if (arg === "--node-version") options.nodeVersion = next();
     else if (arg === "--download-base-url") options.downloadBaseUrl = next();
+    else if (arg === "--generated-at") options.generatedAt = next();
     else if (arg === "--out-dir") options.outDir = next();
     else if (arg === "--platform") options.platforms.push(next());
     else if (arg === "--help" || arg === "-h") {
@@ -139,6 +156,7 @@ function printHelp() {
 Options:
   --node-version <version>          Node.js version or latest-v24.x (default: ${DEFAULT_NODE_VERSION})
   --download-base-url <url>         Public artifact base URL (default: ${DEFAULT_DOWNLOAD_BASE_URL})
+  --generated-at <timestamp>        Release generation timestamp. Defaults to the current time.
   --platform <platform>             Repeatable: ${PORTABLE_PLATFORMS.join(", ")}
   --help                            Show this help
 
@@ -200,6 +218,64 @@ async function listFiles(dir) {
     else files.push(path);
   }
   return files;
+}
+
+export function normalizeGeneratedAt(value) {
+  if (typeof value !== "string" || value.trim() === "") fail("--generated-at requires a timestamp value");
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) fail(`--generated-at must be a valid timestamp, got ${value}`);
+  return date.toISOString();
+}
+
+async function listArchiveEntries(root, relativeDir = "") {
+  const entries = await readdir(join(root, relativeDir), { withFileTypes: true });
+  const names = entries.map((entry) => entry.name).sort();
+  const paths = [];
+  for (const name of names) {
+    const relativePath = relativeDir ? `${relativeDir}/${name}` : name;
+    const fullPath = join(root, relativePath);
+    const stat = lstatSync(fullPath);
+    paths.push(`./${relativePath}`);
+    if (stat.isDirectory()) {
+      paths.push(...(await listArchiveEntries(root, relativePath)));
+    }
+  }
+  return paths;
+}
+
+async function normalizeArchiveTimes(path, timestamp) {
+  const stat = lstatSync(path);
+  if (stat.isDirectory()) {
+    const entries = await readdir(path, { withFileTypes: true });
+    for (const entry of entries) {
+      await normalizeArchiveTimes(join(path, entry.name), timestamp);
+    }
+  }
+  if (stat.isSymbolicLink()) {
+    lutimesSync(path, timestamp, timestamp);
+  } else {
+    utimesSync(path, timestamp, timestamp);
+  }
+}
+
+export async function writeDeterministicTarGz({ sourceDir, tarballPath, generatedAt }) {
+  const normalizedGeneratedAt = normalizeGeneratedAt(generatedAt);
+  const timestamp = new Date(normalizedGeneratedAt);
+  await normalizeArchiveTimes(sourceDir, timestamp);
+
+  const tempDir = await mkdtemp(join(tmpdir(), "first-tree-portable-tar-"));
+  try {
+    const fileListPath = join(tempDir, "files.txt");
+    const tarPath = join(tempDir, "payload.tar");
+    const entries = [".", ...(await listArchiveEntries(sourceDir))];
+    writeFileSync(fileListPath, `${entries.join("\n")}\n`);
+    run("tar", portableTarCreateArgs({ tarballPath: tarPath, sourceDir, fileListPath }), {
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    });
+    writeFileSync(tarballPath, gzipSync(readFileSync(tarPath), { mtime: 0 }));
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 async function rewriteBundleChannel(appDir, channel) {
@@ -425,8 +501,10 @@ async function buildPlatformArtifact(options) {
       platform: options.platform,
     });
     const tarballPath = join(options.versionDir, fileName);
-    run("tar", portableTarCreateArgs({ tarballPath, sourceDir: artifactRoot }), {
-      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    await writeDeterministicTarGz({
+      sourceDir: artifactRoot,
+      tarballPath,
+      generatedAt: options.generatedAt,
     });
     return {
       platform: options.platform,
@@ -477,7 +555,7 @@ export async function buildPortableDistribution(rawOptions) {
   const channelConfig = await loadChannelConfig(options.channel);
   if (!channelConfig.packageName) fail(`portable builds require a published package channel, got ${options.channel}`);
   const nodeVersion = await resolveNodeVersion(options.nodeVersion);
-  const generatedAt = new Date().toISOString();
+  const generatedAt = normalizeGeneratedAt(options.generatedAt ?? new Date().toISOString());
   const channelDir = join(options.outDir, options.channel);
   const versionDir = join(channelDir, options.version);
   rmSync(versionDir, { recursive: true, force: true });

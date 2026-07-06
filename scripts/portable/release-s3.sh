@@ -2,13 +2,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 DEFAULT_DOWNLOAD_BASE_URL="https://download.first-tree.ai/releases"
 
 CHANNEL=""
 VERSION=""
 DOWNLOAD_BASE_URL="${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-$DEFAULT_DOWNLOAD_BASE_URL}"
+GENERATED_AT="${FIRST_TREE_PORTABLE_GENERATED_AT:-}"
 DRY_RUN=0
+PREFLIGHT_ONLY=0
+SKIP_BUILD=0
 BUILD_ARGS=()
 UPLOAD_ARGS=()
 
@@ -33,12 +37,15 @@ Options:
   --out-dir <dir>               Output directory for build and upload.
   --platform <platform>         Repeatable platform filter.
   --node-version <version>      Node runtime version.
+  --generated-at <timestamp>    Release generation timestamp. Defaults to the current git commit timestamp.
   --skip-workspace-build        Reuse an existing apps/cli/dist build.
+  --skip-build                  Reuse existing portable artifacts in --out-dir.
   --bucket <bucket>             S3 bucket name.
   --prefix <prefix>             S3 key prefix before prod/staging.
   --endpoint-url <url>          S3-compatible endpoint URL.
   --region <region>             AWS region.
   --profile <profile>           AWS profile for local credentials.
+  --preflight-only              Build artifacts and check immutable S3 prefix compatibility without writing.
   --dry-run                     Dry-run upload and skip remote install smoke.
   --help                        Show this help.
 EOF
@@ -156,6 +163,15 @@ while [[ $# -gt 0 ]]; do
         shift 2
       fi
       ;;
+    --generated-at)
+      require_value "$1" "${2:-}"
+      GENERATED_AT="$2"
+      shift 2
+      ;;
+    --skip-build)
+      SKIP_BUILD=1
+      shift
+      ;;
     --bucket|--endpoint-url|--region|--profile)
       require_value "$1" "${2:-}"
       UPLOAD_ARGS+=("$1" "$2")
@@ -170,6 +186,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      UPLOAD_ARGS+=("$1")
+      shift
+      ;;
+    --preflight-only)
+      PREFLIGHT_ONLY=1
       UPLOAD_ARGS+=("$1")
       shift
       ;;
@@ -188,10 +209,21 @@ done
 validate_download_base_url "$DOWNLOAD_BASE_URL"
 export_aws_credentials_from_portable_env
 
-"$SCRIPT_DIR/build-release.sh" "${BUILD_ARGS[@]}"
+if [[ -z "$GENERATED_AT" ]]; then
+  GENERATED_AT="$(cd "$REPO_ROOT" && git show -s --format=%cI HEAD)"
+fi
+BUILD_ARGS+=(--generated-at "$GENERATED_AT")
+
+if [[ "$SKIP_BUILD" -eq 0 ]]; then
+  "$SCRIPT_DIR/build-release.sh" "${BUILD_ARGS[@]}"
+else
+  log "skipping portable artifact build"
+fi
 "$SCRIPT_DIR/upload-s3.sh" "${UPLOAD_ARGS[@]}"
 
-if [[ "$DRY_RUN" -eq 1 ]]; then
+if [[ "$PREFLIGHT_ONLY" -eq 1 ]]; then
+  log "preflight completed; skipping remote install smoke"
+elif [[ "$DRY_RUN" -eq 1 ]]; then
   log "dry run completed; skipping remote install smoke"
 else
   remote_install_smoke

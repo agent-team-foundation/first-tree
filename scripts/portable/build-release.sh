@@ -14,6 +14,7 @@ VERSION=""
 DOWNLOAD_BASE_URL="${FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL:-$DEFAULT_DOWNLOAD_BASE_URL}"
 OUT_DIR="${FIRST_TREE_PORTABLE_OUT_DIR:-$DEFAULT_OUT_DIR}"
 NODE_VERSION="${FIRST_TREE_PORTABLE_NODE_VERSION:-$DEFAULT_NODE_VERSION}"
+GENERATED_AT="${FIRST_TREE_PORTABLE_GENERATED_AT:-}"
 SKIP_WORKSPACE_BUILD=0
 PLATFORMS=()
 
@@ -35,6 +36,7 @@ Options:
   --out-dir <dir>               Output directory. Defaults to FIRST_TREE_PORTABLE_OUT_DIR or .portable-release.
   --platform <platform>         Repeatable platform filter.
   --node-version <version>      Node runtime version. Defaults to FIRST_TREE_PORTABLE_NODE_VERSION or latest-v24.x.
+  --generated-at <timestamp>    Release generation timestamp. Defaults to the current git commit timestamp.
   --skip-workspace-build        Reuse an existing apps/cli/dist build.
   --help                        Show this help.
 
@@ -42,6 +44,7 @@ Environment:
   FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL
   FIRST_TREE_PORTABLE_PLATFORMS
   FIRST_TREE_PORTABLE_NODE_VERSION
+  FIRST_TREE_PORTABLE_GENERATED_AT
   FIRST_TREE_PORTABLE_OUT_DIR
 EOF
 }
@@ -138,6 +141,11 @@ while [[ $# -gt 0 ]]; do
       NODE_VERSION="$2"
       shift 2
       ;;
+    --generated-at)
+      require_value "$1" "${2:-}"
+      GENERATED_AT="$2"
+      shift 2
+      ;;
     --skip-workspace-build)
       SKIP_WORKSPACE_BUILD=1
       shift
@@ -171,6 +179,9 @@ else
 fi
 
 GIT_SHA="$(cd "$REPO_ROOT" && git rev-parse HEAD)"
+if [[ -z "$GENERATED_AT" ]]; then
+  GENERATED_AT="$(cd "$REPO_ROOT" && git show -s --format=%cI HEAD)"
+fi
 ARGS=(
   "$SCRIPT_DIR/build-portable.mjs"
   --channel "$CHANNEL"
@@ -178,6 +189,7 @@ ARGS=(
   --git-sha "$GIT_SHA"
   --node-version "$NODE_VERSION"
   --download-base-url "$DOWNLOAD_BASE_URL"
+  --generated-at "$GENERATED_AT"
   --out-dir "$OUT_DIR"
 )
 
