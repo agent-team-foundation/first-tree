@@ -116,9 +116,9 @@ export function NewChatDraft({
   const pickerContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Image staging shared with the in-chat composer (same image/* + 5 MB
-  // rules and object-URL lifecycle). Bytes are read and uploaded only on
-  // send, after the chat is created — see `createMut` below.
+  // Image staging shared with the in-chat composer (same image/* +
+  // attachment-cap rules and object-URL lifecycle). Bytes are read and
+  // uploaded only on send, after the chat is created — see `createMut` below.
   const { pendingImages, addImages, removeImage, clearImages } = usePendingImages({
     onError: setError,
     onChange: () => setError(null),

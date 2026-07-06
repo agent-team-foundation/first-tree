@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { MAX_ATTACHMENT_BYTES } from "@first-tree/shared";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -381,8 +382,8 @@ describe("AskTakeover", () => {
     const c = await renderDom(
       <AskTakeover body="# Evidence?" payload={{ multiSelect: false }} onReply={onReply} onSkip={() => {}} />,
     );
-    // 5MB + 1 byte — over the per-image cap usePendingImages enforces.
-    const big = new File([new ArrayBuffer(5 * 1024 * 1024 + 1)], "big.png", { type: "image/png" });
+    // One byte over the per-image cap usePendingImages enforces.
+    const big = new File([new ArrayBuffer(MAX_ATTACHMENT_BYTES + 1)], "big.png", { type: "image/png" });
     const fileInput = c.querySelector<HTMLInputElement>('input[type="file"]');
     if (!fileInput) throw new Error("file input missing");
     await changeFiles(fileInput, [big]);
