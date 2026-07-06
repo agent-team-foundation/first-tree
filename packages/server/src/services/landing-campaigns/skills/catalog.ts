@@ -341,12 +341,9 @@ export function getLandingCampaignSkillSet(campaign: string): LandingCampaignSki
 }
 
 export function buildLandingCampaignBootstrap(skillSet: LandingCampaignSkillSet, repoUrl: string): string {
-  const closing = `${skillSet.agentDisplayName} will get oriented and flag a few things worth tightening before you ship — or just tell it what you'd like to focus on.`;
   return [
-    `Welcome to First Tree — this is your first chat with ${skillSet.agentDisplayName}.`,
+    `Welcome to First Tree. ${skillSet.agentDisplayName} is connected to your code: ${repoUrl}`,
     "",
-    `It's connected to your code: ${repoUrl}`,
-    "",
-    closing,
+    "It's running a read-only production-readiness scan and will come back with a security-weighted score, any must-fix blockers, and — where there's a real fix worth making — one ready to apply.",
   ].join("\n");
 }
