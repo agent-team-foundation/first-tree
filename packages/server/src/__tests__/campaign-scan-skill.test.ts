@@ -20,6 +20,16 @@ describe("campaign scan skills", () => {
     expect(body).toContain("zero roast");
   });
 
+  it("branches the verdict card to a clean path — no forced stab on healthy repos", () => {
+    const body = (getCampaignScanSkill("production-scan")?.body ?? "").replace(/\s+/g, " ");
+    // A Ready-to-launch / no-blocker report must NOT be forced into a worst-blocker
+    // codename + praise-then-stab; the clean path derives from the strongest positive
+    // signal and uses a praise-with-a-wink line instead of manufacturing a barb.
+    expect(body).toContain("strongest positive signal");
+    expect(body).toContain("praise-with-a-wink");
+    expect(body).toContain("a clean repo earns clean copy");
+  });
+
   it("drives the conversion payoff: produce a real fix + offer to apply, but read-only until consent", () => {
     // Normalize whitespace so phrase checks don't depend on body line-wrapping.
     const body = (getCampaignScanSkill("production-scan")?.body ?? "").replace(/\s+/g, " ");

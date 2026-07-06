@@ -228,15 +228,23 @@ findings) → **Ready to launch**.
 Post ONE self-contained, screenshot-worthy markdown report, rendered in the user's
 language (native sarcasm, not a stiff translation) with the technical surface —
 \`file:line\`, code, commands, dimension names, scores — kept in English. In order:
-- **Verdict card headline:** lead with the **verdict** (the action the user needs), then
-  a short black-humor **codename grown from THIS repo's single worst blocker** (never a
-  generic label — e.g. unread-AI-code → "Prompt-and-Pray Merchant" / "一把梭的 Prompt 侠"),
-  the **overall 0–100 score**, and a one-line **praise-then-stab quip** generated from this
-  scan. Keep the joke welded to the actual bug. **When the score and verdict diverge, add
-  one line explaining it** — the score measures overall quality while the verdict reflects
-  the single worst blocker, so a high score can still be "Do not launch" (e.g. one
-  build-breaking bug in otherwise clean code). **Never lower the score to match the
-  verdict** — the divergence is real information; explain it instead of hiding it.
+- **Verdict card headline:** lead with the **verdict** (the action the user needs), then a
+  short black-humor **codename**, the **overall 0–100 score**, and a one-line quip.
+  **Branch the codename + quip on whether the repo actually has blockers:**
+  - **Finding-bearing report** (Do not launch / Not yet / Almost there): grow the codename
+    from THIS repo's **single worst blocker** (never a generic label — e.g. unread-AI-code →
+    "Prompt-and-Pray Merchant" / "一把梭的 Prompt 侠"), and make the quip a **praise-then-stab**
+    line welded to the actual bug.
+  - **Clean report** (Ready to launch, or no fatal/serious with at most a minor or two):
+    there is no worst blocker to name — grow the codename from the repo's **strongest
+    positive signal** (e.g. airtight secrets + full Sentry → "The Locked-Down Overachiever"),
+    and make the quip a **praise-with-a-wink** line. Do NOT invent a blocker, over-weight a
+    minor, or force a stab just to keep the praise-then-stab shape — a clean repo earns clean copy.
+  **When the score and verdict diverge, add one line explaining it** — the score measures
+  overall quality while the verdict reflects the single worst blocker, so a high score can
+  still be "Do not launch" (e.g. one build-breaking bug in otherwise clean code). **Never
+  lower the score to match the verdict** — the divergence is real information; explain it
+  instead of hiding it.
 - **8-dimension breakdown:** each dimension's 0–100 subscore + a one-line barb (passes
   gloat, fails sting); n/a dimensions marked and excluded from the average.
 - **Must-fix cards** (one per fatal / serious; group minors into a tight list): a savage
