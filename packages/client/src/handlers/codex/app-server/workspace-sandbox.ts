@@ -28,6 +28,7 @@ type WorkspaceOnlyEnvironment = {
 type WorkspaceOnlyAppServerEnvironment = {
   env: NodeJS.ProcessEnv;
   codexHome: string;
+  hostHome: string;
 };
 
 type LandingCodexPermissionProfileConfig = {
@@ -71,6 +72,16 @@ const READ_ONLY_ETC_PATHS = [
   "/etc/nsswitch.conf",
   "/etc/protocols",
   "/etc/services",
+] as const;
+const LANDING_CODEX_ROOT_READ_PATH = ":root";
+export const LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS = [
+  ".codex",
+  ".ssh",
+  ".first-tree",
+  ".first-tree-staging",
+  ".first-tree-dev",
+  ".first-tree-local",
+  ".first-tree-test",
 ] as const;
 const WORKSPACE_ONLY_PATH_DIRS = ["/usr/local/bin", "/usr/bin", "/bin"] as const;
 const SAFE_PASS_ENV_KEYS = new Set([
@@ -204,23 +215,36 @@ function validateChannelCliBin(binDir: string, source: string): void {
   }
 }
 
-function resolveHostCodexHome(parentEnv: NodeJS.ProcessEnv, workspaceRoot: string): string {
+function resolveHostHome(parentEnv: NodeJS.ProcessEnv, workspaceRoot: string): string {
+  const rawHome = parentEnv.HOME?.trim();
+  const hostHome = rawHome && rawHome !== workspaceRoot ? rawHome : homedir();
+  return isAbsolute(hostHome) ? hostHome : resolve(hostHome);
+}
+
+function resolveHostCodexHome(parentEnv: NodeJS.ProcessEnv, hostHome: string): string {
   const rawCodexHome = parentEnv.CODEX_HOME?.trim();
-  const hostHome = parentEnv.HOME && parentEnv.HOME !== workspaceRoot ? parentEnv.HOME : homedir();
   if (rawCodexHome) {
     return isAbsolute(rawCodexHome) ? rawCodexHome : resolve(hostHome, rawCodexHome);
   }
   return join(hostHome, ".codex");
 }
 
-export function landingCodexDenyPaths(codexHome: string): string[] {
-  const paths = new Set([codexHome]);
-  if (existsSync(codexHome)) {
+function addDenyPath(paths: Set<string>, path: string): void {
+  paths.add(path);
+  if (existsSync(path)) {
     try {
-      paths.add(realpathSync(codexHome));
+      paths.add(realpathSync(path));
     } catch {
-      // A lexical deny still blocks the configured Codex home.
+      // A lexical deny still blocks the configured path.
     }
+  }
+}
+
+export function landingCodexDenyPaths(codexHome: string, hostHome: string): string[] {
+  const paths = new Set([codexHome]);
+  addDenyPath(paths, codexHome);
+  for (const relativePath of LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS) {
+    addDenyPath(paths, join(hostHome, relativePath));
   }
   return [...paths];
 }
@@ -228,17 +252,18 @@ export function landingCodexDenyPaths(codexHome: string): string[] {
 export function buildLandingCodexPermissionProfile(
   workspacePath: string,
   codexHome: string,
+  hostHome: string,
 ): LandingCodexPermissionProfileConfig {
   const filesystem: LandingCodexPermissionProfileConfig["filesystem"] = {
-    ":minimal": "read",
+    [LANDING_CODEX_ROOT_READ_PATH]: "read",
     [workspacePath]: "write",
   };
-  for (const path of landingCodexDenyPaths(codexHome)) {
+  for (const path of landingCodexDenyPaths(codexHome, hostHome)) {
     filesystem[path] = "deny";
   }
 
   return {
-    description: "First Tree landing trial workspace-only profile",
+    description: "First Tree landing trial root-read profile with selected host credential denies",
     workspace_roots: {
       [workspacePath]: true,
     },
@@ -258,16 +283,20 @@ function tomlInline(value: TomlInlineValue): string {
     .join(", ")} }`;
 }
 
-export function buildLandingCodexPermissionsConfigOverride(workspacePath: string, codexHome: string): string {
+export function buildLandingCodexPermissionsConfigOverride(
+  workspacePath: string,
+  codexHome: string,
+  hostHome: string,
+): string {
   return `permissions=${tomlInline({
-    [LANDING_CODEX_PERMISSIONS_PROFILE]: buildLandingCodexPermissionProfile(workspacePath, codexHome),
+    [LANDING_CODEX_PERMISSIONS_PROFILE]: buildLandingCodexPermissionProfile(workspacePath, codexHome, hostHome),
   })}`;
 }
 
-export function buildLandingCodexAppServerArgs(workspacePath: string, codexHome: string): string[] {
+export function buildLandingCodexAppServerArgs(workspacePath: string, codexHome: string, hostHome: string): string[] {
   return [
     "-c",
-    buildLandingCodexPermissionsConfigOverride(workspacePath, codexHome),
+    buildLandingCodexPermissionsConfigOverride(workspacePath, codexHome, hostHome),
     "-c",
     `default_permissions=${JSON.stringify(LANDING_CODEX_PERMISSIONS_PROFILE)}`,
   ];
@@ -386,7 +415,8 @@ export function buildWorkspaceOnlyAppServerEnvironment(
   }
   const resolvedFirstTreeHome = assertPathInsideWorkspace(firstTreeHome, realWorkspace, "FIRST_TREE_HOME");
   const cli = resolveWorkspaceOnlyCli(parentEnv);
-  const codexHome = resolveHostCodexHome(parentEnv, realWorkspace);
+  const hostHome = resolveHostHome(parentEnv, realWorkspace);
+  const codexHome = resolveHostCodexHome(parentEnv, hostHome);
 
   const env: NodeJS.ProcessEnv = {};
   for (const key of WORKSPACE_ONLY_APP_SERVER_PASS_ENV_KEYS) {
@@ -399,7 +429,11 @@ export function buildWorkspaceOnlyAppServerEnvironment(
   env.TMPDIR = "/tmp";
   env.FIRST_TREE_CLI_BIN_DIR = cli.cliBinDir;
   env.PATH = cli.pathDirs.join(delimiter);
-  return { env, codexHome };
+  const hostGhConfigDir = join(hostHome, ".config", "gh");
+  if (existingDirectory(hostGhConfigDir)) {
+    env.GH_CONFIG_DIR = hostGhConfigDir;
+  }
+  return { env, codexHome, hostHome };
 }
 
 export function buildWorkspaceOnlyBubblewrapArgs(options: BuildBubblewrapArgsOptions): string[] {

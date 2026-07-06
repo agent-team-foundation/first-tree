@@ -463,10 +463,12 @@ describe("codex app-server handler", () => {
   it("starts landing campaign trial app-server with host Codex auth and managed workspace-only permissions", async () => {
     const hostHome = join(workspaceRoot, "..", "host-home");
     const codexHome = join(hostHome, ".codex");
+    const ghConfigDir = join(hostHome, ".config", "gh");
     const firstTreeHome = join(workspaceRoot, "first-tree-home");
     const cliBinDir = join(workspaceRoot, "first-tree-cli-bin");
     mkdirSync(cliBinDir, { recursive: true });
     mkdirSync(codexHome, { recursive: true });
+    mkdirSync(ghConfigDir, { recursive: true });
     writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
     vi.stubEnv("HOME", hostHome);
     vi.stubEnv("FIRST_TREE_HOME", firstTreeHome);
@@ -522,6 +524,7 @@ describe("codex app-server handler", () => {
     expect(capturedEnv?.FIRST_TREE_HOME).toBe(join(workspaceRoot, ".first-tree-workspace", "outbox-home"));
     expect(capturedEnv?.HOME).toBe(workspaceRoot);
     expect(capturedEnv?.CODEX_HOME).toBe(codexHome);
+    expect(capturedEnv?.GH_CONFIG_DIR).toBe(ghConfigDir);
     expect(capturedEnv?.PATH?.split(":")[0]).toBe(cliBinDir);
     expect(capturedEnv?.OPENAI_API_KEY).toBeUndefined();
     expect(capturedEnv?.CODEX_API_KEY).toBeUndefined();
@@ -541,9 +544,11 @@ describe("codex app-server handler", () => {
             [workspaceRoot]: true,
           },
           filesystem: {
-            ":minimal": "read",
+            ":root": "read",
             [workspaceRoot]: "write",
             [codexHome]: "deny",
+            [join(hostHome, ".first-tree-staging")]: "deny",
+            [join(hostHome, ".ssh")]: "deny",
           },
           network: {
             enabled: true,
