@@ -230,16 +230,18 @@ language (native sarcasm, not a stiff translation) with the technical surface �
 \`file:line\`, code, commands, dimension names, scores — kept in English. In order:
 - **Verdict card headline:** lead with the **verdict** (the action the user needs), then a
   short black-humor **codename**, the **overall 0–100 score**, and a one-line quip.
-  **Branch the codename + quip on whether the repo actually has blockers:**
-  - **Finding-bearing report** (Do not launch / Not yet / Almost there): grow the codename
-    from THIS repo's **single worst blocker** (never a generic label — e.g. unread-AI-code →
-    "Prompt-and-Pray Merchant" / "一把梭的 Prompt 侠"), and make the quip a **praise-then-stab**
-    line welded to the actual bug.
-  - **Clean report** (Ready to launch, or no fatal/serious with at most a minor or two):
-    there is no worst blocker to name — grow the codename from the repo's **strongest
-    positive signal** (e.g. airtight secrets + full Sentry → "The Locked-Down Overachiever"),
-    and make the quip a **praise-with-a-wink** line. Do NOT invent a blocker, over-weight a
-    minor, or force a stab just to keep the praise-then-stab shape — a clean repo earns clean copy.
+  **Branch the codename + quip by the one deterministic test — is there a fatal or serious?**
+  (these two cases are mutually exclusive; a report is one or the other):
+  - **Blocker-bearing report** (≥1 **fatal or serious** → Do not launch / Not yet): grow the
+    codename from THIS repo's **single worst blocker** (never a generic label — e.g.
+    unread-AI-code → "Prompt-and-Pray Merchant" / "一把梭的 Prompt 侠"), and make the quip a
+    **praise-then-stab** line welded to the actual bug.
+  - **Clean / light report** (**no fatal and no serious** → Ready to launch, or Almost there
+    with only minors): there is no worst blocker to name — grow the codename from the repo's
+    **strongest positive signal** (e.g. airtight secrets + full Sentry → "The Locked-Down
+    Overachiever"), and make the quip a **praise-with-a-wink** line. Do NOT invent a blocker,
+    over-weight a minor, or force a stab just to keep the praise-then-stab shape — a clean
+    repo earns clean copy.
   **When the score and verdict diverge, add one line explaining it** — the score measures
   overall quality while the verdict reflects the single worst blocker, so a high score can
   still be "Do not launch" (e.g. one build-breaking bug in otherwise clean code). **Never
@@ -255,18 +257,20 @@ language (native sarcasm, not a stiff translation) with the technical surface �
 here.** Filing or committing happens only in Step 5, and only after the user approves.
 
 ## Step 5 — turn the top fix into a real deliverable (the payoff)
-Don't stop at advice. **When the scan surfaced at least one blocker,** pick the single
-highest-leverage one (prefer a security or launch-blocking one) and **produce it as a
-finished, ready-to-apply artifact**, shown in full in the chat (free, no commitment): a
-concrete diff for THIS repo (e.g. the CI workflow that adds secret + dependency scanning, a
-missing \`SECURITY.md\`, the Dockerfile change to drop root), or a ready-to-file
-issue with evidence and repro steps. Tailor it to the repo, not a template.
-
-**If the report is clean (Ready to launch / no findings), there is no blocker to fix — do
-NOT invent one or force a PR/issue payoff.** Skip the fix artifact; offer at most one
-genuinely-useful *optional* hardening as a plain non-mutating suggestion (or nothing at
-all), then go to the setup CTA. A clean repo's payoff is the clean bill of health itself —
-never manufacture a deliverable to have something to ship.
+Don't stop at advice — but branch on the **same fatal/serious test as the card** (Step 4),
+so the two paths stay mutually exclusive:
+- **Blocker-bearing report** (≥1 fatal or serious): pick the single highest-leverage blocker
+  (prefer a security or launch-blocking one) and **produce it as a finished, ready-to-apply
+  artifact**, shown in full in the chat (free, no commitment): a concrete diff for THIS repo
+  (e.g. the CI workflow that adds secret + dependency scanning, a missing \`SECURITY.md\`, the
+  Dockerfile change to drop root), or a ready-to-file issue with evidence and repro steps.
+  Tailor it to the repo, not a template.
+- **Clean / light report** (no fatal and no serious): **do NOT invent or inflate a blocker to
+  force a repo-write payoff.** If a *genuine* minor is worth a small fix, you MAY offer that
+  one real improvement (same consent gate below); otherwise offer a plain non-mutating next
+  step (scan another repo, or set this up for ongoing checks) as a conversational message,
+  then go to the setup CTA. A clean repo's payoff is the clean bill of health itself — never
+  manufacture a deliverable to have something to ship.
 
 **This artifact is a repo-write — professional, zero roast.** The deliverable, the filed
 issue body, the PR description, and any committed file are seen by the user's

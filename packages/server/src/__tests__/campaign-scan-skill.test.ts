@@ -30,6 +30,10 @@ describe("campaign scan skills", () => {
     expect(body).toContain("a clean repo earns clean copy");
     // Step 5 clean path: a no-finding report must not manufacture a fix/PR payoff.
     expect(body).toContain("A clean repo's payoff is the clean bill of health");
+    // The clean vs blocker split is deterministic + mutually exclusive (by fatal/serious).
+    expect(body).toContain("no fatal and no serious");
+    // The light path (Almost there with only minors) is on the clean side, not the stab side.
+    expect(body).toContain("Almost there with only minors");
   });
 
   it("drives the conversion payoff: produce a real fix + offer to apply, but read-only until consent", () => {
