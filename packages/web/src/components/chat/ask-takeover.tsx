@@ -127,9 +127,9 @@ export function AskTakeover({
   // Keep the card (and its pinned footer) above the on-screen keyboard.
   const keyboardInset = useKeyboardInset();
 
-  // Staged image attachments — same hook (and same `image/* ≤5MB` rules + object-
-  // URL lifecycle) the chat composer uses. A local validation error (oversized
-  // image) renders alongside any host send error below.
+  // Staged image attachments — same hook (and same `image/*` + attachment-cap
+  // rules + object-URL lifecycle) the chat composer uses. A local validation
+  // error (oversized image) renders alongside any host send error below.
   const [imageError, setImageError] = useState<string | null>(null);
   const { pendingImages, addImages, removeImage } = usePendingImages({
     onError: setImageError,
