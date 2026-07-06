@@ -16,6 +16,7 @@ import { organizations } from "../db/schema/organizations.js";
 import { resources } from "../db/schema/resources.js";
 import { users } from "../db/schema/users.js";
 import { createAgent } from "../services/agent.js";
+import { bindAgentRuntimeSession, validateAgentRuntimeSession } from "../services/agent-runtime-session.js";
 import { signTokensForUser } from "../services/auth.js";
 import { createMember } from "../services/member.js";
 import { sendMessage } from "../services/message.js";
@@ -398,6 +399,42 @@ describe("POST /me/landing-campaigns/start", () => {
     const thirdMessages = await app.db.select().from(messages).where(eq(messages.chatId, thirdBody.chatId));
     expect(firstMessages).toHaveLength(1);
     expect(thirdMessages).toHaveLength(1);
+  });
+
+  it("preserves runtime session metadata when reusing the trial agent for a new repo", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ agentUuid: string }>();
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, firstBody.agentUuid, OFFICIAL_CLIENT_ID);
+    expect(
+      await validateAgentRuntimeSession(app.db, firstBody.agentUuid, OFFICIAL_CLIENT_ID, runtimeSessionToken),
+    ).toBe(true);
+
+    const second = await startProductionScan(app, admin, "https://github.com/acme/api");
+
+    expect(second.statusCode).toBe(200);
+    const secondBody = second.json<{ agentUuid: string; repoCanonicalKey: string }>();
+    expect(secondBody.agentUuid).toBe(firstBody.agentUuid);
+    expect(secondBody.repoCanonicalKey).toBe("github.com/acme/api");
+    expect(
+      await validateAgentRuntimeSession(app.db, firstBody.agentUuid, OFFICIAL_CLIENT_ID, runtimeSessionToken),
+    ).toBe(true);
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, firstBody.agentUuid)).limit(1);
+    expect(parseLandingCampaignTrialAgentMetadata(trialAgent?.metadata)).toMatchObject({
+      landingCampaignTrial: true,
+      campaign: "production-scan",
+      repo: { canonicalKey: "github.com/acme/api" },
+    });
+    const runtimeSession = (trialAgent?.metadata as Record<string, unknown> | undefined)?.runtimeSession;
+    expect(runtimeSession).toMatchObject({
+      clientId: OFFICIAL_CLIENT_ID,
+      boundAt: expect.any(String),
+      tokenHash: expect.any(String),
+    });
   });
 
   it("serializes concurrent starts for the same campaign and repo into one trial agent and chat", async () => {
