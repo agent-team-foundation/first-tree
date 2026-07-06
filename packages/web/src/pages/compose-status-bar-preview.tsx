@@ -123,6 +123,23 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
+    name: "working · long multi-line goal (expand card)",
+    subtitle: "goal truncates on the rail; the ⌃ chevron opens the full turnText card (click to test)",
+    chatId: "v-expand",
+    agents: [DEV],
+    statuses: [
+      working("agent-dev", {
+        kind: "tool_call",
+        label: "Bash",
+        detail: "pnpm typecheck",
+        turnText: "Reworking the compose status bar so a long narration can expand to its full multi-line form",
+        turnTextFull:
+          "Reworking the compose status bar so a long narration can expand to its full multi-line form.\n\nPlan:\n1. Server derives a newline-preserving turnTextFull (capped at 2000), only when it carries more than the one-line goal.\n2. The rail keeps its single line; a dedicated ⌃ chevron opens a floating card.\n3. The card floats over the stream (absolute, out of flow) so the live ~1s refresh never reflows the conversation.",
+        startedAt: ago(23),
+      }),
+    ],
+  },
+  {
     name: "working · no prose yet (means leads)",
     subtitle: "turnText absent (opened with a tool) → tool leads, line not blank",
     chatId: "v-no-goal",
