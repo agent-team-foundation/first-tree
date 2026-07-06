@@ -73,6 +73,47 @@ export function createAgentConfigCache(opts: AgentConfigCacheOptions): AgentConf
     return fetched;
   }
 
+  function refresh(agentId: string): Promise<AgentRuntimeConfig> {
+    const existing = entries.get(agentId);
+    if (existing?.inflight) return existing.inflight;
+    const slot: CachedEntry = existing ?? {
+      config: {
+        agentId,
+        version: 0,
+        payload: {
+          kind: "claude-code",
+          prompt: { append: "" },
+          model: "",
+          mcpServers: [],
+          env: [],
+          gitRepos: [],
+          resourceSkills: [],
+          reasoningEffort: "",
+        },
+        updatedAt: "",
+        updatedBy: "",
+      },
+      urls: new Set(),
+      inflight: null,
+    };
+    const generation = sdkGeneration;
+    let inflight!: Promise<AgentRuntimeConfig>;
+    inflight = doFetch(agentId, generation).catch((err) => {
+      if (slot.inflight === inflight) {
+        slot.inflight = null;
+      }
+      if (generation !== sdkGeneration) {
+        log?.warn({ agentId, err }, "agent config fetch failed after SDK replacement; retrying with latest transport");
+        return refresh(agentId);
+      }
+      log?.warn({ agentId, err }, "agent config fetch failed");
+      throw err;
+    });
+    slot.inflight = inflight;
+    entries.set(agentId, slot);
+    return inflight;
+  }
+
   return {
     get(agentId) {
       return entries.get(agentId)?.config;
@@ -86,38 +127,7 @@ export function createAgentConfigCache(opts: AgentConfigCacheOptions): AgentConf
       }
     },
 
-    async refresh(agentId) {
-      const existing = entries.get(agentId);
-      if (existing?.inflight) return existing.inflight;
-      const slot: CachedEntry = existing ?? {
-        config: {
-          agentId,
-          version: 0,
-          payload: {
-            kind: "claude-code",
-            prompt: { append: "" },
-            model: "",
-            mcpServers: [],
-            env: [],
-            gitRepos: [],
-            resourceSkills: [],
-            reasoningEffort: "",
-          },
-          updatedAt: "",
-          updatedBy: "",
-        },
-        urls: new Set(),
-        inflight: null,
-      };
-      const generation = sdkGeneration;
-      slot.inflight = doFetch(agentId, generation).catch((err) => {
-        slot.inflight = null;
-        log?.warn({ agentId, err }, "agent config fetch failed");
-        throw err;
-      });
-      entries.set(agentId, slot);
-      return slot.inflight;
-    },
+    refresh,
 
     async refreshIfNewer(agentId, incomingVersion) {
       const existing = entries.get(agentId);

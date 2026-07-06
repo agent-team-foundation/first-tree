@@ -43,6 +43,7 @@ export function buildAgentEnv(
     agent: AgentIdentity;
     chatId: string;
     clientId?: string;
+    runtimeSessionTokenFile?: string;
     provider?: string;
     /**
      * Resolved doc-preview context for this session, so a `first-tree
@@ -86,6 +87,7 @@ export function buildAgentEnv(
     FIRST_TREE_SERVER_URL: ctx.sdk.serverUrl,
     FIRST_TREE_AGENT_ID: ctx.agent.agentId,
     ...(ctx.sdk.runtimeSessionToken ? { FIRST_TREE_RUNTIME_SESSION_TOKEN: ctx.sdk.runtimeSessionToken } : {}),
+    ...(ctx.runtimeSessionTokenFile ? { FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: ctx.runtimeSessionTokenFile } : {}),
     FIRST_TREE_INBOX_ID: ctx.agent.inboxId,
     FIRST_TREE_CHAT_ID: ctx.chatId,
     ...(ctx.clientId ? { FIRST_TREE_CLIENT_ID: ctx.clientId } : {}),

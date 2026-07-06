@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { existsSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
 import type { AgentSlotConfig } from "../runtime/agent-slot.js";
@@ -100,6 +101,7 @@ function makeSdk(options?: {
   configErrorsThenSucceed?: { error: unknown; times: number };
   activeRuntimeChatIds?: string[];
   activeRuntimeChatIdsError?: unknown;
+  runtimeSessionToken?: string;
 }): FirstTreeHubSDK {
   const agent = options?.agent ?? makeAgent();
   let configCalls = 0;
@@ -127,6 +129,8 @@ function makeSdk(options?: {
         updatedBy: "user-1",
       };
     }),
+    serverUrl: "https://first-tree.example",
+    runtimeSessionToken: options?.runtimeSessionToken,
     listActiveRuntimeChatIds: vi.fn(async () => {
       if (options?.activeRuntimeChatIdsError) throw options.activeRuntimeChatIdsError;
       return { chatIds: options?.activeRuntimeChatIds ?? ["chat-1", "chat-2", "chat-evicted"] };
@@ -267,6 +271,7 @@ async function makeSlot(options?: {
   configErrorsThenSucceed?: { error: unknown; times: number };
   activeRuntimeChatIds?: string[];
   activeRuntimeChatIdsError?: unknown;
+  runtimeSessionToken?: string;
   runtimeType?: string;
   syncResult?: MockState["syncResult"];
   syncDelayMs?: number;
@@ -284,6 +289,7 @@ async function makeSlot(options?: {
     configErrorsThenSucceed: options?.configErrorsThenSucceed,
     activeRuntimeChatIds: options?.activeRuntimeChatIds,
     activeRuntimeChatIdsError: options?.activeRuntimeChatIdsError,
+    runtimeSessionToken: options?.runtimeSessionToken,
   });
   const connection = new FakeClientConnection(sdk);
   const { AgentSlot } = await import("../runtime/agent-slot.js");
@@ -607,11 +613,82 @@ describe("AgentSlot", () => {
     });
     await Promise.resolve();
     await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(vi.mocked(nextSdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(sdk.listActiveRuntimeChatIds)).not.toHaveBeenCalled();
     expect(session.updateTransport).toHaveBeenCalledWith(nextSdk, expect.anything());
 
+    await slot.stop();
+  });
+
+  it("writes a stable runtime session token file that updates after a reconnect rebind", async () => {
+    const tokenFile = "/tmp/first-tree-test-data/runtime-session-tokens/agent-1.token";
+    const { slot, connection, state } = await makeSlot({
+      activeRuntimeChatIds: ["chat-1"],
+      runtimeSessionToken: "runtime-token-1",
+    });
+
+    try {
+      await slot.start();
+      expect(readFileSync(tokenFile, "utf8").trim()).toBe("runtime-token-1");
+      expect((state.sessionConfigs[0] as { runtimeSessionTokenFile?: string }).runtimeSessionTokenFile).toBe(tokenFile);
+
+      const nextSdk = makeSdk({ activeRuntimeChatIds: ["chat-1"], runtimeSessionToken: "runtime-token-2" });
+      connection.emit("agent:bound", {
+        agentId: "agent-1",
+        displayName: "Agent One",
+        agentType: "agent",
+        sdk: nextSdk,
+        runtimeSessionToken: "runtime-token-2",
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(readFileSync(tokenFile, "utf8").trim()).toBe("runtime-token-2");
+    } finally {
+      await slot.stop();
+    }
+
+    expect(existsSync(tokenFile)).toBe(false);
+  });
+
+  it("starts a fresh active-runtime-chat refresh after rebind even when the old refresh is in flight", async () => {
+    const { slot, connection, sdk, state } = await makeSlot({ activeRuntimeChatIds: ["chat-1"] });
+    await slot.start();
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+    session.sessionStates = [
+      { chatId: "stale-chat", state: "active" },
+      { chatId: "chat-2", state: "active" },
+    ];
+
+    const refreshActiveRuntimeChatIds = Reflect.get(slot, "refreshActiveRuntimeChatIds");
+    if (typeof refreshActiveRuntimeChatIds !== "function") throw new Error("private method missing");
+    const staleRefresh = deferred<{ chatIds: string[] }>();
+    vi.mocked(sdk.listActiveRuntimeChatIds).mockImplementationOnce(() => staleRefresh.promise);
+    const stalePromise = refreshActiveRuntimeChatIds.call(slot, "periodic") as Promise<void>;
+    await Promise.resolve();
+
+    connection.reportSessionState.mockClear();
+    const nextSdk = makeSdk({ activeRuntimeChatIds: ["chat-2"], runtimeSessionToken: "runtime-token-2" });
+    connection.emit("agent:bound", {
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+      sdk: nextSdk,
+      runtimeSessionToken: "runtime-token-2",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(vi.mocked(nextSdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(1);
+    expect(connection.reportSessionState).toHaveBeenCalledWith("agent-1", "chat-2", "active");
+    expect(connection.reportSessionState).not.toHaveBeenCalledWith("agent-1", "stale-chat", "active");
+
+    staleRefresh.resolve({ chatIds: ["stale-chat"] });
+    await stalePromise;
     await slot.stop();
   });
 

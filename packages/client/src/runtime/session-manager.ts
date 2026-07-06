@@ -296,6 +296,8 @@ type SessionManagerConfig = {
   registryPath?: string;
   /** Step 4: optional config cache for refresh-before-dispatch on configVersion bump. */
   agentConfigCache?: AgentConfigCache;
+  /** Stable file path updated on every runtime-session rebind for long-lived child CLI calls. */
+  runtimeSessionTokenFile?: string;
   /**
    * Ack channel used by `dispatch` when an entry transitions out of `delivered`.
    * Wired to `clientConnection.sendInboxAck` so the entry is acked over the
@@ -2165,6 +2167,7 @@ export class SessionManager {
       agent: this.config.agentIdentity,
       chatId,
       clientId: typeof this.config.handlerConfig.clientId === "string" ? this.config.handlerConfig.clientId : undefined,
+      runtimeSessionTokenFile: this.config.runtimeSessionTokenFile,
       provider:
         typeof this.config.handlerConfig.runtimeProvider === "string"
           ? this.config.handlerConfig.runtimeProvider

@@ -3,6 +3,22 @@ import { describe, expect, it, vi } from "vitest";
 import { type AgentConfigCacheLogger, createAgentConfigCache } from "../runtime/agent-config-cache.js";
 import type { FirstTreeHubSDK } from "../sdk.js";
 
+type Deferred<T> = {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+};
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function makeConfig(version: number, urls: string[] = []): AgentRuntimeConfig {
   return {
     agentId: "agent-1",
@@ -67,6 +83,25 @@ describe("AgentConfigCache (Step 4)", () => {
     expect(updated.version).toBe(2);
     expect(firstSdk.fetchAgentConfig).toHaveBeenCalledTimes(1);
     expect(secondSdk.fetchAgentConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries waiters with the replacement SDK when an old in-flight fetch fails after rebind", async () => {
+    const firstFetch = deferred<AgentRuntimeConfig>();
+    const firstSdk = {
+      fetchAgentConfig: vi.fn(() => firstFetch.promise),
+      isHubReachable: vi.fn(),
+    } as unknown as FirstTreeHubSDK;
+    const secondSdk = makeSdkWithConfigs([makeConfig(2)]);
+    const cache = createAgentConfigCache({ sdk: firstSdk });
+
+    const pending = cache.refresh("agent-1");
+    cache.updateSdk(secondSdk);
+    firstFetch.reject(new Error("Invalid agent runtime session"));
+
+    await expect(pending).resolves.toMatchObject({ version: 2 });
+    expect(firstSdk.fetchAgentConfig).toHaveBeenCalledTimes(1);
+    expect(secondSdk.fetchAgentConfig).toHaveBeenCalledTimes(1);
+    expect(cache.get("agent-1")?.version).toBe(2);
   });
 
   it("refreshIfNewer is no-op when incoming <= local", async () => {

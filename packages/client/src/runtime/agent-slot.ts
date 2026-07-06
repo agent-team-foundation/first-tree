@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type {
   AgentRuntimeConfig,
   InboxDeliverFrame,
@@ -103,6 +104,7 @@ type ConnectionListener =
 export class AgentSlot {
   private sessionManager: SessionManager | null = null;
   private readonly config: AgentSlotConfig;
+  private readonly runtimeSessionTokenFile: string;
   private logger: pino.Logger;
   private agentConfigCache: AgentConfigCache | null = null;
   private sdk: FirstTreeHubSDK | null = null;
@@ -129,6 +131,7 @@ export class AgentSlot {
 
   constructor(config: AgentSlotConfig) {
     this.config = config;
+    this.runtimeSessionTokenFile = join(defaultDataDir(), "runtime-session-tokens", `${config.agentId}.token`);
     this.logger = createLogger("slot").child({ agentName: config.name, agentId: config.agentId });
   }
 
@@ -203,6 +206,7 @@ export class AgentSlot {
         if (!this.sessionManager) return;
         void this.refreshActiveRuntimeChatIds("bind").finally(() => {
           this.fullStateSync();
+          this.scheduleActiveRuntimeChatIdsRefresh();
           // One-shot post-bind reconcile catches operator-terminates that
           // landed while this client was offline. It is deliberately scheduled
           // after fullStateSync, so just-hydrated registry mappings are first
@@ -241,7 +245,6 @@ export class AgentSlot {
       bindSucceeded = true;
       const sdk = bound.sdk;
       this.adoptRuntimeTransport(sdk);
-      this.activeRuntimeChatIdsRefreshGeneration++;
       const agent = await sdk.register();
 
       this.logger.info({ displayName: agent.displayName }, "agent bound");
@@ -315,6 +318,7 @@ export class AgentSlot {
         log: this.logger,
         registryPath,
         agentConfigCache: this.agentConfigCache,
+        runtimeSessionTokenFile: this.runtimeSessionTokenFile,
         ackEntry,
         recoverChat,
         onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
@@ -444,8 +448,29 @@ export class AgentSlot {
 
   private adoptRuntimeTransport(sdk: FirstTreeHubSDK): void {
     this.sdk = sdk;
+    this.persistRuntimeSessionToken(sdk.runtimeSessionToken);
+    this.activeRuntimeChatIdsRefreshGeneration++;
+    this.activeRuntimeChatIdsRefreshInFlight = null;
+    if (this.activeRuntimeChatIdsRefreshTimer) {
+      clearTimeout(this.activeRuntimeChatIdsRefreshTimer);
+      this.activeRuntimeChatIdsRefreshTimer = null;
+    }
     this.agentConfigCache?.updateSdk(sdk);
     this.sessionManager?.updateTransport(sdk, this.agentConfigCache ?? undefined);
+  }
+
+  private persistRuntimeSessionToken(token: string | undefined): void {
+    try {
+      if (!token) {
+        rmSync(this.runtimeSessionTokenFile, { force: true });
+        return;
+      }
+      mkdirSync(dirname(this.runtimeSessionTokenFile), { recursive: true, mode: 0o700 });
+      writeFileSync(this.runtimeSessionTokenFile, `${token}\n`, { encoding: "utf8", mode: 0o600 });
+      chmodSync(this.runtimeSessionTokenFile, 0o600);
+    } catch (err) {
+      this.logger.warn({ err }, "failed to persist runtime session token");
+    }
   }
 
   async stop(reason?: string, opts: AgentSlotStopOptions = {}): Promise<void> {
@@ -490,6 +515,7 @@ export class AgentSlot {
       firstError ??= err;
       this.logger.warn({ err }, "failed to shut down sessions while stopping");
     }
+    this.persistRuntimeSessionToken(undefined);
     this.sessionManager = null;
     this.agentConfigCache = null;
     this.sdk = null;
@@ -527,6 +553,7 @@ export class AgentSlot {
       }
     }
     await this.sessionManager?.shutdown();
+    this.persistRuntimeSessionToken(undefined);
     this.sessionManager = null;
     this.agentConfigCache = null;
     this.sdk = null;
