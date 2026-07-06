@@ -107,9 +107,49 @@ export function parseParticipantList(params: URLSearchParams): string[] {
 }
 
 export function WorkspacePage() {
-  const [searchParams, setSearchParams] = useSearchParams();
   const { meLoaded, onboardingStep, onboardingDismissedAt, onboardingCompletedAt, currentOrgHasPersonalAgent } =
     useAuth();
+
+  // Users who haven't finished setup go through the standalone /onboarding
+  // flow — including the server-`completed`-but-no-start-chat case. Only
+  // terminally completed or dismissed users fall through to the normal
+  // workspace; the old inline center-panel onboarding has been retired.
+  //
+  // The gate lives HERE (the `/` index route), not inside `shouldEnterOnboarding`
+  // or `WorkspaceBody`: the landing-campaign quickstart funnel renders the same
+  // `WorkspaceBody` at `/quickstart?c=<id>` WITHOUT this gate, so an un-onboarded
+  // trial user is not bounced to /onboarding. Keeping the skip at the route/caller
+  // level leaves `shouldEnterOnboarding` a pure, campaign-agnostic function.
+  if (
+    shouldEnterOnboarding({
+      meLoaded,
+      onboardingStep,
+      onboardingSuppressedAt: onboardingDismissedAt,
+      currentOrgHasPersonalAgent,
+      // Not read by the entry gate (auto-entry keys off connect + org
+      // personal-agent readiness only); supplied because both gates share
+      // OnboardingGateFacts.
+      onboardingCompletedAt,
+    })
+  ) {
+    return <Navigate to="/onboarding" replace />;
+  }
+
+  return <WorkspaceBody />;
+}
+
+/**
+ * Workspace body — the chat-first three-pane shell (conversation rail +
+ * center chat + doc-preview drawer) plus all the URL-backed rail state.
+ *
+ * Split out of `WorkspacePage` so the SAME shell renders in two places:
+ *   - `/` — behind the onboarding gate (via `WorkspacePage`).
+ *   - `/quickstart?c=<id>` — gate-free, inside the landing-campaign trial
+ *     funnel, so the trial chat shows the real workspace instead of a
+ *     bespoke standalone page.
+ */
+export function WorkspaceBody() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
   const legacySource = searchParams.get("source");
@@ -258,25 +298,6 @@ export function WorkspacePage() {
     // win and leave the URL in a half-cleared state.
     setSearchParams(nextParamsForClearFilters(searchParams), { replace: true });
   }, [searchParams, setSearchParams]);
-
-  // Users who haven't finished setup go through the standalone /onboarding
-  // flow — including the server-`completed`-but-no-start-chat case. Only
-  // terminally completed or dismissed users fall through to the normal
-  // workspace; the old inline center-panel onboarding has been retired.
-  if (
-    shouldEnterOnboarding({
-      meLoaded,
-      onboardingStep,
-      onboardingSuppressedAt: onboardingDismissedAt,
-      currentOrgHasPersonalAgent,
-      // Not read by the entry gate (auto-entry keys off connect + org
-      // personal-agent readiness only); supplied because both gates share
-      // OnboardingGateFacts.
-      onboardingCompletedAt,
-    })
-  ) {
-    return <Navigate to="/onboarding" replace />;
-  }
 
   // Pick the width prop based on what role the rail is playing:
   //   - narrow + no chat → full-bleed (100% of the wrapper) so the list

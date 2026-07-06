@@ -6,7 +6,7 @@ import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { useGrowthLandingPagesState } from "../../hooks/use-server-channel.js";
 import { FlowHint, StatusRow, WorkingState } from "../onboarding/flow-ui.js";
-import { ChatByIdView } from "../workspace/center/chat-by-id.js";
+import { WorkspaceBody } from "../workspace/index.js";
 import { getCampaign } from "./campaigns.js";
 import {
   type CampaignIntent,
@@ -30,7 +30,9 @@ export function QuickstartPage() {
   const location = useLocation();
   const { organizationId, refreshMe } = useAuth();
   const { enabled: growthLandingPagesEnabled, settled } = useGrowthLandingPagesState();
-  const chatId = useMemo(() => new URLSearchParams(location.search).get("chat"), [location.search]);
+  // The trial chat is selected with the normal workspace `?c=` param so
+  // `WorkspaceBody` picks it up unchanged — no bespoke `?chat=` handoff.
+  const chatId = useMemo(() => new URLSearchParams(location.search).get("c"), [location.search]);
 
   const intent = useMemo<CampaignIntent | null>(() => {
     if (chatId) return null;
@@ -62,7 +64,7 @@ export function QuickstartPage() {
       });
       clearCampaignIntent();
       await refreshMe();
-      navigate(`/quickstart?chat=${encodeURIComponent(trialChatId)}`, { replace: true });
+      navigate(`/quickstart?c=${encodeURIComponent(trialChatId)}`, { replace: true });
     } catch (err) {
       startStartedRef.current = false;
       setStartError(err instanceof Error ? err.message : "Couldn't open your trial chat. Please try again.");
@@ -83,7 +85,12 @@ export function QuickstartPage() {
     void startTrial();
   }, [startTrial]);
 
-  if (chatId) return <QuickstartTrialChat chatId={chatId} />;
+  // Trial started: render the real workspace shell (full chrome) with the
+  // trial chat selected via `?c=`. This route sits inside the Layout group
+  // but is NOT the onboarding-gated index route, so an un-onboarded trial
+  // user sees the normal workspace here instead of being bounced to
+  // /onboarding — and there is no bespoke trial-chat page to maintain.
+  if (chatId) return <WorkspaceBody />;
 
   if (!settled || !growthLandingPagesEnabled) {
     return (
@@ -93,23 +100,11 @@ export function QuickstartPage() {
     );
   }
 
-  if (!intent || !campaign) {
-    return (
-      <QuickstartShell>
-        <h1 className="text-title" style={{ margin: 0 }}>
-          Start from a First Tree scan
-        </h1>
-        <p className="text-body" style={{ margin: 0, color: "var(--fg-3)" }}>
-          Open this from a First Tree scan link so we know which repo to look at.
-        </p>
-        <div className="flex">
-          <Button asChild>
-            <a href="/">Go to your workspace</a>
-          </Button>
-        </div>
-      </QuickstartShell>
-    );
-  }
+  // No chat selected and no valid campaign handoff to launch — e.g. the user
+  // closed/backed out of the trial chat, or opened /quickstart without a scan
+  // link. Keep them in the real workspace (conversation rail) rather than a
+  // dead-end card: WorkspaceBody with no `?c=` shows their conversation list.
+  if (!intent || !campaign) return <WorkspaceBody />;
 
   return (
     <QuickstartShell repoSlug={intent.repoSlug}>
@@ -139,18 +134,13 @@ export function QuickstartPage() {
   );
 }
 
-function QuickstartTrialChat({ chatId }: { chatId: string }) {
-  return (
-    <div className="flex min-h-screen flex-col" style={{ background: "var(--bg)", color: "var(--fg)" }}>
-      <ChatByIdView chatId={chatId} narrow={false} onShowConversations={null} />
-    </div>
-  );
-}
-
 function QuickstartShell({ repoSlug, children }: { repoSlug?: string; children: ReactNode }) {
+  // `flex-1` (not `min-h-screen`): this launcher now renders inside the
+  // workspace Layout outlet, so it fills the available area under the header
+  // rather than forcing a full-viewport block that would overflow past it.
   return (
     <div
-      className="flex min-h-screen flex-col items-center"
+      className="flex flex-1 flex-col items-center justify-center overflow-y-auto"
       style={{ background: "var(--bg)", color: "var(--fg)", padding: "var(--sp-8) var(--sp-5)" }}
     >
       <div className="flex w-full flex-col" style={{ maxWidth: "30rem", gap: "var(--sp-5)" }}>
