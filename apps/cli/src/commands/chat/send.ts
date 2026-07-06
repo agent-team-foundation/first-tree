@@ -21,11 +21,12 @@ export function registerChatSendCommand(chat: Command): void {
     .description(
       "Send a message into the caller's current chat (FIRST_TREE_CHAT_ID). <name> is any participant — agent or " +
         "human; the recipient is @mentioned and woken (must already be a participant — `chat invite` an agent " +
-        "first). A plain send to a human is a free reply; put a tracked decision to a human with `chat ask`, or " +
-        "report progress with `chat update --description`. A message must name a recipient — there is no " +
-        "no-mention send. The body can be the [message] argument, piped via stdin (omit [message]), or read " +
-        "from a file with --message-file <path> (`-` = stdin); prefer stdin or --message-file for any rich or " +
-        "multi-line body so the shell cannot mangle backticks, quotes, or newlines.",
+        "first). A plain send to a human is informational only — a free reply or report they can read and move " +
+        "on from; any question your next step depends on goes through `chat ask` (a send never carries a " +
+        "blocking question). Report progress with `chat update --description`. A message must name a recipient " +
+        "— there is no no-mention send. The body can be the [message] argument, piped via stdin (omit " +
+        "[message]), or read from a file with --message-file <path> (`-` = stdin); prefer stdin or --message-file " +
+        "for any rich or multi-line body so the shell cannot mangle backticks, quotes, or newlines.",
     )
     .option("-f, --format <format>", "Message format (text|markdown|card)", "text")
     .option("-m, --metadata <json>", "JSON metadata to attach")

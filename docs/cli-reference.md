@@ -283,13 +283,13 @@ first-tree chat
 │     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
 │     --with <name>                                #   context participant; added silently, not woken by the first message
 │     --topic <text> / --description <text>        #   initial chat self-description
-│     --request                                    #   first message is a tracked ask; the body IS the ask; exactly one --to human
+│     --request                                    #   first message is a tracked ask; the body IS the ask, decision-self-sufficient (why + recap + question + recommendation); exactly one --to human
 │     --options <json> / --multi-select            #   (with --request) 2–4 options {label,description,preview?}; allow multi-pick
-├── send <name> [message]                            # wake a participant — agent or human (a plain send to a human is a free reply; use `chat ask` for a tracked decision)
+├── send <name> [message]                            # wake a participant — agent or human (a send to a human is informational only; a question the next step depends on goes through `chat ask`)
 │     # body: [message] arg, or stdin (omit [message]), or -F <path>; prefer stdin/-F for rich bodies (shell-safe)
 │     -F, --message-file <path>                      #   read the body from <path> (`-` = stdin); content never hits the shell
 │     --reply-to <messageId>                         #   thread a reply under a message (pure threading)
-├── ask <name> [message]                             # ask a HUMAN a tracked question; the body IS the ask (background + question)
+├── ask <name> [message]                             # ask a HUMAN a tracked question; the body IS the ask, decision-self-sufficient (why it exists + recent-context recap + question + recommendation)
 │     # body: [message] arg, or stdin (omit [message]), or -F <path>; prefer stdin/-F for rich bodies (shell-safe)
 │     -F, --message-file <path>                      #   read the body from <path> (`-` = stdin); content never hits the shell
 │     --options <json>                               #   2–4 answer options {label (1–5 words), description, preview?}; omit for free-text
@@ -317,15 +317,26 @@ first-tree chat create "Please review the rollout plan." --to code-agent --with 
   --description "reviewing rollout plan; waiting on code-agent"
 
 # Start a new task chat with a tracked question. The first request must target
-# exactly one human. The message body IS the ask (background + the question);
-# pass 2–4 --options (JSON) for a clean pick, or omit them for a free-text answer.
-first-tree chat create --to alice --request \
-  "Migration 0021 drops the legacy column — irreversible. Ship the destructive migration?" \
+# exactly one human. The message body IS the ask and must be
+# decision-self-sufficient (why the question exists + recent-context recap +
+# the single question and your recommendation); pass 2–4 --options (JSON) for
+# a clean pick, or omit them for a free-text answer.
+cat <<'EOF' | first-tree chat create --to alice --request \
   --options '[{"label":"Ship","description":"Roll the migration now"},{"label":"Hold","description":"Wait 24h"}]'
+## Why this question exists
+Migration 0021 drops the legacy column — irreversible, so shipping is your call.
+## Recent context
+The 0021 cleanup you asked for last week is done; the PR is approved and CI is
+green.
+## The question
+Ship the destructive migration now? I would ship — the column has had no reads
+for 30 days.
+EOF
 
 # Inline — `chat send` wakes a participant (agent or human). A plain send to a
-# human is a free reply; use `chat ask` for a tracked decision. The recipient
-# must be a participant of FIRST_TREE_CHAT_ID.
+# human is informational only — readable, then safely ignorable; any question
+# the next step depends on goes through `chat ask` (a send never carries a
+# blocking question). The recipient must be a participant of FIRST_TREE_CHAT_ID.
 first-tree chat send code-agent "ship the PR"
 
 # Stdin (multiline, markdown, special chars)
@@ -354,17 +365,27 @@ EOF
 # intentionally sending literal `\n` text.
 
 # Ask a human a tracked question (red-dot + blocks the chat for them until they
-# answer). `chat ask` targets a single human; the message body IS the ask
-# (background + the question). Omit --options for a free-text answer, or pass 2–4
-# --options (JSON) for a clean pick; add --multi-select to allow more than one.
-first-tree chat ask alice \
-  "Migration 0021 drops the legacy column — irreversible. Ship the destructive migration?" \
+# answer). `chat ask` targets a single human; the message body IS the ask and
+# must be decision-self-sufficient for a reader who remembers nothing of the
+# chat: why the question exists + a recap of the recent interactions + the
+# single question and your recommendation, written for a reader holding none
+# of the context (unpack every shorthand; name options by their concrete
+# consequence). Omit --options for a free-text answer, or pass 2–4 --options
+# (JSON) for a clean pick; add --multi-select to allow more than one.
+cat <<'EOF' | first-tree chat ask alice \
   --options '[{"label":"Ship","description":"Roll it now"},{"label":"Hold","description":"Wait 24h"}]'
+## Why this question exists
+Migration 0021 drops the legacy column — irreversible, so shipping is your call.
+## Recent context
+You asked for the 0021 cleanup yesterday; the PR is approved and CI is green.
+## The question
+Ship the destructive migration now? I would ship — the column has had no reads
+for 30 days.
+EOF
 
-# Free-text ask (no options)
-first-tree chat ask alice "What rollback window do you want before we ship 0021?"
-
-# Rich ask body via a file (shell-safe — same rationale as `chat send -F`)
+# Free-text ask (no options) — the same three-section body, answered in free
+# text. `-F` reads the body from a file (shell-safe — same rationale as
+# `chat send -F`)
 first-tree chat ask alice --message-file ask-body.md
 
 # `chat ask` always opens a fresh top-level question — there is no threading
