@@ -28,6 +28,8 @@ describe("campaign scan skills", () => {
     expect(body).toContain("strongest positive signal");
     expect(body).toContain("praise-with-a-wink");
     expect(body).toContain("a clean repo earns clean copy");
+    // Step 5 clean path: a no-finding report must not manufacture a fix/PR payoff.
+    expect(body).toContain("A clean repo's payoff is the clean bill of health");
   });
 
   it("drives the conversion payoff: produce a real fix + offer to apply, but read-only until consent", () => {

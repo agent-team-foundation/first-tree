@@ -255,12 +255,18 @@ language (native sarcasm, not a stiff translation) with the technical surface �
 here.** Filing or committing happens only in Step 5, and only after the user approves.
 
 ## Step 5 — turn the top fix into a real deliverable (the payoff)
-Don't stop at advice. Pick the single highest-leverage blocker (prefer a
-security or launch-blocking one) and **produce it as a finished, ready-to-apply
-artifact**, shown in full in the chat (free, no commitment): a concrete diff for
-THIS repo (e.g. the CI workflow that adds secret + dependency scanning, a
+Don't stop at advice. **When the scan surfaced at least one blocker,** pick the single
+highest-leverage one (prefer a security or launch-blocking one) and **produce it as a
+finished, ready-to-apply artifact**, shown in full in the chat (free, no commitment): a
+concrete diff for THIS repo (e.g. the CI workflow that adds secret + dependency scanning, a
 missing \`SECURITY.md\`, the Dockerfile change to drop root), or a ready-to-file
 issue with evidence and repro steps. Tailor it to the repo, not a template.
+
+**If the report is clean (Ready to launch / no findings), there is no blocker to fix — do
+NOT invent one or force a PR/issue payoff.** Skip the fix artifact; offer at most one
+genuinely-useful *optional* hardening as a plain non-mutating suggestion (or nothing at
+all), then go to the setup CTA. A clean repo's payoff is the clean bill of health itself —
+never manufacture a deliverable to have something to ship.
 
 **This artifact is a repo-write — professional, zero roast.** The deliverable, the filed
 issue body, the PR description, and any committed file are seen by the user's
