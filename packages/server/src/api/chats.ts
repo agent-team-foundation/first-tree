@@ -55,7 +55,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     const trial = parseLandingCampaignTrialChatMetadata(metadata);
     if (!trial) return;
     const resolves = body.metadata?.resolves;
-    if (trial.state === "awaiting_user" && resolves !== null && typeof resolves === "object") {
+    const resolvesRequest = resolves !== null && typeof resolves === "object";
+    if (
+      trial.state === "awaiting_user" &&
+      trial.inputLocked === false &&
+      (trial.awaitingUserKind === "follow_up" || resolvesRequest)
+    ) {
       return;
     }
     throw new ForbiddenError("This landing campaign trial chat is locked.");

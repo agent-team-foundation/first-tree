@@ -65,6 +65,7 @@ export type CreateTestAppOptions = {
   landingCampaignServiceOrgId?: string;
   landingCampaignClientId?: string;
   landingCampaignRuntimeProvider?: "codex" | "claude-code";
+  landingCampaignMaxAgentTurns?: number;
   commandVersion?: string;
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
   connectBootstrap?: Config["connectBootstrap"];
@@ -98,6 +99,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     channel: opts.channel ?? "dev",
     growth: {
       landingPagesEnabled: opts.growthLandingPagesEnabled ?? false,
+      landingCampaignMaxAgentTurns: opts.landingCampaignMaxAgentTurns ?? 1,
       ...(opts.landingCampaignServiceUserId !== undefined ||
       opts.landingCampaignServiceOrgId !== undefined ||
       opts.landingCampaignClientId !== undefined ||

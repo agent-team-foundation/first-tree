@@ -71,10 +71,12 @@ describe("server config", () => {
     });
 
     expect(defaultConfig.growth.landingPagesEnabled).toBe(false);
+    expect(defaultConfig.growth.landingCampaignMaxAgentTurns).toBe(1);
 
     resetConfig();
     const enabledConfigDir = makeTempConfigDir();
     vi.stubEnv("FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED", "true");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS", "4");
 
     const enabledConfig = await initConfig({
       schema: createServerConfigSchema({ autoGenerateSecrets: false }),
@@ -83,6 +85,7 @@ describe("server config", () => {
     });
 
     expect(enabledConfig.growth.landingPagesEnabled).toBe(true);
+    expect(enabledConfig.growth.landingCampaignMaxAgentTurns).toBe(4);
   });
 
   it("resolves landing campaign official service ids only when configured", async () => {
@@ -116,6 +119,20 @@ describe("server config", () => {
       clientId: "client_official",
       runtimeProvider: "codex",
     });
+  });
+
+  it("rejects invalid landing campaign max turn limits", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS", "0");
+
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/landingCampaignMaxAgentTurns/);
   });
 
   it("defaults landing campaign runtime provider to codex and accepts claude-code", async () => {
