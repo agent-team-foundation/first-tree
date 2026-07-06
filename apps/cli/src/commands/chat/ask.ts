@@ -25,8 +25,9 @@ export function registerChatAskCommand(chat: Command): void {
         "answer. Any question your next step depends on goes through `chat ask`, never a plain `chat send`. Writes " +
         "an open question (format=request) directed at a single human <name>: the message body IS the ask, and it " +
         "must be decision-self-sufficient for a human who remembers nothing of this chat — (1) why this question " +
-        "exists, (2) a recap of the recent interactions, (3) the single question plus your recommendation — phrased " +
-        "in the reader's vocabulary (no unexplained jargon or implementation labels). Omit " +
+        "exists, (2) a recap of the recent interactions, (3) the single question plus your recommendation — written " +
+        "for a reader holding none of the context (unpack every shorthand; name options by their concrete " +
+        "consequence). Omit " +
         "--options for a free-text answer, or pass 2–4 --options for a choice. Raises a tracked red dot and blocks " +
         "the chat for them until they answer. The human resolves it in the web UI — an agent can only ASK; it " +
         "cannot answer or close a question. The body can be the [message] argument, piped via stdin (omit " +

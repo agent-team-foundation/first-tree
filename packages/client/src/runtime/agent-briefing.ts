@@ -873,12 +873,15 @@ against another agent (reach agents with \`chat send\`).
 
 The human you are asking runs many chats in parallel and may answer hours or
 days later — possibly on a review surface that shows the ask alone, outside
-the chat. Assume they remember nothing about this chat and will not scroll
-back. The message **body IS the ask**, and it must carry everything needed to
-decide on its own, structured in three markdown sections — written in the
-session's working language and in the reader's vocabulary: spell out any term
-of art, internal shorthand, or implementation name they may not already know,
-because a question the reader can only guess at cannot produce a good
+the chat. Assume no familiarity with the underlying context, no memory of
+this chat, and no recall of what any shorthand refers to; deciding must not
+require re-living the work. The message **body IS the ask**, and it must
+carry everything needed to decide on its own, structured in three markdown
+sections (written in the session's working language). Unpack every compressed
+reference: a term of art, an internal shorthand, or an option label is
+undecidable not because it is technical but because its meaning lives in
+context the reader does not hold — state what it concretely means and changes
+here. A question the reader can only guess at cannot produce a good
 decision:
 
 1. **Why this question exists** — what you were doing, what forced the fork,
