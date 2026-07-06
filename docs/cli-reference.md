@@ -368,9 +368,10 @@ EOF
 # answer). `chat ask` targets a single human; the message body IS the ask and
 # must be decision-self-sufficient for a reader who remembers nothing of the
 # chat: why the question exists + a recap of the recent interactions + the
-# single question and your recommendation. Omit --options for a free-text
-# answer, or pass 2–4 --options (JSON) for a clean pick; add --multi-select to
-# allow more than one.
+# single question and your recommendation, phrased in the reader's vocabulary
+# (no unexplained jargon or implementation labels). Omit --options for a
+# free-text answer, or pass 2–4 --options (JSON) for a clean pick; add
+# --multi-select to allow more than one.
 cat <<'EOF' | first-tree chat ask alice \
   --options '[{"label":"Ship","description":"Roll it now"},{"label":"Hold","description":"Wait 24h"}]'
 ## Why this question exists

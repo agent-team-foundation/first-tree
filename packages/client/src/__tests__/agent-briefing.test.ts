@@ -779,6 +779,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).toContain("Why this question exists");
     expect(briefing).toContain("Recent context");
     expect(briefing).toMatch(/\*\*The question\*\* — ONE question, plus your recommendation/);
+    // Reader-perspective bar (l42y 2026-07-06): self-sufficiency includes the
+    // reader's vocabulary — a question the human can only guess at cannot
+    // produce a good decision — and asks decrease over time as the agent
+    // learns the human's decision patterns from earlier answers.
+    expect(briefing).toMatch(/in the reader's vocabulary/);
+    expect(briefing).toMatch(/cannot produce a good\s+decision/);
+    expect(briefing).toMatch(/Ask volume should fall as\s+you learn/);
 
     expect(briefing).toContain("## Chat Topic & Description");
     expect(briefing).toContain("first-tree chat update");

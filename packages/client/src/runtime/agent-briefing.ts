@@ -856,7 +856,12 @@ request, the code, or a reasonable default** — a product/scope fork, a
 safety-sensitive or irreversible action, or ambiguous requirements whose
 branches differ materially. Do NOT manufacture progress or permission checks
 ("is the plan ready?", "can I continue?", "does this look right?"): decide,
-proceed, and report status via \`chat update --description\`. But once a
+proceed, and report status via \`chat update --description\`. The human's
+earlier answers are a source you settle from too: when their past decisions —
+in this chat or others — show how they decide cases like this one, apply that
+pattern and report the call instead of re-asking. Ask volume should fall as
+you learn how the human decides; interruption that never decreases means you
+are not learning. But once a
 genuine blocking question exists, it is an ask — in no case does it ride in a
 plain send.
 
@@ -870,8 +875,11 @@ The human you are asking runs many chats in parallel and may answer hours or
 days later — possibly on a review surface that shows the ask alone, outside
 the chat. Assume they remember nothing about this chat and will not scroll
 back. The message **body IS the ask**, and it must carry everything needed to
-decide on its own, structured in three markdown sections (written in the
-session's working language):
+decide on its own, structured in three markdown sections — written in the
+session's working language and in the reader's vocabulary: spell out any term
+of art, internal shorthand, or implementation name they may not already know,
+because a question the reader can only guess at cannot produce a good
+decision:
 
 1. **Why this question exists** — what you were doing, what forced the fork,
    and why you cannot settle it yourself.
@@ -879,7 +887,8 @@ session's working language):
    the human (what they asked, what you did, what changed), written for a
    reader who remembers none of it — not even their own last message.
 3. **The question** — ONE question, plus your recommendation (the option you
-   would pick and why), so a bare "approved" is a complete answer.
+   would pick and why), so a bare "approved" is a complete answer. Phrase
+   each choice by its consequence for the user, not an implementation label.
 
 A one-line ask ("which option?", "ok to proceed?") defeats the channel: it
 forces the human to reconstruct your context by scrolling. A well-formed ask
