@@ -8,9 +8,16 @@ describe("campaign scan skills", () => {
     expect(getCampaignScanSkill("nope")).toBeNull();
   });
 
-  it("keeps its scan schema and the repo-locating step", () => {
-    expect(getCampaignScanSkill("production-scan")?.body).toContain("ps-1");
-    expect(getCampaignScanSkill("production-scan")?.body).toContain("Step 0 — get the repo");
+  it("produces a scored verdict report, chat-only, no side effects", () => {
+    const body = (getCampaignScanSkill("production-scan")?.body ?? "").replace(/\s+/g, " ");
+    // New scored-verdict contract (replaced the old ps-1 JSON schema).
+    expect(body).toContain("score 8 dimensions");
+    expect(body).toContain("Ready to launch");
+    expect(body).toContain("Step 0 — get the repo");
+    // v1 is chat-only: never auto-files issues or auto-posts a hosted report.
+    expect(body).toContain("do NOT file issues, POST anything, or write to the repo");
+    // Voice boundary: anything written into the user's repo stays professional.
+    expect(body).toContain("zero roast");
   });
 
   it("drives the conversion payoff: produce a real fix + offer to apply, but read-only until consent", () => {
