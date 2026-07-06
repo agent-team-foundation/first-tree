@@ -200,6 +200,61 @@ describe("documents API", () => {
       expect(new Set(seen).size).toBe(tiedSlugs.length);
     });
 
+    it("paginates stably across microsecond differences within one millisecond", async () => {
+      const app = getApp();
+      const ctx = await createAdminContext(app);
+      const { docDocuments } = await import("../db/schema/index.js");
+      const { sql, eq: eqOp } = await import("drizzle-orm");
+
+      // Postgres keeps microseconds; the cursor only carries milliseconds.
+      // Give the LARGER (later) uuidv7 id to the row with the SMALLER
+      // microsecond part, so id order contradicts raw-timestamp order —
+      // the exact shape that exposed the predicate/ordering mismatch.
+      const idA = uuidv7();
+      const idB = uuidv7();
+      const seeds = [
+        { id: idA, slug: slug("us-high"), ts: "2026-07-05T15:00:00.123900Z" },
+        { id: idB, slug: slug("us-low"), ts: "2026-07-05T15:00:00.123800Z" },
+      ];
+      for (const seed of seeds) {
+        await app.db.insert(docDocuments).values({
+          id: seed.id,
+          organizationId: ctx.organizationId,
+          slug: seed.slug,
+          title: seed.slug,
+          status: "draft",
+          latestVersion: 1,
+          createdByKind: "human",
+          createdById: ctx.humanAgentUuid,
+          createdByName: "Test Admin",
+        });
+        await app.db
+          .update(docDocuments)
+          .set({ updatedAt: sql`${seed.ts}::timestamptz` })
+          .where(eqOp(docDocuments.id, seed.id));
+      }
+
+      const req = humanRequest(app, ctx.accessToken);
+      const wanted = seeds.map((s) => s.slug);
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (let i = 0; i < 100; i++) {
+        const url: string = `/api/v1/orgs/${ctx.organizationId}/documents?limit=1${
+          cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""
+        }`;
+        const page = await req("GET", url);
+        expect(page.statusCode).toBe(200);
+        for (const item of page.json().items) {
+          if (wanted.includes(item.slug)) seen.push(item.slug);
+        }
+        cursor = page.json().nextCursor;
+        if (cursor === null) break;
+      }
+
+      expect([...seen].sort()).toEqual([...wanted].sort());
+      expect(new Set(seen).size).toBe(wanted.length);
+    });
+
     it("serializes concurrent first publishes of one slug", async () => {
       const app = getApp();
       const ctx = await createAdminContext(app);
