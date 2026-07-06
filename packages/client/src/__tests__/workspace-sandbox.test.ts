@@ -18,6 +18,7 @@ import {
   buildWorkspaceOnlyAppServerEnvironment,
   buildWorkspaceOnlyBubblewrapArgs,
   buildWorkspaceOnlyEnvironment,
+  LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS,
   LANDING_CODEX_PERMISSIONS_PROFILE,
   prepareWorkspaceOnlyOutboxHome,
 } from "../handlers/codex/app-server/workspace-sandbox.js";
@@ -170,14 +171,20 @@ describe("workspace-only sandbox", () => {
   it("builds a landing app-server env that keeps Codex auth location without leaking host secrets", () => {
     const hostHome = join(root, "host-home");
     const codexHome = join(hostHome, ".codex");
+    const ghConfigDir = join(hostHome, ".config", "gh");
     const firstTreeHome = join(workspace, ".first-tree-workspace", "outbox-home");
     const cliBinDir = join(root, "explicit-cli-bin");
     mkdirSync(codexHome, { recursive: true });
+    mkdirSync(ghConfigDir, { recursive: true });
     mkdirSync(firstTreeHome, { recursive: true });
     mkdirSync(cliBinDir, { recursive: true });
     writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
 
-    const { env, codexHome: resolvedCodexHome } = buildWorkspaceOnlyAppServerEnvironment(
+    const {
+      env,
+      codexHome: resolvedCodexHome,
+      hostHome: resolvedHostHome,
+    } = buildWorkspaceOnlyAppServerEnvironment(
       {
         HOME: hostHome,
         FIRST_TREE_HOME: firstTreeHome,
@@ -201,12 +208,14 @@ describe("workspace-only sandbox", () => {
     );
 
     expect(resolvedCodexHome).toBe(codexHome);
+    expect(resolvedHostHome).toBe(hostHome);
     expect(env).toMatchObject({
       FIRST_TREE_HOME: firstTreeHome,
       FIRST_TREE_SERVER_URL: "https://first-tree.test",
       FIRST_TREE_AGENT_ID: "agent-1",
       HOME: workspace,
       CODEX_HOME: codexHome,
+      GH_CONFIG_DIR: ghConfigDir,
       TMPDIR: "/tmp",
     });
     expect(env.PATH?.split(delimiter)[0]).toBe(cliBinDir);
@@ -225,15 +234,33 @@ describe("workspace-only sandbox", () => {
   });
 
   it("builds landing Codex app-server args with a default permissions profile", () => {
-    const codexHome = join(root, "host-home", ".codex");
+    const hostHome = join(root, "host-home");
+    const codexHome = join(hostHome, ".codex");
     mkdirSync(codexHome, { recursive: true });
 
-    expect(buildLandingCodexAppServerArgs(workspace, codexHome)).toEqual([
+    expect(buildLandingCodexAppServerArgs(workspace, codexHome, hostHome)).toEqual([
       "-c",
-      buildLandingCodexPermissionsConfigOverride(workspace, codexHome),
+      buildLandingCodexPermissionsConfigOverride(workspace, codexHome, hostHome),
       "-c",
       `default_permissions=${JSON.stringify(LANDING_CODEX_PERMISSIONS_PROFILE)}`,
     ]);
+  });
+
+  it("allows host system reads while denying selected host credentials in the landing Codex profile", () => {
+    const hostHome = join(root, "host-home");
+    const codexHome = join(hostHome, ".codex");
+    mkdirSync(codexHome, { recursive: true });
+
+    const override = buildLandingCodexPermissionsConfigOverride(workspace, codexHome, hostHome);
+
+    expect(override).toContain(`${JSON.stringify(":root")} = "read"`);
+    expect(override).toContain(`${JSON.stringify(workspace)} = "write"`);
+    for (const relativePath of LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS) {
+      expect(override).toContain(`${JSON.stringify(join(hostHome, relativePath))} = "deny"`);
+    }
+    expect(override).toContain(`${JSON.stringify(codexHome)} = "deny"`);
+    expect(override).not.toContain(".config/gh");
+    expect(override).not.toContain(".git-credentials");
   });
 
   it("does not add an extra read-only bind for an explicit CLI dir covered by system mounts", () => {

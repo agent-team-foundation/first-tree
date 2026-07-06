@@ -207,6 +207,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let latestCurrentSessionUsageTurnId: string | null = null;
   let workspaceOnly = false;
   let workspaceOnlyCodexHome: string | null = null;
+  let workspaceOnlyHostHome: string | null = null;
 
   const pendingInputs: QueueEntry[] = [];
   const pendingNotificationsByTurn = new Map<string, CodexAppServerNotification[]>();
@@ -336,12 +337,13 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
 
   function buildLandingCodexConfig(payload: AgentRuntimeConfigPayload, workspacePath: string): CodexConfigObject {
     const codexHome = workspaceOnlyCodexHome;
-    if (!codexHome) {
-      throw new CodexAppServerStartupError("workspace-sandbox", "missing workspace-only Codex home");
+    const hostHome = workspaceOnlyHostHome;
+    if (!codexHome || !hostHome) {
+      throw new CodexAppServerStartupError("workspace-sandbox", "missing workspace-only Codex host paths");
     }
     const cfg = buildCodexConfig(payload);
     cfg.permissions = {
-      [LANDING_CODEX_PERMISSIONS_PROFILE]: buildLandingCodexPermissionProfile(workspacePath, codexHome),
+      [LANDING_CODEX_PERMISSIONS_PROFILE]: buildLandingCodexPermissionProfile(workspacePath, codexHome, hostHome),
     };
     return cfg;
   }
@@ -443,11 +445,13 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         const appServerEnv = buildWorkspaceOnlyAppServerEnvironment(outboxEnv, cwd);
         env = appServerEnv.env;
         workspaceOnlyCodexHome = appServerEnv.codexHome;
+        workspaceOnlyHostHome = appServerEnv.hostHome;
       } catch (err) {
         throw new CodexAppServerStartupError("workspace-sandbox", err);
       }
     } else {
       workspaceOnlyCodexHome = null;
+      workspaceOnlyHostHome = null;
     }
     return { payload, env, briefingFingerprint: computeBriefingFingerprint(briefing) };
   }
@@ -463,8 +467,8 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     if (!resolution.ok) throw new CodexAppServerStartupError("resolve-binary", resolution.error);
     try {
       const appServerArgs =
-        workspaceOnly && workspaceOnlyCodexHome
-          ? buildLandingCodexAppServerArgs(workspacePath, workspaceOnlyCodexHome)
+        workspaceOnly && workspaceOnlyCodexHome && workspaceOnlyHostHome
+          ? buildLandingCodexAppServerArgs(workspacePath, workspaceOnlyCodexHome, workspaceOnlyHostHome)
           : undefined;
       appServer = await clientFactory({
         binary: resolution.binary,
@@ -1710,6 +1714,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       pendingChatContextPrompt = null;
       workspaceOnly = false;
       workspaceOnlyCodexHome = null;
+      workspaceOnlyHostHome = null;
       resetThreadUsageTracking(null);
     },
 
@@ -1730,6 +1735,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       pendingChatContextPrompt = null;
       workspaceOnly = false;
       workspaceOnlyCodexHome = null;
+      workspaceOnlyHostHome = null;
       resetThreadUsageTracking(null);
     },
   } satisfies AgentHandler;

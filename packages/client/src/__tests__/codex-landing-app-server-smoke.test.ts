@@ -164,15 +164,21 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
     const codexVersion = commandOutput(`${shellQuote(codexBinary)} --version || true`);
     const root = realpathSync(mkdtempSync(join(tmpdir(), "ft-landing-codex-clean-smoke-")));
     tempRoots.push(root);
-    const workspace = join(root, "workspace");
-    const outside = join(root, "outside");
-    const codexHome = join(root, "clean-codex-home");
+    const hostHome = join(root, "host-home");
+    const workspace = join(hostHome, ".first-tree-staging", "data", "workspaces", "clean-smoke");
+    const codexHome = join(hostHome, ".codex");
     const firstTreeHome = join(workspace, FIRST_TREE_WORKSPACE_MARKER, "outbox-home");
+    const hostFirstTreeSecret = join(hostHome, ".first-tree-staging", "config", "credentials.json");
+    const hostSshSecret = join(hostHome, ".ssh", "id_ed25519");
+    const ghConfigDir = join(hostHome, ".config", "gh");
     mkdirSync(firstTreeHome, { recursive: true });
-    mkdirSync(outside);
-    mkdirSync(codexHome);
-    const outsideSentinel = join(outside, "sentinel.txt");
-    writeFileSync(outsideSentinel, "outside-secret\n", { mode: 0o600 });
+    mkdirSync(codexHome, { recursive: true });
+    mkdirSync(dirname(hostFirstTreeSecret), { recursive: true });
+    mkdirSync(dirname(hostSshSecret), { recursive: true });
+    mkdirSync(ghConfigDir, { recursive: true });
+    writeFileSync(join(codexHome, "auth.json"), "{}\n", { mode: 0o600 });
+    writeFileSync(hostFirstTreeSecret, "first-tree-host-secret\n", { mode: 0o600 });
+    writeFileSync(hostSshSecret, "ssh-secret\n", { mode: 0o600 });
 
     const cliPath = resolveCliPath();
     setCliBinding({ binName: basename(cliPath), packageName: basename(cliPath) });
@@ -180,6 +186,7 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
     const appServerEnvironment = buildWorkspaceOnlyAppServerEnvironment(
       {
         ...process.env,
+        HOME: hostHome,
         CODEX_HOME: codexHome,
         FIRST_TREE_HOME: firstTreeHome,
         FIRST_TREE_CLI_BIN_DIR: dirname(cliPath),
@@ -190,7 +197,11 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
       binary: codexBinary,
       cwd: workspace,
       env: appServerEnvironment.env,
-      appServerArgs: buildLandingCodexAppServerArgs(workspace, appServerEnvironment.codexHome),
+      appServerArgs: buildLandingCodexAppServerArgs(
+        workspace,
+        appServerEnvironment.codexHome,
+        appServerEnvironment.hostHome,
+      ),
       requestTimeoutMs: 120_000,
     });
 
@@ -206,7 +217,19 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
             "sh",
             "-lc",
             [
-              `if cat ${shellQuote(outsideSentinel)} >/dev/null 2>&1; then echo outside=readable; else echo outside=denied; fi`,
+              'printf "codex_auth="',
+              'if cat "$CODEX_HOME/auth.json" >/dev/null 2>&1; then echo readable; else echo denied; fi',
+              'printf "host_first_tree="',
+              `if cat ${shellQuote(hostFirstTreeSecret)} >/dev/null 2>&1; then echo readable; else echo denied; fi`,
+              'printf "host_ssh="',
+              `if cat ${shellQuote(hostSshSecret)} >/dev/null 2>&1; then echo readable; else echo denied; fi`,
+              'printf "gh_config_dir="',
+              'if test -n "$GH_CONFIG_DIR" && test -d "$GH_CONFIG_DIR"; then echo set; else echo unset; fi',
+              'printf "resolv_conf="',
+              "if test -r /etc/resolv.conf; then echo readable; else echo missing; fi",
+              'printf "dns_lookup="',
+              "if getent hosts dev.cloud.first-tree.ai >/dev/null 2>&1; then echo ok; else echo failed; fi",
+              'printf "workspace_write="',
               'printf ok > clean-config-smoke.txt && cat clean-config-smoke.txt && printf "\\n"',
             ].join("\n"),
           ],
@@ -221,8 +244,13 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
       const stdout = commandStdout(commandResult);
       console.log(`[smoke] clean-config command stdout:\n${stdout}`);
       expect(commandExitCode(commandResult)).toBe(0);
-      expect(stdout).toContain("outside=denied");
-      expect(stdout).toMatch(/^ok$/m);
+      expect(stdout).toContain("codex_auth=denied");
+      expect(stdout).toContain("host_first_tree=denied");
+      expect(stdout).toContain("host_ssh=denied");
+      expect(stdout).toContain("gh_config_dir=set");
+      expect(stdout).toContain("resolv_conf=readable");
+      expect(stdout).toContain("dns_lookup=ok");
+      expect(stdout).toContain("workspace_write=ok");
     } finally {
       await client.shutdown();
     }
@@ -239,13 +267,18 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
 
     const root = realpathSync(mkdtempSync(join(tmpdir(), "ft-landing-codex-smoke-")));
     tempRoots.push(root);
+    const hostHome = join(root, "host-home");
     const workspace = join(root, "workspace");
-    const outside = join(root, "outside");
     const firstTreeHome = join(workspace, FIRST_TREE_WORKSPACE_MARKER, "outbox-home");
+    const hostFirstTreeSecret = join(hostHome, ".first-tree-staging", "config", "credentials.json");
+    const hostSshSecret = join(hostHome, ".ssh", "id_ed25519");
+    const ghConfigDir = join(hostHome, ".config", "gh");
     mkdirSync(firstTreeHome, { recursive: true });
-    mkdirSync(outside);
-    const outsideSentinel = join(outside, "sentinel.txt");
-    writeFileSync(outsideSentinel, "outside-secret\n", { mode: 0o600 });
+    mkdirSync(dirname(hostFirstTreeSecret), { recursive: true });
+    mkdirSync(dirname(hostSshSecret), { recursive: true });
+    mkdirSync(ghConfigDir, { recursive: true });
+    writeFileSync(hostFirstTreeSecret, "first-tree-host-secret\n", { mode: 0o600 });
+    writeFileSync(hostSshSecret, "ssh-secret\n", { mode: 0o600 });
 
     const cliPath = resolveCliPath();
     setCliBinding({ binName: basename(cliPath), packageName: basename(cliPath) });
@@ -253,6 +286,7 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
     const appServerEnvironment = buildWorkspaceOnlyAppServerEnvironment(
       {
         ...process.env,
+        HOME: hostHome,
         CODEX_HOME: codexHome,
         FIRST_TREE_HOME: firstTreeHome,
         FIRST_TREE_CLI_BIN_DIR: dirname(cliPath),
@@ -261,22 +295,32 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
         GITHUB_TOKEN: "smoke-github-secret",
         GH_TOKEN: "smoke-gh-secret",
         FIRST_TREE_RUNTIME_SESSION_TOKEN: "smoke-runtime-secret",
-        FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: join(outside, "runtime-token"),
+        FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: join(root, "runtime-token"),
         HTTP_PROXY: "http://user:password@proxy.test:8080",
         HTTPS_PROXY: "http://user:password@proxy.test:8080",
-        SSL_CERT_FILE: join(outside, "ca.pem"),
-        NODE_EXTRA_CA_CERTS: join(outside, "node-ca.pem"),
+        SSL_CERT_FILE: join(root, "ca.pem"),
+        NODE_EXTRA_CA_CERTS: join(root, "node-ca.pem"),
       },
       workspace,
     );
 
-    const permissionProfile = buildLandingCodexPermissionProfile(workspace, appServerEnvironment.codexHome);
+    const permissionProfile = buildLandingCodexPermissionProfile(
+      workspace,
+      appServerEnvironment.codexHome,
+      appServerEnvironment.hostHome,
+    );
     const recorder = createNotificationRecorder();
+    const serverUrl = appServerEnvironment.env.FIRST_TREE_SERVER_URL ?? "https://dev.cloud.first-tree.ai";
+    const serverHost = new URL(serverUrl).hostname;
     const client = await CodexAppServerClient.start({
       binary: codexBinary,
       cwd: workspace,
       env: appServerEnvironment.env,
-      appServerArgs: buildLandingCodexAppServerArgs(workspace, appServerEnvironment.codexHome),
+      appServerArgs: buildLandingCodexAppServerArgs(
+        workspace,
+        appServerEnvironment.codexHome,
+        appServerEnvironment.hostHome,
+      ),
       requestTimeoutMs: 120_000,
       onNotification: recorder.onNotification,
     });
@@ -290,10 +334,29 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
       const commandScript = [
         'printf "codex_auth="',
         'if cat "$CODEX_HOME/auth.json" >/dev/null 2>&1; then echo readable; else echo denied; fi',
-        `printf "outside="`,
-        `if cat ${shellQuote(outsideSentinel)} >/dev/null 2>&1; then echo readable; else echo denied; fi`,
+        'printf "host_first_tree="',
+        `if cat ${shellQuote(hostFirstTreeSecret)} >/dev/null 2>&1; then echo readable; else echo denied; fi`,
+        'printf "host_ssh="',
+        `if cat ${shellQuote(hostSshSecret)} >/dev/null 2>&1; then echo readable; else echo denied; fi`,
+        'printf "gh_config_dir="',
+        'if test -n "$GH_CONFIG_DIR" && test -d "$GH_CONFIG_DIR"; then echo set; else echo unset; fi',
+        'printf "gh_version="',
+        "if gh --version >/dev/null 2>&1; then echo ok; else echo failed; fi",
         'printf "workspace_write="',
         'printf ok > workspace-smoke.txt && cat workspace-smoke.txt && printf "\\n"',
+        'printf "resolv_conf="',
+        "if test -r /etc/resolv.conf; then echo readable; else echo missing; fi",
+        'printf "dns_lookup="',
+        `if getent hosts ${shellQuote(serverHost)} >/dev/null 2>&1; then echo ok; else echo failed; fi`,
+        'printf "server_fetch="',
+        [
+          "node",
+          "-e",
+          shellQuote(
+            "fetch(process.argv[1]).then((response) => { console.log('status:' + response.status); }).catch((err) => { console.error(err); process.exit(1); });",
+          ),
+          shellQuote(serverUrl),
+        ].join(" "),
         'printf "leaked_env="',
         [
           "env",
@@ -325,8 +388,14 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
 
       expect(commandExitCode(commandResult)).toBe(0);
       expect(stdout).toContain("codex_auth=denied");
-      expect(stdout).toContain("outside=denied");
+      expect(stdout).toContain("host_first_tree=denied");
+      expect(stdout).toContain("host_ssh=denied");
+      expect(stdout).toContain("gh_config_dir=set");
+      expect(stdout).toContain("gh_version=ok");
       expect(stdout).toContain("workspace_write=ok");
+      expect(stdout).toContain("resolv_conf=readable");
+      expect(stdout).toContain("dns_lookup=ok");
+      expect(stdout).toMatch(/^server_fetch=status:\d+$/m);
       expect(stdout).toMatch(/^leaked_env=$/m);
 
       if (PROVIDER_CHECK_ENABLED) {
