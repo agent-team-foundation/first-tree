@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -341,6 +341,66 @@ describe("portable installer", () => {
     const shim = readFileSync(join(binDir, "first-tree"), "utf8");
     expect(shim).toContain("FIRST_TREE_INSTALL_MODE=portable");
     expect(shim).toContain("FIRST_TREE_PORTABLE_ROOT");
+  });
+
+  it("prints shell refresh guidance for the profile it updates", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makeFixture(platform);
+    const home = tempDir("first-tree-home-");
+    const prefix = join(home, "prefix");
+    const binDir = join(home, "bin");
+    const profile = join(home, ".zshrc");
+    const res = spawnSync(
+      "sh",
+      [join(REPO_ROOT, "scripts", "portable", "install.sh"), "--prefix", prefix, "--bin-dir", binDir],
+      {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          HOME: home,
+          SHELL: "/bin/zsh",
+          FIRST_TREE_PORTABLE_CHANNEL: "prod",
+          FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: `file://${fixture}`,
+        },
+        encoding: "utf8",
+      },
+    );
+
+    expect(res.status, res.stderr || res.stdout).toBe(0);
+    expect(readFileSync(profile, "utf8")).toContain(`export PATH="${binDir}:$PATH"`);
+    expect(res.stdout).toContain(`Restart your shell, or run: . "${profile}"`);
+    expect(res.stdout).not.toContain("Add this to your shell profile:");
+  });
+
+  it("keeps manual PATH guidance when path editing is disabled", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makeFixture(platform);
+    const home = tempDir("first-tree-home-");
+    const prefix = join(home, "prefix");
+    const binDir = join(home, "bin");
+    const profile = join(home, ".zshrc");
+    const res = spawnSync(
+      "sh",
+      [join(REPO_ROOT, "scripts", "portable", "install.sh"), "--prefix", prefix, "--bin-dir", binDir, "--no-path-edit"],
+      {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          HOME: home,
+          SHELL: "/bin/zsh",
+          FIRST_TREE_PORTABLE_CHANNEL: "prod",
+          FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: `file://${fixture}`,
+        },
+        encoding: "utf8",
+      },
+    );
+
+    expect(res.status, res.stderr || res.stdout).toBe(0);
+    expect(existsSync(profile)).toBe(false);
+    expect(res.stdout).not.toContain("Restart your shell, or run: . ");
+    expect(res.stdout).toContain(`Add this to your shell profile: export PATH="${binDir}:$PATH"`);
   });
 
   it("suppresses GNU tar unknown pax keyword warnings during extraction", async () => {

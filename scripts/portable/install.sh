@@ -9,6 +9,7 @@ PATH_MODE="auto"
 REQUESTED_VERSION=""
 PREFIX="$DEFAULT_PREFIX"
 BIN_DIR="$DEFAULT_BIN_DIR"
+PATH_UPDATED_PROFILE=""
 
 START_MARKER="# >>> first-tree portable >>>"
 END_MARKER="# <<< first-tree portable <<<"
@@ -252,14 +253,13 @@ maybe_edit_path() {
   path_contains_bin_dir && return 0
 
   if ! profile="$(profile_for_shell)"; then
-    log "Installed successfully, but this shell is not recognized for automatic PATH setup."
-    log "Add this to your shell profile: export PATH=\"$BIN_DIR:\$PATH\""
+    log "Automatic PATH setup skipped: this shell is not recognized."
     return 0
   fi
 
   if [ "$PATH_MODE" = "prompt" ]; then
     if [ ! -t 0 ]; then
-      log "Installed successfully. Add this to $profile: export PATH=\"$BIN_DIR:\$PATH\""
+      log "Automatic PATH setup skipped because prompt mode requires an interactive shell."
       return 0
     fi
     printf 'Add %s to PATH in %s? [Y/n] ' "$BIN_DIR" "$profile"
@@ -267,17 +267,27 @@ maybe_edit_path() {
     case "$answer" in
       ""|y|Y|yes|YES) ;;
       *)
-        log "Skipped PATH setup. Add this manually: export PATH=\"$BIN_DIR:\$PATH\""
+        log "Skipped PATH setup."
         return 0
         ;;
     esac
   fi
 
   if rewrite_path_block "$profile"; then
+    PATH_UPDATED_PROFILE="$profile"
     log "Updated PATH block in $profile"
   else
-    log "Installed successfully, but PATH setup failed for $profile."
-    log "Add this manually: export PATH=\"$BIN_DIR:\$PATH\""
+    log "PATH setup failed for $profile."
+  fi
+}
+
+print_path_guidance() {
+  if [ -n "$PATH_UPDATED_PROFILE" ]; then
+    log "Restart your shell, or run: . \"$PATH_UPDATED_PROFILE\""
+  elif path_contains_bin_dir; then
+    log "$BIN_NAME should be available now."
+  else
+    log "Add this to your shell profile: export PATH=\"$BIN_DIR:\$PATH\""
   fi
 }
 
@@ -355,3 +365,4 @@ maybe_edit_path
 
 log "First Tree ${VERSION} installed at $FINAL_VERSION_DIR"
 log "Command: $BIN_DIR/$BIN_NAME"
+print_path_guidance
