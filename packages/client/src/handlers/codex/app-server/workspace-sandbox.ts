@@ -264,6 +264,15 @@ export function buildLandingCodexPermissionsConfigOverride(workspacePath: string
   })}`;
 }
 
+export function buildLandingCodexAppServerArgs(workspacePath: string, codexHome: string): string[] {
+  return [
+    "-c",
+    buildLandingCodexPermissionsConfigOverride(workspacePath, codexHome),
+    "-c",
+    `default_permissions=${JSON.stringify(LANDING_CODEX_PERMISSIONS_PROFILE)}`,
+  ];
+}
+
 function resolveWorkspaceOnlyCli(parentEnv: NodeJS.ProcessEnv): WorkspaceOnlyCliResolution {
   const defaultPathDirs = uniqueExistingDirs(WORKSPACE_ONLY_PATH_DIRS);
   const explicit = parentEnv.FIRST_TREE_CLI_BIN_DIR;

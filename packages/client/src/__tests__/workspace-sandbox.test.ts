@@ -13,9 +13,12 @@ import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   assertPathInsideWorkspace,
+  buildLandingCodexAppServerArgs,
+  buildLandingCodexPermissionsConfigOverride,
   buildWorkspaceOnlyAppServerEnvironment,
   buildWorkspaceOnlyBubblewrapArgs,
   buildWorkspaceOnlyEnvironment,
+  LANDING_CODEX_PERMISSIONS_PROFILE,
   prepareWorkspaceOnlyOutboxHome,
 } from "../handlers/codex/app-server/workspace-sandbox.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
@@ -219,6 +222,18 @@ describe("workspace-only sandbox", () => {
     expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE).toBeUndefined();
     expect(env.FIRST_TREE_DOC_BASE).toBeUndefined();
     expect(env.FIRST_TREE_WORKSPACES_ROOT).toBeUndefined();
+  });
+
+  it("builds landing Codex app-server args with a default permissions profile", () => {
+    const codexHome = join(root, "host-home", ".codex");
+    mkdirSync(codexHome, { recursive: true });
+
+    expect(buildLandingCodexAppServerArgs(workspace, codexHome)).toEqual([
+      "-c",
+      buildLandingCodexPermissionsConfigOverride(workspace, codexHome),
+      "-c",
+      `default_permissions=${JSON.stringify(LANDING_CODEX_PERMISSIONS_PROFILE)}`,
+    ]);
   });
 
   it("does not add an extra read-only bind for an explicit CLI dir covered by system mounts", () => {

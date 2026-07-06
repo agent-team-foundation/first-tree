@@ -5,8 +5,8 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodexAppServerClient, type CodexAppServerNotification } from "../handlers/codex/app-server/client.js";
 import {
+  buildLandingCodexAppServerArgs,
   buildLandingCodexPermissionProfile,
-  buildLandingCodexPermissionsConfigOverride,
   buildWorkspaceOnlyAppServerEnvironment,
   LANDING_CODEX_PERMISSIONS_PROFILE,
 } from "../handlers/codex/app-server/workspace-sandbox.js";
@@ -159,6 +159,75 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
     }
   });
 
+  it("starts command execution with a clean Codex config", async () => {
+    const codexBinary = resolveBinary("CODEX_SMOKE_BINARY", "codex");
+    const codexVersion = commandOutput(`${shellQuote(codexBinary)} --version || true`);
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "ft-landing-codex-clean-smoke-")));
+    tempRoots.push(root);
+    const workspace = join(root, "workspace");
+    const outside = join(root, "outside");
+    const codexHome = join(root, "clean-codex-home");
+    const firstTreeHome = join(workspace, FIRST_TREE_WORKSPACE_MARKER, "outbox-home");
+    mkdirSync(firstTreeHome, { recursive: true });
+    mkdirSync(outside);
+    mkdirSync(codexHome);
+    const outsideSentinel = join(outside, "sentinel.txt");
+    writeFileSync(outsideSentinel, "outside-secret\n", { mode: 0o600 });
+
+    const cliPath = resolveCliPath();
+    setCliBinding({ binName: basename(cliPath), packageName: basename(cliPath) });
+
+    const appServerEnvironment = buildWorkspaceOnlyAppServerEnvironment(
+      {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        FIRST_TREE_HOME: firstTreeHome,
+        FIRST_TREE_CLI_BIN_DIR: dirname(cliPath),
+      },
+      workspace,
+    );
+    const client = await CodexAppServerClient.start({
+      binary: codexBinary,
+      cwd: workspace,
+      env: appServerEnvironment.env,
+      appServerArgs: buildLandingCodexAppServerArgs(workspace, appServerEnvironment.codexHome),
+      requestTimeoutMs: 120_000,
+    });
+
+    try {
+      console.log(`[smoke] clean-config codex binary: ${codexBinary}`);
+      console.log(`[smoke] clean-config codex version: ${codexVersion}`);
+      console.log(`[smoke] clean-config CODEX_HOME  : ${appServerEnvironment.codexHome}`);
+
+      const commandResult = await client.request(
+        "command/exec",
+        {
+          command: [
+            "sh",
+            "-lc",
+            [
+              `if cat ${shellQuote(outsideSentinel)} >/dev/null 2>&1; then echo outside=readable; else echo outside=denied; fi`,
+              'printf ok > clean-config-smoke.txt && cat clean-config-smoke.txt && printf "\\n"',
+            ].join("\n"),
+          ],
+          cwd: ".",
+          permissionProfile: LANDING_CODEX_PERMISSIONS_PROFILE,
+          timeoutMs: 20_000,
+          outputBytesCap: 65_536,
+        },
+        60_000,
+      );
+
+      const stdout = commandStdout(commandResult);
+      console.log(`[smoke] clean-config command stdout:\n${stdout}`);
+      expect(commandExitCode(commandResult)).toBe(0);
+      expect(stdout).toContain("outside=denied");
+      expect(stdout).toMatch(/^ok$/m);
+    } finally {
+      await client.shutdown();
+    }
+  }, 120_000);
+
   it("uses host Codex auth while command execution stays workspace-only", async () => {
     const codexBinary = resolveBinary("CODEX_SMOKE_BINARY", "codex");
     const codexVersion = commandOutput(`${shellQuote(codexBinary)} --version || true`);
@@ -202,13 +271,12 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
     );
 
     const permissionProfile = buildLandingCodexPermissionProfile(workspace, appServerEnvironment.codexHome);
-    const permissionsOverride = buildLandingCodexPermissionsConfigOverride(workspace, appServerEnvironment.codexHome);
     const recorder = createNotificationRecorder();
     const client = await CodexAppServerClient.start({
       binary: codexBinary,
       cwd: workspace,
       env: appServerEnvironment.env,
-      appServerArgs: ["-c", permissionsOverride],
+      appServerArgs: buildLandingCodexAppServerArgs(workspace, appServerEnvironment.codexHome),
       requestTimeoutMs: 120_000,
       onNotification: recorder.onNotification,
     });

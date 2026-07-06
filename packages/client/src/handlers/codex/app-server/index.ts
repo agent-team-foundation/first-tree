@@ -64,8 +64,8 @@ import {
   isCodexAppServerTransientError,
 } from "./client.js";
 import {
+  buildLandingCodexAppServerArgs,
   buildLandingCodexPermissionProfile,
-  buildLandingCodexPermissionsConfigOverride,
   buildWorkspaceOnlyAppServerEnvironment,
   LANDING_CODEX_PERMISSIONS_PROFILE,
   prepareWorkspaceOnlyOutboxHome,
@@ -441,7 +441,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     try {
       const appServerArgs =
         workspaceOnly && workspaceOnlyCodexHome
-          ? ["-c", buildLandingCodexPermissionsConfigOverride(workspacePath, workspaceOnlyCodexHome)]
+          ? buildLandingCodexAppServerArgs(workspacePath, workspaceOnlyCodexHome)
           : undefined;
       appServer = await clientFactory({
         binary: resolution.binary,

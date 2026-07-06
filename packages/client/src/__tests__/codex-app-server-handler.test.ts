@@ -491,11 +491,14 @@ describe("codex app-server handler", () => {
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     expect(capturedSpawnProcess).toBeUndefined();
+    expect(capturedAppServerArgs).toHaveLength(4);
     expect(capturedAppServerArgs?.[0]).toBe("-c");
     expect(capturedAppServerArgs?.[1]).toContain("permissions=");
     expect(capturedAppServerArgs?.[1]).toContain("first-tree-landing-trial");
     expect(capturedAppServerArgs?.[1]).toContain(codexHome);
     expect(capturedAppServerArgs?.[1]).toContain(workspaceRoot);
+    expect(capturedAppServerArgs?.[2]).toBe("-c");
+    expect(capturedAppServerArgs?.[3]).toBe('default_permissions="first-tree-landing-trial"');
     expect(createAgentOutboxToken).toHaveBeenCalledWith("chat-app-server");
     expect(capturedEnv?.FIRST_TREE_HOME).toBe(join(workspaceRoot, ".first-tree-workspace", "outbox-home"));
     expect(capturedEnv?.HOME).toBe(workspaceRoot);
