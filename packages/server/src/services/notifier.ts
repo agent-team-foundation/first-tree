@@ -37,6 +37,7 @@ const CHAT_AUDIENCE_CHANNEL = "chat_audience_events";
  * list refresh in realtime, with no accompanying message.
  */
 const CHAT_UPDATED_CHANNEL = "chat_updated_events";
+const AGENT_ROUTE_CHANNEL = "agent_route_events";
 
 export type ConfigChangeHandler = (channel: string) => void;
 export type SessionStateChangeHandler = (payload: {
@@ -76,6 +77,17 @@ export type SessionRuntimeChangeHandler = (payload: {
 export type ChatMessageChangeHandler = (payload: { chatId: string; messageId: string }) => void;
 export type ChatAudienceChangeHandler = (payload: { chatId: string }) => void;
 export type ChatUpdatedChangeHandler = (payload: { chatId: string }) => void;
+export type AgentRouteChangePayload = {
+  agentId: string;
+  name: string | null;
+  displayName: string;
+  agentType: string;
+  oldClientId: string | null;
+  targetClientId: string;
+  runtimeProvider: string;
+  reason: string;
+};
+export type AgentRouteChangeHandler = (payload: AgentRouteChangePayload) => void;
 
 /**
  * Per-socket push handler for the WS data plane. When a NOTIFY arrives on
@@ -115,6 +127,8 @@ export type Notifier = {
   notifyChatAudience(chatId: string): Promise<void>;
   /** Chat metadata changed (description / topic): kick admin WS sockets to invalidate `["chat-detail", chatId]` + `["me","chats"]`. */
   notifyChatUpdated(chatId: string): Promise<void>;
+  /** Agent runtime route changed: fan local WS detach/pin handling to every server replica. */
+  notifyAgentRouteChange(payload: AgentRouteChangePayload): Promise<void>;
   /**
    * Push a raw JSON frame to every socket currently subscribed to `inboxId`
    * on **this server instance only**. Unlike `notify`, does not fan out
@@ -139,6 +153,8 @@ export type Notifier = {
   onChatAudience(handler: ChatAudienceChangeHandler): void;
   /** Register a handler for chat:updated (metadata change) notifications. */
   onChatUpdated(handler: ChatUpdatedChangeHandler): void;
+  /** Register a handler for agent runtime route changes. */
+  onAgentRouteChange(handler: AgentRouteChangeHandler): void;
   /** Start listening for PG notifications */
   start(): Promise<void>;
   /** Stop listening */
@@ -155,6 +171,7 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   const chatMessageHandlers: ChatMessageChangeHandler[] = [];
   const chatAudienceHandlers: ChatAudienceChangeHandler[] = [];
   const chatUpdatedHandlers: ChatUpdatedChangeHandler[] = [];
+  const agentRouteHandlers: AgentRouteChangeHandler[] = [];
   let unlistenInboxFn: (() => Promise<void>) | null = null;
   let unlistenConfigFn: (() => Promise<void>) | null = null;
   let unlistenSessionStateFn: (() => Promise<void>) | null = null;
@@ -164,6 +181,7 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
   let unlistenChatMessageFn: (() => Promise<void>) | null = null;
   let unlistenChatAudienceFn: (() => Promise<void>) | null = null;
   let unlistenChatUpdatedFn: (() => Promise<void>) | null = null;
+  let unlistenAgentRouteFn: (() => Promise<void>) | null = null;
 
   function handleNotification(payload: string) {
     // payload format: "inboxId:messageId"
@@ -288,6 +306,14 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       }
     },
 
+    async notifyAgentRouteChange(payload: AgentRouteChangePayload) {
+      try {
+        await listenClient`SELECT pg_notify(${AGENT_ROUTE_CHANNEL}, ${JSON.stringify(payload)})`;
+      } catch {
+        // fire-and-forget — DB route/token checks are the durable fallback.
+      }
+    },
+
     async pushFrameToInbox(inboxId: string, frame: string): Promise<number> {
       const map = subscriptions.get(inboxId);
       if (!map) return 0;
@@ -338,6 +364,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
 
     onChatUpdated(handler: ChatUpdatedChangeHandler) {
       chatUpdatedHandlers.push(handler);
+    },
+
+    onAgentRouteChange(handler: AgentRouteChangeHandler) {
+      agentRouteHandlers.push(handler);
     },
 
     async start() {
@@ -484,6 +514,35 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
         }
       });
       unlistenChatUpdatedFn = chatUpdatedResult.unlisten;
+
+      const agentRouteResult = await listenClient.listen(AGENT_ROUTE_CHANNEL, (payload) => {
+        if (!payload) return;
+        try {
+          const parsed = JSON.parse(payload) as Partial<AgentRouteChangePayload>;
+          if (
+            typeof parsed.agentId !== "string" ||
+            (parsed.name !== null && typeof parsed.name !== "string") ||
+            typeof parsed.displayName !== "string" ||
+            typeof parsed.agentType !== "string" ||
+            (parsed.oldClientId !== null && typeof parsed.oldClientId !== "string") ||
+            typeof parsed.targetClientId !== "string" ||
+            typeof parsed.runtimeProvider !== "string" ||
+            typeof parsed.reason !== "string"
+          ) {
+            return;
+          }
+          for (const handler of agentRouteHandlers) {
+            try {
+              handler(parsed as AgentRouteChangePayload);
+            } catch {
+              // swallow — handler errors must not poison fan-out
+            }
+          }
+        } catch {
+          // ignore malformed payloads
+        }
+      });
+      unlistenAgentRouteFn = agentRouteResult.unlisten;
     },
 
     async stop() {
@@ -522,6 +581,10 @@ export function createNotifier(listenClient: postgres.Sql): Notifier {
       if (unlistenChatUpdatedFn) {
         await unlistenChatUpdatedFn();
         unlistenChatUpdatedFn = null;
+      }
+      if (unlistenAgentRouteFn) {
+        await unlistenAgentRouteFn();
+        unlistenAgentRouteFn = null;
       }
     },
   };

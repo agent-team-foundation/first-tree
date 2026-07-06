@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FirstTreeHubSDK, SdkError } from "@first-tree/client";
 import {
@@ -88,12 +89,27 @@ export function resolveLocalAgent(
 /** Build an SDK client scoped to the resolved local agent. */
 export function createSdk(agentName?: string): FirstTreeHubSDK {
   const { serverUrl, agentId } = resolveLocalAgent(agentName);
+  const runtimeSessionToken = resolveRuntimeSessionToken();
   return new FirstTreeHubSDK({
     serverUrl,
     getAccessToken: (opts) => ensureFreshAccessToken(opts),
     agentId,
+    runtimeSessionToken,
     userAgent: CLI_USER_AGENT,
   });
+}
+
+function resolveRuntimeSessionToken(): string | undefined {
+  const tokenFile = process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE?.trim();
+  if (tokenFile) {
+    try {
+      return readFileSync(tokenFile, "utf8").trim() || undefined;
+    } catch (err) {
+      void err;
+      return undefined;
+    }
+  }
+  return process.env.FIRST_TREE_RUNTIME_SESSION_TOKEN?.trim() || undefined;
 }
 
 /** Map an SdkError / connection error to the right CLI `fail()`. */

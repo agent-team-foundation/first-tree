@@ -162,6 +162,17 @@ export const liveActivitySchema = z.object({
    */
   turnText: z.string().optional(),
   /**
+   * The current turn's latest `assistant_text`, **newline-preserving** and capped
+   * to {@link ASSISTANT_TEXT_FULL_MAX} (2000) — the "expand to full" companion to
+   * the one-line {@link turnText}. Present ONLY when it carries strictly more than
+   * `turnText` does (source longer than the 120-char one-line preview, or it has
+   * real line breaks `turnText` flattened away); a short single-line narration
+   * omits it, so a client can treat "`turnTextFull` present" as "there is more to
+   * expand". Like `turnText` it rides only the per-agent `/agent-status`
+   * (`withTurnText`) path and is absent on the chat-list `liveActivity`.
+   */
+  turnTextFull: z.string().optional(),
+  /**
    * ISO timestamp at which this activity goes stale (= `startedAt` +
    * `LIVE_ACTIVITY_STALE_MS`). The server already drops stale activities at
    * read time; this lets a live surface's 1s ticker clear a lingering
@@ -184,6 +195,15 @@ export const LIVE_ACTIVITY_STALE_MS = 60_000;
  * and the on-screen ellipsis stays CSS-driven. No trailing "…" is appended.
  */
 export const ASSISTANT_TEXT_PREVIEW_MAX = 120;
+
+/**
+ * Max length of the **full** newline-preserving assistant-text narration surfaced
+ * on `LiveActivity.turnTextFull` for the compose status bar's expand card. Unlike
+ * {@link ASSISTANT_TEXT_PREVIEW_MAX} this is a real visible bound (the card
+ * renders the whole string, so an explicit "…" marks truncation) — kept well
+ * below the 8000-char stored block to bound the `/agent-status` wire payload.
+ */
+export const ASSISTANT_TEXT_FULL_MAX = 2000;
 
 export const meChatRowSchema = z.object({
   chatId: z.string(),

@@ -10,7 +10,6 @@ import { type CampaignSlug, isKnownCampaign } from "./campaigns.js";
  */
 
 const INTENT_KEY = "first-tree:quickstart:intent";
-const AGENT_KEY = "first-tree:quickstart:agent";
 
 /** A normalized GitHub repo reference parsed from a landing handoff. */
 export type RepoIntent = {
@@ -77,6 +76,13 @@ export function readCampaignHandoff(location: Pick<Location, "search" | "hash">)
   return null;
 }
 
+/** Whether the current location explicitly attempted a campaign handoff. */
+export function hasCampaignHandoff(location: Pick<Location, "search" | "hash">): boolean {
+  return [new URLSearchParams(location.search ?? ""), paramsFromHash(location.hash ?? "")].some(
+    (params) => params.has("campaign") || params.has("intent"),
+  );
+}
+
 export function writeCampaignIntent(intent: CampaignIntent): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.setItem(INTENT_KEY, JSON.stringify(intent));
@@ -112,38 +118,4 @@ export function readCampaignIntent(): CampaignIntent | null {
 export function clearCampaignIntent(): void {
   if (typeof window === "undefined") return;
   window.sessionStorage.removeItem(INTENT_KEY);
-  window.sessionStorage.removeItem(AGENT_KEY);
-}
-
-/**
- * The agent created during a quickstart attempt, stashed per-tab so a remount
- * (refresh while waiting, the timeout/error screen) reuses it instead of
- * creating a duplicate. Scoped to the campaign + org so a stash left over from
- * a different campaign / org / user (e.g. an org switch or logout-login in the
- * same tab) is ignored — the flow then creates a fresh agent rather than
- * resuming against one the current membership can't access. Cleared together
- * with the intent once start chat succeeds.
- */
-export type QuickstartAgentStash = { campaign: string; organizationId: string | null; uuid: string };
-
-export function writeQuickstartAgent(stash: QuickstartAgentStash): void {
-  if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(AGENT_KEY, JSON.stringify(stash));
-}
-
-export function readQuickstartAgent(campaign: string, organizationId: string | null): string | null {
-  if (typeof window === "undefined") return null;
-  const raw = window.sessionStorage.getItem(AGENT_KEY);
-  if (!raw) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const o = parsed as Record<string, unknown>;
-    if (o.campaign === campaign && o.organizationId === organizationId && typeof o.uuid === "string") {
-      return o.uuid;
-    }
-    return null;
-  } catch {
-    return null;
-  }
 }

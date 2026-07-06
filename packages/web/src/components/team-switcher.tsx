@@ -67,6 +67,8 @@ export function TeamSwitcher({
   const [switchError, setSwitchError] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameSavedTimerRef = useRef<number | null>(null);
+  const switchTimerRef = useRef<number | null>(null);
 
   // Shared `me-organizations` cache: the inline rename path updates this key,
   // so the anchor + switch list refresh without a reload.
@@ -132,6 +134,19 @@ export function TeamSwitcher({
     renameInputRef.current?.select();
   }, [renaming]);
 
+  useEffect(() => {
+    return () => {
+      if (renameSavedTimerRef.current !== null) {
+        window.clearTimeout(renameSavedTimerRef.current);
+        renameSavedTimerRef.current = null;
+      }
+      if (switchTimerRef.current !== null) {
+        window.clearTimeout(switchTimerRef.current);
+        switchTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const renameMutation = useMutation({
     mutationFn: (displayName: string) => {
       if (!organizationId) throw new Error("organization not loaded");
@@ -145,7 +160,11 @@ export function TeamSwitcher({
       setRenameDraft(next.displayName);
       setRenaming(false);
       setRenameSaved(true);
-      window.setTimeout(() => setRenameSaved(false), 2000);
+      if (renameSavedTimerRef.current !== null) window.clearTimeout(renameSavedTimerRef.current);
+      renameSavedTimerRef.current = window.setTimeout(() => {
+        renameSavedTimerRef.current = null;
+        setRenameSaved(false);
+      }, 2000);
       void refreshMe();
     },
   });
@@ -158,7 +177,11 @@ export function TeamSwitcher({
       await selectOrganization(org.id);
       if (redirectHomeOnSwitch) navigate("/", { replace: true });
       const wait = Math.max(0, MIN_SHOW_MS - (Date.now() - startedAt));
-      window.setTimeout(() => setSwitchingOrg(null), wait);
+      if (switchTimerRef.current !== null) window.clearTimeout(switchTimerRef.current);
+      switchTimerRef.current = window.setTimeout(() => {
+        switchTimerRef.current = null;
+        setSwitchingOrg(null);
+      }, wait);
     } catch {
       setSwitchingOrg(null);
       setSwitchError(org.id);
@@ -203,7 +226,11 @@ export function TeamSwitcher({
       // Hold the veil through the cache-clear → home-mount gap, but no longer
       // than needed, so a fast switch doesn't flash it for one frame.
       const wait = Math.max(0, MIN_SHOW_MS - (Date.now() - startedAt));
-      window.setTimeout(() => setSwitchingOrg(null), wait);
+      if (switchTimerRef.current !== null) window.clearTimeout(switchTimerRef.current);
+      switchTimerRef.current = window.setTimeout(() => {
+        switchTimerRef.current = null;
+        setSwitchingOrg(null);
+      }, wait);
     } catch {
       // Roll the optimistic anchor back and re-enable the list; keep the menu
       // open with an inline retry hint.

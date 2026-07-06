@@ -10,6 +10,7 @@ import {
   extractMentions,
   isImageBatchRefContent,
   isImageRefContent,
+  isLandingCampaignTrialChatLocked,
   type MentionParticipant,
   parseProviderRetryEventMessage,
   type RequestResolution,
@@ -80,11 +81,6 @@ import { AgentHovercard } from "../../../components/chat/agent-hovercard.js";
 import { type AskAnswer, AskTakeover } from "../../../components/chat/ask-takeover.js";
 import { awaitedAgentsFromMessage, ChatOfflineNotice } from "../../../components/chat/chat-offline-notice.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
-import {
-  FIRST_TREE_SYSTEM_SENDER_NAME,
-  FirstTreeSystemAvatar,
-  isTrustedFirstTreeOnboardingSystemMessage,
-} from "../../../components/chat/first-tree-system-message.js";
 import {
   GITHUB_SYSTEM_SENDER_NAME,
   GithubEventCardMessage,
@@ -776,13 +772,8 @@ const MessageRow = memo(function MessageRow({
   // so the recipient does not see their own name color treatment on a
   // card the dispatcher wrote on their row.
   const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
-  const isFirstTreeSystem = isTrustedFirstTreeOnboardingSystemMessage(msg);
-  const isSystem = isGithubSystem || isFirstTreeSystem;
-  const senderName = isGithubSystem
-    ? GITHUB_SYSTEM_SENDER_NAME
-    : isFirstTreeSystem
-      ? FIRST_TREE_SYSTEM_SENDER_NAME
-      : agentNameFn(msg.senderId);
+  const isSystem = isGithubSystem;
+  const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
   const isSelf = !isSystem && myAgentId === msg.senderId;
 
   return (
@@ -797,8 +788,6 @@ const MessageRow = memo(function MessageRow({
     >
       {isGithubSystem ? (
         <GithubSystemAvatar size={20} />
-      ) : isFirstTreeSystem ? (
-        <FirstTreeSystemAvatar size={20} />
       ) : (
         <AgentHovercard
           agentId={msg.senderId}
@@ -1921,6 +1910,7 @@ export function ChatView({
   });
 
   const handleSend = async () => {
+    if (isLandingCampaignTrialChatLocked(chatDetail?.metadata)) return;
     const text = draft.trim();
     const images = pendingImages;
     if (uploading) return;
@@ -3209,14 +3199,16 @@ export function ChatView({
   // swallows clicks, so we keep the button clickable when only the mention is
   // missing and let handleSend pop the tip. `sendDimmed` carries the greyed-out
   // look for that state.
-  const sendDisabled = sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0);
+  const landingCampaignChatLocked = isLandingCampaignTrialChatLocked(chatDetail?.metadata);
+  const sendDisabled =
+    landingCampaignChatLocked || sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0);
   const sendDimmed = sendDisabled || sendBlockedByMentionGate;
 
   const mention = useMentionAutocomplete({
     value: draft,
     cursor,
     candidates: mentionCandidates,
-    disabled: sendMut.isPending || uploading,
+    disabled: landingCampaignChatLocked || sendMut.isPending || uploading,
     onSelect: (update) => {
       autoPrimedDraftRef.current = false;
       setDraft(update.text);
@@ -4024,13 +4016,15 @@ export function ChatView({
                             }
                           }}
                           placeholder={
-                            requiresMention
-                              ? // Group chat: the placeholder carries the rule (this
-                                // is the calm, always-there teaching surface). It
-                                // shows only while empty; once the user types it's
-                                // gone, and the tip bubble covers a blocked send.
-                                "In a group, @mention who this is for"
-                              : `Message @${displayName}  ·  / for commands  ·  @ to mention`
+                            landingCampaignChatLocked
+                              ? "This trial chat is read-only"
+                              : requiresMention
+                                ? // Group chat: the placeholder carries the rule (this
+                                  // is the calm, always-there teaching surface). It
+                                  // shows only while empty; once the user types it's
+                                  // gone, and the tip bubble covers a blocked send.
+                                  "In a group, @mention who this is for"
+                                : `Message @${displayName}  ·  / for commands  ·  @ to mention`
                           }
                           rows={2}
                           onKeyDown={(e) => {
@@ -4052,7 +4046,7 @@ export function ChatView({
                               handleSend();
                             }
                           }}
-                          disabled={sendMut.isPending || uploading}
+                          disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
                           className="mention-composer-textarea w-full outline-none text-subtitle font-normal placeholder:text-muted-foreground"
                           style={{
                             padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
@@ -4136,11 +4130,13 @@ export function ChatView({
                                 el.setSelectionRange(start + 1, start + 1);
                               });
                             }}
+                            disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
                             title="Mention an agent (or type @)"
                             style={{
                               background: "none",
                               border: "none",
-                              cursor: "pointer",
+                              cursor:
+                                landingCampaignChatLocked || sendMut.isPending || uploading ? "not-allowed" : "pointer",
                               color: "var(--fg-3)",
                               padding: 0,
                               display: "inline-flex",
@@ -4152,11 +4148,13 @@ export function ChatView({
                           <button
                             type="button"
                             onClick={() => fileInputRef.current?.click()}
+                            disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
                             title="Attach image"
                             style={{
                               background: "none",
                               border: "none",
-                              cursor: "pointer",
+                              cursor:
+                                landingCampaignChatLocked || sendMut.isPending || uploading ? "not-allowed" : "pointer",
                               color: "var(--fg-3)",
                               padding: 0,
                               display: "inline-flex",
@@ -4170,6 +4168,7 @@ export function ChatView({
                             type="file"
                             accept="image/*"
                             multiple
+                            disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
                             style={{ display: "none" }}
                             onChange={(e) => {
                               if (e.target.files) {

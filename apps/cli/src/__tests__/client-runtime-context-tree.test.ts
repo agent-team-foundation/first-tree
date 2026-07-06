@@ -56,6 +56,7 @@ const watchMockProbe = importedWatch;
 const RUNTIME_TEST_TIMEOUT_MS = 15_000;
 const disposeMock = vi.fn();
 const killAllMock = vi.fn(async () => undefined);
+const cliFetchMock = vi.hoisted(() => vi.fn());
 let connectionMaxListeners = 10;
 const connectionMock = {
   clientId: "client-test",
@@ -131,6 +132,10 @@ vi.mock("../core/bootstrap.js", () => ({
   ensureFreshAccessToken: vi.fn(async () => "tok-test"),
 }));
 
+vi.mock("../core/cli-fetch.js", () => ({
+  cliFetch: cliFetchMock,
+}));
+
 vi.mock("../core/output.js", () => ({
   print: {
     status: vi.fn(),
@@ -173,6 +178,7 @@ describe("ClientRuntime context-tree wiring", () => {
     fsWatchMocks.reset();
     disposeMock.mockClear();
     killAllMock.mockClear();
+    cliFetchMock.mockReset();
   });
 
   afterEach(() => {
@@ -260,7 +266,7 @@ describe("ClientRuntime context-tree wiring", () => {
       });
 
       await vi.waitFor(() => expect(slotInstances[1]?.start).toHaveBeenCalledTimes(2));
-      expect(print.status).toHaveBeenCalledWith("", "agent reactivated: paused");
+      expect(print.status).toHaveBeenCalledWith("", "agent runtime confirmed: paused");
       expect(print.check).toHaveBeenCalledWith(true, "paused: connected", "agent: paused");
       await rt.stop();
     },
@@ -376,6 +382,17 @@ describe("ClientRuntime context-tree wiring", () => {
     await rt.start();
 
     expect(print.check).toHaveBeenCalledWith(false, "broken: connection failed", "bind failed");
+    const pinned = connectionListeners.get("agent:pinned");
+    if (!pinned) throw new Error("agent:pinned listener missing");
+    pinned({
+      agentId: "agent-broken",
+      name: "broken",
+      runtimeProvider: "claude-code",
+    });
+
+    await vi.waitFor(() => expect(slotInstances[0]?.start).toHaveBeenCalledTimes(2));
+    expect(print.status).toHaveBeenCalledWith("", "agent runtime confirmed: broken");
+    expect(print.check).toHaveBeenCalledWith(true, "broken: connected", "agent: broken");
     const runtimeProbe = rt as unknown as {
       agents: Array<{ state: "idle" | "starting" | "running" | "suspended-skipped" | "failed" }>;
       startAgentEntry(entry: unknown): Promise<"connected" | "skipped" | "failed">;
@@ -426,6 +443,95 @@ describe("ClientRuntime context-tree wiring", () => {
     });
     expect(readFileSync(join(agentsDir, "agent-019e70b300007000", "agent.yaml"), "utf8")).toContain("codex");
     expect(slotInstances.map((slot) => slot.name)).toEqual(["nova", "agent-019e70b300007000"]);
+    await rt.stop();
+  });
+
+  it("preserves local agent yaml fields when reconfiguring a pinned runtime", async () => {
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
+    const agentsDir = join(home, "config", "agents");
+    const alphaDir = join(agentsDir, "alpha");
+    mkdirSync(alphaDir, { recursive: true });
+    writeFileSync(
+      join(alphaDir, "agent.yaml"),
+      "agentId: agent-alpha\nruntime: codex\nqaLocalNote: preserve-me\nqaNested:\n  keep: true\n",
+    );
+    rt.watchAgentsDir(agentsDir);
+    rt.addAgent("alpha", {
+      agentId: "agent-alpha",
+      runtime: "codex",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rt.addAgent>[1]);
+
+    const pinned = connectionListeners.get("agent:pinned");
+    if (!pinned) throw new Error("agent:pinned listener missing");
+    pinned({
+      agentId: "agent-alpha",
+      name: "alpha",
+      runtimeProvider: "claude-code",
+    });
+
+    await vi.waitFor(() => expect(slotInstances).toHaveLength(2));
+    await vi.waitFor(() => expect(slotInstances[1]?.start).toHaveBeenCalled());
+    expect(slotInstances[0]?.stop).toHaveBeenCalledWith("runtime switched by server", {
+      sessionShutdown: {
+        clearPersistedRegistry: true,
+        reportSuspendedSessions: false,
+      },
+    });
+    const text = readFileSync(join(alphaDir, "agent.yaml"), "utf8");
+    expect(text).toContain("runtime: claude-code");
+    expect(text).toContain("qaLocalNote: preserve-me");
+    expect(text).toContain("qaNested:");
+    expect(text).toContain("keep: true");
+    await rt.stop();
+  });
+
+  it("repairs runtime-provider bind mismatches once without looping", async () => {
+    const { print } = await import("../core/output.js");
+    const { ClientRuntime } = await import("../core/client-runtime.js");
+    const rt = new ClientRuntime("https://first-tree.test", "client-test");
+    const agentsDir = join(home, "config", "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    rt.watchAgentsDir(agentsDir);
+    rt.addAgent("alpha", {
+      agentId: "agent-alpha",
+      runtime: "claude-code",
+      session: { idle_timeout: 300, max_sessions: 4, working_grace_seconds: 3600 },
+      concurrency: 1,
+    } as unknown as Parameters<typeof rt.addAgent>[1]);
+    await rt.start();
+    cliFetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        uuid: "agent-alpha",
+        name: "alpha",
+        displayName: "Alpha",
+        type: "agent",
+        runtimeProvider: "codex",
+      }),
+    });
+
+    const rejected = connectionListeners.get("agent:bind:rejected");
+    if (!rejected) throw new Error("agent:bind:rejected listener missing");
+    rejected("runtime_provider_mismatch", "agent-alpha");
+    rejected("runtime_provider_mismatch", "agent-alpha");
+
+    await vi.waitFor(() => expect(cliFetchMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(slotInstances).toHaveLength(2));
+    expect(slotInstances[0]?.stop).toHaveBeenCalledWith("runtime switched by server", {
+      sessionShutdown: {
+        clearPersistedRegistry: true,
+        reportSuspendedSessions: false,
+      },
+    });
+    expect(slotInstances[1]?.start).toHaveBeenCalled();
+    expect(print.status).toHaveBeenCalledWith(
+      "⚠️",
+      "alpha: runtime repair already attempted; not retrying bind mismatch.",
+    );
     await rt.stop();
   });
 

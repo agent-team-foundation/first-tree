@@ -796,12 +796,12 @@ export const createClaudeCodeTuiHandler: HandlerFactory = (config) => {
       await teardownTmux();
     },
 
-    async shutdown() {
+    async shutdown(reason?: string) {
       lifecycleFence.requestStop();
       turnAborted = true;
-      dropQueuedMessagesForRecovery("shutdown");
+      dropQueuedMessagesForRecovery(reason ?? "shutdown");
       await waitForStopFence();
-      dropQueuedMessagesForRecovery("shutdown");
+      dropQueuedMessagesForRecovery(reason ?? "shutdown");
       await teardownTmux();
 
       // Per agent-session-cwd-redesign: cwd is the per-agent home — shared

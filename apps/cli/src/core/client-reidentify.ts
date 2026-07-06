@@ -14,9 +14,11 @@ const printClientReidentifyOutput: ClientReidentifyOutput = {
 /**
  * Shared handler for legacy `CLIENT_ORG_MISMATCH` rejections. Current servers
  * reject cross-user reuse as `CLIENT_USER_MISMATCH`, but older deployments may
- * still emit this code. The CLI treats both as purge-first account switching:
- * do not rotate a client id in place, because that would leave old local agent
- * runtime state attached to a new account.
+ * still emit this code. Reaching this handler means the runtime already tried
+ * to register the active root client with the current credentials and the
+ * server rejected that pairing. Do not tell users to retry the same login in a
+ * loop; require local identity repair/reset unless they can return to a known
+ * owner state and let `login` switch before daemon startup.
  */
 export async function handleClientOrgMismatch(
   err: ClientOrgMismatchError,
@@ -28,11 +30,12 @@ export async function handleClientOrgMismatch(
   },
 ): Promise<never> {
   const output = opts.output ?? printClientReidentifyOutput;
-  const purgeCommand = `${channelConfig.binName} logout --purge`;
+  const loginCommand = `${channelConfig.binName} login <token>`;
+  const resetCommand = `${channelConfig.binName} computer reset`;
   if (opts.managed && opts.output?.status) {
     output.status?.(
       "✗",
-      `client identity is not accepted for this account (${err.message}); run \`${purgeCommand}\`, then \`${channelConfig.binName} login <token>\` with the intended account's connect token. Local client identity plus local agent configs, workspaces, and session state stay account-scoped; server-side clients, agents, chats, and history are not deleted.`,
+      `client identity is not accepted for this account (${err.message}); back up local workspaces, run \`${resetCommand}\`, then run \`${loginCommand}\` with the intended account's connect token.`,
     );
     process.exit(1);
   }
@@ -40,12 +43,9 @@ export async function handleClientOrgMismatch(
   output.line("  ⚠️  This machine's client identity is not accepted for this account.\n");
   output.line(`     Server message: ${err.message}\n`);
   output.blank();
-  output.line(`  To switch accounts, run \`${purgeCommand}\` first, then login again.\n\n`);
-  output.line("  `logout --purge` stops the current daemon, signs out the current user, and\n");
-  output.line("  removes this machine's local client identity plus local agent configs,\n");
-  output.line("  workspaces, and session state. Server-side clients, agents, chats, and\n");
-  output.line("  history are not deleted; the previous client and agents simply stop running\n");
-  output.line("  from this machine unless they are set up again.\n\n");
-  output.line(`  Then run \`${channelConfig.binName} login <token>\` with the intended account's connect token.\n\n`);
+  output.line("  The active client id and current credentials do not form a valid server-side owner pair.\n");
+  output.line(
+    `  Back up local workspaces, run \`${resetCommand}\`, then run \`${loginCommand}\` with the intended account's connect token.\n\n`,
+  );
   process.exit(1);
 }

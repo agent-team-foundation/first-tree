@@ -2,6 +2,7 @@ import {
   type AgentChatStatus,
   type AgentEngagement,
   type AgentStatusReason,
+  ASSISTANT_TEXT_FULL_MAX,
   ASSISTANT_TEXT_PREVIEW_MAX,
   type AssistantTextEventPayload,
   buildAgentChatStatus,
@@ -95,6 +96,30 @@ export function previewAssistantText(text: unknown): string | undefined {
 }
 
 /**
+ * Full, **newline-preserving** narration for the compose status bar's expand
+ * card (`LiveActivity.turnTextFull`). Unlike {@link previewAssistantText} (which
+ * flattens all whitespace to a single line and caps at 120), this keeps the
+ * block's line structure — collapsing only intra-line runs of spaces/tabs and
+ * capping consecutive blank lines to one — and caps at
+ * {@link ASSISTANT_TEXT_FULL_MAX}. The card renders the whole string, so an
+ * explicit "…" marks a truncation. Returns undefined for an empty/whitespace-only
+ * block. Exported for unit testing.
+ */
+export function previewAssistantTextFull(text: unknown): string | undefined {
+  if (typeof text !== "string") return undefined;
+  const normalized = text
+    .replace(/\r\n?/g, "\n") // CRLF/CR → LF
+    .replace(/[ \t]+/g, " ") // collapse intra-line whitespace, keep newlines
+    .replace(/ *\n */g, "\n") // trim spaces hugging line breaks
+    .replace(/\n{3,}/g, "\n\n") // cap blank-line runs
+    .trim();
+  if (normalized.length === 0) return undefined;
+  return normalized.length > ASSISTANT_TEXT_FULL_MAX
+    ? `${normalized.slice(0, ASSISTANT_TEXT_FULL_MAX - 1)}…`
+    : normalized;
+}
+
+/**
  * Translate a `session_events` row into a `LiveActivity`, or null when the
  * kind is terminal (`turn_end` / `error`) or unrecognised. Pure & exported
  * for unit testing.
@@ -153,7 +178,13 @@ export function toLiveActivity(row: {
 export function withTurnNarration(base: LiveActivity | null, narrationText: unknown): LiveActivity | null {
   if (!base) return null;
   const narration = previewAssistantText(narrationText);
-  return narration ? { ...base, turnText: narration } : base;
+  if (!narration) return base;
+  const full = previewAssistantTextFull(narrationText);
+  // Attach `turnTextFull` only when it carries strictly more than the one-line
+  // `turnText` (source longer than 120 chars, or it has line breaks the preview
+  // flattened) — so "present" means "there is more to expand" for the client.
+  const hasMore = full !== undefined && full !== narration;
+  return { ...base, turnText: narration, ...(hasMore ? { turnTextFull: full } : {}) };
 }
 
 // ---------------------------------------------------------------------------
@@ -194,11 +225,11 @@ async function deriveActivities(
   const turnTextJoin = withTurn
     ? sql`
       LEFT JOIN LATERAL (
-        -- Generous raw prefix cap: bounds the bytes pulled from PG while
-        -- leaving ample margin for previewAssistantText (collapses whitespace,
-        -- then caps at ASSISTANT_TEXT_PREVIEW_MAX = 120). Wider than 120 so
-        -- pathological leading whitespace cannot starve the final value.
-        SELECT LEFT(se.payload->>'text', 500) AS text
+        -- Raw prefix cap: bounds the bytes pulled from PG while leaving margin
+        -- above ASSISTANT_TEXT_FULL_MAX (2000) — the newline-preserving
+        -- previewAssistantTextFull is the widest consumer, and margin keeps
+        -- pathological leading whitespace from starving the final value.
+        SELECT LEFT(se.payload->>'text', ${sql.raw(String(ASSISTANT_TEXT_FULL_MAX + 200))}) AS text
           FROM session_events se
          WHERE se.agent_id = acs.agent_id
            AND se.chat_id  = acs.chat_id
@@ -454,12 +485,12 @@ export async function resolveAgentChatStatuses(
       //
       // Scoped strictly to `provider_turn`: a `session_start` / `session_resume`
       // terminal reason is session-scoped, not turn-scoped, so a turn-level
-      // "working" signal must NOT hide it (doing so would make it flicker —
-      // hidden while working, reappearing when idle). Those keep their own
-      // lifecycle. `retrying` / `waiting` reasons legitimately co-occur with
-      // working (an in-turn foreground retry) and are kept. Failed agents
-      // (errored ⇒ main "failed", working=false) also keep the reason — that is
-      // the correct co-display on the failure row.
+      // "working" signal must NOT erase it from the status projection. Web
+      // surfaces that should prefer live working over the stale-looking banner
+      // can choose to suppress it at presentation time. `retrying` / `waiting`
+      // reasons legitimately co-occur with working (an in-turn foreground retry)
+      // and are kept. Failed agents (errored ⇒ main "failed", working=false)
+      // also keep the reason — that is the correct co-display on the failure row.
       const reason = perAgentStatusReason?.get(agentId);
       const isStaleTurnTerminal = reason?.kind === "terminal" && reason.scope === "provider_turn";
       const statusReason = working && isStaleTurnTerminal ? undefined : reason;

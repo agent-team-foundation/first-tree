@@ -302,6 +302,29 @@ describe("IdentitySection (display-only)", () => {
     expect(buttonByText(inactive.container, "Edit")).toBeNull();
     await act(async () => inactive.root.unmount());
   });
+
+  it("shows landing trial agents as First Tree managed instead of leaking the service member id", async () => {
+    const { IdentitySection } = await import("../identity-section.js");
+    const trial = await renderDom(
+      <IdentitySection
+        agent={agent({
+          managerId: "service-member-hidden",
+          metadata: {
+            landingCampaignTrial: true,
+            campaign: "production-scan",
+            skillSetId: "production-scan",
+            skillSetVersion: "2026.07.02.1",
+            repo: { url: "https://github.com/acme/backend", canonicalKey: "github.com/acme/backend" },
+          },
+        })}
+      />,
+    );
+    await flush();
+
+    expect(trial.container.textContent).toContain("First Tree managed");
+    expect(trial.container.textContent).not.toContain("service-member-hidden");
+    await act(async () => trial.root.unmount());
+  });
 });
 
 describe("ProfileEditDialog (merged identity + appearance)", () => {

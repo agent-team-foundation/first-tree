@@ -358,8 +358,13 @@ function makeFixtureSkillsRoot(
   return root;
 }
 
-describe("installFirstTreeIntegration (inline skill installer)", () => {
-  const TREE_SKILLS = ["first-tree-write", "first-tree-read", "first-tree-seed"];
+describe("inline skill installer — copy/version/symlink mechanics", () => {
+  // Exercised via installCoreSkills, which carries the 3-skill set
+  // (welcome + write + seed) after write/seed moved TREE→CORE. The tree path
+  // (installFirstTreeIntegration) now installs the single remaining tree skill;
+  // its reconcile is covered by skills-state-reconcile.test.ts and its pin
+  // contract by the CLI-version pin describe below.
+  const CORE_SKILLS = ["first-tree-welcome", "first-tree-write", "first-tree-seed"];
 
   function expectSkillInstalled(workspace: string, name: string): void {
     const agentsDir = join(workspace, ".agents", "skills", name);
@@ -377,19 +382,19 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     mkdirSync(workspace, { recursive: true });
     const bundledSkillsRoot = makeFixtureSkillsRoot(
       "happy",
-      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+      CORE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
     );
 
     const logs: string[] = [];
-    const result = installFirstTreeIntegration({
+    const result = installCoreSkills({
       workspacePath: workspace,
       bundledSkillsRoot,
       log: (m) => logs.push(m),
     });
 
     expect(result, logs.join("\n")).toBe(true);
-    for (const name of TREE_SKILLS) expectSkillInstalled(workspace, name);
-    expect(logs.join("\n")).toContain("installed first-tree-write");
+    for (const name of CORE_SKILLS) expectSkillInstalled(workspace, name);
+    expect(logs.join("\n")).toMatch(/installed[^\n]*first-tree-write/);
   });
 
   it("skips skills whose on-disk VERSION + SKILL.md content both match bundled (fast path)", () => {
@@ -397,11 +402,11 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     mkdirSync(workspace, { recursive: true });
     const bundledSkillsRoot = makeFixtureSkillsRoot(
       "skip",
-      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+      CORE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
     );
 
     // First install populates the workspace.
-    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
+    installCoreSkills({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
 
     // Drop a non-content marker into each installed skill so we can detect
     // whether the second install ran a full rm+cp (which wipes the marker)
@@ -409,19 +414,19 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     // file is important — touching SKILL.md would itself trigger the
     // content-drift defense and force a reinstall, which is what the
     // separate "content drift" test below covers.
-    for (const name of TREE_SKILLS) {
+    for (const name of CORE_SKILLS) {
       writeFileSync(join(workspace, ".agents", "skills", name, ".sentinel"), "marker\n");
     }
 
     const logs: string[] = [];
-    const result = installFirstTreeIntegration({
+    const result = installCoreSkills({
       workspacePath: workspace,
       bundledSkillsRoot,
       log: (m) => logs.push(m),
     });
 
     expect(result, logs.join("\n")).toBe(true);
-    for (const name of TREE_SKILLS) {
+    for (const name of CORE_SKILLS) {
       expect(
         existsSync(join(workspace, ".agents", "skills", name, ".sentinel")),
         `${name} should have been skipped`,
@@ -435,24 +440,24 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     mkdirSync(workspace, { recursive: true });
     const bundledV1 = makeFixtureSkillsRoot(
       "drift-v1",
-      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+      CORE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
     );
-    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot: bundledV1, log: () => {} });
+    installCoreSkills({ workspacePath: workspace, bundledSkillsRoot: bundledV1, log: () => {} });
 
     // Marker file (NOT SKILL.md) detects which skills got re-copied.
-    for (const name of TREE_SKILLS) {
+    for (const name of CORE_SKILLS) {
       writeFileSync(join(workspace, ".agents", "skills", name, ".sentinel"), "marker\n");
     }
 
     // New bundled root: bump only first-tree-write to 2.0.0; the rest stay at 1.0.0.
     const bundledMixed = makeFixtureSkillsRoot("drift-mixed", [
+      { name: "first-tree-welcome", version: "1.0.0" },
       { name: "first-tree-write", version: "2.0.0" },
-      { name: "first-tree-read", version: "1.0.0" },
       { name: "first-tree-seed", version: "1.0.0" },
     ]);
 
     const logs: string[] = [];
-    const result = installFirstTreeIntegration({
+    const result = installCoreSkills({
       workspacePath: workspace,
       bundledSkillsRoot: bundledMixed,
       log: (m) => logs.push(m),
@@ -463,36 +468,36 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-write", ".sentinel"))).toBe(false);
 
     // Others should have been skipped (marker preserved).
-    for (const name of TREE_SKILLS.filter((n) => n !== "first-tree-write")) {
+    for (const name of CORE_SKILLS.filter((n) => n !== "first-tree-write")) {
       expect(
         existsSync(join(workspace, ".agents", "skills", name, ".sentinel")),
         `${name} should have been skipped`,
       ).toBe(true);
     }
 
-    expect(logs.join("\n")).toContain("installed first-tree-write");
+    expect(logs.join("\n")).toMatch(/installed[^\n]*first-tree-write/);
     expect(logs.join("\n")).toContain("up-to-date");
   });
 
   it("returns false when a bundled skill source is missing", () => {
     const workspace = join(tmpBase, "integrate-missing");
     mkdirSync(workspace, { recursive: true });
-    // Bundled root has only first-tree-write; the other tree skills are missing.
+    // Bundled root has only first-tree-write; the other core skills are missing.
     const bundledSkillsRoot = makeFixtureSkillsRoot("missing", [{ name: "first-tree-write", version: "1.0.0" }]);
 
     const logs: string[] = [];
-    const result = installFirstTreeIntegration({
+    const result = installCoreSkills({
       workspacePath: workspace,
       bundledSkillsRoot,
       log: (m) => logs.push(m),
     });
 
     expect(result).toBe(false);
-    // first-tree-write installs successfully, the others fail.
+    // first-tree-write installs successfully, welcome + seed fail (missing sources).
     expectSkillInstalled(workspace, "first-tree-write");
-    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-read"))).toBe(false);
-    expect(logs.join("\n")).toContain("failed first-tree-read, first-tree-seed");
-    expect(logs.join("\n")).toContain("First-tree skill install failed (first-tree-read)");
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-seed"))).toBe(false);
+    expect(logs.join("\n")).toContain("failed first-tree-welcome, first-tree-seed");
+    expect(logs.join("\n")).toContain("Core skill install failed (first-tree-welcome)");
   });
 
   it("repairs a clobbered .claude symlink without re-copying the .agents tree", () => {
@@ -500,10 +505,10 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     mkdirSync(workspace, { recursive: true });
     const bundledSkillsRoot = makeFixtureSkillsRoot(
       "relink",
-      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+      CORE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
     );
 
-    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
+    installCoreSkills({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
 
     // Operator clobbered .claude/skills/first-tree-write with a regular file.
     // rmSync without `recursive` follows symlink-to-directory on macOS
@@ -518,7 +523,7 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     // SKILL.md drift as a reinstall trigger).
     writeFileSync(join(workspace, ".agents", "skills", "first-tree-write", ".sentinel"), "marker\n");
 
-    const result = installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
+    const result = installCoreSkills({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
     expect(result).toBe(true);
     // Symlink was repaired.
     expectSkillInstalled(workspace, "first-tree-write");
@@ -537,10 +542,10 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     mkdirSync(workspace, { recursive: true });
     const bundledSkillsRoot = makeFixtureSkillsRoot(
       "content-drift",
-      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+      CORE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
     );
 
-    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
+    installCoreSkills({ workspacePath: workspace, bundledSkillsRoot, log: () => {} });
 
     // Simulate "developer edited SKILL.md on disk but VERSION never
     // changed" — same VERSION on both sides, but the installed
@@ -549,7 +554,7 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     writeFileSync(installedSkillPath, "STALE_CONTENT\n");
 
     const logs: string[] = [];
-    const result = installFirstTreeIntegration({
+    const result = installCoreSkills({
       workspacePath: workspace,
       bundledSkillsRoot,
       log: (m) => logs.push(m),
@@ -560,7 +565,7 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     // (not the SENTINEL anymore), confirming the installer detected the
     // drift and ran a full reinstall instead of taking the fast path.
     expect(readFileSync(installedSkillPath, "utf-8")).not.toContain("STALE_CONTENT");
-    expect(logs.join("\n")).toContain("installed first-tree-write");
+    expect(logs.join("\n")).toMatch(/installed[^\n]*first-tree-write/);
   });
 
   it("falls through to reinstall when bundled VERSION is missing (cannot prove match)", () => {
@@ -574,9 +579,9 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     // First install: bundled has VERSION.
     const bundledWith = makeFixtureSkillsRoot(
       "missing-version-with",
-      TREE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
+      CORE_SKILLS.map((n) => ({ name: n, version: "1.0.0" })),
     );
-    installFirstTreeIntegration({ workspacePath: workspace, bundledSkillsRoot: bundledWith, log: () => {} });
+    installCoreSkills({ workspacePath: workspace, bundledSkillsRoot: bundledWith, log: () => {} });
 
     // Drop sentinel into installed skill so we can detect re-copy.
     writeFileSync(join(workspace, ".agents", "skills", "first-tree-write", ".sentinel"), "marker\n");
@@ -584,11 +589,11 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     // Second install: bundled root has NO VERSION file for any skill.
     const bundledWithout = makeFixtureSkillsRoot(
       "missing-version-without",
-      TREE_SKILLS.map((n) => ({ name: n })),
+      CORE_SKILLS.map((n) => ({ name: n })),
     );
 
     const logs: string[] = [];
-    const result = installFirstTreeIntegration({
+    const result = installCoreSkills({
       workspacePath: workspace,
       bundledSkillsRoot: bundledWithout,
       log: (m) => logs.push(m),
@@ -598,7 +603,7 @@ describe("installFirstTreeIntegration (inline skill installer)", () => {
     // Sentinel gone — full reinstall ran because the fingerprint match
     // could not be proven.
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-write", ".sentinel"))).toBe(false);
-    expect(logs.join("\n")).toContain("installed first-tree-write");
+    expect(logs.join("\n")).toMatch(/installed[^\n]*first-tree-write/);
   });
 });
 
@@ -606,7 +611,11 @@ describe("installCoreSkills", () => {
   it("installs core skills even without a Context Tree binding", () => {
     const workspace = join(tmpBase, "core-skills");
     mkdirSync(workspace, { recursive: true });
-    const bundledSkillsRoot = makeFixtureSkillsRoot("core-skills", [{ name: "first-tree-welcome", version: "1.0.0" }]);
+    const bundledSkillsRoot = makeFixtureSkillsRoot("core-skills", [
+      { name: "first-tree-welcome", version: "1.0.0" },
+      { name: "first-tree-write", version: "1.0.0" },
+      { name: "first-tree-seed", version: "1.0.0" },
+    ]);
 
     const logs: string[] = [];
     const result = installCoreSkills({
@@ -640,6 +649,8 @@ describe("installCoreSkills", () => {
     );
     const bundledSkillsRoot = makeFixtureSkillsRoot("core-skills-retired", [
       { name: "first-tree-welcome", version: "1.0.0" },
+      { name: "first-tree-write", version: "1.0.0" },
+      { name: "first-tree-seed", version: "1.0.0" },
     ]);
 
     const result = installCoreSkills({
@@ -800,7 +811,10 @@ describe("deepEqualIdentity", () => {
  * giving it a complete vs incomplete bundled-skills layout.
  */
 describe("CLI-version pin contract (handler invariants)", () => {
-  const TREE_SKILLS = ["first-tree-write", "first-tree-read", "first-tree-seed"];
+  // The tree skill(s) installFirstTreeIntegration actually installs — just
+  // first-tree-read now that write/seed are CORE. A "complete" bundle for the
+  // success case only needs these present.
+  const TREE_SKILLS = ["first-tree-read"];
 
   it("does not overwrite the existing pin when integrate fails — next start retries", () => {
     const workspace = join(tmpBase, "cli-pin-failure-keeps-stale");

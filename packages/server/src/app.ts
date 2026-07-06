@@ -14,6 +14,7 @@ import { ZodError } from "zod";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
+import { agentDocumentRoutes } from "./api/agent/documents.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes } from "./api/agent/messages.js";
@@ -31,10 +32,12 @@ import { chatRoutes } from "./api/chats.js";
 import { clientRoutes } from "./api/clients.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { contextTreeSnapshotRoutes } from "./api/context-tree-snapshot.js";
+import { documentCommentRoutes, documentRoutes } from "./api/documents.js";
 import { feedbackRoutes } from "./api/feedback.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
 import { publicInvitationRoutes } from "./api/invitations.js";
+import { landingCampaignRoutes } from "./api/landing-campaigns.js";
 import { meRoutes } from "./api/me.js";
 import { meDocsRoutes } from "./api/me-docs.js";
 import { orgActivityRoutes } from "./api/orgs/activity.js";
@@ -44,6 +47,7 @@ import { orgChatRoutes } from "./api/orgs/chats.js";
 import { orgClientRoutes } from "./api/orgs/clients.js";
 import { orgContextTreeRoutes } from "./api/orgs/context-tree.js";
 import { orgContextTreeSnapshotRoutes } from "./api/orgs/context-tree-snapshot.js";
+import { orgDocumentRoutes } from "./api/orgs/documents.js";
 import { orgGithubAppRoutes } from "./api/orgs/github-app.js";
 import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
@@ -389,7 +393,10 @@ export async function buildApp(config: Config) {
 
   // Auth hooks
   const userAuth = userAuthHook(db, config.secrets.jwtSecret);
-  const agentSelector = agentSelectorHook(db);
+  const agentSelector = agentSelectorHook(db, {
+    enforceRuntimeSession: config.runtime.agentHttpTokenEnforcement,
+    logger: app.log,
+  });
 
   // Helper: build a user-authenticated plugin scope. Each scope mounts:
   //   1. userAuth (validate JWT, populate request.user = { userId })
@@ -511,6 +518,7 @@ export async function buildApp(config: Config) {
       await api.register(
         userScope("meRoutesScope", async (scope) => {
           await scope.register(meRoutes);
+          await scope.register(landingCampaignRoutes, { prefix: "/me/landing-campaigns" });
           await scope.register(meDocsRoutes, { workspacesRoot: config.workspace.root });
         }),
         { prefix: "" },
@@ -546,6 +554,9 @@ export async function buildApp(config: Config) {
           await scope.register(orgContextTreeRoutes, { prefix: "/context-tree" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
           await scope.register(orgAttachmentRoutes, { prefix: "/attachments" });
+          if (config.docs.enabled) {
+            await scope.register(orgDocumentRoutes, { prefix: "/documents" });
+          }
         }),
         { prefix: "/orgs/:orgId" },
       );
@@ -565,6 +576,10 @@ export async function buildApp(config: Config) {
           await scope.register(chatRoutes, { prefix: "/chats" });
           await scope.register(clientRoutes, { prefix: "/clients" });
           await scope.register(resourceRoutes, { prefix: "/resources" });
+          if (config.docs.enabled) {
+            await scope.register(documentRoutes, { prefix: "/documents" });
+            await scope.register(documentCommentRoutes, { prefix: "/document-comments" });
+          }
         }),
         { prefix: "" },
       );
@@ -578,6 +593,9 @@ export async function buildApp(config: Config) {
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);
           await scope.register(agentContextTreeInfoRoutes);
+          if (config.docs.enabled) {
+            await scope.register(agentDocumentRoutes);
+          }
         }),
         { prefix: "/agent" },
       );

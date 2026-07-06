@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
+import { runtimeProviderSchema } from "../schemas/runtime-provider.js";
 import { defaultDataDir } from "./resolver.js";
 import { defineConfig, field, optional } from "./schema.js";
 import { getConfig } from "./singleton.js";
@@ -11,6 +12,12 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }, z.string().min(1).optional());
+
+const landingCampaignRuntimeProviderSchema = runtimeProviderSchema
+  .refine((provider) => provider === "codex" || provider === "claude-code", {
+    message: "Landing campaign runtime provider must be codex or claude-code",
+  })
+  .default("codex");
 
 function serverSecretOptions(env: string, auto: string, autoGenerateSecrets: boolean) {
   return autoGenerateSecrets ? { env, auto, secret: true } : { env, secret: true };
@@ -45,6 +52,72 @@ export const serverConfigSchema = defineConfig({
   channel: field(z.enum(["dev", "staging", "prod"]).default("dev"), {
     env: "FIRST_TREE_CHANNEL",
   }),
+  growth: {
+    /**
+     * Enables the Cloud side of public growth funnels handed off from website
+     * landing pages via `/quickstart?campaign=...`. This is a product feature
+     * flag, not a release-channel property: dev/staging/prod all default to off
+     * until an operator explicitly enables the funnel.
+     */
+    landingPagesEnabled: field(z.boolean().default(false), {
+      env: "FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED",
+    }),
+    /**
+     * Maximum number of visible agent response turns allowed in a landing
+     * campaign trial chat. Default 1 preserves the original single-run trial
+     * behavior; deployments can raise it for short interactive demos.
+     */
+    landingCampaignMaxAgentTurns: field(z.number().int().min(1).max(20).default(1), {
+      env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS",
+    }),
+    landingCampaigns: optional({
+      /**
+       * First Tree official service user that manages landing campaign trial
+       * agents inside customer orgs. Optional at boot so the feature flag can
+       * remain off by default; the start API checks the official service user,
+       * service org, and client ids before creating anything.
+       */
+      serviceUserId: field(optionalTrimmedStringSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID",
+      }),
+      /**
+       * Organization where the official service user is a normal team member.
+       * In every other org, that same user is treated as the campaign-managed
+       * service membership created only to host landing trial agents.
+       */
+      serviceOrgId: field(optionalTrimmedStringSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_SERVICE_ORG_ID",
+      }),
+      /**
+       * Official client row owned by `serviceUserId`. Trial agents are pinned
+       * to this real client so chat/runtime/status use the native path.
+       */
+      clientId: field(optionalTrimmedStringSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID",
+      }),
+      /**
+       * Runtime provider assigned to newly provisioned landing campaign trial
+       * agents. The official client can advertise multiple providers; this
+       * switch only selects which provider the server pins on the agent row.
+       * Claude Code is accepted by config parsing but the start API remains
+       * fail-closed until its workspace-only runtime path exists.
+       */
+      runtimeProvider: field(landingCampaignRuntimeProviderSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_RUNTIME_PROVIDER",
+      }),
+    }),
+  },
+  docs: {
+    /**
+     * Enables the document review (docloop) surface: the org document
+     * library API, the `doc` CLI namespace endpoints, and (later) the web
+     * Docs section. Product feature flag with a staging-first rollout —
+     * off by default until an operator enables it.
+     */
+    enabled: field(z.boolean().default(false), {
+      env: "FIRST_TREE_DOCS_ENABLED",
+    }),
+  },
   database: {
     url: field(z.string(), {
       env: "FIRST_TREE_DATABASE_URL",
@@ -186,6 +259,20 @@ export const serverConfigSchema = defineConfig({
    * safe for local development.
    */
   trustProxy: field(z.boolean().default(false), { env: "FIRST_TREE_TRUST_PROXY" }),
+  connectBootstrap: {
+    /**
+     * Fresh-machine bootstrap method returned by POST /me/connect-tokens.
+     * Defaults to npm for published channels until portable artifacts are
+     * fully promoted in production. Dev remains source-only regardless of
+     * this value because it has no published channel artifact.
+     */
+    method: field(z.enum(["npm", "portable"]).default("npm"), {
+      env: "FIRST_TREE_CONNECT_BOOTSTRAP_METHOD",
+    }),
+    portableDownloadBaseUrl: field(z.string().url().default("https://downloads.first-tree.ai"), {
+      env: "FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL",
+    }),
+  },
   rateLimit: optional({
     /** Actor-aware global safety cap. High enough to avoid normal-use 429s. */
     max: field(z.number().default(3000), { env: "FIRST_TREE_RATE_LIMIT_MAX" }),
@@ -355,6 +442,26 @@ export const serverConfigSchema = defineConfig({
    * deploy manifest (systemd / docker-compose / Fly.toml / Render env).
    */
   runtime: {
+    /**
+     * Require non-human agent-scoped HTTP requests to carry the ephemeral
+     * runtime-session token minted by the current successful WS `agent:bind`.
+     *
+     * Rollout is expand-then-enforce: token-aware clients can start sending the
+     * header while this remains false; once the fleet is upgraded, operators
+     * flip this to true so legacy user-JWT + X-Agent-Id calls are rejected.
+     */
+    agentHttpTokenEnforcement: field(z.boolean().default(false), {
+      env: "FIRST_TREE_AGENT_HTTP_RUNTIME_SESSION_ENFORCEMENT",
+    }),
+    /**
+     * Local/test-only runtime-switch fault injection. When enabled, the
+     * switch-runtime route accepts an explicit fault header so QA can
+     * deterministically exercise claim abort and forward-recovery paths. The
+     * default is off and production should leave it off.
+     */
+    runtimeSwitchFaultInjection: field(z.boolean().default(false), {
+      env: "FIRST_TREE_RUNTIME_SWITCH_FAULT_INJECTION",
+    }),
     pollingIntervalSeconds: field(z.coerce.number().int().positive().default(5), {
       env: "FIRST_TREE_POLLING_INTERVAL_SECONDS",
     }),

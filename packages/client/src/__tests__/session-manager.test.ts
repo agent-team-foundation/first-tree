@@ -301,6 +301,7 @@ describe("SessionManager", () => {
       get: vi.fn(),
       refreshIfNewer: vi.fn(() => refresh.promise),
       refresh: vi.fn(() => Promise.resolve(mockRuntimeConfig())),
+      updateSdk: vi.fn(),
       updateUrls: vi.fn(),
       allReferencedUrls: vi.fn(() => new Set<string>()),
       forget: vi.fn(),
@@ -1239,6 +1240,7 @@ describe("SessionManager ackEntry callback (deferred ack)", () => {
         return refreshCalls === 1 ? firstRefresh.promise : Promise.resolve({} as AgentRuntimeConfig);
       }),
       refresh: vi.fn(async () => ({}) as AgentRuntimeConfig),
+      updateSdk: vi.fn(),
       updateUrls: vi.fn(),
       allReferencedUrls: vi.fn(() => new Set<string>()),
       forget: vi.fn(),

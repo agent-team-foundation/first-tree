@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { existsSync, readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
 import type { AgentSlotConfig } from "../runtime/agent-slot.js";
@@ -25,7 +26,8 @@ type FakeSessionState = {
     typeof vi.fn<(chatId: string, type: "session:suspend" | "session:terminate") => Promise<void>>
   >;
   applyStaleChatIds: ReturnType<typeof vi.fn<(chatIds: string[]) => void>>;
-  shutdown: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  updateTransport: ReturnType<typeof vi.fn<(sdk: unknown, agentConfigCache?: unknown) => void>>;
+  shutdown: ReturnType<typeof vi.fn<(reason?: string, opts?: unknown) => Promise<void>>>;
 };
 
 type MockState = {
@@ -99,6 +101,7 @@ function makeSdk(options?: {
   configErrorsThenSucceed?: { error: unknown; times: number };
   activeRuntimeChatIds?: string[];
   activeRuntimeChatIdsError?: unknown;
+  runtimeSessionToken?: string;
 }): FirstTreeHubSDK {
   const agent = options?.agent ?? makeAgent();
   let configCalls = 0;
@@ -126,6 +129,8 @@ function makeSdk(options?: {
         updatedBy: "user-1",
       };
     }),
+    serverUrl: "https://first-tree.example",
+    runtimeSessionToken: options?.runtimeSessionToken,
     listActiveRuntimeChatIds: vi.fn(async () => {
       if (options?.activeRuntimeChatIdsError) throw options.activeRuntimeChatIdsError;
       return { chatIds: options?.activeRuntimeChatIds ?? ["chat-1", "chat-2", "chat-evicted"] };
@@ -201,6 +206,7 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
           dispatch: vi.fn(async () => {}),
           handleCommand: vi.fn(async () => {}),
           applyStaleChatIds: vi.fn(),
+          updateTransport: vi.fn(),
           shutdown: vi.fn(async () => {}),
         };
         state.sessions.push(this.state);
@@ -241,13 +247,17 @@ function installMocks(options: { syncResult?: MockState["syncResult"]; syncDelay
         this.state.applyStaleChatIds(chatIds);
       }
 
+      updateTransport(sdk: unknown, agentConfigCache?: unknown): void {
+        this.state.updateTransport(sdk, agentConfigCache);
+      }
+
       getHeldChatIds(activeChatIds?: ReadonlySet<string> | null): string[] {
         if (!activeChatIds) return this.state.heldChatIds;
         return this.state.heldChatIds.filter((chatId) => activeChatIds.has(chatId));
       }
 
-      shutdown(): Promise<void> {
-        return this.state.shutdown();
+      shutdown(reason?: string, opts?: unknown): Promise<void> {
+        return this.state.shutdown(reason, opts);
       }
     },
   }));
@@ -261,6 +271,7 @@ async function makeSlot(options?: {
   configErrorsThenSucceed?: { error: unknown; times: number };
   activeRuntimeChatIds?: string[];
   activeRuntimeChatIdsError?: unknown;
+  runtimeSessionToken?: string;
   runtimeType?: string;
   syncResult?: MockState["syncResult"];
   syncDelayMs?: number;
@@ -278,6 +289,7 @@ async function makeSlot(options?: {
     configErrorsThenSucceed: options?.configErrorsThenSucceed,
     activeRuntimeChatIds: options?.activeRuntimeChatIds,
     activeRuntimeChatIdsError: options?.activeRuntimeChatIdsError,
+    runtimeSessionToken: options?.runtimeSessionToken,
   });
   const connection = new FakeClientConnection(sdk);
   const { AgentSlot } = await import("../runtime/agent-slot.js");
@@ -583,6 +595,103 @@ describe("AgentSlot", () => {
     await slot.stop();
   });
 
+  it("adopts the latest runtime SDK after a reconnect rebind", async () => {
+    const { slot, connection, sdk, state } = await makeSlot({ activeRuntimeChatIds: ["chat-1"] });
+    await slot.start();
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+
+    const nextSdk = makeSdk({ activeRuntimeChatIds: ["chat-2"] });
+    vi.mocked(sdk.listActiveRuntimeChatIds).mockClear();
+
+    connection.emit("agent:bound", {
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+      sdk: nextSdk,
+      runtimeSessionToken: "runtime-token-2",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(vi.mocked(nextSdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sdk.listActiveRuntimeChatIds)).not.toHaveBeenCalled();
+    expect(session.updateTransport).toHaveBeenCalledWith(nextSdk, expect.anything());
+
+    await slot.stop();
+  });
+
+  it("writes a stable runtime session token file that updates after a reconnect rebind", async () => {
+    const tokenFile = "/tmp/first-tree-test-data/runtime-session-tokens/agent-1.token";
+    const { slot, connection, state } = await makeSlot({
+      activeRuntimeChatIds: ["chat-1"],
+      runtimeSessionToken: "runtime-token-1",
+    });
+
+    try {
+      await slot.start();
+      expect(readFileSync(tokenFile, "utf8").trim()).toBe("runtime-token-1");
+      expect((state.sessionConfigs[0] as { runtimeSessionTokenFile?: string }).runtimeSessionTokenFile).toBe(tokenFile);
+
+      const nextSdk = makeSdk({ activeRuntimeChatIds: ["chat-1"], runtimeSessionToken: "runtime-token-2" });
+      connection.emit("agent:bound", {
+        agentId: "agent-1",
+        displayName: "Agent One",
+        agentType: "agent",
+        sdk: nextSdk,
+        runtimeSessionToken: "runtime-token-2",
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(readFileSync(tokenFile, "utf8").trim()).toBe("runtime-token-2");
+    } finally {
+      await slot.stop();
+    }
+
+    expect(existsSync(tokenFile)).toBe(false);
+  });
+
+  it("starts a fresh active-runtime-chat refresh after rebind even when the old refresh is in flight", async () => {
+    const { slot, connection, sdk, state } = await makeSlot({ activeRuntimeChatIds: ["chat-1"] });
+    await slot.start();
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+    session.sessionStates = [
+      { chatId: "stale-chat", state: "active" },
+      { chatId: "chat-2", state: "active" },
+    ];
+
+    const refreshActiveRuntimeChatIds = Reflect.get(slot, "refreshActiveRuntimeChatIds");
+    if (typeof refreshActiveRuntimeChatIds !== "function") throw new Error("private method missing");
+    const staleRefresh = deferred<{ chatIds: string[] }>();
+    vi.mocked(sdk.listActiveRuntimeChatIds).mockImplementationOnce(() => staleRefresh.promise);
+    const stalePromise = refreshActiveRuntimeChatIds.call(slot, "periodic") as Promise<void>;
+    await Promise.resolve();
+
+    connection.reportSessionState.mockClear();
+    const nextSdk = makeSdk({ activeRuntimeChatIds: ["chat-2"], runtimeSessionToken: "runtime-token-2" });
+    connection.emit("agent:bound", {
+      agentId: "agent-1",
+      displayName: "Agent One",
+      agentType: "agent",
+      sdk: nextSdk,
+      runtimeSessionToken: "runtime-token-2",
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(vi.mocked(nextSdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(1);
+    expect(connection.reportSessionState).toHaveBeenCalledWith("agent-1", "chat-2", "active");
+    expect(connection.reportSessionState).not.toHaveBeenCalledWith("agent-1", "stale-chat", "active");
+
+    staleRefresh.resolve({ chatIds: ["stale-chat"] });
+    await stalePromise;
+    await slot.stop();
+  });
+
   it("chunks reconcile frames so a large held set never exceeds the wire schema limit", async () => {
     const chatIds = Array.from({ length: 501 }, (_, i) => `chat-${i}`);
     const { slot, connection, state } = await makeSlot({ activeRuntimeChatIds: chatIds });
@@ -633,6 +742,32 @@ describe("AgentSlot", () => {
     await stopPromise;
   });
 
+  it("shuts down sessions even when unbind fails during stop", async () => {
+    const { slot, connection, state } = await makeSlot();
+
+    await slot.start();
+    const err = new Error("unbind failed");
+    connection.unbindAgent.mockRejectedValueOnce(err);
+
+    await expect(
+      slot.stop("runtime switched by server", {
+        sessionShutdown: {
+          clearPersistedRegistry: true,
+          reportSuspendedSessions: false,
+        },
+      }),
+    ).rejects.toThrow("unbind failed");
+
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+    expect(session.shutdown).toHaveBeenCalledWith("runtime switched by server", {
+      clearPersistedRegistry: true,
+      reportSuspendedSessions: false,
+    });
+    expect(state.logger.warn).toHaveBeenCalledWith({ err }, "failed to unbind agent while stopping");
+    expect(state.logger.info).toHaveBeenCalledWith("stopped");
+  });
+
   it("starts the bind-time reconcile grace window after startup full state sync", async () => {
     vi.useFakeTimers();
     const { slot, connection, sdk } = await makeSlot({ syncDelayMs: 4_900, omitReconcileInterval: true });
@@ -678,6 +813,38 @@ describe("AgentSlot", () => {
     expect(session.shutdown).toHaveBeenCalled();
     connection.emit("inbox:deliver", "inbox-1", makeFrame({ entryId: 99 }));
     expect(session.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("uses destructive shutdown for a runtime-switch force unbind before pinned reconfigure joins the stop", async () => {
+    const { slot, connection, state } = await makeSlot();
+    await slot.start();
+    const session = state.sessions[0];
+    if (!session) throw new Error("session missing");
+
+    const unbind = deferred<void>();
+    connection.unbindAgent.mockImplementationOnce(() => unbind.promise);
+
+    connection.emit("agent:unbound", "agent-1", "agent_runtime_switch");
+    await Promise.resolve();
+
+    const joinedStop = slot.stop("runtime switched by server", {
+      sessionShutdown: {
+        clearPersistedRegistry: true,
+        reportSuspendedSessions: false,
+      },
+    });
+    await Promise.resolve();
+    expect(session.shutdown).not.toHaveBeenCalled();
+
+    unbind.resolve();
+    await joinedStop;
+
+    expect(connection.unbindAgent).toHaveBeenCalledWith("agent-1");
+    expect(session.shutdown).toHaveBeenCalledTimes(1);
+    expect(session.shutdown).toHaveBeenCalledWith("agent_runtime_switch", {
+      clearPersistedRegistry: true,
+      reportSuspendedSessions: false,
+    });
   });
 
   it("logs optional context-tree, push-dispatch, and session-command failures without crashing", async () => {

@@ -129,7 +129,12 @@ describe("Context Reviewer PR prompt", () => {
     expect(prompt).toContain("clear, accurate");
     expect(prompt).toContain("missing background");
     expect(prompt).toContain("excessive detail");
-    expect(prompt).toContain("gh pr comment 123 --repo owner/context-tree --body");
+    expect(prompt).toContain("gh pr review 123 --repo owner/context-tree --request-changes --body-file");
+    expect(prompt).toContain("gh pr review 123 --repo owner/context-tree --comment --body-file");
+    expect(prompt).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
+    expect(prompt).toContain("Context changes requested");
+    expect(prompt).toContain("Still unclear or needs more detail");
+    expect(prompt).toContain("review action was submitted: `approved`, `commented`, `changes_requested`, or `failed`");
   });
 
   it("renders when optional refs are missing", async () => {
@@ -150,7 +155,9 @@ describe("Context Reviewer PR prompt", () => {
     expect(prompt).toContain("Base ref: unknown");
     expect(prompt).toContain("Head ref: unknown");
     expect(prompt).toContain("Trigger event: pull_request.synchronize");
-    expect(prompt).toContain("gh pr comment 124 --repo owner/context-tree --body");
+    expect(prompt).toContain("gh pr review 124 --repo owner/context-tree --request-changes --body-file");
+    expect(prompt).toContain("gh pr review 124 --repo owner/context-tree --comment --body-file");
+    expect(prompt).toContain("gh pr review 124 --repo owner/context-tree --approve --body-file");
   });
 
   it("renders comment trigger context when present", async () => {
@@ -301,7 +308,11 @@ describe("handleContextReviewerPrEvent", () => {
     );
 
     const [message] = await app.db.select().from(messages).where(eq(messages.id, result.messageId)).limit(1);
-    expect(message?.content).toContain("gh pr comment 123 --repo owner/context-tree --body");
+    expect(message?.content).toContain("gh pr review 123 --repo owner/context-tree --request-changes --body-file");
+    expect(message?.content).toContain("gh pr review 123 --repo owner/context-tree --comment --body-file");
+    expect(message?.content).toContain("gh pr review 123 --repo owner/context-tree --approve --body-file");
+    expect(message?.content).toContain("Context changes requested");
+    expect(message?.content).toContain("Still unclear or needs more detail");
     expect(message?.content).toContain("Trigger event: pull_request.opened");
     expect(message?.metadata).toMatchObject({
       contextTreeReviewer: true,
@@ -341,7 +352,7 @@ describe("handleContextReviewerPrEvent", () => {
     expect(messageRows).toHaveLength(2);
     const [followUp] = await app.db.select().from(messages).where(eq(messages.id, second.messageId)).limit(1);
     expect(followUp?.content).toBe(FOLLOW_UP_NOTICE);
-    expect(followUp?.content).not.toContain("gh pr comment 123 --repo owner/context-tree --body");
+    expect(followUp?.content).not.toContain("gh pr review 123 --repo owner/context-tree");
     const chatRows = await app.db.select({ id: chats.id }).from(chats);
     expect(chatRows).toHaveLength(1);
   });
@@ -375,7 +386,7 @@ describe("handleContextReviewerPrEvent", () => {
     expect(followUp?.format).toBe("markdown");
     expect(followUp?.content).toBe(FOLLOW_UP_NOTICE);
     expect(followUp?.content).not.toContain("clear, accurate");
-    expect(followUp?.content).not.toContain("gh pr comment 123 --repo owner/context-tree --body");
+    expect(followUp?.content).not.toContain("gh pr review 123 --repo owner/context-tree");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "pull_request",
@@ -424,7 +435,7 @@ describe("handleContextReviewerPrEvent", () => {
         "Comment URL: https://github.com/owner/context-tree/pull/123#issuecomment-1",
       ].join("\n"),
     );
-    expect(followUp?.content).not.toContain("gh pr comment 123 --repo owner/context-tree --body");
+    expect(followUp?.content).not.toContain("gh pr review 123 --repo owner/context-tree");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
@@ -475,7 +486,7 @@ describe("handleContextReviewerPrEvent", () => {
         "Comment URL: https://github.com/owner/context-tree/pull/123#discussion_r1",
       ].join("\n"),
     );
-    expect(followUp?.content).not.toContain("gh pr comment 123 --repo owner/context-tree --body");
+    expect(followUp?.content).not.toContain("gh pr review 123 --repo owner/context-tree");
     expect(followUp?.metadata).toMatchObject({
       source: "github",
       event: "pull_request_review_comment",

@@ -23,6 +23,7 @@ import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
+import { getLandingCampaignTrialChat, withLandingCampaignChatState } from "./landing-campaigns/metadata.js";
 
 const log = createLogger("message");
 const ADDRESSED_AGENT_IDS_METADATA_KEY = "addressedAgentIds";
@@ -118,6 +119,48 @@ function validateMessageContent(data: { format: string; content: unknown }): voi
   if (typeof data.content === "string") {
     validateTextBody(data.content, data.format === "request");
   }
+}
+
+function assertLandingCampaignTrialMessageAllowed(input: {
+  chat: { metadata: Record<string, unknown> | null } | null | undefined;
+  senderId: string;
+  senderType: string;
+  data: SendMessage;
+  metadataToStore: Record<string, unknown>;
+  options: SendMessageOptions;
+}): void {
+  const trial = getLandingCampaignTrialChat(input.chat);
+  if (!trial) return;
+
+  if (trial.state === "completed" || trial.state === "failed") {
+    throw new ForbiddenError("Landing campaign trial chat is already complete.");
+  }
+
+  if (input.senderId === trial.agentId && input.senderType !== "human") {
+    if (trial.state !== "running") {
+      throw new ForbiddenError("Landing campaign trial agent can only send while the trial is running.");
+    }
+    return;
+  }
+
+  if (input.senderType === "human") {
+    const isSystemBootstrap =
+      input.options.allowSystemSender === true &&
+      input.metadataToStore.systemSender === "first_tree_onboarding" &&
+      trial.state === "running";
+    if (isSystemBootstrap) return;
+
+    const resolvesRequest = requestResolutionSchema.safeParse(input.metadataToStore.resolves).success;
+    if (
+      trial.state === "awaiting_user" &&
+      trial.inputLocked === false &&
+      (trial.awaitingUserKind === "follow_up" || resolvesRequest)
+    ) {
+      return;
+    }
+  }
+
+  throw new ForbiddenError("Landing campaign trial chat is locked.");
 }
 
 export type SendMessageResult = {
@@ -499,7 +542,7 @@ async function sendMessageInner(
     //    v2: `chat_membership.mode` is **not** SELECTed — fan-out no longer
     //    reads it. Likewise `chats.type` is locked to 'group' since
     //    first-tree-context PR #465 and no longer drives any decision here.
-    const [participants, [senderRow]] = await Promise.all([
+    const [participants, [senderRow], [chatRowSnapshot]] = await Promise.all([
       tx
         .select({
           agentId: chatMembership.agentId,
@@ -517,10 +560,20 @@ async function sendMessageInner(
         .from(agents)
         .where(eq(agents.uuid, senderId))
         .limit(1),
+      tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).limit(1),
     ]);
     if (!senderRow) {
       throw new NotFoundError(`Sender agent "${senderId}" not found`);
     }
+    const initialTrial = getLandingCampaignTrialChat(chatRowSnapshot);
+    // Trial chat state is a server-owned single-run state machine. Lock and
+    // re-read only those rows so concurrent outbox writes cannot apply stale
+    // running-state transitions after another send completes the trial.
+    const chatRow = initialTrial
+      ? (
+          await tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).for("update").limit(1)
+        )[0]
+      : chatRowSnapshot;
 
     const prepared = preflightMessageSendIntent({
       chatId,
@@ -531,6 +584,15 @@ async function sendMessageInner(
       participants,
     });
     const { content: outboundContent, metadata: metadataToStore, mentionedAgentIds: mergedMentions } = prepared;
+
+    assertLandingCampaignTrialMessageAllowed({
+      chat: chatRow,
+      senderId,
+      senderType: senderRow.type,
+      data,
+      metadataToStore,
+      options,
+    });
 
     // 2b. Validate generic attachment refs (`metadata.attachments[]`) against
     //     the blob store: each referenced attachment must exist and its
@@ -673,6 +735,7 @@ async function sendMessageInner(
     // Storing it would both mislead readers and poison the prior-resolution
     // idempotency scan below (which matches on `resolves ->> 'request'`),
     // permanently blocking the legitimate decrement.
+    let resolvedRequest = false;
     const resolution = requestResolutionSchema.safeParse(metadataToStore.resolves);
     if (resolution.success) {
       const requestId = resolution.data.request;
@@ -746,6 +809,40 @@ async function sendMessageInner(
              SET open_request_count = GREATEST(0, open_request_count - 1)
            WHERE chat_id = ${chatId} AND agent_id = ${target}
         `);
+      }
+      resolvedRequest = true;
+    }
+
+    const trial = getLandingCampaignTrialChat(chatRow);
+    if (chatRow && trial) {
+      let nextMetadata: Record<string, unknown> | null = null;
+      if (senderId === trial.agentId && senderRow.type !== "human") {
+        if (data.format === MESSAGE_FORMATS.REQUEST) {
+          nextMetadata = withLandingCampaignChatState(chatRow.metadata, "awaiting_user", false, {
+            awaitingUserKind: "request",
+          });
+        } else {
+          const completedAgentTurns = trial.completedAgentTurns + 1;
+          const reachedTurnLimit = completedAgentTurns >= trial.maxAgentTurns;
+          nextMetadata = withLandingCampaignChatState(
+            chatRow.metadata,
+            reachedTurnLimit ? "completed" : "awaiting_user",
+            reachedTurnLimit,
+            {
+              ...(reachedTurnLimit ? {} : { awaitingUserKind: "follow_up" as const }),
+              completedAgentTurns,
+            },
+          );
+        }
+      } else if (
+        senderRow.type === "human" &&
+        trial.state === "awaiting_user" &&
+        (resolvedRequest || trial.awaitingUserKind === "follow_up")
+      ) {
+        nextMetadata = withLandingCampaignChatState(chatRow.metadata, "running", true);
+      }
+      if (nextMetadata) {
+        await tx.update(chats).set({ metadata: nextMetadata, updatedAt: new Date() }).where(eq(chats.id, chatId));
       }
     }
 

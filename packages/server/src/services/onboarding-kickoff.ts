@@ -1,47 +1,35 @@
-import type { KickoffKind, SendMessage } from "@first-tree/shared";
-import { and, eq, isNull, like } from "drizzle-orm";
+import type { SendMessage } from "@first-tree/shared";
+import { and, eq, isNull, like, or } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { createChat } from "./chat.js";
-import { sendMessage } from "./message.js";
 
 export type KickoffOnboardingArgs = {
   /** The membership whose completion is stamped once the chat exists. */
   memberId: string;
   /** The caller's human agent in the org — the chat creator and message sender. */
   humanAgentId: string;
+  /** Organization that owns the kickoff chat. */
+  organizationId: string;
   /** The bootstrap agent the kickoff chat is opened with. */
   targetAgentId: string;
-  /** The First Tree-authored system trigger body sent into the kickoff chat. */
+  /** The user-visible first message body sent into the kickoff chat. */
   bootstrap: string;
-  /**
-   * Separates intro, value-first work, and tree-building kickoffs for the same
-   * (human, agent) pair so they get distinct idempotency keys — see
-   * `kickoffKindSchema`. An "intro" chat must not absorb a later "tree"
-   * (`/build-tree`) kickoff, and a value-first "work" chat must stay separate
-   * from the heavier Context Tree setup chat.
-   */
-  kind: KickoffKind;
+  /** Display title for the created chat. */
+  topic: string;
+  /** Stable idempotency key for this kickoff surface. */
+  kickoffKey: string;
   /** Whether this kickoff should stamp onboarding completion after the chat exists. */
   complete: boolean;
-  /**
-   * Optional campaign slug for reusable growth entries (quickstart). When set,
-   * it's appended to the idempotency key so two campaigns for the same
-   * (human, agent, kind) get distinct chats instead of the second being
-   * swallowed by the first's existing chat. Onboarding never sets it, so the
-   * key stays `<human>:<target>:<kind>` and onboarding is unaffected.
-   */
-  campaign?: string;
   /**
    * Optional side effect to run once the kickoff chat exists AND its
    * participants are validated — createChat enforces the cross-org / active /
    * private-target checks on first creation; an existing chat was validated
-   * when it was created — but BEFORE the bootstrap is sent. Quickstart uses it
-   * to provision + bind the campaign scan skill onto the target agent. Running
-   * it earlier would let an unauthorized kickoff mutate another org/agent's
-   * resources before the chat is rejected.
+   * when it was created — but BEFORE the bootstrap is sent. Running it earlier
+   * would let an unauthorized kickoff mutate another org/agent's resources
+   * before the chat is rejected.
    */
   onChatReady?: () => Promise<void>;
 };
@@ -54,17 +42,6 @@ export type KickoffOnboardingResult = {
   sent?: { recipients: string[]; messageId: string };
 };
 
-function topicForKickoffKind(kind: KickoffKind): string {
-  switch (kind) {
-    case "intro":
-      return "Meet your agent";
-    case "work":
-      return "First task chat";
-    case "tree":
-      return "Set up team context";
-  }
-}
-
 /**
  * True only after a tree setup kickoff has a bootstrap message. A chat row by
  * itself is not enough: `kickoffOnboarding` creates the chat before sending the
@@ -76,7 +53,12 @@ export async function hasTreeSetupKickoffMessage(db: Database, organizationId: s
     .select({ id: messages.id })
     .from(chats)
     .innerJoin(messages, eq(messages.chatId, chats.id))
-    .where(and(eq(chats.organizationId, organizationId), like(chats.onboardingKickoffKey, "%:tree")))
+    .where(
+      and(
+        eq(chats.organizationId, organizationId),
+        or(eq(chats.onboardingKickoffKey, `${organizationId}:tree-setup`), like(chats.onboardingKickoffKey, "%:tree")),
+      ),
+    )
     .limit(1);
   return !!row;
 }
@@ -86,95 +68,35 @@ export async function hasTreeSetupKickoffMessage(db: Database, organizationId: s
  * used to orchestrate (create the first chat → send the bootstrap → stamp
  * completion) into one resumable operation:
  *
- *   1. find-or-create the kickoff chat, keyed by `<humanAgentId>:<targetAgentId>:<kind>`
- *      (plus `:<campaign>` for reusable quickstart growth entries; race-safe via
- *      the unique index on `chats.onboarding_kickoff_key`);
- *   2. send the bootstrap message only if the chat has no messages yet, under a
- *      row lock so concurrent requests can't both send;
+ *   1. find-or-create the kickoff chat, keyed by the caller-supplied stable
+ *      onboarding key (race-safe via the unique index on
+ *      `chats.onboarding_kickoff_key`);
+ *   2. send the bootstrap message only if the chat has no messages yet;
  *   3. optionally stamp `onboarding_completed_at` (+ suppressed/reason) only
  *      after the chat exists, and only if not already stamped.
  *
- * Re-running it — a reopened tab, a network retry, or the build-tree recovery
+ * Re-running it — a reopened tab, a network retry, or the tree setup recovery
  * surface — converges on the same chat. Single-chat onboarding paths keep
- * `complete: true`; multi-chat paths use `complete: false` and stamp completion
- * only after all required chats exist. The `kind` is part of the key so an
- * "intro", value-first "work", and later "tree" (`/build-tree`) kickoff for the
- * same agent stay distinct chats.
+ * `complete: true`; support/background paths use `complete: false` and stamp
+ * completion only after all required chats exist.
  */
 export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArgs): Promise<KickoffOnboardingResult> {
-  const kickoffKey = args.campaign
-    ? `${args.humanAgentId}:${args.targetAgentId}:${args.kind}:${args.campaign}`
-    : `${args.humanAgentId}:${args.targetAgentId}:${args.kind}`;
-
-  // 1. Find-or-create the kickoff chat. The fast path (existing chat) skips
-  //    participant re-validation; only a first run pays for createChat, whose
-  //    ON CONFLICT DO NOTHING absorbs a concurrent first run.
-  let chatId: string;
-  const [existing] = await db
-    .select({ id: chats.id })
-    .from(chats)
-    .where(eq(chats.onboardingKickoffKey, kickoffKey))
-    .limit(1);
-  if (existing) {
-    chatId = existing.id;
-  } else {
-    const created = await createChat(db, {
-      mode: "legacy-empty-agent",
-      creatorAgentId: args.humanAgentId,
-      participantAgentIds: [args.targetAgentId],
-      topic: topicForKickoffKind(args.kind),
-      onboardingKickoffKey: kickoffKey,
-    });
-    chatId = created.id;
-  }
-
-  // The chat now exists and its participants are validated (createChat enforces
-  // the cross-org / active / private-target checks on first creation; an
-  // existing chat was validated when it was created). Run any caller-supplied
-  // side effect that mutates the target agent — e.g. binding the campaign scan
-  // skill — only now, BEFORE the bootstrap that triggers the agent. Earlier
-  // would let an unauthorized kickoff mutate another org/agent's resources
-  // before the chat is rejected.
-  if (args.onChatReady) await args.onChatReady();
-
-  // 2. Send the bootstrap only if the chat is still empty — under a row lock on
-  //    the chat so concurrent kickoffs (double-click, two tabs, retry mid-flight)
-  //    serialize: the second waits for the first to commit, then sees the message
-  //    and skips. Without the lock both could read empty and both send. sendMessage
-  //    opens its own (now nested → savepoint) transaction; passing the tx as the
-  //    db is the established cross-service pattern for tx-scoped writes.
-  let sent: KickoffOnboardingResult["sent"];
-  await db.transaction(async (tx) => {
-    await tx.select({ id: chats.id }).from(chats).where(eq(chats.id, chatId)).for("update");
-    const [firstMessage] = await tx
-      .select({ id: messages.id })
-      .from(messages)
-      .where(eq(messages.chatId, chatId))
-      .limit(1);
-    if (firstMessage) return;
-    const message: SendMessage = {
-      format: "text",
-      content: args.bootstrap,
-      source: "api",
-      // `systemSender` marks this as a trusted onboarding kickoff (the server
-      // strips it from untrusted sends). `campaign`, when present, is an
-      // agent-only signal: the client's `onboardingSkillDirective` reads it to
-      // load and run the matching campaign scan skill, while the web bubble
-      // reader keys only on `systemSender` and ignores it — so it never leaks
-      // into the user-visible body.
-      metadata: {
-        systemSender: "first_tree_onboarding",
-        ...(args.campaign ? { campaign: args.campaign } : {}),
-      },
-    };
-    // tx → Database: drizzle transaction handles aren't structurally Database;
-    // the `as unknown as` bridge is the same pattern used in member.ts /
-    // resources.ts / org-settings.ts for tx-scoped service calls.
-    const result = await sendMessage(tx as unknown as Database, chatId, args.humanAgentId, message, {
-      addressedToAgentIds: [args.targetAgentId],
-      allowSystemSender: true,
-    });
-    sent = { recipients: result.recipients, messageId: result.message.id };
+  const initialMessage: SendMessage = {
+    format: "text",
+    content: args.bootstrap,
+    source: "api",
+  };
+  const created = await createChat(db, {
+    mode: "task",
+    initiatorAgentId: args.humanAgentId,
+    organizationId: args.organizationId,
+    initialRecipientAgentIds: [args.targetAgentId],
+    contextParticipantAgentIds: [],
+    topic: args.topic,
+    initialMessage,
+    source: "manual",
+    onboardingKickoffKey: args.kickoffKey,
+    beforeInitialMessage: args.onChatReady,
   });
 
   // 3. Stamp completion now that the chat exists, when requested. Multi-chat
@@ -193,5 +115,10 @@ export async function kickoffOnboarding(db: Database, args: KickoffOnboardingArg
       .where(and(eq(members.id, args.memberId), isNull(members.onboardingCompletedAt)));
   }
 
-  return { chatId, sent };
+  return {
+    chatId: created.chat.id,
+    ...(created.initialMessageCreated
+      ? { sent: { recipients: created.recipients, messageId: created.message.id } }
+      : {}),
+  };
 }

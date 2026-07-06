@@ -89,7 +89,23 @@ describe("formatInboundContent", () => {
     expect(await formatInboundContent(msg, cache)).toBe("[From: alice · type=agent]\n\nhello");
   });
 
-  it("appends the onboarding skill directive for a First Tree onboarding kickoff", async () => {
+  it("resolves the participant SDK lazily so rebound sessions use the current transport", async () => {
+    const firstSdk = mkSdk(async () => []);
+    const secondSdk = mkSdk(async () => participants);
+    let currentSdk = firstSdk;
+    const cache = createParticipantCache(
+      () => currentSdk,
+      "chat-1",
+      () => {},
+    );
+    currentSdk = secondSdk;
+
+    expect(await cache.get()).toEqual(participants);
+    expect(firstSdk.listChatParticipants).not.toHaveBeenCalled();
+    expect(secondSdk.listChatParticipants).toHaveBeenCalledWith("chat-1");
+  });
+
+  it("does not append an agent-only directive for legacy First Tree onboarding metadata", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
     const msg: SessionMessage = {
@@ -101,13 +117,10 @@ describe("formatInboundContent", () => {
       metadata: { systemSender: "first_tree_onboarding" },
     };
     const out = await formatInboundContent(msg, cache);
-    // The user-facing body stays intact; the agent-only directive is appended.
-    expect(out.startsWith("[From: alice · type=agent]\n\nWelcome to First Tree.")).toBe(true);
-    expect(out).toContain("<first-tree-onboarding>");
-    expect(out).toContain("load and follow the `first-tree-welcome` skill");
+    expect(out).toBe("[From: alice · type=agent]\n\nWelcome to First Tree.");
   });
 
-  it("points the agent at the campaign scan skill when the kickoff carries a campaign", async () => {
+  it("does not append a campaign directive for legacy campaign metadata", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
     const msg: SessionMessage = {
@@ -119,14 +132,10 @@ describe("formatInboundContent", () => {
       metadata: { systemSender: "first_tree_onboarding", campaign: "production-scan" },
     };
     const out = await formatInboundContent(msg, cache);
-    expect(out.startsWith("[From: alice · type=agent]\n\nWelcome to First Tree.")).toBe(true);
-    // Campaign kickoff → load the matching scan skill, not the onboarding welcome.
-    expect(out).toContain("<first-tree-onboarding>");
-    expect(out).toContain("load and follow the `production-scan` skill");
-    expect(out).not.toContain("first-tree-welcome");
+    expect(out).toBe("[From: alice · type=agent]\n\nWelcome to First Tree.");
   });
 
-  it("ignores a malformed campaign slug and falls back to the welcome directive", async () => {
+  it("ignores a malformed legacy campaign slug without adding fallback instructions", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
     const msg: SessionMessage = {
@@ -138,10 +147,10 @@ describe("formatInboundContent", () => {
       metadata: { systemSender: "first_tree_onboarding", campaign: "../etc/passwd" },
     };
     const out = await formatInboundContent(msg, cache);
-    expect(out).toContain("load and follow the `first-tree-welcome` skill");
+    expect(out).toBe("[From: alice · type=agent]\n\nWelcome to First Tree.");
   });
 
-  it("does not append the onboarding directive for other system senders", async () => {
+  it("does not append hidden directives for other system senders", async () => {
     const sdk = mkSdk(async () => participants);
     const cache = createParticipantCache(sdk, "chat-1", () => {});
     const msg: SessionMessage = {
@@ -451,10 +460,94 @@ describe("buildAgentEnv", () => {
     expect(env.FIRST_TREE_CHAT_ID).toBe("chat-1");
   });
 
-  it("prepends FIRST_TREE_HOME/bin to PATH for channel-local CLI resolution", () => {
+  it("injects the runtime session token without persisting it in agent config", () => {
+    const env = buildAgentEnv({ PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
+      sdk: { serverUrl: "http://first-tree", runtimeSessionToken: "runtime-token-1" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+    });
+
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBe("runtime-token-1");
+  });
+
+  it("injects a stable runtime session token file for long-lived child CLI calls", () => {
+    const env = buildAgentEnv({ PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
+      sdk: { serverUrl: "http://first-tree", runtimeSessionToken: "runtime-token-1" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+      runtimeSessionTokenFile: "/tmp/runtime-session-token",
+    });
+
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBe("runtime-token-1");
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE).toBe("/tmp/runtime-session-token");
+  });
+
+  it("adds client switch drain markers when provider context is available", () => {
+    const env = buildAgentEnv({ PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
+      sdk: { serverUrl: "http://first-tree" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+      clientId: "client_aabbccdd",
+      provider: "codex",
+    });
+    expect(env.FIRST_TREE_CLIENT_ID).toBe("client_aabbccdd");
+    expect(env.FIRST_TREE_PROVIDER).toBe("codex");
+    expect(env.FIRST_TREE_SWITCH_DRAIN_VERSION).toBe("1");
+  });
+
+  it("does not infer a CLI bin directory from FIRST_TREE_HOME", () => {
+    const logs: string[] = [];
     const parent = {
       FIRST_TREE_HOME: "/first-tree-home",
-      PATH: `/usr/bin${delimiter}/first-tree-home/bin${delimiter}/opt/bin`,
+      PATH: "/usr/bin",
+    } as NodeJS.ProcessEnv;
+    const env = buildAgentEnv(parent, {
+      sdk: { serverUrl: "http://first-tree" },
+      agent: {
+        agentId: "agent-a",
+        inboxId: "inbox-a",
+        displayName: "agent-a",
+        type: "agent",
+        visibility: "organization",
+        delegateMention: null,
+        metadata: {},
+      },
+      chatId: "chat-1",
+      log: (msg) => logs.push(msg),
+    });
+    expect(env.PATH).toBe("/usr/bin");
+    expect(logs).toEqual([]);
+  });
+
+  it("prepends explicit FIRST_TREE_CLI_BIN_DIR to PATH for channel-local CLI resolution", () => {
+    const parent = {
+      FIRST_TREE_HOME: "/first-tree-home",
+      FIRST_TREE_CLI_BIN_DIR: "/first-tree-cli-bin",
+      PATH: `/usr/bin${delimiter}/first-tree-cli-bin${delimiter}/opt/bin`,
     } as NodeJS.ProcessEnv;
     const env = buildAgentEnv(parent, {
       sdk: { serverUrl: "http://first-tree" },
@@ -469,14 +562,14 @@ describe("buildAgentEnv", () => {
       },
       chatId: "chat-1",
     });
-    expect(env.PATH).toBe(`/first-tree-home/bin${delimiter}/usr/bin${delimiter}/opt/bin`);
+    expect(env.PATH).toBe(`/first-tree-cli-bin${delimiter}/usr/bin${delimiter}/opt/bin`);
   });
 
-  it("logs once when the channel-local CLI binary is not resolvable", () => {
+  it("logs once when explicit FIRST_TREE_CLI_BIN_DIR lacks the channel binary", () => {
     setCliBinding({ binName: "first-tree-staging", packageName: "first-tree-staging" });
-    const home = mkdtempSync(join(tmpdir(), "first-tree-agent-env-"));
+    const binDir = mkdtempSync(join(tmpdir(), "first-tree-agent-env-bin-"));
     const logs: string[] = [];
-    const parent = { FIRST_TREE_HOME: home, PATH: "/usr/bin" } as NodeJS.ProcessEnv;
+    const parent = { FIRST_TREE_CLI_BIN_DIR: binDir, PATH: "/usr/bin" } as NodeJS.ProcessEnv;
     const ctx = {
       sdk: { serverUrl: "http://first-tree" },
       agent: {
@@ -497,20 +590,19 @@ describe("buildAgentEnv", () => {
 
     expect(logs).toHaveLength(1);
     expect(logs[0]).toContain("first-tree-staging");
-    expect(logs[0]).toContain(join(home, "bin"));
+    expect(logs[0]).toContain(binDir);
   });
 
-  it("does not warn when the channel-local CLI binary exists", () => {
+  it("does not warn when explicit FIRST_TREE_CLI_BIN_DIR contains the channel binary", () => {
     setCliBinding({ binName: "first-tree-dev", packageName: null });
-    const home = mkdtempSync(join(tmpdir(), "first-tree-agent-env-"));
-    const binDir = join(home, "bin");
+    const binDir = mkdtempSync(join(tmpdir(), "first-tree-agent-env-bin-"));
     mkdirSync(binDir, { recursive: true });
     const binPath = join(binDir, "first-tree-dev");
     writeFileSync(binPath, "#!/bin/sh\n");
     chmodSync(binPath, 0o755);
     const logs: string[] = [];
 
-    buildAgentEnv({ FIRST_TREE_HOME: home, PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
+    buildAgentEnv({ FIRST_TREE_CLI_BIN_DIR: binDir, PATH: "/usr/bin" } as NodeJS.ProcessEnv, {
       sdk: { serverUrl: "http://first-tree" },
       agent: {
         agentId: "agent-a",

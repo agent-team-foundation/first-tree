@@ -13,7 +13,7 @@
  * needs the same prompts, hoist these builders to `packages/shared`.
  */
 
-export type TreeSetupBootstrapPlan = "createBinding" | "useBoundTree";
+export type TreeSetupBootstrapPlan = "agentSeed" | "useBoundTree" | "createBinding";
 
 function formatSourceList(sourceUrls: readonly string[], heading: string): string[] {
   return [heading, ...sourceUrls.map((u) => `- ${u}`)];
@@ -26,34 +26,39 @@ export function buildValueFirstBootstrap(
     treeSetup: "none" | "pending" | "bound";
   },
 ): string {
-  const sourceLines =
-    sourceUrls.length > 0 ? ["", ...formatSourceList(sourceUrls, "It's already connected to your code:")] : [];
-  const teamContextLines =
-    opts.treeSetup === "bound"
-      ? ["", `${opts.agentDisplayName} can also draw on your team's shared context to get up to speed faster.`]
-      : [];
+  const sourceLines = sourceUrls.length > 0 ? ["", ...formatSourceList(sourceUrls, "Connected code:")] : [];
 
   return [
-    `Welcome to First Tree — this is your first chat with ${opts.agentDisplayName}.`,
-    ...sourceLines,
+    `${opts.agentDisplayName}, welcome aboard.`,
     "",
-    `${opts.agentDisplayName} will get oriented and then suggest a few small tasks you could start with — or just tell it what you have in mind.`,
-    ...teamContextLines,
+    "Please help me get started with First Tree.",
+    ...sourceLines,
   ].join("\n");
 }
 
 export function buildNoRepoBootstrap(agentDisplayName: string): string {
-  return [
-    `Welcome to First Tree — this is your first chat with ${agentDisplayName}.`,
-    "",
-    `Tell ${agentDisplayName} what you'd like to work on: point it at a folder on your computer or paste a GitHub URL, and it'll take a look and suggest a few things you could start with.`,
-  ].join("\n");
+  return [`${agentDisplayName}, welcome aboard.`, "", "Please help me get started with First Tree."].join("\n");
 }
 
 export function buildTreeSetupBootstrap(
   sourceUrls: readonly string[],
   opts: { treeBindingPlan: TreeSetupBootstrapPlan; treeUrl: string | null },
 ): string {
+  if (opts.treeBindingPlan === "agentSeed") {
+    // Visible, user-voice task text (onboarding kickoff contract: no skill names
+    // / hidden directives). The agent reaches first-tree-seed from the tree-less
+    // family map + skill descriptions, and seed adapts to the tree's ACTUAL state
+    // — creating + binding it from zero, or filling a bound-but-empty tree. The
+    // tree URL is included only as a hint when a binding already exists.
+    return [
+      "Let's set up our team's shared context.",
+      "",
+      "Please build out our Context Tree from our connected code — propose an initial structure for me to review, then fill it in.",
+      "",
+      ...formatSourceList(sourceUrls, "Connected code:"),
+      ...(opts.treeUrl ? ["", `Context Tree: ${opts.treeUrl}`] : []),
+    ].join("\n");
+  }
   const sourceLines = formatSourceList(sourceUrls, "Source code:");
   const treeLine = `Context Tree: ${opts.treeUrl ?? "resolved by First Tree Cloud"}`;
   return [
@@ -65,7 +70,7 @@ export function buildTreeSetupBootstrap(
     "",
     "This setup helps future agents understand the team's code, decisions, and conventions. The first task chat stays separate.",
     "",
-    "Operational note: after reading the bound tree, use first-tree-read, first-tree-seed, or first-tree-write as appropriate.",
+    "Read the bound tree first. Use first-tree-read, first-tree-seed, or first-tree-write as appropriate.",
   ].join("\n");
 }
 
@@ -75,9 +80,7 @@ export function buildTreeSetupBootstrap(
  * repos or runs org setup. Keep the first chat value-first, not tree-authoring.
  */
 export function buildInviteeReadyBootstrap(agentDisplayName: string): string {
-  return [
-    `Welcome to First Tree — this is your first chat with ${agentDisplayName}.`,
-    "",
-    `Your team's shared context is already set up, so ${agentDisplayName} can get oriented from the team's work and suggest a few things to start with. Tell it what you'd like to dig into.`,
-  ].join("\n");
+  return [`${agentDisplayName}, welcome aboard.`, "", "Please help me get settled into this team on First Tree."].join(
+    "\n",
+  );
 }

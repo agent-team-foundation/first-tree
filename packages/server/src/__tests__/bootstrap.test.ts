@@ -31,6 +31,8 @@ function makeTempConfigDir(): string {
 
 const baseServerConfig: ServerConfig = {
   channel: "dev",
+  growth: { landingPagesEnabled: false, landingCampaignMaxAgentTurns: 1 },
+  docs: { enabled: false },
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: "https://first-tree.example" },
   workspace: { root: "/tmp/first-tree-test-workspaces" },
@@ -40,8 +42,14 @@ const baseServerConfig: ServerConfig = {
   },
   auth: { accessTokenExpiry: "30m", refreshTokenExpiry: "30d", connectTokenExpiry: "10m" },
   trustProxy: false,
+  connectBootstrap: {
+    method: "npm",
+    portableDownloadBaseUrl: "https://downloads.first-tree.ai",
+  },
   observability: { logging: { level: "error", format: "json", bridgeToSpanLevel: "off" } },
   runtime: {
+    agentHttpTokenEnforcement: false,
+    runtimeSwitchFaultInjection: false,
     pollingIntervalSeconds: 5,
     presenceCleanupSeconds: 60,
     archiveSweepIntervalSeconds: 0,

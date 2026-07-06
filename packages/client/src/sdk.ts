@@ -1,5 +1,6 @@
 import {
   type ActiveRuntimeChatIdsResponse,
+  AGENT_RUNTIME_SESSION_HEADER,
   AGENT_SELECTOR_HEADER,
   type Agent,
   type AgentRuntimeConfig,
@@ -11,11 +12,21 @@ import {
   type ChatGithubEntityListResponse,
   type ChatParticipantDetail,
   type ClientCapabilities,
+  type CreateDocCommentRequest,
   type CreateTaskChat,
+  type DocComment,
+  type DocCommentStatus,
+  type DocStatus,
+  type DocSummary,
+  type DocWithVersion,
   type FollowGithubEntityConflict,
   type FollowGithubEntityResponse,
   followGithubEntityConflictSchema,
+  type ListDocCommentsResponse,
+  type ListDocsResponse,
   type Message,
+  type PublishDocRequest,
+  type PublishDocResponse,
   type RuntimeProvider,
   type SendMessage,
   type UnfollowGithubEntityResponse,
@@ -50,6 +61,12 @@ export type SdkConfig = {
    * `request.agent`. Omit for admin/member-only calls (/me, /auth/*).
    */
   agentId?: string;
+  /**
+   * Ephemeral token returned by the current successful WS `agent:bind`.
+   * Agent-scoped HTTP includes it to prove the request comes from the active
+   * runtime binding, not merely from a user JWT that knows `X-Agent-Id`.
+   */
+  runtimeSessionToken?: string;
   /**
    * Optional `User-Agent` header sent on every request. Without it Node's
    * default `User-Agent: node` lands in trace backends — useless for forensics
@@ -153,6 +170,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Serialize defined options into a query string ("" when nothing is set). */
+function buildQuery(options?: Record<string, string | number | undefined>): string {
+  if (!options) return "";
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(options)) {
+    if (value !== undefined) params.set(key, String(value));
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
 /**
  * Decide whether an error thrown by `fetch()` represents a transient
  * network-layer failure that the caller should retry.
@@ -208,6 +236,7 @@ export class FirstTreeHubSDK {
   private readonly _baseUrl: string;
   private readonly getAccessToken: AccessTokenProvider;
   private readonly _agentId: string | undefined;
+  private readonly _runtimeSessionToken: string | undefined;
   private readonly _userAgent: string | undefined;
   private readonly logger = createLogger("sdk");
 
@@ -215,6 +244,7 @@ export class FirstTreeHubSDK {
     this._baseUrl = config.serverUrl.replace(/\/+$/, "");
     this.getAccessToken = config.getAccessToken;
     this._agentId = config.agentId;
+    this._runtimeSessionToken = config.runtimeSessionToken;
     this._userAgent = config.userAgent;
   }
 
@@ -226,6 +256,11 @@ export class FirstTreeHubSDK {
   /** The agent UUID this SDK is scoped to, if any. */
   get agentId(): string | undefined {
     return this._agentId;
+  }
+
+  /** Ephemeral runtime-session token scoped to the current WS bind, if any. */
+  get runtimeSessionToken(): string | undefined {
+    return this._runtimeSessionToken;
   }
 
   /** Validate current JWT + X-Agent-Id, return agent identity. */
@@ -296,6 +331,12 @@ export class FirstTreeHubSDK {
     return this.requestJson<Message>(`/api/v1/agent/chats/${chatId}/messages`, {
       method: "POST",
       body: JSON.stringify(data),
+    });
+  }
+
+  async createAgentOutboxToken(chatId: string): Promise<{ accessToken: string; expiresIn: number }> {
+    return this.requestJson(`/api/v1/agent/chats/${encodeURIComponent(chatId)}/outbox-token`, {
+      method: "POST",
     });
   }
 
@@ -499,6 +540,90 @@ export class FirstTreeHubSDK {
     };
   }
 
+  // ── Documents (docloop) — agent self surface, /api/v1/agent/documents ──
+
+  /** Publish a markdown document: creates it on first publish of a slug, appends the next version after. */
+  public async publishDoc(body: PublishDocRequest): Promise<PublishDocResponse> {
+    // No transport retry: publish is non-idempotent (a lost response +
+    // retry would append a duplicate version), same as createTaskChat.
+    return this.requestJson<PublishDocResponse>(
+      "/api/v1/agent/documents",
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      { retry: false },
+    );
+  }
+
+  /** List the org's documents. `slug` filter is the slug→id resolution path for the CLI. */
+  public async listDocs(options?: {
+    slug?: string;
+    project?: string;
+    status?: DocStatus;
+    limit?: number;
+    cursor?: string;
+  }): Promise<ListDocsResponse> {
+    return this.requestJson<ListDocsResponse>(`/api/v1/agent/documents${buildQuery(options)}`);
+  }
+
+  /** Read a document with one version's content (latest when `version` is omitted). */
+  public async getDoc(docId: string, options?: { version?: number }): Promise<DocWithVersion> {
+    return this.requestJson<DocWithVersion>(
+      `/api/v1/agent/documents/${encodeURIComponent(docId)}${buildQuery(options)}`,
+    );
+  }
+
+  public async setDocStatus(docId: string, status: DocStatus): Promise<DocSummary> {
+    return this.requestJson<DocSummary>(`/api/v1/agent/documents/${encodeURIComponent(docId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    });
+  }
+
+  public async listDocComments(
+    docId: string,
+    options?: { status?: DocCommentStatus; versionNumber?: number },
+  ): Promise<ListDocCommentsResponse> {
+    return this.requestJson<ListDocCommentsResponse>(
+      `/api/v1/agent/documents/${encodeURIComponent(docId)}/comments${buildQuery(options)}`,
+    );
+  }
+
+  public async createDocComment(docId: string, body: CreateDocCommentRequest): Promise<DocComment> {
+    // No transport retry: comment creation is non-idempotent (duplicate
+    // comments would pollute the review thread).
+    return this.requestJson<DocComment>(
+      `/api/v1/agent/documents/${encodeURIComponent(docId)}/comments`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+      },
+      { retry: false },
+    );
+  }
+
+  /** Reply in a comment thread. The comment id alone addresses it — no document id needed. */
+  public async replyDocComment(commentId: string, body: string): Promise<DocComment> {
+    // No transport retry — same non-idempotency as createDocComment.
+    return this.requestJson<DocComment>(
+      `/api/v1/agent/document-comments/${encodeURIComponent(commentId)}/replies`,
+      {
+        method: "POST",
+        body: JSON.stringify({ body }),
+      },
+      { retry: false },
+    );
+  }
+
+  /** Resolve or reopen a top-level comment (replies follow their thread). */
+  public async setDocCommentStatus(commentId: string, status: DocCommentStatus): Promise<DocComment> {
+    return this.requestJson<DocComment>(`/api/v1/agent/document-comments/${encodeURIComponent(commentId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    });
+  }
+
   private queryString(options?: { limit?: number; cursor?: string }): string {
     const params = new URLSearchParams();
     if (options?.limit !== undefined) params.set("limit", String(options.limit));
@@ -581,6 +706,9 @@ export class FirstTreeHubSDK {
     };
     if (this._agentId) {
       headers[AGENT_SELECTOR_HEADER] = this._agentId;
+      if (this._runtimeSessionToken) {
+        headers[AGENT_RUNTIME_SESSION_HEADER] = this._runtimeSessionToken;
+      }
     }
     if (this._userAgent) {
       headers["User-Agent"] = this._userAgent;
@@ -610,7 +738,11 @@ export class FirstTreeHubSDK {
     } catch {
       message = body;
     }
-    return new SdkError(response.status, message);
+    const retryAfter = response.headers.get("retry-after") ?? undefined;
+    return new SdkError(response.status, message, {
+      retryAfter,
+      retryAfterMs: parseRetryAfterMs(retryAfter),
+    });
   }
 }
 
@@ -618,10 +750,25 @@ export class SdkError extends Error {
   constructor(
     public readonly statusCode: number,
     message: string,
+    opts: { retryAfter?: string; retryAfterMs?: number } = {},
   ) {
     super(message);
     this.name = "SdkError";
+    this.retryAfter = opts.retryAfter;
+    this.retryAfterMs = opts.retryAfterMs;
   }
+
+  public readonly retryAfter?: string;
+  public readonly retryAfterMs?: number;
+}
+
+function parseRetryAfterMs(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.floor(seconds * 1000);
+  const dateMs = Date.parse(value);
+  if (!Number.isFinite(dateMs)) return undefined;
+  return Math.max(0, dateMs - Date.now());
 }
 
 /**

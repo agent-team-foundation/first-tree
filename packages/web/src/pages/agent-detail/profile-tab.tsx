@@ -12,7 +12,10 @@ export function ProfileTab() {
   const [editOpen, setEditOpen] = useState(false);
   // Identity + Appearance share one Edit entry (PR2 §Profile). Both the Identity
   // section's Edit button and the avatar open the same unified dialog.
-  const onEdit = ctx.canManageAgent && ctx.agent.status === "active" ? () => setEditOpen(true) : undefined;
+  const onEdit =
+    ctx.canManageAgent && ctx.agent.status === "active" && !ctx.runtimeSwitchClaim
+      ? () => setEditOpen(true)
+      : undefined;
 
   return (
     <>
@@ -33,10 +36,14 @@ export function ProfileTab() {
           suspendPending={ctx.suspendPending}
           reactivatePending={ctx.reactivatePending}
           deletePending={ctx.deletePending}
+          runtimeSwitchClaim={ctx.runtimeSwitchClaim}
+          runtimeSwitchRecoveryPending={ctx.runtimeSwitchRecoveryPending}
+          runtimeSwitchRecoveryError={ctx.runtimeSwitchRecoveryError}
           errorMessage={ctx.dangerError}
           onSuspend={ctx.onSuspend}
           onReactivate={ctx.onReactivate}
           onDelete={ctx.onDelete}
+          onRecoverRuntimeSwitch={ctx.onRecoverRuntimeSwitch}
         />
       )}
       {ctx.canManageAgent && (

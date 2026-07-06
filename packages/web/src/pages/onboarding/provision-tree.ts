@@ -79,8 +79,8 @@ export async function provisionNewTree(organizationId: string): Promise<void> {
 
 /**
  * Register the selected source repos as `recommended` team repo resources.
- * This is required before the value-first work chat and before any tree setup
- * lane: it is the path by which selected repos reach the agent's runtime
+ * This is required before the value-first first chat and before any tree setup
+ * chat: it is the path by which selected repos reach the agent's runtime
  * `gitRepos`, on-disk sources, and `workspace.json.sources`.
  *
  * Creates each resource (tolerating "already exists" conflicts from a re-run —

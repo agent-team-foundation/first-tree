@@ -95,6 +95,9 @@ function buttonByText(container: ParentNode, text: string): HTMLButtonElement | 
 beforeEach(() => {
   document.body.innerHTML = "";
   vi.clearAllMocks();
+  // The panel persists a per-tab install-attempt marker in sessionStorage; clear
+  // it so one test's in-flight attempt doesn't lock the CTA in the next.
+  window.sessionStorage.clear();
   authMock.value = { organizationId: "org-1" };
   githubMocks.getGithubAppInstallation.mockResolvedValue(installation());
   githubMocks.getGithubAppInstallUrl.mockResolvedValue("https://github.com/apps/first-tree/installations/new");
@@ -144,32 +147,75 @@ describe("GithubAppInstallationPanel", () => {
     await act(async () => root.unmount());
   });
 
-  it("opens a freshly minted install URL, surfaces missing slug, and reports generic install URL errors", async () => {
-    githubMocks.getGithubAppInstallation.mockResolvedValueOnce(null);
+  it("mints a fresh install URL into a new tab, then waits without leaving this tab", async () => {
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+    const fakeTab = { location: { href: "" }, close: vi.fn() };
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeTab as unknown as Window);
     const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
     const first = await renderDom(<GithubAppInstallationPanel />);
     await waitForText(first.container, "Install the GitHub App");
 
     await click(buttonByText(first.container, "Install on GitHub"));
-    expect(githubMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1");
-    expect(window.location.assign).toHaveBeenCalledWith("https://github.com/apps/first-tree/installations/new");
-    await act(async () => first.root.unmount());
+    // Opens in a new tab (self-closing connected page as post-install target) and
+    // navigates THAT tab — this tab stays put and shows the waiting affordance.
+    expect(githubMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", "/onboarding/connected");
+    expect(fakeTab.location.href).toBe("https://github.com/apps/first-tree/installations/new");
+    expect(window.location.assign).not.toHaveBeenCalled();
+    await waitForText(first.container, "Waiting for GitHub");
+    // CTA locked while an attempt is in flight (a second mint would clobber the
+    // in-flight nonce cookie); "Start over" re-enables it.
+    expect(buttonByText(first.container, "Install on GitHub")?.disabled).toBe(true);
+    await click(buttonByText(first.container, "Start over"));
+    expect(buttonByText(first.container, "Install on GitHub")?.disabled).toBe(false);
 
-    githubMocks.getGithubAppInstallation.mockResolvedValueOnce(null);
+    openSpy.mockRestore();
+    await act(async () => first.root.unmount());
+  });
+
+  it("falls back to a full-page redirect when the install popup is blocked", async () => {
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
+    // Popup blocked → window.open returns null → full-page redirect. `next` is
+    // omitted so the server applies its `/settings/github` default (returning
+    // this tab to the panel after install).
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+    const { container, root } = await renderDom(<GithubAppInstallationPanel />);
+    await waitForText(container, "Install the GitHub App");
+
+    await click(buttonByText(container, "Install on GitHub"));
+    expect(githubMocks.getGithubAppInstallUrl).toHaveBeenCalledWith("org-1", undefined);
+    expect(window.location.assign).toHaveBeenCalledWith("https://github.com/apps/first-tree/installations/new");
+
+    openSpy.mockRestore();
+    await act(async () => root.unmount());
+  });
+
+  it("surfaces missing slug and reports generic install URL errors (closing the opened tab)", async () => {
+    const { GithubAppInstallationPanel } = await import("../github-app-installation-panel.js");
+
+    githubMocks.getGithubAppInstallation.mockResolvedValue(null);
     githubMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new ApiError(503, "slug missing"));
+    const slugTab = { location: { href: "" }, close: vi.fn() };
+    const slugOpen = vi.spyOn(window, "open").mockReturnValue(slugTab as unknown as Window);
     const missingSlug = await renderDom(<GithubAppInstallationPanel />);
     await waitForText(missingSlug.container, "Install the GitHub App");
     await click(buttonByText(missingSlug.container, "Install on GitHub"));
     await waitForText(missingSlug.container, "FIRST_TREE_GITHUB_APP_SLUG");
     expect(buttonByText(missingSlug.container, "Install on GitHub")).toBeNull();
+    // The prematurely-opened tab is closed on failure so no blank tab lingers.
+    expect(slugTab.close).toHaveBeenCalled();
+    slugOpen.mockRestore();
     await act(async () => missingSlug.root.unmount());
 
-    githubMocks.getGithubAppInstallation.mockResolvedValueOnce(null);
     githubMocks.getGithubAppInstallUrl.mockRejectedValueOnce(new Error("oauth state failed"));
+    const genericTab = { location: { href: "" }, close: vi.fn() };
+    const genericOpen = vi.spyOn(window, "open").mockReturnValue(genericTab as unknown as Window);
     const generic = await renderDom(<GithubAppInstallationPanel />);
     await waitForText(generic.container, "Install the GitHub App");
     await click(buttonByText(generic.container, "Install on GitHub"));
     await waitForText(generic.container, "oauth state failed");
+    expect(genericTab.close).toHaveBeenCalled();
+    genericOpen.mockRestore();
     await act(async () => generic.root.unmount());
   });
 

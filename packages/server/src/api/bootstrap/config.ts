@@ -17,6 +17,9 @@ export async function bootstrapConfigRoutes(app: FastifyInstance): Promise<void>
       // the web gate channel-scoped affordances (e.g. the staging-only "hide
       // agent final text" view toggle) without shipping prod-visible dev UI.
       channel: app.config.channel,
+      // Product flag for growth landing funnels. Kept separate from release
+      // channel so staging/dev do not implicitly expose public campaigns.
+      growthLandingPagesEnabled: app.config.growth.landingPagesEnabled,
     };
   });
 }

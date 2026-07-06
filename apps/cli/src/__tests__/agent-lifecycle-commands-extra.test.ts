@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,7 @@ const configMocks = vi.hoisted(() => ({
   clientConfigSchema: {},
   defaultConfigDir: vi.fn(),
   defaultDataDir: vi.fn(),
+  defaultHome: vi.fn(),
   loadAgents: vi.fn(),
   resolveConfigReadonly: vi.fn(),
   setConfigValue: vi.fn(),
@@ -33,6 +34,7 @@ const coreMocks = vi.hoisted(() => ({
   detectInstallMode: vi.fn(),
   ensureFreshAccessToken: vi.fn(),
   fetchLatestVersion: vi.fn(),
+  fetchPortableLatestVersion: vi.fn(),
   fetchServerCommandVersion: vi.fn(),
   findStaleAliases: vi.fn(),
   formatStaleReason: vi.fn((reason: string) => reason),
@@ -40,9 +42,13 @@ const coreMocks = vi.hoisted(() => ({
   installClientService: vi.fn(),
   installGlobalLatest: vi.fn(),
   installGlobalSpec: vi.fn(),
+  installPortableSpec: vi.fn(),
   isServiceSupported: vi.fn(),
+  loadCredentials: vi.fn(),
   PACKAGE_NAME: "first-tree",
   promptAddAgent: vi.fn(),
+  readActiveRootClientId: vi.fn(),
+  recordActiveClientOwner: vi.fn(),
   removeLocalAgent: vi.fn(),
   resolveServerUrl: vi.fn(),
   restartClientService: vi.fn(),
@@ -80,6 +86,10 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
   } as unknown as Response;
 }
 
+function jwt(payload: Record<string, unknown>): string {
+  return `h.${Buffer.from(JSON.stringify(payload)).toString("base64url")}.s`;
+}
+
 async function runAgent(args: string[]): Promise<void> {
   const { registerAgentCommands } = await import("../commands/agent/index.js");
   const program = new Command();
@@ -100,6 +110,7 @@ async function runTopLevel(register: (program: Command) => void, args: string[])
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "ft-cli-agent-commands-"));
   vi.clearAllMocks();
+  configMocks.defaultHome.mockReturnValue(tempDir);
   configMocks.defaultConfigDir.mockReturnValue(tempDir);
   configMocks.defaultDataDir.mockReturnValue(join(tempDir, "data"));
   configMocks.resolveConfigReadonly.mockReturnValue({ client: { id: "client-1" } });
@@ -109,9 +120,13 @@ beforeEach(() => {
   coreMocks.ensureFreshAccessToken.mockResolvedValue("user-token");
   coreMocks.resolveServerUrl.mockReturnValue("https://hub.example");
   coreMocks.fetchLatestVersion.mockReturnValue({ ok: true, version: "99.0.0" });
+  coreMocks.fetchPortableLatestVersion.mockResolvedValue({ ok: true, version: "99.0.0" });
   coreMocks.fetchServerCommandVersion.mockResolvedValue({ ok: true, version: "99.0.0" });
-  coreMocks.installGlobalLatest.mockResolvedValue({ ok: true, installedVersion: "99.0.0" });
-  coreMocks.installGlobalSpec.mockResolvedValue({ ok: true, installedVersion: "99.0.0" });
+  coreMocks.installGlobalLatest.mockResolvedValue({ ok: true, mode: "global", installedVersion: "99.0.0" });
+  coreMocks.installGlobalSpec.mockResolvedValue({ ok: true, mode: "global", installedVersion: "99.0.0" });
+  coreMocks.installPortableSpec.mockResolvedValue({ ok: true, mode: "portable", installedVersion: "99.0.0" });
+  coreMocks.loadCredentials.mockReturnValue(null);
+  coreMocks.readActiveRootClientId.mockReturnValue(null);
   cliFetchMock.mockReset();
   coreMocks.promptAddAgent.mockResolvedValue({ name: "nova", agentId: "agent-1" });
   coreMocks.findStaleAliases.mockResolvedValue([
@@ -275,21 +290,53 @@ describe("agent lifecycle CLI commands", () => {
 });
 
 describe("logout and upgrade commands", () => {
+  it("logout remembers the active client owner before removing credentials", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client_aabbccdd");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await runTopLevel(registerLogoutCommand, ["logout"]);
+
+    expect(coreMocks.recordActiveClientOwner).toHaveBeenCalledWith({
+      clientId: "client_aabbccdd",
+      userId: "user-old",
+      serverUrl: "https://first-tree.example",
+    });
+    expect(() => readFileSync(credentials, "utf8")).toThrow();
+  });
+
   it("logout stops an active service and removes credentials, client config, and agent runtime state when purging", async () => {
     const credentials = join(tempDir, "credentials.json");
     const clientYaml = join(tempDir, "client.yaml");
     const agentsDir = join(tempDir, "agents");
     const sessionsDir = join(tempDir, "data", "sessions");
     const workspacesDir = join(tempDir, "data", "workspaces");
+    const parkedClientsDir = join(tempDir, "parked-clients");
+    const switchLock = join(tempDir, "state", "client-switch.lock");
+    const switchJournal = join(tempDir, "state", "client-switch-journal.json");
     mkdirSync(tempDir, { recursive: true });
     mkdirSync(agentsDir, { recursive: true });
     mkdirSync(sessionsDir, { recursive: true });
     mkdirSync(workspacesDir, { recursive: true });
+    mkdirSync(join(parkedClientsDir, "client_old", "data", "workspaces"), { recursive: true });
+    mkdirSync(join(tempDir, "state"), { recursive: true });
     writeFileSync(credentials, "{}");
     writeFileSync(clientYaml, "client:\n  id: client-1\n");
     writeFileSync(join(agentsDir, "agent.yaml"), "agentId: agent-1\n");
     writeFileSync(join(sessionsDir, "session.json"), "{}");
     writeFileSync(join(workspacesDir, "workspace.json"), "{}");
+    writeFileSync(join(parkedClientsDir, "index.json"), "{}");
+    writeFileSync(join(parkedClientsDir, "client_old", "data", "workspaces", "marker.txt"), "old");
+    writeFileSync(switchLock, "locked");
+    writeFileSync(switchJournal, "{}");
     coreMocks.isServiceSupported.mockReturnValue(true);
     coreMocks.getClientServiceStatus.mockReturnValue({ state: "active", platform: "launchd" });
     coreMocks.stopClientService.mockReturnValue({ ok: true });
@@ -303,7 +350,52 @@ describe("logout and upgrade commands", () => {
     expect(() => readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toThrow();
     expect(() => readFileSync(join(sessionsDir, "session.json"), "utf8")).toThrow();
     expect(() => readFileSync(join(workspacesDir, "workspace.json"), "utf8")).toThrow();
+    expect(existsSync(parkedClientsDir)).toBe(false);
+    expect(existsSync(switchLock)).toBe(false);
+    expect(existsSync(switchJournal)).toBe(false);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Logged out");
+  });
+
+  it("computer reset uses the same guarded local-state removal as logout --purge", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    const agentsDir = join(tempDir, "agents");
+    const sessionsDir = join(tempDir, "data", "sessions");
+    const workspacesDir = join(tempDir, "data", "workspaces");
+    const parkedClientsDir = join(tempDir, "parked-clients");
+    const switchLock = join(tempDir, "state", "client-switch.lock");
+    const switchJournal = join(tempDir, "state", "client-switch-journal.json");
+    mkdirSync(tempDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(workspacesDir, { recursive: true });
+    mkdirSync(join(parkedClientsDir, "client_old", "data", "sessions"), { recursive: true });
+    mkdirSync(join(tempDir, "state"), { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    writeFileSync(join(agentsDir, "agent.yaml"), "agentId: agent-1\n");
+    writeFileSync(join(sessionsDir, "session.json"), "{}");
+    writeFileSync(join(workspacesDir, "workspace.json"), "{}");
+    writeFileSync(join(parkedClientsDir, "index.json"), "{}");
+    writeFileSync(join(parkedClientsDir, "client_old", "data", "sessions", "marker.json"), "{}");
+    writeFileSync(switchLock, "locked");
+    writeFileSync(switchJournal, "{}");
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus.mockReturnValue({ state: "active", platform: "launchd" });
+    coreMocks.stopClientService.mockReturnValue({ ok: true });
+
+    const { registerComputerCommands } = await import("../commands/computer/index.js");
+    await runTopLevel(registerComputerCommands, ["computer", "reset"]);
+
+    expect(coreMocks.stopClientService).toHaveBeenCalled();
+    expect(() => readFileSync(credentials, "utf8")).toThrow();
+    expect(() => readFileSync(clientYaml, "utf8")).toThrow();
+    expect(() => readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toThrow();
+    expect(() => readFileSync(join(sessionsDir, "session.json"), "utf8")).toThrow();
+    expect(() => readFileSync(join(workspacesDir, "workspace.json"), "utf8")).toThrow();
+    expect(existsSync(parkedClientsDir)).toBe(false);
+    expect(existsSync(switchLock)).toBe(false);
+    expect(existsSync(switchJournal)).toBe(false);
   });
 
   it("refuses purge before deleting local state when an active service cannot be stopped", async () => {
@@ -372,7 +464,14 @@ describe("logout and upgrade commands", () => {
     await runTopLevel(registerUpgradeCommand, ["upgrade", "--latest", "--no-restart"]);
     expect(coreMocks.installGlobalLatest).toHaveBeenCalled();
 
+    coreMocks.detectInstallMode.mockReturnValue("portable");
+    coreMocks.fetchPortableLatestVersion.mockResolvedValueOnce({ ok: true, version: "101.0.0" });
+    await runTopLevel(registerUpgradeCommand, ["upgrade", "--latest", "--no-restart"]);
+    expect(coreMocks.fetchPortableLatestVersion).toHaveBeenCalled();
+    expect(coreMocks.installPortableSpec).toHaveBeenCalledWith("latest");
+
     coreMocks.installGlobalSpec.mockResolvedValueOnce({ ok: false, reason: "permission denied" });
+    coreMocks.detectInstallMode.mockReturnValue("global");
     await expect(runTopLevel(registerUpgradeCommand, ["upgrade"])).rejects.toMatchObject({ code: 1 });
 
     await runTopLevel(registerUpgradeCommand, ["upgrade", "--no-restart"]);

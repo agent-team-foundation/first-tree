@@ -1,4 +1,5 @@
 import { Writable } from "node:stream";
+import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyClientLoggerConfig } from "../observability/logger.js";
 import { FirstTreeHubSDK, SdkError } from "../sdk.js";
@@ -257,5 +258,25 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(result).toMatchObject({ id: "m-1" });
+  });
+
+  it("adds the runtime session header on agent-scoped HTTP requests", async () => {
+    const fetchMock = buildFetchMock([makeOkResponse()]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sdk = new FirstTreeHubSDK({
+      serverUrl: SERVER_URL,
+      getAccessToken: () => "tok-test",
+      agentId: "agent-1",
+      runtimeSessionToken: "runtime-token-1",
+    });
+    await flush(sdk.sendMessage(CHAT_ID, { source: "api", format: "text", content: "hi" }));
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.headers).toMatchObject({
+      Authorization: "Bearer tok-test",
+      [AGENT_SELECTOR_HEADER]: "agent-1",
+      [AGENT_RUNTIME_SESSION_HEADER]: "runtime-token-1",
+    });
   });
 });

@@ -7,6 +7,7 @@ import {
 } from "../../components/agent-lifecycle-confirm-dialog.js";
 import { Button } from "../../components/ui/button.js";
 import { Section } from "../../components/ui/section.js";
+import type { RuntimeSwitchClaimView } from "./layout-context.js";
 
 /**
  * Agent lifecycle — operational controls for availability and deletion.
@@ -24,10 +25,14 @@ export type DangerZoneProps = {
   suspendPending: boolean;
   reactivatePending: boolean;
   deletePending: boolean;
+  runtimeSwitchClaim?: RuntimeSwitchClaimView | null;
+  runtimeSwitchRecoveryPending?: boolean;
+  runtimeSwitchRecoveryError?: string | null;
   errorMessage?: string | null;
   onSuspend: () => void;
   onReactivate: () => void;
   onDelete: () => void;
+  onRecoverRuntimeSwitch?: () => void;
 };
 
 export function DangerZone(props: DangerZoneProps) {
@@ -37,11 +42,36 @@ export function DangerZone(props: DangerZoneProps) {
 
   const displayLabel = agent.displayName || agent.name || agent.uuid;
   const canDelete = agent.status === "suspended";
+  const claim = props.runtimeSwitchClaim ?? null;
 
   return (
     <div id="ad-danger" style={{ marginTop: "var(--sp-10)" }}>
       <Section title="Agent lifecycle">
-        {agent.status === "active" ? (
+        {claim ? (
+          <DangerActionRow
+            label="Recovery"
+            description={
+              <>
+                Runtime switch claim {claim.claimId ?? "unknown"} is in phase {claim.phase ?? "unknown"}. Suspend,
+                reactivate, and delete are locked until recovery completes.
+                {props.runtimeSwitchRecoveryError && (
+                  <span style={{ color: "var(--state-error)" }}> {props.runtimeSwitchRecoveryError}</span>
+                )}
+              </>
+            }
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                style={{ minWidth: "var(--sp-20)" }}
+                onClick={props.onRecoverRuntimeSwitch}
+                disabled={props.runtimeSwitchRecoveryPending || !props.onRecoverRuntimeSwitch}
+              >
+                {props.runtimeSwitchRecoveryPending ? "Recovering…" : "Recover"}
+              </Button>
+            }
+          />
+        ) : agent.status === "active" ? (
           <DangerActionRow
             label="Availability"
             description="Active agents can bind to a runtime and receive routed messages."
@@ -74,29 +104,31 @@ export function DangerZone(props: DangerZoneProps) {
             }
           />
         )}
-        <DangerActionRow
-          label="Deletion"
-          description={
-            canDelete
-              ? "Permanently remove configuration, bindings, tokens, and sessions."
-              : "Available after the agent is suspended."
-          }
-          action={
-            <Button
-              variant={canDelete ? "destructive" : "outline"}
-              size="sm"
-              style={{ minWidth: "var(--sp-20)" }}
-              onClick={() => {
-                if (canDelete) setDeleteOpen(true);
-              }}
-              disabled={props.deletePending || !canDelete}
-              title={canDelete ? undefined : "Suspend this agent before deleting it"}
-            >
-              {canDelete && <Trash2 className="h-3 w-3" />}
-              {props.deletePending ? "Deleting…" : "Delete"}
-            </Button>
-          }
-        />
+        {!claim && (
+          <DangerActionRow
+            label="Deletion"
+            description={
+              canDelete
+                ? "Permanently remove configuration, bindings, tokens, and sessions."
+                : "Available after the agent is suspended."
+            }
+            action={
+              <Button
+                variant={canDelete ? "destructive" : "outline"}
+                size="sm"
+                style={{ minWidth: "var(--sp-20)" }}
+                onClick={() => {
+                  if (canDelete) setDeleteOpen(true);
+                }}
+                disabled={props.deletePending || !canDelete}
+                title={canDelete ? undefined : "Suspend this agent before deleting it"}
+              >
+                {canDelete && <Trash2 className="h-3 w-3" />}
+                {props.deletePending ? "Deleting…" : "Delete"}
+              </Button>
+            }
+          />
+        )}
         {props.errorMessage && (
           <p className="text-body" style={{ color: "var(--state-error)", marginTop: "var(--sp-2)" }}>
             {props.errorMessage}

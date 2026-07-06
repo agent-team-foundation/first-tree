@@ -28,11 +28,45 @@ Review goals:
 
 Required workflow:
 
-1. Inspect this pull request with `gh` commands.
-2. Post a top-level PR review comment using exactly this GitHub CLI shape:
+1. Inspect this pull request with `gh` commands before deciding on the review outcome.
+2. Write the review body to a temporary Markdown file and pass it with `--body-file <file>`. Do not inline multiline Markdown with `--body`; avoiding shell quoting issues is part of the required workflow.
+3. Submit exactly one GitHub PR review using one of these outcomes:
+
+- If Context is incorrect, misleading, contradictory, missing required durable rationale, or otherwise should block merge, run:
 
 ```bash
-gh pr comment <%= prNumber %> --repo <%= repoFullName %> --body "..."
+gh pr review <%= prNumber %> --repo <%= repoFullName %> --request-changes --body-file <file>
 ```
 
-3. After posting the PR comment, reply in this chat with a short summary and include whether the comment was posted successfully.
+- If feedback is useful but not blocking, run:
+
+```bash
+gh pr review <%= prNumber %> --repo <%= repoFullName %> --comment --body-file <file>
+```
+
+- If inspection is complete, no blocking gaps remain, and the PR is safe to merge as durable Context Tree material, run:
+
+```bash
+gh pr review <%= prNumber %> --repo <%= repoFullName %> --approve --body-file <file>
+```
+
+4. When changes or clarification are needed, structure the review body like this, separating incorrect or change-needed Context from Context that is still unclear or missing detail:
+
+```md
+## Context changes requested
+
+- Context: `<path or node title>`
+  Problem: ...
+  Suggested change: ...
+
+## Still unclear or needs more detail
+
+- Context: `<path or node title>`
+  Needed detail: ...
+  Why it matters: ...
+```
+
+If one of those sections has no items, write `None.` under that heading.
+5. Approve only after inspection is complete and only when the PR is safe to merge as Context Tree material.
+6. Do not also post a top-level `gh pr comment` for the same outcome.
+7. After submitting the PR review, reply in this chat with a short summary and report which review action was submitted: `approved`, `commented`, `changes_requested`, or `failed`.

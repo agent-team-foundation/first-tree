@@ -212,8 +212,14 @@ function InstalledCard({ suspended = false, detailsOpen = false }: { suspended?:
   );
 }
 
-/** Not-installed CTA — flush under the header, no hairline (matches the real panel). */
-function NotInstalledCard() {
+/**
+ * Not-installed CTA — flush under the header, no hairline (matches the real
+ * panel). `waiting` mirrors the post-click state: the install opened in a new
+ * tab, the CTA is locked (a second mint would clobber the in-flight nonce
+ * cookie), and this tab shows the "waiting + start over" affordance while it
+ * polls for the install to land.
+ */
+function NotInstalledCard({ waiting = false }: { waiting?: boolean }) {
   return (
     <PageShell>
       <div>
@@ -223,6 +229,7 @@ function NotInstalledCard() {
         </p>
         <button
           type="button"
+          disabled={waiting}
           className="inline-flex items-center justify-center font-medium"
           style={{
             gap: "var(--sp-1)",
@@ -231,12 +238,36 @@ function NotInstalledCard() {
             color: "var(--primary-on)",
             border: "none",
             borderRadius: "var(--radius-input)",
-            cursor: "pointer",
+            cursor: waiting ? "default" : "pointer",
+            opacity: waiting ? 0.6 : 1,
           }}
         >
           Install on GitHub
           <ExternalLink className="h-3 w-3" />
         </button>
+        {waiting && (
+          <div
+            className="flex items-center"
+            style={{ gap: "var(--sp-2_5)", marginTop: "var(--sp-3)", flexWrap: "wrap" }}
+          >
+            <span className="text-label" style={{ color: "var(--fg-3)" }}>
+              Waiting for GitHub…
+            </span>
+            <button
+              type="button"
+              className="text-label underline underline-offset-2"
+              style={{
+                background: "transparent",
+                border: "none",
+                padding: 0,
+                color: "var(--fg-3)",
+                cursor: "pointer",
+              }}
+            >
+              Didn't work? Start over
+            </button>
+          </div>
+        )}
       </div>
     </PageShell>
   );
@@ -317,6 +348,13 @@ export function SettingsGithubPreviewPage() {
 
       <Frame label="Not installed" note="the Install on GitHub CTA — flush under the header, no orphaned rule">
         <NotInstalledCard />
+      </Frame>
+
+      <Frame
+        label="Not installed — waiting"
+        note="after the install opened in a new tab: CTA locked, waiting for the poll + Start over"
+      >
+        <NotInstalledCard waiting />
       </Frame>
 
       <Frame label="Loading" note="initial fetch — flush under the header">

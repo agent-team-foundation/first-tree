@@ -37,6 +37,7 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     skillFileReadObserved: true,
     sourceRepoChanged: false,
     taskOptionsObserved: false,
+    treeBuildOptionObserved: false,
     treeEvidenceReadObserved: false,
     ...overrides,
   };
@@ -129,12 +130,13 @@ describe("first-tree-welcome grader", () => {
     ).toBe(false);
   });
 
-  it("passes row 3 when the model asks for a local clone path or GitHub URL without evidence claims", () => {
+  it("passes row 3 when the model asks for a local project folder path or GitHub repo URL without evidence claims", () => {
     expect(
       casePassed(
         findCase("first-tree-welcome-no-repo-intro"),
         baseMetrics({
-          finalResponse: "Please send one local clone path or GitHub URL so I can inspect the repo first.",
+          finalResponse:
+            "Please send one local project folder path or GitHub repo URL so I can inspect the repo first.",
         }),
       ),
     ).toBe(true);
@@ -147,7 +149,7 @@ describe("first-tree-welcome grader", () => {
         baseMetrics({
           chatAskCount: 1,
           chatOptionCount: 3,
-          finalResponse: "Choose a local clone path or GitHub URL setup option.",
+          finalResponse: "Choose a local project folder path or GitHub repo URL setup option.",
           forbiddenActionHits: ["setup-as-first-task"],
           taskOptionsObserved: true,
         }),
@@ -167,7 +169,7 @@ describe("first-tree-welcome grader", () => {
               "chat",
               "ask",
               "baixiaohang",
-              "请发我一个项目入口：本地 clone 路径或 GitHub 仓库 URL。",
+              "请发我一个项目入口：本地项目文件夹路径或 GitHub repo URL。",
               "--options",
               JSON.stringify([
                 { description: "我可以直接读取本机代码，最快开始给出基于证据的帮助。", label: "本地路径" },
@@ -308,7 +310,7 @@ describe("first-tree-welcome grader", () => {
         [
           skillReadEvent(),
           assistantMessageEvent(
-            "An admin finishes team setup; for now send a local clone path and I can help from that without selecting a repo.",
+            "An admin finishes team setup; for now send a local project folder path and I can help from that without selecting a repo.",
           ),
         ],
         evalCase,
@@ -325,8 +327,8 @@ describe("first-tree-welcome grader", () => {
     }
   });
 
-  it("fails readable-repo-empty-tree when Context Tree setup is offered as a first task option", () => {
-    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-empty-tree-task-setup-"));
+  it("passes readable-repo-empty-tree when Build your Context Tree is offered as a first-class option", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "welcome-eval-empty-tree-build-option-"));
     try {
       const evalCase = findCase("first-tree-welcome-readable-repo-empty-tree-periodic");
       const metrics = deriveMetrics(
@@ -338,18 +340,22 @@ describe("first-tree-welcome grader", () => {
               "chat",
               "ask",
               "baixiaohang",
-              "Choose the first task from repo evidence.",
+              "I read the repo; pick a first task. One option is to build shared memory later.",
               "--options",
               JSON.stringify([
                 { description: "Debug the expired session flow.", label: "Fix session" },
                 { description: "Trace checkout reliability failures.", label: "Trace checkout" },
-                { description: "Create and seed a Context Tree first.", label: "Build Context Tree" },
+                {
+                  description:
+                    "Build your Context Tree — seed the Context Tree so the team gets durable shared memory.",
+                  label: "Build your Context Tree",
+                },
               ]),
             ],
             phase: "model",
             type: "first_tree_call",
           },
-          assistantMessageEvent("I read the repo; choose a session, checkout, or Context Tree setup task."),
+          assistantMessageEvent("I read the repo; choose a session or checkout task, or build shared memory."),
         ],
         evalCase,
         fixtureValidation(),
@@ -360,8 +366,10 @@ describe("first-tree-welcome grader", () => {
 
       expect(metrics.repoEvidenceReadObserved).toBe(true);
       expect(metrics.taskOptionsObserved).toBe(true);
-      expect(metrics.forbiddenActionHits).toContain("tree-setup-as-first-task");
-      expect(casePassed(evalCase, metrics)).toBe(false);
+      expect(metrics.treeBuildOptionObserved).toBe(true);
+      expect(metrics.forbiddenActionHits).toEqual([]);
+      expect(metrics.forbiddenSideEffectHits).toEqual([]);
+      expect(casePassed(evalCase, metrics)).toBe(true);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
@@ -414,7 +422,7 @@ describe("first-tree-welcome grader", () => {
         [
           skillReadEvent(),
           assistantMessageEvent(
-            "I read the selected private repo README and found checkout TODOs; still send a local clone path.",
+            "I read the selected private repo README and found checkout TODOs; still send a local project folder path.",
           ),
         ],
         evalCase,
@@ -497,7 +505,8 @@ describe("first-tree-welcome grader", () => {
     [
       "first-tree-welcome-repo-auth-fails-periodic",
       {
-        finalResponse: "The selected repository has a read failure. Send a local clone path or accessible URL.",
+        finalResponse:
+          "The selected repository has a read failure. Send a local project folder path or accessible URL.",
       },
     ],
     [
@@ -520,9 +529,11 @@ describe("first-tree-welcome grader", () => {
       {
         chatAskCount: 1,
         chatOptionCount: 3,
-        finalResponse: "I read the repo; choose a checkout, session, or map task before tree setup.",
+        finalResponse:
+          "I read the repo; choose a checkout, session, or map task, or build your Context Tree for shared memory.",
         repoEvidenceReadObserved: true,
         taskOptionsObserved: true,
+        treeBuildOptionObserved: true,
       },
     ],
     [
@@ -546,6 +557,7 @@ describe("first-tree-welcome grader", () => {
       chatOptionCount: 2,
       repoEvidenceReadObserved: true,
       taskOptionsObserved: true,
+      treeBuildOptionObserved: true,
       treeEvidenceReadObserved: false,
     });
 

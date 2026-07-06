@@ -1,0 +1,1199 @@
+import {
+  MESSAGE_FORMATS,
+  parseLandingCampaignTrialAgentMetadata,
+  parseLandingCampaignTrialChatMetadata,
+} from "@first-tree/shared";
+import { and, eq, sql } from "drizzle-orm";
+import { describe, expect, it } from "vitest";
+import { agentResourceBindings } from "../db/schema/agent-resource-bindings.js";
+import { agents } from "../db/schema/agents.js";
+import { chatMembership } from "../db/schema/chat-membership.js";
+import { chats } from "../db/schema/chats.js";
+import { clients } from "../db/schema/clients.js";
+import { members } from "../db/schema/members.js";
+import { messages } from "../db/schema/messages.js";
+import { organizations } from "../db/schema/organizations.js";
+import { resources } from "../db/schema/resources.js";
+import { users } from "../db/schema/users.js";
+import { createAgent } from "../services/agent.js";
+import { bindAgentRuntimeSession, validateAgentRuntimeSession } from "../services/agent-runtime-session.js";
+import { signTokensForUser } from "../services/auth.js";
+import { createMember } from "../services/member.js";
+import { sendMessage } from "../services/message.js";
+import { uuidv7 } from "../uuid.js";
+import { agentRequest, createTestAdmin, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
+
+const SERVICE_USER_ID = "landing-campaign-service-user-test";
+const SERVICE_ORG_ID = "landing-campaign-service-org-test";
+const OFFICIAL_CLIENT_ID = "landing-campaign-client-test";
+const START_URL = "/api/v1/me/landing-campaigns/start";
+
+async function seedOfficialRuntime(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  _organizationId: string,
+): Promise<void> {
+  const serviceOrgId = app.config.growth.landingCampaigns?.serviceOrgId ?? SERVICE_ORG_ID;
+  await app.db
+    .insert(organizations)
+    .values({
+      id: serviceOrgId,
+      name: `landing-campaign-service-${serviceOrgId.slice(-8)}`,
+      displayName: "Landing Campaign Service",
+    })
+    .onConflictDoNothing();
+  await app.db
+    .insert(users)
+    .values({
+      id: SERVICE_USER_ID,
+      username: "first-tree-landing-service-test",
+      displayName: "First Tree",
+      passwordHash: INVALID_BCRYPT_PLACEHOLDER,
+    })
+    .onConflictDoUpdate({
+      target: users.id,
+      set: { displayName: "First Tree" },
+    });
+  await app.db
+    .insert(clients)
+    .values({
+      id: OFFICIAL_CLIENT_ID,
+      userId: SERVICE_USER_ID,
+      organizationId: serviceOrgId,
+      status: "connected",
+      hostname: "landing-campaign-host",
+    })
+    .onConflictDoUpdate({
+      target: clients.id,
+      set: {
+        userId: SERVICE_USER_ID,
+        organizationId: serviceOrgId,
+        status: "connected",
+        hostname: "landing-campaign-host",
+      },
+    });
+}
+
+async function attachOrg(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  userId: string,
+  role: "admin" | "member",
+): Promise<{ orgId: string; memberId: string; humanAgentId: string }> {
+  const orgId = `org-lc-${crypto.randomUUID().slice(0, 8)}`;
+  const memberId = uuidv7();
+  let humanAgentId = "";
+  await app.db.transaction(async (tx) => {
+    await tx
+      .insert(organizations)
+      .values({ id: orgId, name: `lc-${crypto.randomUUID().slice(0, 6)}`, displayName: "Landing Side" });
+    const human = await createAgent(tx as unknown as typeof app.db, {
+      name: `lc-h-${crypto.randomUUID().slice(0, 6)}`,
+      type: "human",
+      displayName: "Landing Side Human",
+      managerId: memberId,
+      organizationId: orgId,
+    });
+    humanAgentId = human.uuid;
+    await tx.insert(members).values({ id: memberId, userId, organizationId: orgId, agentId: human.uuid, role });
+  });
+  return { orgId, memberId, humanAgentId };
+}
+
+async function startProductionScan(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  repoUrl = "https://github.com/acme/backend",
+) {
+  return startCampaign(app, admin, "production-scan", repoUrl);
+}
+
+async function startCampaign(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  campaign: string,
+  repoUrl = "https://github.com/acme/backend",
+) {
+  return app.inject({
+    method: "POST",
+    url: START_URL,
+    headers: { authorization: `Bearer ${admin.accessToken}` },
+    payload: { organizationId: admin.organizationId, campaign, repoUrl },
+  });
+}
+
+async function createRunnableOrgAgent(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+  admin: Awaited<ReturnType<typeof createTestAdmin>>,
+  name: string,
+): Promise<{ uuid: string }> {
+  const clientId = `${name}-client`;
+  await app.db.insert(clients).values({
+    id: clientId,
+    userId: admin.userId,
+    organizationId: admin.organizationId,
+    status: "connected",
+  });
+  const created = await app.inject({
+    method: "POST",
+    url: `/api/v1/orgs/${admin.organizationId}/agents`,
+    headers: { authorization: `Bearer ${admin.accessToken}` },
+    payload: {
+      type: "agent",
+      name,
+      displayName: name,
+      clientId,
+    },
+  });
+  if (created.statusCode !== 201) {
+    throw new Error(`failed to create runnable agent: ${created.statusCode} ${created.body}`);
+  }
+  return created.json<{ uuid: string }>();
+}
+
+async function createLandingCampaignServiceAccessToken(
+  app: ReturnType<ReturnType<typeof useTestApp>>,
+): Promise<string> {
+  const tokens = await signTokensForUser(app.config.secrets.jwtSecret, SERVICE_USER_ID, app.config.auth);
+  return tokens.accessToken;
+}
+
+describe("POST /me/landing-campaigns/start", () => {
+  const getApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+  });
+  const getDisabledApp = useTestApp({
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+  });
+  const getClaudeProviderApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignRuntimeProvider: "claude-code",
+  });
+  const getMultiTurnApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxAgentTurns: 2,
+  });
+  it("feature flag off rejects before creating service member, trial agent, chat, or resource", async () => {
+    const app = getDisabledApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await startProductionScan(app, admin);
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ code: "feature_disabled" });
+    const serviceMembers = await app.db
+      .select()
+      .from(members)
+      .where(and(eq(members.userId, SERVICE_USER_ID), eq(members.organizationId, admin.organizationId)));
+    expect(serviceMembers).toHaveLength(0);
+    const trialAgents = await app.db
+      .select()
+      .from(agents)
+      .where(
+        and(
+          eq(agents.organizationId, admin.organizationId),
+          sql`${agents.metadata} ->> 'landingCampaignTrial' = 'true'`,
+        ),
+      );
+    expect(trialAgents).toHaveLength(0);
+  });
+
+  it("fails closed for Claude Code until landing campaign workspace-only is implemented", async () => {
+    const app = getClaudeProviderApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await startProductionScan(app, admin);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({
+      error: expect.stringContaining("Claude Code runtime is not available"),
+    });
+    const serviceMembers = await app.db
+      .select()
+      .from(members)
+      .where(and(eq(members.userId, SERVICE_USER_ID), eq(members.organizationId, admin.organizationId)));
+    expect(serviceMembers).toHaveLength(0);
+    const trialAgents = await app.db
+      .select()
+      .from(agents)
+      .where(
+        and(
+          eq(agents.organizationId, admin.organizationId),
+          sql`${agents.metadata} ->> 'landingCampaignTrial' = 'true'`,
+        ),
+      );
+    expect(trialAgents).toHaveLength(0);
+  });
+
+  it("rejects an official client registered outside the service org", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    await app.db
+      .update(clients)
+      .set({ organizationId: admin.organizationId })
+      .where(eq(clients.id, OFFICIAL_CLIENT_ID));
+
+    const res = await startProductionScan(app, admin);
+
+    expect(res.statusCode).toBe(503);
+  });
+
+  it("rejects unsupported campaigns before provisioning", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+
+    const res = await startCampaign(app, admin, "agent-readiness");
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({
+      error: expect.stringContaining('Landing campaign "agent-readiness" not found'),
+    });
+    const serviceMembers = await app.db
+      .select()
+      .from(members)
+      .where(and(eq(members.userId, SERVICE_USER_ID), eq(members.organizationId, admin.organizationId)));
+    expect(serviceMembers).toHaveLength(0);
+    const trialAgents = await app.db
+      .select()
+      .from(agents)
+      .where(
+        and(
+          eq(agents.organizationId, admin.organizationId),
+          sql`${agents.metadata} ->> 'landingCampaignTrial' = 'true'`,
+        ),
+      );
+    expect(trialAgents).toHaveLength(0);
+  });
+
+  it("creates the service-managed trial agent, installs the agent-scoped campaign skill, and starts a locked chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const res = await startProductionScan(app, admin);
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ chatId: string; agentUuid: string; campaign: string; repoCanonicalKey: string }>();
+    expect(body).toMatchObject({
+      campaign: "production-scan",
+      repoCanonicalKey: "github.com/acme/backend",
+    });
+
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, body.agentUuid)).limit(1);
+    expect(trialAgent?.managerId).toBeTruthy();
+    expect(trialAgent?.clientId).toBe(OFFICIAL_CLIENT_ID);
+    expect(trialAgent?.runtimeProvider).toBe("codex");
+    expect(trialAgent?.visibility).toBe("organization");
+    const agentMeta = parseLandingCampaignTrialAgentMetadata(trialAgent?.metadata);
+    expect(agentMeta).toMatchObject({
+      landingCampaignTrial: true,
+      campaign: "production-scan",
+      skillSetId: "production-scan",
+      repo: { canonicalKey: "github.com/acme/backend" },
+    });
+
+    const [serviceMember] = await app.db
+      .select()
+      .from(members)
+      .where(eq(members.id, trialAgent?.managerId ?? ""));
+    expect(serviceMember).toMatchObject({
+      userId: SERVICE_USER_ID,
+      organizationId: admin.organizationId,
+      role: "member",
+      status: "active",
+    });
+
+    const [skill] = await app.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "skill"), eq(resources.scope, "agent")))
+      .limit(1);
+    expect(skill?.name).toBe("production-scan");
+    expect(skill?.defaultEnabled).toBeNull();
+    expect(skill?.payload).toMatchObject({ name: "production-scan" });
+    expect(JSON.stringify(skill?.payload)).toContain("/onboarding");
+    expect(JSON.stringify(skill?.payload)).not.toContain("{{FIRST_TREE_SETUP_URL}}");
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(
+        and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.resourceId, skill?.id ?? "")),
+      );
+    expect(bindings).toHaveLength(1);
+
+    const [chat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(chat?.topic).toBe("Production readiness scan");
+    expect(chat?.onboardingKickoffKey).toContain("landing-campaign:");
+    expect(chat?.onboardingKickoffKey).toContain("github.com/acme/backend");
+    const chatMeta = parseLandingCampaignTrialChatMetadata(chat?.metadata);
+    expect(chatMeta).toMatchObject({
+      campaign: "production-scan",
+      agentId: body.agentUuid,
+      repo: { canonicalKey: "github.com/acme/backend" },
+      state: "running",
+      inputLocked: true,
+      maxAgentTurns: 1,
+      completedAgentTurns: 0,
+    });
+
+    const [bootstrap] = await app.db.select().from(messages).where(eq(messages.chatId, body.chatId)).limit(1);
+    expect(bootstrap?.senderId).toBe(admin.humanAgentUuid);
+    expect(bootstrap?.content).toContain("https://github.com/acme/backend");
+    expect(bootstrap?.metadata).toMatchObject({
+      systemSender: "first_tree_onboarding",
+      campaign: "production-scan",
+      landingCampaignTrial: true,
+    });
+  });
+
+  it("requires org admin before installing the service member or trial agent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const member = await createTestAdmin(app);
+    await app.db.update(members).set({ role: "member" }).where(eq(members.id, member.memberId));
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const res = await startProductionScan(app, member);
+
+    expect(res.statusCode).toBe(403);
+    const serviceMembers = await app.db
+      .select()
+      .from(members)
+      .where(and(eq(members.userId, SERVICE_USER_ID), eq(members.organizationId, admin.organizationId)));
+    expect(serviceMembers).toHaveLength(0);
+    const trialAgents = await app.db
+      .select()
+      .from(agents)
+      .where(
+        and(
+          eq(agents.organizationId, admin.organizationId),
+          sql`${agents.metadata} ->> 'landingCampaignTrial' = 'true'`,
+        ),
+      );
+    expect(trialAgents).toHaveLength(0);
+  });
+
+  it("is idempotent for the same campaign and repo, but creates a new chat when the repo changes", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const first = await startProductionScan(app, admin);
+    const second = await startProductionScan(app, admin);
+    const third = await startProductionScan(app, admin, "https://github.com/acme/api");
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(third.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string; agentUuid: string }>();
+    const secondBody = second.json<{ chatId: string; agentUuid: string }>();
+    const thirdBody = third.json<{ chatId: string; agentUuid: string; repoCanonicalKey: string }>();
+    expect(secondBody.chatId).toBe(firstBody.chatId);
+    expect(secondBody.agentUuid).toBe(firstBody.agentUuid);
+    expect(thirdBody.agentUuid).toBe(firstBody.agentUuid);
+    expect(thirdBody.chatId).not.toBe(firstBody.chatId);
+    expect(thirdBody.repoCanonicalKey).toBe("github.com/acme/api");
+
+    const firstMessages = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));
+    const thirdMessages = await app.db.select().from(messages).where(eq(messages.chatId, thirdBody.chatId));
+    expect(firstMessages).toHaveLength(1);
+    expect(thirdMessages).toHaveLength(1);
+  });
+
+  it("preserves runtime session metadata when reusing the trial agent for a new repo", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ agentUuid: string }>();
+    const runtimeSessionToken = await bindAgentRuntimeSession(app.db, firstBody.agentUuid, OFFICIAL_CLIENT_ID);
+    expect(
+      await validateAgentRuntimeSession(app.db, firstBody.agentUuid, OFFICIAL_CLIENT_ID, runtimeSessionToken),
+    ).toBe(true);
+
+    const second = await startProductionScan(app, admin, "https://github.com/acme/api");
+
+    expect(second.statusCode).toBe(200);
+    const secondBody = second.json<{ agentUuid: string; repoCanonicalKey: string }>();
+    expect(secondBody.agentUuid).toBe(firstBody.agentUuid);
+    expect(secondBody.repoCanonicalKey).toBe("github.com/acme/api");
+    expect(
+      await validateAgentRuntimeSession(app.db, firstBody.agentUuid, OFFICIAL_CLIENT_ID, runtimeSessionToken),
+    ).toBe(true);
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, firstBody.agentUuid)).limit(1);
+    expect(parseLandingCampaignTrialAgentMetadata(trialAgent?.metadata)).toMatchObject({
+      landingCampaignTrial: true,
+      campaign: "production-scan",
+      repo: { canonicalKey: "github.com/acme/api" },
+    });
+    const runtimeSession = (trialAgent?.metadata as Record<string, unknown> | undefined)?.runtimeSession;
+    expect(runtimeSession).toMatchObject({
+      clientId: OFFICIAL_CLIENT_ID,
+      boundAt: expect.any(String),
+      tokenHash: expect.any(String),
+    });
+  });
+
+  it("serializes concurrent starts for the same campaign and repo into one trial agent and chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const [first, second] = await Promise.all([startProductionScan(app, admin), startProductionScan(app, admin)]);
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string; agentUuid: string }>();
+    const secondBody = second.json<{ chatId: string; agentUuid: string }>();
+    expect(secondBody).toEqual(firstBody);
+
+    const trialAgents = await app.db
+      .select()
+      .from(agents)
+      .where(
+        and(
+          eq(agents.organizationId, admin.organizationId),
+          sql`${agents.metadata} ->> 'landingCampaignTrial' = 'true'`,
+          sql`${agents.metadata} ->> 'campaign' = 'production-scan'`,
+        ),
+      );
+    expect(trialAgents).toHaveLength(1);
+    const kickoffChats = await app.db
+      .select()
+      .from(chats)
+      .where(sql`${chats.onboardingKickoffKey} LIKE ${`landing-campaign:%github.com/acme/backend`}`);
+    expect(kickoffChats).toHaveLength(1);
+    const bootstrapMessages = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));
+    expect(bootstrapMessages).toHaveLength(1);
+  });
+
+  it("does not silently rebind an existing trial agent pinned to a different official client", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+    const otherClientId = "landing-campaign-client-other";
+    await app.db.insert(clients).values({
+      id: otherClientId,
+      userId: SERVICE_USER_ID,
+      organizationId: admin.organizationId,
+      status: "connected",
+    });
+    await app.db.update(agents).set({ clientId: otherClientId }).where(eq(agents.uuid, body.agentUuid));
+
+    const res = await startProductionScan(app, admin);
+
+    expect(res.statusCode).toBe(409);
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, body.agentUuid)).limit(1);
+    expect(trialAgent?.clientId).toBe(otherClientId);
+    const trialChats = await app.db
+      .select()
+      .from(chats)
+      .where(sql`${chats.onboardingKickoffKey} LIKE ${`landing-campaign:%github.com/acme/backend`}`);
+    expect(trialChats).toHaveLength(1);
+  });
+
+  it("keeps the official client ordinary outside trial metadata while preserving ownership and spoofing guards", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+
+    const ordinaryUserOfficialClient = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/agents`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        type: "agent",
+        name: "spoof-client",
+        displayName: "Spoof Client",
+        clientId: OFFICIAL_CLIENT_ID,
+      },
+    });
+    expect(ordinaryUserOfficialClient.statusCode).toBe(403);
+
+    const started = await startProductionScan(app, admin);
+    expect(started.statusCode).toBe(200);
+    const serviceAccessToken = await createLandingCampaignServiceAccessToken(app);
+    const serviceOwnedOrdinaryAgent = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/agents`,
+      headers: { authorization: `Bearer ${serviceAccessToken}` },
+      payload: {
+        type: "agent",
+        name: "service-owned-ordinary",
+        displayName: "Service Owned Ordinary",
+        clientId: OFFICIAL_CLIENT_ID,
+      },
+    });
+    expect(serviceOwnedOrdinaryAgent.statusCode).toBe(201);
+    expect(
+      parseLandingCampaignTrialAgentMetadata(
+        serviceOwnedOrdinaryAgent.json<{ metadata: Record<string, unknown> }>().metadata,
+      ),
+    ).toBeNull();
+
+    const metadata = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/agents`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        type: "agent",
+        name: "spoof-metadata",
+        displayName: "Spoof Metadata",
+        metadata: {
+          landingCampaignTrial: true,
+          campaign: "production-scan",
+          skillSetId: "production-scan",
+          skillSetVersion: "2026.07.02.1",
+          repo: { url: "https://github.com/acme/backend", canonicalKey: "github.com/acme/backend" },
+        },
+      },
+    });
+    expect(metadata.statusCode).toBe(403);
+  });
+
+  it("blocks ordinary chats and messages from continuing the single-run trial agent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    const normalAgentChat = await app.inject({
+      method: "POST",
+      url: `/api/v1/agents/${body.agentUuid}/chats`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(normalAgentChat.statusCode).toBe(403);
+
+    const normalOrgChat = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/chats`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { participantIds: [body.agentUuid] },
+    });
+    expect(normalOrgChat.statusCode).toBe(403);
+
+    const message = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { format: "text", content: "Can you do another thing?", metadata: { mentions: [body.agentUuid] } },
+    });
+    expect(message.statusCode).toBe(403);
+  });
+
+  it("blocks adding ordinary participants to a landing campaign trial chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    const ordinaryAgent = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/agents`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        type: "agent",
+        name: "ordinary-agent",
+        displayName: "Ordinary Agent",
+      },
+    });
+    expect(ordinaryAgent.statusCode).toBe(201);
+    const ordinary = ordinaryAgent.json<{ uuid: string }>();
+
+    const addParticipant = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/participants`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { participantIds: [ordinary.uuid] },
+    });
+    expect(addParticipant.statusCode).toBe(403);
+
+    const rows = await app.db
+      .select()
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, body.chatId), eq(chatMembership.agentId, ordinary.uuid)));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("blocks agent-runtime participant mutation on landing campaign trial chats", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+    const ordinary = await createRunnableOrgAgent(app, admin, "ordinary-agent-runtime-target");
+    const serviceAccessToken = await createLandingCampaignServiceAccessToken(app);
+    const trialAgentRequest = agentRequest(app, serviceAccessToken, body.agentUuid);
+
+    const addParticipant = await trialAgentRequest("POST", `/api/v1/agent/chats/${body.chatId}/participants`, {
+      agentId: ordinary.uuid,
+    });
+
+    expect(addParticipant.statusCode).toBe(403);
+    const rows = await app.db
+      .select()
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, body.chatId), eq(chatMembership.agentId, ordinary.uuid)));
+    expect(rows).toHaveLength(0);
+  });
+
+  it("issues an outbox token scoped to the current trial agent and chat message route", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+    const ordinary = await createRunnableOrgAgent(app, admin, "ordinary-agent-outbox-scope");
+    const serviceAccessToken = await createLandingCampaignServiceAccessToken(app);
+    const trialAgentRequest = agentRequest(app, serviceAccessToken, body.agentUuid);
+
+    const tokenRes = await trialAgentRequest("POST", `/api/v1/agent/chats/${body.chatId}/outbox-token`);
+
+    expect(tokenRes.statusCode).toBe(200);
+    const outbox = tokenRes.json<{ accessToken: string; expiresIn: number }>();
+    expect(outbox.accessToken).toBeTruthy();
+    expect(outbox.expiresIn).toBeGreaterThan(0);
+
+    const send = await app.inject({
+      method: "POST",
+      url: `/api/v1/agent/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${outbox.accessToken}`, "x-agent-id": body.agentUuid },
+      payload: {
+        format: "text",
+        content: "Final trial report.",
+        metadata: { mentions: [admin.humanAgentUuid] },
+        source: "cli",
+      },
+    });
+    expect(send.statusCode).toBe(201);
+    const [completedChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(completedChat?.metadata)).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+    });
+
+    const sendAfterCompleted = await app.inject({
+      method: "POST",
+      url: `/api/v1/agent/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${outbox.accessToken}`, "x-agent-id": body.agentUuid },
+      payload: {
+        format: "text",
+        content: "Follow-up after completion.",
+        metadata: { mentions: [admin.humanAgentUuid] },
+        source: "cli",
+      },
+    });
+    expect(sendAfterCompleted.statusCode).toBe(403);
+
+    const requestAfterCompleted = await app.inject({
+      method: "POST",
+      url: `/api/v1/agent/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${outbox.accessToken}`, "x-agent-id": body.agentUuid },
+      payload: {
+        format: MESSAGE_FORMATS.REQUEST,
+        content: "Can you answer after completion?",
+        metadata: { mentions: [admin.humanAgentUuid] },
+        source: "cli",
+      },
+    });
+    expect(requestAfterCompleted.statusCode).toBe(403);
+    const [stillCompletedChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(stillCompletedChat?.metadata)).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+    });
+
+    const me = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${outbox.accessToken}` },
+    });
+    expect(me.statusCode).toBe(401);
+
+    const wrongAgent = await app.inject({
+      method: "POST",
+      url: `/api/v1/agent/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${outbox.accessToken}`, "x-agent-id": ordinary.uuid },
+      payload: {
+        format: "text",
+        content: "Wrong agent.",
+        metadata: { mentions: [admin.humanAgentUuid] },
+        source: "cli",
+      },
+    });
+    expect(wrongAgent.statusCode).toBe(401);
+  });
+
+  it("allows ordinary human follow-up messages until the trial agent turn limit is reached", async () => {
+    const app = getMultiTurnApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    await sendMessage(app.db, body.chatId, body.agentUuid, {
+      format: "text",
+      content: "Initial trial report.",
+      source: "api",
+      metadata: { mentions: [admin.humanAgentUuid] },
+    });
+    const [awaitingChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(awaitingChat?.metadata)).toMatchObject({
+      state: "awaiting_user",
+      inputLocked: false,
+      awaitingUserKind: "follow_up",
+      maxAgentTurns: 2,
+      completedAgentTurns: 1,
+    });
+
+    const followUp = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Can you expand on the deployment risk?",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(followUp.statusCode).toBe(201);
+    const [runningChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    const runningTrial = parseLandingCampaignTrialChatMetadata(runningChat?.metadata);
+    expect(runningTrial).toMatchObject({
+      state: "running",
+      inputLocked: true,
+      maxAgentTurns: 2,
+      completedAgentTurns: 1,
+    });
+    expect(runningTrial?.awaitingUserKind).toBeUndefined();
+
+    await sendMessage(app.db, body.chatId, body.agentUuid, {
+      format: "text",
+      content: "Second and final trial response.",
+      source: "api",
+      metadata: { mentions: [admin.humanAgentUuid] },
+    });
+    const [completedChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    const completedTrial = parseLandingCampaignTrialChatMetadata(completedChat?.metadata);
+    expect(completedTrial).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+      maxAgentTurns: 2,
+      completedAgentTurns: 2,
+    });
+    expect(completedTrial?.awaitingUserKind).toBeUndefined();
+
+    const afterLimit = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Can we keep going?",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(afterLimit.statusCode).toBe(403);
+  });
+
+  it("serializes concurrent trial outbox writes so only one state transition wins", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+    const serviceAccessToken = await createLandingCampaignServiceAccessToken(app);
+    const trialAgentRequest = agentRequest(app, serviceAccessToken, body.agentUuid);
+    const tokenRes = await trialAgentRequest("POST", `/api/v1/agent/chats/${body.chatId}/outbox-token`);
+    const outbox = tokenRes.json<{ accessToken: string }>();
+
+    const [finalRes, requestRes] = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: `/api/v1/agent/chats/${body.chatId}/messages`,
+        headers: { authorization: `Bearer ${outbox.accessToken}`, "x-agent-id": body.agentUuid },
+        payload: {
+          format: "text",
+          content: "Final trial report.",
+          metadata: { mentions: [admin.humanAgentUuid] },
+          source: "cli",
+        },
+      }),
+      app.inject({
+        method: "POST",
+        url: `/api/v1/agent/chats/${body.chatId}/messages`,
+        headers: { authorization: `Bearer ${outbox.accessToken}`, "x-agent-id": body.agentUuid },
+        payload: {
+          format: MESSAGE_FORMATS.REQUEST,
+          content: "Need one more answer?",
+          metadata: { mentions: [admin.humanAgentUuid] },
+          source: "cli",
+        },
+      }),
+    ]);
+
+    expect([finalRes.statusCode, requestRes.statusCode].sort()).toEqual([201, 403]);
+    const trialMessages = await app.db
+      .select({ id: messages.id, format: messages.format })
+      .from(messages)
+      .where(and(eq(messages.chatId, body.chatId), eq(messages.senderId, body.agentUuid)));
+    expect(trialMessages).toHaveLength(1);
+
+    const [chat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, body.chatId));
+    const trial = parseLandingCampaignTrialChatMetadata(chat?.metadata);
+    if (finalRes.statusCode === 201) {
+      expect(trial).toMatchObject({ state: "completed", inputLocked: true });
+    } else {
+      expect(trial).toMatchObject({ state: "awaiting_user", inputLocked: false });
+    }
+  });
+
+  it("blocks agent-runtime participant removal on landing campaign trial chats", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+    const serviceAccessToken = await createLandingCampaignServiceAccessToken(app);
+    const trialAgentRequest = agentRequest(app, serviceAccessToken, body.agentUuid);
+
+    const removeHuman = await trialAgentRequest(
+      "DELETE",
+      `/api/v1/agent/chats/${body.chatId}/participants/${admin.humanAgentUuid}`,
+    );
+
+    expect(removeHuman.statusCode).toBe(403);
+    const rows = await app.db
+      .select()
+      .from(chatMembership)
+      .where(and(eq(chatMembership.chatId, body.chatId), eq(chatMembership.agentId, admin.humanAgentUuid)));
+    expect(rows).toHaveLength(1);
+  });
+
+  it("blocks trial agents from creating ordinary chats through the agent-runtime API", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+    const ordinary = await createRunnableOrgAgent(app, admin, "ordinary-agent-runtime-chat");
+    const serviceAccessToken = await createLandingCampaignServiceAccessToken(app);
+    const trialAgentRequest = agentRequest(app, serviceAccessToken, body.agentUuid);
+
+    const legacyCreate = await trialAgentRequest("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [ordinary.uuid],
+    });
+    expect(legacyCreate.statusCode).toBe(403);
+
+    const taskCreate = await trialAgentRequest("POST", "/api/v1/agent/chats", {
+      mode: "task",
+      initialRecipientAgentIds: [ordinary.uuid],
+      initialRecipientNames: [],
+      contextParticipantAgentIds: [],
+      contextParticipantNames: [],
+      initialMessage: { source: "cli", format: "text", content: "Please continue this trial." },
+    });
+    expect(taskCreate.statusCode).toBe(403);
+  });
+
+  it("blocks ordinary agents from pulling trial agents into ordinary chats through the agent-runtime API", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ agentUuid: string }>();
+    const ordinary = await createRunnableOrgAgent(app, admin, "ordinary-agent-pulls-trial");
+    const ordinaryAgentRequest = agentRequest(app, admin.accessToken, ordinary.uuid);
+
+    const createWithTrial = await ordinaryAgentRequest("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [body.agentUuid],
+    });
+    expect(createWithTrial.statusCode).toBe(403);
+
+    const ordinaryChat = await ordinaryAgentRequest("POST", "/api/v1/agent/chats", {
+      type: "group",
+      participantIds: [admin.humanAgentUuid],
+    });
+    expect(ordinaryChat.statusCode).toBe(201);
+    const ordinaryChatBody = ordinaryChat.json<{ id: string }>();
+
+    const addTrial = await ordinaryAgentRequest("POST", `/api/v1/agent/chats/${ordinaryChatBody.id}/participants`, {
+      agentId: body.agentUuid,
+    });
+    expect(addTrial.statusCode).toBe(403);
+  });
+
+  it("does not expose trial agents as ordinary addressable, default, or usable agents", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ agentUuid: string }>();
+
+    const addressable = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/agents?limit=100&addressableOnly=true`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(addressable.statusCode).toBe(200);
+    expect(
+      addressable.json<{ items: Array<{ uuid: string }> }>().items.some((agent) => agent.uuid === body.agentUuid),
+    ).toBe(false);
+
+    const defaults = await app.inject({
+      method: "POST",
+      url: `/api/v1/orgs/${admin.organizationId}/agents/new-chat-default-candidates`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {},
+    });
+    expect(defaults.statusCode).toBe(200);
+    expect(defaults.json<{ agent: { uuid: string } | null }>().agent?.uuid).not.toBe(body.agentUuid);
+
+    const me = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(me.statusCode).toBe(200);
+    const membership = me
+      .json<{ memberships: Array<{ organizationId: string; hasUsableAgent: boolean; hasPersonalAgent: boolean }> }>()
+      .memberships.find((row) => row.organizationId === admin.organizationId);
+    expect(membership?.hasUsableAgent).toBe(false);
+    expect(membership?.hasPersonalAgent).toBe(false);
+  });
+
+  it("moves the trial chat through awaiting_user, running, and completed as asks are answered", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    const ask = await sendMessage(app.db, body.chatId, body.agentUuid, {
+      format: MESSAGE_FORMATS.REQUEST,
+      content: "Choose a scan focus.",
+      source: "api",
+      metadata: { mentions: [admin.humanAgentUuid] },
+    });
+    const [awaitingChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(awaitingChat?.metadata)).toMatchObject({
+      state: "awaiting_user",
+      inputLocked: false,
+      awaitingUserKind: "request",
+    });
+
+    const plainMessageDuringRequest = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "I am not answering the request yet.",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(plainMessageDuringRequest.statusCode).toBe(403);
+
+    const answer = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Focus on deploy risk.",
+        metadata: {
+          mentions: [body.agentUuid],
+          resolves: { request: ask.message.id, kind: "answered" },
+        },
+      },
+    });
+    expect(answer.statusCode).toBe(201);
+    const [runningChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(runningChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: true,
+    });
+
+    await sendMessage(app.db, body.chatId, body.agentUuid, {
+      format: "text",
+      content: "Here is the final report.",
+      source: "api",
+      metadata: { mentions: [admin.humanAgentUuid] },
+    });
+    const [completedChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(completedChat?.metadata)).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+    });
+  });
+
+  it("hides the service member and service client outside the service org", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    await startProductionScan(app, admin);
+
+    const membersRes = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/members`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(membersRes.statusCode).toBe(200);
+    expect(membersRes.json<Array<{ userId: string }>>().some((row) => row.userId === SERVICE_USER_ID)).toBe(false);
+
+    const clientsRes = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/clients`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(clientsRes.statusCode).toBe(200);
+    expect(clientsRes.json<Array<{ id: string }>>().some((row) => row.id === OFFICIAL_CLIENT_ID)).toBe(false);
+
+    const meRes = await app.inject({
+      method: "GET",
+      url: "/api/v1/me",
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(meRes.statusCode).toBe(200);
+    const currentOrg = meRes
+      .json<{ memberships: Array<{ organizationId: string; orgHasOtherMembers: boolean }> }>()
+      .memberships.find((row) => row.organizationId === admin.organizationId);
+    expect(currentOrg?.orgHasOtherMembers).toBe(false);
+  });
+
+  it("treats the service user and client as ordinary inside the service org", async () => {
+    const app = getApp();
+    if (!app.config.growth.landingCampaigns) throw new Error("landing campaign config missing");
+    const previousServiceOrgId = app.config.growth.landingCampaigns.serviceOrgId;
+    try {
+      const admin = await createTestAdmin(app);
+      app.config.growth.landingCampaigns.serviceOrgId = admin.organizationId;
+      await seedOfficialRuntime(app, admin.organizationId);
+      const [existingServiceMember] = await app.db
+        .select()
+        .from(members)
+        .where(and(eq(members.userId, SERVICE_USER_ID), eq(members.organizationId, admin.organizationId)))
+        .limit(1);
+      const serviceMember =
+        existingServiceMember ??
+        (await createMember(app.db, admin.organizationId, {
+          username: "first-tree-landing-service-test",
+          displayName: "First Tree",
+          role: "member",
+        }));
+
+      const membersRes = await app.inject({
+        method: "GET",
+        url: `/api/v1/orgs/${admin.organizationId}/members`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(membersRes.statusCode).toBe(200);
+      expect(membersRes.json<Array<{ userId: string }>>().some((row) => row.userId === SERVICE_USER_ID)).toBe(true);
+
+      const patchMember = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/orgs/${admin.organizationId}/members/${serviceMember.id}`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+        payload: { displayName: "First Tree Service" },
+      });
+      expect(patchMember.statusCode).toBe(200);
+
+      const clientsRes = await app.inject({
+        method: "GET",
+        url: `/api/v1/orgs/${admin.organizationId}/clients`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(clientsRes.statusCode).toBe(200);
+      expect(clientsRes.json<Array<{ id: string }>>().some((row) => row.id === OFFICIAL_CLIENT_ID)).toBe(true);
+
+      const startInServiceOrg = await startProductionScan(app, admin);
+      expect(startInServiceOrg.statusCode).toBe(403);
+    } finally {
+      app.config.growth.landingCampaigns.serviceOrgId = previousServiceOrgId;
+    }
+  });
+
+  it("prevents deleting the service member and editing the trial agent through ordinary management APIs", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ agentUuid: string }>();
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, body.agentUuid)).limit(1);
+    if (!trialAgent?.managerId) throw new Error("trial agent manager missing");
+
+    const deleteMember = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/orgs/${admin.organizationId}/members/${trialAgent.managerId}`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(deleteMember.statusCode).toBe(403);
+
+    const patchAgent = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/agents/${body.agentUuid}`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { displayName: "Renamed" },
+    });
+    expect(patchAgent.statusCode).toBe(403);
+
+    const patchResources = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/agents/${body.agentUuid}/resources`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { resources: [] },
+    });
+    expect(patchResources.statusCode).toBe(403);
+  });
+
+  it("returns scoped 404 when another org admin targets the campaign service member id", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ agentUuid: string }>();
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, body.agentUuid)).limit(1);
+    if (!trialAgent?.managerId) throw new Error("trial agent manager missing");
+
+    const otherAdmin = await createTestAdmin(app);
+    const otherOrg = await attachOrg(app, otherAdmin.userId, "admin");
+    const patchMember = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/orgs/${otherOrg.orgId}/members/${trialAgent.managerId}`,
+      headers: { authorization: `Bearer ${otherAdmin.accessToken}` },
+      payload: { displayName: "Renamed" },
+    });
+    expect(patchMember.statusCode).toBe(404);
+
+    const deleteMember = await app.inject({
+      method: "DELETE",
+      url: `/api/v1/orgs/${otherOrg.orgId}/members/${trialAgent.managerId}`,
+      headers: { authorization: `Bearer ${otherAdmin.accessToken}` },
+    });
+    expect(deleteMember.statusCode).toBe(404);
+  });
+});

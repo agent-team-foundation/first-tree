@@ -12,6 +12,7 @@ export { chatUserState } from "./chat-user-state.js";
 export { chats } from "./chats.js";
 export { clients } from "./clients.js";
 export { contextTreeIoEvents } from "./context-tree-io-events.js";
+export { docComments, docDocuments, docVersions } from "./doc-documents.js";
 export { githubAppInstallIntents } from "./github-app-install-intents.js";
 export { githubAppInstallRequests } from "./github-app-install-requests.js";
 export { githubAppInstallations } from "./github-app-installations.js";

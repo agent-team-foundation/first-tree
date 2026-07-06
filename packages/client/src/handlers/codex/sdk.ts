@@ -224,12 +224,10 @@ export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, work
   // matches the user's auth mode (e.g. ChatGPT-account auth rejects the
   // `gpt-5-codex` family, while API-key auth accepts it). Hard-coding a
   // default here would force one auth mode and silently fail on the other.
-  // Sandbox: codex is the agent's primary local-execution surface (docker,
-  // cross-directory writes, host tools all flow through it). `workspace-write`
-  // blocks unix sockets outside the workspace (notably ~/.docker/run/docker.sock)
-  // and any out-of-tree write the agent legitimately needs. We run with
-  // `danger-full-access` and rely on the agent to gate irreversible actions
-  // itself instead of a sandbox-level wall.
+  // Sandbox: ordinary codex agents remain `danger-full-access` because codex is
+  // their primary local-execution surface. Landing campaign trials are forced
+  // through the app-server handler, which supplies a custom managed permissions
+  // profile instead of this SDK-only legacy sandbox field.
   const opts: ThreadOptions = {
     workingDirectory: workspaceCwd,
     skipGitRepoCheck: true,
@@ -1550,8 +1548,8 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       pendingChatContextPrompt = null;
     },
 
-    async shutdown() {
-      retryQueuedMessages("codex_shutdown_before_terminal");
+    async shutdown(reason?: string) {
+      retryQueuedMessages(reason ?? "codex_shutdown_before_terminal");
       // suspend() releases the active turn. Per agent-session-cwd-redesign
       // we no longer rm the cwd or auto-remove predeclared worktrees — both
       // are agent-scoped persistent resources shared across chats.

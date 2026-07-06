@@ -5,7 +5,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { type HubClient, listClients } from "./../api/activity.js";
 import { type ClientStatusInfo, getAgentClientStatus, getAgentConfig } from "./../api/agent-config.js";
-import { deleteAgent, getAgent, reactivateAgent, suspendAgent, updateAgent } from "./../api/agents.js";
+import {
+  deleteAgent,
+  getAgent,
+  reactivateAgent,
+  recoverAgentRuntimeSwitch,
+  suspendAgent,
+  switchAgentRuntime,
+  updateAgent,
+} from "./../api/agents.js";
 import { ApiError } from "./../api/client.js";
 import { listAgentSessions } from "./../api/sessions.js";
 import { useAuth } from "./../auth/auth-context.js";
@@ -29,10 +37,14 @@ import { isBindableClient } from "./agent-detail/action-state.js";
 import { AgentSwitcherStrip } from "./agent-detail/agent-switcher-strip.js";
 import { useAgentResources } from "./agent-detail/capability-section.js";
 import { ContextBar } from "./agent-detail/context-bar.js";
-import type { AgentDetailContext } from "./agent-detail/layout-context.js";
+import type { AgentDetailContext, RuntimeSwitchClaimView } from "./agent-detail/layout-context.js";
 import { buildTabs, type TabDef } from "./agent-detail/tabs.js";
 import { useAgentConfigSave } from "./agent-detail/use-agent-config-save.js";
 import { useLegacyAnchorRedirect } from "./agent-detail/use-legacy-anchor-redirect.js";
+import { PROVIDER_ORDER, runtimeProviderLabel } from "./clients/cards/shared/providers.js";
+
+const MIN_RUNTIME_SWITCH_CLIENT_VERSION = "0.5.11";
+type RuntimeSwitchDialogStep = "target" | "confirm";
 
 export function AgentDetailPage() {
   const params = useParams<{ uuid: string }>();
@@ -170,6 +182,42 @@ function AgentDetailPageView() {
     onError: (err) => setBindClientError(err instanceof Error ? err.message : String(err)),
   });
 
+  const [runtimeSwitchOpen, setRuntimeSwitchOpen] = useState(false);
+  const [runtimeSwitchClientId, setRuntimeSwitchClientId] = useState("");
+  const [runtimeSwitchProvider, setRuntimeSwitchProvider] = useState<RuntimeProvider>("claude-code");
+  const [runtimeSwitchStep, setRuntimeSwitchStep] = useState<RuntimeSwitchDialogStep>("target");
+  const [runtimeSwitchAcknowledged, setRuntimeSwitchAcknowledged] = useState(false);
+  const [runtimeSwitchError, setRuntimeSwitchError] = useState<string | null>(null);
+  const runtimeSwitchMutation = useMutation({
+    mutationFn: (target: { clientId: string; runtimeProvider: RuntimeProvider }) =>
+      switchAgentRuntime(uuid, {
+        clientId: target.clientId,
+        runtimeProvider: target.runtimeProvider,
+        confirmLocalDataLoss: true,
+      }),
+    onSuccess: () => {
+      setRuntimeSwitchOpen(false);
+      setRuntimeSwitchError(null);
+      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agent-config", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agent-client-status", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agent-sessions-active", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+    onError: (err) => setRuntimeSwitchError(err instanceof Error ? err.message : String(err)),
+  });
+  const runtimeSwitchRecoveryMutation = useMutation({
+    mutationFn: () => recoverAgentRuntimeSwitch(uuid),
+    onSuccess: () => {
+      setRuntimeSwitchError(null);
+      queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agent-config", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agent-client-status", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agent-sessions-active", uuid] });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+  });
+
   // Every setting saves immediately, so leaving the page is never destructive —
   // this is just `navigate`, exposed to controls that leave the current agent
   // (switcher, Chat, Usage deep links, "Manage in Settings", "Open Computers").
@@ -281,6 +329,7 @@ function AgentDetailPageView() {
   }
 
   const isHuman = agent.type === "human";
+  const runtimeSwitchClaim = readRuntimeSwitchClaim(agent.metadata);
 
   const clientStatus: ClientStatusInfo | undefined = clientStatusQuery.data;
   const activeSessions = sessionsQuery.data?.length ?? 0;
@@ -310,6 +359,26 @@ function AgentDetailPageView() {
 
   const setupRuntimeProvider: RuntimeProvider = agent.runtimeProvider ?? "claude-code";
 
+  const openRuntimeSwitchDialog = () => {
+    const clients = allClientsQuery.data ?? [];
+    const currentCandidate = clients.find(
+      (client) => client.id === boundClientId && isRuntimeSwitchCandidateClient(client),
+    );
+    setRuntimeSwitchClientId(currentCandidate?.id ?? clients.find(isRuntimeSwitchCandidateClient)?.id ?? "");
+    setRuntimeSwitchProvider(setupRuntimeProvider);
+    setRuntimeSwitchStep("target");
+    setRuntimeSwitchAcknowledged(false);
+    setRuntimeSwitchError(null);
+    setRuntimeSwitchOpen(true);
+  };
+  const runtimeSwitchSelectedClient =
+    allClientsQuery.data?.find((client) => client.id === runtimeSwitchClientId) ?? null;
+  const runtimeSwitchProviderAvailable = runtimeSwitchSelectedClient
+    ? runtimeSwitchAvailableProviders(runtimeSwitchSelectedClient).some(
+        (provider) => provider === runtimeSwitchProvider,
+      )
+    : false;
+
   const refreshAgent = async () => {
     await queryClient.invalidateQueries({ queryKey: ["agent", uuid] });
     await queryClient.invalidateQueries({ queryKey: ["agents"] });
@@ -338,8 +407,19 @@ function AgentDetailPageView() {
     isOffline,
     boundClientLabel,
     setupRuntimeProvider,
+    runtimeSwitchClaim,
     onOpenBindDialog: () => setBindClientOpen(true),
     bindClientPending: bindClientMutation.isPending,
+    onOpenRuntimeSwitchDialog: openRuntimeSwitchDialog,
+    runtimeSwitchPending: runtimeSwitchMutation.isPending,
+    runtimeSwitchRecoveryPending: runtimeSwitchRecoveryMutation.isPending,
+    runtimeSwitchRecoveryError:
+      runtimeSwitchRecoveryMutation.error instanceof Error
+        ? runtimeSwitchRecoveryMutation.error.message
+        : runtimeSwitchRecoveryMutation.error
+          ? String(runtimeSwitchRecoveryMutation.error)
+          : null,
+    onRecoverRuntimeSwitch: () => runtimeSwitchRecoveryMutation.mutate(),
     saveIdentity: async (patch) => {
       await identityUpdateMutation.mutateAsync(patch);
     },
@@ -509,6 +589,129 @@ function AgentDetailPageView() {
             >
               {bindClientMutation.isPending ? "Binding…" : "Bind"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={runtimeSwitchOpen}
+        onOpenChange={(open) => {
+          setRuntimeSwitchOpen(open);
+          if (!open) {
+            setRuntimeSwitchError(null);
+            setRuntimeSwitchStep("target");
+            setRuntimeSwitchAcknowledged(false);
+            runtimeSwitchMutation.reset();
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Switch runtime</DialogTitle>
+            <DialogDescription>
+              {runtimeSwitchStep === "target"
+                ? "Choose the computer and provider that will own this agent after the switch."
+                : "Confirm the interruption and local-state boundary before the switch starts."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {allClientsQuery.isLoading ? (
+              <div className="text-body" style={{ color: "var(--fg-3)" }}>
+                Loading computers…
+              </div>
+            ) : allClientsQuery.error ? (
+              <div className="text-body" style={{ color: "var(--state-error)" }}>
+                Failed to load computers:{" "}
+                {allClientsQuery.error instanceof Error ? allClientsQuery.error.message : "Unknown"}
+              </div>
+            ) : (
+              <RuntimeSwitchControls
+                clients={allClientsQuery.data ?? []}
+                currentClientId={boundClientId}
+                currentProvider={setupRuntimeProvider}
+                selectedClientId={runtimeSwitchClientId}
+                selectedProvider={runtimeSwitchProvider}
+                onSelectClient={(clientId) => {
+                  setRuntimeSwitchClientId(clientId);
+                  const client = allClientsQuery.data?.find((c) => c.id === clientId);
+                  const available = client ? runtimeSwitchAvailableProviders(client) : [];
+                  if (!available.some((provider) => provider === runtimeSwitchProvider) && available[0]) {
+                    setRuntimeSwitchProvider(available[0]);
+                  }
+                  setRuntimeSwitchStep("target");
+                  setRuntimeSwitchAcknowledged(false);
+                }}
+                onSelectProvider={(provider) => {
+                  setRuntimeSwitchProvider(provider);
+                  setRuntimeSwitchStep("target");
+                  setRuntimeSwitchAcknowledged(false);
+                }}
+                onOpenComputers={() => navigateAway("/settings/computers")}
+              />
+            )}
+            {runtimeSwitchStep === "confirm" && (
+              <RuntimeSwitchConfirmation
+                agentLabel={agent.displayName}
+                client={runtimeSwitchSelectedClient}
+                provider={runtimeSwitchProvider}
+                checked={runtimeSwitchAcknowledged}
+                onCheckedChange={setRuntimeSwitchAcknowledged}
+              />
+            )}
+            {runtimeSwitchError && (
+              <div className="text-body" style={{ color: "var(--state-error)" }}>
+                {runtimeSwitchError}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            {runtimeSwitchStep === "confirm" ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setRuntimeSwitchStep("target");
+                  setRuntimeSwitchAcknowledged(false);
+                }}
+              >
+                Back
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={() => setRuntimeSwitchOpen(false)}>
+                Cancel
+              </Button>
+            )}
+            {runtimeSwitchStep === "target" ? (
+              <Button
+                disabled={
+                  !runtimeSwitchClientId ||
+                  !runtimeSwitchProvider ||
+                  !runtimeSwitchProviderAvailable ||
+                  (runtimeSwitchClientId === boundClientId && runtimeSwitchProvider === setupRuntimeProvider) ||
+                  runtimeSwitchMutation.isPending
+                }
+                onClick={() => {
+                  setRuntimeSwitchError(null);
+                  setRuntimeSwitchStep("confirm");
+                  setRuntimeSwitchAcknowledged(false);
+                }}
+              >
+                Review impact
+              </Button>
+            ) : (
+              <Button
+                variant="destructive"
+                disabled={!runtimeSwitchAcknowledged || runtimeSwitchMutation.isPending}
+                onClick={() => {
+                  setRuntimeSwitchError(null);
+                  runtimeSwitchMutation.mutate({
+                    clientId: runtimeSwitchClientId,
+                    runtimeProvider: runtimeSwitchProvider,
+                  });
+                }}
+              >
+                {runtimeSwitchMutation.isPending ? "Switching…" : "Switch runtime"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -747,5 +950,287 @@ function BindClientList({
         );
       })}
     </ul>
+  );
+}
+
+function readRuntimeSwitchClaim(metadata: Record<string, unknown>): RuntimeSwitchClaimView | null {
+  const value = metadata.runtimeSwitch;
+  if (value === undefined) return null;
+  if (!value || typeof value !== "object") return { claimId: null, phase: null };
+  const record = value as Record<string, unknown>;
+  return {
+    claimId: typeof record.claimId === "string" ? record.claimId : null,
+    phase: typeof record.phase === "string" ? record.phase : null,
+  };
+}
+
+function isVersionAtLeast(version: string | null, minimum: string): boolean {
+  if (!version) return false;
+  const parse = (value: string) =>
+    value
+      .replace(/^v/, "")
+      .split(/[.-]/)
+      .slice(0, 3)
+      .map((part) => Number.parseInt(part, 10));
+  const actual = parse(version);
+  const required = parse(minimum);
+  for (let i = 0; i < 3; i += 1) {
+    const actualPart = actual[i] ?? 0;
+    const requiredPart = required[i] ?? 0;
+    const a = Number.isFinite(actualPart) ? actualPart : 0;
+    const b = Number.isFinite(requiredPart) ? requiredPart : 0;
+    if (a > b) return true;
+    if (a < b) return false;
+  }
+  return true;
+}
+
+function capabilitiesReported(client: HubClient): boolean {
+  return Object.keys(client.capabilities ?? {}).length > 0;
+}
+
+function runtimeSwitchAvailableProviders(client: HubClient): RuntimeProvider[] {
+  if (!capabilitiesReported(client)) return [...PROVIDER_ORDER];
+  return PROVIDER_ORDER.filter((provider) => client.capabilities[provider]?.available === true);
+}
+
+function isRuntimeSwitchCandidateClient(client: HubClient): boolean {
+  return (
+    client.authState === "ok" &&
+    isVersionAtLeast(client.sdkVersion, MIN_RUNTIME_SWITCH_CLIENT_VERSION) &&
+    runtimeSwitchAvailableProviders(client).length > 0
+  );
+}
+
+function runtimeSwitchClientBlocker(client: HubClient): string | null {
+  if (client.authState !== "ok") return "Credentials expired";
+  if (!isVersionAtLeast(client.sdkVersion, MIN_RUNTIME_SWITCH_CLIENT_VERSION)) {
+    return `Requires CLI ${MIN_RUNTIME_SWITCH_CLIENT_VERSION}+`;
+  }
+  if (runtimeSwitchAvailableProviders(client).length === 0) return "No available runtime provider";
+  return null;
+}
+
+function RuntimeSwitchControls({
+  clients,
+  currentClientId,
+  currentProvider,
+  selectedClientId,
+  selectedProvider,
+  onSelectClient,
+  onSelectProvider,
+  onOpenComputers,
+}: {
+  clients: HubClient[];
+  currentClientId: string | null;
+  currentProvider: RuntimeProvider;
+  selectedClientId: string;
+  selectedProvider: RuntimeProvider;
+  onSelectClient: (id: string) => void;
+  onSelectProvider: (provider: RuntimeProvider) => void;
+  onOpenComputers: () => void;
+}) {
+  const candidates = clients.filter(isRuntimeSwitchCandidateClient);
+  const selectedClient = candidates.find((client) => client.id === selectedClientId) ?? null;
+  const providers = selectedClient ? runtimeSwitchAvailableProviders(selectedClient) : [];
+
+  if (candidates.length === 0) {
+    return (
+      <div
+        className="flex items-start gap-3"
+        style={{
+          border: "var(--hairline) solid var(--border)",
+          borderRadius: "var(--radius-panel)",
+          padding: "var(--sp-3)",
+        }}
+      >
+        <div
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-input)]"
+          style={{ background: "var(--bg-sunken)", color: "var(--fg-3)" }}
+          aria-hidden
+        >
+          <Monitor className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1 space-y-2">
+          <div>
+            <p className="m-0 text-body font-medium" style={{ color: "var(--fg)" }}>
+              No eligible computers
+            </p>
+            <p className="m-0 text-caption" style={{ color: "var(--fg-3)", marginTop: "var(--sp-0_5)" }}>
+              Connect or upgrade a computer that can run the target runtime before switching.
+            </p>
+          </div>
+          <Button type="button" variant="outline" size="xs" onClick={onOpenComputers}>
+            Open Computers
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="m-0 text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
+          Computer
+        </p>
+        <ul
+          className="max-h-48 overflow-y-auto"
+          style={{
+            border: "var(--hairline) solid var(--border)",
+            borderRadius: "var(--radius-input)",
+            margin: 0,
+            padding: 0,
+            listStyle: "none",
+          }}
+        >
+          {clients.map((client) => {
+            const picked = client.id === selectedClientId;
+            const blocker = runtimeSwitchClientBlocker(client);
+            const disabled = blocker !== null;
+            return (
+              <li key={client.id} style={{ borderTop: "var(--hairline) solid var(--border-faint)" }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!disabled) onSelectClient(client.id);
+                  }}
+                  className={cn("w-full text-left flex items-center gap-3")}
+                  style={{
+                    padding: "var(--sp-2) var(--sp-3)",
+                    background: picked ? "var(--bg-active)" : "transparent",
+                    border: "none",
+                    cursor: disabled ? "not-allowed" : "pointer",
+                    opacity: disabled ? 0.62 : 1,
+                  }}
+                  disabled={disabled}
+                  title={blocker ?? undefined}
+                >
+                  <span
+                    className="inline-block h-2 w-2 rounded-full shrink-0"
+                    style={{ background: client.status === "connected" ? "var(--success)" : "var(--fg-4)" }}
+                    aria-hidden
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-body truncate font-medium">{client.hostname ?? client.id}</span>
+                    <span className="block mono truncate text-caption" style={{ color: "var(--fg-4)" }}>
+                      {client.id}
+                      {client.id === currentClientId ? " · current" : ""}
+                      {client.status !== "connected" ? " · offline" : ""}
+                      {client.sdkVersion ? ` · SDK ${client.sdkVersion}` : ""}
+                    </span>
+                  </span>
+                  {blocker && (
+                    <span className="text-label" style={{ color: "var(--fg-4)" }}>
+                      {blocker}
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        {selectedClient?.status !== "connected" && (
+          <p className="m-0 text-caption" style={{ color: "var(--fg-3)", marginTop: "var(--sp-1_5)" }}>
+            Target computer is offline. The cloud binding changes now; the runtime starts when that computer reconnects.
+          </p>
+        )}
+        {selectedClient && !capabilitiesReported(selectedClient) && (
+          <p className="m-0 text-caption" style={{ color: "var(--state-blocked)", marginTop: "var(--sp-1_5)" }}>
+            This computer has not reported runtime capabilities yet. The server will allow the switch and the runtime
+            will validate on bind.
+          </p>
+        )}
+      </div>
+
+      <div>
+        <p className="m-0 text-label" style={{ color: "var(--fg-3)", marginBottom: "var(--sp-1)" }}>
+          Runtime
+        </p>
+        {providers.length === 0 ? (
+          <p className="m-0 text-body" style={{ color: "var(--state-error)" }}>
+            This computer has not reported an available runtime provider yet.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {providers.map((provider) => {
+              const picked = provider === selectedProvider;
+              return (
+                <button
+                  key={provider}
+                  type="button"
+                  onClick={() => onSelectProvider(provider)}
+                  className="text-body"
+                  style={{
+                    border: "var(--hairline) solid var(--border)",
+                    borderColor: picked ? "var(--primary)" : "var(--border)",
+                    borderRadius: "var(--radius-input)",
+                    background: picked ? "var(--bg-active)" : "var(--bg)",
+                    color: "var(--fg)",
+                    padding: "var(--sp-1_5) var(--sp-2)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {runtimeProviderLabel(provider)}
+                  {provider === currentProvider ? " · current" : ""}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RuntimeSwitchConfirmation({
+  agentLabel,
+  client,
+  provider,
+  checked,
+  onCheckedChange,
+}: {
+  agentLabel: string;
+  client: HubClient | null;
+  provider: RuntimeProvider;
+  checked: boolean;
+  onCheckedChange: (checked: boolean) => void;
+}) {
+  const targetLabel = client?.hostname ?? client?.id ?? "selected computer";
+  return (
+    <div
+      style={{
+        border: "var(--hairline) solid var(--state-blocked)",
+        borderRadius: "var(--radius-panel)",
+        padding: "var(--sp-3)",
+      }}
+    >
+      <p className="m-0 text-body font-medium" style={{ color: "var(--fg)" }}>
+        {agentLabel} will move to {targetLabel} using {runtimeProviderLabel(provider)}.
+      </p>
+      <ul className="text-caption" style={{ color: "var(--fg-3)", margin: "var(--sp-2) 0", paddingLeft: "1.2rem" }}>
+        <li>Existing runtime sessions stop and their live activity trace is cleared.</li>
+        <li>
+          Local workspace files, unpushed changes, provider sessions, provider login state, and nearby local files do
+          not move.
+        </li>
+        <li>
+          Messages sent during the switch window are not delivered to the agent and are not replayed after recovery.
+        </li>
+        <li>Cloud cannot force-kill external commands already running on the old computer.</li>
+        {client?.status !== "connected" && (
+          <li>The target computer is offline; the agent waits there until it reconnects.</li>
+        )}
+      </ul>
+      <label className="flex items-start gap-2 text-body" style={{ color: "var(--fg)" }}>
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onCheckedChange(event.currentTarget.checked)}
+          style={{ marginTop: 3 }}
+        />
+        <span>I understand this switch can abandon local runtime state and active sessions.</span>
+      </label>
+    </div>
   );
 }

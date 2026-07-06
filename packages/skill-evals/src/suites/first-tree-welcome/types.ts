@@ -3,7 +3,7 @@ import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
 export type WelcomeRole = "admin" | "invitee";
-export type WelcomeKickoffKind = "intro" | "work" | "tree";
+export type WelcomeChatScenario = "onboarding" | "team-onboarding" | "tree-setup";
 export type WelcomeRepoState = "none" | "local-readable" | "selected-readable" | "selected-auth-fails" | "unknown";
 export type WelcomeTreeState = "none" | "empty" | "populated" | "unknown";
 export type WelcomeGithubAppState = "installed" | "missing" | "unknown";
@@ -16,7 +16,7 @@ export type WelcomeExpectedAction =
   | "report_auth_failure_without_claiming_repo_read"
   | "value_first_then_setup_handoff"
   | "guide_repo_selection_without_claiming_repo_read"
-  | "offer_code_value_without_tree_setup_task"
+  | "offer_tree_build_with_code_value"
   | "offer_bounded_first_tasks_from_repo_and_tree"
   | "offer_repo_value_without_claiming_tree_ready"
   | "offer_invitee_value_without_admin_setup"
@@ -24,7 +24,7 @@ export type WelcomeExpectedAction =
 
 export type FirstTreeWelcomeFixture = {
   githubAppState: WelcomeGithubAppState;
-  kickoffKind: WelcomeKickoffKind;
+  chatScenario: WelcomeChatScenario;
   repoState: WelcomeRepoState;
   role: WelcomeRole;
   treeSetupChat: WelcomeTreeSetupChatState;
@@ -94,6 +94,7 @@ export type EvalMetrics = {
   skillFileReadObserved: boolean;
   sourceRepoChanged: boolean;
   taskOptionsObserved: boolean;
+  treeBuildOptionObserved: boolean;
   treeEvidenceReadObserved: boolean;
 };
 

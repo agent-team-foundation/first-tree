@@ -58,9 +58,20 @@ type AgentRequestFn = (
  */
 export type CreateTestAppOptions = {
   channel?: Config["channel"];
+  /** Document review (docloop) routes. Defaults to enabled in tests. */
+  docsEnabled?: boolean;
+  growthLandingPagesEnabled?: boolean;
+  landingCampaignServiceUserId?: string;
+  landingCampaignServiceOrgId?: string;
+  landingCampaignClientId?: string;
+  landingCampaignRuntimeProvider?: "codex" | "claude-code";
+  landingCampaignMaxAgentTurns?: number;
   commandVersion?: string;
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
+  connectBootstrap?: Config["connectBootstrap"];
   inbox?: Partial<NonNullable<Config["inbox"]>>;
+  runtimeHttpTokenEnforcement?: boolean;
+  runtimeSwitchFaultInjection?: boolean;
   allowedOrganizationId?: string;
   /**
    * Drop `oauth.githubApp.slug` from the test config. Used by the
@@ -86,6 +97,28 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
   };
   const config: Config = {
     channel: opts.channel ?? "dev",
+    growth: {
+      landingPagesEnabled: opts.growthLandingPagesEnabled ?? false,
+      landingCampaignMaxAgentTurns: opts.landingCampaignMaxAgentTurns ?? 1,
+      ...(opts.landingCampaignServiceUserId !== undefined ||
+      opts.landingCampaignServiceOrgId !== undefined ||
+      opts.landingCampaignClientId !== undefined ||
+      opts.landingCampaignRuntimeProvider !== undefined
+        ? {
+            landingCampaigns: {
+              serviceUserId: opts.landingCampaignServiceUserId,
+              serviceOrgId: opts.landingCampaignServiceOrgId,
+              clientId: opts.landingCampaignClientId,
+              runtimeProvider: opts.landingCampaignRuntimeProvider ?? "codex",
+            },
+          }
+        : {}),
+    },
+    docs: {
+      // Docloop is off by default in production config but on in tests so
+      // the document routes are exercised without per-test wiring.
+      enabled: opts.docsEnabled ?? true,
+    },
     database: {
       url: process.env.DATABASE_URL ?? "",
       provider: "external",
@@ -129,6 +162,11 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       },
     },
     trustProxy: false,
+    connectBootstrap: {
+      method: "npm",
+      portableDownloadBaseUrl: "https://downloads.first-tree.ai",
+      ...opts.connectBootstrap,
+    },
     rateLimit: { ...baseRateLimit, ...opts.rateLimit },
     ...(opts.inbox !== undefined
       ? { inbox: { maxInFlightPerAgent: 8192, maxInFlightPerAgentChat: 8, ...opts.inbox } }
@@ -137,6 +175,8 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
       logging: { level: "error", format: "json", bridgeToSpanLevel: "off" },
     },
     runtime: {
+      agentHttpTokenEnforcement: opts.runtimeHttpTokenEnforcement ?? false,
+      runtimeSwitchFaultInjection: opts.runtimeSwitchFaultInjection ?? false,
       pollingIntervalSeconds: 5,
       presenceCleanupSeconds: 60,
       // Disabled by default in tests — suites that exercise the sweeper

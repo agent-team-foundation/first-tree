@@ -35,13 +35,15 @@ Requirements: Node.js ≥ 22.13 (24 recommended).
 
 ```
 first-tree
-├── login <token>            Sign this computer in
+├── login <token>            Sign this computer in or switch local clients
 ├── logout                   Stop the daemon and clear credentials
+├── computer ...             Computer-level local state recovery
 ├── status                   CLI + daemon + server + auth + agent overview
 ├── doctor                   Cross-subsystem readiness check
 ├── upgrade                  Self-update + restart the daemon
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
+├── doc ...                  Org document library (publish, comments, reply, resolve, status)
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor, probe)
 ├── config ...               View/modify this machine's client.yaml
@@ -53,21 +55,23 @@ first-tree
 ## login
 
 ```
-first-tree login <token> [--no-start]
+first-tree login <token> [--no-start] [--force-switch]
 ```
 
 Sign this computer in using a connect token from the web console. The
 token's `iss` claim carries the server URL — no `--server` flag needed,
 and switching to a different deployment only requires a fresh token.
-If this machine already has credentials for another user, `login` refuses to
-overwrite them. If credentials are missing, `login` preserves `client.yaml` and
-local agent state so the same user can reconnect after a normal `logout`. Switch
-accounts by running `first-tree logout --purge` first, then login with the new
-token.
+If this machine already has credentials for another user, `login` asks for
+explicit confirmation and switches the active local client after stopping and
+draining the old runtime. In non-TTY automation, `--force-switch` is the only
+confirmation flag; it does not skip supervisor, drain, filesystem, or journal
+safety checks. If credentials are missing, `login` preserves `client.yaml` and
+local agent state so the same user can reconnect after a normal `logout`.
 
 | Flag | Effect |
 |---|---|
 | `--no-start` | Write credentials and exit without installing/starting the background daemon. |
+| `--force-switch` | Confirm a different-user local client switch in non-interactive mode. Safety gates still run. |
 
 ## logout
 
@@ -75,14 +79,38 @@ token.
 first-tree logout [--purge]
 ```
 
-Stop the daemon and clear credentials. `--purge` additionally removes
-`client.yaml`, local agent configs, agent workspaces, and session state. Use
-`--purge` before switching this machine to a different account. The purge is
-local-only: server-side clients, agents, chats, and history are not deleted,
-but the previous client and agents stop running from this machine unless they
-are set up again. If the daemon is active and cannot be stopped, `--purge`
-refuses to delete local agent state. The default keeps local client/agent state
-for the same user to reconnect later.
+Stop the daemon and clear credentials. `--purge` additionally removes active
+root client state, parked clients under `$FIRST_TREE_HOME/parked-clients/`, and
+switch lock/journal files. This is a destructive local reset path, not the
+normal account-switch path. To switch this computer to another First Tree user,
+run `first-tree login <token>` with the new user's connect token and confirm
+the switch. The purge is local-only: server-side clients, agents, chats, and
+history are not deleted, but the previous clients and agents stop running from
+this machine unless they are set up again. If the daemon is active and cannot
+be stopped, `--purge` refuses to delete local client state. The default keeps
+local client/agent state for the same user to reconnect later.
+
+## computer
+
+Computer-level local state recovery.
+
+```
+first-tree computer
+└── reset
+```
+
+### computer reset
+
+```
+first-tree computer reset
+```
+
+Stop the daemon and remove active root client state, parked clients under
+`$FIRST_TREE_HOME/parked-clients/`, switch lock/journal files, and active
+credentials. Use this when local identity state is damaged or when you
+intentionally want to discard every local First Tree client stored in this
+installation. Normal different-user switching should use
+`first-tree login <token>` instead, which parks inactive clients.
 
 ## status
 
@@ -222,7 +250,7 @@ first-tree agent config
 
 ```
 first-tree agent bind
-└── client <agentName> --client-id <id>             # first-time bind only; id is immutable once set
+└── client <agentName> --client-id <id>             # first-time bind only; later moves use managed runtime switch
 ```
 
 ### agent workspace
@@ -408,6 +436,54 @@ effective sender so the first message can wake the agent normally.
 
 ---
 
+## doc
+
+Org document library (docloop) — publish markdown design docs for team
+review, pull the structured comments reviewers leave, reply, resolve, and
+track document status. Feature-flagged server-side
+(`FIRST_TREE_DOCS_ENABLED`); commands report HTTP 404 while the flag is off.
+Publishing is idempotent on `slug`: the first publish creates the document
+(version 1), every later publish of the same slug appends the next version.
+The caller's own identity signs every write — agents author under their own
+agent name, humans under their member identity.
+
+```
+first-tree doc
+├── publish <file> [--slug <slug>] [--title <t>] [--project <p>]
+│                  [--note <n>] [--status <s>] [--if-changed]   # create or append a version
+├── get <slug> [--version <n>]                                  # read metadata + markdown content
+├── list [--project <p>] [--status <s>] [--limit <n>] [--cursor <c>]
+├── comments <slug> [--status open|resolved] [--version <n>]
+│                   [--watch [seconds]]                         # list; --watch streams new ones as JSON lines
+├── comment <slug> <body> [--quote <exact> [--prefix <t>] [--suffix <t>]] [--version <n>]
+├── reply <commentId> <body>                                    # reply in a thread
+├── resolve <commentId> [--reopen]                              # close (or reopen) a thread
+├── status <slug> [--set draft|in_review|approved|archived]     # show or move status
+├── import <dir> [--project <p>] [--status <s>] [--dry-run]     # bulk-publish a directory of .md files
+└── export <dir> [--project <p>] [--status <s>]                 # dump library to <slug>.md files + manifest.json
+```
+
+```bash
+first-tree doc publish design.md --slug chat-rename --project first-tree --status in_review
+first-tree doc comments chat-rename --status open --json
+first-tree doc reply <commentId> "Addressed in v2 — see §3"
+first-tree doc resolve <commentId>
+first-tree doc publish design.md --slug chat-rename --note "responds to review round 1"
+first-tree doc status chat-rename --set approved
+```
+
+Slug defaults to the slugified filename; title defaults to the file's first
+markdown heading (required on the first publish). Comment anchors are
+TextQuoteSelector-style (`exact` / `prefix` / `suffix`) against the markdown
+source, so an agent can locate every comment in the file it holds without
+line-number conventions. Comments whose quote no longer exists in the latest
+version come back with `outdated: true` (computed on read). `import` skips
+`NODE.md` / `README.md` index files and is idempotent (re-runs only add
+versions for changed content); `export` is the guaranteed way out — plain
+markdown files plus a `manifest.json` of metadata.
+
+---
+
 ## github
 
 GitHub entity attention for the current chat. `follow` wires an entity's
@@ -576,7 +652,18 @@ shown in human output. Hidden paths and common generated directories
 (`node_modules`, `__pycache__`, `dist`, `build`, `.next`, `.turbo`) are
 skipped.
 
-Human output is written as a tree whose node labels use:
+Human output starts with the Context Tree git checkout branch, then the
+rendered tree. When the current branch is not exactly `main`, `master`, or
+`origin/main`, the branch line is followed by a stale-tree warning:
+Detached HEAD checkouts whose commit matches `refs/remotes/origin/main` are
+reported as `origin/main`.
+
+```text
+Branch: feature/stale-tree
+Warning: current branch "feature/stale-tree" is not main/master; it may be stale. Switch to main/master.
+```
+
+The rendered tree's node labels use:
 
 ```text
 relative/path/ [Title] -> Description
@@ -597,11 +684,16 @@ With global `--json` or `FIRST_TREE_JSON=1`, `first-tree tree tree`
 emits a single `{ ok: true, data }` envelope on stdout. `data.root` is the
 git repo root, `data.target` is the resolved target directory relative to
 that root, and `data.options` records the parsed `level`, `pattern`, and
-effective `path`. `data.tree` contains the same filtered hierarchy as
+effective `path`. `data.branch` reports the current tree checkout as
+`{ name, isMainline, warning }`; `warning` is `null` for `main`, `master`,
+and `origin/main`, including detached HEAD checkouts that match
+`refs/remotes/origin/main`; otherwise it contains the same stale-tree warning
+string shown in human mode. `data.tree` contains the same filtered hierarchy as
 structured nodes with `kind`, `name`, `relativePath`, `depth`, `metadata`,
 `hasNode`, and `children` fields; `metadata` includes `title`, optional
-`description`, and `owners`. Human tree text is written to stderr so stdout
-stays reserved for machine-readable JSON.
+`description`, and `owners`. Human tree text and branch warnings are not
+written to stderr in JSON mode, so stdout stays reserved for machine-readable
+JSON.
 
 ## Environment variables
 

@@ -21,6 +21,7 @@ function makeNotifier(): Notifier {
     notifyChatMessage: vi.fn(async () => {}),
     notifyChatAudience: vi.fn(async () => {}),
     notifyChatUpdated: vi.fn(async () => {}),
+    notifyAgentRouteChange: vi.fn(async () => {}),
     notifySessionEvent: vi.fn(async () => {}),
     pushFrameToInbox: vi.fn(async () => 0),
     onConfigChange: vi.fn(),
@@ -31,6 +32,7 @@ function makeNotifier(): Notifier {
     onChatMessage: vi.fn(),
     onChatAudience: vi.fn(),
     onChatUpdated: vi.fn(),
+    onAgentRouteChange: vi.fn(),
     start: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
   } satisfies Notifier;
@@ -148,6 +150,7 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       notifyChatMessage: vi.fn(async () => {}),
       notifyChatAudience: vi.fn(async () => {}),
       notifyChatUpdated: vi.fn(async () => {}),
+      notifyAgentRouteChange: vi.fn(async () => {}),
       notifySessionEvent: vi.fn(async () => {}),
       pushFrameToInbox: vi.fn(async () => 0),
       onConfigChange: vi.fn(),
@@ -158,6 +161,7 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       onChatMessage: vi.fn(),
       onChatAudience: vi.fn(),
       onChatUpdated: vi.fn(),
+      onAgentRouteChange: vi.fn(),
       start: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
     } satisfies Notifier;
@@ -190,6 +194,7 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       notifyChatMessage: vi.fn(async () => {}),
       notifyChatAudience: vi.fn(async () => {}),
       notifyChatUpdated: vi.fn(async () => {}),
+      notifyAgentRouteChange: vi.fn(async () => {}),
       notifySessionEvent: vi.fn(async () => {}),
       pushFrameToInbox: vi.fn(async () => 0),
       onConfigChange: vi.fn(),
@@ -200,6 +205,7 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
       onChatMessage: vi.fn(),
       onChatAudience: vi.fn(),
       onChatUpdated: vi.fn(),
+      onAgentRouteChange: vi.fn(),
       start: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
     } satisfies Notifier;

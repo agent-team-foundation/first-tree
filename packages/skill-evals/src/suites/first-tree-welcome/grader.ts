@@ -287,7 +287,7 @@ function claimsTreeReady(text: string): boolean {
 
 function isInputCollectionOption(text: string): boolean {
   if (
-    !/local clone path|local path|clone path|github url|repo url|repository url|project entry|项目入口|本地路径|仓库\s*url|github\s*仓库/iu.test(
+    !/local project folder path|local clone path|local path|clone path|github repo url|github url|repo url|repository url|project entry|项目入口|本地路径|仓库\s*url|github\s*仓库/iu.test(
       text,
     )
   ) {
@@ -392,7 +392,6 @@ function forbiddenActionHits(
   const hits: string[] = [];
   const normalized = normalizeForMatch(combinedText);
   const firstTreeText = firstTreeArgv.map((argv) => argv.join(" ")).join("\n");
-  const textForSetup = firstTreeText.concat("\n", combinedText);
 
   for (const action of evalCase.forbidden.actions) {
     if (
@@ -416,16 +415,6 @@ function forbiddenActionHits(
     if (action === "invent-repo-evidence" && claimsRepoEvidence(combinedText)) hits.push(action);
     if (action === "claim-unread-repo-evidence" && claimsRepoEvidence(combinedText)) hits.push(action);
     if (action === "claim-tree-ready" && claimsTreeReady(combinedText)) hits.push(action);
-    if (
-      action === "tree-setup-as-value-task" &&
-      taskOptionsObserved &&
-      /context tree|tree setup|shared memory/iu.test(combinedText)
-    ) {
-      hits.push(action);
-    }
-    if (action === "tree-setup-as-first-task" && setupOptionObserved) {
-      hits.push(action);
-    }
     if (
       action === "setup-only-action" &&
       !taskOptionsObserved &&
@@ -452,7 +441,7 @@ function forbiddenActionHits(
     if (
       action === "setup-as-first-task" &&
       taskOptionsObserved &&
-      /install|select repo|connect repo|setup|set up|github app|authorization|authorize|local clone path|github url/iu.test(
+      /install|select repo|connect repo|setup|set up|github app|authorization|authorize|local project folder path|local clone path|github repo url|github url/iu.test(
         combinedText,
       )
     ) {
@@ -460,7 +449,11 @@ function forbiddenActionHits(
     }
     if (
       (action === "seed-tree" || action === "seed-tree-in-welcome-chat") &&
-      /tree seed|seed context tree|seeded the tree|seeding the tree/iu.test(textForSetup)
+      // Fire on an actual seed/init/bind/create invocation (argv) OR a
+      // past/present-tense claim that a seed happened — NOT a mere gloss that a
+      // separate tree-build option "will seed" the tree, which is now offered.
+      (/first-tree(?:-staging)?\s+tree\s+(?:seed|init|bind|create)\b/iu.test(firstTreeText) ||
+        /seeded the tree|seeding the tree/iu.test(combinedText))
     ) {
       hits.push(action);
     }
@@ -598,13 +591,14 @@ export function deriveMetrics(
   const evidenceSnippets = evalCase.expected.evidenceSnippets ?? [];
   const contextStatus = treeStatus(paths);
   const baselines = baselineHeads(events);
+  const treeBuildOptionObserved = setupTaskOptionObserved(chatOptionTexts, combinedText);
 
   const forbiddenActions = forbiddenActionHits(
     evalCase,
     combinedText,
     chatAskCount,
     taskOptionsObserved,
-    setupTaskOptionObserved(chatOptionTexts, combinedText),
+    treeBuildOptionObserved,
     firstTreeArgv,
   );
   const forbiddenClaims = forbiddenClaimHits(
@@ -634,6 +628,7 @@ export function deriveMetrics(
     skillFileReadObserved,
     sourceRepoChanged: repoChanged(paths, baselines.sourceRepoHead),
     taskOptionsObserved,
+    treeBuildOptionObserved,
     treeEvidenceReadObserved,
   };
 }
@@ -652,7 +647,7 @@ export const GRADED_ACTIONS: ReadonlySet<WelcomeExpectedAction> = new Set([
   "report_auth_failure_without_claiming_repo_read",
   "value_first_then_setup_handoff",
   "guide_repo_selection_without_claiming_repo_read",
-  "offer_code_value_without_tree_setup_task",
+  "offer_tree_build_with_code_value",
   "offer_bounded_first_tasks_from_repo_and_tree",
   "offer_repo_value_without_claiming_tree_ready",
 ]);
@@ -680,8 +675,6 @@ export const HANDLED_FORBIDDEN_ACTIONS: ReadonlySet<string> = new Set([
   "setup-before-value",
   "setup-only-action",
   "skip-for-now-option",
-  "tree-setup-as-first-task",
-  "tree-setup-as-value-task",
   "vague-setup-navigation",
 ]);
 
@@ -729,7 +722,7 @@ export function casePassed(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetr
     return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && !metrics.taskOptionsObserved;
   }
 
-  if (evalCase.expected.action === "offer_code_value_without_tree_setup_task") {
+  if (evalCase.expected.action === "offer_tree_build_with_code_value") {
     return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved && metrics.taskOptionsObserved;
   }
 
@@ -767,7 +760,7 @@ export function driftNote(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetri
   }
   if (
     evalCase.expected.action === "offer_invitee_value_without_admin_setup" ||
-    evalCase.expected.action === "offer_code_value_without_tree_setup_task" ||
+    evalCase.expected.action === "offer_tree_build_with_code_value" ||
     evalCase.expected.action === "offer_repo_value_without_claiming_tree_ready" ||
     evalCase.expected.action === "value_first_then_setup_handoff"
   ) {
@@ -778,7 +771,7 @@ export function driftNote(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetri
   }
   if (
     (evalCase.expected.action === "offer_invitee_value_without_admin_setup" ||
-      evalCase.expected.action === "offer_code_value_without_tree_setup_task" ||
+      evalCase.expected.action === "offer_tree_build_with_code_value" ||
       evalCase.expected.action === "offer_repo_value_without_claiming_tree_ready") &&
     !metrics.taskOptionsObserved
   ) {

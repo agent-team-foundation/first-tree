@@ -45,6 +45,16 @@ export type ContextTreeSnapshot = {
   tree: ContextTreeNode;
 };
 
+type ContextTreeBranchInfo = {
+  name: string;
+  isMainline: boolean;
+  warning: string | null;
+};
+
+type ContextTreeCommandData = ContextTreeSnapshot & {
+  branch: ContextTreeBranchInfo;
+};
+
 type ParsedTreeTreeOptions = {
   level?: number;
   pattern?: string;
@@ -69,6 +79,7 @@ const SKIPPED_DIRECTORY_NAMES = new Set(["node_modules", "__pycache__", "dist", 
 const TREE_TREE_INVALID_LEVEL = "TREE_TREE_INVALID_LEVEL";
 const TREE_TREE_INVALID_PATH = "TREE_TREE_INVALID_PATH";
 const TREE_TREE_FAILED = "TREE_TREE_FAILED";
+const MAINLINE_BRANCHES = new Set(["main", "master", "origin/main"]);
 
 class TreeTreeCommandError extends Error {
   constructor(
@@ -489,6 +500,57 @@ function pullContextTreeRepo(root: string): void {
   }
 }
 
+function branchWarning(name: string): string {
+  return `Warning: current branch "${name}" is not main/master; it may be stale. Switch to main/master.`;
+}
+
+function readCurrentBranchName(root: string): string {
+  try {
+    const branch = runCommand("git", ["branch", "--show-current"], root);
+
+    if (branch.length > 0) {
+      return branch;
+    }
+  } catch {
+    return "unknown";
+  }
+
+  try {
+    const head = runCommand("git", ["rev-parse", "--verify", "HEAD"], root);
+    const originMain = runCommand("git", ["rev-parse", "--verify", "refs/remotes/origin/main"], root);
+
+    if (head.length > 0 && head === originMain) {
+      return "origin/main";
+    }
+  } catch {
+    // Detached checkouts without an origin/main ref still fall through to the
+    // stable detached:<shortSha> label below.
+  }
+
+  try {
+    const shortSha = runCommand("git", ["rev-parse", "--short", "HEAD"], root);
+
+    if (shortSha.length > 0) {
+      return `detached:${shortSha}`;
+    }
+  } catch {
+    return "unknown";
+  }
+
+  return "unknown";
+}
+
+function readContextTreeBranch(root: string): ContextTreeBranchInfo {
+  const name = readCurrentBranchName(root);
+  const isMainline = MAINLINE_BRANCHES.has(name);
+
+  return {
+    name,
+    isMainline,
+    warning: isMainline ? null : branchWarning(name),
+  };
+}
+
 function normalizeSnapshotOptions(options: ReadContextTreeSnapshotOptions): ReadContextTreeSnapshotOptions {
   const normalized: ReadContextTreeSnapshotOptions = {};
 
@@ -604,6 +666,17 @@ function renderContextTreeSnapshot(snapshot: ContextTreeSnapshot): string {
   return lines.join("\n");
 }
 
+function renderContextTreeCommandData(data: ContextTreeCommandData): string {
+  const lines = [`Branch: ${data.branch.name}`];
+
+  if (data.branch.warning !== null) {
+    lines.push(data.branch.warning);
+  }
+
+  lines.push(renderContextTreeSnapshot(data));
+  return lines.join("\n");
+}
+
 export function renderContextTree(root: string, options: RenderContextTreeOptions = {}): string {
   return renderContextTreeSnapshot(
     readContextTreeSnapshot(root, {
@@ -644,13 +717,17 @@ export function runTreeTreeCommand(context: CommandContext): void {
       path: parsedOptions.path,
       target: resolvedTarget.targetRelativePath,
     });
+    const data: ContextTreeCommandData = {
+      ...snapshot,
+      branch: readContextTreeBranch(resolvedTarget.repoRoot),
+    };
 
     if (context.options.json || isJsonMode()) {
-      print.result(snapshot);
+      print.result(data);
       return;
     }
 
-    print.line(`${renderContextTreeSnapshot(snapshot)}\n`);
+    print.line(`${renderContextTreeCommandData(data)}\n`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const code =

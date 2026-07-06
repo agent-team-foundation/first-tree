@@ -20,9 +20,26 @@ function requiresWriteSkill(evalCase: FirstTreeSeedEvalCase): boolean {
 
 function sourceProcessPass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boolean {
   if (evalCase.expected.requireWorktree && !metrics.sourceWorktreeCreated) return false;
-  if (!evalCase.expected.requireWorktree && metrics.sourceWorktreeCreated) return false;
+  // A source worktree must not be touched when none is required — check the
+  // final filesystem AND the event trace, so a Phase-1 add/read/`git worktree
+  // remove` sequence cannot pass by cleaning up before grading.
+  if (!evalCase.expected.requireWorktree && (metrics.sourceWorktreeCreated || metrics.sourceWorktreeAccessObserved)) {
+    return false;
+  }
   if (evalCase.expected.requireSourceRead && !metrics.sourceEvidenceReadObserved) return false;
-  if (!evalCase.expected.requireSourceRead && metrics.sourceEvidenceReadObserved) return false;
+  // State A (create_tree_via_init) tolerates an incidental state-check source read,
+  // keeping this dimension aligned with the relaxed `casePassed` gate (no
+  // `passed=true` / `process_pass=false` artifact). A worktree-backed read is
+  // already failed above via `sourceWorktreeAccessObserved`. Refuse cases
+  // (report_missing_source / refuse_nonempty_tree) keep the strict penalty —
+  // there any source read is off-contract.
+  if (
+    !evalCase.expected.requireSourceRead &&
+    metrics.sourceEvidenceReadObserved &&
+    evalCase.expected.action !== "create_tree_via_init"
+  ) {
+    return false;
+  }
   return !metrics.directBareSourceContentReadObserved;
 }
 
@@ -39,6 +56,9 @@ function outcomePass(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetrics): boo
   }
   if (evalCase.expected.action === "report_missing_source") {
     return !metrics.skeletonObserved;
+  }
+  if (evalCase.expected.action === "create_tree_via_init") {
+    return metrics.treeInitWithContextTreeDirObserved;
   }
   return false;
 }
@@ -78,11 +98,11 @@ export function buildGrading(evalCase: FirstTreeSeedEvalCase, metrics: EvalMetri
       ),
       evidence(
         "process_pass",
-        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; manifest read=${metrics.workspaceManifestReadObserved}; require worktree=${evalCase.expected.requireWorktree}; worktree created=${metrics.sourceWorktreeCreated}; require source read=${evalCase.expected.requireSourceRead}; source read=${metrics.sourceEvidenceReadObserved}; direct bare read=${metrics.directBareSourceContentReadObserved}`,
+        `fixture ok=${metrics.fixtureValidationOk}; runner exit=${metrics.runnerExitCode}; manifest read=${metrics.workspaceManifestReadObserved}; require worktree=${evalCase.expected.requireWorktree}; worktree created=${metrics.sourceWorktreeCreated}; worktree access=${metrics.sourceWorktreeAccessObserved}; require source read=${evalCase.expected.requireSourceRead}; source read=${metrics.sourceEvidenceReadObserved}; direct bare read=${metrics.directBareSourceContentReadObserved}`,
       ),
       evidence(
         "outcome_pass",
-        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}`,
+        `expected response observed=${metrics.expectedResponseObserved}; skeleton observed=${metrics.skeletonObserved}; approval request observed=${metrics.approvalRequestObserved}; tree init observed=${metrics.treeInitObserved}; tree init --dir context-tree observed=${metrics.treeInitWithContextTreeDirObserved}`,
       ),
       evidence(
         "risk_pass",
@@ -136,6 +156,8 @@ export function writeCaseSummaries(summary: CaseRunSummary): void {
 - directBareSourceContentReadObserved: ${markdownBool(summary.metrics.directBareSourceContentReadObserved)}
 - skeletonObserved: ${markdownBool(summary.metrics.skeletonObserved)}
 - approvalRequestObserved: ${markdownBool(summary.metrics.approvalRequestObserved)}
+- treeInitObserved: ${markdownBool(summary.metrics.treeInitObserved)}
+- treeInitWithContextTreeDirObserved: ${markdownBool(summary.metrics.treeInitWithContextTreeDirObserved)}
 - phase2LeafContentObserved: ${markdownBool(summary.metrics.phase2LeafContentObserved)}
 - sourceRepoChanged: ${markdownBool(summary.metrics.sourceRepoChanged)}
 - contextTreeChanged: ${markdownBool(summary.metrics.contextTreeChanged)}

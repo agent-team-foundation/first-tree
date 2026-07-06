@@ -383,12 +383,13 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(contextTreeIdx).toBeGreaterThan(requiredIdx);
   });
 
-  it("omits # Required Reading for tree-less agents (the skill payloads are not installed on disk for them)", () => {
-    // `installFirstTreeIntegration` is short-circuited when
-    // `contextTreePath === null`, so the SKILL.md payloads under
-    // `<workspace>/.agents/skills/` never get materialised. Mandating
-    // a load would point at files that aren't there. The Tree
-    // Location stub already surfaces the gap to a human.
+  it("omits # Required Reading for tree-less agents (the unconditional write mandate is a tree-ops discipline)", () => {
+    // `# Required Reading` mandates loading `first-tree-write` UNCONDITIONALLY
+    // on every task — a tree-ops discipline for reflecting sources into an
+    // existing tree. A tree-less agent DOES carry write on disk now (it ships
+    // core as first-tree-seed's dependency), but should load it only when seed
+    // pulls it in, not on every task, so the mandate stays tree-bound. The
+    // tree-less core skills are surfaced by the First Tree Family map instead.
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     expect(briefing).not.toContain("# Required Reading");
   });
@@ -930,16 +931,17 @@ describe("buildAgentBriefing — # Context Tree", () => {
 
     // Writing discipline anchors — fresh vs persistent context framing, the
     // co-open + cross-link PR coordination rule, and the tightened merge
-    // order: the code PR merges first, then the tree PR is reconciled against
-    // the final merged code before it lands (never concurrent or ahead). The
-    // prose wraps the emphasised phrases across lines, so allow either
-    // single-line or wrapped forms.
+    // order: the tree PR opens as a draft so it can't land ahead, the code PR
+    // merges first, then the tree PR is reconciled against the final merged
+    // code and marked ready. The prose wraps the emphasised phrases across
+    // lines, so allow either single-line or wrapped forms.
     expect(briefing).toContain("fresh context");
     expect(briefing).toMatch(/\*\*persistent[\s\n]+context\*\*/);
     expect(briefing).toMatch(
       /open the tree PR and the code[\s\n]+PR[\s\n]+together and cross-link them in the PR descriptions/,
     );
     expect(briefing).toMatch(/Merge the code PR first, then[\s\n]+the tree PR/);
+    expect(briefing).toMatch(/open the tree PR as a draft/);
     expect(briefing).toContain("final merged");
     expect(briefing).not.toContain("need not merge first");
     expect(briefing).toContain("Implementation-only changes skip the tree");
@@ -1102,15 +1104,27 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
     expect(skillsSection).toContain("## First Tree Family");
   });
 
-  it("omits the First Tree Family map for tree-less agents (skills are gated on `installFirstTreeIntegration`)", () => {
-    // A no-tree agent's `tree skill install` never runs, so listing the
-    // First Tree family would tell it to load skills that the runtime
-    // never put on disk. The map must be gated.
+  it("emits a core-skills First Tree Family map for tree-less agents (routes the tree-build task to first-tree-seed)", () => {
+    // A tree-less agent now carries the core skills on disk (welcome + the
+    // from-zero build pair seed/write), so the map lists exactly those — and
+    // NOT `first-tree-read`, which stays tree-bound. This is the routing
+    // surface a welcome-spawned tree-build chat uses to reach first-tree-seed,
+    // whose brief names no skill by design.
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
-    expect(briefing).not.toContain("## First Tree Family");
-    // And without Team Skills, the bare `# Skills` umbrella is skipped
-    // entirely — a header with no body is just visual noise.
-    expect(briefing).not.toMatch(/^# Skills\b/m);
+    expect(briefing).toContain("# Skills (First Tree Managed)");
+    const familyStart = briefing.indexOf("## First Tree Family");
+    expect(familyStart).toBeGreaterThanOrEqual(0);
+    // Bound the assertion to the map's own block (up to the next heading) so a
+    // later section that legitimately mentions read can't taint the check.
+    const afterStart = briefing.slice(familyStart + "## First Tree Family".length);
+    const nextHeadingRel = afterStart.search(/\n#{1,3} /);
+    const familyMap = nextHeadingRel === -1 ? afterStart : afterStart.slice(0, nextHeadingRel);
+    expect(familyMap).toContain("first-tree-welcome");
+    expect(familyMap).toContain("first-tree-seed");
+    expect(familyMap).toContain("first-tree-write");
+    expect(familyMap).not.toContain("first-tree-read");
+    // Tree-less map must not lean on the (omitted) # Required Reading section.
+    expect(familyMap).not.toContain("# Required Reading");
   });
 
   it("keeps the `# Skills` umbrella for tree-less agents that DO have Team Skills (resource skills land regardless)", () => {
@@ -1139,9 +1153,11 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
     expect(briefing).toContain("# Skills");
     expect(briefing).toContain("## Team Skills");
     expect(briefing).toContain("internal-playbook");
-    // Still no First Tree Family — those skills aren't installed for
-    // tree-less agents.
-    expect(briefing).not.toContain("## First Tree Family");
+    // The tree-less core-skills First Tree Family map is also emitted now, and
+    // sits after Team Skills under the shared `# Skills` umbrella.
+    expect(briefing).toContain("## First Tree Family");
+    const skills = briefing.slice(briefing.indexOf("# Skills"));
+    expect(skills.indexOf("## Team Skills")).toBeLessThan(skills.indexOf("## First Tree Family"));
   });
 });
 

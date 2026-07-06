@@ -4,7 +4,13 @@ import { confirm } from "@inquirer/prompts";
 import * as semver from "semver";
 import { channelConfig } from "./channel.js";
 import { print } from "./output.js";
-import { detectInstallMode, fetchServerCommandVersion, installGlobalSpec, PACKAGE_NAME } from "./update.js";
+import {
+  detectInstallMode,
+  fetchServerCommandVersion,
+  installGlobalSpec,
+  installPortableSpec,
+  PACKAGE_NAME,
+} from "./update.js";
 import { isLoopGuarded, recordUpdateAttempt } from "./update-state.js";
 
 /** Reserved exit code that means "clean self-restart, service manager please bring me back". */
@@ -135,13 +141,22 @@ export function createExecuteUpdate({
     // get stuck on $target").
     if (isLoopGuarded(targetVersion)) {
       const installHint = PACKAGE_NAME ?? channelConfig.binName;
+      const likelyCause =
+        mode === "portable"
+          ? "           The most likely cause is a stale portable metadata target or a shim/path mismatch.\n"
+          : "           The most likely cause is npm's `latest`\n" +
+            "           dist-tag resolving to the same version this client is already running.\n";
+      const operatorAction =
+        mode === "portable"
+          ? `           Operator action: manually run \`${channelConfig.binName} upgrade\`, then restart the service.\n`
+          : `           Operator action: manually run \`npm install -g ${installHint}@latest\`,\n` +
+            "           then restart the service.\n";
       emit(
         "warn",
         `Refusing to retry ${targetVersion} — a previous attempt completed without\n` +
-          "           advancing the on-disk version. The most likely cause is npm's `latest`\n" +
-          "           dist-tag resolving to the same version this client is already running.\n" +
-          `           Operator action: manually run \`npm install -g ${installHint}@latest\`,\n` +
-          "           then restart the service.",
+          "           advancing the on-disk version.\n" +
+          likelyCause +
+          operatorAction,
       );
       return { installed: true };
     }
@@ -153,8 +168,16 @@ export function createExecuteUpdate({
     // run"; channelConfig.packageName guarantees we install against this
     // binary's own package (prod / staging), never crossing channels.
     const pkgSpec = PACKAGE_NAME ?? channelConfig.binName;
-    emit("info", `Running \`npm install -g ${pkgSpec}@${targetVersion}\`...`);
-    const result = await installGlobalSpec(targetVersion, installOutput ? { output: installOutput } : undefined);
+    const isPortable = mode === "portable";
+    emit(
+      "info",
+      isPortable
+        ? `Switching portable ${channelConfig.binName} to ${targetVersion}...`
+        : `Running \`npm install -g ${pkgSpec}@${targetVersion}\`...`,
+    );
+    const result = isPortable
+      ? await installPortableSpec(targetVersion)
+      : await installGlobalSpec(targetVersion, installOutput ? { output: installOutput } : undefined);
     if (!result.ok) {
       emit("warn", `Install failed: ${result.reason}`);
       recordUpdateAttempt({
@@ -199,7 +222,7 @@ export function createExecuteUpdate({
     // disprove a successful install.
     const installed = result.installedVersion;
     if (installed && semver.valid(installed) && semver.valid(targetVersion) && semver.lt(installed, targetVersion)) {
-      const reason = `npm reported install of ${installed}, but the server-advertised target was ${targetVersion} (running ${currentVersion})`;
+      const reason = `${result.mode} reported install of ${installed}, but the server-advertised target was ${targetVersion} (running ${currentVersion})`;
       emit("warn", `WARNING: ${reason}`);
       emit("warn", "Skipping restart to avoid an exit-75 → reboot loop. Loop guard armed.");
       recordUpdateAttempt({
