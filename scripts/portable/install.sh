@@ -113,6 +113,16 @@ sha256_file() {
   fi
 }
 
+extract_tarball() {
+  tarball="$1"
+  dest="$2"
+  if tar --version 2>/dev/null | grep -qi "GNU tar"; then
+    tar --warning=no-unknown-keyword -xzf "$tarball" -C "$dest"
+  else
+    tar -xzf "$tarball" -C "$dest"
+  fi
+}
+
 json_string() {
   file="$1"
   key="$2"
@@ -320,7 +330,7 @@ FINAL_VERSION_DIR="$PREFIX/versions/$VERSION"
 TEMP_VERSION_DIR="$PREFIX/.tmp/${VERSION}.$$"
 rm -rf "$TEMP_VERSION_DIR"
 mkdir -p "$TEMP_VERSION_DIR"
-tar -xzf "$TARBALL" -C "$TEMP_VERSION_DIR"
+extract_tarball "$TARBALL" "$TEMP_VERSION_DIR"
 
 if [ -e "$FINAL_VERSION_DIR" ]; then
   rm -rf "$TEMP_VERSION_DIR"

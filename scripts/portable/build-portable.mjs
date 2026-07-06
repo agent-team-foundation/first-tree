@@ -63,6 +63,10 @@ export function artifactFileName(options) {
   return `${options.packageName}-${options.version}-${options.platform}.tar.gz`;
 }
 
+export function portableTarCreateArgs({ tarballPath, sourceDir }) {
+  return ["--no-xattrs", "-czf", tarballPath, "-C", sourceDir, "."];
+}
+
 export function normalizeDownloadBaseUrl(value) {
   const trimmed = value.replace(/\/+$/, "");
   if (!trimmed) fail("--download-base-url is required");
@@ -421,7 +425,9 @@ async function buildPlatformArtifact(options) {
       platform: options.platform,
     });
     const tarballPath = join(options.versionDir, fileName);
-    run("tar", ["-czf", tarballPath, "-C", artifactRoot, "."]);
+    run("tar", portableTarCreateArgs({ tarballPath, sourceDir: artifactRoot }), {
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    });
     return {
       platform: options.platform,
       fileName,

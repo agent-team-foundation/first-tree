@@ -14,6 +14,7 @@ import {
   manifestDownloadUrl,
   normalizeDownloadBaseUrl,
   parsePlatform,
+  portableTarCreateArgs,
   renderInstallerForChannel,
   validateChannelVersion,
 } from "../../../scripts/portable/build-portable.mjs";
@@ -79,6 +80,38 @@ exec "$FT_TEST_REAL_MV" "$@"
   );
 }
 
+function writeTarWrapper(dir: string): void {
+  const wrapper = join(dir, "tar");
+  writeFileSync(
+    wrapper,
+    `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+
+const args = process.argv.slice(2);
+if (args[0] === "--version") {
+  process.stdout.write("tar (GNU tar) 1.35\\n");
+  process.exit(0);
+}
+
+const sawWarning = args.includes("--warning=no-unknown-keyword");
+const isExtract = args.includes("-xzf");
+if (process.env.FT_TEST_REQUIRE_TAR_WARNING === "1" && isExtract && !sawWarning) {
+  process.stderr.write("expected GNU tar extraction to suppress unknown pax keyword warnings\\n");
+  process.exit(44);
+}
+
+const filteredArgs = args.filter((arg) => arg !== "--warning=no-unknown-keyword");
+const res = spawnSync(process.env.FT_TEST_REAL_TAR, filteredArgs, { stdio: "inherit" });
+if (res.error) {
+  process.stderr.write(String(res.error.message) + "\\n");
+  process.exit(1);
+}
+process.exit(res.status ?? 1);
+`,
+    { mode: 0o755 },
+  );
+}
+
 afterEach(() => {
   for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
   tmpDirs = [];
@@ -102,6 +135,17 @@ describe("portable builder helpers", () => {
     expect(artifactFileName({ packageName: "first-tree", version: "1.2.3", platform: "linux-x64" })).toBe(
       "first-tree-1.2.3-linux-x64.tar.gz",
     );
+  });
+
+  it("builds portable archives without platform xattrs", () => {
+    expect(portableTarCreateArgs({ tarballPath: "payload.tar.gz", sourceDir: "payload" })).toEqual([
+      "--no-xattrs",
+      "-czf",
+      "payload.tar.gz",
+      "-C",
+      "payload",
+      ".",
+    ]);
   });
 
   it("uses the official release download base URL by default", () => {
@@ -297,6 +341,37 @@ describe("portable installer", () => {
     const shim = readFileSync(join(binDir, "first-tree"), "utf8");
     expect(shim).toContain("FIRST_TREE_INSTALL_MODE=portable");
     expect(shim).toContain("FIRST_TREE_PORTABLE_ROOT");
+  });
+
+  it("suppresses GNU tar unknown pax keyword warnings during extraction", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makeFixture(platform);
+    const home = tempDir("first-tree-home-");
+    const prefix = join(home, "prefix");
+    const binDir = join(home, "bin");
+    const realTar = commandPath("tar");
+    const wrapperDir = tempDir("first-tree-tar-wrapper-");
+    writeTarWrapper(wrapperDir);
+    const res = spawnSync(
+      "sh",
+      [join(REPO_ROOT, "scripts", "portable", "install.sh"), "--prefix", prefix, "--bin-dir", binDir, "--no-path-edit"],
+      {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          HOME: home,
+          FIRST_TREE_PORTABLE_CHANNEL: "prod",
+          FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: `file://${fixture}`,
+          FT_TEST_REAL_TAR: realTar,
+          FT_TEST_REQUIRE_TAR_WARNING: "1",
+          PATH: `${wrapperDir}:${process.env.PATH ?? ""}`,
+        },
+        encoding: "utf8",
+      },
+    );
+    expect(res.status, res.stderr || res.stdout).toBe(0);
+    expect(readFileSync(join(prefix, "current", "VERSION"), "utf8")).toBe("1.2.3\n");
   });
 
   it("replaces the current symlink itself when upgrading with the shell installer", async () => {
