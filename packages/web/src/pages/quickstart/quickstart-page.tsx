@@ -40,7 +40,11 @@ export function QuickstartPage() {
   const legacyChatId = useMemo(() => new URLSearchParams(location.search).get("chat"), [location.search]);
 
   const intent = useMemo<CampaignIntent | null>(() => {
-    if (chatId) return null;
+    // A selected chat — `?c=` OR a legacy `?chat=` about to be canonicalized —
+    // means "open this chat", not "launch a trial". Short-circuit both so a
+    // stored campaign intent in sessionStorage can't hijack a legacy link into
+    // starting a fresh trial before the redirect lands.
+    if (chatId || legacyChatId) return null;
     const fromUrl = readCampaignHandoff(location);
     if (fromUrl) {
       writeCampaignIntent(fromUrl);
@@ -51,14 +55,17 @@ export function QuickstartPage() {
       return null;
     }
     return readCampaignIntent();
-  }, [chatId, location]);
+  }, [chatId, legacyChatId, location]);
   const campaign = intent ? getCampaign(intent.campaign) : null;
 
   const startStartedRef = useRef(false);
   const [startError, setStartError] = useState<string | null>(null);
 
   const startTrial = useCallback(async () => {
-    if (chatId || !intent || !campaign || startStartedRef.current || !growthLandingPagesEnabled) return;
+    // `legacyChatId` guards alongside `chatId`: a legacy `?chat=` link is a
+    // selected chat being canonicalized, never a launch trigger — even if a
+    // stale campaign intent lingers in sessionStorage.
+    if (chatId || legacyChatId || !intent || !campaign || startStartedRef.current || !growthLandingPagesEnabled) return;
     startStartedRef.current = true;
     setStartError(null);
     try {
@@ -74,7 +81,7 @@ export function QuickstartPage() {
       startStartedRef.current = false;
       setStartError(err instanceof Error ? err.message : "Couldn't open your trial chat. Please try again.");
     }
-  }, [chatId, intent, campaign, organizationId, growthLandingPagesEnabled, refreshMe, navigate]);
+  }, [chatId, legacyChatId, intent, campaign, organizationId, growthLandingPagesEnabled, refreshMe, navigate]);
 
   useEffect(() => {
     if (!settled || !growthLandingPagesEnabled) return;
