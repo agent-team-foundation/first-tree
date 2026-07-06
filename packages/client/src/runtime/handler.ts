@@ -138,6 +138,12 @@ export type SessionContext = HandlerContext & {
    * what the agent said. There is no separate chat-delivery path for it.
    */
   emitEvent: (event: SessionEvent) => void;
+  /**
+   * Persist a session event and resolve only after the server confirms it.
+   * Business-critical events, such as Codex landing trial turn completion,
+   * must await this before ACKing the inbox work that produced the turn.
+   */
+  emitEventConfirmed?: (event: SessionEvent) => Promise<void>;
 
   /**
    * Turn-completion hook the runtime calls at the end of a turn. It does NOT

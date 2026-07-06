@@ -387,7 +387,7 @@ async function ensureTrialChatAndBootstrap(
     skillSetVersion: input.skillSet.version,
     repo: input.repo,
     state: "running",
-    inputLocked: true,
+    inputLocked: false,
     maxAgentTurns: app.config.growth.landingCampaignMaxAgentTurns,
     completedAgentTurns: 0,
   });

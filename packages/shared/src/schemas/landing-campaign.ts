@@ -56,6 +56,7 @@ export const landingCampaignTrialChatMetadataSchema = z.object({
     awaitingUserKind: landingCampaignTrialAwaitingUserKindSchema.optional(),
     maxAgentTurns: z.number().int().min(1).default(1),
     completedAgentTurns: z.number().int().min(0).default(0),
+    completedAgentTurnIds: z.array(z.string().min(1)).default([]),
   }),
 });
 export type LandingCampaignTrialChatMetadata = z.infer<typeof landingCampaignTrialChatMetadataSchema>;

@@ -234,6 +234,14 @@ describe("sessionEventSchema", () => {
       }
     });
 
+    it("parses an optional stable turn completion id", () => {
+      const r = sessionEventSchema.safeParse({
+        kind: "turn_end",
+        payload: { status: "success", turnCompletionId: "inbox:101" },
+      });
+      expect(r.success).toBe(true);
+    });
+
     it("rejects an unknown status", () => {
       const r = sessionEventSchema.safeParse({
         kind: "turn_end",

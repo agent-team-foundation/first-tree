@@ -123,6 +123,7 @@ function makeContext(
   opts: {
     sendMessage?: SendMessageMock;
     emitEvent?: SessionContext["emitEvent"];
+    emitEventConfirmed?: SessionContext["emitEventConfirmed"];
     log?: SessionContext["log"];
     retryTurn?: SessionContext["retryTurn"];
   } = {},
@@ -145,6 +146,7 @@ function makeContext(
     log: opts.log ?? (() => {}),
     recordProviderActivity: () => {},
     emitEvent: opts.emitEvent ?? (() => {}),
+    ...(opts.emitEventConfirmed ? { emitEventConfirmed: opts.emitEventConfirmed } : {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-usage-limit"),
     // Production-faithful: the final-text forward is retired, so it delivers
     // nothing. (mockCtxPlumbing's stub would proxy to sendMessage and mask
@@ -293,6 +295,37 @@ describe("codex usage-limit empty-turn (issue #971)", () => {
       events.some((event) => event.kind === "error" && event.payload.message.includes("codex usage limit reached")),
     ).toBe(false);
     expect(events.some((event) => event.kind === "turn_end" && event.payload.status === "success")).toBe(true);
+    expect(completedCounts).toEqual([1]);
+
+    await handler.shutdown();
+  });
+
+  it("does not block ordinary SDK delivery on confirmed event rejection", async () => {
+    state.turns = [
+      [
+        { type: "item.completed", item: { type: "agent_message", text: "here is your answer" } },
+        {
+          type: "turn.completed",
+          usage: { input_tokens: 200, cached_input_tokens: 0, output_tokens: 40, reasoning_output_tokens: 0 },
+        },
+      ],
+    ];
+
+    const completedCounts: Array<number | undefined> = [];
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const emitEventConfirmed = vi
+      .fn<NonNullable<SessionContext["emitEventConfirmed"]>>()
+      .mockRejectedValue(new Error("session event persist failed"));
+    const handler = createCodexHandler({ workspaceRoot });
+    const ctx = makeContext((count) => completedCounts.push(count), { emitEvent, emitEventConfirmed });
+
+    await handler.start(makeMessage("m1", "hello"), ctx);
+
+    expect(emitEventConfirmed).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith({
+      kind: "turn_end",
+      payload: { status: "success" },
+    });
     expect(completedCounts).toEqual([1]);
 
     await handler.shutdown();

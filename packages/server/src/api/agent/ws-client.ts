@@ -50,6 +50,7 @@ import * as clientService from "../../services/client.js";
 import * as connectionManager from "../../services/connection-manager.js";
 import * as contextTreeIoService from "../../services/context-tree-io.js";
 import * as inboxService from "../../services/inbox.js";
+import * as landingCampaignChatStateService from "../../services/landing-campaigns/chat-state.js";
 import * as notificationService from "../../services/notification.js";
 import type { InboxPushHandler, Notifier } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
@@ -1455,6 +1456,22 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     payload.chatId,
                     payload.event,
                   );
+                  if (
+                    payload.ref &&
+                    payload.event.kind === "turn_end" &&
+                    payload.event.payload.status === "success" &&
+                    typeof payload.event.payload.turnCompletionId === "string"
+                  ) {
+                    const result = await landingCampaignChatStateService.completeLandingCampaignTrialAgentTurn(
+                      app.db,
+                      payload.chatId,
+                      agentId,
+                      payload.event.payload.turnCompletionId,
+                    );
+                    if (result.advanced) {
+                      notifier.notifyChatUpdated(payload.chatId).catch(() => {});
+                    }
+                  }
                   if (boundInfo) {
                     await contextTreeIoService
                       .recordFromSessionEvent(app.db, {

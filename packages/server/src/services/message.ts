@@ -23,6 +23,7 @@ import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
+import { hasRemainingLandingCampaignTrialAgentTurns } from "./landing-campaigns/chat-state.js";
 import { getLandingCampaignTrialChat, withLandingCampaignChatState } from "./landing-campaigns/metadata.js";
 
 const log = createLogger("message");
@@ -150,14 +151,15 @@ function assertLandingCampaignTrialMessageAllowed(input: {
       trial.state === "running";
     if (isSystemBootstrap) return;
 
-    const resolvesRequest = requestResolutionSchema.safeParse(input.metadataToStore.resolves).success;
-    if (
-      trial.state === "awaiting_user" &&
-      trial.inputLocked === false &&
-      (trial.awaitingUserKind === "follow_up" || resolvesRequest)
-    ) {
-      return;
+    if (!hasRemainingLandingCampaignTrialAgentTurns(trial)) {
+      throw new ForbiddenError("Landing campaign trial chat is locked.");
     }
+
+    const resolvesRequest = requestResolutionSchema.safeParse(input.metadataToStore.resolves).success;
+    if (trial.state === "awaiting_user" && trial.awaitingUserKind !== "follow_up" && !resolvesRequest) {
+      throw new ForbiddenError("Landing campaign trial chat is waiting for a request answer.");
+    }
+    return;
   }
 
   throw new ForbiddenError("Landing campaign trial chat is locked.");
@@ -821,25 +823,13 @@ async function sendMessageInner(
           nextMetadata = withLandingCampaignChatState(chatRow.metadata, "awaiting_user", false, {
             awaitingUserKind: "request",
           });
-        } else {
-          const completedAgentTurns = trial.completedAgentTurns + 1;
-          const reachedTurnLimit = completedAgentTurns >= trial.maxAgentTurns;
-          nextMetadata = withLandingCampaignChatState(
-            chatRow.metadata,
-            reachedTurnLimit ? "completed" : "awaiting_user",
-            reachedTurnLimit,
-            {
-              ...(reachedTurnLimit ? {} : { awaitingUserKind: "follow_up" as const }),
-              completedAgentTurns,
-            },
-          );
         }
       } else if (
         senderRow.type === "human" &&
         trial.state === "awaiting_user" &&
         (resolvedRequest || trial.awaitingUserKind === "follow_up")
       ) {
-        nextMetadata = withLandingCampaignChatState(chatRow.metadata, "running", true);
+        nextMetadata = withLandingCampaignChatState(chatRow.metadata, "running", false);
       }
       if (nextMetadata) {
         await tx.update(chats).set({ metadata: nextMetadata, updatedAt: new Date() }).where(eq(chats.id, chatId));

@@ -55,6 +55,7 @@ import {
   isCodexStreamDiagnosticMessage,
   isTransientCodexErrorMessage,
 } from "../sdk.js";
+import { turnCompletionIdForMessages } from "../turn-completion.js";
 import {
   CodexAppServerClient,
   type CodexAppServerClientOptions,
@@ -105,6 +106,18 @@ type ThreadTokenUsageSnapshot = {
   total: TokenUsageBreakdown;
   last: TokenUsageBreakdown;
 };
+
+async function emitTurnEnd(
+  sessionCtx: SessionContext,
+  event: Extract<SessionEvent, { kind: "turn_end" }>,
+): Promise<void> {
+  if (event.payload.status === "success" && isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata)) {
+    if (!sessionCtx.emitEventConfirmed) throw new Error("confirmed session event channel unavailable");
+    await sessionCtx.emitEventConfirmed(event);
+    return;
+  }
+  sessionCtx.emitEvent(event);
+}
 
 type TurnErrorInfo = {
   message: string;
@@ -1312,10 +1325,20 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
         consumedErrorReason,
         forwardFailed,
       });
-      sessionCtx.emitEvent({ kind: "turn_end", payload: { status: settlement.status } });
       if (settlement.action.kind === "complete") {
+        const isLandingTrial = isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata);
+        await emitTurnEnd(sessionCtx, {
+          kind: "turn_end",
+          payload: {
+            status: settlement.status,
+            ...(settlement.status === "success" && isLandingTrial
+              ? { turnCompletionId: turnCompletionIdForMessages(turn.acceptedMessages) }
+              : {}),
+          },
+        });
         await turn.primaryToken.complete(turn.acceptedMessages, settlement.action.outcome);
       } else {
+        sessionCtx.emitEvent({ kind: "turn_end", payload: { status: settlement.status } });
         turn.primaryToken.retry(turn.acceptedMessages, settlement.action.reason);
         await closeAppServerAfterUncommittablePrefix(sessionCtx, settlement.action.reason);
         return;

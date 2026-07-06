@@ -48,6 +48,7 @@ export function buildLandingCampaignChatMetadata(input: {
   awaitingUserKind?: LandingCampaignTrialAwaitingUserKind;
   maxAgentTurns?: number;
   completedAgentTurns?: number;
+  completedAgentTurnIds?: string[];
 }): Record<string, unknown> {
   return {
     landingCampaignTrial: {
@@ -61,6 +62,7 @@ export function buildLandingCampaignChatMetadata(input: {
       ...(input.awaitingUserKind ? { awaitingUserKind: input.awaitingUserKind } : {}),
       maxAgentTurns: input.maxAgentTurns ?? 1,
       completedAgentTurns: input.completedAgentTurns ?? 0,
+      completedAgentTurnIds: input.completedAgentTurnIds ?? [],
     },
   };
 }
@@ -72,6 +74,7 @@ export function withLandingCampaignChatState(
   updates: {
     awaitingUserKind?: LandingCampaignTrialAwaitingUserKind;
     completedAgentTurns?: number;
+    completedAgentTurnIds?: string[];
     maxAgentTurns?: number;
   } = {},
 ): Record<string, unknown> {

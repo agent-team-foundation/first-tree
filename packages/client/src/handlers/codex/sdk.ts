@@ -3,6 +3,7 @@ import {
   type AgentRuntimeConfigPayload,
   deriveRepoLocalPath,
   encodeProviderRetryEventMessage,
+  isLandingCampaignTrialAgentMetadata,
   runtimeProviderSchema,
   type SessionEvent,
   type ToolFileRef,
@@ -65,6 +66,7 @@ import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/works
 import { chunkAssistantText } from "../assistant-text.js";
 import { formatAuthHint, isCodexAuthError } from "../auth-error-hint.js";
 import { resolveTurnSettlement } from "../turn-settlement.js";
+import { turnCompletionIdForMessages } from "./turn-completion.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -75,6 +77,18 @@ type CodexConfigValue = string | number | boolean | CodexConfigValue[] | CodexCo
 type CodexConfigObject = { [key: string]: CodexConfigValue };
 
 const RESULT_PREVIEW_LIMIT = 400;
+
+async function emitTurnEnd(
+  sessionCtx: SessionContext,
+  event: Extract<SessionEvent, { kind: "turn_end" }>,
+): Promise<void> {
+  if (event.payload.status === "success" && isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata)) {
+    if (!sessionCtx.emitEventConfirmed) throw new Error("confirmed session event channel unavailable");
+    await sessionCtx.emitEventConfirmed(event);
+    return;
+  }
+  sessionCtx.emitEvent(event);
+}
 
 /**
  * Chat-visible notice posted when a turn is detected as a usage-limit empty
@@ -1186,14 +1200,24 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         sessionCtx.log(`Failed to emit token_usage: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    sessionCtx.emitEvent({
-      kind: "turn_end",
-      payload: { status: settlement.status },
-    });
     const turnDelivered = settlement.action.kind === "complete";
     if (settlement.action.kind === "complete") {
+      const isLandingTrial = isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata);
+      await emitTurnEnd(sessionCtx, {
+        kind: "turn_end",
+        payload: {
+          status: settlement.status,
+          ...(settlement.status === "success" && isLandingTrial
+            ? { turnCompletionId: turnCompletionIdForMessages(messages) }
+            : {}),
+        },
+      });
       await token.complete(messages, settlement.action.outcome);
     } else {
+      sessionCtx.emitEvent({
+        kind: "turn_end",
+        payload: { status: settlement.status },
+      });
       token.retry(messages, settlement.action.reason);
     }
 
