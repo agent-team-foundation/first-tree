@@ -98,17 +98,31 @@ export function createAgentConfigCache(opts: AgentConfigCacheOptions): AgentConf
     };
     const generation = sdkGeneration;
     let inflight!: Promise<AgentRuntimeConfig>;
-    inflight = doFetch(agentId, generation).catch((err) => {
-      if (slot.inflight === inflight) {
-        slot.inflight = null;
-      }
-      if (generation !== sdkGeneration) {
-        log?.warn({ agentId, err }, "agent config fetch failed after SDK replacement; retrying with latest transport");
-        return refresh(agentId);
-      }
-      log?.warn({ agentId, err }, "agent config fetch failed");
-      throw err;
-    });
+    inflight = doFetch(agentId, generation)
+      .then((fetched) => {
+        if (generation !== sdkGeneration) {
+          if (slot.inflight === inflight) {
+            slot.inflight = null;
+          }
+          log?.warn({ agentId }, "agent config fetch resolved after SDK replacement; retrying with latest transport");
+          return refresh(agentId);
+        }
+        return fetched;
+      })
+      .catch((err) => {
+        if (slot.inflight === inflight) {
+          slot.inflight = null;
+        }
+        if (generation !== sdkGeneration) {
+          log?.warn(
+            { agentId, err },
+            "agent config fetch failed after SDK replacement; retrying with latest transport",
+          );
+          return refresh(agentId);
+        }
+        log?.warn({ agentId, err }, "agent config fetch failed");
+        throw err;
+      });
     slot.inflight = inflight;
     entries.set(agentId, slot);
     return inflight;

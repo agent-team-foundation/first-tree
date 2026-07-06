@@ -104,6 +104,25 @@ describe("AgentConfigCache (Step 4)", () => {
     expect(cache.get("agent-1")?.version).toBe(2);
   });
 
+  it("retries waiters with the replacement SDK when an old in-flight fetch succeeds after rebind", async () => {
+    const firstFetch = deferred<AgentRuntimeConfig>();
+    const firstSdk = {
+      fetchAgentConfig: vi.fn(() => firstFetch.promise),
+      isHubReachable: vi.fn(),
+    } as unknown as FirstTreeHubSDK;
+    const secondSdk = makeSdkWithConfigs([makeConfig(3)]);
+    const cache = createAgentConfigCache({ sdk: firstSdk });
+
+    const pending = cache.refresh("agent-1");
+    cache.updateSdk(secondSdk);
+    firstFetch.resolve(makeConfig(2));
+
+    await expect(pending).resolves.toMatchObject({ version: 3 });
+    expect(firstSdk.fetchAgentConfig).toHaveBeenCalledTimes(1);
+    expect(secondSdk.fetchAgentConfig).toHaveBeenCalledTimes(1);
+    expect(cache.get("agent-1")?.version).toBe(3);
+  });
+
   it("refreshIfNewer is no-op when incoming <= local", async () => {
     const cfg = makeConfig(5);
     const sdk = makeSdkWithConfigs([cfg]);
