@@ -5,6 +5,7 @@ import type { SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, CodexAppServerTransportError } from "../handlers/codex/app-server/client.js";
 import { createCodexAppServerHandler } from "../handlers/codex/app-server/index.js";
+import { LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED } from "../handlers/codex/turn-completion.js";
 import { writeAgentBriefing } from "../runtime/bootstrap.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
 import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -624,17 +625,19 @@ describe("codex app-server handler", () => {
     await handler.shutdown();
   });
 
-  it("does not complete delivery when confirmed success turn_end is rejected", async () => {
+  it("leaves landing trial delivery recoverable when confirmed success turn_end is rejected", async () => {
     stubLandingTrialHostEnv("confirm-reject");
 
     const fake = new FakeAppServerClient();
     const token = makeDeliveryToken();
+    const failSessionForRecovery = vi.fn<NonNullable<SessionContext["failSessionForRecovery"]>>();
     const emitEventConfirmed = vi
       .fn<NonNullable<SessionContext["emitEventConfirmed"]>>()
       .mockRejectedValue(new Error("session event persist failed"));
     const handler = makeHandler(fake);
     const ctx = makeContext({
       emitEventConfirmed,
+      failSessionForRecovery,
       agentMetadata: trialAgentMetadata,
     });
     const message = makeMessage("m1", "first", 101);
@@ -643,14 +646,21 @@ describe("codex app-server handler", () => {
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     completeTurn(fake, "turn-1", "final answer");
-    await expect(startPromise).rejects.toThrow("session event persist failed");
+    await expect(startPromise).resolves.toMatchObject({
+      sessionId: "thread-app-server",
+      route: { kind: "owned", mode: "processing" },
+    });
 
     expect(emitEventConfirmed).toHaveBeenCalledWith({
       kind: "turn_end",
       payload: { status: "success", turnCompletionId: "inbox:101" },
     });
     expect(token.complete).not.toHaveBeenCalled();
-    expect(token.retry).not.toHaveBeenCalled();
+    expect(token.retry).toHaveBeenCalledWith([message], LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+    expect(failSessionForRecovery).toHaveBeenCalledWith(
+      LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED,
+      "thread-app-server",
+    );
 
     await handler.shutdown();
   });

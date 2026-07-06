@@ -55,7 +55,11 @@ import {
   isCodexStreamDiagnosticMessage,
   isTransientCodexErrorMessage,
 } from "../sdk.js";
-import { turnCompletionIdForMessages } from "../turn-completion.js";
+import {
+  LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED,
+  LandingTrialTurnCompletionConfirmError,
+  turnCompletionIdForMessages,
+} from "../turn-completion.js";
 import {
   CodexAppServerClient,
   type CodexAppServerClientOptions,
@@ -112,8 +116,14 @@ async function emitTurnEnd(
   event: Extract<SessionEvent, { kind: "turn_end" }>,
 ): Promise<void> {
   if (event.payload.status === "success" && isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata)) {
-    if (!sessionCtx.emitEventConfirmed) throw new Error("confirmed session event channel unavailable");
-    await sessionCtx.emitEventConfirmed(event);
+    if (!sessionCtx.emitEventConfirmed) {
+      throw new LandingTrialTurnCompletionConfirmError("confirmed session event channel unavailable");
+    }
+    try {
+      await sessionCtx.emitEventConfirmed(event);
+    } catch (err) {
+      throw new LandingTrialTurnCompletionConfirmError(err);
+    }
     return;
   }
   sessionCtx.emitEvent(event);
@@ -1327,15 +1337,23 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       });
       if (settlement.action.kind === "complete") {
         const isLandingTrial = isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata);
-        await emitTurnEnd(sessionCtx, {
-          kind: "turn_end",
-          payload: {
-            status: settlement.status,
-            ...(settlement.status === "success" && isLandingTrial
-              ? { turnCompletionId: turnCompletionIdForMessages(turn.acceptedMessages) }
-              : {}),
-          },
-        });
+        try {
+          await emitTurnEnd(sessionCtx, {
+            kind: "turn_end",
+            payload: {
+              status: settlement.status,
+              ...(settlement.status === "success" && isLandingTrial
+                ? { turnCompletionId: turnCompletionIdForMessages(turn.acceptedMessages) }
+                : {}),
+            },
+          });
+        } catch (err) {
+          if (!(err instanceof LandingTrialTurnCompletionConfirmError)) throw err;
+          sessionCtx.log(`landing trial turn completion confirmation failed after provider completion: ${err.message}`);
+          turn.primaryToken.retry(turn.acceptedMessages, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+          await closeAppServerAfterUncommittablePrefix(sessionCtx, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+          return;
+        }
         await turn.primaryToken.complete(turn.acceptedMessages, settlement.action.outcome);
       } else {
         sessionCtx.emitEvent({ kind: "turn_end", payload: { status: settlement.status } });
