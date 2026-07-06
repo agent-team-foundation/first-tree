@@ -6,12 +6,13 @@ import {
 } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { Brain, ChevronDown, ChevronsUpDown, Pencil, Wrench } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
-import { viewOf } from "../../lib/agent-status-view.js";
+import { reconcileLiveTurn, viewOf } from "../../lib/agent-status-view.js";
 import { stripInlineMarkdown } from "../../lib/strip-inline-markdown.js";
 import { isJumpable, useMountedAnchors } from "../../lib/use-mounted-anchors.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
+import { LiveTurnAgentsContext } from "./live-turn-context.js";
 import { TimelineJumpButton } from "./timeline-jump-button.js";
 import { formatElapsed } from "./working-chip.js";
 
@@ -147,11 +148,20 @@ export function ComposeStatusBar({
   // every parent re-render (query refetch / elapsed tick).
   const closeCard = useCallback(() => setCardOpenFor(null), []);
   const [lead, setLead] = useState<{ agentId: string; since: number } | null>(null);
-  const { data: statuses } = useQuery({
+  const { data: rawStatuses } = useQuery({
     queryKey: chatAgentStatusQueryKey(chatId),
     queryFn: () => fetchChatAgentStatuses(chatId),
     refetchInterval: 30_000,
   });
+  // Reconcile the composite against the timeline's live-turn signal (from
+  // ChatView via context) once, at the source, so every downstream reader (lead
+  // pick, attention, WorkingDetail) sees the same upgraded status as the sidebar
+  // roster and the hovercard.
+  const liveTurnAgentIds = useContext(LiveTurnAgentsContext);
+  const statuses = useMemo(
+    () => (rawStatuses ?? []).map((s) => reconcileLiveTurn(s, liveTurnAgentIds.has(s.agentId))),
+    [rawStatuses, liveTurnAgentIds],
+  );
   const mounted = useMountedAnchors();
 
   // Per the per-chat-runtime authority refactor: working is now per-chat
