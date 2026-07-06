@@ -388,6 +388,8 @@ async function ensureTrialChatAndBootstrap(
     repo: input.repo,
     state: "running",
     inputLocked: true,
+    maxAgentTurns: app.config.growth.landingCampaignMaxAgentTurns,
+    completedAgentTurns: 0,
   });
 
   let chatId: string;

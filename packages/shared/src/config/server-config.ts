@@ -62,6 +62,14 @@ export const serverConfigSchema = defineConfig({
     landingPagesEnabled: field(z.boolean().default(false), {
       env: "FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED",
     }),
+    /**
+     * Maximum number of visible agent response turns allowed in a landing
+     * campaign trial chat. Default 1 preserves the original single-run trial
+     * behavior; deployments can raise it for short interactive demos.
+     */
+    landingCampaignMaxAgentTurns: field(z.number().int().min(1).max(20).default(1), {
+      env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS",
+    }),
     landingCampaigns: optional({
       /**
        * First Tree official service user that manages landing campaign trial

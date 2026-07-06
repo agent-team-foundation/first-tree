@@ -175,6 +175,13 @@ describe("POST /me/landing-campaigns/start", () => {
     landingCampaignClientId: OFFICIAL_CLIENT_ID,
     landingCampaignRuntimeProvider: "claude-code",
   });
+  const getMultiTurnApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxAgentTurns: 2,
+  });
   it("feature flag off rejects before creating service member, trial agent, chat, or resource", async () => {
     const app = getDisabledApp();
     const admin = await createTestAdmin(app);
@@ -335,6 +342,8 @@ describe("POST /me/landing-campaigns/start", () => {
       repo: { canonicalKey: "github.com/acme/backend" },
       state: "running",
       inputLocked: true,
+      maxAgentTurns: 1,
+      completedAgentTurns: 0,
     });
 
     const [bootstrap] = await app.db.select().from(messages).where(eq(messages.chatId, body.chatId)).limit(1);
@@ -737,6 +746,78 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(wrongAgent.statusCode).toBe(401);
   });
 
+  it("allows ordinary human follow-up messages until the trial agent turn limit is reached", async () => {
+    const app = getMultiTurnApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    await sendMessage(app.db, body.chatId, body.agentUuid, {
+      format: "text",
+      content: "Initial trial report.",
+      source: "api",
+      metadata: { mentions: [admin.humanAgentUuid] },
+    });
+    const [awaitingChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(awaitingChat?.metadata)).toMatchObject({
+      state: "awaiting_user",
+      inputLocked: false,
+      awaitingUserKind: "follow_up",
+      maxAgentTurns: 2,
+      completedAgentTurns: 1,
+    });
+
+    const followUp = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Can you expand on the deployment risk?",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(followUp.statusCode).toBe(201);
+    const [runningChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    const runningTrial = parseLandingCampaignTrialChatMetadata(runningChat?.metadata);
+    expect(runningTrial).toMatchObject({
+      state: "running",
+      inputLocked: true,
+      maxAgentTurns: 2,
+      completedAgentTurns: 1,
+    });
+    expect(runningTrial?.awaitingUserKind).toBeUndefined();
+
+    await sendMessage(app.db, body.chatId, body.agentUuid, {
+      format: "text",
+      content: "Second and final trial response.",
+      source: "api",
+      metadata: { mentions: [admin.humanAgentUuid] },
+    });
+    const [completedChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    const completedTrial = parseLandingCampaignTrialChatMetadata(completedChat?.metadata);
+    expect(completedTrial).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+      maxAgentTurns: 2,
+      completedAgentTurns: 2,
+    });
+    expect(completedTrial?.awaitingUserKind).toBeUndefined();
+
+    const afterLimit = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Can we keep going?",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(afterLimit.statusCode).toBe(403);
+  });
+
   it("serializes concurrent trial outbox writes so only one state transition wins", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
@@ -922,7 +1003,20 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(parseLandingCampaignTrialChatMetadata(awaitingChat?.metadata)).toMatchObject({
       state: "awaiting_user",
       inputLocked: false,
+      awaitingUserKind: "request",
     });
+
+    const plainMessageDuringRequest = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "I am not answering the request yet.",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(plainMessageDuringRequest.statusCode).toBe(403);
 
     const answer = await app.inject({
       method: "POST",

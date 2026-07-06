@@ -151,7 +151,13 @@ function assertLandingCampaignTrialMessageAllowed(input: {
     if (isSystemBootstrap) return;
 
     const resolvesRequest = requestResolutionSchema.safeParse(input.metadataToStore.resolves).success;
-    if (trial.state === "awaiting_user" && resolvesRequest) return;
+    if (
+      trial.state === "awaiting_user" &&
+      trial.inputLocked === false &&
+      (trial.awaitingUserKind === "follow_up" || resolvesRequest)
+    ) {
+      return;
+    }
   }
 
   throw new ForbiddenError("Landing campaign trial chat is locked.");
@@ -811,11 +817,28 @@ async function sendMessageInner(
     if (chatRow && trial) {
       let nextMetadata: Record<string, unknown> | null = null;
       if (senderId === trial.agentId && senderRow.type !== "human") {
-        nextMetadata =
-          data.format === MESSAGE_FORMATS.REQUEST
-            ? withLandingCampaignChatState(chatRow.metadata, "awaiting_user", false)
-            : withLandingCampaignChatState(chatRow.metadata, "completed", true);
-      } else if (senderRow.type === "human" && trial.state === "awaiting_user" && resolvedRequest) {
+        if (data.format === MESSAGE_FORMATS.REQUEST) {
+          nextMetadata = withLandingCampaignChatState(chatRow.metadata, "awaiting_user", false, {
+            awaitingUserKind: "request",
+          });
+        } else {
+          const completedAgentTurns = trial.completedAgentTurns + 1;
+          const reachedTurnLimit = completedAgentTurns >= trial.maxAgentTurns;
+          nextMetadata = withLandingCampaignChatState(
+            chatRow.metadata,
+            reachedTurnLimit ? "completed" : "awaiting_user",
+            reachedTurnLimit,
+            {
+              ...(reachedTurnLimit ? {} : { awaitingUserKind: "follow_up" as const }),
+              completedAgentTurns,
+            },
+          );
+        }
+      } else if (
+        senderRow.type === "human" &&
+        trial.state === "awaiting_user" &&
+        (resolvedRequest || trial.awaitingUserKind === "follow_up")
+      ) {
         nextMetadata = withLandingCampaignChatState(chatRow.metadata, "running", true);
       }
       if (nextMetadata) {

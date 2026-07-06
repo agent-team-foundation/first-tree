@@ -16,7 +16,7 @@ import type { Config } from "../config.js";
  */
 const baseConfig: Config = {
   channel: "dev",
-  growth: { landingPagesEnabled: false },
+  growth: { landingPagesEnabled: false, landingCampaignMaxAgentTurns: 1 },
   docs: { enabled: false },
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: undefined },
