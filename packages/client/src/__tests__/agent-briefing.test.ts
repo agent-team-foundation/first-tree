@@ -772,10 +772,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // a human who remembers nothing of this chat can decide from — they run
     // many chats in parallel, and a future cross-chat review surface may show
     // the ask alone, outside the chat.
+    // Section labels match the example headings exactly (a future cross-chat
+    // ask-review surface may parse them): Why this question exists / Recent
+    // context / The question.
     expect(briefing).toContain("decision-self-sufficient");
     expect(briefing).toContain("Why this question exists");
     expect(briefing).toContain("Recent context");
-    expect(briefing).toMatch(/The question \+ your recommendation/);
+    expect(briefing).toMatch(/\*\*The question\*\* — ONE question, plus your recommendation/);
 
     expect(briefing).toContain("## Chat Topic & Description");
     expect(briefing).toContain("first-tree chat update");

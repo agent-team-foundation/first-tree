@@ -705,7 +705,8 @@ message in the chat.
 
 - **Replying to a human is required, not optional** → when a human directs a
   message at you, end the turn with one \`${bin} chat send <name> "..."\`
-  carrying the result — what you did, decisions made, and the next step —
+  carrying the result — what you did, decisions made, non-human blockers you
+  are waiting out (CI, another agent), and the next step —
   gathered into ONE concise message. A turn that ends without it is, to the
   human, no reply at all. A plain send is informational, raises no red dot,
   and never auto-wakes the human, so there is no loop risk in always answering.
@@ -877,8 +878,8 @@ session's working language):
 2. **Recent context** — a few-line recap of the last rounds between you and
    the human (what they asked, what you did, what changed), written for a
    reader who remembers none of it — not even their own last message.
-3. **The question + your recommendation** — ONE question, plus the option you
-   would pick and why, so a bare "approved" is a complete answer.
+3. **The question** — ONE question, plus your recommendation (the option you
+   would pick and why), so a bare "approved" is a complete answer.
 
 A one-line ask ("which option?", "ok to proceed?") defeats the channel: it
 forces the human to reconstruct your context by scrolling. A well-formed ask
