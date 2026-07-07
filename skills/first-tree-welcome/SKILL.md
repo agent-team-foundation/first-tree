@@ -1,7 +1,7 @@
 ---
 name: first-tree-welcome
-version: 1.0.8
-description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
+version: 1.1.0
+description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
 ---
 
 # First Tree Welcome
@@ -14,13 +14,20 @@ get started with First Tree", or "Please help me get settled into this team on
 First Tree." Do not use it for ordinary chats, PR reviews, repo scans, tree
 writes, or maintenance work.
 
-Two look-alikes that are NOT this launcher:
+Two look-alikes that are NOT this launcher, and one that IS:
 
 - **A dedicated tree-build / single-task chat** (you were placed in it, or it IS
   one) — run that task's own skill (`first-tree-seed` to build/seed a tree,
   `first-tree-read` / `first-tree-write` as appropriate), not this launcher flow.
 - **A repo-scan chat** — it can open with the same "welcome aboard" line but then
   asks for a repository scan or readiness report; run its own bound scan skill.
+- **A production-scan FIX chat is still this launcher** — the opening message
+  references an already-completed scan ("fix the launch blockers found by my
+  production readiness scan"), carries a `Repository:` line, and usually a
+  `Machine-readable findings: https://report.first-tree.ai/<key>.json` line.
+  Nothing needs re-scanning: do not look for a scan skill. Treat it as this
+  launcher arriving with a pre-selected first task (see "Production-scan fix
+  handoff" below).
 
 ## What This Is
 
@@ -80,6 +87,32 @@ Do not invent repo access, GitHub authorization, or tree readiness.
 
   Mention the Context Tree in plain product terms ("your team's shared memory")
   — never as internal jargon.
+
+### Production-scan fix handoff (pre-selected first task)
+
+The start-chat message may arrive with the first task already chosen: fixing
+the blockers from a completed First Tree production scan. Recognize it by the
+combination of a fix request referencing a production readiness scan, a
+`Repository:` line, and (usually) a `Machine-readable findings:
+https://report.first-tree.ai/<key>.json` line. When it matches:
+
+1. Skip the first-task menu — the user already chose. Confirm in one short line
+   that the scan findings are in hand and the blocker work is starting.
+2. Read the findings JSON before touching code. If the JSON link is expired or
+   unreachable (it expires roughly 30 days after the scan), say so plainly and
+   ask the user to re-run the scan from the report page — never guess findings.
+3. Spin the work into its own chat with `chat create` addressed to your own
+   agent, topic `Fix production scan blockers`, keeping this chat as the
+   launcher (see Spawning Task Chats). The task brief must be self-contained:
+   the repository URL, the findings JSON URL, fix blockers in severity order,
+   what to do when access is missing (ask for the narrowest GitHub access or a
+   local path), and the completion bar — a PR or a verified fix per blocker,
+   with evidence.
+4. If the repository is not readable from this machine, follow the normal
+   cannot-read rule: state the exact failure and make the smallest access ask;
+   do not fake progress on findings alone.
+5. Context Tree rules are unchanged: offer a tree build only after the fix work
+   has shown value, and only per the existing role/tree-state gates.
 
 ### State → action (repo/tree axis; role is the overlay below)
 
