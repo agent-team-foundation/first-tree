@@ -59,6 +59,13 @@ export const CORE_SKILL_NAMES = ["first-tree-welcome", "first-tree-seed"] as con
 const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as const;
 
 /**
+ * Skills that used to ship through the core installer but no longer belong in
+ * tree-less workspaces. Bound workspaces reinstall these through
+ * `TREE_SKILL_NAMES` later in the same bootstrap.
+ */
+const FORMER_CORE_SKILL_NAMES = ["first-tree-write"] as const;
+
+/**
  * Skills that ship only for Context-Tree-bound agents — they operate on an
  * existing tree, so they are pointless before one is bound. Installed by
  * `installFirstTreeSkills()` on every bootstrap when `contextTreePath` is set.
@@ -352,7 +359,7 @@ export function installFirstTreeSkills(options: InstallFirstTreeSkillsOptions): 
 }
 
 function reconcileCoreSkillState(workspacePath: string): void {
-  for (const retiredSkill of RETIRED_CORE_SKILL_NAMES) {
+  for (const retiredSkill of [...RETIRED_CORE_SKILL_NAMES, ...FORMER_CORE_SKILL_NAMES]) {
     removeManagedSkill(workspacePath, retiredSkill);
   }
 }

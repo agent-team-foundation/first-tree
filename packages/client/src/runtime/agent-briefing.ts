@@ -988,6 +988,11 @@ function contextTreeSection(
 ): string {
   const blocks: string[] = [];
 
+  const skillRouting =
+    contextTreePath === null
+      ? "The policy below is the always-present baseline for judging what belongs in a future Context Tree. This workspace has no bound tree yet; tree-backed reads and source-backed tree writes are unavailable until a tree is bound. For an initial empty-tree bootstrap from connected sources, load `first-tree-seed`."
+      : "The policy below is the always-present baseline. For task-scoped file selection and operational read workflow, load `first-tree-read`. For source-backed tree edits, load `first-tree-write`.";
+
   blocks.push(`# Context Tree (First Tree Managed)
 
 ## Core Model
@@ -999,9 +1004,7 @@ you need to act correctly across repos and teams. Each domain is a
 directory; each node is a markdown file with frontmatter (\`owners\`,
 \`soft_links\`) plus the actual content.
 
-The policy below is the always-present baseline. For task-scoped file
-selection and operational read workflow, load \`first-tree-read\`. For
-source-backed tree edits, load \`first-tree-write\`.
+${skillRouting}
 
 ## Context Tree Policy
 
@@ -1038,7 +1041,8 @@ write, and seed task:
 - Actionable future work does not live in normal tree content. Put it in an
   issue, source artifact, or human decision instead.`);
 
-  blocks.push(`## Reading the Tree
+  if (contextTreePath) {
+    blocks.push(`## Reading the Tree
 
 **Read the tree before you act on any instruction — every task, even
 ones that look like pure code, CLI, or review work.** An instruction is
@@ -1070,8 +1074,18 @@ Default to normal Context Tree content as current truth. Treat
 \`raw-context/\` as archive/proposal/supporting material, not as the
 canonical answer, unless the user explicitly asks for raw material or the
 task is about that raw artifact itself.`);
+  } else {
+    blocks.push(`## Reading the Tree
 
-  blocks.push(`## Writing the Tree
+This workspace has no Context Tree bound, so there is no tree to read.
+If a task needs durable cross-domain context, surface that binding gap
+to a human instead of pretending the context exists. If the task is the
+initial tree bootstrap from connected sources, load \`first-tree-seed\`
+and follow that empty-tree workflow.`);
+  }
+
+  if (contextTreePath) {
+    blocks.push(`## Writing the Tree
 
 A chat is **fresh context** — the in-the-moment understanding you and
 your teammates build while doing the work. The tree is **persistent
@@ -1112,6 +1126,16 @@ ask for the PR, design doc, meeting note, or pasted source before
 editing the tree. Do not invent ad-hoc tree edits without loading the
 skill — the workflow covers source gating, target selection, surrounding
 reads, verification, review routing, and ownership rules.`);
+  } else {
+    blocks.push(`## Writing the Tree
+
+This workspace has no Context Tree bound, so there is no tree to write.
+Do not attempt source-backed tree edits from this workspace and do not
+ask for a tree-write skill payload that is not installed here. If the
+task is to create the team's first tree from connected sources, load
+\`first-tree-seed\`; otherwise surface the missing binding/setup gap to a
+human.`);
+  }
 
   if (contextTreePath) {
     const branch = contextTreeBranch ?? "main";

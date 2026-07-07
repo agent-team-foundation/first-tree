@@ -335,6 +335,15 @@ describe("buildAgentBriefing — Context Tree Policy baseline", () => {
     expect(policy).toContain("Actionable future work");
   });
 
+  it("does not ask tree-less agents to load tree-bound read/write skills", () => {
+    const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
+
+    expect(briefing).toContain("This workspace has no Context Tree bound");
+    expect(briefing).toContain("first-tree-seed");
+    expect(briefing).not.toContain("first-tree-read");
+    expect(briefing).not.toContain("first-tree-write");
+  });
+
   it("loads `first-tree-write` only from a source-artifact task signal in the First Tree Family map", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
     const familyMap = briefing.slice(briefing.indexOf("## First Tree Family"));

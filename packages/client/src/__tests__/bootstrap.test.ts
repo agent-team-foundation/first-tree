@@ -652,6 +652,33 @@ describe("installCoreSkills", () => {
     expect(() => lstatSync(join(workspace, ".claude", "skills", "first-tree-guide"))).toThrow();
     expect(existsSync(join(workspace, ".agents", "skills", "first-tree-welcome", "SKILL.md"))).toBe(true);
   });
+
+  it("removes first-tree-write left behind by older tree-less core installs", () => {
+    const workspace = join(tmpBase, "core-skills-former-write");
+    mkdirSync(join(workspace, ".agents", "skills", "first-tree-write"), { recursive: true });
+    writeFileSync(join(workspace, ".agents", "skills", "first-tree-write", "SKILL.md"), "stale write skill\n");
+    mkdirSync(join(workspace, ".claude", "skills"), { recursive: true });
+    symlinkSync(
+      `../../${join(".agents", "skills", "first-tree-write")}`,
+      join(workspace, ".claude", "skills", "first-tree-write"),
+    );
+    const bundledSkillsRoot = makeFixtureSkillsRoot("core-skills-former-write", [
+      { name: "first-tree-welcome", version: "1.0.0" },
+      { name: "first-tree-seed", version: "1.0.0" },
+    ]);
+
+    const result = installCoreSkills({
+      workspacePath: workspace,
+      bundledSkillsRoot,
+      log: () => {},
+    });
+
+    expect(result).toBe(true);
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-write"))).toBe(false);
+    expect(() => lstatSync(join(workspace, ".claude", "skills", "first-tree-write"))).toThrow();
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-welcome", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(workspace, ".agents", "skills", "first-tree-seed", "SKILL.md"))).toBe(true);
+  });
 });
 
 describe("Bundled CLI version drift helpers", () => {
