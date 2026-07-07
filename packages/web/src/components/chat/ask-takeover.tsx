@@ -528,8 +528,10 @@ export function AskTakeover({
               padding: `var(--sp-4) ${padX} var(--sp-5)`,
               borderTop: "var(--hairline) solid var(--border-faint)",
             }}
-            onDragOver={(e) => e.preventDefault()}
+            onDragOver={(e) => (isTrial ? undefined : e.preventDefault())}
             onDrop={(e) => {
+              // No drag-and-drop image attachments on the trial answer surface.
+              if (isTrial) return;
               e.preventDefault();
               addImages(Array.from(e.dataTransfer.files));
             }}
