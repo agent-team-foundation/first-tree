@@ -23,10 +23,15 @@ export function CenterPanel({
   narrow,
   onShowConversations,
   initialParticipantIds,
+  isTrial = false,
 }: {
   selectedChatId: string | null;
   onSelectChat: (chatId: string) => void;
   onClearChat: () => void;
+  /** Landing-campaign trial surface: hide chat-management escape hatches
+   *  (new chat, add participant, agent pause/resume) — the trial chat is a
+   *  controlled, single-run surface. */
+  isTrial?: boolean;
   /** True when the workspace shell is in narrow-viewport mode (<768).
    *  Propagated to `ChatView` so it can swap the right rail to an
    *  overlay and surface the conv-list summon button. */
@@ -70,9 +75,10 @@ export function CenterPanel({
         narrow={narrow}
         onShowConversations={onShowConversations}
         onClearChat={onClearChat}
+        isTrial={isTrial}
       />
     );
   }
 
-  return <NoChatView onNewChat={() => onSelectChat(DRAFT_CHAT_ID)} />;
+  return <NoChatView onNewChat={() => onSelectChat(DRAFT_CHAT_ID)} isTrial={isTrial} />;
 }

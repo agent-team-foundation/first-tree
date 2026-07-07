@@ -17,21 +17,28 @@ import { Button } from "../../../components/ui/button.js";
  * "one hero per surface" is honoured by keeping the persistent rail CTA
  * as the canonical home and treating this as a discoverability echo.
  */
-export function NoChatView({ onNewChat }: { onNewChat: () => void }) {
+export function NoChatView({ onNewChat, isTrial = false }: { onNewChat: () => void; isTrial?: boolean }) {
+  // On the trial surface there is no "new chat" affordance — creating chats is
+  // an escape hatch, and the trial's single chat is the whole surface. The
+  // empty state becomes a calm pointer rather than a create-chat CTA.
   return (
     <div className="flex-1 flex items-center justify-center p-8">
       <div className="text-center max-w-sm">
         <FirstTreeLogo width={36} height={40} className="mx-auto mb-3 text-primary opacity-60" />
         <div className="text-subtitle mb-1">No chat selected</div>
         <div className="text-body text-muted-foreground mb-4">
-          Start a new chat to put your agent to work, or open an existing one from the list.
+          {isTrial
+            ? "Your trial chat isn’t open. Use “Set up First Tree” above to continue."
+            : "Start a new chat to put your agent to work, or open an existing one from the list."}
         </div>
-        <div className="flex justify-center">
-          <Button type="button" variant="default" onClick={onNewChat}>
-            <Plus className="h-3.5 w-3.5" />
-            <span>New chat</span>
-          </Button>
-        </div>
+        {isTrial ? null : (
+          <div className="flex justify-center">
+            <Button type="button" variant="default" onClick={onNewChat}>
+              <Plus className="h-3.5 w-3.5" />
+              <span>New chat</span>
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
