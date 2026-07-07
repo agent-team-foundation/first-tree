@@ -1,13 +1,16 @@
 import { ArrowRight } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
+import { getNewChatDefaultCandidates } from "../../api/agents.js";
 import { startLandingCampaign } from "../../api/landing-campaigns.js";
+import { createMeTaskChat } from "../../api/me-chats.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { useGrowthLandingPagesState } from "../../hooks/use-server-channel.js";
 import { writeScanFixHandoffFlag } from "../../utils/onboarding-flags.js";
 import { FlowHint, StatusRow, WorkingState } from "../onboarding/flow-ui.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
+import { buildScanFixBootstrap } from "../workspace/center/onboarding/bootstrap-prose.js";
 import { WorkspaceBody } from "../workspace/index.js";
 import { getCampaign } from "./campaigns.js";
 import {
@@ -124,6 +127,45 @@ export function QuickstartPage() {
     if (settled && !growthLandingPagesEnabled) navigate("/", { replace: true });
   }, [chatId, settled, growthLandingPagesEnabled, navigate]);
 
+  const fixStartedRef = useRef(false);
+  const [fixError, setFixError] = useState<string | null>(null);
+
+  // Already-onboarded users skip onboarding: hand the scan findings straight to
+  // their default agent as a task chat. The handoff flag is cleared only after
+  // the chat exists — on failure it stays, and re-clicking the fix link retries.
+  const startFixChat = useCallback(async () => {
+    if (!fixHandoff || fixStartedRef.current) return;
+    fixStartedRef.current = true;
+    setFixError(null);
+    try {
+      const { agent } = await getNewChatDefaultCandidates({});
+      if (!agent) {
+        throw new Error("No connected agent yet. Connect your computer, then open the fix link again.");
+      }
+      const created = await createMeTaskChat({
+        mode: "task",
+        topic: "Fix production scan blockers",
+        initialRecipientAgentIds: [agent.uuid],
+        initialRecipientNames: [],
+        contextParticipantAgentIds: [],
+        contextParticipantNames: [],
+        initialMessage: {
+          format: "text",
+          content: buildScanFixBootstrap(agent.displayName || "your agent", {
+            repoUrl: fixHandoff.url,
+            reportKey: fixHandoff.reportKey,
+          }),
+          source: "web",
+        },
+      });
+      writeScanFixHandoffFlag(null);
+      navigate(`/?c=${encodeURIComponent(created.chatId)}`, { replace: true });
+    } catch (err) {
+      fixStartedRef.current = false;
+      setFixError(err instanceof Error ? err.message : "Couldn't start the fix chat. Please try again.");
+    }
+  }, [fixHandoff, navigate]);
+
   useEffect(() => {
     if (!fixHandoff || !settled || !growthLandingPagesEnabled) return;
     writeScanFixHandoffFlag({ repoUrl: fixHandoff.url, reportKey: fixHandoff.reportKey });
@@ -138,9 +180,7 @@ export function QuickstartPage() {
     ) {
       navigate("/onboarding", { replace: true });
     } else {
-      // Temporary: Task 6 replaces this with direct task-chat creation before
-      // this PR opens. The stored handoff survives either way.
-      navigate("/", { replace: true });
+      void startFixChat();
     }
   }, [
     fixHandoff,
@@ -152,6 +192,7 @@ export function QuickstartPage() {
     onboardingCompletedAt,
     currentOrgHasPersonalAgent,
     navigate,
+    startFixChat,
   ]);
 
   // Canonicalize a legacy `?chat=<id>` trial link to `?c=<id>` (only when no
@@ -165,6 +206,10 @@ export function QuickstartPage() {
   const retryStart = useCallback(() => {
     void startTrial();
   }, [startTrial]);
+
+  const retryFixChat = useCallback(() => {
+    void startFixChat();
+  }, [startFixChat]);
 
   // Trial started: render the real workspace shell — as trial chrome, since
   // this is the `/quickstart` route (stripped header + no rail; see Layout /
@@ -189,6 +234,35 @@ export function QuickstartPage() {
     return (
       <QuickstartShell>
         <StatusRow state="waiting" label="Loading..." />
+      </QuickstartShell>
+    );
+  }
+
+  // A fix conversion in flight: hold the launcher shell while the effect above
+  // routes to onboarding or opens the direct fix chat; surface failures with a
+  // retry (the stored handoff survives, so retrying is safe).
+  if (fixHandoff) {
+    return (
+      <QuickstartShell repoSlug={fixHandoff.repoSlug}>
+        <h1 className="text-title" style={{ margin: 0 }}>
+          Starting your fix chat...
+        </h1>
+
+        {fixError ? (
+          <div className="flex flex-col" style={{ gap: "var(--sp-4)" }}>
+            <FlowHint tone="error" role="alert">
+              {fixError}
+            </FlowHint>
+            <div className="flex">
+              <Button type="button" onClick={retryFixChat}>
+                <span>Try again</span>
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <WorkingState label="Opening your fix chat..." hint="Handing the scan findings to your agent." />
+        )}
       </QuickstartShell>
     );
   }

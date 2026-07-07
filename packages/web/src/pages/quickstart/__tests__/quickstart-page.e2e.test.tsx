@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { LandingCampaignStartRequest, LandingCampaignStartResponse } from "@first-tree/shared";
+import type { CreateTaskChat, LandingCampaignStartRequest, LandingCampaignStartResponse } from "@first-tree/shared";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -36,6 +36,16 @@ const landingCampaignMock = vi.hoisted(() => ({
     }),
   ),
 }));
+const agentsApiMock = vi.hoisted(() => ({
+  getNewChatDefaultCandidates: vi.fn(
+    async (): Promise<{ agent: { uuid: string; displayName: string } | null }> => ({
+      agent: { uuid: "agent-dev-1", displayName: "Dev Agent" },
+    }),
+  ),
+}));
+const meChatsApiMock = vi.hoisted(() => ({
+  createMeTaskChat: vi.fn(async (_body: CreateTaskChat): Promise<{ chatId: string }> => ({ chatId: "chat-fix-1" })),
+}));
 
 vi.mock("react-router", async () => {
   const actual = await vi.importActual<typeof import("react-router")>("react-router");
@@ -47,6 +57,8 @@ vi.mock("../../../hooks/use-server-channel.js", () => ({
   useGrowthLandingPagesEnabled: () => growthLandingMock.value.enabled,
 }));
 vi.mock("../../../api/landing-campaigns.js", () => landingCampaignMock);
+vi.mock("../../../api/agents.js", () => agentsApiMock);
+vi.mock("../../../api/me-chats.js", () => meChatsApiMock);
 // The trial chat now renders the real workspace shell; stub it so this unit
 // test stays focused on QuickstartPage's launcher/routing, not the whole
 // three-pane workspace. WorkspaceBody reads the selected chat from `?c=`.
@@ -95,6 +107,10 @@ beforeEach(() => {
     campaign: "production-scan",
     repoCanonicalKey: "github.com/acme/backend",
   });
+  agentsApiMock.getNewChatDefaultCandidates.mockResolvedValue({
+    agent: { uuid: "agent-dev-1", displayName: "Dev Agent" },
+  });
+  meChatsApiMock.createMeTaskChat.mockResolvedValue({ chatId: "chat-fix-1" });
 });
 
 afterEach(async () => {
@@ -266,7 +282,7 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
     );
   });
 
-  it("onboarded user: stores the handoff, does not start a trial (Task 6 owns the destination)", async () => {
+  it("onboarded user: opens a direct fix task chat, clears the handoff, never starts a trial", async () => {
     authMock.value = {
       ...authMock.value,
       onboardingStep: "completed",
@@ -279,12 +295,46 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
 
     expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
     expect(navigateMock).not.toHaveBeenCalledWith("/onboarding", { replace: true });
+    expect(agentsApiMock.getNewChatDefaultCandidates).toHaveBeenCalledTimes(1);
+    expect(meChatsApiMock.createMeTaskChat).toHaveBeenCalledTimes(1);
+    const body = meChatsApiMock.createMeTaskChat.mock.calls[0]?.[0];
+    expect(body).toMatchObject({
+      mode: "task",
+      topic: "Fix production scan blockers",
+      initialRecipientAgentIds: ["agent-dev-1"],
+    });
+    expect(body?.initialMessage).toMatchObject({ format: "text", source: "web" });
+    expect(body?.initialMessage.content).toContain(
+      "Machine-readable findings: https://report.first-tree.ai/acme-backend-20260101-abcdef.json",
+    );
+    expect(navigateMock).toHaveBeenCalledWith("/?c=chat-fix-1", { replace: true });
+    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBeNull();
+  });
+
+  it("onboarded user with no connectable agent: shows an error with retry, keeps the handoff", async () => {
+    authMock.value = {
+      ...authMock.value,
+      onboardingStep: "completed",
+      currentOrgHasPersonalAgent: true,
+      onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+    };
+    agentsApiMock.getNewChatDefaultCandidates.mockResolvedValueOnce({ agent: null });
+    const container = await renderPage([
+      "/quickstart?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend&action=fix&report=acme-backend-20260101-abcdef",
+    ]);
+
+    expect(meChatsApiMock.createMeTaskChat).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("No connected agent yet");
     expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
       JSON.stringify({
         repoUrl: "https://github.com/acme/backend",
         reportKey: "acme-backend-20260101-abcdef",
       }),
     );
+    const retryBtn = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Try again"),
+    );
+    expect(retryBtn).toBeTruthy();
   });
 
   it("plain campaign handoff (no action) still calls startLandingCampaign — regression guard", async () => {
