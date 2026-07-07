@@ -18,7 +18,7 @@ const flowMock = vi.hoisted(() => ({
   path: "admin" as const,
   organizationId: "org-1" as string | null,
   selectedRepoUrls: [] as string[],
-  treeBindingPlan: "createBinding" as string,
+  treeBindingPlan: "createBinding",
   setTreeBindingPlan: vi.fn(),
   setTreeUrl: vi.fn(),
   treeAutoDetectDone: true,
