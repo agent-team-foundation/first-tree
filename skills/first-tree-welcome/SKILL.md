@@ -1,7 +1,7 @@
 ---
 name: first-tree-welcome
-version: 1.0.8
-description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
+version: 1.1.0
+description: Use for a First Tree onboarding first chat, especially natural opening messages like "welcome aboard", "Please help me get started with First Tree", or "Please help me get settled into this team on First Tree." Also covers the production-scan fix first chat ("fix the launch blockers found by my production readiness scan"). Do not use for dedicated tree setup chats, ordinary chats, PR reviews, repo scans, tree writes, or maintenance.
 ---
 
 # First Tree Welcome
@@ -14,13 +14,24 @@ get started with First Tree", or "Please help me get settled into this team on
 First Tree." Do not use it for ordinary chats, PR reviews, repo scans, tree
 writes, or maintenance work.
 
-Two look-alikes that are NOT this launcher:
+Two look-alikes that are NOT this launcher, and one that routes by shape:
 
 - **A dedicated tree-build / single-task chat** (you were placed in it, or it IS
   one) — run that task's own skill (`first-tree-seed` to build/seed a tree,
   `first-tree-read` / `first-tree-write` as appropriate), not this launcher flow.
 - **A repo-scan chat** — it can open with the same "welcome aboard" line but then
   asks for a repository scan or readiness report; run its own bound scan skill.
+- **A production-scan FIX chat** — the opening message references an
+  already-completed scan ("fix the launch blockers found by my production
+  readiness scan") with a `Repository:` line, plus a `Machine-readable
+  findings: https://report.first-tree.ai/<key>.json` line when the report key
+  survived the handoff. Nothing needs re-scanning — never look for a scan
+  skill. Route by shape, exactly as "Production-scan fix handoff" below
+  specifies: opened with the onboarding greeting ("welcome aboard") → this
+  launcher with a pre-selected first task, spawn only once a readable findings
+  source exists; greeting-free fix brief → already the dedicated fix chat,
+  work here and do not spawn; no readable findings source → ask for the
+  report or a re-run, then stop.
 
 ## What This Is
 
@@ -80,6 +91,55 @@ Do not invent repo access, GitHub authorization, or tree readiness.
 
   Mention the Context Tree in plain product terms ("your team's shared memory")
   — never as internal jargon.
+
+### Production-scan fix handoff (pre-selected first task)
+
+The start-chat message may arrive with the first task already chosen: fixing
+the blockers from a completed First Tree production scan. TWO message shapes
+are both this handoff — recognize either:
+
+- **With a findings link**: a fix request referencing a production readiness
+  scan, a `Repository:` line, and a `Machine-readable findings:
+  https://report.first-tree.ai/<key>.json` line.
+- **Without a findings link** (the report key did not survive the handoff):
+  the same fix request and `Repository:` line, closing with "The scan report
+  link didn't carry over, so start by checking access to the repository, then
+  ask me to share the report or re-run the scan." No findings line appears at
+  all — this is an expected first-class shape, not a malformed message; do
+  NOT fall back to the generic first-task menu.
+
+When either shape matches:
+
+1. Skip the first-task menu — the user already chose. Confirm in one short line
+   that the blocker work is starting (and, with a findings link, that the scan
+   findings are in hand).
+2. **With a findings link**: read the findings JSON before touching code. If
+   the link is expired or unreachable (it expires roughly 30 days after the
+   scan), say so plainly and ask the user to re-run the scan from the report
+   page — never guess findings. **Without a readable findings source** (no
+   findings line, or the link is dead): check repository access, ask the user
+   to share the report or re-run the scan, and STOP there. Do not spawn a fix
+   chat and do not start fix work from guessed blockers — a task brief without
+   the findings cannot list the blockers it exists to fix. Step 3 applies only
+   once a readable findings source exists (a shared report, a findings URL, or
+   a fresh scan).
+3. **Launcher vs already-dedicated chat** (only with a readable findings
+   source — see step 2). If this chat opened with the
+   onboarding greeting ("welcome aboard"), it is the launcher: spin the work
+   into its own chat with `chat create` addressed to your own agent, topic
+   `Fix production scan blockers`, keeping this chat as the launcher (see
+   Spawning Task Chats). If the message arrived WITHOUT that greeting — a task
+   chat that already carries the fix brief — this chat IS the dedicated fix
+   chat: do the work here and do not spawn another. A spawned chat's task
+   brief must be self-contained: the repository URL, the findings JSON URL
+   (when present), fix blockers in severity order, what to do when access is
+   missing (ask for the narrowest GitHub access or a local path), and the
+   completion bar — a PR or a verified fix per blocker, with evidence.
+4. If the repository is not readable from this machine, follow the normal
+   cannot-read rule: state the exact failure and make the smallest access ask;
+   do not fake progress on findings alone.
+5. Context Tree rules are unchanged: offer a tree build only after the fix work
+   has shown value, and only per the existing role/tree-state gates.
 
 ### State → action (repo/tree axis; role is the overlay below)
 
