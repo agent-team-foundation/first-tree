@@ -112,10 +112,15 @@ When either shape matches:
 2. **With a findings link**: read the findings JSON before touching code. If
    the link is expired or unreachable (it expires roughly 30 days after the
    scan), say so plainly and ask the user to re-run the scan from the report
-   page — never guess findings. **Without a findings link**: there is nothing
-   to fetch — check repository access first, then ask the user to share the
-   report or re-run the scan before starting fix work.
-3. **Launcher vs already-dedicated chat.** If this chat opened with the
+   page — never guess findings. **Without a readable findings source** (no
+   findings line, or the link is dead): check repository access, ask the user
+   to share the report or re-run the scan, and STOP there. Do not spawn a fix
+   chat and do not start fix work from guessed blockers — a task brief without
+   the findings cannot list the blockers it exists to fix. Step 3 applies only
+   once a readable findings source exists (a shared report, a findings URL, or
+   a fresh scan).
+3. **Launcher vs already-dedicated chat** (only with a readable findings
+   source — see step 2). If this chat opened with the
    onboarding greeting ("welcome aboard"), it is the launcher: spin the work
    into its own chat with `chat create` addressed to your own agent, topic
    `Fix production scan blockers`, keeping this chat as the launcher (see
