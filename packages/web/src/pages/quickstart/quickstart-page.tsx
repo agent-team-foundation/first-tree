@@ -115,7 +115,17 @@ export function QuickstartPage() {
       startStartedRef.current = false;
       setStartError(err instanceof Error ? err.message : "Couldn't open your trial chat. Please try again.");
     }
-  }, [chatId, legacyChatId, fixHandoff, intent, campaign, organizationId, growthLandingPagesEnabled, refreshMe, navigate]);
+  }, [
+    chatId,
+    legacyChatId,
+    fixHandoff,
+    intent,
+    campaign,
+    organizationId,
+    growthLandingPagesEnabled,
+    refreshMe,
+    navigate,
+  ]);
 
   useEffect(() => {
     if (!settled || !growthLandingPagesEnabled) return;

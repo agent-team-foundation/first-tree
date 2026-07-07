@@ -134,7 +134,9 @@ describe("readScanFixHandoff", () => {
 
   it("parses a fix handoff with a report key", () => {
     const h = readScanFixHandoff(
-      loc("?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Focto%2Fapp&action=fix&report=octo-app-20260707-ab12cd3"),
+      loc(
+        "?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Focto%2Fapp&action=fix&report=octo-app-20260707-ab12cd3",
+      ),
     );
     expect(h).toEqual({
       campaign: "production-scan",
@@ -148,7 +150,9 @@ describe("readScanFixHandoff", () => {
 
   it("strips a .html/.json suffix off the report key", () => {
     const h = readScanFixHandoff(
-      loc("?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Focto%2Fapp&action=fix&report=octo-app-20260707-ab12cd3.html"),
+      loc(
+        "?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Focto%2Fapp&action=fix&report=octo-app-20260707-ab12cd3.html",
+      ),
     );
     expect(h?.reportKey).toBe("octo-app-20260707-ab12cd3");
   });
@@ -156,7 +160,9 @@ describe("readScanFixHandoff", () => {
   it("degrades an invalid report key to null instead of rejecting the handoff", () => {
     for (const bad of ["../../etc", "a/b", "https://evil.example", "", "-leading-dash-ok?no"]) {
       const h = readScanFixHandoff(
-        loc(`?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Focto%2Fapp&action=fix&report=${encodeURIComponent(bad)}`),
+        loc(
+          `?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Focto%2Fapp&action=fix&report=${encodeURIComponent(bad)}`,
+        ),
       );
       expect(h).not.toBeNull();
       expect(h?.reportKey).toBeNull();
