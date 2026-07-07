@@ -171,12 +171,12 @@ function AdminStartChat() {
           topic: "Get started with First Tree",
           treeBindingPlan: "none",
           complete: async (chatId) => {
-          // Scan-fix handoffs are consumed by the admin fix path only — drop
-          // any stale flag once a non-fix first chat exists, so a later
-          // onboarding run in this tab cannot consume someone else's scan.
-          writeScanFixHandoffFlag(null);
-          await completeAndEnterChat(chatId);
-        },
+            // Scan-fix handoffs are consumed by the admin fix path only — drop
+            // any stale flag once a non-fix first chat exists, so a later
+            // onboarding run in this tab cannot consume someone else's scan.
+            writeScanFixHandoffFlag(null);
+            await completeAndEnterChat(chatId);
+          },
         });
         return;
       }
