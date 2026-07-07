@@ -146,12 +146,8 @@ export function ConnectCommandPanel({
 }
 
 /**
- * The yellow→green→red status row rendered beneath a connect command.
- * Extracted from `ConnectCommandPanel` so a host with MORE than one command
- * block (e.g. `ReconnectDialog`: a `daemon start` primary + a reinstall
- * fallback) can render ONE machine-arrival status row at dialog level that
- * plainly covers "whichever command you ran", instead of pinning the spinner
- * to a single command block.
+ * The yellow -> green -> red status row rendered beneath a connect command.
+ * Hosts with more than one command block can render one shared status row.
  */
 export function ConnectStatusRow({
   phase,
