@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildInviteeReadyBootstrap,
   buildNoRepoBootstrap,
+  buildScanFixBootstrap,
   buildTreeSetupBootstrap,
   buildValueFirstBootstrap,
 } from "../bootstrap-prose.js";
@@ -149,5 +150,35 @@ describe("start-chat bootstrap prose", () => {
     // A brand-new teammate is NOT asked to write to or seed the tree.
     expect(message).not.toContain("first-tree-seed");
     expect(message).not.toContain("reflect them into the tree");
+  });
+});
+
+describe("buildScanFixBootstrap", () => {
+  const handoff = {
+    repoUrl: "https://github.com/octo/app",
+    reportKey: "octo-app-20260707-ab12cd3",
+  };
+
+  it("includes repo, hosted report, and findings JSON URLs", () => {
+    const s = buildScanFixBootstrap("Dev", handoff);
+    expect(s).toContain("Repository: https://github.com/octo/app");
+    expect(s).toContain("https://report.first-tree.ai/octo-app-20260707-ab12cd3.html");
+    expect(s).toContain("Machine-readable findings: https://report.first-tree.ai/octo-app-20260707-ab12cd3.json");
+    expect(s).toContain("production readiness scan");
+  });
+
+  it("degrades without a report key: no report URLs, asks to re-run or share", () => {
+    const s = buildScanFixBootstrap("Dev", { ...handoff, reportKey: null });
+    expect(s).not.toContain("report.first-tree.ai");
+    expect(s).toContain("Repository: https://github.com/octo/app");
+    expect(s).toContain("re-run the scan");
+  });
+
+  it("direct opening drops the onboarding greeting but keeps the recognition phrase", () => {
+    const s = buildScanFixBootstrap("Dev", handoff, "direct");
+    expect(s).not.toContain("welcome aboard");
+    expect(s).toContain("Dev, please help me fix the launch blockers found by my production readiness scan.");
+    expect(s).toContain("Repository: https://github.com/octo/app");
+    expect(s).toContain("Machine-readable findings: https://report.first-tree.ai/octo-app-20260707-ab12cd3.json");
   });
 });

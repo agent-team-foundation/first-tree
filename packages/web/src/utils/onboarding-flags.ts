@@ -112,3 +112,40 @@ export function clearOnboardingSessionFlags(): void {
   }
   for (const k of toRemove) ss.removeItem(k);
 }
+
+const SCAN_FIX_HANDOFF_KEY = "onboarding:scanFixHandoff";
+
+/**
+ * Production-scan fix conversion captured by /quickstart (`action=fix`).
+ * Global like `agentUuid` (the fix link carries no org); consumed and cleared
+ * by the onboarding start-chat completion, kept by `finishLater`. The durable
+ * fallback is the fix link itself — the user can always re-click it.
+ */
+export type StoredScanFixHandoff = {
+  repoUrl: string;
+  reportKey: string | null;
+};
+
+export function readScanFixHandoffFlag(): StoredScanFixHandoff | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.sessionStorage.getItem(SCAN_FIX_HANDOFF_KEY);
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) throw new Error("not an object");
+    const o = parsed as Record<string, unknown>;
+    if (typeof o.repoUrl !== "string" || !(typeof o.reportKey === "string" || o.reportKey === null)) {
+      throw new Error("invalid scan-fix handoff");
+    }
+    return { repoUrl: o.repoUrl, reportKey: o.reportKey };
+  } catch {
+    window.sessionStorage.removeItem(SCAN_FIX_HANDOFF_KEY);
+    return null;
+  }
+}
+
+export function writeScanFixHandoffFlag(handoff: StoredScanFixHandoff | null): void {
+  if (typeof window === "undefined") return;
+  if (handoff === null) window.sessionStorage.removeItem(SCAN_FIX_HANDOFF_KEY);
+  else window.sessionStorage.setItem(SCAN_FIX_HANDOFF_KEY, JSON.stringify(handoff));
+}
