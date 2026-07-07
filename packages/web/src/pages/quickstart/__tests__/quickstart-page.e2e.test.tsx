@@ -331,6 +331,29 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
+  it("finish-later member (dismissed, no completion stamp) resumes onboarding, never direct chat", async () => {
+    authMock.value = {
+      ...authMock.value,
+      onboardingStep: "completed",
+      currentOrgHasPersonalAgent: true,
+      onboardingDismissedAt: "2026-01-01T00:00:00.000Z",
+      onboardingCompletedAt: null,
+    };
+    await renderPage([
+      "/quickstart?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend&action=fix&report=acme-backend-20260101-abcdef",
+    ]);
+
+    expect(agentsApiMock.getNewChatDefaultCandidates).not.toHaveBeenCalled();
+    expect(meChatsApiMock.createMeTaskChat).not.toHaveBeenCalled();
+    expect(navigateMock).toHaveBeenCalledWith("/onboarding", { replace: true });
+    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
+      JSON.stringify({
+        repoUrl: "https://github.com/acme/backend",
+        reportKey: "acme-backend-20260101-abcdef",
+      }),
+    );
+  });
+
   it("a stale trial intent cannot hijack a fix link into a trial", async () => {
     seedIntent("production-scan");
     authMock.value = {

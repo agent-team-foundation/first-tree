@@ -170,7 +170,13 @@ function AdminStartChat() {
           organizationId,
           topic: "Get started with First Tree",
           treeBindingPlan: "none",
-          complete: completeAndEnterChat,
+          complete: async (chatId) => {
+          // Scan-fix handoffs are consumed by the admin fix path only — drop
+          // any stale flag once a non-fix first chat exists, so a later
+          // onboarding run in this tab cannot consume someone else's scan.
+          writeScanFixHandoffFlag(null);
+          await completeAndEnterChat(chatId);
+        },
         });
         return;
       }
@@ -356,7 +362,13 @@ function InviteeReady() {
         topic: "Get settled on First Tree",
         treeBindingPlan: "useBoundTree",
         joinPath: "invite",
-        complete: completeAndEnterChat,
+        complete: async (chatId) => {
+          // Scan-fix handoffs are consumed by the admin fix path only — drop
+          // any stale flag once a non-fix first chat exists, so a later
+          // onboarding run in this tab cannot consume someone else's scan.
+          writeScanFixHandoffFlag(null);
+          await completeAndEnterChat(chatId);
+        },
       });
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
@@ -412,7 +424,13 @@ function InviteeNotReady() {
         topic: "Get settled on First Tree",
         treeBindingPlan: "none",
         joinPath: "invite",
-        complete: completeAndEnterChat,
+        complete: async (chatId) => {
+          // Scan-fix handoffs are consumed by the admin fix path only — drop
+          // any stale flag once a non-fix first chat exists, so a later
+          // onboarding run in this tab cannot consume someone else's scan.
+          writeScanFixHandoffFlag(null);
+          await completeAndEnterChat(chatId);
+        },
       });
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));

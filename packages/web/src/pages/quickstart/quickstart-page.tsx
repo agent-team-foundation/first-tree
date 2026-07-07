@@ -9,7 +9,7 @@ import { Button } from "../../components/ui/button.js";
 import { useGrowthLandingPagesState } from "../../hooks/use-server-channel.js";
 import { writeScanFixHandoffFlag } from "../../utils/onboarding-flags.js";
 import { FlowHint, StatusRow, WorkingState } from "../onboarding/flow-ui.js";
-import { shouldEnterOnboarding } from "../onboarding/steps.js";
+import { shouldLeaveOnboarding } from "../onboarding/steps.js";
 import { buildScanFixBootstrap } from "../workspace/center/onboarding/bootstrap-prose.js";
 import { WorkspaceBody } from "../workspace/index.js";
 import { getCampaign } from "./campaigns.js";
@@ -178,13 +178,17 @@ export function QuickstartPage() {
   }, [fixHandoff, navigate]);
 
   useEffect(() => {
-    // `meLoaded` must gate this: `shouldEnterOnboarding` returns false while
-    // /me is still loading, which this branch would misread as "onboarded" and
-    // fire the direct-chat path for a user who actually needs onboarding.
     if (!fixHandoff || !settled || !growthLandingPagesEnabled || !meLoaded) return;
     writeScanFixHandoffFlag({ repoUrl: fixHandoff.url, reportKey: fixHandoff.reportKey });
+    // Direct-chat eligibility is `shouldLeaveOnboarding` — the membership is
+    // terminally done (past connect, has a personal agent, AND carries the
+    // completion stamp). Its inverse gate, `shouldEnterOnboarding`, returns
+    // false for a "finish later" (dismissed) membership, which is only an
+    // auto-entry suppressor — using it here would misroute dismissed-but-
+    // incomplete members into the direct-chat path. `meLoaded` is re-checked
+    // in the guard above because both gates return false on unloaded /me.
     if (
-      shouldEnterOnboarding({
+      shouldLeaveOnboarding({
         meLoaded,
         onboardingStep,
         onboardingSuppressedAt: onboardingDismissedAt,
@@ -192,9 +196,9 @@ export function QuickstartPage() {
         onboardingCompletedAt,
       })
     ) {
-      navigate("/onboarding", { replace: true });
-    } else {
       void startFixChat();
+    } else {
+      navigate("/onboarding", { replace: true });
     }
   }, [
     fixHandoff,
