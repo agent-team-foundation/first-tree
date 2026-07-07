@@ -464,11 +464,14 @@ describe("codex app-server handler", () => {
     const hostHome = join(workspaceRoot, "..", "host-home");
     const codexHome = join(hostHome, ".codex");
     const ghConfigDir = join(hostHome, ".config", "gh");
+    const sshKeyPath = join(hostHome, ".ssh", "id_ed25519");
     const firstTreeHome = join(workspaceRoot, "first-tree-home");
     const cliBinDir = join(workspaceRoot, "first-tree-cli-bin");
     mkdirSync(cliBinDir, { recursive: true });
     mkdirSync(codexHome, { recursive: true });
     mkdirSync(ghConfigDir, { recursive: true });
+    mkdirSync(join(hostHome, ".ssh"), { recursive: true });
+    writeFileSync(sshKeyPath, "ssh-secret\n", { mode: 0o600 });
     writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
     vi.stubEnv("HOME", hostHome);
     vi.stubEnv("FIRST_TREE_HOME", firstTreeHome);
@@ -525,6 +528,11 @@ describe("codex app-server handler", () => {
     expect(capturedEnv?.HOME).toBe(workspaceRoot);
     expect(capturedEnv?.CODEX_HOME).toBe(codexHome);
     expect(capturedEnv?.GH_CONFIG_DIR).toBe(ghConfigDir);
+    expect(capturedEnv?.GIT_SSH_COMMAND).toContain("-F /dev/null");
+    expect(capturedEnv?.GIT_SSH_COMMAND).toContain(sshKeyPath);
+    expect(capturedEnv?.GIT_SSH_COMMAND).toContain(
+      join(workspaceRoot, ".first-tree-workspace", "outbox-home", "ssh", "known_hosts"),
+    );
     expect(capturedEnv?.PATH?.split(":")[0]).toBe(cliBinDir);
     expect(capturedEnv?.OPENAI_API_KEY).toBeUndefined();
     expect(capturedEnv?.CODEX_API_KEY).toBeUndefined();
@@ -548,7 +556,6 @@ describe("codex app-server handler", () => {
             [workspaceRoot]: "write",
             [codexHome]: "deny",
             [join(hostHome, ".first-tree-staging")]: "deny",
-            [join(hostHome, ".ssh")]: "deny",
           },
           network: {
             enabled: true,

@@ -15,6 +15,7 @@ import { setCliBinding } from "../runtime/cli-binding.js";
 
 const RUN_SMOKE = process.env.RUN_CODEX_LANDING_APP_SERVER_SMOKE === "1";
 const PROVIDER_CHECK_ENABLED = process.env.SKIP_CODEX_LANDING_PROVIDER_SMOKE !== "1";
+const GITHUB_SSH_CHECK_ENABLED = process.env.RUN_CODEX_LANDING_GITHUB_SSH_SMOKE === "1";
 const describeSmoke = RUN_SMOKE ? describe : describe.skip;
 
 type JsonRecord = Record<string, unknown>;
@@ -223,6 +224,8 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
               `if cat ${shellQuote(hostFirstTreeSecret)} >/dev/null 2>&1; then echo readable; else echo denied; fi`,
               'printf "host_ssh="',
               `if cat ${shellQuote(hostSshSecret)} >/dev/null 2>&1; then echo readable; else echo denied; fi`,
+              'printf "git_ssh_command="',
+              'if test -n "$GIT_SSH_COMMAND"; then echo set; else echo unset; fi',
               'printf "gh_config_dir="',
               'if test -n "$GH_CONFIG_DIR" && test -d "$GH_CONFIG_DIR"; then echo set; else echo unset; fi',
               'printf "resolv_conf="',
@@ -246,7 +249,8 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
       expect(commandExitCode(commandResult)).toBe(0);
       expect(stdout).toContain("codex_auth=denied");
       expect(stdout).toContain("host_first_tree=denied");
-      expect(stdout).toContain("host_ssh=denied");
+      expect(stdout).toContain("host_ssh=readable");
+      expect(stdout).toContain("git_ssh_command=set");
       expect(stdout).toContain("gh_config_dir=set");
       expect(stdout).toContain("resolv_conf=readable");
       expect(stdout).toContain("dns_lookup=ok");
@@ -338,6 +342,8 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
         `if cat ${shellQuote(hostFirstTreeSecret)} >/dev/null 2>&1; then echo readable; else echo denied; fi`,
         'printf "host_ssh="',
         `if cat ${shellQuote(hostSshSecret)} >/dev/null 2>&1; then echo readable; else echo denied; fi`,
+        'printf "git_ssh_command="',
+        'if test -n "$GIT_SSH_COMMAND"; then echo set; else echo unset; fi',
         'printf "gh_config_dir="',
         'if test -n "$GH_CONFIG_DIR" && test -d "$GH_CONFIG_DIR"; then echo set; else echo unset; fi',
         'printf "gh_version="',
@@ -389,7 +395,8 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
       expect(commandExitCode(commandResult)).toBe(0);
       expect(stdout).toContain("codex_auth=denied");
       expect(stdout).toContain("host_first_tree=denied");
-      expect(stdout).toContain("host_ssh=denied");
+      expect(stdout).toContain("host_ssh=readable");
+      expect(stdout).toContain("git_ssh_command=set");
       expect(stdout).toContain("gh_config_dir=set");
       expect(stdout).toContain("gh_version=ok");
       expect(stdout).toContain("workspace_write=ok");
@@ -447,4 +454,91 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
       await client.shutdown();
     }
   }, 300_000);
+
+  it.skipIf(!GITHUB_SSH_CHECK_ENABLED)(
+    "uses the host SSH key for GitHub SSH git operations",
+    async () => {
+      const codexBinary = resolveBinary("CODEX_SMOKE_BINARY", "codex");
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "ft-landing-codex-git-ssh-smoke-")));
+      tempRoots.push(root);
+      const hostHome = homedir();
+      const hostSshKey = join(hostHome, ".ssh", "id_ed25519");
+      if (!existsSync(hostSshKey)) {
+        throw new Error(`GitHub SSH smoke requires ${hostSshKey} to exist`);
+      }
+
+      const workspace = join(root, "workspace");
+      const firstTreeHome = join(workspace, FIRST_TREE_WORKSPACE_MARKER, "outbox-home");
+      const codexHome = join(root, "codex-home");
+      mkdirSync(firstTreeHome, { recursive: true });
+      mkdirSync(codexHome, { recursive: true });
+      writeFileSync(join(codexHome, "auth.json"), "{}\n", { mode: 0o600 });
+
+      const cliPath = resolveCliPath();
+      setCliBinding({ binName: basename(cliPath), packageName: basename(cliPath) });
+
+      const appServerEnvironment = buildWorkspaceOnlyAppServerEnvironment(
+        {
+          ...process.env,
+          HOME: hostHome,
+          CODEX_HOME: codexHome,
+          FIRST_TREE_HOME: firstTreeHome,
+          FIRST_TREE_CLI_BIN_DIR: dirname(cliPath),
+        },
+        workspace,
+      );
+      const client = await CodexAppServerClient.start({
+        binary: codexBinary,
+        cwd: workspace,
+        env: appServerEnvironment.env,
+        appServerArgs: buildLandingCodexAppServerArgs(
+          workspace,
+          appServerEnvironment.codexHome,
+          appServerEnvironment.hostHome,
+        ),
+        requestTimeoutMs: 120_000,
+      });
+
+      try {
+        const commandResult = await client.request(
+          "command/exec",
+          {
+            command: [
+              "sh",
+              "-lc",
+              [
+                'printf "git_ssh_command="',
+                'if test -n "$GIT_SSH_COMMAND"; then echo set; else echo unset; fi',
+                'printf "git_ssh_config="',
+                'case "$GIT_SSH_COMMAND" in *"-F /dev/null"*) echo ignored-system-config;; *) echo missing;; exit 1;; esac',
+                'printf "gh_auth_status="',
+                "if gh auth status >landing-gh-auth.out 2>landing-gh-auth.err; then echo ok; else echo failed; cat landing-gh-auth.err; exit 1; fi",
+                'printf "git_ssh_remote="',
+                "if git ls-remote git@github.com:agent-team-foundation/first-tree.git HEAD >landing-git-ssh.out 2>landing-git-ssh.err; then echo ok; else echo failed; cat landing-git-ssh.err; exit 1; fi",
+              ].join("\n"),
+            ],
+            cwd: ".",
+            permissionProfile: LANDING_CODEX_PERMISSIONS_PROFILE,
+            timeoutMs: 30_000,
+            outputBytesCap: 65_536,
+          },
+          60_000,
+        );
+
+        const stdout = commandStdout(commandResult);
+        console.log(`[smoke] github ssh command stdout:\n${stdout}`);
+        const stderr = commandStderr(commandResult);
+        if (stderr.trim()) console.log(`[smoke] github ssh command stderr:\n${stderr}`);
+
+        expect(commandExitCode(commandResult)).toBe(0);
+        expect(stdout).toContain("git_ssh_command=set");
+        expect(stdout).toContain("git_ssh_config=ignored-system-config");
+        expect(stdout).toContain("gh_auth_status=ok");
+        expect(stdout).toContain("git_ssh_remote=ok");
+      } finally {
+        await client.shutdown();
+      }
+    },
+    120_000,
+  );
 });

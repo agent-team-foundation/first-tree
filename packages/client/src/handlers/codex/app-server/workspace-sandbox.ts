@@ -76,13 +76,13 @@ const READ_ONLY_ETC_PATHS = [
 const LANDING_CODEX_ROOT_READ_PATH = ":root";
 export const LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS = [
   ".codex",
-  ".ssh",
   ".first-tree",
   ".first-tree-staging",
   ".first-tree-dev",
   ".first-tree-local",
   ".first-tree-test",
 ] as const;
+const LANDING_CODEX_GIT_SSH_KEY_RELATIVE_PATH = join(".ssh", "id_ed25519");
 const WORKSPACE_ONLY_PATH_DIRS = ["/usr/local/bin", "/usr/bin", "/bin"] as const;
 const SAFE_PASS_ENV_KEYS = new Set([
   "FIRST_TREE_HOME",
@@ -227,6 +227,33 @@ function resolveHostCodexHome(parentEnv: NodeJS.ProcessEnv, hostHome: string): s
     return isAbsolute(rawCodexHome) ? rawCodexHome : resolve(hostHome, rawCodexHome);
   }
   return join(hostHome, ".codex");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function landingCodexGitSshCommand(hostHome: string, firstTreeHome: string): string | null {
+  const keyPath = join(hostHome, LANDING_CODEX_GIT_SSH_KEY_RELATIVE_PATH);
+  if (!existsSync(keyPath)) return null;
+
+  const sshStateDir = join(firstTreeHome, "ssh");
+  mkdirSync(sshStateDir, { recursive: true, mode: 0o700 });
+  const knownHostsPath = join(sshStateDir, "known_hosts");
+
+  return [
+    "ssh",
+    "-F",
+    "/dev/null",
+    "-i",
+    shellQuote(keyPath),
+    "-o",
+    "IdentitiesOnly=yes",
+    "-o",
+    `UserKnownHostsFile=${shellQuote(knownHostsPath)}`,
+    "-o",
+    "StrictHostKeyChecking=accept-new",
+  ].join(" ");
 }
 
 function addDenyPath(paths: Set<string>, path: string): void {
@@ -432,6 +459,10 @@ export function buildWorkspaceOnlyAppServerEnvironment(
   const hostGhConfigDir = join(hostHome, ".config", "gh");
   if (existingDirectory(hostGhConfigDir)) {
     env.GH_CONFIG_DIR = hostGhConfigDir;
+  }
+  const gitSshCommand = landingCodexGitSshCommand(hostHome, resolvedFirstTreeHome);
+  if (gitSshCommand) {
+    env.GIT_SSH_COMMAND = gitSshCommand;
   }
   return { env, codexHome, hostHome };
 }
