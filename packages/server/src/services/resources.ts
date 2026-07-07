@@ -69,6 +69,17 @@ export type ResourcesService = {
    * standalone inline prompt path.
    */
   ensureAndBindLandingCampaignTrialPrompt(agentId: string, actorId: string): Promise<void>;
+  /**
+   * Idempotently remove the legacy server-materialized campaign scan skill
+   * from a trial agent. Kickoffs before 2026-07 provisioned an agent-scoped
+   * skill resource named after the campaign and bound it (the since-removed
+   * ensureAndBindCampaignScanSkill); the campaign skill now arrives via the
+   * kickoff clone instruction, and a reused trial agent must not keep the
+   * stale bound copy — its name collides with the cloned skill and the client
+   * only prunes materialized skills whose binding is gone. No-op when no such
+   * resource exists.
+   */
+  unbindLegacyCampaignScanSkill(agentId: string, campaign: string, actorId: string): Promise<void>;
   resolveRuntimeConfig(config: AgentRuntimeConfig): Promise<AgentRuntimeConfig>;
   resolveEffectiveResources(agentId: string): Promise<EffectiveAgentResources>;
 };
@@ -316,11 +327,14 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
       if (resource.scope === "agent" && resource.ownerAgentId !== agentId) {
         throw new BadRequestError(`Agent-scoped resource "${id}" is not owned by this agent`);
       }
-      // Agent-scoped resources are repos (agent-extra repos) and skills (the
-      // quickstart managed campaign scan skill, owned by this agent — ownership
-      // already enforced just above). Admitting owned agent-scoped skills lets
-      // their binding round-trip through ordinary resource saves: the web
-      // editors re-submit the full binding array, which includes it.
+      // Agent-scoped resources are repos (agent-extra repos) and skills.
+      // Agent-scoped skills are no longer produced (the pre-2026-07 campaign
+      // scan skill was the only producer, since removed), but trial agents
+      // provisioned before that migration still carry such rows until a
+      // re-kickoff purges them (unbindLegacyCampaignScanSkill). Admitting
+      // owned agent-scoped skills lets those legacy bindings round-trip
+      // through ordinary resource saves: the web editors re-submit the full
+      // binding array, which includes them.
       if (resource.scope === "agent" && resource.type !== "repo" && resource.type !== "skill") {
         throw new BadRequestError("Only repo and skill resources may be agent-scoped");
       }
@@ -1276,6 +1290,57 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
           createdBy: actorId,
           updatedBy: actorId,
         });
+        await bumpAgentConfigVersions(targetDb, [agentId], actorId);
+        needsNotify = true;
+      });
+      if (needsNotify) await notifyAgents([agentId]);
+    },
+
+    async unbindLegacyCampaignScanSkill(agentId, campaign, actorId) {
+      const [agent] = await db
+        .select({ organizationId: agents.organizationId, managerId: agents.managerId, status: agents.status })
+        .from(agents)
+        .where(eq(agents.uuid, agentId))
+        .limit(1);
+      if (!agent || agent.status === "deleted") return;
+
+      // Same manage gate as the trial prompt binding above: only the agent's
+      // manager or an admin in its org may mutate its resources.
+      const [actor] = await db
+        .select({ organizationId: members.organizationId, role: members.role })
+        .from(members)
+        .where(eq(members.id, actorId))
+        .limit(1);
+      const isManager = agent.managerId === actorId;
+      const isOrgAdmin = !!actor && actor.organizationId === agent.organizationId && actor.role === "admin";
+      if (!isManager && !isOrgAdmin) throw new NotFoundError(`Agent "${agentId}" not found`);
+
+      let needsNotify = false;
+      await db.transaction(async (tx) => {
+        const targetDb = tx as unknown as Database;
+        await targetDb.select({ uuid: agents.uuid }).from(agents).where(eq(agents.uuid, agentId)).for("update");
+
+        const legacy = await targetDb
+          .select({ id: resources.id })
+          .from(resources)
+          .where(
+            and(
+              eq(resources.type, "skill"),
+              eq(resources.scope, "agent"),
+              eq(resources.ownerAgentId, agentId),
+              eq(resources.name, campaign),
+            ),
+          );
+        if (legacy.length === 0) return;
+        const legacyIds = legacy.map((row) => row.id);
+
+        // Bindings first (FK), unscoped to this agent so a dangling reference
+        // from any binding cannot block the resource delete.
+        await targetDb.delete(agentResourceBindings).where(inArray(agentResourceBindings.resourceId, legacyIds));
+        await targetDb.delete(resources).where(inArray(resources.id, legacyIds));
+
+        // Version bump + notify so the client re-fetches the config and
+        // prunes the materialized stale skill from the workspace.
         await bumpAgentConfigVersions(targetDb, [agentId], actorId);
         needsNotify = true;
       });

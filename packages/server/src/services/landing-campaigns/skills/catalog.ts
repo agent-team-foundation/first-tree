@@ -4,8 +4,11 @@
  * A campaign entry carries the trial agent's identity (agent name, chat topic)
  * plus the skill repo the agent clones at kickoff. The scan skill body is NOT
  * server-delivered: the bootstrap message tells the trial agent to clone the
- * campaign's skill repo and run the named skill in First Tree trial mode, so
- * the skill content evolves in its own repo without a server release.
+ * campaign's skill repo and run the named skill in First Tree trial mode.
+ * Nothing is materialized, bound, or SHA-pinned server-side — the agent clones
+ * the skill repo's default branch at session time and follows it, so the trial
+ * runs the exact same skill version standalone users get and the skill stays a
+ * single source of truth in its own repo, evolving without a server release.
  *
  * The web quickstart flow only sends the campaign slug + repo; the server
  * resolves the slug here and seeds the kickoff chat. `version` is provenance

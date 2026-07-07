@@ -33,7 +33,11 @@ import { sendMessage } from "../message.js";
 import { notifyRecipients } from "../notifier.js";
 import { isLandingCampaignServiceOrg } from "./guards.js";
 import { buildLandingCampaignAgentMetadata, buildLandingCampaignChatMetadata } from "./metadata.js";
-import { buildLandingCampaignBootstrap, getLandingCampaignSkillSet } from "./skills/catalog.js";
+import {
+  buildLandingCampaignBootstrap,
+  getLandingCampaignSkillSet,
+  type LandingCampaignSkillSet,
+} from "./skills/catalog.js";
 
 const SERVICE_MEMBER_AGENT_BASE_NAME = "first-tree-campaigns";
 
@@ -246,7 +250,7 @@ async function ensureTrialAgent(
     officialClientId: string;
     runtimeProvider: RuntimeProvider;
     campaign: string;
-    skillSet: NonNullable<ReturnType<typeof getLandingCampaignSkillSet>>;
+    skillSet: LandingCampaignSkillSet;
     repo: LandingCampaignRepoMetadata;
   },
 ) {
@@ -317,7 +321,7 @@ async function provisionTrialAgent(
     officialClientId: string;
     runtimeProvider: RuntimeProvider;
     campaign: string;
-    skillSet: NonNullable<ReturnType<typeof getLandingCampaignSkillSet>>;
+    skillSet: LandingCampaignSkillSet;
     repo: LandingCampaignRepoMetadata;
   },
 ): Promise<{
@@ -369,7 +373,7 @@ async function ensureTrialChatAndBootstrap(
     agentId: string;
     campaign: string;
     repo: LandingCampaignRepoMetadata;
-    skillSet: NonNullable<ReturnType<typeof getLandingCampaignSkillSet>>;
+    skillSet: LandingCampaignSkillSet;
   },
 ): Promise<{ chatId: string; sent?: { recipients: string[]; messageId: string } }> {
   const kickoffKey = [
@@ -475,6 +479,7 @@ export async function startLandingCampaignTrial(
     skillSet,
     repo,
   });
+  await app.resourcesService.unbindLegacyCampaignScanSkill(trialAgent.uuid, body.campaign, serviceMember.id);
   await app.resourcesService.ensureAndBindLandingCampaignTrialPrompt(trialAgent.uuid, serviceMember.id);
   notifyClientAgentPinned(app, trialAgent);
 

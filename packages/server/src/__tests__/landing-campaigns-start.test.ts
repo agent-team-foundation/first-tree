@@ -5,6 +5,7 @@ import {
 } from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentResourceBindings } from "../db/schema/agent-resource-bindings.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -446,6 +447,74 @@ describe("POST /me/landing-campaigns/start", () => {
       campaign: "production-scan",
       landingCampaignTrial: true,
     });
+  });
+
+  it("purges the legacy server-materialized campaign skill from a reused trial agent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const body = first.json<{ agentUuid: string }>();
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, body.agentUuid)).limit(1);
+    if (!trialAgent?.managerId) throw new Error("expected trial agent with manager");
+
+    // Simulate a pre-migration trial agent: old kickoffs provisioned an
+    // agent-scoped skill resource named after the campaign and bound it.
+    const legacyResourceId = uuidv7();
+    await app.db.insert(resources).values({
+      id: legacyResourceId,
+      organizationId: admin.organizationId,
+      type: "skill",
+      scope: "agent",
+      ownerAgentId: body.agentUuid,
+      name: "production-scan",
+      repoCanonicalKey: null,
+      defaultEnabled: null,
+      status: "active",
+      payload: { name: "production-scan", description: "stale", body: "STALE INLINE BODY", metadata: {} },
+      createdBy: trialAgent.managerId,
+      updatedBy: trialAgent.managerId,
+    });
+    await app.db.insert(agentResourceBindings).values({
+      id: uuidv7(),
+      organizationId: admin.organizationId,
+      agentId: body.agentUuid,
+      type: "skill",
+      mode: "include",
+      resourceId: legacyResourceId,
+      replacesResourceId: null,
+      inlinePromptBody: null,
+      repoRef: null,
+      repoLocalPath: null,
+      order: 0,
+      createdBy: trialAgent.managerId,
+      updatedBy: trialAgent.managerId,
+    });
+    const [configBefore] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, body.agentUuid));
+
+    const again = await startProductionScan(app, admin);
+    expect(again.statusCode).toBe(200);
+
+    const skillRows = await app.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "skill")));
+    expect(skillRows).toHaveLength(0);
+    const skillBindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.type, "skill")));
+    expect(skillBindings).toHaveLength(0);
+    // Version bumped so the client re-fetches and prunes the materialized copy.
+    const [configAfter] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, body.agentUuid));
+    expect(configAfter?.version).toBe((configBefore?.version ?? 0) + 1);
   });
 
   it("presents stale running trial chats as unlocked while turns remain", async () => {
