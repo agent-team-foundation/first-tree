@@ -50,7 +50,7 @@ export function buildLandingCampaignBootstrap(skillSet: LandingCampaignSkillSet,
   return [
     `Welcome to First Tree. ${skillSet.agentDisplayName} is connected to your code: ${repoUrl}`,
     "",
-    "It's giving your code a safe, read-only check before launch — you'll get a score, the problems that actually matter, and a ready-to-use fix for the biggest one.",
+    "It's giving your code a safe, read-only check before launch — you'll get a score, the problems that actually matter, and the exact fix for each one.",
     "",
     `${skillSet.agentDisplayName} — clone ${skillSet.skillRepoUrl} and run its ${skillSet.skillName} skill on the repo above.`,
   ].join("\n");
