@@ -7,7 +7,7 @@ import {
   type RuntimeProvider,
   type SendMessage,
 } from "@first-tree/shared";
-import { and, asc, eq, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, ne, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../../db/connection.js";
 import { agents } from "../../db/schema/agents.js";
@@ -15,6 +15,7 @@ import { chats } from "../../db/schema/chats.js";
 import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
 import { messages } from "../../db/schema/messages.js";
+import { sessionEvents } from "../../db/schema/session-events.js";
 import { users } from "../../db/schema/users.js";
 import {
   BadRequestError,
@@ -32,14 +33,28 @@ import { MEMBER_STATUSES, reactivateMembership } from "../membership.js";
 import { sendMessage } from "../message.js";
 import { notifyRecipients } from "../notifier.js";
 import { isLandingCampaignServiceOrg } from "./guards.js";
-import { buildLandingCampaignAgentMetadata, buildLandingCampaignChatMetadata } from "./metadata.js";
+import {
+  buildLandingCampaignAgentMetadata,
+  buildLandingCampaignChatMetadata,
+  getLandingCampaignTrialChat,
+} from "./metadata.js";
 import {
   buildLandingCampaignBootstrap,
+  buildLandingCampaignRetryBootstrap,
   getLandingCampaignSkillSet,
   type LandingCampaignSkillSet,
 } from "./skills/catalog.js";
 
 const SERVICE_MEMBER_AGENT_BASE_NAME = "first-tree-campaigns";
+
+/**
+ * How long a running trial may stay silent (no agent message, no session
+ * events, last message still the bootstrap) before a repeated start for the
+ * same repo re-sends the bootstrap instead of returning the chat untouched.
+ * Failed turns never consume trial budget, so the re-kick restores a dead run
+ * without any counter reset. Sized to outlast a slow skill-repo clone.
+ */
+const TRIAL_BOOTSTRAP_RETRY_AFTER_MS = 10 * 60 * 1000;
 
 type ActiveMembership = {
   id: string;
@@ -423,22 +438,63 @@ async function ensureTrialChatAndBootstrap(
 
   let sent: { recipients: string[]; messageId: string } | undefined;
   await app.db.transaction(async (tx) => {
-    await tx.select({ id: chats.id }).from(chats).where(eq(chats.id, chatId)).for("update");
-    const [firstMessage] = await tx
-      .select({ id: messages.id })
+    const [chatRow] = await tx
+      .select({ id: chats.id, metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, chatId))
+      .for("update")
+      .limit(1);
+    const [lastMessage] = await tx
+      .select({ senderId: messages.senderId, metadata: messages.metadata, createdAt: messages.createdAt })
       .from(messages)
       .where(eq(messages.chatId, chatId))
+      .orderBy(desc(messages.createdAt))
       .limit(1);
-    if (firstMessage) return;
+
+    let content: string;
+    let retryMetadata: Record<string, unknown> = {};
+    if (!lastMessage) {
+      content = buildLandingCampaignBootstrap(input.skillSet, input.repo.url);
+    } else {
+      // The chat already has messages: only re-kick a run that looks dead.
+      // A repeated start for a live or finished trial stays a pure no-op.
+      const trial = getLandingCampaignTrialChat({ metadata: chatRow?.metadata ?? null });
+      if (!trial || trial.state !== "running") return;
+      if (lastMessage.senderId === input.agentId) return;
+      if (lastMessage.metadata.systemSender !== "first_tree_onboarding") return;
+      if (Date.now() - lastMessage.createdAt.getTime() < TRIAL_BOOTSTRAP_RETRY_AFTER_MS) return;
+      const [agentMessage] = await tx
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(eq(messages.chatId, chatId), eq(messages.senderId, input.agentId)))
+        .limit(1);
+      if (agentMessage) return;
+      const [recentEvent] = await tx
+        .select({ id: sessionEvents.id })
+        .from(sessionEvents)
+        .where(
+          and(
+            eq(sessionEvents.agentId, input.agentId),
+            eq(sessionEvents.chatId, chatId),
+            gt(sessionEvents.createdAt, new Date(Date.now() - TRIAL_BOOTSTRAP_RETRY_AFTER_MS)),
+          ),
+        )
+        .limit(1);
+      if (recentEvent) return;
+      content = buildLandingCampaignRetryBootstrap(input.skillSet, input.repo.url);
+      retryMetadata = { bootstrapRetry: true };
+    }
+
     const message: SendMessage = {
       format: "text",
-      content: buildLandingCampaignBootstrap(input.skillSet, input.repo.url),
+      content,
       source: "api",
       metadata: {
         systemSender: "first_tree_onboarding",
         campaign: input.campaign,
         landingCampaignTrial: true,
         repo: input.repo,
+        ...retryMetadata,
       },
     };
     const result = await sendMessage(tx as unknown as Database, chatId, input.humanAgentId, message, {

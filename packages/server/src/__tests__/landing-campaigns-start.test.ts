@@ -3,7 +3,7 @@ import {
   parseLandingCampaignTrialAgentMetadata,
   parseLandingCampaignTrialChatMetadata,
 } from "@first-tree/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentResourceBindings } from "../db/schema/agent-resource-bindings.js";
@@ -657,6 +657,88 @@ describe("POST /me/landing-campaigns/start", () => {
       );
     expect(promptBindings).toHaveLength(1);
     expect(promptBindings[0]?.inlinePromptBody).toBeNull();
+  });
+
+  it("resends the bootstrap when a running trial has been silent past the retry window", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string }>();
+    await app.db
+      .update(messages)
+      .set({ createdAt: new Date(Date.now() - 11 * 60 * 1000) })
+      .where(eq(messages.chatId, firstBody.chatId));
+
+    const second = await startProductionScan(app, admin);
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ chatId: string }>().chatId).toBe(firstBody.chatId);
+    const chatMessages = await app.db
+      .select()
+      .from(messages)
+      .where(eq(messages.chatId, firstBody.chatId))
+      .orderBy(asc(messages.createdAt));
+    expect(chatMessages).toHaveLength(2);
+    const retry = chatMessages[1];
+    expect(retry?.metadata).toMatchObject({
+      systemSender: "first_tree_onboarding",
+      landingCampaignTrial: true,
+      bootstrapRetry: true,
+    });
+    expect(retry?.content).toContain("restarted");
+    expect(retry?.content).toContain("run its production-scan skill on https://github.com/acme/backend");
+  });
+
+  it("does not resend the bootstrap while the agent shows recent session activity", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string; agentUuid: string }>();
+    await app.db
+      .update(messages)
+      .set({ createdAt: new Date(Date.now() - 11 * 60 * 1000) })
+      .where(eq(messages.chatId, firstBody.chatId));
+    await sessionEventService.appendEvent(app.db, firstBody.agentUuid, firstBody.chatId, {
+      kind: "thinking",
+      payload: {},
+    });
+
+    const second = await startProductionScan(app, admin);
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ chatId: string }>().chatId).toBe(firstBody.chatId);
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));
+    expect(chatMessages).toHaveLength(1);
+  });
+
+  it("does not resend the bootstrap when the trial agent has already replied", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string; agentUuid: string }>();
+    await sendMessage(app.db, firstBody.chatId, firstBody.agentUuid, {
+      format: "text",
+      content: "Cloning the scan skill now.",
+      source: "api",
+      metadata: { mentions: [admin.humanAgentUuid] },
+    });
+    await app.db
+      .update(messages)
+      .set({ createdAt: new Date(Date.now() - 11 * 60 * 1000) })
+      .where(eq(messages.chatId, firstBody.chatId));
+
+    const second = await startProductionScan(app, admin);
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ chatId: string }>().chatId).toBe(firstBody.chatId);
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));
+    expect(chatMessages).toHaveLength(2);
   });
 
   it("preserves runtime session metadata when reusing the trial agent for a new repo", async () => {
