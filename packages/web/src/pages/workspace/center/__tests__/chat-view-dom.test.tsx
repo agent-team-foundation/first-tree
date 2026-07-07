@@ -744,6 +744,30 @@ afterEach(() => {
 });
 
 describe("ChatView", () => {
+  it("hides chat-management affordances on the trial surface even when read-only (route-scoped)", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // A persisted-open sidebar must NOT re-appear on the trial surface.
+    localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
+    // `isTrial` + `readOnly` together = the watcher branch of a `/quickstart`
+    // chat. The trial-chrome guarantee is route-scoped, so the participant /
+    // details cluster, the chat-details sidebar toggle, and rename must all be
+    // gone here — `readOnly` alone would not hide them all (nor the hovercard).
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" isTrial readOnly />,
+      undefined,
+      "/",
+    );
+
+    await waitForText(container, "Launch planning");
+
+    expect(container.querySelector('button[aria-label="Add participant"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Show chat details"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Hide chat details"]')).toBeNull();
+    expect(buttonByTitle(container, "Click to rename")).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
   it("uses matching initial chat detail without an immediate detail refetch", async () => {
     const { ChatView } = await import("../chat-view.js");
     const initialChatDetail = chatDetail({ title: "Initial detail title", topic: "Initial detail title" });

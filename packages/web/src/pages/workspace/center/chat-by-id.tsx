@@ -204,6 +204,11 @@ export function ChatByIdView({
         chatId={chatId}
         initialChatDetail={chatDetail}
         readOnly
+        // Forward `isTrial` on the watcher branch too: the trial-chrome
+        // guarantee is route-scoped, so `/quickstart?c=<any>` must stay a pure
+        // conversation even if the viewer resolves as a watcher (readOnly
+        // hides some surfaces, but not the per-message hovercard).
+        isTrial={isTrial}
         titleFallback={chatDetail?.title ?? null}
         joinAction={{
           onJoin: () => joinMut.mutate(),
