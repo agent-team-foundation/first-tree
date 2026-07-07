@@ -15,8 +15,7 @@ chats and the adjacent campaign quickstart handoff.
   That server-owned path creates the trial chat, binds the managed trial prompt
   guardrail, and wakes the agent from visible task text. The campaign skill is
   not server-materialized: the kickoff message instructs the trial agent to
-  clone the campaign's skill repo and run the named skill in First Tree trial
-  mode.
+  clone the campaign's skill repo and run the named skill on the connected repo.
 - A `/me/onboarding/kickoff` request carrying `campaign` is a stale quickstart
   request. It must not create an onboarding kickoff chat or campaign idempotency
   key; it returns `410 campaign_kickoff_moved` when landing campaigns are enabled
