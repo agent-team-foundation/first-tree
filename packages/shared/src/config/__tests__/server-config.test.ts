@@ -71,7 +71,7 @@ describe("server config", () => {
     });
 
     expect(defaultConfig.growth.landingPagesEnabled).toBe(false);
-    expect(defaultConfig.growth.landingCampaignMaxAgentTurns).toBe(1);
+    expect(defaultConfig.growth.landingCampaignMaxAgentTurns).toBe(6);
     expect(defaultConfig.growth.landingCampaignMaxEstimatedTokens).toBeUndefined();
 
     resetConfig();

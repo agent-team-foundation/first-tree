@@ -322,7 +322,7 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(trialAgents).toHaveLength(0);
   });
 
-  it("creates the service-managed trial agent, installs the agent-scoped campaign skill, and starts an unlocked capped chat", async () => {
+  it("creates the service-managed trial agent, binds only the trial prompt, and starts an unlocked capped chat", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     await seedOfficialRuntime(app, admin.organizationId);
@@ -360,23 +360,18 @@ describe("POST /me/landing-campaigns/start", () => {
       status: "active",
     });
 
-    const [skill] = await app.db
+    // The scan skill is no longer server-materialized: the bootstrap message
+    // instructs the agent to clone the campaign's skill repo instead.
+    const skillResources = await app.db
       .select()
       .from(resources)
-      .where(and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "skill"), eq(resources.scope, "agent")))
-      .limit(1);
-    expect(skill?.name).toBe("production-scan");
-    expect(skill?.defaultEnabled).toBeNull();
-    expect(skill?.payload).toMatchObject({ name: "production-scan" });
-    expect(JSON.stringify(skill?.payload)).toContain("/onboarding");
-    expect(JSON.stringify(skill?.payload)).not.toContain("{{FIRST_TREE_SETUP_URL}}");
-    const bindings = await app.db
+      .where(and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "skill")));
+    expect(skillResources).toHaveLength(0);
+    const skillBindings = await app.db
       .select()
       .from(agentResourceBindings)
-      .where(
-        and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.resourceId, skill?.id ?? "")),
-      );
-    expect(bindings).toHaveLength(1);
+      .where(and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.type, "skill")));
+    expect(skillBindings).toHaveLength(0);
 
     const [prompt] = await app.db
       .select()
@@ -441,6 +436,11 @@ describe("POST /me/landing-campaigns/start", () => {
     const [bootstrap] = await app.db.select().from(messages).where(eq(messages.chatId, body.chatId)).limit(1);
     expect(bootstrap?.senderId).toBe(admin.humanAgentUuid);
     expect(bootstrap?.content).toContain("https://github.com/acme/backend");
+    // The kickoff instructs the agent to fetch the external skill instead of
+    // relying on a server-delivered body.
+    expect(bootstrap?.content).toContain("clone https://github.com/agent-team-foundation/launch-readiness-scan");
+    expect(bootstrap?.content).toContain("run its production-scan skill on the repo above, in First Tree trial mode");
+    expect(bootstrap?.content).toContain("safe, read-only check before launch");
     expect(bootstrap?.metadata).toMatchObject({
       systemSender: "first_tree_onboarding",
       campaign: "production-scan",

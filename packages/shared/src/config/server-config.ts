@@ -64,10 +64,11 @@ export const serverConfigSchema = defineConfig({
     }),
     /**
      * Maximum number of visible agent response turns allowed in a landing
-     * campaign trial chat. Default 1 preserves the original single-run trial
-     * behavior; deployments can raise it for short interactive demos.
+     * campaign trial chat. Default 6 covers the full external production-scan
+     * skill flow (calibration, scan report, fix offer, bounded follow-ups);
+     * deployments can override in either direction.
      */
-    landingCampaignMaxAgentTurns: field(z.number().int().min(1).max(20).default(1), {
+    landingCampaignMaxAgentTurns: field(z.number().int().min(1).max(20).default(6), {
       env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS",
     }),
     /**

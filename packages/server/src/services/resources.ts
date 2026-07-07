@@ -38,7 +38,6 @@ import { members } from "../db/schema/members.js";
 import { resources } from "../db/schema/resources.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
-import { getCampaignScanSkill } from "./landing-campaigns/skills/catalog.js";
 import {
   LANDING_CAMPAIGN_TRIAL_PROMPT,
   LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_DESCRIPTION,
@@ -63,13 +62,6 @@ export type ResourcesService = {
   previewResourceImpact(resourceId: string, input: ResourceImpactPreview): Promise<ResourceImpactPreviewOutput>;
   getAgentResources(agentId: string): Promise<AgentResourcesOutput>;
   replaceAgentResources(agentId: string, input: UpdateAgentResources, actorId: string): Promise<AgentResourcesOutput>;
-  /**
-   * Idempotently provision a campaign's managed scan skill (server-owned
-   * content) into the agent's org and bind it to the agent. Server-side so it
-   * works for non-admin quickstart actors (the team-resource HTTP route is
-   * admin-only); no-op for an unknown campaign slug.
-   */
-  ensureAndBindCampaignScanSkill(agentId: string, campaign: string, actorId: string, setupUrl: string): Promise<void>;
   /**
    * Idempotently bind the service-owned initial prompt for landing campaign
    * trial agents. The prompt is an agent-scoped managed resource so it projects
@@ -1285,176 +1277,6 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
           updatedBy: actorId,
         });
         await bumpAgentConfigVersions(targetDb, [agentId], actorId);
-        needsNotify = true;
-      });
-      if (needsNotify) await notifyAgents([agentId]);
-    },
-
-    async ensureAndBindCampaignScanSkill(agentId, campaign, actorId, setupUrl) {
-      const skill = getCampaignScanSkill(campaign);
-      if (!skill) return;
-      // Env-correct setup link (dev/staging/prod) is templated in at
-      // materialization: the skill body ships an env-agnostic
-      // `{{FIRST_TREE_SETUP_URL}}` placeholder (campaign-scan-skill.ts Step 6).
-      // Use `body` everywhere below — payload AND the change-check — so a
-      // same-env re-scan compares templated-vs-templated and doesn't churn the
-      // config version on every kickoff.
-      const body = skill.body.replaceAll("{{FIRST_TREE_SETUP_URL}}", setupUrl);
-      const [agent] = await db
-        .select({ organizationId: agents.organizationId, managerId: agents.managerId, status: agents.status })
-        .from(agents)
-        .where(eq(agents.uuid, agentId))
-        .limit(1);
-      if (!agent || agent.status === "deleted") return;
-      const organizationId = agent.organizationId;
-
-      // Ownership gate (IDOR defense). Only someone who may MANAGE this agent —
-      // its manager, or an admin in the agent's org — may provision a skill onto
-      // it. Mirrors `requireAgentAccess(…, "manage")`. The kickoff route already
-      // runs this AFTER createChat validates the chat, but guarding here keeps
-      // the mutation safe regardless of caller. A caller from another org (the
-      // IDOR vector) is neither manager nor admin-in-that-org, so they're
-      // rejected — 404 like the route, to avoid agent-id enumeration.
-      const [actor] = await db
-        .select({ organizationId: members.organizationId, role: members.role })
-        .from(members)
-        .where(eq(members.id, actorId))
-        .limit(1);
-      const isManager = agent.managerId === actorId;
-      const isOrgAdmin = !!actor && actor.organizationId === organizationId && actor.role === "admin";
-      if (!isManager && !isOrgAdmin) throw new NotFoundError(`Agent "${agentId}" not found`);
-
-      const findSkillResourceId = async (database: Database): Promise<string | null> => {
-        const [row] = await database
-          .select({ id: resources.id })
-          .from(resources)
-          .where(
-            and(
-              eq(resources.organizationId, organizationId),
-              eq(resources.type, "skill"),
-              eq(resources.scope, "agent"),
-              eq(resources.ownerAgentId, agentId),
-              eq(resources.name, skill.name),
-              inArray(resources.status, ["active", "stale"]),
-            ),
-          )
-          .limit(1);
-        return row?.id ?? null;
-      };
-
-      // Provision the AGENT-PRIVATE scan skill (scope=agent, owned by this agent
-      // — never an org team resource, so it needs no org-admin and never lands
-      // in the org catalogue) and bind it, all under a row lock on the agent.
-      // Concurrent kickoffs (two tabs / a retry) serialize on the lock: the
-      // second waits, then re-reads inside the lock and sees the first run's
-      // resource + binding, so it duplicates neither — which is why no DB unique
-      // index is needed (no prod schema change). Bump the config version +
-      // notify (mirroring replaceAgentResources) so the client re-fetches and
-      // materializes the skill before the kickoff chat dispatches.
-      // The skill body is server-owned (campaign-scan-skill.ts) and evolves; a
-      // returning user's re-scan must pick up the latest rubric. So on an
-      // already-provisioned skill we refresh its payload to the current version
-      // and — the linchpin — bump the config version so the client actually
-      // re-fetches and re-materializes it. Comparing body + description first
-      // keeps a no-op re-scan from churning the version on every kickoff.
-      const desiredPayload = {
-        name: skill.name,
-        description: skill.description,
-        body,
-        metadata: {},
-      };
-      // `body` and `description` are the only server-mutable fields of a
-      // campaign scan skill: `name` is the stable lookup key and `metadata` is
-      // always empty for these skills, so this two-field diff is a complete
-      // change check. If a campaign skill ever gains meaningful metadata or a
-      // renamable identity, extend both `desiredPayload` above and this compare.
-      const payloadMatchesDesired = (stored: unknown): boolean =>
-        typeof stored === "object" &&
-        stored !== null &&
-        "body" in stored &&
-        stored.body === body &&
-        "description" in stored &&
-        stored.description === skill.description;
-
-      let needsNotify = false;
-      await db.transaction(async (tx) => {
-        const targetDb = tx as unknown as Database;
-        await targetDb.select({ uuid: agents.uuid }).from(agents).where(eq(agents.uuid, agentId)).for("update");
-
-        let resourceId = await findSkillResourceId(targetDb);
-        let contentChanged = false;
-        if (!resourceId) {
-          resourceId = uuidv7();
-          await targetDb.insert(resources).values({
-            id: resourceId,
-            organizationId,
-            type: "skill",
-            scope: "agent",
-            ownerAgentId: agentId,
-            name: skill.name,
-            repoCanonicalKey: null,
-            defaultEnabled: null,
-            status: "active",
-            payload: desiredPayload,
-            createdBy: actorId,
-            updatedBy: actorId,
-          });
-        } else {
-          const [current] = await targetDb
-            .select({ payload: resources.payload })
-            .from(resources)
-            .where(eq(resources.id, resourceId))
-            .limit(1);
-          if (!payloadMatchesDesired(current?.payload)) {
-            await targetDb
-              .update(resources)
-              .set({ payload: desiredPayload, updatedAt: new Date(), updatedBy: actorId })
-              .where(eq(resources.id, resourceId));
-            contentChanged = true;
-          }
-        }
-
-        const [already] = await targetDb
-          .select({ id: agentResourceBindings.id })
-          .from(agentResourceBindings)
-          .where(and(eq(agentResourceBindings.agentId, agentId), eq(agentResourceBindings.resourceId, resourceId)))
-          .limit(1);
-        if (already) {
-          // Binding set is unchanged, but a refreshed body still has to reach the
-          // client: without a version bump `refreshIfNewer` is a no-op and the
-          // new rubric never re-materializes. Skip the bump when nothing changed.
-          if (contentChanged) {
-            await targetDb
-              .update(agentConfigs)
-              .set({ version: sql`${agentConfigs.version} + 1`, updatedAt: new Date(), updatedBy: actorId })
-              .where(eq(agentConfigs.agentId, agentId));
-            needsNotify = true;
-          }
-          return;
-        }
-        const existing = await targetDb
-          .select({ id: agentResourceBindings.id })
-          .from(agentResourceBindings)
-          .where(eq(agentResourceBindings.agentId, agentId));
-        await targetDb
-          .update(agentConfigs)
-          .set({ version: sql`${agentConfigs.version} + 1`, updatedAt: new Date(), updatedBy: actorId })
-          .where(eq(agentConfigs.agentId, agentId));
-        await targetDb.insert(agentResourceBindings).values({
-          id: uuidv7(),
-          organizationId,
-          agentId,
-          type: "skill",
-          mode: "include",
-          resourceId,
-          replacesResourceId: null,
-          inlinePromptBody: null,
-          repoRef: null,
-          repoLocalPath: null,
-          order: existing.length,
-          createdBy: actorId,
-          updatedBy: actorId,
-        });
         needsNotify = true;
       });
       if (needsNotify) await notifyAgents([agentId]);
