@@ -17,6 +17,23 @@ skill does not own broad drift audits; when the user asks whether the
 tree is generally up to date, report that no shipped broad-audit skill
 is available and ask for a specific source artifact or scope.
 
+## Authority Boundary
+
+Default to **normal Context Tree content** as current truth: root/domain
+`NODE.md` files and normal leaf markdown files under the tree's durable
+domains.
+
+Treat `raw-context/` as archive/proposal/supporting material, not canonical
+truth. Read raw material only when the user explicitly names it, the source
+artifact you are inspecting is itself raw/proposal/archive material, or the
+task is to understand that archive. A normal node should never force a reader
+to enter `raw-context/` to understand the current decision; if you discover
+that shape, report it as a tree hygiene concern rather than silently treating
+raw as canonical.
+
+When you mention tree facts in your answer, separate durable normal-tree facts
+from your own inference and from any raw/proposal/archive material you read.
+
 ## Workflow
 
 ### 1. Resolve the context repo

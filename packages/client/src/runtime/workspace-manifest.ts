@@ -1,8 +1,8 @@
 // Make a cloud agent home a valid W1 workspace so the shipped First Tree
 // skills find the binding they expect.
 //
-// The shipped skills (pre-task hygiene in `first-tree`, and `first-tree-seed`'s
-// self-check) locate their binding by walking up from cwd for
+// The shipped tree skills (`first-tree-read`, `first-tree-write`, and
+// `first-tree-seed`'s self-check) locate their binding by walking up from cwd for
 // `.first-tree/workspace.json` — a manifest that names the tree subdir (an
 // immediate child of the workspace root) and the bound source subdirs (each an
 // immediate child of `sourcesRoot`, i.e. `<workspace>/source-repos/<name>`);

@@ -114,12 +114,11 @@ describe("installFirstTreeSkills — state-based skill reconcile (PR #869 P1-3)"
     expect(readManagedState(workspace)?.skills).toEqual([...TREE_SKILL_NAMES].sort());
   });
 
-  it("keeps CORE skills (seed/write) a prior version recorded as TREE skills — they moved tiers, not retired", () => {
-    // Before the seed/write→CORE move, an agent recorded `first-tree-write`
-    // and `first-tree-seed` in managed state as TREE skills. After upgrade
-    // their payloads are on disk (installCoreSkills plants them earlier in the
-    // same bootstrap), but they're no longer in TREE_SKILL_NAMES. The TREE
-    // reconcile must NOT delete them: they're CORE skills now, not retired.
+  it("keeps still-shipped skills a prior version recorded as TREE skills — tier moves are not retirement", () => {
+    // Older versions recorded `first-tree-write` and `first-tree-seed` in
+    // managed state as TREE skills. Today write is TREE and seed is CORE. The
+    // TREE reconcile must NOT delete either payload: they are still shipped,
+    // not retired.
     plantManagedSkill(workspace, "first-tree-write");
     plantManagedSkill(workspace, "first-tree-seed");
     writeManagedState(workspace, {

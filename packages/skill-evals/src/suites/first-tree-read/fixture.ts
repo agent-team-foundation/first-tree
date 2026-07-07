@@ -159,13 +159,15 @@ Your fixed working directory is \`${workspacePath}\`. The runtime marker
 
 - \`${sourceRepoPath}\` (fixture source repo)
 
-# Required Reading (First Tree Managed)
-
-Before changing a Context Tree, load \`.agents/skills/first-tree-write/SKILL.md\`.
-
 # Context Tree (First Tree Managed)
 
 The current Context Tree checkout is \`${contextTreePath}\`.
+
+## Context Tree Policy
+
+Normal Context Tree content is current truth for durable decisions,
+constraints, ownership, and cross-domain relationships. \`raw-context/\` is
+archive/supporting material, not canonical truth.
 
 Read task-scoped tree context before acting on software project questions:
 
@@ -182,8 +184,8 @@ Read task-scoped tree context before acting on software project questions:
 ${skillRows}
 
 \`first-tree-welcome\` is the core onboarding skill. Tree-bound workspaces
-additionally install \`first-tree-read\`, \`first-tree-seed\`, and
-\`first-tree-write\`. Runtime metadata can activate skills, but visible
+additionally install \`first-tree-read\` and \`first-tree-write\`; \`first-tree-seed\`
+ships core so a tree-less build chat can bootstrap the tree. Runtime metadata can activate skills, but visible
 instructions still define when the agent should load them.
 `;
 }

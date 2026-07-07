@@ -9,12 +9,10 @@ import type { RunPaths } from "../../core/types.js";
 import type { FirstTreeSeedEvalCase, FixtureValidation } from "./types.js";
 
 const SEED_SKILL_NAME = "first-tree-seed";
-const WRITE_SKILL_NAME = "first-tree-write";
 
 function workspaceAgentsMarkdown(
   workspacePath: string,
   seedDescription: string,
-  writeDescription: string,
   evalCase: FirstTreeSeedEvalCase,
 ): string {
   const sourceRepoPath = join(workspacePath, "source-repos", "source-repo");
@@ -46,12 +44,18 @@ only when the skill description applies to the prompt.
 | Skill | Load when |
 |---|---|
 | \`first-tree-seed\` | ${seedDescription} |
-| \`first-tree-write\` | ${writeDescription} |
 
 When \`first-tree-seed\` applies, load it by reading
-\`.agents/skills/first-tree-seed/SKILL.md\` before acting. The seed skill may
-also require reading \`.agents/skills/first-tree-write/SKILL.md\`; that file is
-installed in this workspace.
+\`.agents/skills/first-tree-seed/SKILL.md\` before acting.
+
+## Context Tree Policy
+
+Normal Context Tree content records durable current truth: decisions,
+constraints, ownership, and cross-domain relationships with rationale.
+\`raw-context/\` is archive/supporting structure, not a seeded normal domain
+and not canonical truth. Seed must satisfy the Double Test, avoid
+implementation detail, and keep actionable future work out of normal tree
+content.
 
 ## Eval Workspace State
 
@@ -86,15 +90,9 @@ inside this eval workspace.
 
 function installSeedSkills(repoRoot: string, workspacePath: string, evalCase: FirstTreeSeedEvalCase): void {
   const seedMarkdown = installRepoSkill(repoRoot, workspacePath, SEED_SKILL_NAME);
-  const writeMarkdown = installRepoSkill(repoRoot, workspacePath, WRITE_SKILL_NAME);
   writeText(
     join(workspacePath, "AGENTS.md"),
-    workspaceAgentsMarkdown(
-      workspacePath,
-      parseSkillDescription(seedMarkdown),
-      parseSkillDescription(writeMarkdown),
-      evalCase,
-    ),
+    workspaceAgentsMarkdown(workspacePath, parseSkillDescription(seedMarkdown), evalCase),
   );
 }
 
@@ -439,6 +437,7 @@ function validateTreeEmpty(
   if (evalCase.fixture.treeState === "unbound") return validateTreeUnbound(paths, contextTreePath, errors);
   const forbiddenEntries = readdirSync(contextTreePath).filter((entry) => {
     if (entry === ".git" || entry === ".first-tree" || entry === ".github") return false;
+    if (entry === "members" || entry === "raw-context") return false;
     return !entry.startsWith(".");
   });
   if (forbiddenEntries.length > 0) {

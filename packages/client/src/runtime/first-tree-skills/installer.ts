@@ -53,11 +53,8 @@ import { readManagedState, updateManagedState } from "../managed-state.js";
  *     tree-build chat, which has no binding yet), so seed must ship there too —
  *     gating it on a binding would hide the very skill whose job is to create
  *     that binding.
- *   - `first-tree-write` rides along because seed's Required Reading loads it as
- *     a hard dependency; without its payload on disk, seed breaks on its first
- *     step.
  */
-export const CORE_SKILL_NAMES = ["first-tree-welcome", "first-tree-write", "first-tree-seed"] as const;
+export const CORE_SKILL_NAMES = ["first-tree-welcome", "first-tree-seed"] as const;
 
 const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as const;
 
@@ -69,7 +66,7 @@ const RETIRED_CORE_SKILL_NAMES = ["first-tree-guide", "first-tree-kickoff"] as c
  * `scripts/copy-bundled-skills.mjs` — that script materialises every skill
  * directory under `<client-pkg>/skills/`.
  */
-export const TREE_SKILL_NAMES = ["first-tree-read"] as const;
+export const TREE_SKILL_NAMES = ["first-tree-read", "first-tree-write"] as const;
 
 export type CoreSkillName = (typeof CORE_SKILL_NAMES)[number];
 export type TreeSkillName = (typeof TREE_SKILL_NAMES)[number];
@@ -372,12 +369,11 @@ function reconcileCoreSkillState(workspacePath: string): void {
  * pass diffs against today's reality.
  */
 function reconcileTreeSkillState(workspacePath: string): void {
-  // Never remove a skill that either tier currently ships. A skill that moved
-  // from TREE to CORE (`first-tree-seed` / `first-tree-write`) is still on
-  // disk — `installCoreSkills` places it earlier in the same bootstrap — so
-  // treating it as a "dropped TREE skill" here would delete a payload the
-  // runtime still ships. Protect the CORE set alongside TREE; removal is only
-  // for names that left BOTH lists (genuinely retired skills).
+  // Never remove a skill that either tier currently ships. Skills have moved
+  // between CORE and TREE across releases, and a bound workspace may already
+  // have the payload on disk from the other installer path. Protect both
+  // current sets; removal is only for names that left BOTH lists (genuinely
+  // retired skills).
   const protectedSkills = new Set<string>([...TREE_SKILL_NAMES, ...CORE_SKILL_NAMES]);
   const prev = readManagedState(workspacePath);
   if (prev) {

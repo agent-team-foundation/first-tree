@@ -14,7 +14,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
       requireSourceRead: true,
       requireWorktree: true,
       responseHints: ["Phase 1", "skeleton", "approval"],
-      skeletonHints: ["system", "product", "team-practice", "raw-context", "members"],
+      skeletonHints: ["system", "product", "team-practice"],
     },
     fixture: {
       sourceRepoState: "bare-readable",
@@ -116,7 +116,7 @@ export const FIRST_TREE_SEED_GATE_CASES: readonly FirstTreeSeedEvalCase[] = [
       requireSourceRead: true,
       requireWorktree: true,
       responseHints: ["worktree", "Phase 1", "skeleton"],
-      skeletonHints: ["system", "product", "team-practice", "raw-context", "members"],
+      skeletonHints: ["system", "product", "team-practice"],
     },
     fixture: {
       sourceRepoState: "bare-readable",
@@ -146,7 +146,7 @@ export const FIRST_TREE_SEED_PERIODIC_CASES: readonly FirstTreeSeedEvalCase[] = 
       requireSourceRead: true,
       requireWorktree: true,
       responseHints: ["Phase 1", "skeleton", "approval"],
-      skeletonHints: ["system", "context-management", "cloud", "team-practice", "members"],
+      skeletonHints: ["system", "context-management", "cloud", "team-practice"],
     },
     fixture: {
       sourceRepoState: "real-first-tree-bare-readable",

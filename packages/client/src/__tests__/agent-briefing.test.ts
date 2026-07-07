@@ -89,9 +89,9 @@ describe("buildAgentBriefing — top-level structure & section order", () => {
       "## Asking Humans",
       "## Chat Topic & Description",
       "## CLI Overview",
-      "# Required Reading (First Tree Managed)",
       "# Context Tree (First Tree Managed)",
       "## Core Model",
+      "## Context Tree Policy",
       "## Reading the Tree",
       "## Writing the Tree",
       "## Tree Location (agent-managed clone)",
@@ -315,118 +315,40 @@ describe("buildAgentBriefing — # Team Prompt / # Agent Prompt (structured prom
   });
 });
 
-describe("buildAgentBriefing — # Required Reading (unconditional skill-load mandate)", () => {
-  // The inline briefing is a routing index, not a substitute for the
-  // skill payloads. `# Required Reading` is the hard mandate that
-  // guarantees `first-tree-write` gets loaded on
-  // every task — otherwise progressive disclosure (keyword-triggered)
-  // can silently skip them and the agent acts without the rules in
-  // that skill (tree concept model, hard write rules, etc.).
+describe("buildAgentBriefing — Context Tree Policy baseline", () => {
+  it("does not emit the old unconditional # Required Reading section", () => {
+    expect(buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }))).not.toContain("# Required Reading");
+    expect(buildAgentBriefing(makeOpts({ contextTreePath: null }))).not.toContain("# Required Reading");
+  });
 
-  it("emits the # Required Reading section for tree-bound agents with MUST framing and the write skill", () => {
+  it("emits the generated Context Tree Policy as the always-present judgment baseline", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
+    const policy = briefing.slice(briefing.indexOf("## Context Tree Policy"), briefing.indexOf("## Reading the Tree"));
 
-    expect(briefing).toContain("# Required Reading");
-    expect(briefing).toMatch(/you MUST\s+load \*\*`first-tree-write`\*\*/);
-    expect(briefing).toContain("source-system boundary");
-    expect(briefing).toContain("Hard Rules + Double Test");
-    // Claude Code's transcript exposes a skill listing, but native skill-body
-    // injection is still provider-owned. The briefing must give a direct
-    // filesystem fallback so "unconditional" is actionable even when the
-    // provider only listed the skill names.
-    expect(briefing).toContain(`${AGENT_HOME}/.agents/skills/first-tree-write/SKILL.md`);
-    expect(briefing).toMatch(/minimum\s+mechanics you need to operate at all/);
-    expect(briefing).toMatch(/inline briefing only summarises/);
-    // Calls out the on-demand-only sibling so the agent doesn't
-    // over-load every First Tree family skill on every task.
-    expect(briefing).toContain("`first-tree-read`");
-    expect(briefing).toContain("`first-tree-seed`");
-    expect(briefing).not.toContain(`${AGENT_HOME}/.agents/skills/first-tree/SKILL.md`);
-    expect(briefing).not.toContain(`${AGENT_HOME}/.agents/skills/first-tree-context/SKILL.md`);
+    expect(policy).toContain("durable context");
+    expect(policy).toContain("current truth");
+    expect(policy).toContain("Capture **why**");
+    expect(policy).toContain("raw-context/");
+    expect(policy).toContain("not canonical truth");
+    expect(policy).toContain("Double Test");
+    expect(policy).toContain("Default to editing an existing node");
+    expect(policy).toContain("Actionable future work");
   });
 
-  it("places # Required Reading immediately after # Working in First Tree (its CLI Overview tail) and before # Context Tree", () => {
-    // Placement rationale: the agent first reads the inline
-    // workspace-collab basics (chat send, working directory,
-    // communication) it needs to operate at all, then hits the hard
-    // mandate to load `first-tree-write` before any real work. The
-    // mandate sits adjacent to `# Context Tree` because that skill covers
-    // the tree concept/write rules for that section.
-    const payload = {
-      kind: "claude-code" as const,
-      model: "",
-      prompt: { append: "You are staff: design, implement, and coordinate review." },
-      mcpServers: [],
-      env: [],
-      gitRepos: [],
-      resourceSkills: [],
-      reasoningEffort: "" as const,
-    };
-    const briefing = buildAgentBriefing(makeOpts({ payload, contextTreePath: "/tree" }));
-
-    const identityIdx = briefing.indexOf("# Identity");
-    const agentPromptIdx = briefing.indexOf("## Agent-Specific Prompt");
-    const workingIdx = briefing.indexOf("# Working in First Tree");
-    const cliOverviewIdx = briefing.indexOf("## CLI Overview");
-    const requiredIdx = briefing.indexOf("# Required Reading");
-    const contextTreeIdx = briefing.indexOf("# Context Tree");
-
-    expect(identityIdx).toBeGreaterThanOrEqual(0);
-    expect(agentPromptIdx).toBeGreaterThan(identityIdx);
-    expect(workingIdx).toBeGreaterThan(agentPromptIdx);
-    // CLI Overview is the last subsection of `# Working in First Tree`,
-    // so Required Reading must land after it.
-    expect(cliOverviewIdx).toBeGreaterThan(workingIdx);
-    expect(requiredIdx).toBeGreaterThan(cliOverviewIdx);
-    // And immediately before `# Context Tree` — no other top-level
-    // section may slip between them.
-    expect(contextTreeIdx).toBeGreaterThan(requiredIdx);
-  });
-
-  it("omits # Required Reading for tree-less agents (the unconditional write mandate is a tree-ops discipline)", () => {
-    // `# Required Reading` mandates loading `first-tree-write` UNCONDITIONALLY
-    // on every task — a tree-ops discipline for reflecting sources into an
-    // existing tree. A tree-less agent DOES carry write on disk now (it ships
-    // core as first-tree-seed's dependency), but should load it only when seed
-    // pulls it in, not on every task, so the mandate stays tree-bound. The
-    // tree-less core skills are surfaced by the First Tree Family map instead.
-    const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
-    expect(briefing).not.toContain("# Required Reading");
-  });
-
-  it("flags `first-tree-write` as unconditional in the ## First Tree Family map (consistent with # Required Reading)", () => {
-    // The Skill Map's framing has to match the # Required Reading
-    // mandate, otherwise the agent gets contradictory signals
-    // (progressive-disclosure-only vs. unconditional). Pin both
-    // rows' new "unconditional" label and the head paragraph that
-    // calls them out.
+  it("loads `first-tree-write` only from a source-artifact task signal in the First Tree Family map", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: "/tree" }));
     const familyMap = briefing.slice(briefing.indexOf("## First Tree Family"));
 
-    // Head paragraph explicitly names the unconditional skill and
-    // points back at the # Required Reading anchor.
-    expect(familyMap).toMatch(
-      /`first-tree-write` is \*\*unconditional\*\* — load it on every task per\s+`# Required Reading` above\./,
-    );
+    expect(familyMap).not.toContain("unconditional");
+    expect(familyMap).not.toContain("# Required Reading");
 
-    // The unconditional row must carry the "unconditional" label
-    // inline so the table is self-explanatory even when read in
-    // isolation.
     const writeRow = familyMap.match(/\|\s*`first-tree-write`\s*\|[^\n]*/)?.[0] ?? "";
-    expect(writeRow).toContain("unconditional");
-    expect(writeRow).toContain("`# Required Reading`");
-    expect(writeRow).toContain("concept model");
-    expect(writeRow).toContain("source-driven tree writes");
-    expect(writeRow).not.toContain("read context before acting");
+    expect(writeRow).toContain("reflect one concrete source artifact");
+    expect(writeRow).toContain("PR, issue, design doc, meeting note");
+    expect(writeRow).not.toContain("concept model");
 
-    // On-demand rows must NOT pick up the unconditional label by
-    // accident — they're triggered by keyword / task signal.
     const readRow = familyMap.match(/\|\s*`first-tree-read`\s*\|[^\n]*/)?.[0] ?? "";
-    expect(readRow).not.toContain("unconditional");
     expect(readRow).toContain("before acting");
-
-    const seedRow = familyMap.match(/\|\s*`first-tree-seed`\s*\|[^\n]*/)?.[0] ?? "";
-    expect(seedRow).not.toContain("unconditional");
   });
 });
 
@@ -1142,11 +1064,11 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
   });
 
   it("emits a core-skills First Tree Family map for tree-less agents (routes the tree-build task to first-tree-seed)", () => {
-    // A tree-less agent now carries the core skills on disk (welcome + the
-    // from-zero build pair seed/write), so the map lists exactly those — and
-    // NOT `first-tree-read`, which stays tree-bound. This is the routing
-    // surface a welcome-spawned tree-build chat uses to reach first-tree-seed,
-    // whose brief names no skill by design.
+    // A tree-less agent carries only the core skills on disk (welcome + seed),
+    // so the map lists exactly those — and NOT `first-tree-read` /
+    // `first-tree-write`, which stay tree-bound. This is the routing surface a
+    // welcome-spawned tree-build chat uses to reach first-tree-seed, whose
+    // brief names no skill by design.
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     expect(briefing).toContain("# Skills (First Tree Managed)");
     const familyStart = briefing.indexOf("## First Tree Family");
@@ -1158,10 +1080,8 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
     const familyMap = nextHeadingRel === -1 ? afterStart : afterStart.slice(0, nextHeadingRel);
     expect(familyMap).toContain("first-tree-welcome");
     expect(familyMap).toContain("first-tree-seed");
-    expect(familyMap).toContain("first-tree-write");
     expect(familyMap).not.toContain("first-tree-read");
-    // Tree-less map must not lean on the (omitted) # Required Reading section.
-    expect(familyMap).not.toContain("# Required Reading");
+    expect(familyMap).not.toContain("first-tree-write");
   });
 
   it("keeps the `# Skills` umbrella for tree-less agents that DO have Team Skills (resource skills land regardless)", () => {

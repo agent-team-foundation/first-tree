@@ -49,6 +49,10 @@ function runPostModelVerify(caseId: string, paths: ReturnType<typeof createRunPa
   });
 }
 
+function combinedOutput(result: ReturnType<typeof runPostModelVerify>): string {
+  return `${result.stdout}\n${result.stderr}`;
+}
+
 describe("first-tree-write post-model verify", { timeout: 20_000 }, () => {
   it("fails with the real validator when a model writes a broken soft_links target", () => {
     const { contextTreePath, paths } = setupVerifyFixture("post-model-verify-soft-links");
@@ -70,7 +74,7 @@ This node keeps valid title and owners frontmatter, but its soft link target is 
       const result = runPostModelVerify("post-model-verify-soft-links", paths, contextTreePath);
 
       expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain("broken soft_links target");
+      expect(combinedOutput(result)).toContain("broken soft_links target");
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });
     }
@@ -95,9 +99,9 @@ This member node is missing member metadata that the real validator requires.
       const result = runPostModelVerify("post-model-verify-member", paths, contextTreePath);
 
       expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain("missing 'type' field");
-      expect(result.stdout).toContain("missing or empty 'role' field");
-      expect(result.stdout).toContain("missing 'domains' field");
+      expect(combinedOutput(result)).toContain("missing 'type' field");
+      expect(combinedOutput(result)).toContain("missing or empty 'role' field");
+      expect(combinedOutput(result)).toContain("missing 'domains' field");
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });
     }
@@ -117,7 +121,7 @@ This member node is missing member metadata that the real validator requires.
       const result = runPostModelVerify("post-model-verify-progress", paths, contextTreePath);
 
       expect(result.exitCode).toBe(1);
-      expect(result.stdout).toContain("Unchecked progress item: finish binding the eval tree");
+      expect(combinedOutput(result)).toContain("Unchecked progress item: finish binding the eval tree");
     } finally {
       rmSync(paths.runRoot, { force: true, recursive: true });
     }

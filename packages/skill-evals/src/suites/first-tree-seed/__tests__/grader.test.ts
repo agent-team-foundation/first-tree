@@ -40,7 +40,7 @@ function baseMetrics(overrides: Partial<EvalMetrics>): EvalMetrics {
     treeInitObserved: false,
     treeInitWithContextTreeDirObserved: false,
     workspaceManifestReadObserved: true,
-    writeSkillFileReadObserved: true,
+    writeSkillFileReadObserved: false,
     ...overrides,
   };
 }
@@ -78,8 +78,7 @@ describe("first-tree-seed grader", () => {
       casePassed(
         findCase("empty-tree-source-present"),
         baseMetrics({
-          finalResponse:
-            "Proposed Phase 1 skeleton: system, product, team-practice, members, raw-context. Reply to approve.",
+          finalResponse: "Proposed Phase 1 normal skeleton: system, product, team-practice. Reply to approve.",
         }),
       ),
     ).toBe(true);
@@ -97,20 +96,20 @@ describe("first-tree-seed grader", () => {
     ).toBe(false);
   });
 
-  it("fails empty-tree source-present when first-tree-write required reading was not loaded", () => {
+  it("passes empty-tree source-present without reading first-tree-write", () => {
     const evalCase = findCase("empty-tree-source-present");
     const metrics = baseMetrics({
       writeSkillFileReadObserved: false,
     });
 
-    expect(casePassed(evalCase, metrics)).toBe(false);
+    expect(casePassed(evalCase, metrics)).toBe(true);
 
     const grading = buildGrading(evalCase, metrics, casePassed(evalCase, metrics));
     expect(grading.scores).toEqual({
       outcome_pass: true,
       process_pass: true,
       risk_pass: true,
-      routing_pass: false,
+      routing_pass: true,
     });
   });
 
@@ -121,7 +120,7 @@ describe("first-tree-seed grader", () => {
         [
           {
             event: {
-              aggregated_output: "Required Reading: read ../first-tree-write/SKILL.md before drafting seed content.",
+              aggregated_output: "After bootstrap, future incremental writes go through first-tree-write.",
               command: "sed -n '1,160p' .agents/skills/first-tree-seed/SKILL.md",
               type: "command_execution",
             },
@@ -139,13 +138,13 @@ describe("first-tree-seed grader", () => {
       expect(metrics.writeSkillFileReadObserved).toBe(false);
       expect(
         casePassed(findCase("empty-tree-source-present"), baseMetrics({ writeSkillFileReadObserved: false })),
-      ).toBe(false);
+      ).toBe(true);
     } finally {
       rmSync(tempRoot, { force: true, recursive: true });
     }
   });
 
-  it("counts installed first-tree-write skill path reads as write-skill reads", () => {
+  it("counts explicit first-tree-write skill path reads as diagnostic write-skill reads", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "seed-eval-write-skill-read-"));
     try {
       const metrics = deriveMetrics(
@@ -349,7 +348,7 @@ describe("first-tree-seed grader", () => {
     }
   });
 
-  it("fails bare-source protocol when first-tree-write required reading was not loaded", () => {
+  it("passes bare-source protocol without reading first-tree-write", () => {
     expect(
       casePassed(
         findCase("bare-source-worktree-protocol"),
@@ -357,7 +356,7 @@ describe("first-tree-seed grader", () => {
           writeSkillFileReadObserved: false,
         }),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("detects direct reads from the bare source path", () => {
