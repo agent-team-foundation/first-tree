@@ -10,12 +10,17 @@ export type DisconnectedSummary = {
 /**
  * Pure filter rule. Exported so the unit test can pin the contract — drift
  * here changes when the topbar warning shows up. Scope is strictly the
- * caller's own clients (no admin widening); only computers that were
- * actively serving agents and are now offline qualify.
+ * caller's own clients (no admin widening). A connected client means the
+ * operator still has a usable local computer, so stale disconnected rows from
+ * an older local client should not raise the global topbar warning. Only when
+ * none of the caller's clients are connected do offline computers that were
+ * actively serving agents qualify.
  */
 export function selectDisconnectedComputers(clients: HubClient[], userId: string): HubClient[] {
   if (!userId) return [];
-  return clients.filter((c) => c.userId === userId && c.status === "disconnected" && c.agentCount > 0);
+  const myClients = clients.filter((c) => c.userId === userId);
+  if (myClients.some((c) => c.status === "connected")) return [];
+  return myClients.filter((c) => c.status === "disconnected" && c.agentCount > 0);
 }
 
 /**
