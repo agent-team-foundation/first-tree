@@ -132,6 +132,71 @@ describe("POST /agents/:uuid/switch-runtime", () => {
     expect(events).toEqual([]);
   });
 
+  it("switches a delegate agent without clearing the member delegate mention", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    await setClientRuntimeSupport(app, ctx.clientId, {
+      "claude-code": capability("ok"),
+      codex: capability("ok"),
+    });
+    const agent = await createAgent(app.db, {
+      name: `switch-delegate-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Switch Delegate",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+    await app.db.update(agents).set({ delegateMention: agent.uuid }).where(eq(agents.uuid, ctx.humanAgentUuid));
+    const oldRuntimeSessionToken = await bindAgentRuntimeSession(app.db, agent.uuid, ctx.clientId);
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/agents/${agent.uuid}/switch-runtime`,
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+      payload: {
+        clientId: ctx.clientId,
+        runtimeProvider: "codex",
+        confirmLocalDataLoss: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      uuid: agent.uuid,
+      clientId: ctx.clientId,
+      runtimeProvider: "codex",
+      status: "active",
+    });
+
+    const [human] = await app.db
+      .select({ delegateMention: agents.delegateMention })
+      .from(agents)
+      .where(eq(agents.uuid, ctx.humanAgentUuid))
+      .limit(1);
+    expect(human?.delegateMention).toBe(agent.uuid);
+
+    const [row] = await app.db
+      .select({ metadata: agents.metadata, runtimeProvider: agents.runtimeProvider })
+      .from(agents)
+      .where(eq(agents.uuid, agent.uuid))
+      .limit(1);
+    expect(row?.runtimeProvider).toBe("codex");
+    expect(row?.metadata.runtimeSwitch).toBeUndefined();
+    expect(row?.metadata.runtimeSession).toBeUndefined();
+
+    const staleRuntimeHttp = await app.inject({
+      method: "GET",
+      url: "/api/v1/agent/me",
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "x-agent-id": agent.uuid,
+        "x-agent-runtime-session": oldRuntimeSessionToken,
+      },
+    });
+    expect(staleRuntimeHttp.statusCode).toBe(403);
+  });
+
   it("allows an offline target client when its known version and capabilities are sufficient", async () => {
     const app = getApp();
     const ctx = await createAdminContext(app);

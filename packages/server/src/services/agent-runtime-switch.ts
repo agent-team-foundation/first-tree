@@ -6,7 +6,7 @@ import {
   defaultRuntimeConfigPayload,
   type RuntimeProvider,
 } from "@first-tree/shared";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import * as semver from "semver";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
@@ -264,22 +264,6 @@ export async function switchAgentRuntime(
   }
   assertRuntimeSwitchClientVersion(targetClient.sdkVersion);
   await ensureClientSupportsRuntimeProvider(db, targetClient.id, input.runtimeProvider);
-
-  const [delegate] = await db
-    .select({ uuid: agents.uuid })
-    .from(agents)
-    .where(
-      and(
-        eq(agents.organizationId, current.organizationId),
-        eq(agents.type, AGENT_TYPES.HUMAN),
-        eq(agents.delegateMention, current.uuid),
-        ne(agents.status, AGENT_STATUSES.DELETED),
-      ),
-    )
-    .limit(1);
-  if (delegate) {
-    throw new ConflictError("Clear member delegate mention before switching this agent's runtime");
-  }
 
   const claim: RuntimeSwitchClaim = {
     claimId: uuidv7(),
