@@ -71,7 +71,8 @@ export function agentSelectorHook(db: Database, options: AgentSelectorOptions = 
       throw new ForbiddenError("Agent is not active");
     }
 
-    if (user.agentOutbox && user.agentOutbox.agentId !== row.uuid) {
+    const agentOutbox = user.agentOutbox;
+    if (agentOutbox && agentOutbox.agentId !== row.uuid) {
       throw new ForbiddenError("Agent outbox token is not valid for this agent");
     }
 
@@ -103,7 +104,7 @@ export function agentSelectorHook(db: Database, options: AgentSelectorOptions = 
       // Rule R-RUN: non-human agents must be pinned to a client owned by the
       // caller's user.
       throw new ForbiddenError("Agent not runnable by this user");
-    } else {
+    } else if (!agentOutbox) {
       const runtimeSessionToken = request.headers[AGENT_RUNTIME_SESSION_HEADER];
       if (typeof runtimeSessionToken === "string" && runtimeSessionToken.length > 0) {
         if (!(await validateAgentRuntimeSession(db, row.uuid, row.clientId, runtimeSessionToken))) {
@@ -118,6 +119,12 @@ export function agentSelectorHook(db: Database, options: AgentSelectorOptions = 
           "legacy agent-scoped HTTP without runtime session token accepted",
         );
       }
+    } else {
+      // `agent_outbox` JWTs are already route-scoped by userAuthHook to
+      // POST /api/v1/agent/chats/:chatId/messages for this agent. Landing
+      // trial sandboxes intentionally do not receive the broader runtime
+      // session secret, so the scoped outbox token is the message-write
+      // authority for that narrow path.
     }
 
     request.agent = {
