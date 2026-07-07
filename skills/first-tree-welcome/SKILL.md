@@ -91,23 +91,41 @@ Do not invent repo access, GitHub authorization, or tree readiness.
 ### Production-scan fix handoff (pre-selected first task)
 
 The start-chat message may arrive with the first task already chosen: fixing
-the blockers from a completed First Tree production scan. Recognize it by the
-combination of a fix request referencing a production readiness scan, a
-`Repository:` line, and (usually) a `Machine-readable findings:
-https://report.first-tree.ai/<key>.json` line. When it matches:
+the blockers from a completed First Tree production scan. TWO message shapes
+are both this handoff — recognize either:
+
+- **With a findings link**: a fix request referencing a production readiness
+  scan, a `Repository:` line, and a `Machine-readable findings:
+  https://report.first-tree.ai/<key>.json` line.
+- **Without a findings link** (the report key did not survive the handoff):
+  the same fix request and `Repository:` line, closing with "The scan report
+  link didn't carry over, so start by checking access to the repository, then
+  ask me to share the report or re-run the scan." No findings line appears at
+  all — this is an expected first-class shape, not a malformed message; do
+  NOT fall back to the generic first-task menu.
+
+When either shape matches:
 
 1. Skip the first-task menu — the user already chose. Confirm in one short line
-   that the scan findings are in hand and the blocker work is starting.
-2. Read the findings JSON before touching code. If the JSON link is expired or
-   unreachable (it expires roughly 30 days after the scan), say so plainly and
-   ask the user to re-run the scan from the report page — never guess findings.
-3. Spin the work into its own chat with `chat create` addressed to your own
-   agent, topic `Fix production scan blockers`, keeping this chat as the
-   launcher (see Spawning Task Chats). The task brief must be self-contained:
-   the repository URL, the findings JSON URL, fix blockers in severity order,
-   what to do when access is missing (ask for the narrowest GitHub access or a
-   local path), and the completion bar — a PR or a verified fix per blocker,
-   with evidence.
+   that the blocker work is starting (and, with a findings link, that the scan
+   findings are in hand).
+2. **With a findings link**: read the findings JSON before touching code. If
+   the link is expired or unreachable (it expires roughly 30 days after the
+   scan), say so plainly and ask the user to re-run the scan from the report
+   page — never guess findings. **Without a findings link**: there is nothing
+   to fetch — check repository access first, then ask the user to share the
+   report or re-run the scan before starting fix work.
+3. **Launcher vs already-dedicated chat.** If this chat opened with the
+   onboarding greeting ("welcome aboard"), it is the launcher: spin the work
+   into its own chat with `chat create` addressed to your own agent, topic
+   `Fix production scan blockers`, keeping this chat as the launcher (see
+   Spawning Task Chats). If the message arrived WITHOUT that greeting — a task
+   chat that already carries the fix brief — this chat IS the dedicated fix
+   chat: do the work here and do not spawn another. A spawned chat's task
+   brief must be self-contained: the repository URL, the findings JSON URL
+   (when present), fix blockers in severity order, what to do when access is
+   missing (ask for the narrowest GitHub access or a local path), and the
+   completion bar — a PR or a verified fix per blocker, with evidence.
 4. If the repository is not readable from this machine, follow the normal
    cannot-read rule: state the exact failure and make the smallest access ask;
    do not fake progress on findings alone.
