@@ -47,7 +47,8 @@ export function buildLandingCampaignChatMetadata(input: {
   state: LandingCampaignTrialChatState;
   inputLocked: boolean;
   awaitingUserKind?: LandingCampaignTrialAwaitingUserKind;
-  maxAgentTurns?: number;
+  /** Required: an omitted budget must not silently stamp a 1-turn trial. */
+  maxAgentTurns: number;
   completedAgentTurns?: number;
   completedAgentTurnIds?: string[];
   maxEstimatedTokens?: number | null;
@@ -66,7 +67,7 @@ export function buildLandingCampaignChatMetadata(input: {
       state: input.state,
       inputLocked: input.inputLocked,
       ...(input.awaitingUserKind ? { awaitingUserKind: input.awaitingUserKind } : {}),
-      maxAgentTurns: input.maxAgentTurns ?? 1,
+      maxAgentTurns: input.maxAgentTurns,
       completedAgentTurns: input.completedAgentTurns ?? 0,
       completedAgentTurnIds: input.completedAgentTurnIds ?? [],
       maxEstimatedTokens: input.maxEstimatedTokens ?? null,

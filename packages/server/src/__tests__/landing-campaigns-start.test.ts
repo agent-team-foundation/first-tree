@@ -5,6 +5,7 @@ import {
 } from "@first-tree/shared";
 import { and, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentResourceBindings } from "../db/schema/agent-resource-bindings.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
@@ -188,6 +189,18 @@ describe("POST /me/landing-campaigns/start", () => {
     landingCampaignClientId: OFFICIAL_CLIENT_ID,
     landingCampaignMaxAgentTurns: 2,
   });
+  // Exercises the shipped production default (6) end-to-end through turn
+  // gating — the server-config unit test asserts the default value in
+  // isolation; this proves a 6-turn trial actually admits turns 1–5 and locks
+  // exactly at the 6th, so a regression in turn accounting at that boundary is
+  // caught.
+  const getSixTurnApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxAgentTurns: 6,
+  });
   const getBudgetApp = useTestApp({
     growthLandingPagesEnabled: true,
     landingCampaignServiceUserId: SERVICE_USER_ID,
@@ -322,7 +335,7 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(trialAgents).toHaveLength(0);
   });
 
-  it("creates the service-managed trial agent, installs the agent-scoped campaign skill, and starts an unlocked capped chat", async () => {
+  it("creates the service-managed trial agent, binds only the trial prompt, and starts an unlocked capped chat", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     await seedOfficialRuntime(app, admin.organizationId);
@@ -360,23 +373,18 @@ describe("POST /me/landing-campaigns/start", () => {
       status: "active",
     });
 
-    const [skill] = await app.db
+    // The scan skill is no longer server-materialized: the bootstrap message
+    // instructs the agent to clone the campaign's skill repo instead.
+    const skillResources = await app.db
       .select()
       .from(resources)
-      .where(and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "skill"), eq(resources.scope, "agent")))
-      .limit(1);
-    expect(skill?.name).toBe("production-scan");
-    expect(skill?.defaultEnabled).toBeNull();
-    expect(skill?.payload).toMatchObject({ name: "production-scan" });
-    expect(JSON.stringify(skill?.payload)).toContain("/onboarding");
-    expect(JSON.stringify(skill?.payload)).not.toContain("{{FIRST_TREE_SETUP_URL}}");
-    const bindings = await app.db
+      .where(and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "skill")));
+    expect(skillResources).toHaveLength(0);
+    const skillBindings = await app.db
       .select()
       .from(agentResourceBindings)
-      .where(
-        and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.resourceId, skill?.id ?? "")),
-      );
-    expect(bindings).toHaveLength(1);
+      .where(and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.type, "skill")));
+    expect(skillBindings).toHaveLength(0);
 
     const [prompt] = await app.db
       .select()
@@ -441,11 +449,84 @@ describe("POST /me/landing-campaigns/start", () => {
     const [bootstrap] = await app.db.select().from(messages).where(eq(messages.chatId, body.chatId)).limit(1);
     expect(bootstrap?.senderId).toBe(admin.humanAgentUuid);
     expect(bootstrap?.content).toContain("https://github.com/acme/backend");
+    // The kickoff instructs the agent to fetch the external skill instead of
+    // relying on a server-delivered body.
+    expect(bootstrap?.content).toContain("clone https://github.com/agent-team-foundation/launch-readiness-scan");
+    expect(bootstrap?.content).toContain("run its production-scan skill on the repo above, in First Tree trial mode");
+    expect(bootstrap?.content).toContain("safe, read-only check before launch");
     expect(bootstrap?.metadata).toMatchObject({
       systemSender: "first_tree_onboarding",
       campaign: "production-scan",
       landingCampaignTrial: true,
     });
+  });
+
+  it("purges the legacy server-materialized campaign skill from a reused trial agent", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const body = first.json<{ agentUuid: string }>();
+    const [trialAgent] = await app.db.select().from(agents).where(eq(agents.uuid, body.agentUuid)).limit(1);
+    if (!trialAgent?.managerId) throw new Error("expected trial agent with manager");
+
+    // Simulate a pre-migration trial agent: old kickoffs provisioned an
+    // agent-scoped skill resource named after the campaign and bound it.
+    const legacyResourceId = uuidv7();
+    await app.db.insert(resources).values({
+      id: legacyResourceId,
+      organizationId: admin.organizationId,
+      type: "skill",
+      scope: "agent",
+      ownerAgentId: body.agentUuid,
+      name: "production-scan",
+      repoCanonicalKey: null,
+      defaultEnabled: null,
+      status: "active",
+      payload: { name: "production-scan", description: "stale", body: "STALE INLINE BODY", metadata: {} },
+      createdBy: trialAgent.managerId,
+      updatedBy: trialAgent.managerId,
+    });
+    await app.db.insert(agentResourceBindings).values({
+      id: uuidv7(),
+      organizationId: admin.organizationId,
+      agentId: body.agentUuid,
+      type: "skill",
+      mode: "include",
+      resourceId: legacyResourceId,
+      replacesResourceId: null,
+      inlinePromptBody: null,
+      repoRef: null,
+      repoLocalPath: null,
+      order: 0,
+      createdBy: trialAgent.managerId,
+      updatedBy: trialAgent.managerId,
+    });
+    const [configBefore] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, body.agentUuid));
+
+    const again = await startProductionScan(app, admin);
+    expect(again.statusCode).toBe(200);
+
+    const skillRows = await app.db
+      .select()
+      .from(resources)
+      .where(and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "skill")));
+    expect(skillRows).toHaveLength(0);
+    const skillBindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.type, "skill")));
+    expect(skillBindings).toHaveLength(0);
+    // Version bumped so the client re-fetches and prunes the materialized copy.
+    const [configAfter] = await app.db
+      .select({ version: agentConfigs.version })
+      .from(agentConfigs)
+      .where(eq(agentConfigs.agentId, body.agentUuid));
+    expect(configAfter?.version).toBe((configBefore?.version ?? 0) + 1);
   });
 
   it("presents stale running trial chats as unlocked while turns remain", async () => {
@@ -1028,6 +1109,53 @@ describe("POST /me/landing-campaigns/start", () => {
         content: "Can we keep going?",
         metadata: { mentions: [body.agentUuid] },
       },
+    });
+    expect(afterLimit.statusCode).toBe(403);
+  });
+
+  it("admits six agent turns then locks at the sixth under the shipped default cap", async () => {
+    const app = getSixTurnApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    const [initialChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(initialChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      maxAgentTurns: 6,
+      completedAgentTurns: 0,
+    });
+
+    // Turns 1–5 advance without hitting the cap.
+    for (let turn = 1; turn <= 5; turn++) {
+      const result = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, `turn-${turn}`);
+      expect(result).toMatchObject({ advanced: true, reachedTurnLimit: false, limitReason: null });
+      const [chat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+      expect(parseLandingCampaignTrialChatMetadata(chat?.metadata)).toMatchObject({
+        state: "running",
+        inputLocked: false,
+        completedAgentTurns: turn,
+      });
+    }
+
+    // The sixth turn reaches the cap and locks the chat.
+    const sixth = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "turn-6");
+    expect(sixth).toMatchObject({ advanced: true, reachedTurnLimit: true, limitReason: "turns" });
+    const [completedChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(completedChat?.metadata)).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+      maxAgentTurns: 6,
+      completedAgentTurns: 6,
+    });
+
+    const afterLimit = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { format: "text", content: "One more?", metadata: { mentions: [body.agentUuid] } },
     });
     expect(afterLimit.statusCode).toBe(403);
   });
