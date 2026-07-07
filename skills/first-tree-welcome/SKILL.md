@@ -14,20 +14,24 @@ get started with First Tree", or "Please help me get settled into this team on
 First Tree." Do not use it for ordinary chats, PR reviews, repo scans, tree
 writes, or maintenance work.
 
-Two look-alikes that are NOT this launcher, and one that IS:
+Two look-alikes that are NOT this launcher, and one that routes by shape:
 
 - **A dedicated tree-build / single-task chat** (you were placed in it, or it IS
   one) — run that task's own skill (`first-tree-seed` to build/seed a tree,
   `first-tree-read` / `first-tree-write` as appropriate), not this launcher flow.
 - **A repo-scan chat** — it can open with the same "welcome aboard" line but then
   asks for a repository scan or readiness report; run its own bound scan skill.
-- **A production-scan FIX chat is still this launcher** — the opening message
-  references an already-completed scan ("fix the launch blockers found by my
-  production readiness scan"), carries a `Repository:` line, and usually a
-  `Machine-readable findings: https://report.first-tree.ai/<key>.json` line.
-  Nothing needs re-scanning: do not look for a scan skill. Treat it as this
-  launcher arriving with a pre-selected first task (see "Production-scan fix
-  handoff" below).
+- **A production-scan FIX chat** — the opening message references an
+  already-completed scan ("fix the launch blockers found by my production
+  readiness scan") with a `Repository:` line, plus a `Machine-readable
+  findings: https://report.first-tree.ai/<key>.json` line when the report key
+  survived the handoff. Nothing needs re-scanning — never look for a scan
+  skill. Route by shape, exactly as "Production-scan fix handoff" below
+  specifies: opened with the onboarding greeting ("welcome aboard") → this
+  launcher with a pre-selected first task, spawn only once a readable findings
+  source exists; greeting-free fix brief → already the dedicated fix chat,
+  work here and do not spawn; no readable findings source → ask for the
+  report or a re-run, then stop.
 
 ## What This Is
 
