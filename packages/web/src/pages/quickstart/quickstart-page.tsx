@@ -5,7 +5,9 @@ import { startLandingCampaign } from "../../api/landing-campaigns.js";
 import { useAuth } from "../../auth/auth-context.js";
 import { Button } from "../../components/ui/button.js";
 import { useGrowthLandingPagesState } from "../../hooks/use-server-channel.js";
+import { writeScanFixHandoffFlag } from "../../utils/onboarding-flags.js";
 import { FlowHint, StatusRow, WorkingState } from "../onboarding/flow-ui.js";
+import { shouldEnterOnboarding } from "../onboarding/steps.js";
 import { WorkspaceBody } from "../workspace/index.js";
 import { getCampaign } from "./campaigns.js";
 import {
@@ -14,6 +16,7 @@ import {
   hasCampaignHandoff,
   readCampaignHandoff,
   readCampaignIntent,
+  readScanFixHandoff,
   writeCampaignIntent,
 } from "./intent.js";
 
@@ -28,7 +31,15 @@ import {
 export function QuickstartPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { organizationId, refreshMe } = useAuth();
+  const {
+    organizationId,
+    refreshMe,
+    meLoaded,
+    onboardingStep,
+    onboardingDismissedAt,
+    onboardingCompletedAt,
+    currentOrgHasPersonalAgent,
+  } = useAuth();
   const { enabled: growthLandingPagesEnabled, settled } = useGrowthLandingPagesState();
   // The trial chat is selected with the normal workspace `?c=` param so
   // `WorkspaceBody` picks it up unchanged — no bespoke `?chat=` handoff.
@@ -39,7 +50,17 @@ export function QuickstartPage() {
   // instead of silently falling through to the no-chat state.
   const legacyChatId = useMemo(() => new URLSearchParams(location.search).get("chat"), [location.search]);
 
+  // A fix conversion (`action=fix`) is not a trial launch: store the handoff and
+  // send the user to normal onboarding (their own agent does the fixing). The
+  // trial-intent memo below must never see these params — readCampaignHandoff
+  // skips action=fix, and this memo short-circuits it too.
+  const fixHandoff = useMemo(() => {
+    if (chatId || legacyChatId) return null;
+    return readScanFixHandoff(location);
+  }, [chatId, legacyChatId, location]);
+
   const intent = useMemo<CampaignIntent | null>(() => {
+    if (fixHandoff) return null;
     // A selected chat — `?c=` OR a legacy `?chat=` about to be canonicalized —
     // means "open this chat", not "launch a trial". Short-circuit both so a
     // stored campaign intent in sessionStorage can't hijack a legacy link into
@@ -55,7 +76,7 @@ export function QuickstartPage() {
       return null;
     }
     return readCampaignIntent();
-  }, [chatId, legacyChatId, location]);
+  }, [fixHandoff, chatId, legacyChatId, location]);
   const campaign = intent ? getCampaign(intent.campaign) : null;
 
   const startStartedRef = useRef(false);
@@ -64,8 +85,18 @@ export function QuickstartPage() {
   const startTrial = useCallback(async () => {
     // `legacyChatId` guards alongside `chatId`: a legacy `?chat=` link is a
     // selected chat being canonicalized, never a launch trigger — even if a
-    // stale campaign intent lingers in sessionStorage.
-    if (chatId || legacyChatId || !intent || !campaign || startStartedRef.current || !growthLandingPagesEnabled) return;
+    // stale campaign intent lingers in sessionStorage. `fixHandoff` guards too
+    // so a fix link can never start a trial even transiently.
+    if (
+      chatId ||
+      legacyChatId ||
+      fixHandoff ||
+      !intent ||
+      !campaign ||
+      startStartedRef.current ||
+      !growthLandingPagesEnabled
+    )
+      return;
     startStartedRef.current = true;
     setStartError(null);
     try {
@@ -81,7 +112,7 @@ export function QuickstartPage() {
       startStartedRef.current = false;
       setStartError(err instanceof Error ? err.message : "Couldn't open your trial chat. Please try again.");
     }
-  }, [chatId, legacyChatId, intent, campaign, organizationId, growthLandingPagesEnabled, refreshMe, navigate]);
+  }, [chatId, legacyChatId, fixHandoff, intent, campaign, organizationId, growthLandingPagesEnabled, refreshMe, navigate]);
 
   useEffect(() => {
     if (!settled || !growthLandingPagesEnabled) return;
@@ -92,6 +123,36 @@ export function QuickstartPage() {
     if (chatId) return;
     if (settled && !growthLandingPagesEnabled) navigate("/", { replace: true });
   }, [chatId, settled, growthLandingPagesEnabled, navigate]);
+
+  useEffect(() => {
+    if (!fixHandoff || !settled || !growthLandingPagesEnabled) return;
+    writeScanFixHandoffFlag({ repoUrl: fixHandoff.url, reportKey: fixHandoff.reportKey });
+    if (
+      shouldEnterOnboarding({
+        meLoaded,
+        onboardingStep,
+        onboardingSuppressedAt: onboardingDismissedAt,
+        currentOrgHasPersonalAgent,
+        onboardingCompletedAt,
+      })
+    ) {
+      navigate("/onboarding", { replace: true });
+    } else {
+      // Temporary: Task 6 replaces this with direct task-chat creation before
+      // this PR opens. The stored handoff survives either way.
+      navigate("/", { replace: true });
+    }
+  }, [
+    fixHandoff,
+    settled,
+    growthLandingPagesEnabled,
+    meLoaded,
+    onboardingStep,
+    onboardingDismissedAt,
+    onboardingCompletedAt,
+    currentOrgHasPersonalAgent,
+    navigate,
+  ]);
 
   // Canonicalize a legacy `?chat=<id>` trial link to `?c=<id>` (only when no
   // `?c=` is already present) so pre-migration URLs keep opening the trial chat.
