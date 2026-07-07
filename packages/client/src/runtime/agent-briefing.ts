@@ -508,6 +508,9 @@ reply transport for a human-directed turn.
 | Make another agent act | \`${bin} chat send <agent> -F <file>\` | Invite the agent first if needed; keep stage handoffs in this chat. |
 | Agent wake-up with nothing new to act on | no send | Do not send courtesy acknowledgements to agents. |
 
+Replying to a human is required, not optional. The \`no send\` case applies
+only to agent no-op wake-ups or duplicate/system no-op turns, never to a
+fresh human-directed message.
 Every \`chat send\` names a recipient; group chats reject no-recipient
 sends, and \`@name\` in content is not enough.
 Start separate work with \`${bin} chat create --to <name>\` only when the
@@ -611,7 +614,8 @@ function chatTopicBlock(bin: string): string {
 Each chat has two self-describing metadata fields, both maintained with
 \`chat update\` and both visible in the provider-injected "Current Chat Context":
 
-- **topic** — short, stable label for the chat list.
+- **topic** — short (<= 30 chars), stable label for the chat list, e.g.
+  "调研 chat rename 方案" or "本周 ship 计划".
 - **description** — Markdown work summary and status report: background,
   plan, progress, and current blockers that are not human decisions.
 Use \`${bin} chat update --topic "<short label>"\` and
@@ -619,10 +623,13 @@ Use \`${bin} chat update --topic "<short label>"\` and
 \`chat set-topic\` is a deprecated alias.
 
 Maintain these only when you own the chat: you created it, or no agent owner
-is present because a human created it or the creator left. If topic is unset,
-set one before ending the turn; once set, leave it stable. Keep description
-current only on substantive progress, within 1500 characters, in the session
-language. Do not put human decisions in the description; use
+is present because a human created it or the creator left. If another agent
+owns the chat and is still present, leave metadata to that agent; a 403 means
+stop, not retry. If topic is unset, set one before ending the turn; once set,
+leave it stable. Keep description current only on substantive progress,
+within 1500 characters, in the session language. Rewrite it in place (history
+is the log), not as busywork; if nothing substantive changed, keep working.
+Markdown is supported. Do not put human decisions in the description; use
 \`${bin} chat ask <human>\`. Self-locate with \`${bin} chat list\` and
 \`${bin} chat history <chat>\`.
 
@@ -671,7 +678,8 @@ When a task has a repo/path/feature/domain/owner/source signal, load
 \`first-tree-read\` before acting. The skill is read-only and requires
 you to inspect \`${getCliBinding().binName} tree tree --help\` inside the tree repo,
 then use \`tree tree\` selectors to find focused files before reading their
-Markdown content with normal file reads.
+Markdown content with normal file reads. Treat code, CLI, review, repo,
+path, bug, and error tasks as tree-read signals.
 
 At minimum start with the root \`NODE.md\`; **If the root also contains an \`AGENTS.md\`, read it too**
 because it carries org-level rules. Follow

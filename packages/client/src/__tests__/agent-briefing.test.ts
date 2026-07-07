@@ -130,9 +130,9 @@ describe("buildAgentBriefing — generated skeleton", () => {
       190,
     );
     expect(lineCount(topLevelSection(briefing, "# Required Reading (First Tree Managed)"))).toBeLessThanOrEqual(18);
-    expect(lineCount(topLevelSection(briefing, "# Context Tree (First Tree Managed)"))).toBeLessThanOrEqual(75);
+    expect(lineCount(topLevelSection(briefing, "# Context Tree (First Tree Managed)"))).toBeLessThanOrEqual(80);
     expect(lineCount(topLevelSection(briefing, "# Skills (First Tree Managed)"))).toBeLessThanOrEqual(20);
-    expect(lineCount(briefing)).toBeLessThanOrEqual(420);
+    expect(lineCount(briefing)).toBeLessThanOrEqual(440);
   });
 
   it("renders identity from visibility", () => {
@@ -326,6 +326,8 @@ describe("buildAgentBriefing — Working in First Tree hard rules", () => {
     const communication = briefing.slice(briefing.indexOf("## Communication"));
 
     expect(communication).toMatch(/business action changes the workspace\s+or outside world/);
+    expect(communication).toContain("Replying to a human is required, not optional");
+    expect(communication).toContain("never to a\nfresh human-directed message");
     expect(communication).toContain("Blocking questions never ride inside plain `chat send`");
     expect(communication).toContain("route by dependency, not importance");
     expect(communication).toContain("chat update --description -");
@@ -397,11 +399,18 @@ describe("buildAgentBriefing — asking humans, GitHub, and CLI overview", () =>
     const chatTopic = briefing.slice(briefing.indexOf("## Chat Topic & Description"));
 
     expect(chatTopic).toContain('provider-injected "Current Chat Context"');
+    expect(chatTopic).toContain("short (<= 30 chars)");
+    expect(chatTopic).toContain("调研 chat rename 方案");
+    expect(chatTopic).toContain("本周 ship 计划");
     expect(chatTopic).toContain("chat update --topic");
     expect(chatTopic).toContain("chat update --description");
     expect(chatTopic).toContain("deprecated alias");
+    expect(chatTopic).toContain("a 403 means\nstop, not retry");
     expect(chatTopic).toContain("leave it stable");
     expect(chatTopic).toContain("within 1500 characters");
+    expect(chatTopic).toContain("Rewrite it in place");
+    expect(chatTopic).toContain("history\nis the log");
+    expect(chatTopic).toContain("Markdown is supported");
     expect(chatTopic).toMatch(/use\s+`first-tree chat ask <human>`/);
     expect(chatTopic).toContain("chat list");
     expect(chatTopic).toContain("chat history <chat>");
@@ -455,6 +464,7 @@ describe("buildAgentBriefing — Context Tree", () => {
     expect(tree).toContain("load `first-tree-read`");
 
     expect(tree).toContain("repo/path/feature/domain/owner/source signal");
+    expect(tree).toContain("code, CLI, review, repo,\npath, bug, and error tasks");
     expect(tree).toContain("first-tree tree tree --help");
     expect(tree).toContain("tree tree` selectors");
     expect(tree).toContain("root `NODE.md`");
