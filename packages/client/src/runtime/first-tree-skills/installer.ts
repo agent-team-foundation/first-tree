@@ -321,6 +321,13 @@ export type InstallCoreSkillsOptions = {
   workspacePath: string;
   /** Override the bundled-skills lookup root for tests. */
   bundledSkillsRoot?: string;
+  /**
+   * Remove skills that used to ship through the core installer but now belong
+   * only to tree-bound workspaces. Set only when the caller knows this
+   * bootstrap is tree-less; tree-bound fast paths may skip tree-skill
+   * reinstall in the same call.
+   */
+  pruneFormerCoreSkills?: boolean;
 };
 
 export type InstallFirstTreeSkillsOptions = {
@@ -335,7 +342,7 @@ export type InstallFirstTreeSkillsOptions = {
  */
 export function installCoreSkills(options: InstallCoreSkillsOptions): InstallSkillsResult {
   const bundledSkillsRoot = options.bundledSkillsRoot ?? resolveBundledSkillsRoot();
-  reconcileCoreSkillState(options.workspacePath);
+  reconcileCoreSkillState(options.workspacePath, options.pruneFormerCoreSkills === true);
   return installSkillSet(options.workspacePath, CORE_SKILL_NAMES, bundledSkillsRoot);
 }
 
@@ -358,9 +365,13 @@ export function installFirstTreeSkills(options: InstallFirstTreeSkillsOptions): 
   return result;
 }
 
-function reconcileCoreSkillState(workspacePath: string): void {
-  for (const retiredSkill of [...RETIRED_CORE_SKILL_NAMES, ...FORMER_CORE_SKILL_NAMES]) {
+function reconcileCoreSkillState(workspacePath: string, pruneFormerCoreSkills: boolean): void {
+  for (const retiredSkill of RETIRED_CORE_SKILL_NAMES) {
     removeManagedSkill(workspacePath, retiredSkill);
+  }
+  if (!pruneFormerCoreSkills) return;
+  for (const formerSkill of FORMER_CORE_SKILL_NAMES) {
+    removeManagedSkill(workspacePath, formerSkill);
   }
 }
 

@@ -175,6 +175,28 @@ describe("ensureAgentBootstrap — integration retry gate", () => {
     expect(installCoreSkills).toHaveBeenCalledWith(
       expect.objectContaining({
         workspacePath: workspace,
+        pruneFormerCoreSkills: true,
+      }),
+    );
+  });
+
+  it("does not prune former core skills on a tree-bound sentinel fast path", () => {
+    state.cachedCli = "1.0.0";
+    const params = {
+      workspace,
+      sessionCtx: fakeSessionCtx(),
+      contextTreePath: "/tree",
+      briefing: "# Agent Identity\n\nstub briefing\n",
+      currentSourceRepoNames: null,
+    };
+
+    ensureAgentBootstrap(params);
+
+    expect(installFirstTreeIntegration).not.toHaveBeenCalled();
+    expect(installCoreSkills).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspacePath: workspace,
+        pruneFormerCoreSkills: false,
       }),
     );
   });

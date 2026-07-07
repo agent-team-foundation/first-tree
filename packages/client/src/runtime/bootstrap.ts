@@ -441,6 +441,8 @@ export type InstallCoreSkillsOptions = {
   log: (msg: string) => void;
   /** See {@link InstallFirstTreeIntegrationOptions.bundledSkillsRoot}. */
   bundledSkillsRoot?: string;
+  /** Remove skills that used to be core but now only belong to tree-bound sessions. */
+  pruneFormerCoreSkills?: boolean;
 };
 
 /**
@@ -495,9 +497,9 @@ export function installFirstTreeIntegration(options: InstallFirstTreeIntegration
  * {@link installFirstTreeIntegration}: no shell-out, no CLI dependency.
  */
 export function installCoreSkills(options: InstallCoreSkillsOptions): boolean {
-  const { workspacePath, log, bundledSkillsRoot } = options;
+  const { workspacePath, log, bundledSkillsRoot, pruneFormerCoreSkills } = options;
   try {
-    const result = installCoreSkillsImpl({ workspacePath, bundledSkillsRoot });
+    const result = installCoreSkillsImpl({ workspacePath, bundledSkillsRoot, pruneFormerCoreSkills });
     if (result.installed.length > 0 || result.skipped.length > 0 || result.failed.length > 0) {
       const parts: string[] = [];
       if (result.installed.length > 0) parts.push(`installed ${result.installed.join(", ")}`);

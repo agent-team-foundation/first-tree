@@ -670,6 +670,7 @@ describe("installCoreSkills", () => {
     const result = installCoreSkills({
       workspacePath: workspace,
       bundledSkillsRoot,
+      pruneFormerCoreSkills: true,
       log: () => {},
     });
 
