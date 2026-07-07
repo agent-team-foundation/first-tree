@@ -5,6 +5,7 @@ import type { SessionEvent } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, CodexAppServerTransportError } from "../handlers/codex/app-server/client.js";
 import { createCodexAppServerHandler } from "../handlers/codex/app-server/index.js";
+import { LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED } from "../handlers/codex/turn-completion.js";
 import { writeAgentBriefing } from "../runtime/bootstrap.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
 import type { DeliveryToken, SessionContext, SessionMessage } from "../runtime/handler.js";
@@ -168,8 +169,20 @@ class FakeAppServerClient {
 
 let workspaceRoot: string;
 
-function makeMessage(id: string, content: string): SessionMessage {
+const trialAgentMetadata = {
+  landingCampaignTrial: true,
+  campaign: "production-scan",
+  skillSetId: "production-scan",
+  skillSetVersion: "2026.07.02.1",
+  repo: {
+    url: "https://github.com/acme/backend",
+    canonicalKey: "github.com/acme/backend",
+  },
+};
+
+function makeMessage(id: string, content: string, inboxEntryId?: number): SessionMessage {
   return {
+    ...(inboxEntryId !== undefined ? { inboxEntryId } : {}),
     id,
     chatId: "chat-app-server",
     senderId: "sender-1",
@@ -189,6 +202,7 @@ function makeContext(
     retryTurn?: SessionContext["retryTurn"];
     failSessionForRecovery?: SessionContext["failSessionForRecovery"];
     emitEvent?: SessionContext["emitEvent"];
+    emitEventConfirmed?: SessionContext["emitEventConfirmed"];
     formatInboundContent?: SessionContext["formatInboundContent"];
     sendMessage?: ReturnType<typeof vi.fn<(chatId: string, body: Record<string, unknown>) => Promise<unknown>>>;
     createAgentOutboxToken?: ReturnType<
@@ -221,6 +235,7 @@ function makeContext(
     log: () => {},
     recordProviderActivity: () => {},
     emitEvent: opts.emitEvent ?? (() => {}),
+    ...(opts.emitEventConfirmed ? { emitEventConfirmed: opts.emitEventConfirmed } : {}),
     ...mockCtxPlumbing({ sendMessage }, "chat-app-server"),
     ...(opts.finishTurn ? { finishTurn: opts.finishTurn } : {}),
     ...(opts.retryTurn ? { retryTurn: opts.retryTurn } : {}),
@@ -423,6 +438,17 @@ function activeTurnNotSteerableError(): CodexAppServerRpcError {
   });
 }
 
+function stubLandingTrialHostEnv(suffix: string): void {
+  const hostHome = join(workspaceRoot, "..", `host-home-${suffix}`);
+  const codexHome = join(hostHome, ".codex");
+  const cliBinDir = join(workspaceRoot, `first-tree-cli-bin-${suffix}`);
+  mkdirSync(cliBinDir, { recursive: true });
+  mkdirSync(codexHome, { recursive: true });
+  writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
+  vi.stubEnv("HOME", hostHome);
+  vi.stubEnv("FIRST_TREE_CLI_BIN_DIR", cliBinDir);
+}
+
 beforeEach(() => {
   workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "ft-codex-app-server-")));
   setCliBinding({ binName: "first-tree-test", packageName: null });
@@ -434,31 +460,43 @@ afterEach(() => {
 });
 
 describe("codex app-server handler", () => {
-  it("wraps landing campaign trial app-server startup in workspace-only sandbox mode", async () => {
+  it("starts landing campaign trial app-server with host Codex auth and managed workspace-only permissions", async () => {
+    const hostHome = join(workspaceRoot, "..", "host-home");
+    const codexHome = join(hostHome, ".codex");
+    const ghConfigDir = join(hostHome, ".config", "gh");
     const firstTreeHome = join(workspaceRoot, "first-tree-home");
     const cliBinDir = join(workspaceRoot, "first-tree-cli-bin");
     mkdirSync(cliBinDir, { recursive: true });
+    mkdirSync(codexHome, { recursive: true });
+    mkdirSync(ghConfigDir, { recursive: true });
     writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
+    vi.stubEnv("HOME", hostHome);
     vi.stubEnv("FIRST_TREE_HOME", firstTreeHome);
     vi.stubEnv("FIRST_TREE_CLI_BIN_DIR", cliBinDir);
     vi.stubEnv("OPENAI_API_KEY", "secret-openai");
+    vi.stubEnv("CODEX_API_KEY", "secret-codex");
     vi.stubEnv("GITHUB_TOKEN", "secret-github");
+    vi.stubEnv("FIRST_TREE_RUNTIME_SESSION_TOKEN", "runtime-session-token");
 
     const fake = new FakeAppServerClient();
     let capturedSpawnProcess: unknown;
     let capturedEnv: NodeJS.ProcessEnv | undefined;
+    let capturedAppServerArgs: readonly string[] | undefined;
     const createAgentOutboxToken = vi
       .fn<(chatId: string) => Promise<{ accessToken: string; expiresIn: number }>>()
       .mockResolvedValue({ accessToken: "trial-outbox-token", expiresIn: 900 });
+    const emitEventConfirmed = vi.fn<NonNullable<SessionContext["emitEventConfirmed"]>>().mockResolvedValue();
     const handler = makeHandler(fake, {
       codexAppServerClientFactory: async (options: {
         env?: NodeJS.ProcessEnv;
         spawnProcess?: unknown;
+        appServerArgs?: readonly string[];
         onNotification?: NotificationHandler;
         onClose?: CloseHandler;
       }) => {
         capturedSpawnProcess = options.spawnProcess;
         capturedEnv = options.env;
+        capturedAppServerArgs = options.appServerArgs;
         fake.onNotification = options.onNotification ?? null;
         fake.onClose = options.onClose ?? null;
         return fake;
@@ -466,45 +504,81 @@ describe("codex app-server handler", () => {
     });
     const ctx = makeContext({
       createAgentOutboxToken,
-      agentMetadata: {
-        landingCampaignTrial: true,
-        campaign: "production-scan",
-        skillSetId: "production-scan",
-        skillSetVersion: "2026.07.02.1",
-        repo: {
-          url: "https://github.com/acme/backend",
-          canonicalKey: "github.com/acme/backend",
-        },
-      },
+      emitEventConfirmed,
+      agentMetadata: trialAgentMetadata,
     });
 
     const startPromise = handler.start(makeMessage("m1", "first"), ctx);
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
-    expect(typeof capturedSpawnProcess).toBe("function");
+    expect(capturedSpawnProcess).toBeUndefined();
+    expect(capturedAppServerArgs).toHaveLength(4);
+    expect(capturedAppServerArgs?.[0]).toBe("-c");
+    expect(capturedAppServerArgs?.[1]).toContain("permissions=");
+    expect(capturedAppServerArgs?.[1]).toContain("first-tree-landing-trial");
+    expect(capturedAppServerArgs?.[1]).toContain(codexHome);
+    expect(capturedAppServerArgs?.[1]).toContain(workspaceRoot);
+    expect(capturedAppServerArgs?.[2]).toBe("-c");
+    expect(capturedAppServerArgs?.[3]).toBe('default_permissions="first-tree-landing-trial"');
     expect(createAgentOutboxToken).toHaveBeenCalledWith("chat-app-server");
     expect(capturedEnv?.FIRST_TREE_HOME).toBe(join(workspaceRoot, ".first-tree-workspace", "outbox-home"));
+    expect(capturedEnv?.HOME).toBe(workspaceRoot);
+    expect(capturedEnv?.CODEX_HOME).toBe(codexHome);
+    expect(capturedEnv?.GH_CONFIG_DIR).toBe(ghConfigDir);
     expect(capturedEnv?.PATH?.split(":")[0]).toBe(cliBinDir);
     expect(capturedEnv?.OPENAI_API_KEY).toBeUndefined();
+    expect(capturedEnv?.CODEX_API_KEY).toBeUndefined();
     expect(capturedEnv?.GITHUB_TOKEN).toBeUndefined();
+    expect(capturedEnv?.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBeUndefined();
     const threadStart = fake.requests.find((request) => request.method === "thread/start");
-    expect(threadStart?.params).toMatchObject({ sandbox: "workspace-write" });
+    const threadStartParams = threadStart?.params as Record<string, unknown> | undefined;
+    expect(threadStartParams).toMatchObject({
+      permissions: "first-tree-landing-trial",
+      runtimeWorkspaceRoots: [workspaceRoot],
+    });
+    expect(threadStartParams?.sandbox).toBeUndefined();
+    expect(threadStartParams?.config).toMatchObject({
+      permissions: {
+        "first-tree-landing-trial": {
+          workspace_roots: {
+            [workspaceRoot]: true,
+          },
+          filesystem: {
+            ":root": "read",
+            [workspaceRoot]: "write",
+            [codexHome]: "deny",
+            [join(hostHome, ".first-tree-staging")]: "deny",
+            [join(hostHome, ".ssh")]: "deny",
+          },
+          network: {
+            enabled: true,
+          },
+        },
+      },
+    });
 
     completeTurn(fake, "turn-1", "final answer");
     await startPromise;
+    expect(emitEventConfirmed).toHaveBeenCalledWith({
+      kind: "turn_end",
+      payload: { status: "success", turnCompletionId: "message:m1" },
+    });
     await handler.shutdown();
   });
 
   it("leaves ordinary app-server startup unsandboxed", async () => {
     const fake = new FakeAppServerClient();
     let capturedSpawnProcess: unknown = "unset";
+    let capturedAppServerArgs: readonly string[] | undefined;
     const handler = makeHandler(fake, {
       codexAppServerClientFactory: async (options: {
         spawnProcess?: unknown;
+        appServerArgs?: readonly string[];
         onNotification?: NotificationHandler;
         onClose?: CloseHandler;
       }) => {
         capturedSpawnProcess = options.spawnProcess;
+        capturedAppServerArgs = options.appServerArgs;
         fake.onNotification = options.onNotification ?? null;
         fake.onClose = options.onClose ?? null;
         return fake;
@@ -516,8 +590,10 @@ describe("codex app-server handler", () => {
     await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
 
     expect(capturedSpawnProcess).toBeUndefined();
+    expect(capturedAppServerArgs).toBeUndefined();
     const threadStart = fake.requests.find((request) => request.method === "thread/start");
     expect(threadStart?.params).toMatchObject({ sandbox: "danger-full-access" });
+    expect((threadStart?.params as Record<string, unknown> | undefined)?.permissions).toBeUndefined();
 
     completeTurn(fake, "turn-1", "final answer");
     await startPromise;
@@ -550,6 +626,77 @@ describe("codex app-server handler", () => {
 
     expect(finished.map((messages) => messages.map((message) => message.id))).toEqual([["m1", "m2"]]);
     expect(emitEvent.mock.calls.some(([event]) => event.kind === "token_usage")).toBe(true);
+
+    await handler.shutdown();
+  });
+
+  it("leaves landing trial delivery recoverable when confirmed success turn_end is rejected", async () => {
+    stubLandingTrialHostEnv("confirm-reject");
+
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const failSessionForRecovery = vi.fn<NonNullable<SessionContext["failSessionForRecovery"]>>();
+    const emitEventConfirmed = vi
+      .fn<NonNullable<SessionContext["emitEventConfirmed"]>>()
+      .mockRejectedValue(new Error("session event persist failed"));
+    const handler = makeHandler(fake);
+    const ctx = makeContext({
+      emitEventConfirmed,
+      failSessionForRecovery,
+      agentMetadata: trialAgentMetadata,
+    });
+    const message = makeMessage("m1", "first", 101);
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    completeTurn(fake, "turn-1", "final answer");
+    await expect(startPromise).resolves.toMatchObject({
+      sessionId: "thread-app-server",
+      route: { kind: "owned", mode: "processing" },
+    });
+
+    expect(emitEventConfirmed).toHaveBeenCalledWith({
+      kind: "turn_end",
+      payload: { status: "success", turnCompletionId: "inbox:101" },
+    });
+    expect(token.complete).not.toHaveBeenCalled();
+    expect(token.retry).toHaveBeenCalledWith([message], LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+    expect(failSessionForRecovery).toHaveBeenCalledWith(
+      LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED,
+      "thread-app-server",
+    );
+
+    await handler.shutdown();
+  });
+
+  it("does not block ordinary Codex delivery on confirmed event rejection", async () => {
+    const fake = new FakeAppServerClient();
+    const token = makeDeliveryToken();
+    const emitEvent = vi.fn<(event: SessionEvent) => void>();
+    const emitEventConfirmed = vi
+      .fn<NonNullable<SessionContext["emitEventConfirmed"]>>()
+      .mockRejectedValue(new Error("session event persist failed"));
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ emitEvent, emitEventConfirmed });
+    const message = makeMessage("m1", "first");
+
+    const startPromise = handler.start(message, ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+
+    completeTurn(fake, "turn-1", "final answer");
+    await expect(startPromise).resolves.toMatchObject({
+      sessionId: "thread-app-server",
+      route: { kind: "owned", mode: "processing" },
+    });
+
+    expect(emitEventConfirmed).not.toHaveBeenCalled();
+    expect(emitEvent).toHaveBeenCalledWith({
+      kind: "turn_end",
+      payload: { status: "success" },
+    });
+    expect(token.complete).toHaveBeenCalledWith([message], expect.objectContaining({ status: "success" }));
+    expect(token.retry).not.toHaveBeenCalled();
 
     await handler.shutdown();
   });

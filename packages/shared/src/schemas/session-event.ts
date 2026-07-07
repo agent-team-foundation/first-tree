@@ -80,6 +80,7 @@ export type ThinkingEventPayload = z.infer<typeof thinkingEventPayload>;
  */
 export const turnEndEventPayload = z.object({
   status: z.enum(["success", "error"]),
+  turnCompletionId: z.string().min(1).optional(),
 });
 export type TurnEndEventPayload = z.infer<typeof turnEndEventPayload>;
 
@@ -188,5 +189,26 @@ export const sessionEventMessageSchema = z.object({
   agentId: z.string(),
   chatId: z.string(),
   event: sessionEventSchema,
+  ref: z.string().min(1).optional(),
 });
 export type SessionEventMessage = z.infer<typeof sessionEventMessageSchema>;
+
+export const sessionEventRejectedReasonSchema = z.enum(["agent_not_bound", "malformed", "persist_failed"]);
+export type SessionEventRejectedReason = z.infer<typeof sessionEventRejectedReasonSchema>;
+
+export const sessionEventAcceptedFrameSchema = z.object({
+  type: z.literal("session:event:accepted"),
+  ref: z.string().min(1),
+  agentId: z.string().min(1),
+  chatId: z.string().min(1),
+});
+export type SessionEventAcceptedFrame = z.infer<typeof sessionEventAcceptedFrameSchema>;
+
+export const sessionEventRejectedFrameSchema = z.object({
+  type: z.literal("session:event:rejected"),
+  ref: z.string().min(1),
+  agentId: z.string().min(1),
+  chatId: z.string().min(1).optional(),
+  reason: sessionEventRejectedReasonSchema,
+});
+export type SessionEventRejectedFrame = z.infer<typeof sessionEventRejectedFrameSchema>;

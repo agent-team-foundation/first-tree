@@ -16,7 +16,8 @@ import type { Config } from "../config.js";
  */
 const baseConfig: Config = {
   channel: "dev",
-  growth: { landingPagesEnabled: false },
+  growth: { landingPagesEnabled: false, landingCampaignMaxAgentTurns: 1 },
+  docs: { enabled: false },
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: undefined },
   workspace: { root: "/tmp/first-tree-test-workspaces" },
@@ -164,8 +165,8 @@ describe("buildApp — server secret validation", () => {
   });
 });
 
-describe("buildApp — feedback static fallback boundary", () => {
-  it("does not serve the SPA shell for feedback routes when feedback is not configured", async () => {
+describe("buildApp — retired feedback route boundary", () => {
+  it("returns a 410 tombstone for /feedback/* instead of the SPA shell", async () => {
     const webRoot = await mkdtemp(join(tmpdir(), "first-tree-web-"));
     await writeFile(join(webRoot, "index.html"), "<!doctype html><html><body>App shell</body></html>", "utf8");
 
@@ -178,9 +179,10 @@ describe("buildApp — feedback static fallback boundary", () => {
       expect(spa.body).toContain("App shell");
 
       const feedback = await app.inject({ method: "POST", url: "/feedback/chat" });
-      expect(feedback.statusCode).toBe(501);
+      expect(feedback.statusCode).toBe(410);
       expect(feedback.headers["content-type"]).toContain("application/json");
-      expect(feedback.json()).toEqual({ error: "Feedback is not configured" });
+      expect(feedback.json()).toEqual({ error: "Feedback has been removed" });
+      expect(feedback.body).not.toContain("App shell");
     } finally {
       await safeClose(app);
       await rm(webRoot, { recursive: true, force: true });

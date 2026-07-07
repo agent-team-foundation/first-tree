@@ -54,9 +54,11 @@ export {
   resolveCliInvocation,
   resolveServerUrl,
   restartClientService,
+  slugFromFilename,
   startClientService,
   status,
   stopClientService,
+  titleFromMarkdown,
   uninstallClientService,
   writeWorkspaceManifest,
 } from "./core/index.js";

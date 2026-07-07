@@ -15,6 +15,8 @@ import { RuntimeTab } from "./pages/agent-detail/runtime-tab.js";
 import { UsageTab } from "./pages/agent-detail/usage-tab.js";
 import { AgentDetailPage } from "./pages/agent-detail.js";
 import { ContextPage } from "./pages/context.js";
+import { DocPage } from "./pages/docs/doc-page.js";
+import { DocsListPage } from "./pages/docs/docs-list-page.js";
 import { InviteAcceptPage } from "./pages/invite-accept.js";
 import { LoginPage } from "./pages/login.js";
 import { OAuthCompletePage } from "./pages/oauth-complete.js";
@@ -322,10 +324,6 @@ export function App() {
                 /onboarding route (below); the workspace root redirects users
                 who haven't finished setup into it. */}
               <Route element={<RequireAuth />}>
-                {/* Reusable growth quickstart — full-screen, outside the
-                    workspace chrome. Login guard only; it owns its own campaign
-                    completion semantics and never writes onboarding stamps. */}
-                <Route path="/quickstart" element={<QuickstartPage />} />
                 {/* Standalone onboarding — full-screen, outside the workspace
                     chrome. The workspace root redirects incomplete users
                     here; this route redirects back once setup is complete. */}
@@ -338,7 +336,16 @@ export function App() {
                   }
                 >
                   <Route index element={<WorkspacePage />} />
+                  {/* Growth quickstart (landing-campaign trial). Lives INSIDE
+                      the Layout group so the trial chat renders with full
+                      workspace chrome — but as its own route, NOT the gated
+                      index, so an un-onboarded trial user is not bounced to
+                      /onboarding. It owns its own campaign completion semantics
+                      and never writes onboarding stamps. */}
+                  <Route path="quickstart" element={<QuickstartPage />} />
                   <Route path="context" element={<ContextPage />} />
+                  <Route path="context/docs" element={<DocsListPage />} />
+                  <Route path="context/docs/:slug" element={<DocPage />} />
                   <Route path="agents/:uuid" element={<AgentDetailPage />}>
                     <Route index element={<Navigate to="profile" replace />} />
                     <Route path="profile" element={<ProfileTab />} />

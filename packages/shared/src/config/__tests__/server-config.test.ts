@@ -71,10 +71,12 @@ describe("server config", () => {
     });
 
     expect(defaultConfig.growth.landingPagesEnabled).toBe(false);
+    expect(defaultConfig.growth.landingCampaignMaxAgentTurns).toBe(1);
 
     resetConfig();
     const enabledConfigDir = makeTempConfigDir();
     vi.stubEnv("FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED", "true");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS", "4");
 
     const enabledConfig = await initConfig({
       schema: createServerConfigSchema({ autoGenerateSecrets: false }),
@@ -83,6 +85,7 @@ describe("server config", () => {
     });
 
     expect(enabledConfig.growth.landingPagesEnabled).toBe(true);
+    expect(enabledConfig.growth.landingCampaignMaxAgentTurns).toBe(4);
   });
 
   it("resolves landing campaign official service ids only when configured", async () => {
@@ -116,6 +119,20 @@ describe("server config", () => {
       clientId: "client_official",
       runtimeProvider: "codex",
     });
+  });
+
+  it("rejects invalid landing campaign max turn limits", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS", "0");
+
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/landingCampaignMaxAgentTurns/);
   });
 
   it("defaults landing campaign runtime provider to codex and accepts claude-code", async () => {
@@ -288,58 +305,5 @@ describe("server config", () => {
 
     expect(config.secrets).toEqual({ jwtSecret, encryptionKey });
     expect(existsSync(join(configDir, "server.yaml"))).toBe(false);
-  });
-
-  it("does not enable feedback from LLM_API_KEY alone", async () => {
-    const configDir = makeTempConfigDir();
-    stubRequiredProductionConfig();
-    vi.stubEnv("LLM_API_KEY", "sk-feedback-test");
-
-    const config = await initConfig({
-      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
-      role: "server",
-      configDir,
-    });
-
-    expect(config.feedback).toBeUndefined();
-  });
-
-  it("rejects half-configured feedback when the feedback repo activates the group", async () => {
-    const configDir = makeTempConfigDir();
-    stubRequiredProductionConfig();
-    vi.stubEnv("HEARBACK_FEEDBACK_REPO", "agent-team-foundation/feedback");
-
-    await expect(
-      initConfig({
-        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
-        role: "server",
-        configDir,
-      }),
-    ).rejects.toThrow(/feedback\.githubToken/);
-  });
-
-  it("resolves feedback LLM settings only after feedback is configured", async () => {
-    const configDir = makeTempConfigDir();
-    stubRequiredProductionConfig();
-    vi.stubEnv("HEARBACK_FEEDBACK_REPO", "agent-team-foundation/feedback");
-    vi.stubEnv("HEARBACK_GITHUB_TOKEN", "ghp_feedback");
-    vi.stubEnv("LLM_API_KEY", "sk-feedback-test");
-    vi.stubEnv("LLM_MODEL", "gpt-test");
-
-    const config = await initConfig({
-      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
-      role: "server",
-      configDir,
-    });
-
-    expect(config.feedback).toEqual({
-      repo: "agent-team-foundation/feedback",
-      githubToken: "ghp_feedback",
-      llm: {
-        apiKey: "sk-feedback-test",
-        model: "gpt-test",
-      },
-      trustProxyHeaders: false,
-    });
   });
 });

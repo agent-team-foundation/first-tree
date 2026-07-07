@@ -9,12 +9,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   assertPathInsideWorkspace,
+  buildLandingCodexAppServerArgs,
+  buildLandingCodexPermissionsConfigOverride,
+  buildWorkspaceOnlyAppServerEnvironment,
   buildWorkspaceOnlyBubblewrapArgs,
   buildWorkspaceOnlyEnvironment,
+  LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS,
+  LANDING_CODEX_PERMISSIONS_PROFILE,
   prepareWorkspaceOnlyOutboxHome,
 } from "../handlers/codex/app-server/workspace-sandbox.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
@@ -64,6 +69,7 @@ describe("workspace-only sandbox", () => {
     const sandboxEnv = buildWorkspaceOnlyEnvironment(
       {
         FIRST_TREE_HOME: join(root, "first-tree-home"),
+        FIRST_TREE_CLI_BIN_DIR: cliBinDir,
         FIRST_TREE_SERVER_URL: "https://first-tree.test",
         OPENAI_API_KEY: "secret",
         GITHUB_TOKEN: "secret",
@@ -96,19 +102,43 @@ describe("workspace-only sandbox", () => {
     expect(args).not.toContain(outside);
   });
 
-  it("scrubs parent env and fails closed without a channel-local First Tree CLI", () => {
+  it("uses the controlled standard tool PATH when no explicit CLI bin dir is configured", () => {
+    setCliBinding({ binName: "sh", packageName: null });
     const firstTreeHome = join(root, "first-tree-home");
-    const cliBinDir = join(firstTreeHome, "bin");
-    mkdirSync(cliBinDir, { recursive: true });
+    const { env, readOnlyPaths } = buildWorkspaceOnlyEnvironment(
+      {
+        FIRST_TREE_HOME: firstTreeHome,
+        PATH: "/sensitive/bin:/usr/bin",
+      },
+      workspace,
+    );
 
-    expect(() =>
-      buildWorkspaceOnlyEnvironment({ FIRST_TREE_HOME: firstTreeHome, PATH: "/usr/bin" }, workspace),
-    ).toThrow(/channel-local First Tree CLI/);
+    const pathDirs = env.PATH?.split(delimiter) ?? [];
+    expect(pathDirs).toContain(env.FIRST_TREE_CLI_BIN_DIR);
+    expect(pathDirs).toContain("/usr/bin");
+    expect(pathDirs).toContain("/bin");
+    expect(env.PATH).not.toContain("/sensitive/bin");
+    expect(readOnlyPaths).toEqual([]);
+  });
+
+  it("fails closed when the channel CLI is absent from the controlled standard tool PATH", () => {
+    const firstTreeHome = join(root, "first-tree-home");
+
+    expect(() => buildWorkspaceOnlyEnvironment({ FIRST_TREE_HOME: firstTreeHome }, workspace)).toThrow(
+      /could not find channel-local First Tree CLI first-tree-test in controlled PATH directories/,
+    );
+  });
+
+  it("scrubs parent env and uses an explicit non-standard CLI bin dir", () => {
+    const firstTreeHome = join(root, "first-tree-home");
+    const cliBinDir = join(root, "explicit-cli-bin");
+    mkdirSync(cliBinDir, { recursive: true });
 
     writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
     const { env, readOnlyPaths } = buildWorkspaceOnlyEnvironment(
       {
         FIRST_TREE_HOME: firstTreeHome,
+        FIRST_TREE_CLI_BIN_DIR: cliBinDir,
         FIRST_TREE_SERVER_URL: "https://first-tree.test",
         FIRST_TREE_AGENT_ID: "agent-1",
         FIRST_TREE_CHAT_ID: "chat-1",
@@ -133,9 +163,120 @@ describe("workspace-only sandbox", () => {
     expect(env.GH_TOKEN).toBeUndefined();
     expect(env.FIRST_TREE_DOC_BASE).toBeUndefined();
     expect(env.FIRST_TREE_WORKSPACES_ROOT).toBeUndefined();
-    expect(env.PATH?.split(":")[0]).toBe(cliBinDir);
+    expect(env.PATH?.split(delimiter)[0]).toBe(cliBinDir);
     expect(env.PATH).not.toContain("/sensitive/bin");
     expect(readOnlyPaths).toEqual([cliBinDir]);
+  });
+
+  it("builds a landing app-server env that keeps Codex auth location without leaking host secrets", () => {
+    const hostHome = join(root, "host-home");
+    const codexHome = join(hostHome, ".codex");
+    const ghConfigDir = join(hostHome, ".config", "gh");
+    const firstTreeHome = join(workspace, ".first-tree-workspace", "outbox-home");
+    const cliBinDir = join(root, "explicit-cli-bin");
+    mkdirSync(codexHome, { recursive: true });
+    mkdirSync(ghConfigDir, { recursive: true });
+    mkdirSync(firstTreeHome, { recursive: true });
+    mkdirSync(cliBinDir, { recursive: true });
+    writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
+
+    const {
+      env,
+      codexHome: resolvedCodexHome,
+      hostHome: resolvedHostHome,
+    } = buildWorkspaceOnlyAppServerEnvironment(
+      {
+        HOME: hostHome,
+        FIRST_TREE_HOME: firstTreeHome,
+        FIRST_TREE_CLI_BIN_DIR: cliBinDir,
+        FIRST_TREE_SERVER_URL: "https://first-tree.test",
+        FIRST_TREE_AGENT_ID: "agent-1",
+        FIRST_TREE_RUNTIME_SESSION_TOKEN: "runtime-secret",
+        FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: "/host/runtime-token",
+        FIRST_TREE_DOC_BASE: outside,
+        FIRST_TREE_WORKSPACES_ROOT: root,
+        OPENAI_API_KEY: "openai-secret",
+        CODEX_API_KEY: "codex-secret",
+        GITHUB_TOKEN: "github-secret",
+        HTTP_PROXY: "http://user:password@proxy.test:8080",
+        HTTPS_PROXY: "http://user:password@proxy.test:8080",
+        SSL_CERT_FILE: join(outside, "ca.pem"),
+        NODE_EXTRA_CA_CERTS: join(outside, "node-ca.pem"),
+        PATH: "/sensitive/bin:/usr/bin",
+      },
+      workspace,
+    );
+
+    expect(resolvedCodexHome).toBe(codexHome);
+    expect(resolvedHostHome).toBe(hostHome);
+    expect(env).toMatchObject({
+      FIRST_TREE_HOME: firstTreeHome,
+      FIRST_TREE_SERVER_URL: "https://first-tree.test",
+      FIRST_TREE_AGENT_ID: "agent-1",
+      HOME: workspace,
+      CODEX_HOME: codexHome,
+      GH_CONFIG_DIR: ghConfigDir,
+      TMPDIR: "/tmp",
+    });
+    expect(env.PATH?.split(delimiter)[0]).toBe(cliBinDir);
+    expect(env.PATH).not.toContain("/sensitive/bin");
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.CODEX_API_KEY).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.HTTP_PROXY).toBeUndefined();
+    expect(env.HTTPS_PROXY).toBeUndefined();
+    expect(env.SSL_CERT_FILE).toBeUndefined();
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN).toBeUndefined();
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE).toBeUndefined();
+    expect(env.FIRST_TREE_DOC_BASE).toBeUndefined();
+    expect(env.FIRST_TREE_WORKSPACES_ROOT).toBeUndefined();
+  });
+
+  it("builds landing Codex app-server args with a default permissions profile", () => {
+    const hostHome = join(root, "host-home");
+    const codexHome = join(hostHome, ".codex");
+    mkdirSync(codexHome, { recursive: true });
+
+    expect(buildLandingCodexAppServerArgs(workspace, codexHome, hostHome)).toEqual([
+      "-c",
+      buildLandingCodexPermissionsConfigOverride(workspace, codexHome, hostHome),
+      "-c",
+      `default_permissions=${JSON.stringify(LANDING_CODEX_PERMISSIONS_PROFILE)}`,
+    ]);
+  });
+
+  it("allows host system reads while denying selected host credentials in the landing Codex profile", () => {
+    const hostHome = join(root, "host-home");
+    const codexHome = join(hostHome, ".codex");
+    mkdirSync(codexHome, { recursive: true });
+
+    const override = buildLandingCodexPermissionsConfigOverride(workspace, codexHome, hostHome);
+
+    expect(override).toContain(`${JSON.stringify(":root")} = "read"`);
+    expect(override).toContain(`${JSON.stringify(workspace)} = "write"`);
+    for (const relativePath of LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS) {
+      expect(override).toContain(`${JSON.stringify(join(hostHome, relativePath))} = "deny"`);
+    }
+    expect(override).toContain(`${JSON.stringify(codexHome)} = "deny"`);
+    expect(override).not.toContain(".config/gh");
+    expect(override).not.toContain(".git-credentials");
+  });
+
+  it("does not add an extra read-only bind for an explicit CLI dir covered by system mounts", () => {
+    setCliBinding({ binName: "sh", packageName: null });
+
+    const { env, readOnlyPaths } = buildWorkspaceOnlyEnvironment(
+      {
+        FIRST_TREE_HOME: join(root, "first-tree-home"),
+        FIRST_TREE_CLI_BIN_DIR: "/bin",
+      },
+      workspace,
+    );
+
+    expect(env.FIRST_TREE_CLI_BIN_DIR).toBe("/bin");
+    expect(env.PATH?.split(delimiter)[0]).toBe("/bin");
+    expect(readOnlyPaths).toEqual([]);
   });
 
   it("builds a workspace-local First Tree home with only scoped outbox credentials", () => {

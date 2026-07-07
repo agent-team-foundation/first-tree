@@ -58,11 +58,14 @@ type AgentRequestFn = (
  */
 export type CreateTestAppOptions = {
   channel?: Config["channel"];
+  /** Document review (docloop) routes. Defaults to enabled in tests. */
+  docsEnabled?: boolean;
   growthLandingPagesEnabled?: boolean;
   landingCampaignServiceUserId?: string;
   landingCampaignServiceOrgId?: string;
   landingCampaignClientId?: string;
   landingCampaignRuntimeProvider?: "codex" | "claude-code";
+  landingCampaignMaxAgentTurns?: number;
   commandVersion?: string;
   rateLimit?: Partial<NonNullable<Config["rateLimit"]>>;
   connectBootstrap?: Config["connectBootstrap"];
@@ -96,6 +99,7 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
     channel: opts.channel ?? "dev",
     growth: {
       landingPagesEnabled: opts.growthLandingPagesEnabled ?? false,
+      landingCampaignMaxAgentTurns: opts.landingCampaignMaxAgentTurns ?? 1,
       ...(opts.landingCampaignServiceUserId !== undefined ||
       opts.landingCampaignServiceOrgId !== undefined ||
       opts.landingCampaignClientId !== undefined ||
@@ -109,6 +113,11 @@ export async function createTestApp(opts: CreateTestAppOptions = {}): Promise<Fa
             },
           }
         : {}),
+    },
+    docs: {
+      // Docloop is off by default in production config but on in tests so
+      // the document routes are exercised without per-test wiring.
+      enabled: opts.docsEnabled ?? true,
     },
     database: {
       url: process.env.DATABASE_URL ?? "",

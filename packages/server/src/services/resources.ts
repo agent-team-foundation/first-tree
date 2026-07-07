@@ -29,7 +29,7 @@ import {
   type UpdateAgentResources,
   type UpdateTeamResource,
 } from "@first-tree/shared";
-import { and, eq, inArray, ne, or, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentResourceBindings } from "../db/schema/agent-resource-bindings.js";
@@ -39,6 +39,11 @@ import { resources } from "../db/schema/resources.js";
 import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import { uuidv7 } from "../uuid.js";
 import { getCampaignScanSkill } from "./landing-campaigns/skills/catalog.js";
+import {
+  LANDING_CAMPAIGN_TRIAL_PROMPT,
+  LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_DESCRIPTION,
+  LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_NAME,
+} from "./landing-campaigns/trial-prompt.js";
 import type { Notifier } from "./notifier.js";
 
 type ResourceDbRow = typeof resources.$inferSelect;
@@ -65,6 +70,13 @@ export type ResourcesService = {
    * admin-only); no-op for an unknown campaign slug.
    */
   ensureAndBindCampaignScanSkill(agentId: string, campaign: string, actorId: string, setupUrl: string): Promise<void>;
+  /**
+   * Idempotently bind the service-owned initial prompt for landing campaign
+   * trial agents. The prompt is an agent-scoped managed resource so it projects
+   * through the normal runtime prompt stack without entering the editable
+   * standalone inline prompt path.
+   */
+  ensureAndBindLandingCampaignTrialPrompt(agentId: string, actorId: string): Promise<void>;
   resolveRuntimeConfig(config: AgentRuntimeConfig): Promise<AgentRuntimeConfig>;
   resolveEffectiveResources(agentId: string): Promise<EffectiveAgentResources>;
 };
@@ -647,7 +659,12 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
   }
 
   function renderPromptRow(name: string, source: EffectiveResourceRow["source"], body: string): string {
-    const title = source === "inline_prompt" ? "Agent Prompt (this agent only)" : `Team Prompt: ${name}`;
+    const title =
+      source === "inline_prompt"
+        ? "Agent Prompt (this agent only)"
+        : source === "agent_extra"
+          ? `Agent Prompt Override: ${name}`
+          : `Team Prompt: ${name}`;
     return `\n\n## ${title}\n\n${body.trim()}\n`;
   }
 
@@ -1125,6 +1142,152 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         bindings: bindingRows.map(bindingToInput),
         availableTeamResources: availableTeamResources.map(rowToResource),
       };
+    },
+
+    async ensureAndBindLandingCampaignTrialPrompt(agentId, actorId) {
+      const [agent] = await db
+        .select({ organizationId: agents.organizationId, managerId: agents.managerId, status: agents.status })
+        .from(agents)
+        .where(eq(agents.uuid, agentId))
+        .limit(1);
+      if (!agent || agent.status === "deleted") return;
+      const organizationId = agent.organizationId;
+
+      const [actor] = await db
+        .select({ organizationId: members.organizationId, role: members.role })
+        .from(members)
+        .where(eq(members.id, actorId))
+        .limit(1);
+      const isManager = agent.managerId === actorId;
+      const isOrgAdmin = !!actor && actor.organizationId === organizationId && actor.role === "admin";
+      if (!isManager && !isOrgAdmin) throw new NotFoundError(`Agent "${agentId}" not found`);
+
+      const desiredPayload = {
+        body: LANDING_CAMPAIGN_TRIAL_PROMPT,
+        description: LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_DESCRIPTION,
+      };
+      const payloadMatchesDesired = (stored: unknown): boolean =>
+        typeof stored === "object" &&
+        stored !== null &&
+        "body" in stored &&
+        stored.body === desiredPayload.body &&
+        "description" in stored &&
+        stored.description === desiredPayload.description;
+
+      const findPromptResourceId = async (database: Database): Promise<string | null> => {
+        const [row] = await database
+          .select({ id: resources.id })
+          .from(resources)
+          .where(
+            and(
+              eq(resources.organizationId, organizationId),
+              eq(resources.type, "prompt"),
+              eq(resources.scope, "agent"),
+              eq(resources.ownerAgentId, agentId),
+              eq(resources.name, LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_NAME),
+              inArray(resources.status, ["active", "stale"]),
+            ),
+          )
+          .limit(1);
+        return row?.id ?? null;
+      };
+
+      let needsNotify = false;
+      await db.transaction(async (tx) => {
+        const targetDb = tx as unknown as Database;
+        await targetDb.select({ uuid: agents.uuid }).from(agents).where(eq(agents.uuid, agentId)).for("update");
+
+        let resourceId = await findPromptResourceId(targetDb);
+        let contentChanged = false;
+        if (!resourceId) {
+          resourceId = uuidv7();
+          await targetDb.insert(resources).values({
+            id: resourceId,
+            organizationId,
+            type: "prompt",
+            scope: "agent",
+            ownerAgentId: agentId,
+            name: LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_NAME,
+            repoCanonicalKey: null,
+            defaultEnabled: null,
+            status: "active",
+            payload: desiredPayload,
+            createdBy: actorId,
+            updatedBy: actorId,
+          });
+        } else {
+          const [current] = await targetDb
+            .select({ payload: resources.payload })
+            .from(resources)
+            .where(eq(resources.id, resourceId))
+            .limit(1);
+          if (!payloadMatchesDesired(current?.payload)) {
+            await targetDb
+              .update(resources)
+              .set({ payload: desiredPayload, updatedAt: new Date(), updatedBy: actorId })
+              .where(eq(resources.id, resourceId));
+            contentChanged = true;
+          }
+        }
+
+        const staleInlineGuardrails = await targetDb
+          .select({ id: agentResourceBindings.id })
+          .from(agentResourceBindings)
+          .where(
+            and(
+              eq(agentResourceBindings.agentId, agentId),
+              eq(agentResourceBindings.type, "prompt"),
+              eq(agentResourceBindings.mode, "include"),
+              isNull(agentResourceBindings.resourceId),
+              eq(agentResourceBindings.inlinePromptBody, LANDING_CAMPAIGN_TRIAL_PROMPT),
+            ),
+          );
+        if (staleInlineGuardrails.length > 0) {
+          await targetDb.delete(agentResourceBindings).where(
+            inArray(
+              agentResourceBindings.id,
+              staleInlineGuardrails.map((row) => row.id),
+            ),
+          );
+          contentChanged = true;
+        }
+
+        const [already] = await targetDb
+          .select({ id: agentResourceBindings.id })
+          .from(agentResourceBindings)
+          .where(and(eq(agentResourceBindings.agentId, agentId), eq(agentResourceBindings.resourceId, resourceId)))
+          .limit(1);
+        if (already) {
+          if (contentChanged) {
+            await bumpAgentConfigVersions(targetDb, [agentId], actorId);
+            needsNotify = true;
+          }
+          return;
+        }
+
+        const existing = await targetDb
+          .select({ id: agentResourceBindings.id })
+          .from(agentResourceBindings)
+          .where(eq(agentResourceBindings.agentId, agentId));
+        await targetDb.insert(agentResourceBindings).values({
+          id: uuidv7(),
+          organizationId,
+          agentId,
+          type: "prompt",
+          mode: "include",
+          resourceId,
+          replacesResourceId: null,
+          inlinePromptBody: null,
+          repoRef: null,
+          repoLocalPath: null,
+          order: existing.length,
+          createdBy: actorId,
+          updatedBy: actorId,
+        });
+        await bumpAgentConfigVersions(targetDb, [agentId], actorId);
+        needsNotify = true;
+      });
+      if (needsNotify) await notifyAgents([agentId]);
     },
 
     async ensureAndBindCampaignScanSkill(agentId, campaign, actorId, setupUrl) {

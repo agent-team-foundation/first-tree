@@ -72,7 +72,8 @@ export function stripReservedAgentMetadata(metadata: unknown): Record<string, un
   return publicMetadata;
 }
 
-function userMetadataUpdateExpression(metadata: Record<string, unknown>) {
+// Callers provide public metadata; internal runtime state is copied from the existing row.
+export function agentMetadataUpdateExpressionPreservingRuntimeState(metadata: Record<string, unknown>) {
   return sql`${JSON.stringify(metadata)}::jsonb || jsonb_strip_nulls(jsonb_build_object(
     'runtimeSwitch', ${agents.metadata}->'runtimeSwitch',
     'runtimeSession', ${agents.metadata}->'runtimeSession'
@@ -1066,7 +1067,7 @@ export async function updateAgent(db: Database, uuid: string, data: UpdateAgent)
   if (data.visibility !== undefined) updates.visibility = data.visibility;
   if (data.metadata !== undefined) {
     assertUserAgentMetadataHasNoReservedKeys(data.metadata);
-    (updates as Record<string, unknown>).metadata = userMetadataUpdateExpression(data.metadata);
+    (updates as Record<string, unknown>).metadata = agentMetadataUpdateExpressionPreservingRuntimeState(data.metadata);
   }
   // Explicit null clears the override (renderer falls back to djb2 hash).
   // Omitting the field leaves the column untouched.

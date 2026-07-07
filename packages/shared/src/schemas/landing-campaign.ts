@@ -41,6 +41,8 @@ export type LandingCampaignTrialAgentMetadata = z.infer<typeof landingCampaignTr
 
 export const landingCampaignTrialChatStateSchema = z.enum(["running", "awaiting_user", "completed", "failed"]);
 export type LandingCampaignTrialChatState = z.infer<typeof landingCampaignTrialChatStateSchema>;
+export const landingCampaignTrialAwaitingUserKindSchema = z.enum(["request", "follow_up"]);
+export type LandingCampaignTrialAwaitingUserKind = z.infer<typeof landingCampaignTrialAwaitingUserKindSchema>;
 
 export const landingCampaignTrialChatMetadataSchema = z.object({
   landingCampaignTrial: z.object({
@@ -51,6 +53,10 @@ export const landingCampaignTrialChatMetadataSchema = z.object({
     repo: landingCampaignRepoMetadataSchema,
     state: landingCampaignTrialChatStateSchema,
     inputLocked: z.boolean(),
+    awaitingUserKind: landingCampaignTrialAwaitingUserKindSchema.optional(),
+    maxAgentTurns: z.number().int().min(1).default(1),
+    completedAgentTurns: z.number().int().min(0).default(0),
+    completedAgentTurnIds: z.array(z.string().min(1)).default([]),
   }),
 });
 export type LandingCampaignTrialChatMetadata = z.infer<typeof landingCampaignTrialChatMetadataSchema>;

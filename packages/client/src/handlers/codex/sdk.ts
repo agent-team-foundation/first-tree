@@ -3,6 +3,7 @@ import {
   type AgentRuntimeConfigPayload,
   deriveRepoLocalPath,
   encodeProviderRetryEventMessage,
+  isLandingCampaignTrialAgentMetadata,
   RUNTIME_NOTICE_METADATA_KEY,
   runtimeProviderSchema,
   type SessionEvent,
@@ -66,6 +67,11 @@ import { acquireAgentHome, markWorkspaceInitComplete } from "../../runtime/works
 import { chunkAssistantText } from "../assistant-text.js";
 import { formatAuthHint, isCodexAuthError } from "../auth-error-hint.js";
 import { resolveTurnSettlement } from "../turn-settlement.js";
+import {
+  LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED,
+  LandingTrialTurnCompletionConfirmError,
+  turnCompletionIdForMessages,
+} from "./turn-completion.js";
 
 /**
  * Codex SDK does not export its `CodexConfigObject` type, so reproduce the
@@ -76,6 +82,24 @@ type CodexConfigValue = string | number | boolean | CodexConfigValue[] | CodexCo
 type CodexConfigObject = { [key: string]: CodexConfigValue };
 
 const RESULT_PREVIEW_LIMIT = 400;
+
+async function emitTurnEnd(
+  sessionCtx: SessionContext,
+  event: Extract<SessionEvent, { kind: "turn_end" }>,
+): Promise<void> {
+  if (event.payload.status === "success" && isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata)) {
+    if (!sessionCtx.emitEventConfirmed) {
+      throw new LandingTrialTurnCompletionConfirmError("confirmed session event channel unavailable");
+    }
+    try {
+      await sessionCtx.emitEventConfirmed(event);
+    } catch (err) {
+      throw new LandingTrialTurnCompletionConfirmError(err);
+    }
+    return;
+  }
+  sessionCtx.emitEvent(event);
+}
 
 /**
  * Chat-visible notice posted when a turn is detected as a usage-limit empty
@@ -207,11 +231,7 @@ function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
  * can lock the auth-mode-friendly defaults (notably `model` only set when
  * the operator chose one).
  */
-export function buildCodexThreadOptions(
-  payload: AgentRuntimeConfigPayload,
-  workspaceCwd: string,
-  options: { workspaceOnly?: boolean } = {},
-): ThreadOptions {
+export function buildCodexThreadOptions(payload: AgentRuntimeConfigPayload, workspaceCwd: string): ThreadOptions {
   const additionalDirectories: string[] = [];
   for (const repo of payload.gitRepos) {
     const localPath = repo.localPath ?? deriveRepoLocalPath(repo.url);
@@ -230,13 +250,13 @@ export function buildCodexThreadOptions(
   // `gpt-5-codex` family, while API-key auth accepts it). Hard-coding a
   // default here would force one auth mode and silently fail on the other.
   // Sandbox: ordinary codex agents remain `danger-full-access` because codex is
-  // their primary local-execution surface. Landing campaign trials run inside a
-  // process-level workspace-only sandbox; use codex's own workspace-write mode
-  // there as a second, scoped belt without changing the ordinary path.
+  // their primary local-execution surface. Landing campaign trials are forced
+  // through the app-server handler, which supplies a custom managed permissions
+  // profile instead of this SDK-only legacy sandbox field.
   const opts: ThreadOptions = {
     workingDirectory: workspaceCwd,
     skipGitRepoCheck: true,
-    sandboxMode: options.workspaceOnly ? "workspace-write" : "danger-full-access",
+    sandboxMode: "danger-full-access",
     approvalPolicy: "never",
     // Operator-configured reasoning effort. Defaults to "high" (the value this
     // previously hard-coded). The codex variant's enum (low|medium|high|xhigh)
@@ -1192,14 +1212,32 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         sessionCtx.log(`Failed to emit token_usage: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    sessionCtx.emitEvent({
-      kind: "turn_end",
-      payload: { status: settlement.status },
-    });
     const turnDelivered = settlement.action.kind === "complete";
     if (settlement.action.kind === "complete") {
+      const isLandingTrial = isLandingCampaignTrialAgentMetadata(sessionCtx.agent.metadata);
+      try {
+        await emitTurnEnd(sessionCtx, {
+          kind: "turn_end",
+          payload: {
+            status: settlement.status,
+            ...(settlement.status === "success" && isLandingTrial
+              ? { turnCompletionId: turnCompletionIdForMessages(messages) }
+              : {}),
+          },
+        });
+      } catch (err) {
+        if (!(err instanceof LandingTrialTurnCompletionConfirmError)) throw err;
+        sessionCtx.log(`landing trial turn completion confirmation failed after provider completion: ${err.message}`);
+        token.retry(messages, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+        await closeSdkSessionAfterUncommittablePrefix(sessionCtx, LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED);
+        return false;
+      }
       await token.complete(messages, settlement.action.outcome);
     } else {
+      sessionCtx.emitEvent({
+        kind: "turn_end",
+        payload: { status: settlement.status },
+      });
       token.retry(messages, settlement.action.reason);
     }
 
@@ -1339,6 +1377,19 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     for (const queued of drained) {
       queued.token.retry(queued.message, reason);
     }
+  }
+
+  async function closeSdkSessionAfterUncommittablePrefix(sessionCtx: SessionContext, reason: string): Promise<void> {
+    retryQueuedMessages(reason);
+    currentAbort?.abort();
+    currentAbort = null;
+    currentTurnPromise = null;
+    const resumeThreadId = threadId ?? undefined;
+    thread = null;
+    codex = null;
+    initialTurnPreparing = false;
+    pendingChatContextPrompt = null;
+    sessionCtx.failSessionForRecovery?.(reason, resumeThreadId);
   }
 
   function ensureCodexBootstrap(

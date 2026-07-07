@@ -1,5 +1,6 @@
 import {
   type LandingCampaignRepoMetadata,
+  type LandingCampaignTrialAwaitingUserKind,
   type LandingCampaignTrialChatState,
   parseLandingCampaignTrialAgentMetadata,
   parseLandingCampaignTrialChatMetadata,
@@ -44,6 +45,10 @@ export function buildLandingCampaignChatMetadata(input: {
   repo: LandingCampaignRepoMetadata;
   state: LandingCampaignTrialChatState;
   inputLocked: boolean;
+  awaitingUserKind?: LandingCampaignTrialAwaitingUserKind;
+  maxAgentTurns?: number;
+  completedAgentTurns?: number;
+  completedAgentTurnIds?: string[];
 }): Record<string, unknown> {
   return {
     landingCampaignTrial: {
@@ -54,6 +59,10 @@ export function buildLandingCampaignChatMetadata(input: {
       repo: input.repo,
       state: input.state,
       inputLocked: input.inputLocked,
+      ...(input.awaitingUserKind ? { awaitingUserKind: input.awaitingUserKind } : {}),
+      maxAgentTurns: input.maxAgentTurns ?? 1,
+      completedAgentTurns: input.completedAgentTurns ?? 0,
+      completedAgentTurnIds: input.completedAgentTurnIds ?? [],
     },
   };
 }
@@ -62,15 +71,26 @@ export function withLandingCampaignChatState(
   metadata: Record<string, unknown>,
   state: LandingCampaignTrialChatState,
   inputLocked: boolean,
+  updates: {
+    awaitingUserKind?: LandingCampaignTrialAwaitingUserKind;
+    completedAgentTurns?: number;
+    completedAgentTurnIds?: string[];
+    maxAgentTurns?: number;
+  } = {},
 ): Record<string, unknown> {
   const current = parseLandingCampaignTrialChatMetadata(metadata);
   if (!current) return metadata;
+  const nextTrial = {
+    ...current,
+    state,
+    inputLocked,
+    ...updates,
+  };
+  if (state !== "awaiting_user") {
+    delete nextTrial.awaitingUserKind;
+  }
   return {
     ...metadata,
-    landingCampaignTrial: {
-      ...current,
-      state,
-      inputLocked,
-    },
+    landingCampaignTrial: nextTrial,
   };
 }

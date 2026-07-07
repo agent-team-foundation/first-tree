@@ -88,6 +88,7 @@ import {
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
+import { LiveTurnAgentsContext } from "../../../components/chat/live-turn-context.js";
 import {
   findBlockingRequest,
   findThreadableRequestId,
@@ -2370,6 +2371,34 @@ export function ChatView({
 
   const itemCount = items.length;
 
+  // Agents with a live (un-ended) turn: one workgroup == one in-progress turn
+  // (see the `items` builder above). This is the timeline's authoritative
+  // "working" signal — a mounted WorkingTurn. Provided via LiveTurnAgentsContext
+  // so every chat-scoped status surface (roster, compose bar, hovercard)
+  // reconciles the composite against it (`reconcileLiveTurn`) from one source —
+  // a lapsed per-chat runtime heartbeat (or a missed composite invalidation)
+  // can't show Idle while a WorkingTurn is visibly on screen. Derived from
+  // `items` (not `visibleItems`) so a viewer-local blocking truncation never
+  // blanks an agent's work status.
+  //
+  // Scope: `eventsData` is a single-(primary-)agent feed (`["session-events",
+  // agentId, chatId]`), so `items` only ever carries the primary agent's
+  // workgroup and this set covers only that agent — exactly the agent whose
+  // WorkingTurn is on screen. `reconcileLiveTurn` is upgrade-only, so a
+  // secondary agent (no card) is never wrongly forced to working; it just shows
+  // the composite. Fixing idle-while-working for secondary agents would need a
+  // multi-agent events feed and is out of this stopgap's scope.
+  const liveTurnAgentIds = useMemo(
+    () =>
+      new Set(
+        items
+          .filter((it): it is Extract<TimelineItem, { kind: "workgroup" }> => it.kind === "workgroup")
+          .map((it) => it.events[0]?.agentId)
+          .filter((id): id is string => id != null),
+      ),
+    [items],
+  );
+
   // Blocking truncation: while a question blocks me (the FIFO-oldest live
   // request directed at me), hide every timeline item AFTER that request's
   // card — the conversation does not continue until I answer. The block is
@@ -3305,7 +3334,9 @@ export function ChatView({
     },
   });
 
-  return (
+  // Wrapped via a variable (not nested inline) so introducing the provider
+  // doesn't re-indent the entire chat body — keeps the diff about the fix.
+  const body = (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Chat body: left column owns header + timeline + composer; right
           rail (chat details) sits as an independent column when open.
@@ -4275,6 +4306,7 @@ export function ChatView({
       </div>
     </div>
   );
+  return <LiveTurnAgentsContext.Provider value={liveTurnAgentIds}>{body}</LiveTurnAgentsContext.Provider>;
 }
 
 /**

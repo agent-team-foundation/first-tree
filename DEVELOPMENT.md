@@ -59,7 +59,7 @@ The local `dev` channel can auto-generate `FIRST_TREE_JWT_SECRET` and
 `FIRST_TREE_ENCRYPTION_KEY` when they are omitted. Set stable values only when
 you need tokens or encrypted local rows to survive config regeneration.
 
-The Vite web dev server proxies `/api/v1` and `/feedback` to
+The Vite web dev server proxies `/api/v1` to
 `http://localhost:8000` by default. If your server is on another port or host,
 start web with:
 

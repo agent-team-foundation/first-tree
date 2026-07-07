@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { accessSync, constants, existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { getCliBinding } from "../../../runtime/cli-binding.js";
 import type { SpawnProcess } from "./client.js";
@@ -24,6 +25,33 @@ type WorkspaceOnlyEnvironment = {
   readOnlyPaths: string[];
 };
 
+type WorkspaceOnlyAppServerEnvironment = {
+  env: NodeJS.ProcessEnv;
+  codexHome: string;
+  hostHome: string;
+};
+
+type LandingCodexPermissionProfileConfig = {
+  description: string;
+  workspace_roots: Record<string, true>;
+  filesystem: Record<string, "read" | "write" | "deny">;
+  network: {
+    enabled: true;
+  };
+};
+
+type TomlInlinePrimitive = string | number | boolean;
+type TomlInlineValue = TomlInlinePrimitive | TomlInlineObject;
+type TomlInlineObject = {
+  [key: string]: TomlInlineValue;
+};
+
+type WorkspaceOnlyCliResolution = {
+  cliBinDir: string;
+  pathDirs: string[];
+  readOnlyPaths: string[];
+};
+
 type WorkspaceOnlyOutboxHomeOptions = {
   parentEnv: NodeJS.ProcessEnv;
   workspaceRoot: string;
@@ -45,6 +73,16 @@ const READ_ONLY_ETC_PATHS = [
   "/etc/protocols",
   "/etc/services",
 ] as const;
+const LANDING_CODEX_ROOT_READ_PATH = ":root";
+export const LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS = [
+  ".codex",
+  ".ssh",
+  ".first-tree",
+  ".first-tree-staging",
+  ".first-tree-dev",
+  ".first-tree-local",
+  ".first-tree-test",
+] as const;
 const WORKSPACE_ONLY_PATH_DIRS = ["/usr/local/bin", "/usr/bin", "/bin"] as const;
 const SAFE_PASS_ENV_KEYS = new Set([
   "FIRST_TREE_HOME",
@@ -62,6 +100,22 @@ const SAFE_PASS_ENV_KEYS = new Set([
   "TERM",
   "TZ",
 ]);
+const WORKSPACE_ONLY_APP_SERVER_PASS_ENV_KEYS = new Set([
+  "FIRST_TREE_SERVER_URL",
+  "FIRST_TREE_AGENT_ID",
+  "FIRST_TREE_INBOX_ID",
+  "FIRST_TREE_CHAT_ID",
+  "FIRST_TREE_CLIENT_ID",
+  "FIRST_TREE_PROVIDER",
+  "FIRST_TREE_SWITCH_DRAIN_VERSION",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TERM",
+  "TZ",
+]);
+
+export const LANDING_CODEX_PERMISSIONS_PROFILE = "first-tree-landing-trial";
 
 function pathIsWithin(parent: string, child: string): boolean {
   return child === parent || child.startsWith(parent.endsWith(sep) ? parent : `${parent}${sep}`);
@@ -131,6 +185,26 @@ function isCoveredBySystemBind(path: string): boolean {
   return READ_ONLY_SYSTEM_DIRS.some((dir) => existsSync(dir) && pathIsWithin(dir, path));
 }
 
+function existingDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function uniqueExistingDirs(paths: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const dirs: string[] = [];
+  for (const path of paths) {
+    const dir = isAbsolute(path) ? path : resolve(path);
+    if (!existingDirectory(dir) || seen.has(dir)) continue;
+    seen.add(dir);
+    dirs.push(dir);
+  }
+  return dirs;
+}
+
 function validateChannelCliBin(binDir: string, source: string): void {
   const { binName } = getCliBinding();
   const cliPath = join(binDir, binName);
@@ -141,23 +215,120 @@ function validateChannelCliBin(binDir: string, source: string): void {
   }
 }
 
-function resolveChannelCliBinDir(parentEnv: NodeJS.ProcessEnv): string {
+function resolveHostHome(parentEnv: NodeJS.ProcessEnv, workspaceRoot: string): string {
+  const rawHome = parentEnv.HOME?.trim();
+  const hostHome = rawHome && rawHome !== workspaceRoot ? rawHome : homedir();
+  return isAbsolute(hostHome) ? hostHome : resolve(hostHome);
+}
+
+function resolveHostCodexHome(parentEnv: NodeJS.ProcessEnv, hostHome: string): string {
+  const rawCodexHome = parentEnv.CODEX_HOME?.trim();
+  if (rawCodexHome) {
+    return isAbsolute(rawCodexHome) ? rawCodexHome : resolve(hostHome, rawCodexHome);
+  }
+  return join(hostHome, ".codex");
+}
+
+function addDenyPath(paths: Set<string>, path: string): void {
+  paths.add(path);
+  if (existsSync(path)) {
+    try {
+      paths.add(realpathSync(path));
+    } catch {
+      // A lexical deny still blocks the configured path.
+    }
+  }
+}
+
+export function landingCodexDenyPaths(codexHome: string, hostHome: string): string[] {
+  const paths = new Set([codexHome]);
+  addDenyPath(paths, codexHome);
+  for (const relativePath of LANDING_CODEX_HOST_CREDENTIAL_DENY_RELATIVE_PATHS) {
+    addDenyPath(paths, join(hostHome, relativePath));
+  }
+  return [...paths];
+}
+
+export function buildLandingCodexPermissionProfile(
+  workspacePath: string,
+  codexHome: string,
+  hostHome: string,
+): LandingCodexPermissionProfileConfig {
+  const filesystem: LandingCodexPermissionProfileConfig["filesystem"] = {
+    [LANDING_CODEX_ROOT_READ_PATH]: "read",
+    [workspacePath]: "write",
+  };
+  for (const path of landingCodexDenyPaths(codexHome, hostHome)) {
+    filesystem[path] = "deny";
+  }
+
+  return {
+    description: "First Tree landing trial root-read profile with selected host credential denies",
+    workspace_roots: {
+      [workspacePath]: true,
+    },
+    filesystem,
+    network: {
+      enabled: true,
+    },
+  };
+}
+
+function tomlInline(value: TomlInlineValue): string {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return `{ ${Object.entries(value)
+    .map(([key, child]) => `${JSON.stringify(key)} = ${tomlInline(child)}`)
+    .join(", ")} }`;
+}
+
+export function buildLandingCodexPermissionsConfigOverride(
+  workspacePath: string,
+  codexHome: string,
+  hostHome: string,
+): string {
+  return `permissions=${tomlInline({
+    [LANDING_CODEX_PERMISSIONS_PROFILE]: buildLandingCodexPermissionProfile(workspacePath, codexHome, hostHome),
+  })}`;
+}
+
+export function buildLandingCodexAppServerArgs(workspacePath: string, codexHome: string, hostHome: string): string[] {
+  return [
+    "-c",
+    buildLandingCodexPermissionsConfigOverride(workspacePath, codexHome, hostHome),
+    "-c",
+    `default_permissions=${JSON.stringify(LANDING_CODEX_PERMISSIONS_PROFILE)}`,
+  ];
+}
+
+function resolveWorkspaceOnlyCli(parentEnv: NodeJS.ProcessEnv): WorkspaceOnlyCliResolution {
+  const defaultPathDirs = uniqueExistingDirs(WORKSPACE_ONLY_PATH_DIRS);
   const explicit = parentEnv.FIRST_TREE_CLI_BIN_DIR;
   if (explicit) {
     const binDir = isAbsolute(explicit) ? explicit : resolve(explicit);
     validateChannelCliBin(binDir, "FIRST_TREE_CLI_BIN_DIR");
-    return binDir;
+    return {
+      cliBinDir: binDir,
+      pathDirs: uniqueExistingDirs([binDir, ...WORKSPACE_ONLY_PATH_DIRS]),
+      readOnlyPaths: isCoveredBySystemBind(binDir) ? [] : [binDir],
+    };
   }
 
-  const home = parentEnv.FIRST_TREE_HOME;
-  if (!home) {
-    throw new Error(
-      "workspace-only sandbox requires FIRST_TREE_CLI_BIN_DIR, or FIRST_TREE_HOME with a legacy bin shim fallback",
-    );
+  for (const binDir of defaultPathDirs) {
+    try {
+      validateChannelCliBin(binDir, "controlled PATH");
+      return { cliBinDir: binDir, pathDirs: defaultPathDirs, readOnlyPaths: [] };
+    } catch {
+      // Keep searching the controlled tool PATH.
+    }
   }
-  const binDir = join(isAbsolute(home) ? home : resolve(home), "bin");
-  validateChannelCliBin(binDir, "legacy FIRST_TREE_HOME/bin fallback");
-  return binDir;
+
+  const { binName } = getCliBinding();
+  const searched = defaultPathDirs.length > 0 ? defaultPathDirs.join(", ") : "(no existing standard tool dirs)";
+  throw new Error(
+    `workspace-only sandbox could not find channel-local First Tree CLI ${binName} in controlled PATH directories: ${searched}. Install ${binName} in /usr/local/bin, /usr/bin, or /bin, or set FIRST_TREE_CLI_BIN_DIR to its directory.`,
+  );
 }
 
 function writePrivateFile(path: string, content: string): void {
@@ -170,7 +341,7 @@ export function prepareWorkspaceOnlyOutboxHome(options: WorkspaceOnlyOutboxHomeO
   cliBinDir: string;
 } {
   const realWorkspace = realpathExisting(options.workspaceRoot, "workspaceRoot");
-  const cliBinDir = resolveChannelCliBinDir(options.parentEnv);
+  const { cliBinDir } = resolveWorkspaceOnlyCli(options.parentEnv);
 
   const home = join(realWorkspace, ".first-tree-workspace", "outbox-home");
   const configDir = join(home, "config");
@@ -217,10 +388,7 @@ export function buildWorkspaceOnlyEnvironment(
     throw new Error("workspace-only sandbox requires FIRST_TREE_HOME for sandbox-local First Tree config");
   }
   const resolvedHome = isAbsolute(firstTreeHome) ? firstTreeHome : resolve(firstTreeHome);
-  const cliBinDir = resolveChannelCliBinDir({
-    FIRST_TREE_HOME: resolvedHome,
-    FIRST_TREE_CLI_BIN_DIR: parentEnv.FIRST_TREE_CLI_BIN_DIR,
-  });
+  const cli = resolveWorkspaceOnlyCli(parentEnv);
 
   const env: NodeJS.ProcessEnv = {};
   for (const key of SAFE_PASS_ENV_KEYS) {
@@ -230,9 +398,42 @@ export function buildWorkspaceOnlyEnvironment(
   env.FIRST_TREE_HOME = resolvedHome;
   env.HOME = realWorkspace;
   env.TMPDIR = "/tmp";
-  env.PATH = [cliBinDir, ...WORKSPACE_ONLY_PATH_DIRS].filter((entry) => existsSync(entry)).join(delimiter);
+  env.FIRST_TREE_CLI_BIN_DIR = cli.cliBinDir;
+  env.PATH = cli.pathDirs.join(delimiter);
 
-  return { env, readOnlyPaths: [cliBinDir] };
+  return { env, readOnlyPaths: cli.readOnlyPaths };
+}
+
+export function buildWorkspaceOnlyAppServerEnvironment(
+  parentEnv: NodeJS.ProcessEnv,
+  workspaceRoot: string,
+): WorkspaceOnlyAppServerEnvironment {
+  const realWorkspace = realpathExisting(workspaceRoot, "workspaceRoot");
+  const firstTreeHome = parentEnv.FIRST_TREE_HOME;
+  if (!firstTreeHome) {
+    throw new Error("workspace-only app-server requires FIRST_TREE_HOME for sandbox-local First Tree config");
+  }
+  const resolvedFirstTreeHome = assertPathInsideWorkspace(firstTreeHome, realWorkspace, "FIRST_TREE_HOME");
+  const cli = resolveWorkspaceOnlyCli(parentEnv);
+  const hostHome = resolveHostHome(parentEnv, realWorkspace);
+  const codexHome = resolveHostCodexHome(parentEnv, hostHome);
+
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of WORKSPACE_ONLY_APP_SERVER_PASS_ENV_KEYS) {
+    const value = parentEnv[key];
+    if (typeof value === "string") env[key] = value;
+  }
+  env.FIRST_TREE_HOME = resolvedFirstTreeHome;
+  env.HOME = realWorkspace;
+  env.CODEX_HOME = codexHome;
+  env.TMPDIR = "/tmp";
+  env.FIRST_TREE_CLI_BIN_DIR = cli.cliBinDir;
+  env.PATH = cli.pathDirs.join(delimiter);
+  const hostGhConfigDir = join(hostHome, ".config", "gh");
+  if (existingDirectory(hostGhConfigDir)) {
+    env.GH_CONFIG_DIR = hostGhConfigDir;
+  }
+  return { env, codexHome, hostHome };
 }
 
 export function buildWorkspaceOnlyBubblewrapArgs(options: BuildBubblewrapArgsOptions): string[] {

@@ -1,7 +1,5 @@
+import { MAX_ATTACHMENT_BYTES } from "@first-tree/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
-
-/** Claude API per-image byte limit (5 MB). */
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
 export type PendingImage = {
   id: string;
@@ -21,7 +19,9 @@ export type UsePendingImages = {
 /**
  * Stages images for an outbound message — the shared backbone of both the
  * in-chat composer and the new-chat draft so they enforce identical image
- * rules (`image/*` only, ≤5 MB each) and the same object-URL lifecycle.
+ * rules (`image/*` only, up to the shared `MAX_ATTACHMENT_BYTES` cap — the same
+ * byte limit the attachment upload route enforces) and the same object-URL
+ * lifecycle.
  *
  * The host owns the actual upload (read → IndexedDB → `sendFileMessageBatch`);
  * this hook only validates and holds the `File` + a revocable preview URL.
@@ -62,10 +62,15 @@ export function usePendingImages(
     const imageFiles = files.filter((f) => f.type.startsWith("image/"));
     if (imageFiles.length === 0) return;
 
-    const oversized = imageFiles.find((f) => f.size > MAX_IMAGE_SIZE);
+    // Gate on the shared attachment byte cap: it's the binding limit for our
+    // path — an image the composer accepts is one the attachment upload route
+    // will store, and chat images reach the agent as on-disk files read via its
+    // Read tool (see the claude-code handler), not as raw base64 image blocks,
+    // so the raw-byte storage cap governs rather than any model image-block limit.
+    const oversized = imageFiles.find((f) => f.size > MAX_ATTACHMENT_BYTES);
     if (oversized) {
       optsRef.current.onError?.(
-        `Image too large (${(oversized.size / 1024 / 1024).toFixed(1)}MB). Maximum ${MAX_IMAGE_SIZE / 1024 / 1024}MB per image.`,
+        `Image too large (${(oversized.size / 1024 / 1024).toFixed(1)}MB). Maximum ${MAX_ATTACHMENT_BYTES / 1024 / 1024}MB per image.`,
       );
       return;
     }

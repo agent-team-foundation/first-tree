@@ -21,8 +21,9 @@ import { mockEntry } from "./test-helpers.js";
  *   2) emit a structured `error` session event so the chat timeline renders
  *      the failure with its distinct ErrorRow styling (NOT a plain text
  *      message — that would be indistinguishable from a normal agent reply),
- *   3) recover so the next inbound message for the same chat can start a
- *      fresh session.
+ *   3) settle the failed delivery when the terminal error event was emitted,
+ *      or fall back to recovery if that durable signal could not be written,
+ *      so the next inbound message for the same chat can start a fresh session.
  *
  * Historical note: pre-2026-05 this path forwarded a `⚠️ Session ... failed`
  * **text** message via the result-sink. That worked but rendered identical
@@ -59,6 +60,8 @@ function makeSessionManager(opts: {
   onSessionEvent?: (chatId: string, event: SessionEvent) => void;
   sdk?: FirstTreeHubSDK;
   recoverChat?: (chatId: string) => Promise<void>;
+  ackEntry?: (entryId: number) => Promise<void>;
+  confirmSessionEvent?: (chatId: string, event: SessionEvent) => Promise<void>;
 }) {
   const factory: HandlerFactory = () => {
     const next = opts.handlers.shift();
@@ -81,9 +84,10 @@ function makeSessionManager(opts: {
     },
     sdk: opts.sdk ?? mockSdk().sdk,
     log: silentLogger(),
-    ackEntry: vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
+    ackEntry: opts.ackEntry ?? vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
     onStateChange: opts.onStateChange,
     onSessionEvent: opts.onSessionEvent,
+    confirmSessionEvent: opts.confirmSessionEvent,
     recoverChat: opts.recoverChat,
   });
 }
@@ -120,6 +124,20 @@ function workingHandler(sessionId = "session-after-recovery"): AgentHandler {
 async function flushAsync(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
   await new Promise((resolve) => setImmediate(resolve));
+}
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value?: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value?: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = (value) => res(value as T | PromiseLike<T>);
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("SessionManager: session-start failure signalling (F2)", () => {
@@ -204,14 +222,18 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
     }
   });
 
-  it("allows the next inbound message for the same chat to start a fresh session", async () => {
+  it("ACKs a terminal start failure after emitting the error event so the next inbound starts fresh", async () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const failing = failingHandler();
     const working = workingHandler("session-after-recovery");
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const confirmSessionEvent = vi.fn<(chatId: string, event: SessionEvent) => Promise<void>>().mockResolvedValue();
     const recoverChat = vi.fn().mockResolvedValue(undefined);
     const sm = makeSessionManager({
       handlers: [failing, working],
       onStateChange: (chatId, state) => stateChanges.push({ chatId, state }),
+      confirmSessionEvent,
+      ackEntry,
       recoverChat,
     });
 
@@ -222,9 +244,12 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
       { chatId: "chat-recover", state: "active" },
       { chatId: "chat-recover", state: "errored" },
     ]);
-    expect(recoverChat).toHaveBeenCalledWith("chat-recover");
+    expect(confirmSessionEvent).toHaveBeenCalledWith("chat-recover", expect.objectContaining({ kind: "error" }));
+    expect(ackEntry).toHaveBeenCalledWith(1);
+    expect(recoverChat).not.toHaveBeenCalled();
 
-    // Second dispatch after accepted recovery can route as a fresh start.
+    // Second dispatch routes as a fresh start without needing server-side
+    // recovery redelivery of the failed entry.
     await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recover" }));
 
     // The recovered session emits `active` (notifySessionState dedupes against
@@ -232,6 +257,138 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
     // notification, not a no-op).
     expect(stateChanges.at(-1)).toEqual({ chatId: "chat-recover", state: "active" });
     expect(working.start).toHaveBeenCalledTimes(1);
+
+    await sm.shutdown();
+  });
+
+  it("does not ACK a terminal start failure when confirmed error event persistence rejects", async () => {
+    const failing = failingHandler();
+    const working = workingHandler("session-after-rejected-event");
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    const confirmSessionEvent = vi
+      .fn<(chatId: string, event: SessionEvent) => Promise<void>>()
+      .mockRejectedValue(new Error("persist failed"));
+    const sm = makeSessionManager({
+      handlers: [failing, working],
+      confirmSessionEvent,
+      ackEntry,
+      recoverChat,
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-event-rejected" }));
+
+    expect(confirmSessionEvent).toHaveBeenCalledWith("chat-event-rejected", expect.objectContaining({ kind: "error" }));
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(recoverChat).toHaveBeenCalledWith("chat-event-rejected");
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-event-rejected" }));
+    expect(working.start).toHaveBeenCalledTimes(1);
+
+    await sm.shutdown();
+  });
+
+  it("queues same-chat deliveries while terminal start failure is awaiting confirmed event settlement", async () => {
+    const confirm = deferred();
+    const failing = failingHandler();
+    const working = workingHandler("session-after-terminal-settlement");
+    const workingStart = vi.mocked(working.start);
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    const confirmSessionEvent = vi
+      .fn<(chatId: string, event: SessionEvent) => Promise<void>>()
+      .mockReturnValue(confirm.promise);
+    const sm = makeSessionManager({
+      handlers: [failing, working],
+      confirmSessionEvent,
+      ackEntry,
+      recoverChat,
+    });
+
+    const firstDispatch = sm.dispatch(mockEntry({ id: 1, chatId: "chat-confirm-window", messageId: "msg-1" }));
+    await vi.waitFor(() => expect(confirmSessionEvent).toHaveBeenCalledTimes(1));
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-confirm-window", messageId: "msg-2" }));
+    expect(working.start).not.toHaveBeenCalled();
+    expect(ackEntry).not.toHaveBeenCalled();
+
+    confirm.resolve();
+    await firstDispatch;
+
+    await vi.waitFor(() => expect(workingStart).toHaveBeenCalledTimes(1));
+    expect(ackEntry).toHaveBeenCalledWith(1);
+    expect(ackEntry.mock.invocationCallOrder).toHaveLength(1);
+    expect(workingStart.mock.invocationCallOrder).toHaveLength(1);
+    const [ackOrder = Number.POSITIVE_INFINITY] = ackEntry.mock.invocationCallOrder;
+    const [startOrder = Number.NEGATIVE_INFINITY] = workingStart.mock.invocationCallOrder;
+    expect(ackOrder).toBeLessThan(startOrder);
+    expect(recoverChat).not.toHaveBeenCalled();
+
+    await sm.shutdown();
+  });
+
+  it("drops queued same-chat delivery copies after terminal fallback recovery clears local custody", async () => {
+    const confirm = deferred();
+    const failing = failingHandler();
+    const working = workingHandler("session-after-recovery-redelivery");
+    const workingStart = vi.mocked(working.start);
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    const recoverChat = vi.fn().mockResolvedValue(undefined);
+    const confirmSessionEvent = vi
+      .fn<(chatId: string, event: SessionEvent) => Promise<void>>()
+      .mockReturnValue(confirm.promise);
+    const sm = makeSessionManager({
+      handlers: [failing, working],
+      confirmSessionEvent,
+      ackEntry,
+      recoverChat,
+    });
+
+    const firstDispatch = sm.dispatch(mockEntry({ id: 1, chatId: "chat-recovery-window", messageId: "msg-1" }));
+    await vi.waitFor(() => expect(confirmSessionEvent).toHaveBeenCalledTimes(1));
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery-window", messageId: "msg-2" }));
+    expect(workingStart).not.toHaveBeenCalled();
+
+    confirm.reject(new Error("persist failed"));
+    await firstDispatch;
+    await flushAsync();
+
+    expect(recoverChat).toHaveBeenCalledWith("chat-recovery-window");
+    expect(ackEntry).not.toHaveBeenCalled();
+    expect(workingStart).not.toHaveBeenCalled();
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-recovery-window", messageId: "msg-2" }));
+    await vi.waitFor(() => expect(workingStart).toHaveBeenCalledTimes(1));
+
+    await sm.shutdown();
+  });
+
+  it("keeps a session whose start turn completed and ACKed before returning a route receipt", async () => {
+    const handler = workingHandler("session-live-after-start");
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
+    handler.start = vi.fn(async (message, _ctx, token) => {
+      token?.processingStarted(message);
+      await token?.complete(message, { status: "success", terminal: true });
+      return { sessionId: "session-live-after-start", route: { kind: "owned", mode: "processing" } } as const;
+    });
+    const sm = makeSessionManager({
+      handlers: [handler],
+      ackEntry,
+      recoverChat: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-start-settled", messageId: "msg-1" }));
+
+    expect(ackEntry).toHaveBeenCalledWith(1);
+    expect(handler.shutdown).not.toHaveBeenCalled();
+    expect(sm.getSessionStates().find((session) => session.chatId === "chat-start-settled")?.state).toBe("active");
+
+    await sm.dispatch(mockEntry({ id: 2, chatId: "chat-start-settled", messageId: "msg-2" }));
+
+    expect(handler.start).toHaveBeenCalledTimes(1);
+    expect(handler.inject).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(handler.inject).mock.calls[0]?.[0].id).toBe("msg-2");
 
     await sm.shutdown();
   });
@@ -244,6 +401,7 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
     const stateChanges: Array<{ chatId: string; state: SessionState }> = [];
     const failing = failingHandler();
     const working = workingHandler("session-after-broken-emit");
+    const ackEntry = vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined);
     const recoverChat = vi.fn().mockResolvedValue(undefined);
     const sm = makeSessionManager({
       handlers: [failing, working],
@@ -251,6 +409,7 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
       onSessionEvent: () => {
         throw new Error("event sink down");
       },
+      ackEntry,
       recoverChat,
     });
 
@@ -260,6 +419,7 @@ describe("SessionManager: session-start failure signalling (F2)", () => {
       { chatId: "chat-emit-throw", state: "errored" },
     ]);
     expect(recoverChat).toHaveBeenCalledWith("chat-emit-throw");
+    expect(ackEntry).not.toHaveBeenCalled();
 
     // After accepted recovery, the next dispatch routes through
     // `startNewSession` (no stale entry left behind by the throwing emit).

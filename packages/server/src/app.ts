@@ -14,6 +14,7 @@ import { ZodError } from "zod";
 import { agentChatRoutes } from "./api/agent/chats.js";
 import { agentConfigRoutes as agentRuntimeConfigRoutes } from "./api/agent/config.js";
 import { agentContextTreeInfoRoutes } from "./api/agent/context-tree-info.js";
+import { agentDocumentRoutes } from "./api/agent/documents.js";
 import { agentInboxRoutes } from "./api/agent/inbox.js";
 import { agentMeRoutes } from "./api/agent/me.js";
 import { agentMessageRoutes } from "./api/agent/messages.js";
@@ -31,7 +32,7 @@ import { chatRoutes } from "./api/chats.js";
 import { clientRoutes } from "./api/clients.js";
 import { contextTreeInfoRoutes } from "./api/context-tree-info.js";
 import { contextTreeSnapshotRoutes } from "./api/context-tree-snapshot.js";
-import { feedbackRoutes } from "./api/feedback.js";
+import { documentCommentRoutes, documentRoutes } from "./api/documents.js";
 import { healthRoutes } from "./api/health.js";
 import { healthzRoutes } from "./api/healthz.js";
 import { publicInvitationRoutes } from "./api/invitations.js";
@@ -45,6 +46,7 @@ import { orgChatRoutes } from "./api/orgs/chats.js";
 import { orgClientRoutes } from "./api/orgs/clients.js";
 import { orgContextTreeRoutes } from "./api/orgs/context-tree.js";
 import { orgContextTreeSnapshotRoutes } from "./api/orgs/context-tree-snapshot.js";
+import { orgDocumentRoutes } from "./api/orgs/documents.js";
 import { orgGithubAppRoutes } from "./api/orgs/github-app.js";
 import { orgIdentityRoutes } from "./api/orgs/identity.js";
 import { orgInvitationRoutes } from "./api/orgs/invitations.js";
@@ -265,7 +267,6 @@ export async function buildApp(config: Config) {
     },
     // Skip tracing for:
     //   - static SPA assets, fonts, healthchecks → volume without value
-    //   - hearback feedback widget endpoints → outside the API surface
     //   - WebSocket upgrade routes → fastify hijacks the reply, so an HTTP
     //     root span here would never see `onResponse` and would leak.
     //     We emit a dedicated long-running `ws.connection` span from
@@ -273,7 +274,6 @@ export async function buildApp(config: Config) {
     ignoreRoutes: (path: string) => {
       if (path === "/" || path === "/healthz") return true;
       if (path.startsWith("/assets/") || path.startsWith("/fonts/")) return true;
-      if (path.startsWith("/feedback/")) return true;
       if (path === "/api/v1/agent/ws/client") return true;
       // Org WS upgrade: `/api/v1/orgs/:orgId/ws/`. Use a startsWith check so
       // every org's socket-upgrade path is excluded.
@@ -551,6 +551,9 @@ export async function buildApp(config: Config) {
           await scope.register(orgContextTreeRoutes, { prefix: "/context-tree" });
           await scope.register(orgContextTreeSnapshotRoutes, { prefix: "/context-tree" });
           await scope.register(orgAttachmentRoutes, { prefix: "/attachments" });
+          if (config.docs.enabled) {
+            await scope.register(orgDocumentRoutes, { prefix: "/documents" });
+          }
         }),
         { prefix: "/orgs/:orgId" },
       );
@@ -570,6 +573,10 @@ export async function buildApp(config: Config) {
           await scope.register(chatRoutes, { prefix: "/chats" });
           await scope.register(clientRoutes, { prefix: "/clients" });
           await scope.register(resourceRoutes, { prefix: "/resources" });
+          if (config.docs.enabled) {
+            await scope.register(documentRoutes, { prefix: "/documents" });
+            await scope.register(documentCommentRoutes, { prefix: "/document-comments" });
+          }
         }),
         { prefix: "" },
       );
@@ -583,6 +590,9 @@ export async function buildApp(config: Config) {
           await scope.register(agentInboxRoutes, { prefix: "/inbox" });
           await scope.register(agentRuntimeConfigRoutes);
           await scope.register(agentContextTreeInfoRoutes);
+          if (config.docs.enabled) {
+            await scope.register(agentDocumentRoutes);
+          }
         }),
         { prefix: "/agent" },
       );
@@ -593,31 +603,6 @@ export async function buildApp(config: Config) {
     }),
     { prefix: "/api/v1" },
   );
-
-  // Hearback feedback endpoint — mounted outside /api/v1 because the widget's
-  // default `data-endpoint="/feedback"` expects `/feedback/chat`, `/feedback/submit`,
-  // `/feedback/upload`, etc. Registered in an encapsulated scope so its
-  // image/* content-type parser doesn't affect the rest of the app.
-  if (config.feedback) {
-    const feedbackConfig = config.feedback;
-    await app.register(
-      namePlugin("feedbackScope", async (scope) => {
-        await scope.register(feedbackRoutes, {
-          repo: feedbackConfig.repo,
-          githubToken: feedbackConfig.githubToken,
-          llm: feedbackConfig.llm
-            ? {
-                apiKey: feedbackConfig.llm.apiKey,
-                baseUrl: feedbackConfig.llm.baseUrl,
-                model: feedbackConfig.llm.model,
-              }
-            : undefined,
-          trustProxyHeaders: feedbackConfig.trustProxyHeaders,
-        });
-      }),
-      { prefix: "/feedback" },
-    );
-  }
 
   // Serve Web static files
   const webDistPath = config.webDistPath;
@@ -630,8 +615,12 @@ export async function buildApp(config: Config) {
           return reply.status(404).send({ error: "Not found" });
         }
         const requestPath = request.url.split("?")[0] ?? request.url;
+        // Tombstone for the retired Hearback feedback endpoint. The route is
+        // gone, but stale cached widgets (and any external caller) may still
+        // POST to `/feedback/*`; fail them deliberately with JSON instead of
+        // letting the SPA fallback below hand back a 200 index.html shell.
         if (requestPath.startsWith("/feedback/")) {
-          return reply.status(501).send({ error: "Feedback is not configured" });
+          return reply.status(410).send({ error: "Feedback has been removed" });
         }
         if (requestPath.startsWith("/assets/") || extname(requestPath).length > 0) {
           return reply.status(404).send({ error: "Not found" });

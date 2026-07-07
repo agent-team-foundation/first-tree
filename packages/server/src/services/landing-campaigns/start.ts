@@ -24,7 +24,7 @@ import {
   ServiceUnavailableError,
 } from "../../errors.js";
 import { uuidv7 } from "../../uuid.js";
-import { createAgent, legacyWireAgentType } from "../agent.js";
+import { agentMetadataUpdateExpressionPreservingRuntimeState, createAgent, legacyWireAgentType } from "../agent.js";
 import { pickDefaultMembership } from "../auth.js";
 import { createChat } from "../chat.js";
 import { sendToClient } from "../connection-manager.js";
@@ -286,7 +286,7 @@ async function ensureTrialAgent(
       .set({
         visibility: "organization",
         displayName: input.skillSet.agentDisplayName,
-        metadata,
+        metadata: agentMetadataUpdateExpressionPreservingRuntimeState(metadata),
         updatedAt: new Date(),
       })
       .where(eq(agents.uuid, existing.uuid))
@@ -387,7 +387,9 @@ async function ensureTrialChatAndBootstrap(
     skillSetVersion: input.skillSet.version,
     repo: input.repo,
     state: "running",
-    inputLocked: true,
+    inputLocked: false,
+    maxAgentTurns: app.config.growth.landingCampaignMaxAgentTurns,
+    completedAgentTurns: 0,
   });
 
   let chatId: string;
@@ -471,6 +473,7 @@ export async function startLandingCampaignTrial(
     repo,
   });
   await app.resourcesService.ensureAndBindCampaignScanSkill(trialAgent.uuid, body.campaign, serviceMember.id, setupUrl);
+  await app.resourcesService.ensureAndBindLandingCampaignTrialPrompt(trialAgent.uuid, serviceMember.id);
   notifyClientAgentPinned(app, trialAgent);
 
   const result = await ensureTrialChatAndBootstrap(app, {

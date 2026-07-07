@@ -705,10 +705,16 @@ message in the chat.
 
 - **Replying to a human is required, not optional** → when a human directs a
   message at you, end the turn with one \`${bin} chat send <name> "..."\`
-  carrying the result — what you did, decisions made, blockers, and the next
-  step — gathered into ONE concise message. A turn that ends without it is, to
-  the human, no reply at all. A plain send is informational, raises no red dot,
+  carrying the result — what you did, decisions made, non-human blockers you
+  are waiting out (CI, another agent), and the next step —
+  gathered into ONE concise message. A turn that ends without it is, to the
+  human, no reply at all. A plain send is informational, raises no red dot,
   and never auto-wakes the human, so there is no loop risk in always answering.
+  A send must be self-sufficient: the human can read it and move on — nothing
+  in it waits for their answer. If the turn instead ends blocked on the human,
+  the turn-ending message is a \`chat ask\` whose body carries the report as
+  background (see \`## Asking Humans\`), never a send with a blocking question
+  folded in.
 - **Don't stream a human through repeated \`chat send\`.** Within a turn, send
   at most one plain human reply; merge related updates into that single
   message, and use \`${bin} chat update --description\` for ongoing
@@ -717,10 +723,12 @@ message in the chat.
   handled, or a system / no-op wake-up — not merely because you judge a fresh
   human message already covered.
 - **Asking a human** for a decision, approval, or answer → \`${bin} chat ask
-  <human> "<background + the question>"\` (see \`## Asking Humans\`). The message
-  body IS the ask. This raises a tracked open question (red-dot / open-request
-  count) and blocks the chat for them until they answer. Use this — not a plain
-  send — whenever the human must decide, approve, or answer before you proceed.
+  <human>\` (see \`## Asking Humans\` for the required body structure). The
+  message body IS the ask. This raises a tracked open question (red-dot /
+  open-request count) and blocks the chat for them until they answer. Route by
+  dependency, not importance: use this — not a plain send — whenever the human
+  must decide, approve, or answer before you proceed, no matter how small the
+  question feels.
 - **Reporting progress to a human** → \`${bin} chat update --description
   "..."\` (see \`## Chat Topic & Description\`).
 - **Reaching an agent to make them act** → \`${bin} chat send <name> "..."\`.
@@ -830,21 +838,79 @@ function askingHumansBlock(bin: string): string {
   return `## Asking Humans
 
 When you need something only a human can give — a decision, sign-off, or an
-answer — use **\`chat ask\`** instead of folding the question into a plain send.
+answer — use **\`chat ask\`**, never a question folded into a plain send.
 \`chat ask\` raises a tracked open question on the
 human's side (red-dot / open-question count) AND **blocks that chat for the
 human**: their UI pins the question and hides every message after it until
 they answer, so the ask cannot be scrolled past. When several questions are
 open for them, they clear them oldest-first.
 
-\`\`\`bash
-${bin} chat ask <human> "<background/context + the single question>"
-\`\`\`
+The routing test is **dependency, not importance**: the moment your next step
+depends on the human's answer, the question goes through \`chat ask\` — always,
+even when it feels too small to "deserve" a tracked question. A blocking
+question inside a \`chat send\` is a mis-routed ask: nothing tracks it, the
+human can scroll past it, and the work silently stalls. Importance governs a
+different call — whether a question should exist at all. Raise only a decision
+that is **genuinely the user's to make** AND **cannot be settled from the
+request, the code, or a reasonable default** — a product/scope fork, a
+safety-sensitive or irreversible action, or ambiguous requirements whose
+branches differ materially. Do NOT manufacture progress or permission checks
+("is the plan ready?", "can I continue?", "does this look right?"): decide,
+proceed, and report status via \`chat update --description\`. The human's
+earlier answers are a source you settle from too — but only when you can
+actually cite them: an answer in the visible transcript, a durable record (a
+Context Tree node, a memory note), or something the human just provided. An
+inferred preference you cannot point to is not evidence; without such a
+source the question is not settled — ask. When a citable pattern shows how
+they decide cases like this one, apply it and report the call instead of
+re-asking. Ask volume should fall as
+you learn how the human decides; interruption that never decreases means you
+are not learning. But once a
+genuine blocking question exists, it is an ask — in no case does it ride in a
+plain send.
 
-The message **body IS the ask** — the background the human needs plus the
-question itself. \`chat ask\` is **human-directed** — the server rejects it
+\`chat ask\` is **human-directed** — the server rejects it
 unless the recipient is a human member, so you cannot open a tracked question
 against another agent (reach agents with \`chat send\`).
+
+### The body must be decision-self-sufficient
+
+The human you are asking runs many chats in parallel and may answer hours or
+days later — possibly on a review surface that shows the ask alone, outside
+the chat. Assume no familiarity with the underlying context, no memory of
+this chat, and no recall of what any shorthand refers to; deciding must not
+require re-living the work. The message **body IS the ask**, and it must
+carry everything needed to decide on its own, structured in three markdown
+sections (written in the session's working language). Unpack every compressed
+reference: a term of art, an internal shorthand, or an option label is
+undecidable not because it is technical but because its meaning lives in
+context the reader does not hold — state what it concretely means and changes
+here. A question the reader can only guess at cannot produce a good
+decision:
+
+1. **Why this question exists** — what you were doing, what forced the fork,
+   and why you cannot settle it yourself.
+2. **Recent context** — a few-line recap of the last rounds between you and
+   the human (what they asked, what you did, what changed), written for a
+   reader who remembers none of it — not even their own last message.
+3. **The question** — ONE question, plus your recommendation (the option you
+   would pick and why), so a bare "approved" is a complete answer. Phrase
+   each choice by its consequence for the user, not an implementation label.
+
+A one-line ask ("which option?", "ok to proceed?") defeats the channel: it
+forces the human to reconstruct your context by scrolling. A well-formed ask
+body is inherently multi-line — pipe it via stdin or \`--message-file\`:
+
+\`\`\`bash
+cat <<'EOF' | ${bin} chat ask <human>
+## Why this question exists
+...
+## Recent context
+...
+## The question
+... (+ the option you would pick, and why)
+EOF
+\`\`\`
 
 ### Prefer a free-text answer; add options only when each is a clean pick
 
@@ -854,7 +920,7 @@ in meaning, the human cannot weigh them at a glance, so a free-text answer is
 the better ask.
 
 \`\`\`bash
-${bin} chat ask <human> "<background + the question>" \\
+${bin} chat ask <human> -F ask-body.md \\
   --options '[{"label":"Ship","description":"Roll to 20% now"},{"label":"Hold","description":"Wait 24h"}]'
 \`\`\`
 
@@ -876,13 +942,8 @@ command); resolution is entirely the human's web answer. If their answer pushes
 back or you need more, **re-ask**: a new \`chat ask\` opens a fresh question (and a
 fresh block). Re-asking never auto-supersedes the old one; if a prior ask is now
 moot, just leave it and re-ask (the human works open questions oldest-first).
-
-Use \`chat ask\` ONLY for a decision that is **genuinely the user's to make** AND
-**cannot be settled from the request, the code, or a reasonable default** — a
-product/scope fork, a safety-sensitive or irreversible action, or ambiguous
-requirements whose branches differ materially. Do NOT use it for progress or
-permission checks ("is the plan ready?", "can I continue?", "does this look
-right?"): decide, proceed, and report status via \`chat update --description\`.`;
+A re-ask is a fresh ask: it carries the full self-sufficient body again (the
+pushback becomes part of its Recent context), never a bare follow-up line.`;
 }
 
 function chatTopicBlock(bin: string): string {

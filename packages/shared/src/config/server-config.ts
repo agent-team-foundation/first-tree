@@ -62,6 +62,14 @@ export const serverConfigSchema = defineConfig({
     landingPagesEnabled: field(z.boolean().default(false), {
       env: "FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED",
     }),
+    /**
+     * Maximum number of visible agent response turns allowed in a landing
+     * campaign trial chat. Default 1 preserves the original single-run trial
+     * behavior; deployments can raise it for short interactive demos.
+     */
+    landingCampaignMaxAgentTurns: field(z.number().int().min(1).max(20).default(1), {
+      env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS",
+    }),
     landingCampaigns: optional({
       /**
        * First Tree official service user that manages landing campaign trial
@@ -97,6 +105,17 @@ export const serverConfigSchema = defineConfig({
       runtimeProvider: field(landingCampaignRuntimeProviderSchema, {
         env: "FIRST_TREE_LANDING_CAMPAIGN_RUNTIME_PROVIDER",
       }),
+    }),
+  },
+  docs: {
+    /**
+     * Enables the document review (docloop) surface: the org document
+     * library API, the `doc` CLI namespace endpoints, and (later) the web
+     * Docs section. Product feature flag with a staging-first rollout —
+     * off by default until an operator enables it.
+     */
+    enabled: field(z.boolean().default(false), {
+      env: "FIRST_TREE_DOCS_ENABLED",
     }),
   },
   database: {
@@ -302,30 +321,6 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT",
     }),
   }),
-  feedback: optional(
-    {
-      /**
-       * GitHub repo where feedback issues are filed (owner/name).
-       * HEARBACK_FEEDBACK_REPO is distinct from FIRST_TREE_GITHUB_* vars so
-       * the feedback token can be scoped narrowly (issues:write on a single repo)
-       * without widening First Tree's Context Tree access.
-       */
-      repo: field(z.string(), { env: "HEARBACK_FEEDBACK_REPO" }),
-      githubToken: field(z.string(), { env: "HEARBACK_GITHUB_TOKEN", secret: true }),
-      llm: optional({
-        apiKey: field(z.string(), { env: "LLM_API_KEY", secret: true }),
-        baseUrl: field(z.string().optional(), { env: "LLM_BASE_URL" }),
-        model: field(z.string().optional(), { env: "LLM_MODEL" }),
-      }),
-      /**
-       * Trust x-forwarded-for for rate-limit attribution. Default false; set true
-       * when First Tree sits behind a proxy you control (CDN, ingress). Otherwise
-       * clients can spoof the header and bypass per-ip limits.
-       */
-      trustProxyHeaders: field(z.boolean().default(false), { env: "HEARBACK_TRUST_PROXY_HEADERS" }),
-    },
-    { activateBy: ["repo", "githubToken"] },
-  ),
   observability: {
     logging: {
       level: field(logLevelSchema.default("info"), {

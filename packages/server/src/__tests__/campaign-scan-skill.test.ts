@@ -8,9 +8,32 @@ describe("campaign scan skills", () => {
     expect(getCampaignScanSkill("nope")).toBeNull();
   });
 
-  it("keeps its scan schema and the repo-locating step", () => {
-    expect(getCampaignScanSkill("production-scan")?.body).toContain("ps-1");
-    expect(getCampaignScanSkill("production-scan")?.body).toContain("Step 0 — get the repo");
+  it("produces a scored verdict report, chat-only, no side effects", () => {
+    const body = (getCampaignScanSkill("production-scan")?.body ?? "").replace(/\s+/g, " ");
+    // New scored-verdict contract (replaced the old ps-1 JSON schema).
+    expect(body).toContain("score 8 dimensions");
+    expect(body).toContain("Ready to launch");
+    expect(body).toContain("Step 0 — get the repo");
+    // v1 is chat-only: never auto-files issues or auto-posts a hosted report.
+    expect(body).toContain("do NOT file issues, POST anything, or write to the repo");
+    // Voice boundary: anything written into the user's repo stays professional.
+    expect(body).toContain("zero roast");
+  });
+
+  it("branches the verdict card to a clean path — no forced stab on healthy repos", () => {
+    const body = (getCampaignScanSkill("production-scan")?.body ?? "").replace(/\s+/g, " ");
+    // A Ready-to-launch / no-blocker report must NOT be forced into a worst-blocker
+    // codename + praise-then-stab; the clean path derives from the strongest positive
+    // signal and uses a praise-with-a-wink line instead of manufacturing a barb.
+    expect(body).toContain("strongest positive signal");
+    expect(body).toContain("praise-with-a-wink");
+    expect(body).toContain("a clean repo earns clean copy");
+    // Step 5 clean path: a no-finding report must not manufacture a fix/PR payoff.
+    expect(body).toContain("A clean repo's payoff is the clean bill of health");
+    // The clean vs blocker split is deterministic + mutually exclusive (by fatal/serious).
+    expect(body).toContain("no fatal and no serious");
+    // The light path (Almost there with only minors) is on the clean side, not the stab side.
+    expect(body).toContain("Almost there with only minors");
   });
 
   it("drives the conversion payoff: produce a real fix + offer to apply, but read-only until consent", () => {

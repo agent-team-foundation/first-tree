@@ -95,7 +95,7 @@ describe("Resources Phase 1", () => {
     expect(skills).toHaveLength(1);
     expect(skills[0]?.scope).toBe("agent");
     expect(skills[0]?.organizationId).toBe(owner.organizationId);
-    expect((skills[0]?.payload as { body?: string })?.body ?? "").toContain("ps-1");
+    expect((skills[0]?.payload as { body?: string })?.body ?? "").toContain("score 8 dimensions");
 
     const bindings = await app.db
       .select()
@@ -177,7 +177,7 @@ describe("Resources Phase 1", () => {
       .from(resources)
       .where(and(eq(resources.ownerAgentId, agent.uuid), eq(resources.type, "skill")));
     const body = (after?.payload as { body?: string })?.body ?? "";
-    expect(body).toContain("ps-1");
+    expect(body).toContain("score 8 dimensions");
     expect(body).not.toContain("STALE BODY");
 
     // Linchpin: the already-bound path MUST bump the version when content

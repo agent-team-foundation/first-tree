@@ -43,6 +43,8 @@ export {
 } from "./client-switch.js";
 // User-owned daemon environment (proxy etc.) — read, never written by us
 export { daemonEnvPath, loadDaemonEnv, parseDaemonEnv } from "./daemon-env.js";
+// Document review (docloop) CLI helpers
+export { slugFromFilename, titleFromMarkdown } from "./doc-review.js";
 // Diagnostics (doctor)
 export type { CheckResult } from "./doctor.js";
 export {

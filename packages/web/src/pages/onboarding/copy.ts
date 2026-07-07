@@ -69,6 +69,14 @@ export const STEP_COPY: Record<StepId, StepCopy> = {
   },
 };
 
+/** One plain launch line for every start-chat finale — admin or invitee, team
+ *  ready or not. The team/tree state behind these variants is invisible to the
+ *  user (the Context Tree is introduced later, in chat), so a per-state subtitle
+ *  would only surface backend readiness they can't act on — and would name
+ *  "context" before the user has met the concept. So every finale shows this one
+ *  line. Title stays "Start working with your agent"; this is the subtitle. */
+const START_CHAT_LAUNCH_WHY = "Your agent's ready. Start a chat and it'll help you get going.";
+
 /** Shared phrases reused across steps so wording stays consistent. */
 export const COPY = {
   /** Title shown across the flow's top chrome. */
@@ -266,41 +274,34 @@ export const COPY = {
       rendered per-state by the step; the shell leaves STEP_COPY["start-chat"] empty
       for this finale. */
   startChat: {
-    // admin · new tree (the default — the team has none yet). Lead with the
-    // agent + immediate code value; the Context Tree setup moves into its own
-    // background chat and is named/explained there.
+    // Every finale below shares one title + one subtitle + one button. The
+    // per-state keys are kept because the step still selects them by path/state,
+    // but they resolve to the same strings on purpose (see START_CHAT_LAUNCH_WHY):
+    // the team/tree difference behind them is invisible to the user, so a
+    // differentiated subtitle only leaked backend readiness they can't act on.
+
+    // admin · new tree (the default — the team has none yet). `newWhy`/`existingWhy`
+    // are only read by the dormant repo-aware branch (StepConnectCode is out of the
+    // live sequence); kept as functions so that call site's shape is unchanged.
     newTitle: "Start working with your agent",
-    newWhy: (_repoCount: number): string =>
-      "Your agent can start from any available code or team context, get oriented, and suggest a useful first task.",
+    newWhy: (_repoCount: number): string => START_CHAT_LAUNCH_WHY,
     startBuilding: "Start chat",
 
     // admin · the team already has a Context Tree (re-run / second admin /
-    // CLI-bound). Detected silently — no fork, no paste — the agent reads it
-    // instead of seeding.
+    // CLI-bound). Detected silently; also part of the dormant repo-aware branch.
     existingTitle: "Start working with your agent",
-    existingWhy: (_repoCount: number): string =>
-      "Your agent can use the team's existing context when it helps, then focus this chat on a useful first task.",
+    existingWhy: (_repoCount: number): string => START_CHAT_LAUNCH_WHY,
     startExisting: "Start chat",
 
+    // admin · no repo connected (the live default path).
     noProjectTitle: "Start working with your agent",
-    noProjectBody: "Setup is ready. In chat, share a project path, a GitHub repo URL, or the task you want help with.",
+    noProjectBody: START_CHAT_LAUNCH_WHY,
     startChatting: "Start chat",
 
-    // invitee · ready (team has a tree + a GitHub connection). Replaces the old
-    // confirm/picker screens — the agent already inherits the team's repos
-    // automatically (recommended team resources are enabled for every org
-    // agent), so there is nothing to select.
+    // invitee · ready (team has a tree + a GitHub connection). The agent inherits
+    // the team's recommended repos automatically, so there is nothing to select.
     inviteeReadyTitle: "Start working with your agent",
-    // Names what the agent actually has — the team's repos + shared Context Tree —
-    // because onboarding is where we teach that concept, and a joining teammate
-    // benefits from knowing their agent isn't a blank assistant. One line for every
-    // ready case (the agent inherits the team's recommended repos automatically,
-    // so there's nothing to pick). Deliberately doesn't claim specific repo ACCESS:
-    // an agent clones with the host's git credentials, so "works with your team's
-    // repos" stays true regardless — a member without access to a private repo just
-    // can't reach that one.
-    inviteeReadyBody:
-      "Your team's context is ready. Start a chat and your agent will get oriented before suggesting a useful first task.",
+    inviteeReadyBody: START_CHAT_LAUNCH_WHY,
     startWorking: "Start chat",
 
     // shared launch transition
@@ -316,8 +317,7 @@ export const COPY = {
       post: ".",
     },
     notReadyTitle: "Start working with your agent",
-    notReadyBody:
-      "Team context can be added by an admin later. You can start now with a question, project path, or GitHub URL.",
+    notReadyBody: START_CHAT_LAUNCH_WHY,
     // The primary action on the not-ready screen — start a simple first chat now
     // instead of waiting on the team.
     startAnyway: "Start chat",
