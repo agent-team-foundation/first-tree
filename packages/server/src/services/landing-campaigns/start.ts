@@ -10,6 +10,7 @@ import {
 import { and, asc, desc, eq, gt, ne, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../../db/connection.js";
+import { agentChatSessions } from "../../db/schema/agent-chat-sessions.js";
 import { agents } from "../../db/schema/agents.js";
 import { chats } from "../../db/schema/chats.js";
 import { clients } from "../../db/schema/clients.js";
@@ -26,6 +27,7 @@ import {
 } from "../../errors.js";
 import { uuidv7 } from "../../uuid.js";
 import { agentMetadataUpdateExpressionPreservingRuntimeState, createAgent, legacyWireAgentType } from "../agent.js";
+import { computeWorking } from "../agent-chat-status.js";
 import { pickDefaultMembership } from "../auth.js";
 import { createChat } from "../chat.js";
 import { sendToClient } from "../connection-manager.js";
@@ -469,6 +471,21 @@ async function ensureTrialChatAndBootstrap(
         .where(and(eq(messages.chatId, chatId), eq(messages.senderId, input.agentId)))
         .limit(1);
       if (agentMessage) return;
+      // Authoritative in-flight signal: fresh per-chat runtime_state='working'
+      // covers the codex no-events case (a long turn that emits nothing until
+      // turn_end), which the session_events silence check below can never see.
+      // Old clients that never reported per-chat runtime (NULL stamp) fall
+      // through to the events check, which is their legacy working proxy.
+      const [runtimeSession] = await tx
+        .select({
+          state: agentChatSessions.state,
+          runtimeState: agentChatSessions.runtimeState,
+          runtimeStateAt: agentChatSessions.runtimeStateAt,
+        })
+        .from(agentChatSessions)
+        .where(and(eq(agentChatSessions.agentId, input.agentId), eq(agentChatSessions.chatId, chatId)))
+        .limit(1);
+      if (computeWorking(runtimeSession, null, Date.now())) return;
       const [recentEvent] = await tx
         .select({ id: sessionEvents.id })
         .from(sessionEvents)

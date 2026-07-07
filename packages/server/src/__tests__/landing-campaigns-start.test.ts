@@ -5,6 +5,7 @@ import {
 } from "@first-tree/shared";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
+import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
 import { agentConfigs } from "../db/schema/agent-configs.js";
 import { agentResourceBindings } from "../db/schema/agent-resource-bindings.js";
 import { agents } from "../db/schema/agents.js";
@@ -706,6 +707,41 @@ describe("POST /me/landing-campaigns/start", () => {
       kind: "thinking",
       payload: {},
     });
+
+    const second = await startProductionScan(app, admin);
+
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ chatId: string }>().chatId).toBe(firstBody.chatId);
+    const chatMessages = await app.db.select().from(messages).where(eq(messages.chatId, firstBody.chatId));
+    expect(chatMessages).toHaveLength(1);
+  });
+
+  it("does not resend the bootstrap while the runtime reports fresh working state without session events", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const first = await startProductionScan(app, admin);
+    expect(first.statusCode).toBe(200);
+    const firstBody = first.json<{ chatId: string; agentUuid: string }>();
+    await app.db
+      .update(messages)
+      .set({ createdAt: new Date(Date.now() - 11 * 60 * 1000) })
+      .where(eq(messages.chatId, firstBody.chatId));
+    // Codex no-events case: a long turn is in flight (fresh per-chat
+    // runtime_state='working') but has emitted zero session events.
+    await app.db
+      .insert(agentChatSessions)
+      .values({
+        agentId: firstBody.agentUuid,
+        chatId: firstBody.chatId,
+        state: "active",
+        runtimeState: "working",
+        runtimeStateAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: [agentChatSessions.agentId, agentChatSessions.chatId],
+        set: { state: "active", runtimeState: "working", runtimeStateAt: new Date() },
+      });
 
     const second = await startProductionScan(app, admin);
 
