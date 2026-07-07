@@ -53,6 +53,7 @@ export function buildLandingCampaignChatMetadata(input: {
   maxEstimatedTokens?: number | null;
   estimatedTokensUsed?: number;
   lastObservedEstimatedTokens?: number;
+  lastObservedTokenUsageEventId?: string | null;
   limitReason?: LandingCampaignTrialLimitReason;
 }): Record<string, unknown> {
   return {
@@ -71,6 +72,7 @@ export function buildLandingCampaignChatMetadata(input: {
       maxEstimatedTokens: input.maxEstimatedTokens ?? null,
       estimatedTokensUsed: input.estimatedTokensUsed ?? 0,
       lastObservedEstimatedTokens: input.lastObservedEstimatedTokens ?? 0,
+      lastObservedTokenUsageEventId: input.lastObservedTokenUsageEventId ?? null,
       ...(input.limitReason ? { limitReason: input.limitReason } : {}),
     },
   };
@@ -88,6 +90,7 @@ export function withLandingCampaignChatState(
     maxEstimatedTokens?: number | null;
     estimatedTokensUsed?: number;
     lastObservedEstimatedTokens?: number;
+    lastObservedTokenUsageEventId?: string | null;
     limitReason?: LandingCampaignTrialLimitReason;
   } = {},
 ): Record<string, unknown> {

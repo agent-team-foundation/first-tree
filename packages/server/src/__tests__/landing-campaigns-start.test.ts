@@ -196,6 +196,14 @@ describe("POST /me/landing-campaigns/start", () => {
     landingCampaignMaxAgentTurns: 3,
     landingCampaignMaxEstimatedTokens: 500,
   });
+  const getResetBudgetApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxAgentTurns: 3,
+    landingCampaignMaxEstimatedTokens: 900,
+  });
 
   it("parses legacy trial chat metadata with estimated token defaults", () => {
     const trial = parseLandingCampaignTrialChatMetadata({
@@ -217,6 +225,7 @@ describe("POST /me/landing-campaigns/start", () => {
       maxEstimatedTokens: null,
       estimatedTokensUsed: 0,
       lastObservedEstimatedTokens: 0,
+      lastObservedTokenUsageEventId: null,
     });
   });
 
@@ -426,6 +435,7 @@ describe("POST /me/landing-campaigns/start", () => {
       maxEstimatedTokens: null,
       estimatedTokensUsed: 0,
       lastObservedEstimatedTokens: 0,
+      lastObservedTokenUsageEventId: null,
     });
 
     const [bootstrap] = await app.db.select().from(messages).where(eq(messages.chatId, body.chatId)).limit(1);
@@ -1029,7 +1039,7 @@ describe("POST /me/landing-campaigns/start", () => {
     const started = await startProductionScan(app, admin);
     const body = started.json<{ chatId: string; agentUuid: string }>();
 
-    await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+    const uncappedEvent = await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
       kind: "token_usage",
       payload: {
         provider: "codex",
@@ -1060,6 +1070,7 @@ describe("POST /me/landing-campaigns/start", () => {
       maxEstimatedTokens: null,
       estimatedTokensUsed: 130_000,
       lastObservedEstimatedTokens: 130_000,
+      lastObservedTokenUsageEventId: uncappedEvent.id,
     });
 
     const followUp = await app.inject({
@@ -1094,9 +1105,10 @@ describe("POST /me/landing-campaigns/start", () => {
       maxEstimatedTokens: 500,
       estimatedTokensUsed: 0,
       lastObservedEstimatedTokens: 0,
+      lastObservedTokenUsageEventId: null,
     });
 
-    await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+    const firstUsage = await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
       kind: "token_usage",
       payload: { provider: "codex", model: "gpt-5", inputTokens: 100, cachedInputTokens: 25, outputTokens: 50 },
     });
@@ -1128,6 +1140,7 @@ describe("POST /me/landing-campaigns/start", () => {
       completedAgentTurns: 1,
       estimatedTokensUsed: 175,
       lastObservedEstimatedTokens: 175,
+      lastObservedTokenUsageEventId: firstUsage.id,
     });
 
     const whileUnderBudget = await app.inject({
@@ -1142,7 +1155,7 @@ describe("POST /me/landing-campaigns/start", () => {
     });
     expect(whileUnderBudget.statusCode).toBe(201);
 
-    await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+    const secondUsage = await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
       kind: "token_usage",
       payload: { provider: "codex", model: "gpt-5", inputTokens: 200, cachedInputTokens: 50, outputTokens: 100 },
     });
@@ -1163,6 +1176,7 @@ describe("POST /me/landing-campaigns/start", () => {
       maxEstimatedTokens: 500,
       estimatedTokensUsed: 525,
       lastObservedEstimatedTokens: 525,
+      lastObservedTokenUsageEventId: secondUsage.id,
       limitReason: "tokens",
     });
 
@@ -1198,13 +1212,13 @@ describe("POST /me/landing-campaigns/start", () => {
   });
 
   it("continues charging estimated tokens after session event traces reset", async () => {
-    const app = getBudgetApp();
+    const app = getResetBudgetApp();
     const admin = await createTestAdmin(app);
     await seedOfficialRuntime(app, admin.organizationId);
     const started = await startProductionScan(app, admin);
     const body = started.json<{ chatId: string; agentUuid: string }>();
 
-    await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+    const firstUsage = await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
       kind: "token_usage",
       payload: { provider: "codex", model: "gpt-5", inputTokens: 300, cachedInputTokens: 50, outputTokens: 50 },
     });
@@ -1226,12 +1240,13 @@ describe("POST /me/landing-campaigns/start", () => {
       completedAgentTurns: 1,
       estimatedTokensUsed: 400,
       lastObservedEstimatedTokens: 400,
+      lastObservedTokenUsageEventId: firstUsage.id,
     });
 
     await sessionEventService.clearEvents(app.db, body.agentUuid, body.chatId);
-    await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+    const secondUsage = await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
       kind: "token_usage",
-      payload: { provider: "codex", model: "gpt-5", inputTokens: 75, cachedInputTokens: 25, outputTokens: 25 },
+      payload: { provider: "codex", model: "gpt-5", inputTokens: 450, cachedInputTokens: 50, outputTokens: 100 },
     });
     const secondTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "reset-2");
     expect(secondTurn).toEqual({
@@ -1247,9 +1262,10 @@ describe("POST /me/landing-campaigns/start", () => {
       inputLocked: true,
       completedAgentTurns: 2,
       completedAgentTurnIds: ["reset-1", "reset-2"],
-      maxEstimatedTokens: 500,
-      estimatedTokensUsed: 525,
-      lastObservedEstimatedTokens: 125,
+      maxEstimatedTokens: 900,
+      estimatedTokensUsed: 1000,
+      lastObservedEstimatedTokens: 600,
+      lastObservedTokenUsageEventId: secondUsage.id,
       limitReason: "tokens",
     });
   });

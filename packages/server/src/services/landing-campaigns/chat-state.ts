@@ -100,6 +100,12 @@ export async function completeLandingCampaignTrialAgentTurn(
           coalesce((${sessionEvents.payload}->>'cachedInputTokens')::bigint, 0) +
           coalesce((${sessionEvents.payload}->>'outputTokens')::bigint, 0)
         ), 0)::text`,
+        latestTokenUsageEventId: sql<string | null>`
+          (array_agg(${sessionEvents.id} order by ${sessionEvents.seq} desc))[1]
+        `,
+        hasLastObservedTokenUsageEvent: trial.lastObservedTokenUsageEventId
+          ? sql<boolean>`bool_or(${sessionEvents.id} = ${trial.lastObservedTokenUsageEventId})`
+          : sql<boolean>`false`,
       })
       .from(sessionEvents)
       .where(
@@ -111,8 +117,9 @@ export async function completeLandingCampaignTrialAgentTurn(
       );
 
     const observedEstimatedTokens = Number(usageRow?.estimatedTokens ?? 0);
+    const currentTraceContainsLastObservation = Boolean(usageRow?.hasLastObservedTokenUsageEvent);
     const turnEstimatedTokens =
-      observedEstimatedTokens >= trial.lastObservedEstimatedTokens
+      currentTraceContainsLastObservation && observedEstimatedTokens >= trial.lastObservedEstimatedTokens
         ? observedEstimatedTokens - trial.lastObservedEstimatedTokens
         : observedEstimatedTokens;
     const estimatedTokensUsed = trial.estimatedTokensUsed + turnEstimatedTokens;
@@ -135,6 +142,7 @@ export async function completeLandingCampaignTrialAgentTurn(
         completedAgentTurnIds,
         estimatedTokensUsed,
         lastObservedEstimatedTokens: observedEstimatedTokens,
+        lastObservedTokenUsageEventId: usageRow?.latestTokenUsageEventId ?? null,
         ...(limitReason ? { limitReason } : {}),
       },
     );

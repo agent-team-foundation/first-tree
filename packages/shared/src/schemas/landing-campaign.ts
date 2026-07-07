@@ -62,6 +62,7 @@ export const landingCampaignTrialChatMetadataSchema = z.object({
     maxEstimatedTokens: z.number().int().min(1).nullable().default(null),
     estimatedTokensUsed: z.number().int().min(0).default(0),
     lastObservedEstimatedTokens: z.number().int().min(0).default(0),
+    lastObservedTokenUsageEventId: z.string().min(1).nullable().default(null),
     limitReason: landingCampaignTrialLimitReasonSchema.optional(),
   }),
 });
