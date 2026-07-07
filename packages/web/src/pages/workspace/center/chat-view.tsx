@@ -1265,7 +1265,11 @@ const ChatTimeline = memo(function ChatTimeline({
               </div>
             ) : null}
           </div>
-          <ChatOfflineNotice chatId={chatId} agents={awaitedAgents} />
+          {/* No offline-agent notice on the trial surface: its "Reconnect"
+              action navigates to /settings/computers (an escape hatch), and a
+              service-managed trial agent has no computer for the user to
+              reconnect anyway — liveness is First Tree's concern here. */}
+          {isTrial ? null : <ChatOfflineNotice chatId={chatId} agents={awaitedAgents} />}
           <div ref={messagesEndRef} />
         </div>
       </div>
