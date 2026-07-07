@@ -510,7 +510,7 @@ describeSmoke("landing Codex app-server auth and sandbox smoke", () => {
                 'printf "git_ssh_command="',
                 'if test -n "$GIT_SSH_COMMAND"; then echo set; else echo unset; fi',
                 'printf "git_ssh_config="',
-                'case "$GIT_SSH_COMMAND" in *"-F /dev/null"*) echo ignored-system-config;; *) echo missing;; exit 1;; esac',
+                'case "$GIT_SSH_COMMAND" in *"-F /dev/null"*) echo ignored-system-config;; *) echo missing; exit 1;; esac',
                 'printf "gh_auth_status="',
                 "if gh auth status >landing-gh-auth.out 2>landing-gh-auth.err; then echo ok; else echo failed; cat landing-gh-auth.err; exit 1; fi",
                 'printf "git_ssh_remote="',
