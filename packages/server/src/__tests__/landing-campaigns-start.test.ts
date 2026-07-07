@@ -452,7 +452,10 @@ describe("POST /me/landing-campaigns/start", () => {
     // The kickoff instructs the agent to fetch the external skill instead of
     // relying on a server-delivered body.
     expect(bootstrap?.content).toContain("clone https://github.com/agent-team-foundation/launch-readiness-scan");
-    expect(bootstrap?.content).toContain("run its production-scan skill on the repo above, in First Tree trial mode");
+    expect(bootstrap?.content).toContain("run its production-scan skill on the repo above");
+    // The kickoff no longer names a "trial mode" — the external skill is
+    // unconditionally trial-shaped, so the phrase would reference nothing.
+    expect(bootstrap?.content).not.toContain("trial mode");
     expect(bootstrap?.content).toContain("safe, read-only check before launch");
     expect(bootstrap?.metadata).toMatchObject({
       systemSender: "first_tree_onboarding",
