@@ -189,6 +189,18 @@ describe("POST /me/landing-campaigns/start", () => {
     landingCampaignClientId: OFFICIAL_CLIENT_ID,
     landingCampaignMaxAgentTurns: 2,
   });
+  // Exercises the shipped production default (6) end-to-end through turn
+  // gating — the server-config unit test asserts the default value in
+  // isolation; this proves a 6-turn trial actually admits turns 1–5 and locks
+  // exactly at the 6th, so a regression in turn accounting at that boundary is
+  // caught.
+  const getSixTurnApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxAgentTurns: 6,
+  });
   const getBudgetApp = useTestApp({
     growthLandingPagesEnabled: true,
     landingCampaignServiceUserId: SERVICE_USER_ID,
@@ -1097,6 +1109,53 @@ describe("POST /me/landing-campaigns/start", () => {
         content: "Can we keep going?",
         metadata: { mentions: [body.agentUuid] },
       },
+    });
+    expect(afterLimit.statusCode).toBe(403);
+  });
+
+  it("admits six agent turns then locks at the sixth under the shipped default cap", async () => {
+    const app = getSixTurnApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    const [initialChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(initialChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      maxAgentTurns: 6,
+      completedAgentTurns: 0,
+    });
+
+    // Turns 1–5 advance without hitting the cap.
+    for (let turn = 1; turn <= 5; turn++) {
+      const result = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, `turn-${turn}`);
+      expect(result).toMatchObject({ advanced: true, reachedTurnLimit: false, limitReason: null });
+      const [chat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+      expect(parseLandingCampaignTrialChatMetadata(chat?.metadata)).toMatchObject({
+        state: "running",
+        inputLocked: false,
+        completedAgentTurns: turn,
+      });
+    }
+
+    // The sixth turn reaches the cap and locks the chat.
+    const sixth = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "turn-6");
+    expect(sixth).toMatchObject({ advanced: true, reachedTurnLimit: true, limitReason: "turns" });
+    const [completedChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
+    expect(parseLandingCampaignTrialChatMetadata(completedChat?.metadata)).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+      maxAgentTurns: 6,
+      completedAgentTurns: 6,
+    });
+
+    const afterLimit = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: { format: "text", content: "One more?", metadata: { mentions: [body.agentUuid] } },
     });
     expect(afterLimit.statusCode).toBe(403);
   });

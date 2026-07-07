@@ -75,9 +75,11 @@ export type ResourcesService = {
    * skill resource named after the campaign and bound it (the since-removed
    * ensureAndBindCampaignScanSkill); the campaign skill now arrives via the
    * kickoff clone instruction, and a reused trial agent must not keep the
-   * stale bound copy — its name collides with the cloned skill and the client
-   * only prunes materialized skills whose binding is gone. No-op when no such
-   * resource exists.
+   * stale bound copy — otherwise the agent discovers two `production-scan`
+   * skills (the materialized stale one and the freshly cloned one) and may run
+   * the outdated rubric. The client only prunes a materialized skill once its
+   * binding is gone, so removing the resource + binding here (plus the version
+   * bump below) is what drives that prune. No-op when no such resource exists.
    */
   unbindLegacyCampaignScanSkill(agentId: string, campaign: string, actorId: string): Promise<void>;
   resolveRuntimeConfig(config: AgentRuntimeConfig): Promise<AgentRuntimeConfig>;
@@ -1334,8 +1336,13 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
         if (legacy.length === 0) return;
         const legacyIds = legacy.map((row) => row.id);
 
-        // Bindings first (FK), unscoped to this agent so a dangling reference
-        // from any binding cannot block the resource delete.
+        // Delete bindings, then the resource. The binding FKs are ON DELETE
+        // CASCADE, so the resource delete alone would clear them — this
+        // explicit delete just makes the two-step order obvious and keeps the
+        // statement independent of the cascade. Scoped by resourceId across all
+        // agents (the resource is agent-owned, so only this agent's bindings
+        // match anyway); no binding replaces a campaign skill, so there is no
+        // replacesResourceId reference to sweep.
         await targetDb.delete(agentResourceBindings).where(inArray(agentResourceBindings.resourceId, legacyIds));
         await targetDb.delete(resources).where(inArray(resources.id, legacyIds));
 
