@@ -72,6 +72,51 @@ describe("skill eval selection", () => {
     ]);
   });
 
+  it("recommends related skill behavior baselines for generated briefing changes", () => {
+    const summary = selectSkillEvalRecommendations([
+      "packages/client/src/runtime/agent-briefing.ts",
+      "packages/client/src/runtime/templates/agent-briefing.ejs",
+    ]);
+
+    expect(summary.recommendations).toEqual([
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read",
+        kind: "periodic",
+        reason:
+          "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
+        suite: "first-tree-read",
+      },
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
+        kind: "gate",
+        reason:
+          "packages/client/src/runtime/agent-briefing.ts changes generated briefing text; run related skill behavior baseline",
+        suite: "first-tree-write",
+      },
+    ]);
+  });
+
+  it("recommends related skill behavior baselines for generated briefing template changes", () => {
+    const summary = selectSkillEvalRecommendations(["packages/client/src/runtime/templates/agent-briefing.ejs"]);
+
+    expect(summary.recommendations).toEqual([
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:periodic -- --suite first-tree-read",
+        kind: "periodic",
+        reason:
+          "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
+        suite: "first-tree-read",
+      },
+      {
+        command: "pnpm --filter @first-tree/skill-evals eval:gate -- --suite first-tree-write",
+        kind: "gate",
+        reason:
+          "packages/client/src/runtime/templates/agent-briefing.ejs changes generated briefing text; run related skill behavior baseline",
+        suite: "first-tree-write",
+      },
+    ]);
+  });
+
   it("selects only periodic for shared periodic framework changes", () => {
     const summary = selectSkillEvalRecommendations(["packages/skill-evals/src/core/periodic.ts"]);
 
