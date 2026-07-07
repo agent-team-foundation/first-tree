@@ -250,6 +250,16 @@ describe("runtime-bound agent HTTP enforcement", () => {
     });
     expect(wrongPath.statusCode).toBe(401);
 
+    const wrongSibling = await app.inject({
+      method: "POST",
+      url: `/api/v1/agent/chats/${chatId}/outbox-token`,
+      headers: {
+        authorization: `Bearer ${outbox.accessToken}`,
+        "x-agent-id": sender.agent.uuid,
+      },
+    });
+    expect(wrongSibling.statusCode).toBe(401);
+
     const otherChatRes = await sender.request(
       "POST",
       "/api/v1/agent/chats",
