@@ -68,6 +68,12 @@ import { chunkAssistantText } from "../assistant-text.js";
 import { formatAuthHint, isCodexAuthError } from "../auth-error-hint.js";
 import { resolveTurnSettlement } from "../turn-settlement.js";
 import {
+  CodexStaleRolloutError,
+  extractCodexStaleRolloutThreadId,
+  isCodexStaleRolloutError,
+  staleRolloutRecoveryMessage,
+} from "./stale-rollout.js";
+import {
   LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED,
   LandingTrialTurnCompletionConfirmError,
   turnCompletionIdForMessages,
@@ -416,6 +422,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
   const workspaceRoot = config.workspaceRoot as string;
   const runtimeProvider = runtimeProviderSchema.parse(config.runtimeProvider ?? "codex");
   const providerTurnMaxRetries = maxProviderTurnRetryAttempts();
+  let activePayload: AgentRuntimeConfigPayload | null = null;
   const agentConfigCache = (config.agentConfigCache as AgentConfigCache | undefined) ?? null;
   const contextTreePath = (config.contextTreePath as string | undefined) ?? null;
   const contextTreeRepoUrl = (config.contextTreeRepoUrl as string | undefined) ?? null;
@@ -953,6 +960,9 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
             }
           } catch (err) {
             if (abort.signal.aborted) return;
+            if (isCodexStaleRolloutError(err)) {
+              throw new CodexStaleRolloutError(err, threadId);
+            }
             const msg = err instanceof Error ? err.message : String(err);
             const classification = providerAttempt.recordSignal({
               kind: "local_error",
@@ -1262,6 +1272,45 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
     return turnDelivered;
   }
 
+  async function runTurnWithStaleRolloutRecovery(
+    input: Input,
+    sessionCtx: SessionContext,
+    messages: readonly SessionMessage[],
+    token: DeliveryToken,
+    payload: AgentRuntimeConfigPayload,
+  ): Promise<boolean> {
+    const promptSnapshot = pendingChatContextPrompt;
+    const staleThreadIdBeforeTurn = threadId;
+    try {
+      return await runTurn(input, sessionCtx, messages, token);
+    } catch (err) {
+      if (!isCodexStaleRolloutError(err)) throw err;
+      const staleThreadId = extractCodexStaleRolloutThreadId(err) ?? staleThreadIdBeforeTurn ?? threadId ?? null;
+      if (!codex || !cwd) throw err;
+
+      pendingChatContextPrompt = promptSnapshot;
+      const recoveryMessage = staleRolloutRecoveryMessage(staleThreadId);
+      sessionCtx.emitEvent({ kind: "error", payload: { source: "runtime", message: recoveryMessage } });
+      sessionCtx.log(recoveryMessage);
+
+      thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
+      threadId = null;
+      prevCumulativeUsage = null;
+      threadIsFresh = true;
+
+      const delivered = await runTurn(input, sessionCtx, messages, token);
+      if (!threadId) threadId = thread?.id ?? null;
+      if (threadId) {
+        sessionCtx.replaceSessionId?.(threadId, "codex_stale_rollout_recovered");
+        sessionCtx.emitEvent({
+          kind: "error",
+          payload: { source: "runtime", message: staleRolloutRecoveryMessage(staleThreadId, threadId) },
+        });
+      }
+      return delivered;
+    }
+  }
+
   function scheduleQueuedMessagesDrain(): void {
     if (drainScheduled || drainInProgress) return;
     if (queuedMessages.length === 0 || !ctx || !thread || currentTurnPromise || initialTurnPreparing) return;
@@ -1366,7 +1415,10 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       pendingChatContextPrompt = pendingChatContextPrompt ? `${notice}\n\n${pendingChatContextPrompt}` : notice;
       sessionCtx.log(`Active session briefing changed — prepending re-read notice (${threadId})`);
     }
-    const delivered = await runTurn(inputs.join("\n\n"), sessionCtx, messages, token);
+    const payload = activePayload;
+    const delivered = payload
+      ? await runTurnWithStaleRolloutRecovery(inputs.join("\n\n"), sessionCtx, messages, token, payload)
+      : await runTurn(inputs.join("\n\n"), sessionCtx, messages, token);
     if (refreshed?.changed && delivered && cwd && threadId) {
       writeSessionBriefingFingerprint(cwd, threadId, refreshed.fingerprint);
     }
@@ -1455,6 +1507,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       markWorkspaceInitComplete(cwd);
 
       codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
+      activePayload = payload;
       thread = codex.startThread(buildCodexThreadOptions(payload, cwd));
       currentModel = payload.model || "";
       // Brand-new thread: the first `turn.completed` cumulative IS turn 1, so
@@ -1547,6 +1600,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       }
 
       codex = createCodexClient({ env: buildEnv(sessionCtx), config: buildCodexConfig(payload) }, sessionCtx);
+      activePayload = payload;
       // Footgun F2: resumeThread does NOT inherit first-call ThreadOptions —
       // re-pass them every time.
       thread = codex.resumeThread(sessionId, buildCodexThreadOptions(payload, cwd));
@@ -1559,7 +1613,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         let turnDelivered = false;
         try {
           const input = await toCodexInput(message, sessionCtx);
-          turnDelivered = await runTurn(input, sessionCtx, [message], deliveryToken);
+          turnDelivered = await runTurnWithStaleRolloutRecovery(input, sessionCtx, [message], deliveryToken, payload);
           initialTurnCompleted = true;
         } finally {
           initialTurnPreparing = false;
@@ -1569,11 +1623,11 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
         // delivered (settled complete). A pre-provider / retried turn consumed
         // the notice without the model seeing it, so leaving the baseline
         // unchanged lets the redelivery's resume re-surface it.
-        if (turnDelivered) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
+        if (turnDelivered && threadId) writeSessionBriefingFingerprint(cwd, threadId, briefingFingerprint);
       }
       return hasExplicitDeliveryToken
-        ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
-        : sessionId;
+        ? { sessionId: threadId ?? sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+        : (threadId ?? sessionId);
     },
 
     inject(message, token) {
@@ -1601,6 +1655,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       currentTurnPromise = null;
       thread = null;
       codex = null;
+      activePayload = null;
       initialTurnPreparing = false;
       pendingChatContextPrompt = null;
     },
@@ -1620,6 +1675,7 @@ export const createCodexSdkHandler: HandlerFactory = (config) => {
       currentTurnPromise = null;
       thread = null;
       codex = null;
+      activePayload = null;
 
       // Source repos, the Context Tree clone, and on-demand worktrees under
       // `<cwd>/worktrees/<name>/` are all agent-managed state — the agent

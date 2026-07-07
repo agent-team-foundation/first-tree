@@ -185,6 +185,14 @@ export type SessionContext = HandlerContext & {
   failSessionForRecovery?: (reason: string, sessionId?: string) => void;
 
   /**
+   * Rebind the active runtime session to a provider-minted replacement id
+   * without dropping inbox custody. Used by handlers that can safely recover a
+   * stale local provider transcript/rollout by cold-starting the same inbound
+   * turn under a fresh provider thread.
+   */
+  replaceSessionId?: (sessionId: string, reason: string) => void;
+
+  /**
    * Build env for CLI sub-processes that shell out to the First Tree CLI.
    * Layers First Tree envelope vars (server/agent/inbox/chat IDs) on
    * top of the parent env. Handlers pass their own cleaned `process.env`.
