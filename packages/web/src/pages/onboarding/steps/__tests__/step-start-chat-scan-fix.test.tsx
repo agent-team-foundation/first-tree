@@ -146,6 +146,18 @@ describe("AdminStartChat — production-scan fix handoff", () => {
     expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBeNull();
   });
 
+  it("keeps the handoff flag when the start-chat call fails", async () => {
+    writeScanFixHandoffFlag({ repoUrl: "https://github.com/acme/backend", reportKey: "acme-backend-20260101-abcdef" });
+    treeSetupChatMock.startOnboardingChat.mockRejectedValueOnce(new Error("boom"));
+
+    const container = await renderStep();
+    clickStart(container);
+    await flush();
+
+    expect(flowMock.completeAndEnterChat).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).not.toBeNull();
+  });
+
   it("falls back to the normal no-repo bootstrap and topic when no handoff flag is set", async () => {
     const container = await renderStep();
     clickStart(container);

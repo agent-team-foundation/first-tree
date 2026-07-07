@@ -161,10 +161,11 @@ export function QuickstartPage() {
         contextParticipantNames: [],
         initialMessage: {
           format: "text",
-          content: buildScanFixBootstrap(agent.displayName || "your agent", {
-            repoUrl: fixHandoff.url,
-            reportKey: fixHandoff.reportKey,
-          }),
+          content: buildScanFixBootstrap(
+            agent.displayName || "your agent",
+            { repoUrl: fixHandoff.url, reportKey: fixHandoff.reportKey },
+            "direct",
+          ),
           source: "web",
         },
       });
@@ -177,7 +178,10 @@ export function QuickstartPage() {
   }, [fixHandoff, navigate]);
 
   useEffect(() => {
-    if (!fixHandoff || !settled || !growthLandingPagesEnabled) return;
+    // `meLoaded` must gate this: `shouldEnterOnboarding` returns false while
+    // /me is still loading, which this branch would misread as "onboarded" and
+    // fire the direct-chat path for a user who actually needs onboarding.
+    if (!fixHandoff || !settled || !growthLandingPagesEnabled || !meLoaded) return;
     writeScanFixHandoffFlag({ repoUrl: fixHandoff.url, reportKey: fixHandoff.reportKey });
     if (
       shouldEnterOnboarding({

@@ -307,8 +307,70 @@ describe("QuickstartPage — production-scan fix handoff (action=fix)", () => {
     expect(body?.initialMessage.content).toContain(
       "Machine-readable findings: https://report.first-tree.ai/acme-backend-20260101-abcdef.json",
     );
+    // Direct path uses the greeting-free bootstrap: the agent isn't being onboarded.
+    expect(body?.initialMessage.content).not.toContain("welcome aboard");
     expect(navigateMock).toHaveBeenCalledWith("/?c=chat-fix-1", { replace: true });
     expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBeNull();
+  });
+
+  it("waits for /me: with meLoaded=false a fix link routes nowhere and calls nothing", async () => {
+    authMock.value = {
+      ...authMock.value,
+      meLoaded: false,
+      onboardingStep: "completed",
+      currentOrgHasPersonalAgent: true,
+      onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await renderPage([
+      "/quickstart?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend&action=fix&report=acme-backend-20260101-abcdef",
+    ]);
+
+    expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
+    expect(agentsApiMock.getNewChatDefaultCandidates).not.toHaveBeenCalled();
+    expect(meChatsApiMock.createMeTaskChat).not.toHaveBeenCalled();
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it("a stale trial intent cannot hijack a fix link into a trial", async () => {
+    seedIntent("production-scan");
+    authMock.value = {
+      ...authMock.value,
+      onboardingStep: "completed",
+      currentOrgHasPersonalAgent: true,
+      onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await renderPage([
+      "/quickstart?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend&action=fix&report=acme-backend-20260101-abcdef",
+    ]);
+
+    expect(landingCampaignMock.startLandingCampaign).not.toHaveBeenCalled();
+    expect(meChatsApiMock.createMeTaskChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("direct fix chat failure surfaces an error with retry and keeps the handoff", async () => {
+    authMock.value = {
+      ...authMock.value,
+      onboardingStep: "completed",
+      currentOrgHasPersonalAgent: true,
+      onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+    };
+    meChatsApiMock.createMeTaskChat.mockRejectedValueOnce(new Error("server unavailable"));
+    const container = await renderPage([
+      "/quickstart?campaign=production-scan&repo=https%3A%2F%2Fgithub.com%2Facme%2Fbackend&action=fix&report=acme-backend-20260101-abcdef",
+    ]);
+
+    expect(container.textContent).toContain("server unavailable");
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem("onboarding:scanFixHandoff")).toBe(
+      JSON.stringify({
+        repoUrl: "https://github.com/acme/backend",
+        reportKey: "acme-backend-20260101-abcdef",
+      }),
+    );
+    const retryBtn = [...container.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Try again"),
+    );
+    expect(retryBtn).toBeTruthy();
   });
 
   it("onboarded user with no connectable agent: shows an error with retry, keeps the handoff", async () => {

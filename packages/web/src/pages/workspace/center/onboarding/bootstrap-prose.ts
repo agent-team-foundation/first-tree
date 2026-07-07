@@ -91,10 +91,16 @@ export function buildInviteeReadyBootstrap(agentDisplayName: string): string {
  * skill recognizes the scan reference + findings link and launches the fix as
  * the pre-selected first task. `report.first-tree.ai` mirrors the scan skill's
  * BASE constant; the findings JSON expires ~30 days after the scan.
+ *
+ * `opening: "direct"` is the already-onboarded path (quickstart opens the task
+ * chat itself): no "welcome aboard" greeting — the agent isn't being onboarded,
+ * and the greeting-free shape keeps the welcome skill's launcher flow from
+ * treating an already-dedicated fix chat as a launcher.
  */
 export function buildScanFixBootstrap(
   agentDisplayName: string,
   handoff: { repoUrl: string; reportKey: string | null },
+  opening: "onboarding" | "direct" = "onboarding",
 ): string {
   const reportLines = handoff.reportKey
     ? [
@@ -105,14 +111,13 @@ export function buildScanFixBootstrap(
   const closing = handoff.reportKey
     ? "Start from the machine-readable findings and fix the blockers in severity order. If the findings link has expired, or the repository isn't accessible from here, say exactly what is needed — a re-run of the scan, the narrowest GitHub access, or a local path."
     : "The scan report link didn't carry over, so start by checking access to the repository, then ask me to share the report or re-run the scan.";
-  return [
-    `${agentDisplayName}, welcome aboard.`,
-    "",
-    "Please help me fix the launch blockers found by my production readiness scan.",
-    "",
-    `Repository: ${handoff.repoUrl}`,
-    ...reportLines,
-    "",
-    closing,
-  ].join("\n");
+  const openingLines =
+    opening === "direct"
+      ? [`${agentDisplayName}, please help me fix the launch blockers found by my production readiness scan.`]
+      : [
+          `${agentDisplayName}, welcome aboard.`,
+          "",
+          "Please help me fix the launch blockers found by my production readiness scan.",
+        ];
+  return [...openingLines, "", `Repository: ${handoff.repoUrl}`, ...reportLines, "", closing].join("\n");
 }
