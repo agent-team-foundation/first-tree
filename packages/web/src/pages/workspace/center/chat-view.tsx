@@ -4288,7 +4288,10 @@ export function ChatView({
                             />
                           </span>
                         )}
-                        <span className="flex items-center" style={{ gap: 8 }}>
+                        {/* `ml-auto` keeps the send cluster hard-right even when the
+                            left @/attach cluster is gone (trial surface) — otherwise
+                            `justify-between` with a single child left-aligns it. */}
+                        <span className="flex items-center ml-auto" style={{ gap: 8 }}>
                           {uploading && (
                             <span className="mono text-caption" style={{ color: "var(--primary)" }}>
                               uploading…
