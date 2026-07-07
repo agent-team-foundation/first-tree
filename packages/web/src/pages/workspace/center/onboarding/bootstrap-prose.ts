@@ -84,3 +84,35 @@ export function buildInviteeReadyBootstrap(agentDisplayName: string): string {
     "\n",
   );
 }
+
+/**
+ * First chat for a production-scan fix conversion: the user arrived from the
+ * trial's "fix these" CTA. Visible prose only (kickoff contract) — the welcome
+ * skill recognizes the scan reference + findings link and launches the fix as
+ * the pre-selected first task. `report.first-tree.ai` mirrors the scan skill's
+ * BASE constant; the findings JSON expires ~30 days after the scan.
+ */
+export function buildScanFixBootstrap(
+  agentDisplayName: string,
+  handoff: { repoUrl: string; reportKey: string | null },
+): string {
+  const reportLines = handoff.reportKey
+    ? [
+        `Hosted report: https://report.first-tree.ai/${handoff.reportKey}.html`,
+        `Machine-readable findings: https://report.first-tree.ai/${handoff.reportKey}.json`,
+      ]
+    : [];
+  const closing = handoff.reportKey
+    ? "Start from the machine-readable findings and fix the blockers in severity order. If the findings link has expired, or the repository isn't accessible from here, say exactly what is needed — a re-run of the scan, the narrowest GitHub access, or a local path."
+    : "The scan report link didn't carry over, so start by checking access to the repository, then ask me to share the report or re-run the scan.";
+  return [
+    `${agentDisplayName}, welcome aboard.`,
+    "",
+    "Please help me fix the launch blockers found by my production readiness scan.",
+    "",
+    `Repository: ${handoff.repoUrl}`,
+    ...reportLines,
+    "",
+    closing,
+  ].join("\n");
+}
