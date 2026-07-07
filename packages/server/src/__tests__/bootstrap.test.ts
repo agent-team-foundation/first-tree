@@ -31,7 +31,7 @@ function makeTempConfigDir(): string {
 
 const baseServerConfig: ServerConfig = {
   channel: "dev",
-  growth: { landingPagesEnabled: false, landingCampaignMaxAgentTurns: 1 },
+  growth: { landingPagesEnabled: false, landingCampaignMaxAgentTurns: 1, landingCampaignMaxEstimatedTokens: undefined },
   docs: { enabled: false },
   database: { url: process.env.DATABASE_URL ?? "", provider: "external" },
   server: { port: 0, host: "127.0.0.1", publicUrl: "https://first-tree.example" },

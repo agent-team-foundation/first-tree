@@ -25,6 +25,7 @@ import {
 } from "../services/landing-campaigns/trial-prompt.js";
 import { createMember } from "../services/member.js";
 import { sendMessage } from "../services/message.js";
+import * as sessionEventService from "../services/session-event.js";
 import { uuidv7 } from "../uuid.js";
 import { agentRequest, createTestAdmin, INVALID_BCRYPT_PLACEHOLDER, useTestApp } from "./helpers.js";
 
@@ -187,6 +188,38 @@ describe("POST /me/landing-campaigns/start", () => {
     landingCampaignClientId: OFFICIAL_CLIENT_ID,
     landingCampaignMaxAgentTurns: 2,
   });
+  const getBudgetApp = useTestApp({
+    growthLandingPagesEnabled: true,
+    landingCampaignServiceUserId: SERVICE_USER_ID,
+    landingCampaignServiceOrgId: SERVICE_ORG_ID,
+    landingCampaignClientId: OFFICIAL_CLIENT_ID,
+    landingCampaignMaxAgentTurns: 3,
+    landingCampaignMaxEstimatedTokens: 500,
+  });
+
+  it("parses legacy trial chat metadata with estimated token defaults", () => {
+    const trial = parseLandingCampaignTrialChatMetadata({
+      landingCampaignTrial: {
+        campaign: "production-scan",
+        agentId: "agent-1",
+        skillSetId: "production-scan",
+        skillSetVersion: "test",
+        repo: { url: "https://github.com/acme/backend", canonicalKey: "github.com/acme/backend" },
+        state: "running",
+        inputLocked: false,
+      },
+    });
+
+    expect(trial).toMatchObject({
+      maxAgentTurns: 1,
+      completedAgentTurns: 0,
+      completedAgentTurnIds: [],
+      maxEstimatedTokens: null,
+      estimatedTokensUsed: 0,
+      lastObservedEstimatedTokens: 0,
+    });
+  });
+
   it("feature flag off rejects before creating service member, trial agent, chat, or resource", async () => {
     const app = getDisabledApp();
     const admin = await createTestAdmin(app);
@@ -390,6 +423,9 @@ describe("POST /me/landing-campaigns/start", () => {
       inputLocked: false,
       maxAgentTurns: 1,
       completedAgentTurns: 0,
+      maxEstimatedTokens: null,
+      estimatedTokensUsed: 0,
+      lastObservedEstimatedTokens: 0,
     });
 
     const [bootstrap] = await app.db.select().from(messages).where(eq(messages.chatId, body.chatId)).limit(1);
@@ -826,7 +862,13 @@ describe("POST /me/landing-campaigns/start", () => {
       body.agentUuid,
       "turn-outbox",
     );
-    expect(completedTurn).toEqual({ advanced: true, reachedTurnLimit: true, duplicate: false });
+    expect(completedTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: true,
+      reachedLimit: true,
+      limitReason: "turns",
+      duplicate: false,
+    });
     const [completedChat] = await app.db
       .select({ metadata: chats.metadata })
       .from(chats)
@@ -920,7 +962,13 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(whileRunning.statusCode).toBe(201);
 
     const firstTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "turn-1");
-    expect(firstTurn).toEqual({ advanced: true, reachedTurnLimit: false, duplicate: false });
+    expect(firstTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: false,
+      limitReason: null,
+      duplicate: false,
+    });
     const [runningChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
     const runningTrial = parseLandingCampaignTrialChatMetadata(runningChat?.metadata);
     expect(runningTrial).toMatchObject({
@@ -944,7 +992,13 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(followUp.statusCode).toBe(201);
 
     const finalTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "turn-2");
-    expect(finalTurn).toEqual({ advanced: true, reachedTurnLimit: true, duplicate: false });
+    expect(finalTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: true,
+      reachedLimit: true,
+      limitReason: "turns",
+      duplicate: false,
+    });
     const [completedChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
     const completedTrial = parseLandingCampaignTrialChatMetadata(completedChat?.metadata);
     expect(completedTrial).toMatchObject({
@@ -966,6 +1020,238 @@ describe("POST /me/landing-campaigns/start", () => {
       },
     });
     expect(afterLimit.statusCode).toBe(403);
+  });
+
+  it("keeps turn-only behavior when the estimated token cap is not configured", async () => {
+    const app = getMultiTurnApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+      kind: "token_usage",
+      payload: {
+        provider: "codex",
+        model: "gpt-5",
+        inputTokens: 100_000,
+        cachedInputTokens: 10_000,
+        outputTokens: 20_000,
+      },
+    });
+
+    const firstTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "uncapped-1");
+    expect(firstTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: false,
+      limitReason: null,
+      duplicate: false,
+    });
+    const [runningChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(runningChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      maxAgentTurns: 2,
+      completedAgentTurns: 1,
+      maxEstimatedTokens: null,
+      estimatedTokensUsed: 130_000,
+      lastObservedEstimatedTokens: 130_000,
+    });
+
+    const followUp = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Can you keep going after a large uncapped turn?",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(followUp.statusCode).toBe(201);
+  });
+
+  it("locks a trial chat when the estimated token cap is reached before the turn cap", async () => {
+    const app = getBudgetApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    const [initialChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(initialChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      maxAgentTurns: 3,
+      completedAgentTurns: 0,
+      maxEstimatedTokens: 500,
+      estimatedTokensUsed: 0,
+      lastObservedEstimatedTokens: 0,
+    });
+
+    await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+      kind: "token_usage",
+      payload: { provider: "codex", model: "gpt-5", inputTokens: 100, cachedInputTokens: 25, outputTokens: 50 },
+    });
+    await sessionEventService.appendEvent(app.db, uuidv7(), body.chatId, {
+      kind: "token_usage",
+      payload: {
+        provider: "codex",
+        model: "gpt-5",
+        inputTokens: 10_000,
+        cachedInputTokens: 1_000,
+        outputTokens: 2_000,
+      },
+    });
+    const firstTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "budget-1");
+    expect(firstTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: false,
+      limitReason: null,
+      duplicate: false,
+    });
+    const [afterFirstChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(afterFirstChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      completedAgentTurns: 1,
+      estimatedTokensUsed: 175,
+      lastObservedEstimatedTokens: 175,
+    });
+
+    const whileUnderBudget = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Please continue while the token budget remains.",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(whileUnderBudget.statusCode).toBe(201);
+
+    await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+      kind: "token_usage",
+      payload: { provider: "codex", model: "gpt-5", inputTokens: 200, cachedInputTokens: 50, outputTokens: 100 },
+    });
+    const secondTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "budget-2");
+    expect(secondTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: true,
+      limitReason: "tokens",
+      duplicate: false,
+    });
+    const [lockedChat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(lockedChat?.metadata)).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+      maxAgentTurns: 3,
+      completedAgentTurns: 2,
+      maxEstimatedTokens: 500,
+      estimatedTokensUsed: 525,
+      lastObservedEstimatedTokens: 525,
+      limitReason: "tokens",
+    });
+
+    const duplicate = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "budget-2");
+    expect(duplicate).toEqual({
+      advanced: false,
+      reachedTurnLimit: false,
+      reachedLimit: true,
+      limitReason: "tokens",
+      duplicate: true,
+    });
+    const [afterDuplicateChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(afterDuplicateChat?.metadata)).toMatchObject({
+      completedAgentTurns: 2,
+      estimatedTokensUsed: 525,
+      completedAgentTurnIds: ["budget-1", "budget-2"],
+    });
+
+    const afterBudget = await app.inject({
+      method: "POST",
+      url: `/api/v1/chats/${body.chatId}/messages`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+      payload: {
+        format: "text",
+        content: "Can we keep going after the token budget?",
+        metadata: { mentions: [body.agentUuid] },
+      },
+    });
+    expect(afterBudget.statusCode).toBe(403);
+  });
+
+  it("continues charging estimated tokens after session event traces reset", async () => {
+    const app = getBudgetApp();
+    const admin = await createTestAdmin(app);
+    await seedOfficialRuntime(app, admin.organizationId);
+    const started = await startProductionScan(app, admin);
+    const body = started.json<{ chatId: string; agentUuid: string }>();
+
+    await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+      kind: "token_usage",
+      payload: { provider: "codex", model: "gpt-5", inputTokens: 300, cachedInputTokens: 50, outputTokens: 50 },
+    });
+    const firstTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "reset-1");
+    expect(firstTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: false,
+      limitReason: null,
+      duplicate: false,
+    });
+    const [afterFirstChat] = await app.db
+      .select({ metadata: chats.metadata })
+      .from(chats)
+      .where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(afterFirstChat?.metadata)).toMatchObject({
+      state: "running",
+      inputLocked: false,
+      completedAgentTurns: 1,
+      estimatedTokensUsed: 400,
+      lastObservedEstimatedTokens: 400,
+    });
+
+    await sessionEventService.clearEvents(app.db, body.agentUuid, body.chatId);
+    await sessionEventService.appendEvent(app.db, body.agentUuid, body.chatId, {
+      kind: "token_usage",
+      payload: { provider: "codex", model: "gpt-5", inputTokens: 75, cachedInputTokens: 25, outputTokens: 25 },
+    });
+    const secondTurn = await completeLandingCampaignTrialAgentTurn(app.db, body.chatId, body.agentUuid, "reset-2");
+    expect(secondTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: false,
+      reachedLimit: true,
+      limitReason: "tokens",
+      duplicate: false,
+    });
+    const [lockedChat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, body.chatId));
+    expect(parseLandingCampaignTrialChatMetadata(lockedChat?.metadata)).toMatchObject({
+      state: "completed",
+      inputLocked: true,
+      completedAgentTurns: 2,
+      completedAgentTurnIds: ["reset-1", "reset-2"],
+      maxEstimatedTokens: 500,
+      estimatedTokensUsed: 525,
+      lastObservedEstimatedTokens: 125,
+      limitReason: "tokens",
+    });
   });
 
   it("serializes concurrent trial request writes so only one state transition wins", async () => {
@@ -1192,7 +1478,13 @@ describe("POST /me/landing-campaigns/start", () => {
       body.agentUuid,
       "turn-request-answer",
     );
-    expect(completedTurn).toEqual({ advanced: true, reachedTurnLimit: true, duplicate: false });
+    expect(completedTurn).toEqual({
+      advanced: true,
+      reachedTurnLimit: true,
+      reachedLimit: true,
+      limitReason: "turns",
+      duplicate: false,
+    });
     const [completedChat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
     expect(parseLandingCampaignTrialChatMetadata(completedChat?.metadata)).toMatchObject({
       state: "completed",

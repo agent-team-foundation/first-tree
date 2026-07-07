@@ -23,7 +23,7 @@ import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
-import { hasRemainingLandingCampaignTrialAgentTurns } from "./landing-campaigns/chat-state.js";
+import { hasRemainingLandingCampaignTrialBudget } from "./landing-campaigns/chat-state.js";
 import { getLandingCampaignTrialChat, withLandingCampaignChatState } from "./landing-campaigns/metadata.js";
 
 const log = createLogger("message");
@@ -151,7 +151,7 @@ function assertLandingCampaignTrialMessageAllowed(input: {
       trial.state === "running";
     if (isSystemBootstrap) return;
 
-    if (!hasRemainingLandingCampaignTrialAgentTurns(trial)) {
+    if (!hasRemainingLandingCampaignTrialBudget(trial)) {
       throw new ForbiddenError("Landing campaign trial chat is locked.");
     }
 

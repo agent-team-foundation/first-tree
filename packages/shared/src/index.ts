@@ -490,6 +490,7 @@ export {
   type LandingCampaignTrialAwaitingUserKind,
   type LandingCampaignTrialChatMetadata,
   type LandingCampaignTrialChatState,
+  type LandingCampaignTrialLimitReason,
   landingCampaignRepoMetadataSchema,
   landingCampaignSlugSchema,
   landingCampaignStartRequestSchema,
@@ -498,6 +499,7 @@ export {
   landingCampaignTrialAwaitingUserKindSchema,
   landingCampaignTrialChatMetadataSchema,
   landingCampaignTrialChatStateSchema,
+  landingCampaignTrialLimitReasonSchema,
   parseLandingCampaignTrialAgentMetadata,
   parseLandingCampaignTrialChatMetadata,
 } from "./schemas/landing-campaign.js";
