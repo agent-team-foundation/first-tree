@@ -390,6 +390,10 @@ async function ensureTrialChatAndBootstrap(
     inputLocked: false,
     maxAgentTurns: app.config.growth.landingCampaignMaxAgentTurns,
     completedAgentTurns: 0,
+    maxEstimatedTokens: app.config.growth.landingCampaignMaxEstimatedTokens ?? null,
+    estimatedTokensUsed: 0,
+    lastObservedEstimatedTokens: 0,
+    lastObservedTokenUsageEventId: null,
   });
 
   let chatId: string;

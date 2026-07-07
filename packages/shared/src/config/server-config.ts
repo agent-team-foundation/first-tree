@@ -70,6 +70,14 @@ export const serverConfigSchema = defineConfig({
     landingCampaignMaxAgentTurns: field(z.number().int().min(1).max(20).default(1), {
       env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS",
     }),
+    /**
+     * Optional approximate token budget for each landing campaign trial chat.
+     * When unset, trial quota remains turn-only. When set, successful agent
+     * turns advance both the turn count and this metadata-backed estimate.
+     */
+    landingCampaignMaxEstimatedTokens: field(z.number().int().min(1).optional(), {
+      env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_ESTIMATED_TOKENS",
+    }),
     landingCampaigns: optional({
       /**
        * First Tree official service user that manages landing campaign trial

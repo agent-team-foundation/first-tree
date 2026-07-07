@@ -25,7 +25,7 @@ import { getChatAgentStatuses } from "../services/agent-chat-status.js";
 import { ensureParticipant, leaveChat, updateChatMetadata } from "../services/chat.js";
 import { declareEntityFollow, listChatGithubEntities, removeEntityFollow } from "../services/github-entity-follow.js";
 import {
-  hasRemainingLandingCampaignTrialAgentTurns,
+  hasRemainingLandingCampaignTrialBudget,
   normalizeLandingCampaignTrialChatMetadataForRead,
 } from "../services/landing-campaigns/chat-state.js";
 import { assertNoLandingCampaignTrialAgents } from "../services/landing-campaigns/guards.js";
@@ -60,7 +60,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     if (!trial) return;
     const resolves = body.metadata?.resolves;
     const resolvesRequest = resolves !== null && typeof resolves === "object";
-    if (trial.state === "completed" || trial.state === "failed" || !hasRemainingLandingCampaignTrialAgentTurns(trial)) {
+    if (trial.state === "completed" || trial.state === "failed" || !hasRemainingLandingCampaignTrialBudget(trial)) {
       throw new ForbiddenError("This landing campaign trial chat is locked.");
     }
     if (trial.state === "awaiting_user" && trial.awaitingUserKind !== "follow_up" && !resolvesRequest) {

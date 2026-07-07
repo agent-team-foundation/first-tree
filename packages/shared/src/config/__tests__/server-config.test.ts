@@ -72,11 +72,13 @@ describe("server config", () => {
 
     expect(defaultConfig.growth.landingPagesEnabled).toBe(false);
     expect(defaultConfig.growth.landingCampaignMaxAgentTurns).toBe(1);
+    expect(defaultConfig.growth.landingCampaignMaxEstimatedTokens).toBeUndefined();
 
     resetConfig();
     const enabledConfigDir = makeTempConfigDir();
     vi.stubEnv("FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED", "true");
     vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS", "4");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_ESTIMATED_TOKENS", "12000");
 
     const enabledConfig = await initConfig({
       schema: createServerConfigSchema({ autoGenerateSecrets: false }),
@@ -86,6 +88,7 @@ describe("server config", () => {
 
     expect(enabledConfig.growth.landingPagesEnabled).toBe(true);
     expect(enabledConfig.growth.landingCampaignMaxAgentTurns).toBe(4);
+    expect(enabledConfig.growth.landingCampaignMaxEstimatedTokens).toBe(12000);
   });
 
   it("resolves landing campaign official service ids only when configured", async () => {
@@ -133,6 +136,20 @@ describe("server config", () => {
         configDir,
       }),
     ).rejects.toThrow(/landingCampaignMaxAgentTurns/);
+  });
+
+  it("rejects invalid landing campaign estimated token limits", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_ESTIMATED_TOKENS", "0");
+
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/landingCampaignMaxEstimatedTokens/);
   });
 
   it("defaults landing campaign runtime provider to codex and accepts claude-code", async () => {

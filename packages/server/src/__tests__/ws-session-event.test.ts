@@ -296,6 +296,27 @@ describe("Agent WS — session event protocol (S10)", () => {
       );
     }
 
+    async function sendTokenUsage(
+      ref: string,
+      tokens: { inputTokens: number; cachedInputTokens: number; outputTokens: number },
+    ) {
+      ws.send(
+        JSON.stringify({
+          type: "session:event",
+          ref,
+          agentId: seed.agent.uuid,
+          chatId,
+          event: { kind: "token_usage", payload: { provider: "codex", model: "gpt-5", ...tokens } },
+        }),
+      );
+      await waitForFrame(
+        ws,
+        (m) =>
+          (m as { type?: string; ref?: string }).type === "session:event:accepted" &&
+          (m as { ref?: string }).ref === ref,
+      );
+    }
+
     try {
       await app.db.insert(chats).values({
         id: chatId,
@@ -314,7 +335,8 @@ describe("Agent WS — session event protocol (S10)", () => {
           },
           state: "running",
           inputLocked: false,
-          maxAgentTurns: 2,
+          maxAgentTurns: 3,
+          maxEstimatedTokens: 400,
           completedAgentTurns: 0,
         }),
       });
@@ -340,8 +362,15 @@ describe("Agent WS — session event protocol (S10)", () => {
         inputLocked: false,
         completedAgentTurns: 0,
         completedAgentTurnIds: [],
+        estimatedTokensUsed: 0,
+        lastObservedEstimatedTokens: 0,
       });
 
+      await sendTokenUsage("landing-token-usage-1", {
+        inputTokens: 100,
+        cachedInputTokens: 10,
+        outputTokens: 40,
+      });
       await sendTurnEnd("landing-turn-end-1", "inbox:101");
       const [runningChat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId));
       expect(parseLandingCampaignTrialChatMetadata(runningChat?.metadata)).toMatchObject({
@@ -349,7 +378,10 @@ describe("Agent WS — session event protocol (S10)", () => {
         inputLocked: false,
         completedAgentTurns: 1,
         completedAgentTurnIds: ["inbox:101"],
-        maxAgentTurns: 2,
+        maxAgentTurns: 3,
+        maxEstimatedTokens: 400,
+        estimatedTokensUsed: 150,
+        lastObservedEstimatedTokens: 150,
       });
 
       await sendTurnEnd("landing-turn-end-1-duplicate", "inbox:101");
@@ -359,9 +391,17 @@ describe("Agent WS — session event protocol (S10)", () => {
         inputLocked: false,
         completedAgentTurns: 1,
         completedAgentTurnIds: ["inbox:101"],
-        maxAgentTurns: 2,
+        maxAgentTurns: 3,
+        maxEstimatedTokens: 400,
+        estimatedTokensUsed: 150,
+        lastObservedEstimatedTokens: 150,
       });
 
+      await sendTokenUsage("landing-token-usage-2", {
+        inputTokens: 200,
+        cachedInputTokens: 20,
+        outputTokens: 80,
+      });
       await sendTurnEnd("landing-turn-end-2", "inbox:102");
       const [completedChat] = await app.db.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId));
       expect(parseLandingCampaignTrialChatMetadata(completedChat?.metadata)).toMatchObject({
@@ -369,7 +409,11 @@ describe("Agent WS — session event protocol (S10)", () => {
         inputLocked: true,
         completedAgentTurns: 2,
         completedAgentTurnIds: ["inbox:101", "inbox:102"],
-        maxAgentTurns: 2,
+        maxAgentTurns: 3,
+        maxEstimatedTokens: 400,
+        estimatedTokensUsed: 450,
+        lastObservedEstimatedTokens: 450,
+        limitReason: "tokens",
       });
       expect(notifySpy).toHaveBeenCalledTimes(2);
       expect(notifySpy).toHaveBeenCalledWith(chatId);

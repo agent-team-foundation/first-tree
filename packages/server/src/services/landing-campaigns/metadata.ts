@@ -2,6 +2,7 @@ import {
   type LandingCampaignRepoMetadata,
   type LandingCampaignTrialAwaitingUserKind,
   type LandingCampaignTrialChatState,
+  type LandingCampaignTrialLimitReason,
   parseLandingCampaignTrialAgentMetadata,
   parseLandingCampaignTrialChatMetadata,
 } from "@first-tree/shared";
@@ -49,6 +50,11 @@ export function buildLandingCampaignChatMetadata(input: {
   maxAgentTurns?: number;
   completedAgentTurns?: number;
   completedAgentTurnIds?: string[];
+  maxEstimatedTokens?: number | null;
+  estimatedTokensUsed?: number;
+  lastObservedEstimatedTokens?: number;
+  lastObservedTokenUsageEventId?: string | null;
+  limitReason?: LandingCampaignTrialLimitReason;
 }): Record<string, unknown> {
   return {
     landingCampaignTrial: {
@@ -63,6 +69,11 @@ export function buildLandingCampaignChatMetadata(input: {
       maxAgentTurns: input.maxAgentTurns ?? 1,
       completedAgentTurns: input.completedAgentTurns ?? 0,
       completedAgentTurnIds: input.completedAgentTurnIds ?? [],
+      maxEstimatedTokens: input.maxEstimatedTokens ?? null,
+      estimatedTokensUsed: input.estimatedTokensUsed ?? 0,
+      lastObservedEstimatedTokens: input.lastObservedEstimatedTokens ?? 0,
+      lastObservedTokenUsageEventId: input.lastObservedTokenUsageEventId ?? null,
+      ...(input.limitReason ? { limitReason: input.limitReason } : {}),
     },
   };
 }
@@ -76,6 +87,11 @@ export function withLandingCampaignChatState(
     completedAgentTurns?: number;
     completedAgentTurnIds?: string[];
     maxAgentTurns?: number;
+    maxEstimatedTokens?: number | null;
+    estimatedTokensUsed?: number;
+    lastObservedEstimatedTokens?: number;
+    lastObservedTokenUsageEventId?: string | null;
+    limitReason?: LandingCampaignTrialLimitReason;
   } = {},
 ): Record<string, unknown> {
   const current = parseLandingCampaignTrialChatMetadata(metadata);
@@ -88,6 +104,9 @@ export function withLandingCampaignChatState(
   };
   if (state !== "awaiting_user") {
     delete nextTrial.awaitingUserKind;
+  }
+  if (state !== "completed") {
+    delete nextTrial.limitReason;
   }
   return {
     ...metadata,
