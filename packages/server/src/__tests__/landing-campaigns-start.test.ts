@@ -322,7 +322,7 @@ describe("POST /me/landing-campaigns/start", () => {
     expect(trialAgents).toHaveLength(0);
   });
 
-  it("creates the service-managed trial agent, installs the agent-scoped campaign skill, and starts an unlocked capped chat", async () => {
+  it("creates the service-managed trial agent with guardrails and starts an unlocked capped clone-driven chat", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     await seedOfficialRuntime(app, admin.organizationId);
@@ -360,23 +360,17 @@ describe("POST /me/landing-campaigns/start", () => {
       status: "active",
     });
 
-    const [skill] = await app.db
+    const skillResources = await app.db
       .select()
       .from(resources)
       .where(and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "skill"), eq(resources.scope, "agent")))
       .limit(1);
-    expect(skill?.name).toBe("production-scan");
-    expect(skill?.defaultEnabled).toBeNull();
-    expect(skill?.payload).toMatchObject({ name: "production-scan" });
-    expect(JSON.stringify(skill?.payload)).toContain("/onboarding");
-    expect(JSON.stringify(skill?.payload)).not.toContain("{{FIRST_TREE_SETUP_URL}}");
-    const bindings = await app.db
+    expect(skillResources).toHaveLength(0);
+    const skillBindings = await app.db
       .select()
       .from(agentResourceBindings)
-      .where(
-        and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.resourceId, skill?.id ?? "")),
-      );
-    expect(bindings).toHaveLength(1);
+      .where(and(eq(agentResourceBindings.agentId, body.agentUuid), eq(agentResourceBindings.type, "skill")));
+    expect(skillBindings).toHaveLength(0);
 
     const [prompt] = await app.db
       .select()
@@ -441,6 +435,10 @@ describe("POST /me/landing-campaigns/start", () => {
     const [bootstrap] = await app.db.select().from(messages).where(eq(messages.chatId, body.chatId)).limit(1);
     expect(bootstrap?.senderId).toBe(admin.humanAgentUuid);
     expect(bootstrap?.content).toContain("https://github.com/acme/backend");
+    expect(bootstrap?.content).toContain("safe, read-only check before launch");
+    expect(bootstrap?.content).toContain("https://github.com/agent-team-foundation/launch-readiness-scan");
+    expect(bootstrap?.content).toContain("run its production-scan skill");
+    expect(bootstrap?.content).toContain("First Tree trial mode");
     expect(bootstrap?.metadata).toMatchObject({
       systemSender: "first_tree_onboarding",
       campaign: "production-scan",

@@ -316,11 +316,10 @@ export function createResourcesService(opts: ResourcesServiceOptions): Resources
       if (resource.scope === "agent" && resource.ownerAgentId !== agentId) {
         throw new BadRequestError(`Agent-scoped resource "${id}" is not owned by this agent`);
       }
-      // Agent-scoped resources are repos (agent-extra repos) and skills (the
-      // quickstart managed campaign scan skill, owned by this agent — ownership
-      // already enforced just above). Admitting owned agent-scoped skills lets
-      // their binding round-trip through ordinary resource saves: the web
-      // editors re-submit the full binding array, which includes it.
+      // Agent-scoped resources are repos (agent-extra repos) and legacy skills
+      // owned by this agent; ownership is enforced just above. Admitting owned
+      // agent-scoped skills lets existing bindings round-trip through ordinary
+      // resource saves.
       if (resource.scope === "agent" && resource.type !== "repo" && resource.type !== "skill") {
         throw new BadRequestError("Only repo and skill resources may be agent-scoped");
       }
