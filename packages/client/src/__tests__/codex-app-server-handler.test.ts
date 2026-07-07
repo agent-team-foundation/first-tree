@@ -69,6 +69,7 @@ class FakeAppServerClient {
   onNotification: NotificationHandler | null = null;
   onClose: CloseHandler | null = null;
   steerError: Error | null = null;
+  threadResumeError: Error | null = null;
   turnStartError: Error | null = null;
   beforeTurnStartError: (() => void) | null = null;
   beforeTurnStartReturn: (() => void) | null = null;
@@ -90,6 +91,7 @@ class FakeAppServerClient {
     }
     if (method === "thread/resume") {
       this.beforeThreadResumeReturn?.();
+      if (this.threadResumeError) throw this.threadResumeError;
       return { thread: { id: "thread-app-server" } };
     }
     if (method === "turn/start") {
@@ -201,6 +203,7 @@ function makeContext(
     finishTurn?: SessionContext["finishTurn"];
     retryTurn?: SessionContext["retryTurn"];
     failSessionForRecovery?: SessionContext["failSessionForRecovery"];
+    replaceSessionId?: SessionContext["replaceSessionId"];
     emitEvent?: SessionContext["emitEvent"];
     emitEventConfirmed?: SessionContext["emitEventConfirmed"];
     formatInboundContent?: SessionContext["formatInboundContent"];
@@ -240,6 +243,7 @@ function makeContext(
     ...(opts.finishTurn ? { finishTurn: opts.finishTurn } : {}),
     ...(opts.retryTurn ? { retryTurn: opts.retryTurn } : {}),
     ...(opts.failSessionForRecovery ? { failSessionForRecovery: opts.failSessionForRecovery } : {}),
+    ...(opts.replaceSessionId ? { replaceSessionId: opts.replaceSessionId } : {}),
     ...(opts.formatInboundContent ? { formatInboundContent: opts.formatInboundContent } : {}),
   };
 }
@@ -890,6 +894,31 @@ describe("codex app-server handler", () => {
     });
 
     await handler.shutdown();
+  });
+
+  it("fresh-starts and rebinds when thread/resume reports a missing rollout", async () => {
+    const fake = new FakeAppServerClient();
+    fake.threadResumeError = new Error(
+      "thread/resume: thread/resume failed: no rollout found for thread id thread-stale (code -32600)",
+    );
+    const replaceSessionId = vi.fn<NonNullable<SessionContext["replaceSessionId"]>>();
+    const retryTurn = vi.fn<SessionContext["retryTurn"]>();
+    const failSessionForRecovery = vi.fn<NonNullable<SessionContext["failSessionForRecovery"]>>();
+    const handler = makeHandler(fake);
+    const ctx = makeContext({ replaceSessionId, retryTurn, failSessionForRecovery });
+    const token = makeDeliveryToken();
+
+    const resumePromise = handler.resume(makeMessage("m1", "first"), "thread-stale", ctx, token);
+    await waitFor(() => fake.requests.some((request) => request.method === "turn/start"));
+    completeTurn(fake, "turn-1", "fresh answer");
+    const result = await resumePromise;
+
+    expect(fake.requests.map((request) => request.method)).toEqual(["thread/resume", "thread/start", "turn/start"]);
+    expect(result).toEqual({ sessionId: "thread-app-server", route: { kind: "owned", mode: "processing" } });
+    expect(replaceSessionId).toHaveBeenCalledWith("thread-app-server", "codex_stale_rollout_recovered");
+    expect(token.retry).not.toHaveBeenCalled();
+    expect(retryTurn).not.toHaveBeenCalled();
+    expect(failSessionForRecovery).not.toHaveBeenCalled();
   });
 
   it("uses late replayed cumulative usage as the current resumed turn baseline", async () => {

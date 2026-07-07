@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentRuntimeConfig, SessionEvent } from "@first-tree/shared";
 import type pino from "pino";
 import { describe, expect, it, vi } from "vitest";
@@ -110,6 +113,7 @@ function createSessionManager(opts: {
   recoverChat?: (chatId: string) => Promise<void>;
   onSessionEvent?: (chatId: string, event: SessionEvent) => void;
   subprocessProbe?: SubprocessProbe;
+  registryPath?: string;
 }) {
   const handler = opts.handler ?? createMockHandler();
   const factory: HandlerFactory = opts.handlerFactory ?? (() => handler);
@@ -140,6 +144,7 @@ function createSessionManager(opts: {
     },
     sdk,
     log: opts.log ?? silentLogger(),
+    registryPath: opts.registryPath,
     ackEntry: opts.ackEntry ?? mockAckEntry(),
     recoverChat: opts.recoverChat,
     agentConfigCache: opts.agentConfigCache,
@@ -199,6 +204,31 @@ describe("SessionManager", () => {
     expect(ackEntry).toHaveBeenCalledWith(42);
 
     await sm.shutdown();
+  });
+
+  it("persists a handler-replaced session id", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "session-manager-rebind-"));
+    const registryPath = join(dir, "sessions.json");
+    let capturedCtx: SessionContext | undefined;
+    const handler = createMockHandler({
+      async start(_msg, ctx) {
+        capturedCtx = ctx;
+        return { sessionId: "session-old", route: { kind: "owned", mode: "processing" } as const };
+      },
+    });
+    const sm = createSessionManager({ handler, registryPath });
+    try {
+      await sm.dispatch(mockEntry({ id: 1, chatId: "chat-rebind" }));
+      capturedCtx?.replaceSessionId?.("session-new", "codex_stale_rollout_recovered");
+      await sm.shutdown();
+
+      const raw = JSON.parse(readFileSync(registryPath, "utf-8")) as {
+        entries: Record<string, { claudeSessionId: string }>;
+      };
+      expect(raw.entries["chat-rebind"]?.claudeSessionId).toBe("session-new");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("deduplicates messages with same message ID", async () => {

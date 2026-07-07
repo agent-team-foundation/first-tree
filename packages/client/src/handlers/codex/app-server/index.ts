@@ -57,6 +57,11 @@ import {
   isTransientCodexErrorMessage,
 } from "../sdk.js";
 import {
+  extractCodexStaleRolloutThreadId,
+  isCodexStaleRolloutError,
+  staleRolloutRecoveryMessage,
+} from "../stale-rollout.js";
+import {
   LANDING_TRIAL_TURN_COMPLETION_CONFIRM_FAILED,
   LandingTrialTurnCompletionConfirmError,
   turnCompletionIdForMessages,
@@ -193,6 +198,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
   let threadId: string | null = null;
   let currentModel = "";
   let currentReasoningEffort = "high";
+  let activePayload: AgentRuntimeConfigPayload | null = null;
   let currentTurn: CurrentTurn | null = null;
   let currentTurnPromise: Promise<void> | null = null;
   let turnSettlementInProgress = false;
@@ -533,6 +539,23 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       throw new CodexAppServerStartupError("thread-resume", err);
     }
     threadId = sessionId;
+  }
+
+  async function startFreshThreadAfterStaleRollout(
+    payload: AgentRuntimeConfigPayload,
+    sessionCtx: SessionContext,
+    staleThreadId: string | null,
+  ): Promise<string> {
+    const recoveryMessage = staleRolloutRecoveryMessage(staleThreadId);
+    sessionCtx.emitEvent({ kind: "error", payload: { source: "runtime", message: recoveryMessage } });
+    sessionCtx.log(recoveryMessage);
+    const replacementThreadId = await startThread(payload);
+    sessionCtx.replaceSessionId?.(replacementThreadId, "codex_stale_rollout_recovered");
+    sessionCtx.emitEvent({
+      kind: "error",
+      payload: { source: "runtime", message: staleRolloutRecoveryMessage(staleThreadId, replacementThreadId) },
+    });
+    return replacementThreadId;
   }
 
   function emitToolCall(
@@ -980,6 +1003,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
     messages: readonly SessionMessage[],
     token: DeliveryToken,
     sessionCtx: SessionContext,
+    allowStaleRolloutRecovery = true,
   ): Promise<boolean> {
     const client = appServer;
     if (!client || !threadId) {
@@ -995,6 +1019,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       return false;
     }
 
+    const promptSnapshot = pendingChatContextPrompt;
     const providerInputText = consumePendingChatContext(inputText);
     gitWriteTracker.captureBaseline();
     let result: unknown;
@@ -1011,6 +1036,13 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       });
     } catch (err) {
       turnStartInProgress = false;
+      if (allowStaleRolloutRecovery && isCodexStaleRolloutError(err) && activePayload) {
+        turnStartAttempt = null;
+        pendingChatContextPrompt = promptSnapshot;
+        const staleThreadId = extractCodexStaleRolloutThreadId(err) ?? threadId;
+        await startFreshThreadAfterStaleRollout(activePayload, sessionCtx, staleThreadId);
+        return runTurnFromText(inputText, messages, token, sessionCtx, false);
+      }
       const attempt = turnStartAttempt ?? createProviderAttempt();
       turnStartAttempt = null;
       const syntheticFailure = {
@@ -1625,6 +1657,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       ctx = sessionCtx;
       try {
         const { payload, env, briefingFingerprint } = await prepareSession(sessionCtx);
+        activePayload = payload;
         await startAppServer(sessionCtx, env);
         const id = await startThread(payload);
         let input: string;
@@ -1656,6 +1689,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       ctx = sessionCtx;
       try {
         const { payload, env, briefingFingerprint } = await prepareSession(sessionCtx);
+        activePayload = payload;
         // Briefing-staleness notice: a resumed Codex thread read AGENTS.md once
         // at thread init and never re-reads it. If the briefing changed since
         // this session last ran a turn — or there is no baseline (a session
@@ -1672,7 +1706,14 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
           sessionCtx.log(`Resume: briefing changed since last turn — prepending re-read notice (${sessionId})`);
         }
         await startAppServer(sessionCtx, env);
-        await resumeThread(sessionId, payload);
+        let effectiveSessionId = sessionId;
+        try {
+          await resumeThread(sessionId, payload);
+        } catch (err) {
+          if (!isCodexStaleRolloutError(err)) throw err;
+          const staleThreadId = extractCodexStaleRolloutThreadId(err) ?? sessionId;
+          effectiveSessionId = await startFreshThreadAfterStaleRollout(payload, sessionCtx, staleThreadId);
+        }
         if (message) {
           let input: string;
           try {
@@ -1682,16 +1723,19 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
             sessionCtx.log(
               `codex app-server resume formatInboundContent failed: ${err instanceof Error ? err.message : String(err)}`,
             );
-            return hasExplicitDeliveryToken ? { sessionId, route: { kind: "owned", mode: "queued" } } : sessionId;
+            return hasExplicitDeliveryToken
+              ? { sessionId: effectiveSessionId, route: { kind: "owned", mode: "queued" } }
+              : effectiveSessionId;
           }
           const delivered = await runTurnFromText(input, [message], deliveryToken, sessionCtx);
+          effectiveSessionId = threadId ?? effectiveSessionId;
           // Advance the baseline ONLY when the notice-bearing turn actually
           // delivered; a retried / pre-provider turn leaves it for redelivery.
-          if (cwd && delivered) writeSessionBriefingFingerprint(cwd, sessionId, briefingFingerprint);
+          if (cwd && delivered) writeSessionBriefingFingerprint(cwd, effectiveSessionId, briefingFingerprint);
         }
         return hasExplicitDeliveryToken
-          ? { sessionId, route: message ? { kind: "owned", mode: "processing" } : null }
-          : sessionId;
+          ? { sessionId: effectiveSessionId, route: message ? { kind: "owned", mode: "processing" } : null }
+          : effectiveSessionId;
       } finally {
         startupTurnPending = false;
         schedulePendingDrain();
@@ -1713,6 +1757,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       await interruptCurrentTurn();
       await appServer?.shutdown();
       appServer = null;
+      activePayload = null;
       pendingChatContextPrompt = null;
       workspaceOnly = false;
       workspaceOnlyCodexHome = null;
@@ -1726,6 +1771,7 @@ export const createCodexAppServerHandler: HandlerFactory = (config: HandlerConfi
       await interruptCurrentTurn();
       await appServer?.shutdown();
       appServer = null;
+      activePayload = null;
       currentTurn = null;
       currentTurnPromise = null;
       startupTurnPending = false;

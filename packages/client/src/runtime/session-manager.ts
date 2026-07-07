@@ -2213,6 +2213,15 @@ export class SessionManager {
       failSessionForRecovery: (reason, sessionId) => {
         this.failSessionForRecovery(chatId, reason, sessionId);
       },
+      replaceSessionId: (sessionId, reason) => {
+        const entry = this.sessions.get(chatId);
+        if (!entry) return;
+        const previousSessionId = entry.claudeSessionId;
+        entry.claudeSessionId = sessionId;
+        entry.lastActivity = Date.now();
+        this.config.log.info({ chatId, previousSessionId, sessionId, reason }, "session id replaced by handler");
+        this.persistRegistry();
+      },
       buildAgentEnv: (parentEnv) => buildAgentEnv(parentEnv, envCtx),
       formatInboundContent: (message) => formatInboundContent(message, participants),
       resolveSenderLabel: async (senderId) => resolveSenderLabel(senderId, await participants.get()),
