@@ -97,14 +97,10 @@ function isAllowedAgentOutboxRequest(request: FastifyRequest, scope: { agentId: 
   if (request.headers[AGENT_SELECTOR_HEADER] !== scope.agentId) return false;
 
   const pathname = new URL(request.url, "http://first-tree.local").pathname;
-  const marker = "/agent/chats/";
-  const markerIndex = pathname.indexOf(marker);
-  if (markerIndex < 0) return false;
-  const tail = pathname.slice(markerIndex + marker.length);
-  const parts = tail.split("/");
-  if (parts.length !== 2 || parts[1] !== "messages") return false;
+  const match = /^\/api\/v1\/agent\/chats\/([^/]+)\/messages$/.exec(pathname);
+  if (!match) return false;
   try {
-    return decodeURIComponent(parts[0] ?? "") === scope.chatId;
+    return decodeURIComponent(match[1] ?? "") === scope.chatId;
   } catch {
     return false;
   }
