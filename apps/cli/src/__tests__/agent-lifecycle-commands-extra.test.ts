@@ -31,6 +31,7 @@ const cliFetchMock = vi.hoisted(() => vi.fn());
 const coreMocks = vi.hoisted(() => ({
   COMMAND_VERSION: "0.5.0",
   CLI_USER_AGENT: "first-tree-test",
+  cliFetch: cliFetchMock,
   detectInstallMode: vi.fn(),
   ensureFreshAccessToken: vi.fn(),
   fetchLatestVersion: vi.fn(),
@@ -44,15 +45,18 @@ const coreMocks = vi.hoisted(() => ({
   installGlobalSpec: vi.fn(),
   installPortableSpec: vi.fn(),
   isServiceSupported: vi.fn(),
+  listLiveClientRuntimeMarkers: vi.fn(),
   loadCredentials: vi.fn(),
   PACKAGE_NAME: "first-tree",
   promptAddAgent: vi.fn(),
+  readActiveClientIdFromIndex: vi.fn(),
   readActiveRootClientId: vi.fn(),
   recordActiveClientOwner: vi.fn(),
   removeLocalAgent: vi.fn(),
   resolveServerUrl: vi.fn(),
   restartClientService: vi.fn(),
   stopClientService: vi.fn(),
+  stopClientRuntimeProcess: vi.fn(),
 }));
 
 const outputMocks = vi.hoisted(() => ({
@@ -126,7 +130,10 @@ beforeEach(() => {
   coreMocks.installGlobalSpec.mockResolvedValue({ ok: true, mode: "global", installedVersion: "99.0.0" });
   coreMocks.installPortableSpec.mockResolvedValue({ ok: true, mode: "portable", installedVersion: "99.0.0" });
   coreMocks.loadCredentials.mockReturnValue(null);
+  coreMocks.listLiveClientRuntimeMarkers.mockReturnValue([]);
+  coreMocks.readActiveClientIdFromIndex.mockReturnValue(null);
   coreMocks.readActiveRootClientId.mockReturnValue(null);
+  coreMocks.stopClientRuntimeProcess.mockResolvedValue({ ok: true });
   cliFetchMock.mockReset();
   coreMocks.promptAddAgent.mockResolvedValue({ name: "nova", agentId: "agent-1" });
   coreMocks.findStaleAliases.mockResolvedValue([
@@ -340,11 +347,25 @@ describe("logout and upgrade commands", () => {
     coreMocks.isServiceSupported.mockReturnValue(true);
     coreMocks.getClientServiceStatus.mockReturnValue({ state: "active", platform: "launchd" });
     coreMocks.stopClientService.mockReturnValue({ ok: true });
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    cliFetchMock.mockResolvedValue(jsonResponse({}, true, 204));
 
     const { registerLogoutCommand } = await import("../commands/logout.js");
     await runTopLevel(registerLogoutCommand, ["logout", "--purge"]);
 
     expect(coreMocks.stopClientService).toHaveBeenCalled();
+    expect(cliFetchMock).toHaveBeenCalledWith(
+      "https://first-tree.example/api/v1/clients/client-1",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: { Authorization: "Bearer user-token" },
+      }),
+    );
     expect(() => readFileSync(credentials, "utf8")).toThrow();
     expect(() => readFileSync(clientYaml, "utf8")).toThrow();
     expect(() => readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toThrow();
@@ -356,7 +377,85 @@ describe("logout and upgrade commands", () => {
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Logged out");
   });
 
-  it("computer reset uses the same guarded local-state removal as logout --purge", async () => {
+  it("uses the active switch-index client id for logout purge when client.yaml has no id", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    const agentsDir = join(tempDir, "agents");
+    mkdirSync(tempDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "server:\n  url: https://first-tree.example\n");
+    writeFileSync(join(agentsDir, "agent.yaml"), "agentId: agent-1\n");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue(null);
+    coreMocks.readActiveClientIdFromIndex.mockReturnValue("client_aabbccdd");
+    cliFetchMock.mockResolvedValue(jsonResponse({}, true, 204));
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await runTopLevel(registerLogoutCommand, ["logout", "--purge"]);
+
+    expect(coreMocks.listLiveClientRuntimeMarkers).toHaveBeenCalledWith(tempDir, "client_aabbccdd");
+    expect(cliFetchMock).toHaveBeenCalledWith(
+      "https://first-tree.example/api/v1/clients/client_aabbccdd",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(existsSync(credentials)).toBe(false);
+    expect(existsSync(clientYaml)).toBe(false);
+    expect(existsSync(agentsDir)).toBe(false);
+  });
+
+  it("logout purge stops foreground daemon markers before server retire and local deletion", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    const agentsDir = join(tempDir, "agents");
+    mkdirSync(tempDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    writeFileSync(join(agentsDir, "agent.yaml"), "agentId: agent-1\n");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    coreMocks.listLiveClientRuntimeMarkers.mockReturnValue([
+      {
+        pid: 4321,
+        clientId: "client-1",
+        mode: "foreground",
+        command: "first-tree-dev",
+      },
+    ]);
+    coreMocks.stopClientRuntimeProcess.mockResolvedValue({ ok: true });
+    cliFetchMock.mockResolvedValue(jsonResponse({}, true, 204));
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await runTopLevel(registerLogoutCommand, ["logout", "--purge"]);
+
+    expect(coreMocks.listLiveClientRuntimeMarkers).toHaveBeenCalledWith(tempDir, "client-1");
+    expect(coreMocks.stopClientRuntimeProcess).toHaveBeenCalledWith(4321, { timeoutMs: 5000 });
+    expect(coreMocks.stopClientRuntimeProcess.mock.invocationCallOrder[0]).toBeLessThan(
+      cliFetchMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(cliFetchMock).toHaveBeenCalledWith(
+      "https://first-tree.example/api/v1/clients/client-1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(() => readFileSync(credentials, "utf8")).toThrow();
+    expect(() => readFileSync(clientYaml, "utf8")).toThrow();
+    expect(() => readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toThrow();
+    const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Stopped foreground daemon pid 4321");
+  });
+
+  it("computer reset uses the same guarded local-state removal without server retire", async () => {
     const credentials = join(tempDir, "credentials.json");
     const clientYaml = join(tempDir, "client.yaml");
     const agentsDir = join(tempDir, "agents");
@@ -388,6 +487,7 @@ describe("logout and upgrade commands", () => {
     await runTopLevel(registerComputerCommands, ["computer", "reset"]);
 
     expect(coreMocks.stopClientService).toHaveBeenCalled();
+    expect(cliFetchMock).not.toHaveBeenCalled();
     expect(() => readFileSync(credentials, "utf8")).toThrow();
     expect(() => readFileSync(clientYaml, "utf8")).toThrow();
     expect(() => readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toThrow();
@@ -431,6 +531,147 @@ describe("logout and upgrade commands", () => {
     const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain("Refusing to purge");
     expect(output).toContain("first-tree-dev daemon stop");
+  });
+
+  it("refuses purge before server retire or local deletion when service state is unknown", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    const agentsDir = join(tempDir, "agents");
+    mkdirSync(tempDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    writeFileSync(join(agentsDir, "agent.yaml"), "agentId: agent-1\n");
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.getClientServiceStatus.mockReturnValue({
+      state: "unknown",
+      platform: "launchd",
+      detail: "launchctl failed",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await expect(runTopLevel(registerLogoutCommand, ["logout", "--purge"])).rejects.toMatchObject({
+      code: "PURGE_DAEMON_STATE_UNKNOWN",
+      exitCode: 1,
+    });
+
+    expect(coreMocks.stopClientService).not.toHaveBeenCalled();
+    expect(cliFetchMock).not.toHaveBeenCalled();
+    expect(readFileSync(credentials, "utf8")).toBe("{}");
+    expect(readFileSync(clientYaml, "utf8")).toContain("client-1");
+    expect(readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toContain("agent-1");
+    const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("service state");
+    expect(output).toContain("Refusing to purge");
+  });
+
+  it("refuses logout purge before server retire or local deletion when a foreground daemon cannot be stopped", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    const agentsDir = join(tempDir, "agents");
+    const sessionsDir = join(tempDir, "data", "sessions");
+    const workspacesDir = join(tempDir, "data", "workspaces");
+    mkdirSync(tempDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(workspacesDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    writeFileSync(join(agentsDir, "agent.yaml"), "agentId: agent-1\n");
+    writeFileSync(join(sessionsDir, "session.json"), "{}");
+    writeFileSync(join(workspacesDir, "workspace.json"), "{}");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    coreMocks.listLiveClientRuntimeMarkers.mockReturnValue([
+      {
+        pid: 4321,
+        clientId: "client-1",
+        mode: "foreground",
+        command: "first-tree-dev daemon start --foreground",
+      },
+    ]);
+    coreMocks.stopClientRuntimeProcess.mockResolvedValue({ ok: false, reason: "still running" });
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await expect(runTopLevel(registerLogoutCommand, ["logout", "--purge"])).rejects.toMatchObject({
+      code: "PURGE_FOREGROUND_DAEMON_STOP_FAILED",
+      exitCode: 1,
+    });
+
+    expect(cliFetchMock).not.toHaveBeenCalled();
+    expect(readFileSync(credentials, "utf8")).toBe("{}");
+    expect(readFileSync(clientYaml, "utf8")).toContain("client-1");
+    expect(readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toContain("agent-1");
+    expect(readFileSync(join(sessionsDir, "session.json"), "utf8")).toBe("{}");
+    expect(readFileSync(join(workspacesDir, "workspace.json"), "utf8")).toBe("{}");
+    const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Could not stop foreground daemon pid 4321");
+    expect(output).toContain("Refusing to purge");
+  });
+
+  it("refuses logout purge instead of killing an untrusted reused foreground marker pid", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    coreMocks.listLiveClientRuntimeMarkers.mockReturnValue([
+      {
+        pid: 4321,
+        clientId: "client-1",
+        mode: "foreground",
+        command: "sleep 1000",
+      },
+    ]);
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await expect(runTopLevel(registerLogoutCommand, ["logout", "--purge"])).rejects.toMatchObject({
+      code: "PURGE_FOREGROUND_DAEMON_STOP_FAILED",
+      exitCode: 1,
+    });
+
+    expect(coreMocks.stopClientRuntimeProcess).not.toHaveBeenCalled();
+    expect(cliFetchMock).not.toHaveBeenCalled();
+    expect(readFileSync(credentials, "utf8")).toBe("{}");
+    expect(readFileSync(clientYaml, "utf8")).toContain("client-1");
+    const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Could not safely stop foreground daemon marker");
+    expect(output).toContain("sleep 1000");
+  });
+
+  it("refuses logout purge before deleting local state when server retire fails", async () => {
+    const credentials = join(tempDir, "credentials.json");
+    const clientYaml = join(tempDir, "client.yaml");
+    const agentsDir = join(tempDir, "agents");
+    mkdirSync(tempDir, { recursive: true });
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(credentials, "{}");
+    writeFileSync(clientYaml, "client:\n  id: client-1\n");
+    writeFileSync(join(agentsDir, "agent.yaml"), "agentId: agent-1\n");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+    coreMocks.loadCredentials.mockReturnValue({
+      accessToken: jwt({ sub: "user-old" }),
+      refreshToken: "refresh",
+      serverUrl: "https://first-tree.example",
+    });
+    coreMocks.readActiveRootClientId.mockReturnValue("client-1");
+    cliFetchMock.mockResolvedValue(jsonResponse({ error: "delete pinned agents first" }, false, 409));
+
+    const { registerLogoutCommand } = await import("../commands/logout.js");
+    await expect(runTopLevel(registerLogoutCommand, ["logout", "--purge"])).rejects.toMatchObject({
+      code: "PURGE_CLIENT_RETIRE_FAILED",
+      exitCode: 1,
+    });
+
+    expect(readFileSync(credentials, "utf8")).toBe("{}");
+    expect(readFileSync(clientYaml, "utf8")).toContain("client-1");
+    expect(readFileSync(join(agentsDir, "agent.yaml"), "utf8")).toContain("agent-1");
+    const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("server-side client retire failed");
+    expect(output).toContain("delete pinned agents first");
   });
 
   it("upgrade covers source, npx, check-only, install failure, no service, inactive service, and restart failure paths", async () => {

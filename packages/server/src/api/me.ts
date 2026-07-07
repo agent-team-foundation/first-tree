@@ -646,7 +646,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     return list.map((c) => ({
       id: c.id,
       userId: c.userId,
-      status: c.status,
+      status: clientService.clientStatusForApi(c),
       authState: clientService.deriveAuthState(c, refreshExpirySeconds),
       binName,
       sdkVersion: c.sdkVersion,

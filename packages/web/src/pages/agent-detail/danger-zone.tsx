@@ -42,6 +42,7 @@ export function DangerZone(props: DangerZoneProps) {
 
   const displayLabel = agent.displayName || agent.name || agent.uuid;
   const canDelete = agent.status === "suspended";
+  const canReactivate = agent.status === "suspended" && agent.clientId !== null;
   const claim = props.runtimeSwitchClaim ?? null;
 
   return (
@@ -87,7 +88,7 @@ export function DangerZone(props: DangerZoneProps) {
               </Button>
             }
           />
-        ) : (
+        ) : canReactivate ? (
           <DangerActionRow
             label="Availability"
             description="Suspended agents cannot bind or receive routed messages."
@@ -102,6 +103,12 @@ export function DangerZone(props: DangerZoneProps) {
                 {props.reactivatePending ? "Reactivating…" : "Reactivate"}
               </Button>
             }
+          />
+        ) : (
+          <DangerActionRow
+            label="Availability"
+            description="Suspended agents cannot bind or receive routed messages."
+            action={null}
           />
         )}
         {!claim && (

@@ -84,11 +84,17 @@ root client state, parked clients under `$FIRST_TREE_HOME/parked-clients/`, and
 switch lock/journal files. This is a destructive local reset path, not the
 normal account-switch path. To switch this computer to another First Tree user,
 run `first-tree login <token>` with the new user's connect token and confirm
-the switch. The purge is local-only: server-side clients, agents, chats, and
-history are not deleted, but the previous clients and agents stop running from
-this machine unless they are set up again. If the daemon is active and cannot
-be stopped, `--purge` refuses to delete local client state. The default keeps
-local client/agent state for the same user to reconnect later.
+the switch. Before deleting local state, `--purge` retires the current server
+client so it disappears from default Computers views and cannot be reactivated
+with the same client id. Retiring is destructive for runtime routing on that
+client: non-deleted agents pinned to it are suspended and unpinned, while agent
+identity, chats, history, and profile data remain; those cleared agents can be
+moved back onto a connected computer/runtime from the Agent Runtime tab. Logout
+stops both the background service and any live `daemon start --foreground`
+runtime markers for the active client before clearing credentials/state. If the
+daemon is active and cannot be stopped, a foreground runtime cannot be stopped,
+or the server-side retire fails, `--purge` refuses to delete local client state.
+The default keeps local client/agent state for the same user to reconnect later.
 
 ## computer
 
@@ -109,7 +115,8 @@ Stop the daemon and remove active root client state, parked clients under
 `$FIRST_TREE_HOME/parked-clients/`, switch lock/journal files, and active
 credentials. Use this when local identity state is damaged or when you
 intentionally want to discard every local First Tree client stored in this
-installation. Normal different-user switching should use
+installation. This is local-only and does not retire server client rows. Normal
+different-user switching should use
 `first-tree login <token>` instead, which parks inactive clients.
 
 ## status

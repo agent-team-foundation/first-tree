@@ -22,6 +22,7 @@ import {
   confirmLocalClientSwitch,
   createApiNameResolver,
   createExecuteUpdate,
+  ensureActiveRootClientIdPersisted,
   ensureFreshAccessToken,
   handleClientOrgMismatch,
   hasIncompleteClientSwitch,
@@ -164,6 +165,7 @@ export function registerLoginCommand(program: Command): void {
           resetConfig();
           resetConfigMeta();
           config = await initConfig({ schema: clientConfigSchema, role: "client" });
+          ensureActiveRootClientIdPersisted(config.client.id, configDir);
           recordActiveClientOwner({ clientId: config.client.id, userId: newOwnerSub, serverUrl: url });
         }
         print.line("  ✓ Authenticated\n");

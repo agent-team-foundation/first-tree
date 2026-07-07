@@ -28,7 +28,7 @@ export async function orgClientRoutes(app: FastifyInstance): Promise<void> {
     return clients.map((c) => ({
       id: c.id,
       userId: c.userId,
-      status: c.status,
+      status: clientService.clientStatusForApi(c),
       authState: clientService.deriveAuthState(c, refreshExpirySeconds),
       binName,
       sdkVersion: c.sdkVersion,

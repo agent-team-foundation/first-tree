@@ -35,7 +35,7 @@ export type ActivityOverview = {
 export type HubClient = {
   id: string;
   userId: string | null;
-  status: string;
+  status: "connected" | "disconnected" | "retired";
   /** Server-derived from offline duration vs refresh-token TTL. See clientAuthStateSchema in shared. */
   authState: "ok" | "expired";
   /** Channel-aware CLI binary name returned by the server. */

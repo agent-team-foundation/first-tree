@@ -110,6 +110,79 @@ export async function bindAgent(
     });
 }
 
+/**
+ * Publish a client-aware bind only while the durable route still exists.
+ *
+ * `agent:bind` first mints a runtime-session token on the agent row, then
+ * publishes presence. A concurrent `retireClient()` can otherwise land between
+ * those two writes and clear the route, after which a plain presence upsert
+ * would put the retired client back online. Lock client first, then agent, to
+ * match `retireClient()`'s lock order and make the publication serialize with
+ * retirement.
+ */
+export async function bindAgentIfActiveClient(
+  db: Database,
+  agentId: string,
+  data: {
+    clientId: string;
+    instanceId: string;
+    runtimeType: string;
+    runtimeVersion?: string;
+  },
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [client] = await tx.execute<{ id: string }>(
+      sql`SELECT id FROM clients WHERE id = ${data.clientId} AND retired_at IS NULL FOR UPDATE`,
+    );
+    if (!client) return false;
+
+    const [agent] = await tx.execute<{ uuid: string }>(
+      sql`
+        SELECT uuid
+        FROM agents
+        WHERE uuid = ${agentId}
+          AND client_id = ${data.clientId}
+          AND status = 'active'
+        FOR UPDATE
+      `,
+    );
+    if (!agent) return false;
+
+    const now = new Date();
+    await tx
+      .insert(agentPresence)
+      .values({
+        agentId,
+        status: "online",
+        instanceId: data.instanceId,
+        clientId: data.clientId,
+        runtimeType: data.runtimeType,
+        runtimeVersion: data.runtimeVersion ?? null,
+        runtimeState: "idle",
+        connectedAt: now,
+        lastSeenAt: now,
+        runtimeUpdatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: agentPresence.agentId,
+        set: {
+          status: "online",
+          instanceId: data.instanceId,
+          clientId: data.clientId,
+          runtimeType: data.runtimeType,
+          runtimeVersion: data.runtimeVersion ?? null,
+          runtimeState: "idle",
+          activeSessions: null,
+          totalSessions: null,
+          connectedAt: now,
+          lastSeenAt: now,
+          runtimeUpdatedAt: now,
+        },
+      });
+    return true;
+  });
+}
+
 export async function unbindAgent(
   db: Database,
   agentId: string,
