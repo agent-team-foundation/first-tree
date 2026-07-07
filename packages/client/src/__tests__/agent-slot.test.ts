@@ -572,9 +572,20 @@ describe("AgentSlot", () => {
     const session = state.sessions[0];
     if (!session) throw new Error("session missing");
 
+    session.runtimeStates = [
+      { chatId: "chat-1", runtimeState: "working" },
+      { chatId: "chat-2", runtimeState: "idle" },
+    ];
+    connection.reportSessionRuntime.mockClear();
+    const sync = Reflect.get(slot, "fullStateSync");
+    if (typeof sync !== "function") throw new Error("private method missing");
+    sync.call(slot);
+
     expect(vi.mocked(sdk.listActiveRuntimeChatIds)).toHaveBeenCalledTimes(1);
     expect(connection.reportSessionState).toHaveBeenCalledWith("agent-1", "chat-1", "active");
     expect(connection.reportSessionState).not.toHaveBeenCalledWith("agent-1", "chat-evicted", "suspended");
+    expect(connection.reportSessionRuntime).toHaveBeenCalledWith("agent-1", "chat-1", "working");
+    expect(connection.reportSessionRuntime).toHaveBeenCalledWith("agent-1", "chat-2", "idle");
 
     const reconcile = Reflect.get(slot, "reconcileNow");
     if (typeof reconcile !== "function") throw new Error("private method missing");

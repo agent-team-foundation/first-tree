@@ -159,8 +159,9 @@ export type RequestResolution = z.infer<typeof requestResolutionSchema>;
  *     surfaced for humans, not addressed into the room. The per-turn final-text
  *     MIRROR that used to ride this purpose is RETIRED (an agent's final text is
  *     its output stream, not a chat message — see `runtime/result-sink.ts`);
- *     the purpose now serves deliberate handler-emitted runtime notices (e.g.
- *     the codex usage-limit notice).
+ *     the purpose still supplies the silent recipientless delivery profile for
+ *     deliberate handler-emitted runtime notices when paired with
+ *     `metadata.runtimeNotice=true`.
  *
  * Default-`undefined` means a regular agent-initiated send (CLI `chat send`,
  * API, etc.) and goes through the normal enforcement profile.
@@ -182,10 +183,16 @@ export type MessagePurpose = z.infer<typeof messagePurposeSchema>;
  * false on every other message.
  */
 export const AGENT_FINAL_TEXT_METADATA_KEY = "agentFinalText";
+export const RUNTIME_NOTICE_METADATA_KEY = "runtimeNotice";
 
 /** True when a stored message's metadata marks it as an agent final-text mirror. */
 export function isAgentFinalTextMetadata(metadata: Record<string, unknown> | null | undefined): boolean {
   return metadata?.[AGENT_FINAL_TEXT_METADATA_KEY] === true;
+}
+
+/** True when a stored message was emitted by the runtime as an operator notice. */
+export function isRuntimeNoticeMetadata(metadata: Record<string, unknown> | null | undefined): boolean {
+  return metadata?.[RUNTIME_NOTICE_METADATA_KEY] === true;
 }
 
 export const sendMessageSchema = z.object({
