@@ -3403,6 +3403,7 @@ export function ChatView({
                 sending={askBusy}
                 error={askError ?? undefined}
                 mentionCandidates={mentionCandidates}
+                isTrial={isTrial}
                 onReply={(answer) => {
                   void submitAskAnswer(dockRequest, answer);
                 }}
@@ -3902,8 +3903,10 @@ export function ChatView({
                         // still defines its edge.
                         background: "var(--bg-raised)",
                       }}
-                      onDragOver={(e) => e.preventDefault()}
+                      onDragOver={(e) => (isTrial ? undefined : e.preventDefault())}
                       onDrop={(e) => {
+                        // No drag-and-drop image attachments on the trial surface.
+                        if (isTrial) return;
                         e.preventDefault();
                         addImages(Array.from(e.dataTransfer.files));
                       }}
@@ -3990,21 +3993,27 @@ export function ChatView({
                         </div>
                       )}
                       <div style={{ position: "relative" }}>
-                        <MentionAutocompletePopover
-                          trigger={mention.trigger}
-                          results={mention.results}
-                          highlightIndex={mention.highlightIndex}
-                          anchorRef={textareaRef}
-                          onPick={mention.pick}
-                        />
-                        <SlashCommandPopover
-                          trigger={slash.trigger}
-                          results={slash.results}
-                          highlightIndex={slash.highlightIndex}
-                          mentionedAgent={slash.mentionedAgent}
-                          anchorRef={textareaRef}
-                          onPick={slash.pick}
-                        />
+                        {/* No mention / slash-command autocomplete on the trial
+                            surface (single agent, controlled conversation). */}
+                        {!isTrial && (
+                          <>
+                            <MentionAutocompletePopover
+                              trigger={mention.trigger}
+                              results={mention.results}
+                              highlightIndex={mention.highlightIndex}
+                              anchorRef={textareaRef}
+                              onPick={mention.pick}
+                            />
+                            <SlashCommandPopover
+                              trigger={slash.trigger}
+                              results={slash.results}
+                              highlightIndex={slash.highlightIndex}
+                              mentionedAgent={slash.mentionedAgent}
+                              anchorRef={textareaRef}
+                              onPick={slash.pick}
+                            />
+                          </>
+                        )}
                         {/* Mirror layer painting `@<participant>` chips behind
                           the textarea. Typography (`text-subtitle font-normal`)
                           is copied from the textarea's className so glyphs
@@ -4066,6 +4075,10 @@ export function ChatView({
                             // `sendBlockedByMentionGate`), so stamping `@` would fight
                             // the dock contract as the user starts a free-text answer.
                             if (
+                              // Trial never primes `@` on focus (single agent, no
+                              // mention) — explicit rather than relying on the
+                              // single-speaker requiresMention=false coincidence.
+                              isTrial ||
                               !shouldPrimeMentionOnFocus({
                                 requiresMention,
                                 dockActive: dockRequest != null,
@@ -4087,6 +4100,9 @@ export function ChatView({
                             });
                           }}
                           onPaste={(e) => {
+                            // No image attachments on the trial surface — let text
+                            // paste fall through to the default handler.
+                            if (isTrial) return;
                             const files = Array.from(e.clipboardData.files);
                             if (files.length > 0) {
                               e.preventDefault();
@@ -4096,29 +4112,38 @@ export function ChatView({
                           placeholder={
                             landingCampaignChatLocked
                               ? "This trial chat is read-only"
-                              : requiresMention
-                                ? // Group chat: the placeholder carries the rule (this
-                                  // is the calm, always-there teaching surface). It
-                                  // shows only while empty; once the user types it's
-                                  // gone, and the tip bubble covers a blocked send.
-                                  "In a group, @mention who this is for"
-                                : `Message @${displayName}  ·  / for commands  ·  @ to mention`
+                              : isTrial
+                                ? // Trial: a single-agent, controlled conversation — no
+                                  // slash commands or @mention (one agent), so the
+                                  // placeholder is just the plain message prompt.
+                                  `Message @${displayName}`
+                                : requiresMention
+                                  ? // Group chat: the placeholder carries the rule (this
+                                    // is the calm, always-there teaching surface). It
+                                    // shows only while empty; once the user types it's
+                                    // gone, and the tip bubble covers a blocked send.
+                                    "In a group, @mention who this is for"
+                                  : `Message @${displayName}  ·  / for commands  ·  @ to mention`
                           }
                           rows={2}
                           onKeyDown={(e) => {
                             // Skip while an IME is composing so Enter confirms the
                             // candidate instead of sending / picking a mention.
                             if (e.nativeEvent.isComposing) return;
-                            // Slash command popover handles navigation keys when active.
-                            // Sits before mention so `/`-typed draft never falls through to
-                            // mention-autocomplete (the trigger predicates are disjoint, but
-                            // ordering documents intent).
-                            if (slash.handleKey(e)) return;
-                            // Mention autocomplete gets next crack: when the caret is
-                            // inside an active `@trigger` (typed, pasted, or pre-existing),
-                            // Enter/Tab/Arrows/Escape drive the popover instead of
-                            // sending or moving the cursor.
-                            if (mention.handleKey(e)) return;
+                            // Trial: no slash commands / mention autocomplete, so `/` and
+                            // `@` type literally and Enter always sends.
+                            if (!isTrial) {
+                              // Slash command popover handles navigation keys when active.
+                              // Sits before mention so `/`-typed draft never falls through to
+                              // mention-autocomplete (the trigger predicates are disjoint, but
+                              // ordering documents intent).
+                              if (slash.handleKey(e)) return;
+                              // Mention autocomplete gets next crack: when the caret is
+                              // inside an active `@trigger` (typed, pasted, or pre-existing),
+                              // Enter/Tab/Arrows/Escape drive the popover instead of
+                              // sending or moving the cursor.
+                              if (mention.handleKey(e)) return;
+                            }
                             if (e.key === "Enter" && !e.shiftKey) {
                               e.preventDefault();
                               handleSend();
@@ -4185,77 +4210,84 @@ export function ChatView({
                           zIndex: 2,
                         }}
                       >
-                        <span className="mono flex items-center" style={{ gap: 10 }}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              // Insert `@` at the cursor (or replace the current selection)
-                              // and re-focus. The mention autocomplete will pick it up
-                              // from the resulting `value`/`cursor` state — same path as
-                              // typing `@` directly. Mirrors the Slack
-                              // explicit-button affordance for users who don't know the
-                              // keyboard trick.
-                              const el = textareaRef.current;
-                              if (!el) return;
-                              const start = el.selectionStart ?? draft.length;
-                              const end = el.selectionEnd ?? start;
-                              const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
-                              autoPrimedDraftRef.current = false;
-                              setDraft(next);
-                              setCursor(start + 1);
-                              requestAnimationFrame(() => {
-                                el.focus();
-                                el.setSelectionRange(start + 1, start + 1);
-                              });
-                            }}
-                            disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
-                            title="Mention an agent (or type @)"
-                            style={{
-                              background: "none",
-                              border: "none",
-                              cursor:
-                                landingCampaignChatLocked || sendMut.isPending || uploading ? "not-allowed" : "pointer",
-                              color: "var(--fg-3)",
-                              padding: 0,
-                              display: "inline-flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            <AtSign className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
-                            title="Attach image"
-                            style={{
-                              background: "none",
-                              border: "none",
-                              cursor:
-                                landingCampaignChatLocked || sendMut.isPending || uploading ? "not-allowed" : "pointer",
-                              color: "var(--fg-3)",
-                              padding: 0,
-                              display: "inline-flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            <Paperclip className="h-3.5 w-3.5" />
-                          </button>
-                          <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept="image/*"
-                            multiple
-                            disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
-                            style={{ display: "none" }}
-                            onChange={(e) => {
-                              if (e.target.files) {
-                                addImages(Array.from(e.target.files));
-                                e.target.value = "";
-                              }
-                            }}
-                          />
-                        </span>
+                        {/* Trial: no @mention / attach affordances — just type + send. */}
+                        {!isTrial && (
+                          <span className="mono flex items-center" style={{ gap: 10 }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                // Insert `@` at the cursor (or replace the current selection)
+                                // and re-focus. The mention autocomplete will pick it up
+                                // from the resulting `value`/`cursor` state — same path as
+                                // typing `@` directly. Mirrors the Slack
+                                // explicit-button affordance for users who don't know the
+                                // keyboard trick.
+                                const el = textareaRef.current;
+                                if (!el) return;
+                                const start = el.selectionStart ?? draft.length;
+                                const end = el.selectionEnd ?? start;
+                                const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
+                                autoPrimedDraftRef.current = false;
+                                setDraft(next);
+                                setCursor(start + 1);
+                                requestAnimationFrame(() => {
+                                  el.focus();
+                                  el.setSelectionRange(start + 1, start + 1);
+                                });
+                              }}
+                              disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
+                              title="Mention an agent (or type @)"
+                              style={{
+                                background: "none",
+                                border: "none",
+                                cursor:
+                                  landingCampaignChatLocked || sendMut.isPending || uploading
+                                    ? "not-allowed"
+                                    : "pointer",
+                                color: "var(--fg-3)",
+                                padding: 0,
+                                display: "inline-flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <AtSign className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
+                              title="Attach image"
+                              style={{
+                                background: "none",
+                                border: "none",
+                                cursor:
+                                  landingCampaignChatLocked || sendMut.isPending || uploading
+                                    ? "not-allowed"
+                                    : "pointer",
+                                color: "var(--fg-3)",
+                                padding: 0,
+                                display: "inline-flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <Paperclip className="h-3.5 w-3.5" />
+                            </button>
+                            <input
+                              ref={fileInputRef}
+                              type="file"
+                              accept="image/*"
+                              multiple
+                              disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
+                              style={{ display: "none" }}
+                              onChange={(e) => {
+                                if (e.target.files) {
+                                  addImages(Array.from(e.target.files));
+                                  e.target.value = "";
+                                }
+                              }}
+                            />
+                          </span>
+                        )}
                         <span className="flex items-center" style={{ gap: 8 }}>
                           {uploading && (
                             <span className="mono text-caption" style={{ color: "var(--primary)" }}>
