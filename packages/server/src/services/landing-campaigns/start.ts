@@ -473,6 +473,7 @@ export async function startLandingCampaignTrial(
     repo,
   });
   await app.resourcesService.ensureAndBindCampaignScanSkill(trialAgent.uuid, body.campaign, serviceMember.id, setupUrl);
+  await app.resourcesService.ensureAndBindLandingCampaignTrialPrompt(trialAgent.uuid, serviceMember.id);
   notifyClientAgentPinned(app, trialAgent);
 
   const result = await ensureTrialChatAndBootstrap(app, {

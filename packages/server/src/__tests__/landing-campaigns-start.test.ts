@@ -19,6 +19,10 @@ import { createAgent } from "../services/agent.js";
 import { bindAgentRuntimeSession, validateAgentRuntimeSession } from "../services/agent-runtime-session.js";
 import { signTokensForUser } from "../services/auth.js";
 import { completeLandingCampaignTrialAgentTurn } from "../services/landing-campaigns/chat-state.js";
+import {
+  LANDING_CAMPAIGN_TRIAL_PROMPT,
+  LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_NAME,
+} from "../services/landing-campaigns/trial-prompt.js";
 import { createMember } from "../services/member.js";
 import { sendMessage } from "../services/message.js";
 import { uuidv7 } from "../uuid.js";
@@ -332,6 +336,47 @@ describe("POST /me/landing-campaigns/start", () => {
       );
     expect(bindings).toHaveLength(1);
 
+    const [prompt] = await app.db
+      .select()
+      .from(resources)
+      .where(
+        and(eq(resources.ownerAgentId, body.agentUuid), eq(resources.type, "prompt"), eq(resources.scope, "agent")),
+      )
+      .limit(1);
+    expect(prompt?.name).toBe(LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_NAME);
+    expect(prompt?.defaultEnabled).toBeNull();
+    expect(prompt?.payload).toMatchObject({
+      body: LANDING_CAMPAIGN_TRIAL_PROMPT,
+    });
+
+    const promptBindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(
+        and(
+          eq(agentResourceBindings.agentId, body.agentUuid),
+          eq(agentResourceBindings.type, "prompt"),
+          eq(agentResourceBindings.resourceId, prompt?.id ?? ""),
+        ),
+      );
+    expect(promptBindings).toHaveLength(1);
+    expect(promptBindings[0]?.inlinePromptBody).toBeNull();
+    expect(JSON.stringify(prompt?.payload)).toContain("Workspace access");
+    expect(JSON.stringify(prompt?.payload)).toContain("Privacy and secrets");
+    expect(JSON.stringify(prompt?.payload)).toContain("passwords");
+    expect(JSON.stringify(prompt?.payload)).toContain("tokens");
+
+    const resolvedConfig = await app.resourcesService.resolveRuntimeConfig(await app.configService.get(body.agentUuid));
+    expect(resolvedConfig.payload.prompt.sections).toEqual([
+      {
+        scope: "agent",
+        name: LANDING_CAMPAIGN_TRIAL_PROMPT_RESOURCE_NAME,
+        body: LANDING_CAMPAIGN_TRIAL_PROMPT,
+        editable: false,
+      },
+    ]);
+    expect(resolvedConfig.payload.prompt.append).toContain(LANDING_CAMPAIGN_TRIAL_PROMPT);
+
     const [chat] = await app.db.select().from(chats).where(eq(chats.id, body.chatId)).limit(1);
     expect(chat?.topic).toBe("Production readiness scan");
     expect(chat?.onboardingKickoffKey).toContain("landing-campaign:");
@@ -454,6 +499,34 @@ describe("POST /me/landing-campaigns/start", () => {
     const thirdMessages = await app.db.select().from(messages).where(eq(messages.chatId, thirdBody.chatId));
     expect(firstMessages).toHaveLength(1);
     expect(thirdMessages).toHaveLength(1);
+
+    const prompts = await app.db
+      .select()
+      .from(resources)
+      .where(
+        and(
+          eq(resources.ownerAgentId, firstBody.agentUuid),
+          eq(resources.type, "prompt"),
+          eq(resources.scope, "agent"),
+        ),
+      );
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]?.payload).toMatchObject({
+      body: LANDING_CAMPAIGN_TRIAL_PROMPT,
+    });
+
+    const promptBindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(
+        and(
+          eq(agentResourceBindings.agentId, firstBody.agentUuid),
+          eq(agentResourceBindings.type, "prompt"),
+          eq(agentResourceBindings.resourceId, prompts[0]?.id ?? ""),
+        ),
+      );
+    expect(promptBindings).toHaveLength(1);
+    expect(promptBindings[0]?.inlinePromptBody).toBeNull();
   });
 
   it("preserves runtime session metadata when reusing the trial agent for a new repo", async () => {
