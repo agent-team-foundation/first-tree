@@ -545,6 +545,10 @@ type MessageRowProps = {
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
   mentionParticipants: MentionParticipant[];
+  /** Trial surface: render sender avatar/name as plain identity, without the
+   *  AgentHovercard whose actions ("Open details" → /agents/:id, "Chat" →
+   *  /?c=draft) would navigate out of the controlled trial conversation. */
+  isTrial: boolean;
 };
 
 type MessageBodyProps = {
@@ -762,6 +766,7 @@ const MessageRow = memo(function MessageRow({
   agentAvatarFn,
   agentColorTokenFn,
   mentionParticipants,
+  isTrial,
 }: MessageRowProps) {
   // GitHub-dispatcher cards keep the human-agent uuid in `senderId` so
   // routing / read-receipts / mention-resolution stay consistent, but we
@@ -789,6 +794,15 @@ const MessageRow = memo(function MessageRow({
     >
       {isGithubSystem ? (
         <GithubSystemAvatar size={20} />
+      ) : isTrial ? (
+        <span className="block self-start rounded-full">
+          <Avatar
+            name={senderName}
+            imageUrl={agentAvatarFn(msg.senderId)}
+            seed={msg.senderId}
+            colorToken={agentColorTokenFn(msg.senderId)}
+          />
+        </span>
       ) : (
         <AgentHovercard
           agentId={msg.senderId}
@@ -807,7 +821,7 @@ const MessageRow = memo(function MessageRow({
       )}
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
-          {isSystem ? (
+          {isSystem || isTrial ? (
             <span className="mono text-body font-semibold" style={{ color: isSelf ? "var(--fg)" : "var(--primary)" }}>
               {senderName}
             </span>
@@ -844,6 +858,7 @@ function areMessageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): 
     prev.agentNameFn === next.agentNameFn &&
     prev.agentAvatarFn === next.agentAvatarFn &&
     prev.agentColorTokenFn === next.agentColorTokenFn &&
+    prev.isTrial === next.isTrial &&
     mentionParticipantsEqual(prev.mentionParticipants, next.mentionParticipants)
   );
 }
@@ -1085,6 +1100,9 @@ type ChatTimelineProps = {
   visibleItems: readonly TimelineItem[];
   hiddenByBlock: number;
   readOnly: boolean;
+  /** Trial surface: forwarded to each MessageRow to render plain sender
+   *  identity (no navigating hovercard). */
+  isTrial: boolean;
   scrollContainerRef: RefObject<HTMLDivElement | null>;
   /** The timeline's `relative` wrapper, used as the chat-summary overlay's
    *  positioning context (the summary card is portaled into it). */
@@ -1116,6 +1134,7 @@ const ChatTimeline = memo(function ChatTimeline({
   visibleItems,
   hiddenByBlock,
   readOnly,
+  isTrial,
   scrollContainerRef,
   overlayContainerRef,
   messagesEndRef,
@@ -1207,6 +1226,7 @@ const ChatTimeline = memo(function ChatTimeline({
                     agentAvatarFn={agentAvatarFn}
                     agentColorTokenFn={agentColorTokenFn}
                     mentionParticipants={mentionParticipants}
+                    isTrial={isTrial}
                   />
                 );
               }
@@ -1301,6 +1321,7 @@ export function ChatView({
   joinAction,
   narrow = false,
   onShowConversations = null,
+  isTrial = false,
 }: {
   agentId: string;
   chatId: string;
@@ -1310,6 +1331,10 @@ export function ChatView({
   /** When true, render watching mode: timeline only, no rename, no [+] participant,
    *  composer slot replaced with a Join panel. */
   readOnly?: boolean;
+  /** Landing-campaign trial surface: hide chat-management escape hatches
+   *  (add participant, agent pause/resume) without switching to watcher mode —
+   *  the trial keeps its live composer for the awaiting-user answer flow. */
+  isTrial?: boolean;
   /** Pre-loaded title shown while `chatDetail` is still fetching — typically
    *  the row's `title` from the `me/chats` cache the chat list already has hot.
    *  Without it, the header flashes "…" on every cold open. */
@@ -3490,6 +3515,12 @@ export function ChatView({
                       watching
                     </span>
                   </span>
+                ) : isTrial ? (
+                  // Trial surface: the title is not renamable (a write on the
+                  // controlled single-run chat) — render it as plain text.
+                  <span className="truncate text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
+                    {chatDetail?.title ?? titleFallback ?? "…"}
+                  </span>
                 ) : renaming ? (
                   <span className="inline-flex items-center" style={{ gap: "var(--sp-2)" }}>
                     <input
@@ -3595,67 +3626,76 @@ export function ChatView({
                     Read-only on the web — written by the owning agent via
                     `chat update --description`. */}
               </div>
-              {/* Audience — compact stats icon + quick-add icon. Replaces
+              {/* Trial surface hides the entire audience/details cluster
+                  (participant stats, add participant, chat-details toggle) —
+                  the trial is a pure conversation with no side rail. */}
+              {!isTrial && (
+                <>
+                  {/* Audience — compact stats icon + quick-add icon. Replaces
               the previous chip-row, which one-shot the panel width once
               chats grew past three participants. Stats icon shows count
               + hover popover with full name list; the quick-add icon
               opens the same dropdown the sidebar's "+ Add participant"
               uses (shared backend mutation, single one-way-door notice). */}
-              <ParticipantsStats
-                participants={chatDetail?.participants ?? []}
-                chatId={chatId}
-                agentIdentity={chatScopedAgentIdentity}
-                onOpen={() => setSidebarByUser(true)}
-              />
-              {/* Vertical divider splits "look" (avatar strip = identity +
+                  <ParticipantsStats
+                    participants={chatDetail?.participants ?? []}
+                    chatId={chatId}
+                    agentIdentity={chatScopedAgentIdentity}
+                    onOpen={() => setSidebarByUser(true)}
+                  />
+                  {/* Vertical divider splits "look" (avatar strip = identity +
                   state) from "do" (add / open details). Keeps the four
                   icons from reading as one undifferentiated cluster. */}
-              <span
-                aria-hidden="true"
-                className="shrink-0"
-                style={{
-                  width: "var(--hairline)",
-                  height: "var(--sp-4)",
-                  background: "var(--border)",
-                  marginLeft: "var(--sp-1)",
-                  marginRight: "var(--sp-1)",
-                }}
-              />
-              {readOnly ? null : (
-                <AddParticipantDropdown
-                  variant="icon"
-                  chatId={chatId}
-                  participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-                  onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-                />
-              )}
-              {/* Hide agent final-text toggle — TEMPORARY, staging/dev only
+                  <span
+                    aria-hidden="true"
+                    className="shrink-0"
+                    style={{
+                      width: "var(--hairline)",
+                      height: "var(--sp-4)",
+                      background: "var(--border)",
+                      marginLeft: "var(--sp-1)",
+                      marginRight: "var(--sp-1)",
+                    }}
+                  />
+                  {readOnly ? null : (
+                    <AddParticipantDropdown
+                      variant="icon"
+                      chatId={chatId}
+                      participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
+                      onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                    />
+                  )}
+                  {/* Hide agent final-text toggle — TEMPORARY, staging/dev only
               (gated on `finalTextToggleEnabled`). Filters the per-turn
               final-text mirrors out of the timeline so a human watcher sees
               only deliberate sends + human messages. Eye / EyeOff conveys the
               show/hide state; pressed styling marks "currently hiding". */}
-              {finalTextToggleEnabled && (
-                <button
-                  type="button"
-                  onClick={toggleHideAgentFinalText}
-                  aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                  aria-pressed={hideAgentFinalText}
-                  title={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                  className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                  style={{
-                    width: 28,
-                    height: 28,
-                    border: 0,
-                    background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
-                    borderRadius: "var(--radius-input)",
-                    color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
-                    cursor: "pointer",
-                  }}
-                >
-                  {hideAgentFinalText ? <EyeOff size={16} strokeWidth={2.25} /> : <Eye size={16} strokeWidth={2.25} />}
-                </button>
-              )}
-              {/* Chat details toggle — opens the right rail (Participants /
+                  {finalTextToggleEnabled && (
+                    <button
+                      type="button"
+                      onClick={toggleHideAgentFinalText}
+                      aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
+                      aria-pressed={hideAgentFinalText}
+                      title={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
+                      className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                      style={{
+                        width: 28,
+                        height: 28,
+                        border: 0,
+                        background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
+                        borderRadius: "var(--radius-input)",
+                        color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {hideAgentFinalText ? (
+                        <EyeOff size={16} strokeWidth={2.25} />
+                      ) : (
+                        <Eye size={16} strokeWidth={2.25} />
+                      )}
+                    </button>
+                  )}
+                  {/* Chat details toggle — opens the right rail (Participants /
               GitHub / Chat actions). Sits at the panel's far right,
               mirroring the rail's position. The PanelRight glyph is the
               panel-toggle convention (Linear / Notion / VS Code); the same
@@ -3663,26 +3703,28 @@ export function ChatView({
               background + darker foreground) carries the open/closed state.
               An ellipsis is reserved for overflow-action menus (see
               row-actions-menu.tsx), so it would mislead here. */}
-              <button
-                type="button"
-                onClick={toggleSidebar}
-                aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
-                aria-expanded={showSidebar}
-                aria-pressed={showSidebar}
-                title={showSidebar ? "Hide chat details" : "Show chat details"}
-                className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                style={{
-                  width: 28,
-                  height: 28,
-                  border: 0,
-                  background: showSidebar ? "var(--bg-sunken)" : "transparent",
-                  borderRadius: "var(--radius-input)",
-                  color: showSidebar ? "var(--fg)" : "var(--fg-3)",
-                  cursor: "pointer",
-                }}
-              >
-                <PanelRight size={16} strokeWidth={2.25} />
-              </button>
+                  <button
+                    type="button"
+                    onClick={toggleSidebar}
+                    aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
+                    aria-expanded={showSidebar}
+                    aria-pressed={showSidebar}
+                    title={showSidebar ? "Hide chat details" : "Show chat details"}
+                    className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                    style={{
+                      width: 28,
+                      height: 28,
+                      border: 0,
+                      background: showSidebar ? "var(--bg-sunken)" : "transparent",
+                      borderRadius: "var(--radius-input)",
+                      color: showSidebar ? "var(--fg)" : "var(--fg-3)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <PanelRight size={16} strokeWidth={2.25} />
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -3748,6 +3790,7 @@ export function ChatView({
             visibleItems={visibleItems}
             hiddenByBlock={hiddenByBlock}
             readOnly={readOnly}
+            isTrial={isTrial}
             scrollContainerRef={scrollContainerRef}
             overlayContainerRef={overlayContainerRef}
             messagesEndRef={messagesEndRef}
@@ -4266,7 +4309,10 @@ export function ChatView({
             </div>
           }
         </div>
-        {showSidebar ? (
+        {/* No chat-details right rail on the trial surface — a pure
+            conversation. `!isTrial` also defends against a persisted
+            `showSidebar=true` carried over from a prior non-trial session. */}
+        {showSidebar && !isTrial ? (
           narrow ? (
             // Narrow viewport: rail floats over the chat instead of
             // pushing it aside. A scrim catches outside-clicks for

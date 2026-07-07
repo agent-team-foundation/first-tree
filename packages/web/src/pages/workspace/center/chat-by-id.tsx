@@ -66,11 +66,15 @@ export function ChatByIdView({
   narrow,
   onShowConversations,
   onClearChat = null,
+  isTrial = false,
 }: {
   chatId: string;
   narrow: boolean;
   onShowConversations: (() => void) | null;
   onClearChat?: (() => void) | null;
+  /** Trial surface: forwarded to ChatView to hide chat-management escape
+   *  hatches (add participant, agent pause/resume). */
+  isTrial?: boolean;
 }) {
   const queryClient = useQueryClient();
   const { agentId: myAgentId, organizationId: currentOrgId, selectOrganization, memberships, switchingOrg } = useAuth();
@@ -219,6 +223,7 @@ export function ChatByIdView({
       initialChatDetail={chatDetail}
       narrow={narrow}
       onShowConversations={onShowConversations}
+      isTrial={isTrial}
     />
   );
 }

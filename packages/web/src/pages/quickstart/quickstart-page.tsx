@@ -36,7 +36,7 @@ export function QuickstartPage() {
   // Back-compat: trials minted before this migration used `?chat=<id>`.
   // Canonicalize such a legacy URL to `?c=` (effect below) so an already-open
   // trial tab, bookmark, copied link, or reload still opens the trial chat
-  // instead of silently falling through to the conversation rail.
+  // instead of silently falling through to the no-chat state.
   const legacyChatId = useMemo(() => new URLSearchParams(location.search).get("chat"), [location.search]);
 
   const intent = useMemo<CampaignIntent | null>(() => {
@@ -105,16 +105,17 @@ export function QuickstartPage() {
     void startTrial();
   }, [startTrial]);
 
-  // Trial started: render the real workspace shell (full chrome) with the
-  // trial chat selected via `?c=`. This route sits inside the Layout group
-  // but is NOT the onboarding-gated index route, so an un-onboarded trial
-  // user sees the normal workspace here instead of being bounced to
-  // /onboarding — and there is no bespoke trial-chat page to maintain.
+  // Trial started: render the real workspace shell — as trial chrome, since
+  // this is the `/quickstart` route (stripped header + no rail; see Layout /
+  // WorkspaceBody `isLandingTrialSurface`) — with the trial chat selected via
+  // `?c=`. This route sits inside the Layout group but is NOT the
+  // onboarding-gated index route, so an un-onboarded trial user is not bounced
+  // to /onboarding — and there is no bespoke trial-chat page to maintain.
   if (chatId) return <WorkspaceBody />;
 
   // A legacy `?chat=` link is being canonicalized to `?c=` (effect above) —
   // hold a neutral screen for the one tick before the `?c=` URL renders, so we
-  // don't flash the no-selection rail.
+  // don't flash the no-chat state.
   if (legacyChatId) {
     return (
       <QuickstartShell>
@@ -133,8 +134,9 @@ export function QuickstartPage() {
 
   // No chat selected and no valid campaign handoff to launch — e.g. the user
   // closed/backed out of the trial chat, or opened /quickstart without a scan
-  // link. Keep them in the real workspace (conversation rail) rather than a
-  // dead-end card: WorkspaceBody with no `?c=` shows their conversation list.
+  // link. Render the trial workspace body (no rail on this surface); with no
+  // `?c=` it shows NoChatView's trial empty state, which points back to the
+  // header "Set up First Tree" CTA rather than a create-chat dead-end.
   if (!intent || !campaign) return <WorkspaceBody />;
 
   return (

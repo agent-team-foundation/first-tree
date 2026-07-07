@@ -1,11 +1,12 @@
 import { CHAT_SOURCES, type ChatEngagementView, type ChatSource, chatEngagementViewSchema } from "@first-tree/shared";
 import { useCallback, useEffect, useState } from "react";
-import { Navigate, useSearchParams } from "react-router";
+import { Navigate, useLocation, useSearchParams } from "react-router";
 import { useAuth } from "../../auth/auth-context.js";
 import { DocPreviewDrawer } from "../../components/doc-preview-drawer.js";
 import { useAdminWs } from "../../hooks/use-admin-ws.js";
 import { useWorkspaceViewport } from "../../hooks/use-viewport.js";
 import { shouldEnterOnboarding } from "../onboarding/steps.js";
+import { isLandingTrialSurface } from "../quickstart/route.js";
 import { CenterPanel } from "./center/index.js";
 import {
   DEFAULT_GROUP_MODE,
@@ -150,6 +151,11 @@ export function WorkspacePage() {
  */
 export function WorkspaceBody() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  // Trial surface (`/quickstart`): the single-run trial chat is the only
+  // supported surface, so drop the conversation rail (and its new-chat /
+  // filter affordances) and show the chat full-bleed.
+  const isTrial = isLandingTrialSurface(location.pathname);
   const selectedChatId = searchParams.get("c");
   const legacyAgentId = searchParams.get("a");
   const legacySource = searchParams.get("source");
@@ -298,6 +304,28 @@ export function WorkspaceBody() {
     // win and leave the URL in a half-cleared state.
     setSearchParams(nextParamsForClearFilters(searchParams), { replace: true });
   }, [searchParams, setSearchParams]);
+
+  // Trial surface: no conversation rail (and no narrow overlay) — the trial
+  // chat renders full-bleed. Escape-hatch affordances (new chat, filters) live
+  // in the rail, so dropping it is what keeps the trial a controlled surface.
+  if (isTrial) {
+    return (
+      <div className="flex flex-1 overflow-hidden relative">
+        <main className="flex-1 flex flex-col overflow-hidden min-w-0" style={{ background: "var(--bg)" }}>
+          <CenterPanel
+            selectedChatId={selectedChatId}
+            onSelectChat={selectChat}
+            onClearChat={clearSelectedChat}
+            narrow={isNarrow}
+            onShowConversations={null}
+            initialParticipantIds={participants}
+            isTrial
+          />
+        </main>
+        <DocPreviewDrawer />
+      </div>
+    );
+  }
 
   // Pick the width prop based on what role the rail is playing:
   //   - narrow + no chat → full-bleed (100% of the wrapper) so the list
