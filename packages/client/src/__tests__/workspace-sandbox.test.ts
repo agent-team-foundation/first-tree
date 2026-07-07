@@ -172,12 +172,15 @@ describe("workspace-only sandbox", () => {
     const hostHome = join(root, "host-home");
     const codexHome = join(hostHome, ".codex");
     const ghConfigDir = join(hostHome, ".config", "gh");
+    const sshKeyPath = join(hostHome, ".ssh", "id_ed25519");
     const firstTreeHome = join(workspace, ".first-tree-workspace", "outbox-home");
     const cliBinDir = join(root, "explicit-cli-bin");
     mkdirSync(codexHome, { recursive: true });
     mkdirSync(ghConfigDir, { recursive: true });
+    mkdirSync(join(hostHome, ".ssh"), { recursive: true });
     mkdirSync(firstTreeHome, { recursive: true });
     mkdirSync(cliBinDir, { recursive: true });
+    writeFileSync(sshKeyPath, "ssh-secret\n", { mode: 0o600 });
     writeFileSync(join(cliBinDir, "first-tree-test"), "#!/bin/sh\n", { mode: 0o755 });
 
     const {
@@ -200,6 +203,7 @@ describe("workspace-only sandbox", () => {
         GITHUB_TOKEN: "github-secret",
         HTTP_PROXY: "http://user:password@proxy.test:8080",
         HTTPS_PROXY: "http://user:password@proxy.test:8080",
+        GIT_SSH_COMMAND: "ssh -i /host/secret",
         SSL_CERT_FILE: join(outside, "ca.pem"),
         NODE_EXTRA_CA_CERTS: join(outside, "node-ca.pem"),
         PATH: "/sensitive/bin:/usr/bin",
@@ -218,6 +222,12 @@ describe("workspace-only sandbox", () => {
       GH_CONFIG_DIR: ghConfigDir,
       TMPDIR: "/tmp",
     });
+    expect(env.GIT_SSH_COMMAND).toContain("-F /dev/null");
+    expect(env.GIT_SSH_COMMAND).toContain(sshKeyPath);
+    expect(env.GIT_SSH_COMMAND).toContain(join(firstTreeHome, "ssh", "known_hosts"));
+    expect(env.GIT_SSH_COMMAND).toContain("IdentitiesOnly=yes");
+    expect(env.GIT_SSH_COMMAND).toContain("StrictHostKeyChecking=accept-new");
+    expect(env.GIT_SSH_COMMAND).not.toContain("/host/secret");
     expect(env.PATH?.split(delimiter)[0]).toBe(cliBinDir);
     expect(env.PATH).not.toContain("/sensitive/bin");
     expect(env.OPENAI_API_KEY).toBeUndefined();
@@ -259,6 +269,7 @@ describe("workspace-only sandbox", () => {
       expect(override).toContain(`${JSON.stringify(join(hostHome, relativePath))} = "deny"`);
     }
     expect(override).toContain(`${JSON.stringify(codexHome)} = "deny"`);
+    expect(override).not.toContain(`${JSON.stringify(join(hostHome, ".ssh"))} = "deny"`);
     expect(override).not.toContain(".config/gh");
     expect(override).not.toContain(".git-credentials");
   });

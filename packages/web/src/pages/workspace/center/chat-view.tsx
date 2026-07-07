@@ -140,6 +140,9 @@ import { ChatRightSidebar } from "../right-sidebar/index.js";
 import { ChatSummary } from "./chat-summary.js";
 
 const SIDEBAR_OPEN_STORAGE_KEY = "first-tree:chat-right-sidebar:open:v1";
+const LANDING_TRIAL_CHAT_ENDED_PLACEHOLDER =
+  'Your trial chat has ended. To keep using First Tree, click "Set up First Tree for your team" ' +
+  "at the top of the page to create your team.";
 
 /**
  * Read the user's stored right-rail preference. Returns `null` when the
@@ -4111,7 +4114,7 @@ export function ChatView({
                           }}
                           placeholder={
                             landingCampaignChatLocked
-                              ? "This trial chat is read-only"
+                              ? LANDING_TRIAL_CHAT_ENDED_PLACEHOLDER
                               : isTrial
                                 ? // Trial: a single-agent, controlled conversation — no
                                   // slash commands or @mention (one agent), so the
