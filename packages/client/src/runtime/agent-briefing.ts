@@ -1011,35 +1011,114 @@ ${skillRouting}
 This policy is the default judgment baseline for every Context Tree read,
 write, and seed task:
 
-- The Context Tree is durable context, not a source-code mirror, wiki dump,
-  or task log. It records decisions, constraints, ownership, and
-  cross-domain relationships.
-- Normal Context Tree content states **current truth**. When a decision
-  changes, rewrite or remove the old claim instead of preserving competing
-  versions side by side.
-- Capture **why**, not only what. A node without rationale is a fact, not a
+### What A Context Tree Is
+
+The Context Tree is durable context, not a source-code mirror, wiki dump, or
+task log. It records current decisions, constraints, ownership, and
+cross-domain relationships with enough rationale that a future reader does
+not have to reconstruct them from PRs, chat logs, or tribal knowledge.
+
+### Source-System Boundary
+
+The tree records **what was decided and why**; source repos record **how it is
+implemented**. If information would rot when the next refactor lands, it does
+not belong in the tree.
+
+| Belongs in the tree | Stays in the source repo |
+| --- | --- |
+| A choice between alternatives and why the alternatives lost | Function signatures, types, class hierarchies |
+| A constraint that shapes future implementation across repos | Step-by-step implementation walkthroughs |
+| An ownership change or clarified review path | API request / response shapes |
+| A current constraint that resulted from a deprecation | Test fixtures, snapshot data, build / CI config |
+| A new relationship between two domains | Bug fixes that do not change a public contract |
+| Rationale that would not be obvious from the diff alone | Refactors that preserve behaviour |
+| A decision as it stands today: current state + present-tense rationale | Historical narrative of how we got here |
+
+### Normal vs \`raw-context/\` Authority
+
+Normal Context Tree content states **current truth**. When a decision
+changes, rewrite or remove the old claim instead of preserving competing
+versions side by side. \`raw-context/\` is archive/supporting material, not
+canonical truth. Read it only when the user asks for that raw material, the
+source artifact is itself raw/proposal/archive content, or the task needs
+archive context. Normal nodes must not require readers to enter
+\`raw-context/\` to understand current truth.
+
+### The Double Test
+
+Before writing, apply both questions to every candidate fact:
+
+1. **Decision test.** Does this source establish or change something a future
+   agent must respect when making cross-domain choices?
+2. **Durability test.** If the triggering commit or PR were rewritten, would
+   the decision still stand?
+
+The candidate belongs in the tree only when both answers are yes. Failing the
+decision test means the source is implementation detail; failing the
+durability test means the source captures how something was done this time,
+not what was decided.
+
+### Content Model: What / Why / Who
+
+- **What** — the decision, design choice, or constraint as it stands today.
+  Write the durable claim, not implementation detail or a timeline of prior
+  states.
+- **Why** — the surviving rationale: constraints that won, alternatives that
+  lost, and design course-corrections translated into present-tense reasoning.
+  Capture **why**, not only what. A node without rationale is a fact, not a
   decision record.
-- Write code-external information or highly compressed design principles.
-  Function signatures, API shapes, step-by-step implementation notes, build
-  config, and test fixtures stay in source repos.
-- \`raw-context/\` is archive/supporting material, not canonical truth.
-  Read it only when the user asks for that raw material, the source artifact
-  is itself raw/proposal/archive content, or the task needs archive context.
-  Normal nodes must not require readers to enter \`raw-context/\` to
-  understand current truth.
-- Before writing, apply the Double Test: the candidate must establish or
-  change a decision future agents must respect, and it must remain durable if
-  the triggering commit or PR is rewritten.
-- Default to editing an existing node. Add a leaf only for a distinct
-  decision; add a directory only when the domain shape justifies it. New
-  top-level domains require explicit human-owner approval.
-- Keep canonical content in one place. Use normal-to-normal \`soft_links\`
-  or short prose pointers for cross-domain navigation instead of duplicating
-  the same claim.
-- Metadata is the reader interface: \`title\`, \`description\`, \`owners\`,
-  and \`soft_links\` should make scanning, routing, and responsibility clear.
-- Actionable future work does not live in normal tree content. Put it in an
-  issue, source artifact, or human decision instead.`);
+- **Who** — ownership, carried by \`owners\` frontmatter and
+  \`members/<id>/NODE.md\` nodes. Do not put ownership in the body, and do not
+  unilaterally edit \`owners\`.
+
+### Add vs Edit
+
+Default to editing an existing node. A node earns its existence by being
+independently findable, ownable, or linkable; otherwise edit the existing
+node. Add a leaf only when all three hold:
+
+1. **Distinct identity** — a noun-phrase title that does not overlap any
+   sibling.
+2. **Distinct anchor** — at least one of: different \`owners\`; another domain
+   would \`soft_links\` to this specific decision; or the source naturally has
+   its own Decision / Rationale / Constraints that cannot co-live with an
+   existing leaf.
+3. **Passes the Double Test.**
+
+Add a directory only when there are or are expected to be at least three
+cohesive leaves under the same axis. New top-level domains require explicit
+human-owner approval. When a decision touches two domains, keep canonical
+content in the more specific domain and link from the broader one with
+normal-to-normal \`soft_links\` or short prose pointers.
+
+### Node Shape
+
+Required frontmatter:
+
+\`\`\`yaml
+---
+title: "Short noun phrase"
+owners: [alice, bob]
+---
+\`\`\`
+
+Useful optional frontmatter: \`description\`, \`soft_links\`,
+\`lastReviewed\`, and \`decisionLocksCode\`. Metadata is the reader
+interface: \`title\`, \`description\`, \`owners\`, and \`soft_links\` should
+make scanning, routing, and responsibility clear.
+
+Prefer body sections in this order, omitting any that do not apply:
+\`Decision\`, \`Rationale\`, \`Constraints\`, \`Cross-Domain\`. There is no
+\`Source\`, \`Provenance\`, or \`Shipped-in\` section; PR / commit / issue
+delivery history lives in git history and PR descriptions, not node prose.
+
+### Write / Verify / PR Discipline
+
+Source-backed writes require a concrete source artifact. Actionable future
+work does not live in normal tree content; put it in an issue, source
+artifact, or human decision instead. \`first-tree tree verify\` must pass
+before any tree commit. A source-backed tree PR should stay scoped to one
+source artifact so owner review and rollback stay precise.`);
 
   if (contextTreePath) {
     blocks.push(`## Reading the Tree

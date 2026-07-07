@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -326,13 +326,50 @@ describe("buildAgentBriefing — Context Tree Policy baseline", () => {
     const policy = briefing.slice(briefing.indexOf("## Context Tree Policy"), briefing.indexOf("## Reading the Tree"));
 
     expect(policy).toContain("durable context");
+    expect(policy).toContain("### What A Context Tree Is");
+    expect(policy).toContain("### Source-System Boundary");
+    expect(policy).toContain("### Normal vs `raw-context/` Authority");
+    expect(policy).toContain("### The Double Test");
+    expect(policy).toContain("### Content Model: What / Why / Who");
+    expect(policy).toContain("### Add vs Edit");
+    expect(policy).toContain("### Node Shape");
+    expect(policy).toContain("### Write / Verify / PR Discipline");
     expect(policy).toContain("current truth");
     expect(policy).toContain("Capture **why**");
     expect(policy).toContain("raw-context/");
-    expect(policy).toContain("not canonical truth");
+    expect(policy).toMatch(/not\s+canonical truth/);
     expect(policy).toContain("Double Test");
     expect(policy).toContain("Default to editing an existing node");
-    expect(policy).toContain("Actionable future work");
+    expect(policy).toContain("Distinct anchor");
+    expect(policy).toContain("at least three\ncohesive leaves");
+    expect(policy).toContain("There is no\n`Source`, `Provenance`, or `Shipped-in` section");
+    expect(policy).toMatch(/Actionable future\s+work/);
+  });
+
+  it("keeps first-tree-write examples as write-time judgment calibration", () => {
+    const testFileDir = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = resolve(testFileDir, "..", "..", "..", "..");
+    const skill = readFileSync(join(repoRoot, "skills", "first-tree-write", "SKILL.md"), "utf8");
+
+    expect(skill).toContain("## Authoring Judgment");
+    expect(skill).toContain("### Source-System Boundary");
+    expect(skill).toContain("### Content Model");
+    expect(skill).toContain("### When to Add vs. Edit");
+    expect(skill).toContain("## Worked Examples");
+    for (const trigger of [
+      "PR adding a new caching layer",
+      'meeting note "we are moving billing to a new repo"',
+      "reviewer's nit about variable naming",
+      "security review report",
+      "course-correction during design",
+      "constraint surfaces during design",
+      "design-phase direction picked between options",
+      "PR that flips a policy default",
+      "existing tree node already carries a `## Source` section",
+    ]) {
+      expect(skill).toContain(trigger);
+    }
+    expect(skill).toContain("Move to a GitHub Issue");
   });
 
   it("does not ask tree-less agents to load tree-bound read/write skills", () => {
