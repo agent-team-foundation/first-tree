@@ -414,6 +414,117 @@ describe("ContextPage DOM behavior", () => {
     await act(async () => disconnected.root.unmount());
   });
 
+  it("shows an admin the add-repo-to-App recovery CTA when a bound tree repo is unreadable", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    githubAppMocks.getGithubAppInstallation.mockResolvedValue({
+      installationId: 7,
+      accountLogin: "acme",
+      accountType: "Organization",
+      manageUrl: "https://github.com/organizations/acme/settings/installations/7",
+      suspended: false,
+      permissions: {},
+      events: [],
+    });
+    const { ContextPage } = await import("../context.js");
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
+      snapshot({
+        repo: "https://github.com/acme/context-tree",
+        branch: "main",
+        snapshotStatus: "unavailable",
+        // Server probed and confirmed the App can't read the repo.
+        recoveryAction: "manage_github_app_installation",
+        contextStatus: { label: "Sync failed", detail: "Permission denied", severity: "error" },
+      }),
+    );
+
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "Add repo to the GitHub App");
+    const cta = [...container.querySelectorAll("a")].find((anchor) =>
+      anchor.textContent?.includes("Add repo to the GitHub App"),
+    );
+    expect(cta?.getAttribute("href")).toBe("https://github.com/organizations/acme/settings/installations/7");
+    expect(cta?.getAttribute("target")).toBe("_blank");
+    // Security: external target must not leak the opener.
+    expect(cta?.getAttribute("rel")).toBe("noreferrer");
+    expect(container.textContent).toContain("First Tree can't read this repo yet.");
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the generic copy and shows no CTA for a non-coverage unavailable cause", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    const { ContextPage } = await import("../context.js");
+    // Unavailable but NOT a GitHub App coverage gap (e.g. bad branch / transient
+    // clone): the server leaves recoveryAction unset, so the admin sees the
+    // generic sync copy and no misdirecting "Add repo" CTA, and the admin-only
+    // installation endpoint is never fetched.
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
+      snapshot({
+        repo: "https://github.com/acme/context-tree",
+        branch: "main",
+        snapshotStatus: "unavailable",
+        recoveryAction: null,
+        contextStatus: { label: "Sync failed", detail: "Invalid branch", severity: "error" },
+      }),
+    );
+
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "First Tree cannot read the team Context Tree yet.");
+    expect(
+      [...container.querySelectorAll("a")].some((anchor) => anchor.textContent?.includes("Add repo to the GitHub App")),
+    ).toBe(false);
+    expect(container.textContent).not.toContain("Ask an admin to add it to the GitHub App");
+    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
+  it("shows an admin the problem without a dead button when the manage URL never resolves", async () => {
+    authMock.value = { organizationId: "org-1", role: "admin" };
+    // Coverage gap confirmed by the server, but the manage-URL fetch resolves to
+    // null (e.g. the installation row raced away): the button must not render,
+    // and the copy must not dangle an "add it" instruction with nothing to click.
+    githubAppMocks.getGithubAppInstallation.mockResolvedValue(null);
+    const { ContextPage } = await import("../context.js");
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
+      snapshot({
+        repo: "https://github.com/acme/context-tree",
+        branch: "main",
+        snapshotStatus: "unavailable",
+        recoveryAction: "manage_github_app_installation",
+        contextStatus: { label: "Sync failed", detail: "Permission denied", severity: "error" },
+      }),
+    );
+
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "First Tree can't read this repo yet.");
+    expect(
+      [...container.querySelectorAll("a")].some((anchor) => anchor.textContent?.includes("Add repo to the GitHub App")),
+    ).toBe(false);
+    await act(async () => root.unmount());
+  });
+
+  it("directs a member to ask an admin (no CTA, no admin-only fetch) when the App can't read the repo", async () => {
+    authMock.value = { organizationId: "org-1", role: "member" };
+    const { ContextPage } = await import("../context.js");
+    contextApiMocks.getContextTreeSnapshot.mockResolvedValue(
+      snapshot({
+        repo: "https://github.com/acme/context-tree",
+        branch: "main",
+        snapshotStatus: "unavailable",
+        recoveryAction: "manage_github_app_installation",
+        contextStatus: { label: "Sync failed", detail: "Permission denied", severity: "error" },
+      }),
+    );
+
+    const { container, root } = await renderDom(<ContextPage />);
+    await waitForText(container, "Ask an admin to add it to the GitHub App.");
+    expect(
+      [...container.querySelectorAll("a")].some((anchor) => anchor.textContent?.includes("Add repo to the GitHub App")),
+    ).toBe(false);
+    // The manage-URL endpoint is admin-only; a member must never trigger it.
+    expect(githubAppMocks.getGithubAppInstallation).not.toHaveBeenCalled();
+    await act(async () => root.unmount());
+  });
+
   const treeAgent = {
     uuid: "agent-1",
     name: "agent-1",
