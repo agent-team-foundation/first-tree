@@ -1,8 +1,9 @@
 import type { ShippedSkillName, SkillEvalCase } from "../../core/case-schema.js";
 import type { JudgeRubricDimension } from "../../core/judge/types.js";
+import type { AgentProviderName } from "../../core/provider/types.js";
 import type { QualityJudgeRunResult } from "../../core/result-schema.js";
 
-export type QualitySkillName = Extract<ShippedSkillName, "first-tree-write" | "first-tree-welcome">;
+export type QualitySkillName = Extract<ShippedSkillName, "first-tree-write" | "first-tree-seed" | "first-tree-welcome">;
 
 export type QualityFixture = {
   artifact: string;
@@ -49,11 +50,13 @@ export type QualityCaseDefinition = {
 
 export type QualityRunOptions = {
   caseId: string | null;
+  claudeBin: string;
   codexBin: string;
   judgeBin: string;
   judgeModel: string | null;
   json: boolean;
   model: string | null;
+  provider: AgentProviderName;
   suite: QualitySkillName | null;
   verbose: boolean;
 };

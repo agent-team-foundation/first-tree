@@ -1,12 +1,35 @@
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import {
   AGENT_BRIEFING_GENERATED_MARKER,
   type AgentRuntimeConfigPayload,
   type PromptSection,
 } from "@first-tree/shared";
+import type * as ejs from "ejs";
 import type { PredeclaredSourceRepo } from "./bootstrap.js";
 import { getCliBinding } from "./cli-binding.js";
 import type { AgentIdentity } from "./handler.js";
 import { buildResourceSkillsBriefing } from "./resource-skills.js";
+
+const require = createRequire(import.meta.url);
+// EJS is published as CommonJS at runtime even though its types expose named
+// exports, so native ESM cannot import `render` directly.
+const ejsRuntime: typeof ejs = require("ejs");
+const AGENT_BRIEFING_TEMPLATE_FILENAME = "agent-briefing.ejs";
+const TEMPLATE_CANDIDATE_URLS = [
+  // Source execution: packages/client/src/runtime/agent-briefing.ts
+  new URL(`./templates/${AGENT_BRIEFING_TEMPLATE_FILENAME}`, import.meta.url),
+  // Bundled execution: packages/client/dist/index.mjs or apps/cli/dist/<chunk>.mjs
+  new URL(`../templates/${AGENT_BRIEFING_TEMPLATE_FILENAME}`, import.meta.url),
+] as const;
+
+type CachedTemplate = {
+  filename: string;
+  source: string;
+};
+
+let templateCache: CachedTemplate | null = null;
 
 /**
  * Wrap an arbitrary string in POSIX-safe single quotes so it can be pasted
@@ -35,6 +58,19 @@ export type BuildAgentBriefingOptions = {
    */
   contextTreeRepoUrl?: string | null;
   contextTreeBranch?: string | null;
+};
+
+type AgentBriefingRenderModel = {
+  generatedBannerBlock: string;
+  identityBlock: string;
+  teamPromptBlock: string | null;
+  agentPromptBlock: string | null;
+  agentPromptOverridesBlock: string | null;
+  legacyPromptBlock: string | null;
+  workingInFirstTreeBlock: string;
+  requiredReadingBlock: string | null;
+  contextTreeBlock: string;
+  skillsBlock: string | null;
 };
 
 /**
@@ -75,32 +111,32 @@ export type BuildAgentBriefingOptions = {
  *   7. `# Skills (First Tree Managed)`         — Team Skills (if any) + First Tree Family
  */
 export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
-  const sections: string[] = [];
+  return renderAgentBriefingTemplate(buildAgentBriefingRenderModel(opts));
+}
 
-  sections.push(generatedBannerSection(getCliBinding().binName));
-  sections.push(identitySection(opts.identity));
+function buildAgentBriefingRenderModel(opts: BuildAgentBriefingOptions): AgentBriefingRenderModel {
+  const bin = getCliBinding().binName;
 
   const promptSections = opts.payload?.prompt.sections ?? [];
   const teamPromptBlock = teamPromptSection(promptSections);
-  if (teamPromptBlock) sections.push(teamPromptBlock);
-  const agentPromptBlock = agentPromptSection(promptSections, opts.identity, getCliBinding().binName);
-  if (agentPromptBlock) sections.push(agentPromptBlock);
+  const agentPromptBlock = agentPromptSection(promptSections, opts.identity, bin);
   const overridesBlock = agentPromptOverridesSection(promptSections);
-  if (overridesBlock) sections.push(overridesBlock);
+  let legacyPromptBlock: string | null = null;
   if (!teamPromptBlock && !agentPromptBlock && !overridesBlock) {
     // Legacy server without structured sections — keep the old single-blob
     // rendering. The blob may mix team and agent content, so it must NOT be
     // presented under the editable `# Agent Prompt` heading.
     const legacyPrompt = opts.payload?.prompt.append?.trim() ?? "";
-    if (legacyPrompt) sections.push(`## Agent-Specific Prompt\n\n${legacyPrompt}`);
+    if (legacyPrompt) legacyPromptBlock = `## Agent-Specific Prompt\n\n${legacyPrompt}`;
   }
 
-  sections.push(
-    workingInFirstTreeSection({
+  const workingInFirstTreeBlock = workingInFirstTreeSection(
+    {
       agentHome: opts.workspacePath,
       sourceRepos: opts.sourceRepos,
       contextTreePath: opts.contextTreePath,
-    }),
+    },
+    bin,
   );
 
   // `# Required Reading` — sits AFTER `# Working in First Tree` so the
@@ -110,22 +146,58 @@ export function buildAgentBriefing(opts: BuildAgentBriefingOptions): string {
   // before doing any real work. Placing it
   // immediately before `# Context Tree` also keeps the mandate adjacent
   // to the content domains the two skills cover. Gated on
-  // `contextTreePath !== null` for the same reason `skillsSection`
-  // gates `firstTreeFamilyMap`: a tree-less agent has no First Tree
-  // skill payloads installed on disk (`installFirstTreeIntegration`
-  // is short-circuited in `agent-bootstrap.ts`), so mandating a load
-  // would point at files that don't exist.
+  // `contextTreePath !== null` because the UNCONDITIONAL mandate to load
+  // `first-tree-write` on every task is a tree-ops discipline (reflecting
+  // sources into an existing tree). A tree-less agent DOES carry write on disk
+  // now — it ships core as `first-tree-seed`'s dependency — but should load it
+  // only when seed pulls it in, not on every task; its installed core skills
+  // are still surfaced by the tree-less family map in `skillsSection`.
   const requiredReading = requiredReadingSection(opts.contextTreePath, opts.workspacePath);
-  if (requiredReading) sections.push(requiredReading);
-
-  sections.push(
-    contextTreeSection(opts.contextTreePath, opts.contextTreeRepoUrl ?? null, opts.contextTreeBranch ?? null),
+  const contextTreeBlock = contextTreeSection(
+    opts.contextTreePath,
+    opts.contextTreeRepoUrl ?? null,
+    opts.contextTreeBranch ?? null,
   );
 
   const skillsBlock = skillsSection(opts.workspacePath, opts.payload, opts.contextTreePath);
-  if (skillsBlock) sections.push(skillsBlock);
 
-  return `${sections.join("\n\n")}\n`;
+  return {
+    generatedBannerBlock: generatedBannerSection(bin),
+    identityBlock: identitySection(opts.identity),
+    teamPromptBlock,
+    agentPromptBlock,
+    agentPromptOverridesBlock: overridesBlock,
+    legacyPromptBlock,
+    workingInFirstTreeBlock,
+    requiredReadingBlock: requiredReading,
+    contextTreeBlock,
+    skillsBlock,
+  };
+}
+
+function renderAgentBriefingTemplate(model: AgentBriefingRenderModel): string {
+  const template = readAgentBriefingTemplate();
+  return ejsRuntime.render(template.source, model, { filename: template.filename });
+}
+
+function readAgentBriefingTemplate(): CachedTemplate {
+  if (templateCache) return templateCache;
+  const filename = resolveAgentBriefingTemplatePath();
+  templateCache = {
+    filename,
+    source: readFileSync(filename, "utf8"),
+  };
+  return templateCache;
+}
+
+export function resolveAgentBriefingTemplatePath(): string {
+  for (const url of TEMPLATE_CANDIDATE_URLS) {
+    const filename = fileURLToPath(url);
+    if (existsSync(filename)) return filename;
+  }
+  throw new Error(
+    `Agent briefing EJS template is missing. Expected ${AGENT_BRIEFING_TEMPLATE_FILENAME} in the client runtime templates assets.`,
+  );
 }
 
 function identitySection(identity: AgentIdentity): string {
@@ -262,11 +334,14 @@ prompt.*`,
  *    `decisionLocksCode`), the Double Test, Node Shape, and the
  *    Worked Examples.
  *
- * Both are gated on `contextTreePath !== null` because the runtime only
- * installs the SKILL.md payloads to disk when a Context Tree is bound
- * (see `runtime/first-tree-skills/installer.ts` and the short-circuit in
- * `agent-bootstrap.ts`). Telling a tree-less agent to load them would
- * point at files that aren't there.
+ * This section is gated on `contextTreePath !== null` because the
+ * UNCONDITIONAL mandate to load `first-tree-write` on every task is a
+ * tree-ops discipline (reflecting sources into an existing tree). Since the
+ * seed/write→core move, a tree-less agent DOES carry `first-tree-write` on
+ * disk (it ships core as `first-tree-seed`'s dependency), but should load it
+ * only when seed pulls it in — not on every task — so the mandate stays
+ * tree-bound. A tree-less agent's installed core skills are surfaced by the
+ * tree-less First Tree Family map in `skillsSection` instead.
  */
 function requiredReadingSection(contextTreePath: string | null, workspacePath: string): string | null {
   if (contextTreePath === null) return null;
@@ -305,8 +380,7 @@ type WorkingInFirstTreeOpts = {
   contextTreePath: string | null;
 };
 
-function workingInFirstTreeSection(opts: WorkingInFirstTreeOpts): string {
-  const bin = getCliBinding().binName;
+function workingInFirstTreeSection(opts: WorkingInFirstTreeOpts, bin: string): string {
   const blocks: string[] = [];
 
   blocks.push(`# Working in First Tree (First Tree Managed)
@@ -360,7 +434,7 @@ You are running inside **First Tree**, a messaging platform for agent teams.
   blocks.push(workspaceCollaborationBlock(bin));
   blocks.push(githubWorkingPostureBlock());
   blocks.push(githubAttentionBlock(bin, opts.contextTreePath !== null));
-  blocks.push(askingHumansBlock());
+  blocks.push(askingHumansBlock(bin));
   blocks.push(chatTopicBlock(bin));
   blocks.push(cliOverviewBlock(bin));
 
@@ -631,10 +705,16 @@ message in the chat.
 
 - **Replying to a human is required, not optional** → when a human directs a
   message at you, end the turn with one \`${bin} chat send <name> "..."\`
-  carrying the result — what you did, decisions made, blockers, and the next
-  step — gathered into ONE concise message. A turn that ends without it is, to
-  the human, no reply at all. A plain send is informational, raises no red dot,
+  carrying the result — what you did, decisions made, non-human blockers you
+  are waiting out (CI, another agent), and the next step —
+  gathered into ONE concise message. A turn that ends without it is, to the
+  human, no reply at all. A plain send is informational, raises no red dot,
   and never auto-wakes the human, so there is no loop risk in always answering.
+  A send must be self-sufficient: the human can read it and move on — nothing
+  in it waits for their answer. If the turn instead ends blocked on the human,
+  the turn-ending message is a \`chat ask\` whose body carries the report as
+  background (see \`## Asking Humans\`), never a send with a blocking question
+  folded in.
 - **Don't stream a human through repeated \`chat send\`.** Within a turn, send
   at most one plain human reply; merge related updates into that single
   message, and use \`${bin} chat update --description\` for ongoing
@@ -643,10 +723,12 @@ message in the chat.
   handled, or a system / no-op wake-up — not merely because you judge a fresh
   human message already covered.
 - **Asking a human** for a decision, approval, or answer → \`${bin} chat ask
-  <human> "<background + the question>"\` (see \`## Asking Humans\`). The message
-  body IS the ask. This raises a tracked open question (red-dot / open-request
-  count) and blocks the chat for them until they answer. Use this — not a plain
-  send — whenever the human must decide, approve, or answer before you proceed.
+  <human>\` (see \`## Asking Humans\` for the required body structure). The
+  message body IS the ask. This raises a tracked open question (red-dot /
+  open-request count) and blocks the chat for them until they answer. Route by
+  dependency, not importance: use this — not a plain send — whenever the human
+  must decide, approve, or answer before you proceed, no matter how small the
+  question feels.
 - **Reporting progress to a human** → \`${bin} chat update --description
   "..."\` (see \`## Chat Topic & Description\`).
 - **Reaching an agent to make them act** → \`${bin} chat send <name> "..."\`.
@@ -742,6 +824,21 @@ and there is no auto-binding. Declaring the dependency is your job:
 
   Skip the follow only when the entity is clearly unrelated to this
   chat's task.
+- **If the follow fails because the org has not installed the First Tree
+  GitHub App**, do not dismiss it as "no action needed." You just delivered
+  something the user cares about (the PR/issue) — treat installing the App as
+  an optional value upgrade, in plain product language: it makes this entity's
+  live activity (CI results, review comments, merge) flow back into this chat,
+  and lets future PRs or issues you follow flow back here too (the App is
+  required for that; you still follow each one). Installing is an org-admin
+  action, so route by who you are talking to: if the human can set up the team
+  (an org admin — e.g. from the onboarding greeting), point them to
+  **Settings → GitHub** in the First Tree web app (you cannot mint the install
+  link yourself); if they are not an admin or you are unsure, say an
+  organization admin can enable it and offer to hand over the exact steps. Be
+  honest — it is optional and the PR/issue works either way — and never surface
+  the raw error code or \`github follow\` mechanics to the user. Say it in a
+  tight line or two, not a wall of text; users skim.
 - **Unfollow only when the human explicitly asks to stop tracking** the
   entity (\`${bin} github unfollow <entity>\`). Do not proactively unfollow
   merely because a PR or Issue completed, merged, or closed; terminal
@@ -752,26 +849,83 @@ For the full flag surface, upstream-dependency follows, \`409\` /
 \`${bin} github follow --help\` / \`${bin} github unfollow --help\`.`;
 }
 
-function askingHumansBlock(): string {
-  const bin = getCliBinding().binName;
+function askingHumansBlock(bin: string): string {
   return `## Asking Humans
 
 When you need something only a human can give — a decision, sign-off, or an
-answer — use **\`chat ask\`** instead of folding the question into a plain send.
+answer — use **\`chat ask\`**, never a question folded into a plain send.
 \`chat ask\` raises a tracked open question on the
 human's side (red-dot / open-question count) AND **blocks that chat for the
 human**: their UI pins the question and hides every message after it until
 they answer, so the ask cannot be scrolled past. When several questions are
 open for them, they clear them oldest-first.
 
-\`\`\`bash
-${bin} chat ask <human> "<background/context + the single question>"
-\`\`\`
+The routing test is **dependency, not importance**: the moment your next step
+depends on the human's answer, the question goes through \`chat ask\` — always,
+even when it feels too small to "deserve" a tracked question. A blocking
+question inside a \`chat send\` is a mis-routed ask: nothing tracks it, the
+human can scroll past it, and the work silently stalls. Importance governs a
+different call — whether a question should exist at all. Raise only a decision
+that is **genuinely the user's to make** AND **cannot be settled from the
+request, the code, or a reasonable default** — a product/scope fork, a
+safety-sensitive or irreversible action, or ambiguous requirements whose
+branches differ materially. Do NOT manufacture progress or permission checks
+("is the plan ready?", "can I continue?", "does this look right?"): decide,
+proceed, and report status via \`chat update --description\`. The human's
+earlier answers are a source you settle from too — but only when you can
+actually cite them: an answer in the visible transcript, a durable record (a
+Context Tree node, a memory note), or something the human just provided. An
+inferred preference you cannot point to is not evidence; without such a
+source the question is not settled — ask. When a citable pattern shows how
+they decide cases like this one, apply it and report the call instead of
+re-asking. Ask volume should fall as
+you learn how the human decides; interruption that never decreases means you
+are not learning. But once a
+genuine blocking question exists, it is an ask — in no case does it ride in a
+plain send.
 
-The message **body IS the ask** — the background the human needs plus the
-question itself. \`chat ask\` is **human-directed** — the server rejects it
+\`chat ask\` is **human-directed** — the server rejects it
 unless the recipient is a human member, so you cannot open a tracked question
 against another agent (reach agents with \`chat send\`).
+
+### The body must be decision-self-sufficient
+
+The human you are asking runs many chats in parallel and may answer hours or
+days later — possibly on a review surface that shows the ask alone, outside
+the chat. Assume no familiarity with the underlying context, no memory of
+this chat, and no recall of what any shorthand refers to; deciding must not
+require re-living the work. The message **body IS the ask**, and it must
+carry everything needed to decide on its own, structured in three markdown
+sections (written in the session's working language). Unpack every compressed
+reference: a term of art, an internal shorthand, or an option label is
+undecidable not because it is technical but because its meaning lives in
+context the reader does not hold — state what it concretely means and changes
+here. A question the reader can only guess at cannot produce a good
+decision:
+
+1. **Why this question exists** — what you were doing, what forced the fork,
+   and why you cannot settle it yourself.
+2. **Recent context** — a few-line recap of the last rounds between you and
+   the human (what they asked, what you did, what changed), written for a
+   reader who remembers none of it — not even their own last message.
+3. **The question** — ONE question, plus your recommendation (the option you
+   would pick and why), so a bare "approved" is a complete answer. Phrase
+   each choice by its consequence for the user, not an implementation label.
+
+A one-line ask ("which option?", "ok to proceed?") defeats the channel: it
+forces the human to reconstruct your context by scrolling. A well-formed ask
+body is inherently multi-line — pipe it via stdin or \`--message-file\`:
+
+\`\`\`bash
+cat <<'EOF' | ${bin} chat ask <human>
+## Why this question exists
+...
+## Recent context
+...
+## The question
+... (+ the option you would pick, and why)
+EOF
+\`\`\`
 
 ### Prefer a free-text answer; add options only when each is a clean pick
 
@@ -781,7 +935,7 @@ in meaning, the human cannot weigh them at a glance, so a free-text answer is
 the better ask.
 
 \`\`\`bash
-${bin} chat ask <human> "<background + the question>" \\
+${bin} chat ask <human> -F ask-body.md \\
   --options '[{"label":"Ship","description":"Roll to 20% now"},{"label":"Hold","description":"Wait 24h"}]'
 \`\`\`
 
@@ -803,13 +957,8 @@ command); resolution is entirely the human's web answer. If their answer pushes
 back or you need more, **re-ask**: a new \`chat ask\` opens a fresh question (and a
 fresh block). Re-asking never auto-supersedes the old one; if a prior ask is now
 moot, just leave it and re-ask (the human works open questions oldest-first).
-
-Use \`chat ask\` ONLY for a decision that is **genuinely the user's to make** AND
-**cannot be settled from the request, the code, or a reasonable default** — a
-product/scope fork, a safety-sensitive or irreversible action, or ambiguous
-requirements whose branches differ materially. Do NOT use it for progress or
-permission checks ("is the plan ready?", "can I continue?", "does this look
-right?"): decide, proceed, and report status via \`chat update --description\`.`;
+A re-ask is a fresh ask: it carries the full self-sufficient body again (the
+pushback becomes part of its Recent context), never a bare follow-up line.`;
 }
 
 function chatTopicBlock(bin: string): string {
@@ -911,10 +1060,14 @@ to people and other agents) and **context management** (the Context Tree):
 | \`${bin} tree verify\` | validate a Context Tree's structure |
 | \`${bin} tree tree\` | browse Context Tree nodes as a hierarchy |
 
-Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`,
-workspace ↔ tree binding) runs from the web console or a human terminal
-— **never from inside a running agent**. Full surface:
-\`docs/cli-reference.md\`.`;
+Operator-only (\`login\`, \`daemon install\`, \`agent create / bind\`) runs from
+the web console or a human terminal — **never from inside a running agent**.
+Binding a workspace to a Context Tree is operator-owned too, with **one
+sanctioned in-agent exception**: the seed skill's own create + bind, which a
+**confirmed org admin** (with authenticated \`gh\`) runs directly on a
+build-the-tree task — no human hand-off, and never a "who runs the bind?"
+question. Stop and ask a human only if the caller is not an admin or \`gh\` is
+unauthenticated. Full surface: \`docs/cli-reference.md\`.`;
 }
 
 // --- # Context Tree ---------------------------------------------------------
@@ -987,10 +1140,19 @@ open the code PR. If the task touched decisions, constraints, ownership,
 or cross-domain relationships, **open the tree PR and the code PR
 together and cross-link them in the PR descriptions**, so a reviewer on
 the code PR can reach the decision and its rationale from the linked
-tree PR; when review
-reshapes the design, update both PRs together. The tree PR lands **with
-the code PR or shortly after** — it need not merge first, but keep it
-close so the tree never trails the merged code for long.
+tree PR; when review reshapes the design, update both PRs together so
+they never describe different things. **Merge the code PR first, then
+the tree PR.** To hold that order, **open the tree PR as a draft**: a
+draft stays cross-linked and fully readable — a code reviewer still
+reaches the decision and rationale from it — but cannot merge, so it
+can't land ahead of the code PR or auto-merge on green. The code PR is
+the source of truth for what was decided, so let it settle first. Once
+the code PR merges, reconcile the tree PR against the **final merged**
+code PR — fold in any last-round review changes so it reflects the
+code's final conclusion, not an earlier draft — then mark the tree PR
+**ready**. Its own review and merge happen at that point, against the
+final code; keep it prompt so the tree does not trail the merged code
+for long.
 Implementation-only changes skip the tree write — not the read.
 
 Before writing, you MUST load the relevant skill first and follow its
@@ -1044,18 +1206,22 @@ The Context Tree for this workspace lives at:
 
 Read the root \`NODE.md\` first to map the domains before you act.`);
   } else {
-    // Tree-less stub. Binding a workspace to a tree is an operator
-    // action (web console / human at the terminal), not something an
-    // agent can self-serve — so surface the gap to a human instead of
-    // suggesting any in-agent action. (The retired `first-tree-onboarding`
-    // skill used to live here; PR following #844 deleted that provisioning
-    // flow and the broad tree-management commands it depended on.)
+    // Tree-less stub. For ordinary tasks, binding stays operator-owned —
+    // surface the gap rather than self-serving a bind. The ONE sanctioned
+    // in-agent path is the seed skill's `tree init` create + bind, for a
+    // confirmed org admin on a build/set-up-the-tree task (#844 removed the
+    // retired `first-tree-onboarding` provisioning flow; #1379 added
+    // `tree init` as the admin create+bind path this carve-out points to).
     blocks.push(`## Tree Location
 
-This agent has no Context Tree bound. If a task needs cross-domain
-context that should be persistent (decisions, ownership), surface that
-gap to a human — binding a workspace to a tree is an operator action
-taken from the web console, not from inside a running agent.`);
+This agent has no Context Tree bound. For an ordinary task that needs
+persistent cross-domain context (decisions, ownership) and no tree exists,
+surface that gap to a human — binding is normally an operator action, from the
+web console. The one exception is a **build / set up the Context Tree** task:
+there the seed skill's own create + bind is the sanctioned path for a
+**confirmed org admin** with authenticated \`gh\` — run it directly and proceed,
+never a "who runs the bind?" question; stop and ask a human only if the caller
+is not an admin or \`gh\` is unauthenticated.`);
   }
 
   return blocks.join("\n\n");
@@ -1073,11 +1239,12 @@ function skillsSection(
   // header so we can splice it under the new `# Skills` umbrella.
   const teamBlock = buildResourceSkillsBriefing(workspacePath, payload).trim();
 
-  // The full First Tree family map is gated on `contextTreePath` because most
-  // rows are tree-bound skills installed by `installFirstTreeIntegration`.
-  // Core skills (for example onboarding kickoff) are installed separately and
-  // can still be invoked directly by a system kickoff in a tree-less workspace.
-  const familyBlock = contextTreePath !== null ? firstTreeFamilyMap() : null;
+  // The First Tree family map is emitted in both modes, but its rows are scoped
+  // to what is actually installed: tree-bound agents get the full four, while
+  // tree-less agents get only the core skills on disk (welcome + the from-zero
+  // build pair seed/write). A tree-less map matters because a welcome-spawned
+  // tree-build chat needs a routing surface to reach `first-tree-seed`.
+  const familyBlock = firstTreeFamilyMap(contextTreePath);
 
   // Skip the `# Skills` umbrella entirely when both inner blocks are
   // empty — a bare header without rows is just visual noise.
@@ -1089,12 +1256,35 @@ function skillsSection(
   return blocks.join("\n\n");
 }
 
-function firstTreeFamilyMap(): string {
-  // Listed skills MUST match what the inline installer actually deploys
-  // (`CORE_SKILL_NAMES` + `TREE_SKILL_NAMES`). Adding an aspirational row here
-  // would tell every agent to load a skill the runtime never puts on disk.
-  // Tests lock this map against the repo's `skills/` directory and the prebuild
-  // copy script.
+function firstTreeFamilyMap(contextTreePath: string | null): string {
+  // Listed skills MUST match what the inline installer actually deploys for
+  // THIS agent: `CORE_SKILL_NAMES` always, plus `TREE_SKILL_NAMES` only when
+  // tree-bound. Listing a skill the runtime never puts on disk would tell the
+  // agent to load a payload that isn't there; omitting an installed one leaves
+  // it with no First Tree routing surface. Tests lock this against the
+  // installer constants and the repo's `skills/` directory.
+  if (contextTreePath === null) {
+    // Tree-less: only the core skills are on disk — `first-tree-welcome` plus
+    // the from-zero build pair (`first-tree-seed` and its `first-tree-write`
+    // dependency). `first-tree-read` is tree-bound and NOT installed here, so
+    // it is omitted. This map is the routing surface a welcome-spawned
+    // tree-build chat relies on to reach `first-tree-seed`: that chat's opening
+    // brief names no skill by design, so without this the agent would fall back
+    // to provider auto-discovery instead of First Tree's own routing.
+    return `## First Tree Family
+
+These First Tree skills are installed even before your team has a Context
+Tree; each row's \`description\` drives progressive disclosure. If the task is
+to build the team's Context Tree from the connected code, load
+\`first-tree-seed\`.
+
+| Skill | Load when |
+|---|---|
+| \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
+| \`first-tree-seed\` | set up the team's Context Tree from the connected sources when it has no domain structure yet — creates + binds the repo if none exists, else fills a bound-but-empty tree; refuses once the tree has domain structure |
+| \`first-tree-write\` | pulled in by \`first-tree-seed\` as its authoring dependency (source-driven tree writes) |
+| \`first-tree-file-bug\` | the user hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and wants it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
+  }
   return `## First Tree Family
 
 \`first-tree-write\` is **unconditional** — load it on every task per
@@ -1106,10 +1296,11 @@ harness skills (\`tdoc\`, \`review\`, \`simplify\`, \`update-config\`,
 
 | Skill | Load when |
 |---|---|
-| \`first-tree-welcome\` | First Tree onboarding system messages ask for welcome, setup guidance, or the value-first first chat |
+| \`first-tree-welcome\` | the onboarding first chat — a natural welcome / "help me get started" message from the user; value-first intro, not a repo scan or tree setup chat |
 | \`first-tree-write\`   | unconditional (see \`# Required Reading\`) — concept model, source-system boundary, and source-driven tree writes |
 | \`first-tree-read\`    | read relevant Context Tree files before acting from task / path / feature signals |
-| \`first-tree-seed\`    | empty tree only — one-shot bootstrap right after Cloud onboarding provisions the workspace; refuses on a populated tree |`;
+| \`first-tree-seed\`    | no domain structure yet — bootstrap the team's Context Tree from its sources (create + bind if none exists, else fill a bound-but-empty tree); refuses once the tree has domain structure |
+| \`first-tree-file-bug\` | you hit a bug in First Tree itself (CLI, runtime, chat, web, GitHub, or tree tooling) and want it reported — gathers repro + version + chat/user IDs and opens an issue on the first-tree repo via the user's \`gh\` CLI |`;
 }
 
 /**
@@ -1126,4 +1317,5 @@ export const FIRST_TREE_FAMILY_SKILL_NAMES = [
   "first-tree-write",
   "first-tree-read",
   "first-tree-seed",
+  "first-tree-file-bug",
 ] as const;

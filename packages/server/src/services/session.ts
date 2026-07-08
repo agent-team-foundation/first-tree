@@ -8,7 +8,8 @@ import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { messages } from "../db/schema/messages.js";
-import { BadRequestError, NotFoundError } from "../errors.js";
+import { sessionEvents } from "../db/schema/session-events.js";
+import { BadRequestError, ConflictError, NotFoundError } from "../errors.js";
 import type { Notifier } from "./notifier.js";
 
 export const SUMMARY_MAX_LENGTH = 50;
@@ -411,6 +412,74 @@ export async function archiveSession(
   notifier?: Notifier,
 ): Promise<StateTransitionResult> {
   return transitionSessionState(db, agentId, chatId, "evicted", ["suspended"], organizationId, notifier);
+}
+
+export type ArchiveAgentSessionsResult = {
+  chatIds: string[];
+  transitioned: number;
+};
+
+/**
+ * Terminally evict every non-evicted session for an agent. Runtime switches use
+ * this after the agent has moved to a new client/runtime so stale local session
+ * state from the old handler cannot be resumed under the new provider.
+ */
+export async function archiveAllSessionsForAgent(
+  db: Database,
+  agentId: string,
+  organizationId: string,
+  notifier?: Notifier,
+  options: { runtimeSwitchClaimId?: string } = {},
+): Promise<ArchiveAgentSessionsResult> {
+  const now = new Date();
+  const rows = await db.transaction(async (tx) => {
+    if (options.runtimeSwitchClaimId) {
+      const [claim] = await tx
+        .select({ uuid: agents.uuid })
+        .from(agents)
+        .where(
+          and(
+            eq(agents.uuid, agentId),
+            sql`${agents.metadata}->'runtimeSwitch'->>'claimId' = ${options.runtimeSwitchClaimId}`,
+            sql`${agents.metadata}->'runtimeSwitch'->>'phase' = 'committed'`,
+          ),
+        )
+        .for("update")
+        .limit(1);
+      if (!claim) {
+        throw new ConflictError("Runtime switch claim is no longer committed for session archive");
+      }
+    }
+
+    const transitioned = await tx
+      .update(agentChatSessions)
+      .set({ state: "evicted", runtimeState: "idle", runtimeStateAt: now, updatedAt: now })
+      .where(and(eq(agentChatSessions.agentId, agentId), ne(agentChatSessions.state, "evicted")))
+      .returning({ chatId: agentChatSessions.chatId });
+
+    await tx.delete(sessionEvents).where(eq(sessionEvents.agentId, agentId));
+
+    await tx
+      .update(agentPresence)
+      .set({
+        activeSessions: 0,
+        totalSessions: 0,
+        runtimeState: "idle",
+        runtimeUpdatedAt: now,
+        lastSeenAt: now,
+      })
+      .where(eq(agentPresence.agentId, agentId));
+
+    return transitioned;
+  });
+
+  if (notifier) {
+    for (const row of rows) {
+      notifier.notifySessionStateChange(agentId, row.chatId, "evicted", organizationId).catch(() => {});
+    }
+  }
+
+  return { chatIds: rows.map((row) => row.chatId), transitioned: rows.length };
 }
 
 async function transitionSessionState(

@@ -229,7 +229,7 @@ export function shouldLeaveOnboarding(facts: OnboardingGateFacts): boolean {
  *   - "not-ready" → either is missing. We don't distinguish "no tree" from "no
  *                   GitHub": in both cases the invitee is blocked on the admin
  *                   and can't act on it, so a single screen ("your team is still
- *                   setting up" + a "Meet your agent" bailout) covers both. The
+ *                   setting up" + a simple first-chat action) covers both. The
  *                   start-chat query keeps polling, so this flips to "ready" on its
  *                   own the moment the admin finishes whichever half was missing.
  *

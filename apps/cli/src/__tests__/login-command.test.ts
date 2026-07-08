@@ -5,8 +5,10 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const cliFetchMock = vi.hoisted(() => vi.fn());
+const getClientServiceStatusMock = vi.hoisted(() => vi.fn());
 const installClientServiceMock = vi.hoisted(() => vi.fn());
 const isServiceSupportedMock = vi.hoisted(() => vi.fn());
+const stopClientServiceMock = vi.hoisted(() => vi.fn());
 const clientRuntimeMock = vi.hoisted(() => vi.fn());
 const createApiNameResolverMock = vi.hoisted(() => vi.fn());
 const createExecuteUpdateMock = vi.hoisted(() => vi.fn());
@@ -25,8 +27,10 @@ vi.mock("../core/cli-fetch.js", () => ({
 
 vi.mock("../core/service-install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../core/service-install.js")>()),
+  getClientServiceStatus: getClientServiceStatusMock,
   installClientService: installClientServiceMock,
   isServiceSupported: isServiceSupportedMock,
+  stopClientService: stopClientServiceMock,
 }));
 
 vi.mock("../core/client-runtime.js", async (importOriginal) => ({
@@ -58,6 +62,7 @@ vi.mock("../core/update-glue.js", async (importOriginal) => ({
 
 const originalFirstTreeHome = process.env.FIRST_TREE_HOME;
 const originalServerUrl = process.env.FIRST_TREE_SERVER_URL;
+const originalClientId = process.env.FIRST_TREE_CLIENT_ID;
 
 let home: string;
 let runtimeInstance: {
@@ -103,15 +108,146 @@ function writeCredentials(memberId: string, serverUrl = "http://old.test", sub =
   );
 }
 
+function writeActiveOwnerMetadata(opts: { clientId?: string; serverUrl?: string; userId?: string } = {}): void {
+  const clientId = opts.clientId ?? "client_aabbccdd";
+  const serverUrl = opts.serverUrl ?? "http://first-tree.test";
+  const userId = opts.userId ?? "user-new";
+  mkdirSync(join(home, "parked-clients"), { recursive: true });
+  writeFileSync(
+    join(home, "parked-clients", "index.json"),
+    JSON.stringify({
+      version: 1,
+      activeClientId: clientId,
+      accountDefaults: { [`${serverUrl}\n${userId}`]: clientId },
+      clients: {
+        [clientId]: {
+          clientId,
+          userId,
+          serverUrl,
+          storage: "active-root",
+          updatedAt: new Date().toISOString(),
+        },
+      },
+    }),
+  );
+}
+
+function switchJournalMoves(toClientId?: string): Array<Record<string, unknown>> {
+  const oldClientId = "client_aabbccdd";
+  const parkedOld = join(home, "parked-clients", oldClientId);
+  const moves: Array<Record<string, unknown>> = [
+    {
+      kind: "park-client-yaml",
+      group: "park",
+      source: join(home, "config", "client.yaml"),
+      target: join(parkedOld, "config", "client.yaml"),
+      required: true,
+      state: "pending",
+    },
+    {
+      kind: "park-agents",
+      group: "park",
+      source: join(home, "config", "agents"),
+      target: join(parkedOld, "config", "agents"),
+      required: false,
+      state: "pending",
+    },
+    {
+      kind: "park-sessions",
+      group: "park",
+      source: join(home, "data", "sessions"),
+      target: join(parkedOld, "data", "sessions"),
+      required: false,
+      state: "pending",
+    },
+    {
+      kind: "park-workspaces",
+      group: "park",
+      source: join(home, "data", "workspaces"),
+      target: join(parkedOld, "data", "workspaces"),
+      required: false,
+      state: "pending",
+    },
+  ];
+  if (!toClientId) {
+    moves.push({
+      kind: "restore-client-yaml",
+      group: "restore",
+      source: join(home, "parked-clients", "__new-client__", "config", "client.yaml"),
+      target: join(home, "config", "client.yaml"),
+      required: true,
+      state: "create",
+    });
+    return moves;
+  }
+  const parkedTarget = join(home, "parked-clients", toClientId);
+  moves.push(
+    {
+      kind: "restore-client-yaml",
+      group: "restore",
+      source: join(parkedTarget, "config", "client.yaml"),
+      target: join(home, "config", "client.yaml"),
+      required: true,
+      state: "pending",
+    },
+    {
+      kind: "restore-agents",
+      group: "restore",
+      source: join(parkedTarget, "config", "agents"),
+      target: join(home, "config", "agents"),
+      required: false,
+      state: "pending",
+    },
+    {
+      kind: "restore-sessions",
+      group: "restore",
+      source: join(parkedTarget, "data", "sessions"),
+      target: join(home, "data", "sessions"),
+      required: false,
+      state: "pending",
+    },
+    {
+      kind: "restore-workspaces",
+      group: "restore",
+      source: join(parkedTarget, "data", "workspaces"),
+      target: join(home, "data", "workspaces"),
+      required: false,
+      state: "pending",
+    },
+  );
+  return moves;
+}
+
+function writePendingSwitchJournal(opts: { toClientId?: string } = {}): void {
+  mkdirSync(join(home, "state"), { recursive: true });
+  writeFileSync(join(home, "state", "client-switch.lock"), JSON.stringify({ pid: 123, createdAt: "now" }));
+  writeFileSync(
+    join(home, "state", "client-switch-journal.json"),
+    JSON.stringify({
+      version: 1,
+      id: "switch-test",
+      phase: "drain-clean",
+      from: { clientId: "client_aabbccdd", userId: "user-old", serverUrl: "http://first-tree.test" },
+      to: { clientId: opts.toClientId, userId: "user-new", serverUrl: "http://first-tree.test" },
+      moves: switchJournalMoves(opts.toClientId),
+      createdAt: "now",
+      updatedAt: "now",
+    }),
+  );
+}
+
 beforeEach(() => {
   vi.resetModules();
   home = join(tmpdir(), `ft-login-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(join(home, "config"), { recursive: true });
   process.env.FIRST_TREE_HOME = home;
   delete process.env.FIRST_TREE_SERVER_URL;
+  delete process.env.FIRST_TREE_CLIENT_ID;
   cliFetchMock.mockReset();
+  getClientServiceStatusMock.mockReset();
   installClientServiceMock.mockReset();
   isServiceSupportedMock.mockReset();
+  stopClientServiceMock.mockReset();
   clientRuntimeMock.mockReset();
   createApiNameResolverMock.mockReset();
   createExecuteUpdateMock.mockReset();
@@ -125,7 +261,14 @@ beforeEach(() => {
   cliFetchMock.mockImplementation(async () =>
     response(200, { accessToken: jwt({ sub: "user-new" }), refreshToken: "r1" }),
   );
+  getClientServiceStatusMock.mockReturnValue({
+    platform: "launchd",
+    state: "not-installed",
+    label: "dev.first-tree",
+    logDir: join(home, "logs"),
+  });
   isServiceSupportedMock.mockReturnValue(false);
+  stopClientServiceMock.mockReturnValue({ ok: true });
   createApiNameResolverMock.mockReturnValue({ resolveName: vi.fn(async () => "nova") });
   createExecuteUpdateMock.mockReturnValue(async () => undefined);
   ensureFreshAccessTokenMock.mockResolvedValue("access-token");
@@ -148,17 +291,18 @@ afterEach(() => {
   else process.env.FIRST_TREE_HOME = originalFirstTreeHome;
   if (originalServerUrl === undefined) delete process.env.FIRST_TREE_SERVER_URL;
   else process.env.FIRST_TREE_SERVER_URL = originalServerUrl;
+  if (originalClientId === undefined) delete process.env.FIRST_TREE_CLIENT_ID;
+  else process.env.FIRST_TREE_CLIENT_ID = originalClientId;
   process.exitCode = undefined;
 });
 
 // `runLogin` dynamic-imports `commands/login.js` on every test run, which
 // pulls in the credentials / config / runtime module graph fresh each time.
-// On hot caches that resolves in ~500 ms; on cold CI runners it has been
-// observed hitting ~5 s (vitest's default `testTimeout`). The tests do not
-// drive long-running work themselves, so the 5 s default is too tight for
-// CI's first-load cost — bump to 15 s across the describe to give cold
-// caches headroom without affecting hot-run latency.
-describe("login command", { timeout: 15_000 }, () => {
+// On hot caches that resolves in ~500 ms; on cold CI runners under the full
+// monorepo test fan-out it can be much slower than Vitest's default
+// `testTimeout`. The tests do not drive long-running work themselves, so give
+// this import-heavy command suite CI headroom without affecting hot-run latency.
+describe("login command", { timeout: 60_000 }, () => {
   it("exchanges a connect token, writes credentials/config, and honors --no-start", async () => {
     await runLogin(["login", jwt({ iss: "http://first-tree.test/" }), "--no-start"]);
 
@@ -175,7 +319,70 @@ describe("login command", { timeout: 15_000 }, () => {
     expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("--no-start");
   });
 
-  it("rejects cross-account login before overwriting local credentials", async () => {
+  it("persists an env-provided client id during --no-start login", async () => {
+    process.env.FIRST_TREE_CLIENT_ID = "client_c0ffee00";
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test/" }), "--no-start"]);
+
+    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).toContain("id: client_c0ffee00");
+  });
+
+  it("exchanges a short connect URL token", async () => {
+    const token = "http://first-tree.test/connect/short_code-123";
+    await runLogin(["login", token, "--no-start"]);
+
+    expect(cliFetchMock).toHaveBeenCalledWith(
+      "http://first-tree.test/api/v1/auth/connect-token",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ token }),
+      }),
+    );
+    expect(JSON.parse(readFileSync(credentialsPath(), "utf8"))).toMatchObject({
+      refreshToken: "r1",
+      serverUrl: "http://first-tree.test",
+    });
+  });
+
+  it("requires explicit confirmation for cross-account login with a short connect URL", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
+    writeCredentials("member-old", "http://first-tree.test", "user-old");
+
+    await expect(runLogin(["login", "http://first-tree.test/connect/short_code-123", "--no-start"])).rejects.toThrow(
+      "process.exit",
+    );
+
+    expect(cliFetchMock).toHaveBeenCalledTimes(1);
+    expect(readFileSync(credentialsPath(), "utf8")).toContain("old-refresh");
+    expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
+    expect(installClientServiceMock).not.toHaveBeenCalled();
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("ACCOUNT_SWITCH_REQUIRES_CONFIRMATION");
+    expect(output).toContain("--force-switch");
+  });
+
+  it("parks the old local client when --force-switch confirms a short-URL account switch", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
+    mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
+    writeFileSync(join(home, "config", "agents", "nova", "agent.yaml"), "agentId: agent-old\nruntime: claude-code\n");
+    writeCredentials("member-old", "http://first-tree.test", "user-old");
+
+    await runLogin(["login", "http://first-tree.test/connect/short_code-123", "--no-start", "--force-switch"]);
+
+    const parkedRoot = join(home, "parked-clients", "client_aabbccdd");
+    expect(readFileSync(join(parkedRoot, "config", "client.yaml"), "utf8")).toContain("client_aabbccdd");
+    expect(readFileSync(join(parkedRoot, "config", "agents", "nova", "agent.yaml"), "utf8")).toContain("agent-old");
+    expect(readFileSync(credentialsPath(), "utf8")).toContain("r1");
+    expect(readFileSync(credentialsPath(), "utf8")).not.toContain("old-refresh");
+    expect(readFileSync(yamlPath, "utf8")).not.toContain("client_aabbccdd");
+    expect(readFileSync(yamlPath, "utf8")).toContain("url: http://first-tree.test");
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Previous local client parked");
+  });
+
+  it("requires explicit confirmation for cross-account login before overwriting local credentials", async () => {
     const yamlPath = join(home, "config", "client.yaml");
     writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
     writeCredentials("member-old", "http://first-tree.test", "user-old");
@@ -189,8 +396,93 @@ describe("login command", { timeout: 15_000 }, () => {
     expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
     expect(installClientServiceMock).not.toHaveBeenCalled();
     const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
-    expect(output).toContain("ACCOUNT_SWITCH_REQUIRES_PURGE");
-    expect(output).toContain("first-tree-dev logout --purge");
+    expect(output).toContain("ACCOUNT_SWITCH_REQUIRES_CONFIRMATION");
+    expect(output).toContain("--force-switch");
+  });
+
+  it("parks the old local client and creates a new active client when --force-switch confirms non-TTY switching", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
+    mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
+    writeFileSync(join(home, "config", "agents", "nova", "agent.yaml"), "agentId: agent-old\nruntime: claude-code\n");
+    mkdirSync(join(home, "data", "sessions"), { recursive: true });
+    writeFileSync(join(home, "data", "sessions", "nova.json"), "{}");
+    writeCredentials("member-old", "http://first-tree.test", "user-old");
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start", "--force-switch"]);
+
+    const parkedRoot = join(home, "parked-clients", "client_aabbccdd");
+    expect(readFileSync(join(parkedRoot, "config", "client.yaml"), "utf8")).toContain("client_aabbccdd");
+    expect(readFileSync(join(parkedRoot, "config", "agents", "nova", "agent.yaml"), "utf8")).toContain("agent-old");
+    expect(readFileSync(join(parkedRoot, "data", "sessions", "nova.json"), "utf8")).toBe("{}");
+    expect(existsSync(join(parkedRoot, "config", "credentials.json"))).toBe(false);
+
+    expect(readFileSync(credentialsPath(), "utf8")).toContain("r1");
+    expect(readFileSync(credentialsPath(), "utf8")).not.toContain("old-refresh");
+    expect(readFileSync(yamlPath, "utf8")).not.toContain("client_aabbccdd");
+    expect(readFileSync(yamlPath, "utf8")).toContain("url: http://first-tree.test");
+    const index = JSON.parse(readFileSync(join(home, "parked-clients", "index.json"), "utf8")) as {
+      activeClientId: string;
+      clients: Record<string, { storage: string; userId: string }>;
+    };
+    expect(index.clients.client_aabbccdd).toMatchObject({ storage: "parked", userId: "user-old" });
+    expect(index.clients[index.activeClientId]).toMatchObject({ storage: "active-root", userId: "user-new" });
+    expect(installClientServiceMock).not.toHaveBeenCalled();
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Previous local client parked");
+  });
+
+  it("clears the switch guard when supervisor stop fails before root state movement", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
+    writeCredentials("member-old", "http://first-tree.test", "user-old");
+    getClientServiceStatusMock.mockReturnValueOnce({
+      platform: "launchd",
+      state: "active",
+      label: "dev.first-tree",
+      logDir: join(home, "logs"),
+    });
+    stopClientServiceMock.mockReturnValueOnce({ ok: false, reason: "permission denied" });
+
+    await expect(
+      runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start", "--force-switch"]),
+    ).rejects.toThrow("process.exit");
+
+    expect(readFileSync(credentialsPath(), "utf8")).toContain("old-refresh");
+    expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
+    expect(existsSync(join(home, "state", "client-switch.lock"))).toBe(false);
+    expect(existsSync(join(home, "state", "client-switch-journal.json"))).toBe(false);
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("CLIENT_SWITCH_SUPERVISOR_UNSAFE");
+  });
+
+  it("refuses to move root state while a foreground runtime marker is still live", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
+    writeCredentials("member-old", "http://first-tree.test", "user-old");
+    mkdirSync(join(home, "state", "client-runtimes"), { recursive: true });
+    writeFileSync(
+      join(home, "state", "client-runtimes", `${process.pid}.json`),
+      JSON.stringify({
+        version: 1,
+        pid: process.pid,
+        clientId: "client_aabbccdd",
+        home,
+        mode: "foreground",
+        createdAt: new Date().toISOString(),
+      }),
+    );
+
+    await expect(
+      runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start", "--force-switch"]),
+    ).rejects.toThrow("process.exit");
+
+    expect(readFileSync(credentialsPath(), "utf8")).toContain("old-refresh");
+    expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
+    expect(existsSync(join(home, "state", "client-switch.lock"))).toBe(false);
+    expect(existsSync(join(home, "state", "client-switch-journal.json"))).toBe(false);
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("CLIENT_SWITCH_RUNTIME_ACTIVE");
+    expect(output).toContain("runtime processes are still running");
   });
 
   it("allows same-user reauth without rotating the client identity", async () => {
@@ -212,6 +504,7 @@ describe("login command", { timeout: 15_000 }, () => {
     writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
     mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
     writeFileSync(join(home, "config", "agents", "nova", "agent.yaml"), "agentId: agent-1\nruntime: claude-code\n");
+    writeActiveOwnerMetadata();
 
     await runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start"]);
 
@@ -220,6 +513,110 @@ describe("login command", { timeout: 15_000 }, () => {
     const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain("Authenticated");
     expect(output).not.toContain("ACCOUNT_SWITCH_REQUIRES_PURGE");
+  });
+
+  it("switches local clients when credentials are missing but remembered owner differs", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
+    mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
+    writeFileSync(join(home, "config", "agents", "nova", "agent.yaml"), "agentId: agent-old\nruntime: claude-code\n");
+    writeActiveOwnerMetadata({ userId: "user-old" });
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start", "--force-switch"]);
+
+    const parkedRoot = join(home, "parked-clients", "client_aabbccdd");
+    expect(readFileSync(join(parkedRoot, "config", "client.yaml"), "utf8")).toContain("client_aabbccdd");
+    expect(readFileSync(join(parkedRoot, "config", "agents", "nova", "agent.yaml"), "utf8")).toContain("agent-old");
+    expect(readFileSync(credentialsPath(), "utf8")).toContain("r1");
+    expect(readFileSync(yamlPath, "utf8")).not.toContain("client_aabbccdd");
+    const index = JSON.parse(readFileSync(join(home, "parked-clients", "index.json"), "utf8")) as {
+      activeClientId: string;
+      clients: Record<string, { storage: string; userId: string }>;
+    };
+    expect(index.clients.client_aabbccdd).toMatchObject({ storage: "parked", userId: "user-old" });
+    expect(index.clients[index.activeClientId]).toMatchObject({ storage: "active-root", userId: "user-new" });
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("Previous local client parked");
+  });
+
+  it("switches when credentials match the target user but remembered owner still belongs to the old client", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
+    writeCredentials("member-new", "http://first-tree.test", "user-new");
+    writeActiveOwnerMetadata({ userId: "user-old" });
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start", "--force-switch"]);
+
+    const parkedRoot = join(home, "parked-clients", "client_aabbccdd");
+    expect(readFileSync(join(parkedRoot, "config", "client.yaml"), "utf8")).toContain("client_aabbccdd");
+    expect(readFileSync(credentialsPath(), "utf8")).toContain("r1");
+    expect(readFileSync(credentialsPath(), "utf8")).not.toContain("old-refresh");
+    expect(readFileSync(yamlPath, "utf8")).not.toContain("client_aabbccdd");
+    const index = JSON.parse(readFileSync(join(home, "parked-clients", "index.json"), "utf8")) as {
+      activeClientId: string;
+      clients: Record<string, { storage: string; userId: string }>;
+    };
+    expect(index.clients.client_aabbccdd).toMatchObject({ storage: "parked", userId: "user-old" });
+    expect(index.clients[index.activeClientId]).toMatchObject({ storage: "active-root", userId: "user-new" });
+  });
+
+  it("rolls forward an interrupted switch after a partial root-state move", async () => {
+    writeCredentials("member-old", "http://first-tree.test", "user-old");
+    mkdirSync(join(home, "parked-clients", "client_aabbccdd", "config"), { recursive: true });
+    writeFileSync(
+      join(home, "parked-clients", "client_aabbccdd", "config", "client.yaml"),
+      "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n",
+    );
+    mkdirSync(join(home, "config", "agents", "nova"), { recursive: true });
+    writeFileSync(join(home, "config", "agents", "nova", "agent.yaml"), "agentId: agent-old\nruntime: claude-code\n");
+    writePendingSwitchJournal();
+
+    await runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start"]);
+
+    const parkedRoot = join(home, "parked-clients", "client_aabbccdd");
+    expect(readFileSync(join(parkedRoot, "config", "client.yaml"), "utf8")).toContain("client_aabbccdd");
+    expect(readFileSync(join(parkedRoot, "config", "agents", "nova", "agent.yaml"), "utf8")).toContain("agent-old");
+    expect(readFileSync(credentialsPath(), "utf8")).toContain("r1");
+    expect(readFileSync(join(home, "config", "client.yaml"), "utf8")).not.toContain("client_aabbccdd");
+    expect(existsSync(join(home, "state", "client-switch.lock"))).toBe(false);
+    expect(existsSync(join(home, "state", "client-switch-journal.json"))).toBe(false);
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "Interrupted local client switch recovered",
+    );
+  });
+
+  it("keeps the switch guard when journal recovery finds both source and target", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "server:\n  url: http://first-tree.test\nclient:\n  id: client_aabbccdd\n");
+    writeCredentials("member-old", "http://first-tree.test", "user-old");
+    mkdirSync(join(home, "parked-clients", "client_aabbccdd", "config"), { recursive: true });
+    writeFileSync(join(home, "parked-clients", "client_aabbccdd", "config", "client.yaml"), "client:\n  id: stale\n");
+    writePendingSwitchJournal();
+
+    await expect(runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start"])).rejects.toThrow(
+      "process.exit",
+    );
+
+    expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
+    expect(existsSync(join(home, "state", "client-switch.lock"))).toBe(true);
+    expect(existsSync(join(home, "state", "client-switch-journal.json"))).toBe(true);
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("CLIENT_SWITCH_MANUAL_REPAIR_REQUIRED");
+    expect(output).toContain("both source and target exist");
+  });
+
+  it("fails closed when credentials are missing and active client owner is unknown", async () => {
+    const yamlPath = join(home, "config", "client.yaml");
+    writeFileSync(yamlPath, "client:\n  id: client_aabbccdd\n");
+
+    await expect(runLogin(["login", jwt({ iss: "http://first-tree.test" }), "--no-start"])).rejects.toThrow(
+      "process.exit",
+    );
+
+    expect(existsSync(credentialsPath())).toBe(false);
+    expect(readFileSync(yamlPath, "utf8")).toContain("client_aabbccdd");
+    const output = stderrMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("CLIENT_OWNER_UNKNOWN_REQUIRES_RESET_OR_OWNER_LOGIN");
+    expect(output).toContain("remembered owner metadata");
   });
 
   it("maps invalid tokens and token exchange failures to CLI errors", async () => {
@@ -291,6 +688,8 @@ describe("login command", { timeout: 15_000 }, () => {
     exitMock.mockClear();
     writeCredentials("member-old");
     await expect(runLogin(["login", jwt({ iss: "http://hub.test" })])).rejects.toThrow("process.exit");
-    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain("ACCOUNT_SWITCH_REQUIRES_PURGE");
+    expect(stderrMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "ACCOUNT_SWITCH_REQUIRES_CONFIRMATION",
+    );
   });
 });

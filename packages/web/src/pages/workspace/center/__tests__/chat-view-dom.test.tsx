@@ -744,6 +744,30 @@ afterEach(() => {
 });
 
 describe("ChatView", () => {
+  it("hides chat-management affordances on the trial surface even when read-only (route-scoped)", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    // A persisted-open sidebar must NOT re-appear on the trial surface.
+    localStorage.setItem("first-tree:chat-right-sidebar:open:v1", "1");
+    // `isTrial` + `readOnly` together = the watcher branch of a `/quickstart`
+    // chat. The trial-chrome guarantee is route-scoped, so the participant /
+    // details cluster, the chat-details sidebar toggle, and rename must all be
+    // gone here — `readOnly` alone would not hide them all (nor the hovercard).
+    const { container, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" isTrial readOnly />,
+      undefined,
+      "/",
+    );
+
+    await waitForText(container, "Launch planning");
+
+    expect(container.querySelector('button[aria-label="Add participant"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Show chat details"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Hide chat details"]')).toBeNull();
+    expect(buttonByTitle(container, "Click to rename")).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+
   it("uses matching initial chat detail without an immediate detail refetch", async () => {
     const { ChatView } = await import("../chat-view.js");
     const initialChatDetail = chatDetail({ title: "Initial detail title", topic: "Initial detail title" });
@@ -1331,7 +1355,23 @@ describe("ChatView", () => {
 
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
     if (!textarea) throw new Error("Composer textarea missing");
-    expect(textarea.placeholder).toContain("Type @ to pick a recipient");
+    // Group chat, no @mention yet: the placeholder carries the rule, and the
+    // tip bubble is NOT shown until a blocked send is actually attempted.
+    expect(textarea.placeholder).toContain("In a group, @mention who this is for");
+    expect(container.textContent).not.toContain("or no one gets this");
+
+    // Blocked TEXT send: typing without an @mention then pressing Enter pops the
+    // tip bubble and sends nothing. The send button stays clickable (not
+    // `disabled`) so a click would trigger the same tip.
+    await setValue(textarea, "no recipient here");
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Send"]')?.disabled).toBe(false);
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+    await waitForText(container, "@mention someone, or no one gets this");
+    expect(chatMocks.sendChatMessage).not.toHaveBeenCalled();
+
     await setValue(textarea, "Please review @nova");
     await click(container.querySelector('button[aria-label="Send"]'));
     await waitForCondition(() => chatMocks.sendChatMessage.mock.calls.length > 0, "Expected text send");
@@ -1346,7 +1386,9 @@ describe("ChatView", () => {
       textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
     });
     await flush();
-    await waitForText(container, "@mention a group member");
+    // Image-only send with no @mention is blocked too; the tip bubble pops for
+    // both text and image attempts.
+    await waitForText(container, "@mention someone, or no one gets this");
     expect(chatMocks.sendFileMessageBatch).not.toHaveBeenCalled();
 
     await setValue(textarea, "@design image attached");
@@ -1363,6 +1405,49 @@ describe("ChatView", () => {
       // No live request in this chat → nothing to thread under.
       undefined,
     );
+
+    await act(async () => root.unmount());
+  });
+
+  it("clears the mention tip when switching to another group chat", async () => {
+    const { ChatView } = await import("../chat-view.js");
+    const { container, queryClient, root } = await renderDom(
+      <ChatView agentId="agent-1" chatId="chat-1" />,
+      undefined,
+      "/",
+    );
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    if (!textarea) throw new Error("Composer textarea missing");
+    // Trigger the tip in chat-1 (group, no @mention).
+    await setValue(textarea, "no recipient");
+    await act(async () => {
+      textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await flush();
+    await waitForText(container, "@mention someone, or no one gets this");
+
+    // Switch to another group chat on the SAME long-lived ChatView instance
+    // (identical provider wrappers → React updates the chatId prop rather than
+    // remounting). The tip must not leak into the new chat before any blocked
+    // send there.
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/"]}>
+          <QueryClientProvider client={queryClient}>
+            <ToastProvider>
+              <ChatView agentId="agent-1" chatId="chat-2" />
+            </ToastProvider>
+          </QueryClientProvider>
+        </MemoryRouter>,
+      );
+    });
+    // Pre-paint: the render gate (tip's origin chat ≠ viewed chat) keeps the
+    // stale bubble from painting even before effects flush — assert right after
+    // the commit, with no intervening flush.
+    expect(container.textContent).not.toContain("@mention someone, or no one gets this");
+    await flush();
+    expect(container.textContent).not.toContain("@mention someone, or no one gets this");
 
     await act(async () => root.unmount());
   });

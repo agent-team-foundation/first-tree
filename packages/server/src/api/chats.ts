@@ -4,6 +4,7 @@ import {
   type ChatEngagementStatus,
   followGithubEntityRequestSchema,
   paginationQuerySchema,
+  parseLandingCampaignTrialChatMetadata,
   patchChatEngagementSchema,
   sendMessageSchema,
   updateChatSchema,
@@ -17,12 +18,17 @@ import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
 import { users } from "../db/schema/users.js";
-import { BadRequestError } from "../errors.js";
+import { BadRequestError, ForbiddenError } from "../errors.js";
 import { assertAllAgentsVisibleInOrg, requireChatAccess } from "../scope/require-resource.js";
 import { resolveAvatarImageUrl } from "../services/agent.js";
 import { getChatAgentStatuses } from "../services/agent-chat-status.js";
 import { ensureParticipant, leaveChat, updateChatMetadata } from "../services/chat.js";
 import { declareEntityFollow, listChatGithubEntities, removeEntityFollow } from "../services/github-entity-follow.js";
+import {
+  hasRemainingLandingCampaignTrialBudget,
+  normalizeLandingCampaignTrialChatMetadataForRead,
+} from "../services/landing-campaigns/chat-state.js";
+import { assertNoLandingCampaignTrialAgents } from "../services/landing-campaigns/guards.js";
 import {
   addMeChatParticipants,
   joinMeChat,
@@ -46,6 +52,22 @@ import { sendFollowResult } from "./github-entity-reply.js";
  * and gates participation/supervision.
  */
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
+  function assertLandingCampaignTrialChatAcceptsHumanMessage(
+    metadata: Record<string, unknown> | null,
+    body: { metadata?: Record<string, unknown> },
+  ): void {
+    const trial = parseLandingCampaignTrialChatMetadata(metadata);
+    if (!trial) return;
+    const resolves = body.metadata?.resolves;
+    const resolvesRequest = resolves !== null && typeof resolves === "object";
+    if (trial.state === "completed" || trial.state === "failed" || !hasRemainingLandingCampaignTrialBudget(trial)) {
+      throw new ForbiddenError("This landing campaign trial chat is locked.");
+    }
+    if (trial.state === "awaiting_user" && trial.awaitingUserKind !== "follow_up" && !resolvesRequest) {
+      throw new ForbiddenError("This landing campaign trial chat is waiting for a request answer.");
+    }
+  }
+
   app.get<{ Params: { chatId: string } }>("/:chatId", async (request) => {
     const { chat, scope } = await requireChatAccess(request, app.db);
 
@@ -140,6 +162,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
     return {
       ...chat,
+      metadata: normalizeLandingCampaignTrialChatMetadataForRead(chat.metadata),
       title,
       firstMessagePreview,
       engagementStatus,
@@ -426,8 +449,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
    * `bodyLimit` is sufficient — no inline base64 ever rides this route.
    */
   app.post<{ Params: { chatId: string } }>("/:chatId/messages", async (request, reply) => {
-    const { scope } = await requireChatAccess(request, app.db);
+    const { chat, scope } = await requireChatAccess(request, app.db);
     const body = sendMessageSchema.parse(request.body);
+    assertLandingCampaignTrialChatAcceptsHumanMessage(chat.metadata, body);
 
     await ensureParticipant(app.db, request.params.chatId, scope.humanAgentId);
 
@@ -476,9 +500,13 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
   /** POST /chats/:chatId/participants — add speaking participants. Idempotent. */
   app.post<{ Params: { chatId: string } }>("/:chatId/participants", async (request, reply) => {
-    const { scope } = await requireChatAccess(request, app.db);
+    const { chat, scope } = await requireChatAccess(request, app.db);
+    if (parseLandingCampaignTrialChatMetadata(chat.metadata)) {
+      throw new ForbiddenError("Landing campaign trial chats are managed by First Tree.");
+    }
     const body = addMeChatParticipantsSchema.parse(request.body);
     await assertAllAgentsVisibleInOrg(app.db, scope, body.participantIds);
+    await assertNoLandingCampaignTrialAgents(app.db, body.participantIds);
     await addMeChatParticipants(app.db, request.params.chatId, scope.humanAgentId, scope.organizationId, body);
     return reply.status(204).send();
   });

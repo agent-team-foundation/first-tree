@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -125,6 +125,7 @@ function makeCache(
         }),
     ),
     refresh: vi.fn(),
+    updateSdk: vi.fn(),
     updateUrls: vi.fn(),
     allReferencedUrls: vi.fn(() => new Set<string>()),
     forget: vi.fn(),
@@ -147,6 +148,7 @@ function makeManager(
     onSessionRuntimeChange?: (chatId: string, state: TestRuntimeState) => void;
     onSessionEvent?: (chatId: string, event: SessionEvent) => void;
     workspaceRoot?: string;
+    runtimeSessionTokenFile?: string;
   } = {},
 ): SessionManager {
   const handlers = [...(opts.handlers ?? [handler()])];
@@ -176,6 +178,7 @@ function makeManager(
     log: silentLogger(),
     registryPath: opts.registryPath,
     agentConfigCache: opts.agentConfigCache,
+    runtimeSessionTokenFile: opts.runtimeSessionTokenFile,
     ackEntry: opts.ackEntry ?? vi.fn<(entryId: number) => Promise<void>>().mockResolvedValue(undefined),
     recoverChat: opts.recoverChat,
     onStateChange: opts.onStateChange,
@@ -238,6 +241,28 @@ afterEach(() => {
 });
 
 describe("SessionManager edge coverage", () => {
+  it("filters runtime sync by active set while force-keeping queued work", async () => {
+    const sm = makeManager();
+    const i = internals(sm);
+    i.sessions.set("chat-active", makeSessionRecord("chat-active"));
+    i.sessions.set("chat-archived", makeSessionRecord("chat-archived"));
+    i.sessions.set("chat-pending", makeSessionRecord("chat-pending"));
+    i.evictedMappings.set("chat-evicted-active", { claudeSessionId: "evicted-active", lastActivity: 1 });
+    i.evictedMappings.set("chat-evicted-archived", { claudeSessionId: "evicted-archived", lastActivity: 2 });
+    i.pendingQueue.push({ chatId: "chat-pending", message: makeMessage("chat-pending"), deliveryKind: "fresh" });
+
+    const activeSet = new Set(["chat-active", "chat-evicted-active"]);
+
+    expect(sm.getHeldChatIds(activeSet)).toEqual(["chat-active", "chat-pending", "chat-evicted-active"]);
+    expect(sm.getSessionStates(activeSet)).toEqual([
+      { chatId: "chat-active", state: "suspended" },
+      { chatId: "chat-pending", state: "suspended" },
+    ]);
+    expect(sm.getEvictedChatIds(activeSet)).toEqual(["chat-evicted-active"]);
+
+    await sm.shutdown();
+  });
+
   it("refreshes newer config before dispatch and logs refresh failures without blocking delivery", async () => {
     const okCache = makeCache();
     const okHandler = handler();
@@ -370,6 +395,51 @@ describe("SessionManager edge coverage", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it("clears persisted mappings on destructive runtime-switch shutdown", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ft-session-registry-switch-"));
+    const registryPath = join(dir, "sessions.json");
+    writeFileSync(
+      registryPath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "chat-persisted": {
+            claudeSessionId: "persisted-session",
+            lastActivity: new Date(1_000).toISOString(),
+            status: "evicted",
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const onStateChange = vi.fn();
+    const activeHandler = handler();
+    const sm = makeManager({ handlers: [activeHandler], registryPath, onStateChange });
+    expect(sm.getEvictedChatIds()).toContain("chat-persisted");
+
+    await sm.dispatch(mockEntry({ id: 1, chatId: "chat-active" }));
+    expect(activeHandler.start).toHaveBeenCalled();
+    onStateChange.mockClear();
+    internals(sm).evictedMappings.set("chat-extra", { claudeSessionId: "extra-session", lastActivity: 2_000 });
+    internals(sm).persistRegistry();
+
+    await sm.shutdown("runtime switched by server", {
+      clearPersistedRegistry: true,
+      reportSuspendedSessions: false,
+    });
+
+    const data = JSON.parse(readFileSync(registryPath, "utf-8")) as { entries: Record<string, unknown> };
+    expect(data.entries).toEqual({});
+    expect(onStateChange).not.toHaveBeenCalledWith("chat-active", "suspended");
+
+    const reloaded = makeManager({ registryPath });
+    expect(reloaded.getEvictedChatIds()).toEqual([]);
+    await reloaded.shutdown();
+
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it("builds session context plumbing from cached config and falls back when self-fence refresh fails", async () => {
     const workspaceRoot = mkdtempSync(join(tmpdir(), "ft-session-context-"));
     const sdk = mockSdk();
@@ -406,6 +476,7 @@ describe("SessionManager edge coverage", () => {
       sdk,
       workspaceRoot,
       agentConfigCache: cache,
+      runtimeSessionTokenFile: "/tmp/runtime-session-token",
     });
 
     await sm.dispatch(mockEntry({ id: 1, chatId: "chat-context" }));
@@ -422,6 +493,7 @@ describe("SessionManager edge coverage", () => {
     expect(env.FIRST_TREE_DOC_REPO_LOCAL_PATH).toBe("source-repos/project");
     expect(env.FIRST_TREE_WORKSPACES_ROOT).toBe(tmpdir());
     expect(env.FIRST_TREE_AGENT_SLUG).toBe(workspaceRoot.split("/").at(-1));
+    expect(env.FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE).toBe("/tmp/runtime-session-token");
 
     const formatted = await ctx.formatInboundContent({
       id: "msg-format",

@@ -1,4 +1,5 @@
 import {
+  AGENT_STATUSES,
   type ClientCapabilities,
   clientCapabilitiesSchema,
   type RuntimeProvider,
@@ -6,14 +7,21 @@ import {
   updateAttemptSchema,
 } from "@first-tree/shared";
 import { getServerCliBinding } from "@first-tree/shared/channel";
-import { and, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agentPresence } from "../db/schema/agent-presence.js";
 import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
 import { members } from "../db/schema/members.js";
-import { BadRequestError, ClientUserMismatchError, ConflictError, NotFoundError } from "../errors.js";
+import {
+  BadRequestError,
+  ClientRetiredError,
+  ClientUserMismatchError,
+  ConflictError,
+  NotFoundError,
+} from "../errors.js";
 import { runtimeFieldsReset } from "./presence.js";
+import { recordClientHeartbeat } from "./runtime-liveness.js";
 
 /**
  * Assert the caller can act on this client. Throws 404 for both "not found"
@@ -21,7 +29,8 @@ import { runtimeFieldsReset } from "./presence.js";
  * one user; cross-user admin access is no longer supported by this code path
  * (see decouple-client-from-identity-design §4.10.5 option A). There is no
  * cross-user ownership transfer: machine handover is local-only via
- * `logout --purge` followed by login, which generates a fresh clientId.
+ * `login <token>` on the target user, which parks the old local client and
+ * activates a separate client id.
  */
 export async function assertClientOwner(db: Database, clientId: string, scope: { userId: string }): Promise<void> {
   const [row] = await db
@@ -31,6 +40,20 @@ export async function assertClientOwner(db: Database, clientId: string, scope: {
     .limit(1);
   if (!row || row.userId !== scope.userId) {
     throw new NotFoundError(`Client "${clientId}" not found`);
+  }
+}
+
+export async function assertClientNotRetired(db: Database, clientId: string): Promise<void> {
+  const [row] = await db
+    .select({ retiredAt: clients.retiredAt })
+    .from(clients)
+    .where(eq(clients.id, clientId))
+    .limit(1);
+  if (!row) {
+    throw new NotFoundError(`Client "${clientId}" not found`);
+  }
+  if (row.retiredAt) {
+    throw new ClientRetiredError(`Client "${clientId}" has been retired`);
   }
 }
 
@@ -46,8 +69,8 @@ export async function assertClientOwner(db: Database, clientId: string, scope: {
  *     at first insert sticks for the row's lifetime.
  *   - Existing row with a different user_id → raises
  *     {@link ClientUserMismatchError} (WS close 4403). The CLI guides the
- *     operator through `logout --purge` before a new login; the previous
- *     owner's row stays untouched.
+ *     operator through local-client switching; the previous owner's row stays
+ *     untouched.
  */
 export async function registerClient(
   db: Database,
@@ -72,15 +95,21 @@ export async function registerClient(
   const now = new Date();
 
   const [existing] = await db
-    .select({ id: clients.id, userId: clients.userId })
+    .select({ id: clients.id, userId: clients.userId, retiredAt: clients.retiredAt })
     .from(clients)
     .where(eq(clients.id, data.clientId))
     .limit(1);
 
+  if (existing?.retiredAt) {
+    throw new ClientRetiredError(
+      `Client "${data.clientId}" has been retired. Run \`${getServerCliBinding().binName} computer reset\`, then run \`${getServerCliBinding().binName} login <token>\` to register a new client identity.`,
+    );
+  }
+
   if (existing?.userId && existing.userId !== data.userId) {
     throw new ClientUserMismatchError(
       `Client "${data.clientId}" is owned by a different user. ` +
-        `Run \`${getServerCliBinding().binName} logout --purge\`, then login with the new account's connect token.`,
+        `Run \`${getServerCliBinding().binName} login <token>\` with the intended account to switch local clients before daemon startup; if this mismatch persists, back up local workspaces and run \`${getServerCliBinding().binName} computer reset\`.`,
     );
   }
 
@@ -96,7 +125,7 @@ export async function registerClient(
     ? sql`COALESCE(${clients.metadata}, '{}'::jsonb) || ${JSON.stringify({ lastUpdateAttempt: data.lastUpdateAttempt })}::jsonb`
     : undefined;
 
-  await db
+  const registered = await db
     .insert(clients)
     .values({
       id: data.clientId,
@@ -124,7 +153,29 @@ export async function registerClient(
         lastSeenAt: now,
         ...(metadataMerge ? { metadata: metadataMerge } : {}),
       },
-    });
+      setWhere: and(isNull(clients.retiredAt), or(isNull(clients.userId), eq(clients.userId, data.userId))),
+    })
+    .returning({ id: clients.id });
+
+  if (registered.length > 0) return;
+
+  const [current] = await db
+    .select({ userId: clients.userId, retiredAt: clients.retiredAt })
+    .from(clients)
+    .where(eq(clients.id, data.clientId))
+    .limit(1);
+  if (current?.retiredAt) {
+    throw new ClientRetiredError(
+      `Client "${data.clientId}" has been retired. Run \`${getServerCliBinding().binName} computer reset\`, then run \`${getServerCliBinding().binName} login <token>\` to register a new client identity.`,
+    );
+  }
+  if (current?.userId && current.userId !== data.userId) {
+    throw new ClientUserMismatchError(
+      `Client "${data.clientId}" is owned by a different user. ` +
+        `Run \`${getServerCliBinding().binName} login <token>\` with the intended account to switch local clients before daemon startup; if this mismatch persists, back up local workspaces and run \`${getServerCliBinding().binName} computer reset\`.`,
+    );
+  }
+  throw new ConflictError(`Client "${data.clientId}" could not be registered because it changed concurrently.`);
 }
 
 export async function disconnectClient(db: Database, clientId: string) {
@@ -136,11 +187,14 @@ export async function disconnectClient(db: Database, clientId: string) {
     .set({ status: "offline", clientId: null, ...runtimeFieldsReset(now) })
     .where(eq(agentPresence.clientId, clientId));
 
-  await db.update(clients).set({ status: "disconnected", lastSeenAt: now }).where(eq(clients.id, clientId));
+  await db
+    .update(clients)
+    .set({ status: "disconnected", lastSeenAt: now })
+    .where(and(eq(clients.id, clientId), isNull(clients.retiredAt)));
 }
 
-export async function heartbeatClient(db: Database, clientId: string) {
-  await db.update(clients).set({ lastSeenAt: new Date() }).where(eq(clients.id, clientId));
+export async function heartbeatClient(db: Database, clientId: string, instanceId: string) {
+  await recordClientHeartbeat(db, { clientId, instanceId, routedAgentIds: [] });
 }
 
 export async function getClient(db: Database, clientId: string) {
@@ -181,6 +235,13 @@ export function extractCapabilities(metadata: unknown): ClientCapabilities {
   return parsed.success ? parsed.data : {};
 }
 
+export function clientStatusForApi(row: {
+  status: string;
+  retiredAt?: Date | null;
+}): "connected" | "disconnected" | "retired" {
+  return row.retiredAt ? "retired" : row.status === "connected" ? "connected" : "disconnected";
+}
+
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
@@ -211,7 +272,17 @@ export async function listActiveAgentsPinnedToClient(db: Database, clientId: str
       runtimeProvider: agents.runtimeProvider,
     })
     .from(agents)
-    .where(and(eq(agents.clientId, clientId), eq(agents.status, "active")));
+    .where(
+      and(
+        eq(agents.clientId, clientId),
+        eq(agents.status, "active"),
+        sql`EXISTS (
+          SELECT 1 FROM ${clients}
+          WHERE ${clients.id} = ${clientId}
+            AND ${clients.retiredAt} IS NULL
+        )`,
+      ),
+    );
 }
 
 /**
@@ -234,7 +305,7 @@ export async function listMyPinnedAgents(
     })
     .from(agents)
     .innerJoin(clients, eq(agents.clientId, clients.id))
-    .where(and(eq(clients.userId, scope.userId), ne(agents.status, "deleted")));
+    .where(and(eq(clients.userId, scope.userId), isNull(clients.retiredAt), ne(agents.status, "deleted")));
   return rows.filter(
     (r): r is { agentId: string; clientId: string; runtimeProvider: RuntimeProvider; status: string } =>
       r.clientId !== null,
@@ -259,12 +330,15 @@ export async function updateClientCapabilities(
   }
 
   const [client] = await db
-    .select({ metadata: clients.metadata })
+    .select({ metadata: clients.metadata, retiredAt: clients.retiredAt })
     .from(clients)
     .where(eq(clients.id, clientId))
     .limit(1);
   if (!client) {
     throw new NotFoundError(`Client "${clientId}" not found`);
+  }
+  if (client.retiredAt) {
+    throw new ClientRetiredError(`Client "${clientId}" has been retired`);
   }
 
   const baseMetadata = (client.metadata ?? {}) as Record<string, unknown>;
@@ -283,7 +357,10 @@ export async function updateClientCapabilities(
  * `?organizationId=` cross-user view via {@link listClientsForOrgAdmin}.
  */
 export async function listClients(db: Database, scope: { userId: string }) {
-  const rows = await db.select().from(clients).where(eq(clients.userId, scope.userId));
+  const rows = await db
+    .select()
+    .from(clients)
+    .where(and(eq(clients.userId, scope.userId), isNull(clients.retiredAt)));
   return attachAgentCounts(db, rows);
 }
 
@@ -310,11 +387,12 @@ export async function listClientsForOrgAdmin(db: Database, orgId: string) {
       instanceId: clients.instanceId,
       connectedAt: clients.connectedAt,
       lastSeenAt: clients.lastSeenAt,
+      retiredAt: clients.retiredAt,
       metadata: clients.metadata,
     })
     .from(clients)
     .innerJoin(members, eq(members.userId, clients.userId))
-    .where(and(eq(members.organizationId, orgId), eq(members.status, "active")));
+    .where(and(eq(members.organizationId, orgId), eq(members.status, "active"), isNull(clients.retiredAt)));
   return attachAgentCounts(db, rows, { organizationId: orgId });
 }
 
@@ -378,45 +456,51 @@ async function attachAgentCounts<T extends { id: string }>(
 }
 
 /**
- * Retire a client row. Refuses while any non-deleted agent is still pinned to
- * it — per proposal M12, the operator must delete the agents first
- * (no reassign in this milestone). Throws {@link ConflictError} with the
- * pinned agent list so the UI can show the exact names.
+ * Retire a client row. This is destructive: it cuts runtime bindings on this
+ * client, but preserves agent identity, profile, chats, and history.
  *
  * Runs in a single transaction with `SELECT … FOR UPDATE` on the client row
- * so a concurrent `createAgent(clientId=X)` cannot land between the pinned
- * check and the DELETE — otherwise the agents.client_id RESTRICT FK would
- * surface as a raw PG 23503 instead of the ConflictError the caller expects.
+ * so a concurrent `createAgent(clientId=X)` serializes with the tombstone and
+ * sees the retired guard instead of landing a hidden pin.
  */
 export async function retireClient(db: Database, clientId: string): Promise<void> {
   await db.transaction(async (tx) => {
-    const [locked] = await tx.execute<{ id: string }>(sql`SELECT id FROM clients WHERE id = ${clientId} FOR UPDATE`);
+    const [locked] = await tx.execute<{ id: string; retired_at: Date | null }>(
+      sql`SELECT id, retired_at FROM clients WHERE id = ${clientId} FOR UPDATE`,
+    );
     if (!locked) {
       throw new NotFoundError(`Client "${clientId}" not found`);
     }
 
-    const pinned = await tx
-      .select({ uuid: agents.uuid, name: agents.name })
-      .from(agents)
-      .where(and(eq(agents.clientId, clientId), ne(agents.status, "deleted")));
-
-    if (pinned.length > 0) {
-      const names = pinned.map((a) => a.name ?? a.uuid).join(", ");
-      throw new ConflictError(
-        `Cannot retire client "${clientId}" — ${pinned.length} agent(s) still pinned (${names}). ` +
-          "Delete the pinned agents first (no reassign is available in this milestone).",
-      );
-    }
-
-    // Deleted (soft-deleted) agents may still carry the FK → clear it so
-    // RESTRICT does not block the client delete. Only the active guard above is
-    // a product-level check; tombstones should not veto operator actions.
+    const now = new Date();
+    await tx
+      .update(agentPresence)
+      .set({ status: "offline", clientId: null, ...runtimeFieldsReset(now) })
+      .where(eq(agentPresence.clientId, clientId));
     await tx
       .update(agents)
-      .set({ clientId: null })
-      .where(and(eq(agents.clientId, clientId), eq(agents.status, "deleted")));
+      .set({
+        status: AGENT_STATUSES.SUSPENDED,
+        clientId: null,
+        metadata: sql`${agents.metadata} - 'runtimeSession' - 'runtimeSwitch'`,
+        updatedAt: now,
+      })
+      .where(and(eq(agents.clientId, clientId), ne(agents.status, AGENT_STATUSES.DELETED)));
+    await tx
+      .update(agents)
+      .set({
+        clientId: null,
+        metadata: sql`${agents.metadata} - 'runtimeSession' - 'runtimeSwitch'`,
+        updatedAt: now,
+      })
+      .where(and(eq(agents.clientId, clientId), eq(agents.status, AGENT_STATUSES.DELETED)));
 
-    await tx.delete(clients).where(eq(clients.id, clientId));
+    if (locked.retired_at) return;
+
+    await tx
+      .update(clients)
+      .set({ status: "disconnected", instanceId: null, retiredAt: now, lastSeenAt: now })
+      .where(eq(clients.id, clientId));
   });
 }
 
@@ -433,6 +517,7 @@ export async function cleanupStaleClients(db: Database, staleSeconds = 60): Prom
   const result = await db.execute<{ id: string }>(sql`
     UPDATE clients SET status = 'disconnected'
     WHERE status = 'connected'
+    AND retired_at IS NULL
     AND (
       last_seen_at < NOW() - make_interval(secs => ${staleSeconds})
       OR instance_id IN (

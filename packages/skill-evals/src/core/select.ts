@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 
-import type { ShippedSkillName } from "./case-schema.js";
+import { type ShippedSkillName, UNEVALUATED_SHIPPED_SKILLS } from "./case-schema.js";
 
-export type EvalRecommendationKind = "floor" | "gate" | "quality";
+export type EvalRecommendationKind = "floor" | "gate" | "periodic" | "quality";
 
 export type EvalRecommendation = {
   command: string;
@@ -23,11 +23,7 @@ const SKILL_BY_PATH: readonly {
   paths: readonly string[];
 }[] = [
   {
-    paths: [
-      "skills/first-tree-read/",
-      "packages/skill-evals/src/first-tree-read/",
-      "packages/skill-evals/src/suites/first-tree-read/",
-    ],
+    paths: ["skills/first-tree-read/", "packages/skill-evals/src/suites/first-tree-read/"],
     skill: "first-tree-read",
   },
   {
@@ -63,8 +59,15 @@ function gateCommand(skill: ShippedSkillName): string {
   return `pnpm --filter @first-tree/skill-evals eval:gate -- --suite ${skill}`;
 }
 
-function qualityCommand(skill: Extract<ShippedSkillName, "first-tree-write" | "first-tree-welcome">): string {
+function qualityCommand(
+  skill: Extract<ShippedSkillName, "first-tree-write" | "first-tree-seed" | "first-tree-welcome">,
+): string {
   return `pnpm --filter @first-tree/skill-evals eval:quality -- --suite ${skill}`;
+}
+
+function periodicCommand(skill: ShippedSkillName | null = null): string {
+  if (skill === null) return "pnpm --filter @first-tree/skill-evals eval:periodic";
+  return `pnpm --filter @first-tree/skill-evals eval:periodic -- --suite ${skill}`;
 }
 
 function addSuiteRecommendations(
@@ -86,7 +89,7 @@ function addSuiteRecommendations(
     suite: skill,
   });
 
-  if (skill === "first-tree-write" || skill === "first-tree-welcome") {
+  if (skill === "first-tree-write" || skill === "first-tree-seed" || skill === "first-tree-welcome") {
     addRecommendation(recommendations, {
       command: qualityCommand(skill),
       kind: "quality",
@@ -114,7 +117,7 @@ function addAllImplementedGateRecommendations(recommendations: Map<string, EvalR
 }
 
 function addQualityRecommendations(recommendations: Map<string, EvalRecommendation>, reason: string): void {
-  for (const skill of ["first-tree-write", "first-tree-welcome"] as const) {
+  for (const skill of ["first-tree-write", "first-tree-seed", "first-tree-welcome"] as const) {
     addRecommendation(recommendations, {
       command: qualityCommand(skill),
       kind: "quality",
@@ -122,6 +125,16 @@ function addQualityRecommendations(recommendations: Map<string, EvalRecommendati
       suite: skill,
     });
   }
+}
+
+function addProviderRecommendations(recommendations: Map<string, EvalRecommendation>, reason: string): void {
+  addAllImplementedGateRecommendations(recommendations, reason);
+  addRecommendation(recommendations, {
+    command: periodicCommand("first-tree-read"),
+    kind: "periodic",
+    reason,
+    suite: "first-tree-read",
+  });
 }
 
 function matchingSkill(path: string): ShippedSkillName | null {
@@ -133,8 +146,34 @@ function matchingSkill(path: string): ShippedSkillName | null {
   return null;
 }
 
+// A shipped skill that is intentionally outside the eval harness
+// (`UNEVALUATED_SHIPPED_SKILLS`). Returns the skill name so the selector can
+// emit an explicit "no eval by design" note instead of silently recommending
+// nothing, which would read the same as "forgot to wire up a suite".
+function intentionallyUnevaluatedSkill(path: string): string | null {
+  for (const skill of UNEVALUATED_SHIPPED_SKILLS) {
+    if (path.startsWith(`skills/${skill}/`)) return skill;
+  }
+  return null;
+}
+
 function isSkillEvalCorePath(path: string): boolean {
   return path.startsWith("packages/skill-evals/src/core/") || path === "packages/skill-evals/src/index.ts";
+}
+
+function periodicFrameworkSkill(path: string): ShippedSkillName | "all" | null {
+  if (
+    path === "packages/skill-evals/src/core/periodic.ts" ||
+    path.startsWith("packages/skill-evals/src/core/periodic/") ||
+    path.startsWith("packages/skill-evals/src/suites/periodic/")
+  ) {
+    return "all";
+  }
+  for (const skill of ["first-tree-read", "first-tree-write", "first-tree-seed", "first-tree-welcome"] as const) {
+    if (path === `packages/skill-evals/src/suites/${skill}/periodic.ts`) return skill;
+    if (path.startsWith(`packages/skill-evals/src/suites/${skill}/periodic/`)) return skill;
+  }
+  return null;
 }
 
 function isSkillEvalCliOrSchemaPath(path: string): boolean {
@@ -160,9 +199,33 @@ export function selectSkillEvalRecommendations(
   const notes: string[] = [];
 
   for (const path of changedFiles) {
+    const unevaluatedSkill = intentionallyUnevaluatedSkill(path);
+    if (unevaluatedSkill !== null) {
+      notes.push(
+        `${path} belongs to ${unevaluatedSkill}, a shipped skill intentionally outside skill-evals (see UNEVALUATED_SHIPPED_SKILLS); no eval selected.`,
+      );
+      continue;
+    }
+
+    const periodicSkill = periodicFrameworkSkill(path);
+    if (periodicSkill !== null) {
+      addRecommendation(recommendations, {
+        command: periodicCommand(periodicSkill === "all" ? null : periodicSkill),
+        kind: "periodic",
+        reason: `${path} touches periodic eval framework`,
+        suite: periodicSkill,
+      });
+      continue;
+    }
+
     const skill = matchingSkill(path);
     if (skill !== null) {
       addSuiteRecommendations(recommendations, skill, `${path} touches ${skill}`);
+      continue;
+    }
+
+    if (path.startsWith("packages/skill-evals/src/core/provider/")) {
+      addProviderRecommendations(recommendations, `${path} touches tested-agent provider infrastructure`);
       continue;
     }
 
@@ -198,7 +261,7 @@ export function selectSkillEvalRecommendations(
   if (changedFiles.length === 0) {
     notes.push("No changed files were provided; no skill eval runs selected.");
   }
-  if (recommendations.size === 0 && changedFiles.length > 0) {
+  if (recommendations.size === 0 && changedFiles.length > 0 && notes.length === 0) {
     notes.push("No skill-eval-related changes were detected.");
   }
 

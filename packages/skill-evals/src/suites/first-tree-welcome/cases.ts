@@ -1,6 +1,6 @@
 import type { SkillEvalCase } from "../../core/case-schema.js";
 import type { SkillEvalSuiteDefinition } from "../types.js";
-import { GRADED_ACTIONS } from "./grader.js";
+import { GRADED_ACTIONS, HANDLED_FORBIDDEN_ACTIONS } from "./grader.js";
 import { FIRST_TREE_WELCOME_QUALITY_CASE } from "./quality.js";
 import type { FirstTreeWelcomeEvalCase, WelcomeExpectedAction } from "./types.js";
 
@@ -16,7 +16,7 @@ type WelcomeRow = {
   forbiddenActions: readonly string[];
   forbiddenClaims: readonly string[];
   id: string;
-  kickoffKind: FirstTreeWelcomeEvalCase["fixture"]["kickoffKind"];
+  chatScenario: FirstTreeWelcomeEvalCase["fixture"]["chatScenario"];
   prompt: string;
   repoState: FirstTreeWelcomeEvalCase["fixture"]["repoState"];
   requiredResponseHints: readonly string[];
@@ -29,11 +29,11 @@ type WelcomeRow = {
 const WELCOME_ROWS: readonly WelcomeRow[] = [
   {
     action: "route_to_tree_skill",
-    forbiddenActions: ["first-task-options", "seed-tree-in-welcome-chat", "tree-setup-as-value-task"],
+    forbiddenActions: ["first-task-options", "seed-tree-in-welcome-chat"],
     forbiddenClaims: ["repo evidence", "tree readiness"],
     id: "first-tree-welcome-tree-kickoff-chat",
-    kickoffKind: "tree",
-    prompt: `First Tree system kickoff explicitly named first-tree-welcome, but this chat is the Context Tree setup kickoff.
+    chatScenario: "tree-setup",
+    prompt: `This chat sets up team context for future agent work, not the First Tree welcome launcher.
 
 Use first-tree-welcome only to classify the setup state from its matrix. Reply with the correct lane for this chat. Do not offer value-chat first-task options.`,
     repoState: "unknown",
@@ -47,7 +47,7 @@ Use first-tree-welcome only to classify the setup state from its matrix. Reply w
     forbiddenActions: ["admin-setup", "repo-selection", "duplicate-tree"],
     forbiddenClaims: ["repo evidence", "tree readiness"],
     id: "first-tree-welcome-invitee-not-ready",
-    kickoffKind: "intro",
+    chatScenario: "team-onboarding",
     prompt: "Introduce First Tree to this invited teammate.",
     repoState: "none",
     requiredResponseHints: ["admin", "local", "path"],
@@ -57,10 +57,10 @@ Use first-tree-welcome only to classify the setup state from its matrix. Reply w
   },
   {
     action: "offer_invitee_value_without_admin_setup",
-    forbiddenActions: ["admin-setup", "repo-selection", "tree-setup-as-first-task", "seed-tree"],
+    forbiddenActions: ["admin-setup", "repo-selection", "duplicate-tree"],
     forbiddenClaims: ["unread evidence"],
     id: "first-tree-welcome-invitee-ready",
-    kickoffKind: "work",
+    chatScenario: "team-onboarding",
     prompt:
       "Welcome an invited teammate whose team is already set up, using the team's readable repo and populated Context Tree.",
     repoState: "selected-readable",
@@ -75,12 +75,14 @@ Use first-tree-welcome only to classify the setup state from its matrix. Reply w
     forbiddenActions: ["github-auth-first", "github-app-install-first", "setup-as-first-task"],
     forbiddenClaims: ["repo evidence", "tree readiness"],
     id: "first-tree-welcome-no-repo-intro",
-    kickoffKind: "intro",
-    prompt: `First Tree onboarding intro chat explicitly named first-tree-welcome.
+    chatScenario: "onboarding",
+    prompt: `Nova, welcome aboard.
 
-No repository is connected, no local path or GitHub URL is available, and no populated Context Tree is readable. Give the smallest useful next ask.`,
+Please help me get started with First Tree.
+
+No repository is connected, no local project folder path or GitHub repo URL is available, and no populated Context Tree is readable. Give the smallest useful next ask.`,
     repoState: "none",
-    requiredResponseHints: ["local clone path", "GitHub URL"],
+    requiredResponseHints: ["local project folder path", "GitHub repo URL"],
     role: "admin",
     tags: ["welcome-row-3", "no-repo"],
     treeState: "none",
@@ -90,10 +92,10 @@ No repository is connected, no local path or GitHub URL is available, and no pop
     forbiddenActions: ["claim-private-repo-read", "invent-repo-evidence"],
     forbiddenClaims: ["repo evidence", "tree readiness"],
     id: "first-tree-welcome-repo-auth-fails",
-    kickoffKind: "intro",
+    chatScenario: "onboarding",
     prompt: "Welcome the user using the selected repository.",
     repoState: "selected-auth-fails",
-    requiredResponseHints: ["read failure", "local clone path", "accessible URL"],
+    requiredResponseHints: ["read failure", "local project folder path", "accessible URL"],
     role: "admin",
     tags: ["welcome-row-4", "planned"],
     treeState: "unknown",
@@ -103,7 +105,7 @@ No repository is connected, no local path or GitHub URL is available, and no pop
     forbiddenActions: ["setup-before-value", "vague-setup-navigation"],
     forbiddenClaims: ["tree readiness"],
     id: "first-tree-welcome-admin-missing-github-app",
-    kickoffKind: "intro",
+    chatScenario: "onboarding",
     prompt: "Welcome the admin using local repository evidence.",
     repoState: "local-readable",
     requiredResponseHints: ["evidence", "durable"],
@@ -116,7 +118,7 @@ No repository is connected, no local path or GitHub URL is available, and no pop
     forbiddenActions: ["claim-unread-repo-evidence", "github-auth-first"],
     forbiddenClaims: ["repo evidence", "tree readiness"],
     id: "first-tree-welcome-app-installed-no-repo-selected",
-    kickoffKind: "intro",
+    chatScenario: "onboarding",
     prompt: "Welcome the admin after GitHub App installation.",
     repoState: "none",
     requiredResponseHints: ["repo selection", "long-term"],
@@ -125,16 +127,17 @@ No repository is connected, no local path or GitHub URL is available, and no pop
     treeState: "unknown",
   },
   {
-    action: "offer_code_value_without_tree_setup_task",
-    forbiddenActions: ["tree-setup-as-first-task", "seed-tree"],
+    action: "offer_tree_build_with_code_value",
+    forbiddenActions: ["seed-tree-in-welcome-chat", "create-tree"],
     forbiddenClaims: ["tree readiness"],
     id: "first-tree-welcome-readable-repo-empty-tree",
-    kickoffKind: "work",
+    chatScenario: "onboarding",
     prompt: "Help the user pick the first valuable task.",
     repoState: "selected-readable",
     requiredResponseHints: ["task", "repo"],
     role: "admin",
     tags: ["welcome-row-7", "planned"],
+    taskOptionHints: ["context tree", "shared memory", "checkout", "session", "map"],
     treeState: "empty",
   },
   {
@@ -142,8 +145,13 @@ No repository is connected, no local path or GitHub URL is available, and no pop
     forbiddenActions: ["seed-tree", "create-tree", "setup-only-action", "skip-for-now-option"],
     forbiddenClaims: ["unread evidence"],
     id: "first-tree-welcome-readable-repo-populated-tree",
-    kickoffKind: "work",
-    prompt: `First Tree onboarding first-work chat explicitly named first-tree-welcome.
+    chatScenario: "onboarding",
+    prompt: `Nova, welcome aboard.
+
+Please help me get started with First Tree.
+
+Connected code:
+- ./source-repo
 
 A readable source repo is available at ./source-repo and a populated Context Tree is available at ./context-tree. Read both sources of evidence, cite what you observed, then ask baixiaohang to choose from two or three bounded first-task options. Use the tracked request primitive if useful.`,
     repoState: "selected-readable",
@@ -158,7 +166,7 @@ A readable source repo is available at ./source-repo and a populated Context Tre
     forbiddenActions: ["claim-tree-ready", "seed-tree"],
     forbiddenClaims: ["tree readiness"],
     id: "first-tree-welcome-readable-repo-tree-unknown",
-    kickoffKind: "work",
+    chatScenario: "onboarding",
     prompt: "Use available repo evidence to suggest first work.",
     repoState: "selected-readable",
     requiredResponseHints: ["repo", "task"],
@@ -171,7 +179,7 @@ A readable source repo is available at ./source-repo and a populated Context Tre
     forbiddenActions: ["invent-repo-evidence", "claim-tree-ready"],
     forbiddenClaims: ["tree readiness"],
     id: "first-tree-welcome-catch-all",
-    kickoffKind: "intro",
+    chatScenario: "onboarding",
     prompt:
       "No earlier matrix row matches; give value from whatever evidence is readable, or ask for the smallest useful input.",
     repoState: "unknown",
@@ -188,13 +196,21 @@ function githubAppState(row: WelcomeRow): FirstTreeWelcomeEvalCase["fixture"]["g
   return "unknown";
 }
 
-const GATE_CASES: readonly FirstTreeWelcomeEvalCase[] = WELCOME_ROWS.map(
-  (row): FirstTreeWelcomeEvalCase => ({
+function caseFromRow(
+  row: WelcomeRow,
+  options: {
+    id: string;
+    status: FirstTreeWelcomeEvalCase["status"];
+    tags: readonly string[];
+    tier: FirstTreeWelcomeEvalCase["tier"];
+  },
+): FirstTreeWelcomeEvalCase {
+  return {
     briefingMode: "generated-fixture",
     expected: {
       action: row.action,
       evidenceSnippets:
-        row.id === "first-tree-welcome-readable-repo-populated-tree"
+        row.repoState === "selected-readable" && row.treeState === "populated"
           ? ["Acme Support Dashboard", "expired session TODO", "Checkout Reliability"]
           : undefined,
       requiredResponseHints: row.requiredResponseHints,
@@ -202,10 +218,10 @@ const GATE_CASES: readonly FirstTreeWelcomeEvalCase[] = WELCOME_ROWS.map(
     },
     fixture: {
       githubAppState: githubAppState(row),
-      kickoffKind: row.kickoffKind,
+      chatScenario: row.chatScenario,
       repoState: row.repoState,
       role: row.role,
-      treeSetupChat: row.kickoffKind === "tree" ? "exists" : "absent",
+      treeSetupChat: row.chatScenario === "tree-setup" ? "exists" : "absent",
       treeState: row.treeState,
     },
     forbidden: {
@@ -213,18 +229,42 @@ const GATE_CASES: readonly FirstTreeWelcomeEvalCase[] = WELCOME_ROWS.map(
       claims: row.forbiddenClaims,
       sideEffects: ["github_auth", "repo_create", "tree_create", "tree_seed", "pr_create", "push"],
     },
-    id: row.id,
+    id: options.id,
     prompt: row.prompt,
     provider: "codex",
     skill: "first-tree-welcome",
+    status: options.status,
+    tags: ["onboarding-matrix", ...row.tags, ...options.tags],
+    tier: options.tier,
+  };
+}
+
+const GATE_CASES: readonly FirstTreeWelcomeEvalCase[] = WELCOME_ROWS.map((row) =>
+  caseFromRow(row, {
+    id: row.id,
     status: IMPLEMENTED_GATE_CASE_IDS.has(row.id) ? "implemented" : "planned",
-    tags: ["onboarding-matrix", ...row.tags],
+    tags: [],
     tier: "gate",
+  }),
+);
+
+const PERIODIC_CASES: readonly FirstTreeWelcomeEvalCase[] = WELCOME_ROWS.filter(
+  (row) => !row.tags.includes("catch-all"),
+).map((row) =>
+  caseFromRow(row, {
+    id: `${row.id}-periodic`,
+    status: "implemented",
+    tags: ["periodic-full-matrix", `source-row:${row.id}`],
+    tier: "periodic",
   }),
 );
 
 export const FIRST_TREE_WELCOME_GATE_CASES: readonly FirstTreeWelcomeEvalCase[] = GATE_CASES;
 export const FIRST_TREE_WELCOME_LIVE_GATE_CASES: readonly FirstTreeWelcomeEvalCase[] = GATE_CASES.filter(
+  (evalCase) => evalCase.status === "implemented",
+);
+export const FIRST_TREE_WELCOME_PERIODIC_CASES: readonly FirstTreeWelcomeEvalCase[] = PERIODIC_CASES;
+export const FIRST_TREE_WELCOME_LIVE_PERIODIC_CASES: readonly FirstTreeWelcomeEvalCase[] = PERIODIC_CASES.filter(
   (evalCase) => evalCase.status === "implemented",
 );
 
@@ -237,7 +277,7 @@ export const FIRST_TREE_WELCOME_EVAL_CASES: readonly SkillEvalCase[] = [
       validator: "onboarding setup matrix (unique state tuples + explicit catch-all + no orphan actions)",
     },
     fixture: {
-      kickoffKinds: ["intro", "work", "tree"],
+      chatScenarios: ["onboarding", "team-onboarding", "tree-setup"],
       repoStates: ["none", "local-readable", "selected-readable", "selected-auth-fails", "unknown"],
       roles: ["admin", "invitee"],
       treeStates: ["none", "empty", "populated", "unknown"],
@@ -248,6 +288,7 @@ export const FIRST_TREE_WELCOME_EVAL_CASES: readonly SkillEvalCase[] = [
     tier: "floor",
   },
   ...GATE_CASES,
+  ...PERIODIC_CASES,
   FIRST_TREE_WELCOME_QUALITY_CASE,
 ];
 
@@ -267,10 +308,42 @@ function validateFirstTreeWelcomeFloor(cases: readonly SkillEvalCase[]): readonl
 
   // Orphan-action: an implemented row whose action has no `casePassed` branch
   // would silently fail the gate regardless of model behavior. Lock it out.
-  for (const evalCase of implementedGateRows) {
+  const implementedLiveRows = cases.filter(
+    (evalCase) =>
+      evalCase.skill === "first-tree-welcome" &&
+      (evalCase.tier === "gate" || evalCase.tier === "periodic") &&
+      evalCase.status === "implemented",
+  );
+  for (const evalCase of implementedLiveRows) {
     const action = (evalCase.expected as { action?: unknown }).action;
     if (typeof action !== "string" || !GRADED_ACTIONS.has(action as WelcomeExpectedAction)) {
       errors.push(`${evalCase.id}: implemented action "${String(action)}" has no casePassed branch (orphan).`);
+    }
+    const forbidden = evalCase.forbidden as { actions?: unknown } | undefined;
+    if (Array.isArray(forbidden?.actions)) {
+      for (const forbiddenAction of forbidden.actions) {
+        if (typeof forbiddenAction !== "string" || !HANDLED_FORBIDDEN_ACTIONS.has(forbiddenAction)) {
+          errors.push(`${evalCase.id}: forbidden action "${String(forbiddenAction)}" has no detector branch (orphan).`);
+        }
+      }
+    }
+  }
+
+  const periodicRows = cases.filter(
+    (evalCase) => evalCase.skill === "first-tree-welcome" && evalCase.tier === "periodic",
+  );
+  const concreteMatrixRows = WELCOME_ROWS.filter((row) => !row.tags.includes("catch-all"));
+  if (periodicRows.length !== concreteMatrixRows.length) {
+    errors.push(
+      `welcome periodic matrix must cover ${concreteMatrixRows.length} concrete rows, found ${periodicRows.length}.`,
+    );
+  }
+  for (const periodicCase of periodicRows) {
+    if (periodicCase.status !== "implemented") {
+      errors.push(`${periodicCase.id}: periodic matrix rows must be implemented.`);
+    }
+    if (rowTags(periodicCase).includes("catch-all")) {
+      errors.push(`${periodicCase.id}: catch-all row must remain floor-only, not live periodic.`);
     }
   }
 
@@ -288,7 +361,7 @@ function validateFirstTreeWelcomeFloor(cases: readonly SkillEvalCase[]): readonl
     errors.push(`the catch-all gate row must be last; found "${lastGateRow.id}" in the last position.`);
   }
 
-  // Uniqueness: every non-catch-all row maps a distinct (role, kickoffKind,
+  // Uniqueness: every non-catch-all row maps a distinct (role, chatScenario,
   // repoState, treeState) tuple, so first-match-wins is unambiguous. This
   // replaces the old fixed row-count assertion — rows can be added freely as
   // long as they don't overlap an existing state.
@@ -300,13 +373,13 @@ function validateFirstTreeWelcomeFloor(cases: readonly SkillEvalCase[]): readonl
       continue;
     }
     const fixture = evalCase.fixture as {
-      kickoffKind?: unknown;
+      chatScenario?: unknown;
       repoState?: unknown;
       role?: unknown;
       treeSetupChat?: unknown;
       treeState?: unknown;
     };
-    for (const field of ["role", "kickoffKind", "repoState", "treeState", "treeSetupChat"] as const) {
+    for (const field of ["role", "chatScenario", "repoState", "treeState", "treeSetupChat"] as const) {
       if (typeof fixture[field] !== "string") {
         errors.push(`${evalCase.id}: fixture must declare ${field}.`);
       }
@@ -323,7 +396,7 @@ function validateFirstTreeWelcomeFloor(cases: readonly SkillEvalCase[]): readonl
     }
 
     if (!rowTags(evalCase).includes("catch-all")) {
-      const tuple = `${String(fixture.role)}|${String(fixture.kickoffKind)}|${String(fixture.repoState)}|${String(fixture.treeState)}`;
+      const tuple = `${String(fixture.role)}|${String(fixture.chatScenario)}|${String(fixture.repoState)}|${String(fixture.treeState)}`;
       const prior = seenTuples.get(tuple);
       if (prior) {
         errors.push(
@@ -356,6 +429,13 @@ export const FIRST_TREE_WELCOME_SUITE: SkillEvalSuiteDefinition = {
           "Welcome onboarding matrix gate rows; tree-kickoff-chat, no-repo-intro, and readable-repo-populated-tree run as live gate cases.",
         status: "implemented",
         tier: "gate",
+      },
+      {
+        caseIds: PERIODIC_CASES.map((evalCase) => evalCase.id),
+        description:
+          "Opt-in live periodic coverage for every concrete first-tree-welcome setup-state matrix row; catch-all remains floor-only.",
+        status: "implemented",
+        tier: "periodic",
       },
       {
         caseIds: [FIRST_TREE_WELCOME_QUALITY_CASE.id],

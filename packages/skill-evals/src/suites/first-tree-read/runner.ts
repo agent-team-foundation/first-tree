@@ -1,11 +1,11 @@
 import { appendEvent, readEvents } from "../../core/events.js";
 import { deriveRunObservability } from "../../core/observability.js";
 import { createRunPaths } from "../../core/paths.js";
-import { runCodexProvider } from "../../core/provider/codex.js";
+import { runAgentProvider } from "../../core/provider/index.js";
 import { createEvalReporter } from "../../core/reporter.js";
 import { createFirstTreeShim } from "../../core/shims/first-tree.js";
 import { setupFixture, validateFixture } from "./fixture.js";
-import { casePassed, deriveMetrics, fixtureOnlyPassed } from "./metrics.js";
+import { casePassed, deriveMetrics } from "./metrics.js";
 import { buildGrading, driftNote, writeCaseSummaries } from "./summary.js";
 import type { CaseRunSummary, CliOptions, FirstTreeReadEvalCase } from "./types.js";
 
@@ -28,23 +28,22 @@ export async function runFirstTreeReadCase(
   createFirstTreeShim(paths);
   const contextTreePath = setupFixture(evalCase, paths, reporter);
   const fixtureValidation = validateFixture(paths, contextTreePath, evalCase.id, options.verbose, reporter);
-  const runnerExitCode = options.validateFixtures
-    ? 0
-    : await runCodexProvider(
-        {
-          bin: options.codexBin,
-          caseId: evalCase.id,
-          model: options.model,
-          prompt: evalCase.prompt,
-          verbose: options.verbose,
-        },
-        { paths, reporter },
-      );
+  const runnerResult = await runAgentProvider(
+    {
+      caseId: evalCase.id,
+      claudeBin: options.claudeBin,
+      codexBin: options.codexBin,
+      model: options.model,
+      prompt: evalCase.prompt,
+      provider: options.provider,
+      verbose: options.verbose,
+    },
+    { paths, reporter },
+  );
+  const runnerExitCode = runnerResult.exitCode;
   const events = readEvents(paths.eventsPath);
   const metrics = deriveMetrics(events, fixtureValidation, runnerExitCode, evalCase.expectedFacts);
-  const passed = options.validateFixtures
-    ? fixtureOnlyPassed(fixtureValidation)
-    : casePassed(evalCase.expectedTrigger, metrics);
+  const passed = casePassed(evalCase.expectedTrigger, metrics);
   const grading = buildGrading(evalCase.id, metrics, evalCase.expectedTrigger, passed);
   const observability = deriveRunObservability(events);
 

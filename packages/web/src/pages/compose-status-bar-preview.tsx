@@ -107,8 +107,9 @@ const VARIANTS: Variant[] = [
     ],
   },
   {
-    name: "working · long goal (truncates)",
-    subtitle: "goal truncates first; name, tool, and ticker always survive",
+    name: "working · long goal, clipped by width (offers expand)",
+    subtitle:
+      "no server turnTextFull, but the goal is clipped by the rail width → the ⇕ appears and clicking anywhere on the row shows the full line",
     chatId: "v-long",
     agents: [DEV],
     statuses: [
@@ -119,6 +120,23 @@ const VARIANTS: Variant[] = [
         turnText:
           "Investigating why the assistant-text narration was burying the live tool action on the rail, then flipping the priority so the goal leads and the tool trails, and finally width-capping the goal so it never crowds out the ticker",
         startedAt: ago(48),
+      }),
+    ],
+  },
+  {
+    name: "working · long multi-line goal (expand card)",
+    subtitle: "server sent turnTextFull; click anywhere on the row (⇕) opens the full multi-line card (click to test)",
+    chatId: "v-expand",
+    agents: [DEV],
+    statuses: [
+      working("agent-dev", {
+        kind: "tool_call",
+        label: "Bash",
+        detail: "pnpm typecheck",
+        turnText: "Reworking the compose status bar so a long narration can expand to its full multi-line form",
+        turnTextFull:
+          "Reworking the compose status bar so a long narration can expand to its full multi-line form.\n\nPlan:\n1. Server derives a newline-preserving turnTextFull (capped at 2000), only when it carries more than the one-line goal.\n2. The rail keeps its single line; a dedicated ⌃ chevron opens a floating card.\n3. The card floats over the stream (absolute, out of flow) so the live ~1s refresh never reflows the conversation.",
+        startedAt: ago(23),
       }),
     ],
   },

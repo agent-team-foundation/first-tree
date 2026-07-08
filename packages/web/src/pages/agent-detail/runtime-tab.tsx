@@ -4,7 +4,7 @@ import { EnvSection } from "./env-section.js";
 import { useAgentDetailContext } from "./layout-context.js";
 import { ModelSection } from "./model-section.js";
 import { ReasoningEffortSection } from "./reasoning-effort-section.js";
-import { RuntimeSection } from "./runtime-section.js";
+import { RuntimeSection, RuntimeSwitchRecoveryNotice } from "./runtime-section.js";
 import { titleWithSemantics } from "./save-semantics.js";
 
 export function RuntimeTab() {
@@ -19,6 +19,10 @@ export function RuntimeTab() {
   // Edits disable while a save is in flight, so the next PATCH always sees the
   // version the previous one wrote back — no self-conflicting 409 on rapid edits.
   const editsDisabled = ctx.agent.status !== "active" || configSave.pending;
+  const canSwitchRuntime =
+    !ctx.runtimeSwitchClaim &&
+    ((!!ctx.clientStatus?.clientId && ctx.agent.status === "active") ||
+      (ctx.isUnclaimed && ctx.agent.status === "suspended"));
   const modelSettingsSaved =
     configSave.justSaved && (configSave.savedField === "model" || configSave.savedField === "effort");
   const envSaved = configSave.justSaved && configSave.savedField === "env";
@@ -41,6 +45,16 @@ export function RuntimeTab() {
           immediately. */}
       {config && (
         <div>
+          {ctx.runtimeSwitchClaim && (
+            <div style={{ marginBottom: "var(--sp-5)" }}>
+              <RuntimeSwitchRecoveryNotice
+                claim={ctx.runtimeSwitchClaim}
+                pending={ctx.runtimeSwitchRecoveryPending}
+                error={ctx.runtimeSwitchRecoveryError}
+                onRecover={ctx.onRecoverRuntimeSwitch}
+              />
+            </div>
+          )}
           <RuntimeSection
             runtimeProvider={ctx.setupRuntimeProvider}
             computerLabel={ctx.boundClientLabel}
@@ -49,6 +63,9 @@ export function RuntimeTab() {
             canBindComputer={ctx.isUnclaimed && ctx.agent.status === "active"}
             bindComputerPending={ctx.bindClientPending}
             onBindComputer={ctx.onOpenBindDialog}
+            canSwitchRuntime={canSwitchRuntime}
+            runtimeSwitchPending={ctx.runtimeSwitchPending}
+            onSwitchRuntime={ctx.onOpenRuntimeSwitchDialog}
           />
         </div>
       )}

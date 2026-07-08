@@ -40,4 +40,16 @@ describe("safeRedirectPath", () => {
     const long = `/${"a".repeat(300)}`;
     expect(safeRedirectPath(long)).toBe("/");
   });
+
+  it("preserves a quickstart campaign handoff only when the repo is percent-encoded", () => {
+    // The login round-trip carries the post-login destination through `next`,
+    // which must pass this guard. A campaign CTA therefore MUST percent-encode
+    // the repo URL: a raw `https://…` contains `:` and `//`, which the guard
+    // rejects (silently dropping the funnel to `/`); the encoded form survives.
+    const encoded = `/quickstart?campaign=production-scan&repo=${encodeURIComponent("https://github.com/acme/backend")}`;
+    expect(safeRedirectPath(encoded)).toBe(encoded);
+    expect(safeRedirectPath("/quickstart?campaign=production-scan&repo=https://github.com/acme/backend")).toBe(
+      DEFAULT_SAFE_REDIRECT,
+    );
+  });
 });

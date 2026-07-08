@@ -178,7 +178,7 @@ that changed.
 | Old | New | Notes |
 | --- | --- | --- |
 | `first-tree connect <token>` | `first-tree login <token>` | `--no-service` renamed to `--no-start`. |
-| `first-tree client claim --confirm` | (removed) | There is no longer a client ownership transfer command. To switch this machine to another account, run `first-tree logout --purge`, then `first-tree login <token>`. The purge removes only local state; the previous account's server-side client entry and pinned agents stay on the server until that account removes them. |
+| `first-tree client claim --confirm` | (removed) | There is no longer a client ownership transfer command. To switch this machine to another account, run `first-tree login <token>` with the new account and confirm the local-client switch. `logout --purge` retires the current server client before deleting local state and is not the normal account-switch path. |
 | `first-tree update [--check] [--no-restart]` | `first-tree upgrade [--check] [--no-restart]` | Flags unchanged. |
 | `first-tree client start` | `first-tree daemon start` | `daemon start` is **fail-closed** when no credentials exist — it exits 1 with a `NO_CREDENTIALS` error pointing at `login` instead of dropping into the interactive prompt path the old `client start` had. |
 | `first-tree client stop` | `first-tree daemon stop` | — |
@@ -189,7 +189,7 @@ that changed.
 | `first-tree client list` | (removed) | The web console's *Computers* tab is now the canonical surface. |
 | `first-tree client disconnect <clientId>` | (removed) | Same — *Computers* tab → Disconnect. |
 | `first-tree onboard [...]` | (sequence: `login` + `agent create` + optional `agent bind bot|user` + `daemon start`) | Each verb fails / recovers independently. See `docs/onboarding-guide.md` for the full sequence. |
-| New: `first-tree logout [--purge]` | — | Symmetric to `login`. Stops the daemon + deletes `credentials.json`. `--purge` also deletes `client.yaml`, local agent configs, agent workspaces, and session state. |
+| New: `first-tree logout [--purge]` | — | Symmetric to `login`. Stops the daemon + deletes `credentials.json`, including live `daemon start --foreground` runtimes for the active client. `--purge` first retires the current server client, suspending/unpinning agents routed through that client; those agents can later be moved to a connected computer/runtime from Web. It then deletes `client.yaml`, local agent configs, agent workspaces, and session state. |
 | New placeholder: `first-tree tree` | — | Visible in `--help` with description `"(Phase 3 — not yet implemented)"`. Wired in Phase 3 T3.1. |
 | New placeholder: `first-tree github` | — | Same. |
 

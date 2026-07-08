@@ -48,4 +48,19 @@ describe("NoChatView", () => {
 
     await act(async () => root.unmount());
   });
+
+  it("hides the New chat CTA on the trial surface (no escape hatch)", async () => {
+    const onNewChat = vi.fn();
+    const { NoChatView } = await import("../no-chat-view.js");
+    const { container, root } = await renderDom(<NoChatView onNewChat={onNewChat} isTrial />);
+
+    expect(container.textContent).toContain("No chat selected");
+    // The create-chat affordance and its copy are gone; a calm pointer replaces them.
+    expect([...container.querySelectorAll("button")].some((b) => b.textContent?.includes("New chat"))).toBe(false);
+    expect(container.textContent).not.toContain("Start a new chat");
+    expect(container.textContent).not.toContain("from the list");
+    expect(container.textContent).toContain("Set up First Tree");
+
+    await act(async () => root.unmount());
+  });
 });

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SkillEvalCase } from "../../../core/case-schema.js";
 import { FIRST_TREE_WELCOME_SUITE } from "../cases.js";
@@ -13,6 +15,7 @@ if (!validateFloor) {
   throw new Error("first-tree-welcome suite must define validateFloor");
 }
 const cases = FIRST_TREE_WELCOME_SUITE.cases;
+const skillMarkdown = readFileSync(join(process.cwd(), "../../skills/first-tree-welcome/SKILL.md"), "utf8");
 
 function hasTag(evalCase: SkillEvalCase, tag: string): boolean {
   const tags = (evalCase as { tags?: readonly string[] }).tags;
@@ -22,6 +25,14 @@ function hasTag(evalCase: SkillEvalCase, tag: string): boolean {
 describe("first-tree-welcome floor invariants", () => {
   it("accepts the shipped matrix with no errors", () => {
     expect(validateFloor(cases)).toEqual([]);
+  });
+
+  it("implements periodic coverage for every concrete non-catch-all matrix row", () => {
+    const periodicCases = cases.filter((evalCase) => evalCase.tier === "periodic");
+
+    expect(periodicCases).toHaveLength(10);
+    expect(periodicCases.every((evalCase) => evalCase.status === "implemented")).toBe(true);
+    expect(periodicCases.some((evalCase) => hasTag(evalCase, "catch-all"))).toBe(false);
   });
 
   it("flags an implemented row whose action has no casePassed branch (orphan)", () => {
@@ -34,6 +45,29 @@ describe("first-tree-welcome floor invariants", () => {
           : evalCase,
     );
     expect(validateFloor(broken).some((error) => error.includes("orphan"))).toBe(true);
+  });
+
+  it("flags an implemented periodic row whose action has no casePassed branch (orphan)", () => {
+    const broken = cases.map(
+      (evalCase): SkillEvalCase =>
+        evalCase.tier === "periodic" && evalCase.status === "implemented"
+          ? { ...evalCase, expected: { ...(evalCase.expected as Record<string, unknown>), action: "made_up_action" } }
+          : evalCase,
+    );
+    expect(validateFloor(broken).some((error) => error.includes("orphan"))).toBe(true);
+  });
+
+  it("flags an implemented row whose forbidden action has no detector branch (orphan)", () => {
+    const broken = cases.map(
+      (evalCase): SkillEvalCase =>
+        evalCase.tier === "periodic" && evalCase.status === "implemented"
+          ? {
+              ...evalCase,
+              forbidden: { ...(evalCase.forbidden as Record<string, unknown>), actions: ["made-up-risk"] },
+            }
+          : evalCase,
+    );
+    expect(validateFloor(broken).some((error) => error.includes("forbidden action"))).toBe(true);
   });
 
   it("flags two non-catch-all rows that claim the same state tuple", () => {
@@ -61,11 +95,75 @@ describe("first-tree-welcome floor invariants", () => {
       fixture: {
         ...(sample.fixture as Record<string, unknown>),
         role: "invitee",
-        kickoffKind: "tree",
+        chatScenario: "tree-setup",
         repoState: "local-readable",
         treeState: "empty",
       },
     };
     expect(validateFloor([...cases, trailing]).some((error) => error.includes("must be last"))).toBe(true);
+  });
+
+  it("keeps onboarding attribution and no-project first reply guidance aligned with the product flow", () => {
+    const description = skillMarkdown.match(/^description:\s*(.*)$/m)?.[1] ?? "";
+
+    expect(description).not.toContain("local project folder path");
+    expect(skillMarkdown).toContain("Treat the opening message as the user's onboarding request.");
+    expect(skillMarkdown).toContain("local project folder path");
+    expect(skillMarkdown).toContain("GitHub repo URL");
+    expect(skillMarkdown).not.toContain("First Tree sent it");
+  });
+
+  it("keeps the skill's example trigger phrases in sync with the real onboarding bootstraps", () => {
+    // Skill activation now rests entirely on the visible message matching the
+    // skill description (no hidden directive — see the onboarding kickoff
+    // contract). The skill hard-codes the product's kickoff openers as its
+    // activation examples, so bind them to the real copy: a reword in
+    // bootstrap-prose.ts must not silently drift the skill's trigger examples
+    // and weaken selection.
+    const bootstrapProse = readFileSync(
+      join(process.cwd(), "../web/src/pages/workspace/center/onboarding/bootstrap-prose.ts"),
+      "utf8",
+    );
+    const sharedOpeners = [
+      "welcome aboard",
+      "Please help me get started with First Tree",
+      "Please help me get settled into this team on First Tree",
+    ];
+    for (const opener of sharedOpeners) {
+      expect(skillMarkdown, `skill should reference the real kickoff opener: "${opener}"`).toContain(opener);
+      expect(bootstrapProse, `bootstrap-prose.ts should still ship the kickoff opener: "${opener}"`).toContain(opener);
+    }
+  });
+
+  it("keeps the OpenAI/Codex routing metadata description in sync with SKILL.md", () => {
+    // `skills/<name>/agents/openai.yaml` is a second shipped routing surface:
+    // the composer/runtime read it to select the skill on the OpenAI/Codex side.
+    // Since activation is description-driven (no hidden directive), a stale
+    // description here can still follow the retired explicit-name trigger and
+    // miss the repo-scan exclusion even when SKILL.md is correct. Bind the two
+    // so a copy reword cannot drift one surface without the other.
+    const openaiYaml = readFileSync(join(process.cwd(), "../../skills/first-tree-welcome/agents/openai.yaml"), "utf8");
+    const skillDescription = skillMarkdown.match(/^description:\s*(.*)$/m)?.[1] ?? "";
+    const yamlDescription = openaiYaml.match(/^description:\s*(.*)$/m)?.[1] ?? "";
+
+    expect(skillDescription, "SKILL.md must declare a description").not.toBe("");
+    expect(yamlDescription, "openai.yaml description must match SKILL.md description").toBe(skillDescription);
+    // Guard the specific retired trigger the drift-guard exists to catch.
+    expect(yamlDescription).not.toContain("explicitly names first-tree-welcome");
+    expect(yamlDescription).toContain("repo scans");
+  });
+
+  it("hardens both agent-briefing welcome skill-map rows with the scan / tree-setup exclusion", () => {
+    // agent-briefing.ts ships TWO `first-tree-welcome` "Load when" rows (the
+    // tree-less and tree-bound briefing variants) — routing hints the agent
+    // reads. If either omits the scan / tree-setup exclusion it can misroute a
+    // scan-first chat into the welcome launcher. Bind both so neither drifts back
+    // to an un-hardened hint.
+    const briefing = readFileSync(join(process.cwd(), "../client/src/runtime/agent-briefing.ts"), "utf8");
+    const hardenedRows = briefing.match(/first-tree-welcome.*not a repo scan or tree setup chat/g) ?? [];
+    expect(hardenedRows.length, "both welcome skill-map rows must carry the scan/tree-setup exclusion").toBe(2);
+    // The retired un-hardened hints must be gone.
+    expect(briefing).not.toContain("onboarding welcome / intro / value-first first chat");
+    expect(briefing).not.toContain("onboarding system messages ask for welcome");
   });
 });

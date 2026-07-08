@@ -1,0 +1,359 @@
+import { createHash, randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
+import { SignJWT } from "jose";
+import { describe, expect, it } from "vitest";
+import { connectCodes } from "../db/schema/connect-codes.js";
+import { members } from "../db/schema/members.js";
+import { users } from "../db/schema/users.js";
+import { createTestAdmin, createTestApp, useTestApp } from "./helpers.js";
+
+const TEST_JWT_SECRET = "test-jwt-secret-key-for-vitest";
+
+function hashConnectCode(code: string): string {
+  return createHash("sha256").update(code).digest("hex");
+}
+
+function expectShortConnectUrl(token: string): { url: URL; code: string } {
+  const url = new URL(token);
+  expect(url.protocol).toMatch(/^https?:$/);
+  const match = /^\/connect\/([A-Za-z0-9_-]+)$/.exec(url.pathname);
+  if (!match?.[1]) throw new Error(`expected short connect URL, got ${token}`);
+  expect(match[1].length).toBeGreaterThanOrEqual(20);
+  expect(match[1]).not.toContain(".");
+  return { url, code: match[1] };
+}
+
+async function signLegacyConnectJwt(userId: string): Promise<string> {
+  return new SignJWT({ sub: userId, type: "connect", iss: "http://first-tree.test" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setJti(randomUUID())
+    .setExpirationTime("10m")
+    .sign(new TextEncoder().encode(TEST_JWT_SECRET));
+}
+
+describe("POST /me/connect-tokens bootstrap method", () => {
+  describe("prod default", () => {
+    const getApp = useTestApp({ channel: "prod" });
+
+    it("returns npm bootstrap by default for published channels", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{
+        token: string;
+        command: string;
+        bootstrapCommand: string;
+        npmSpec: string | null;
+        installMethod: string;
+        installerUrl: string | null;
+        binName: string;
+      }>();
+      expect(body.binName).toBe("first-tree");
+      expect(body.npmSpec).toBe("first-tree");
+      expect(body.installMethod).toBe("npm");
+      expect(body.installerUrl).toBeNull();
+      expectShortConnectUrl(body.token);
+      expect(body.bootstrapCommand).toBe(`npm install -g first-tree\nfirst-tree login ${body.token}`);
+    });
+  });
+
+  describe("prod portable", () => {
+    const getApp = useTestApp({
+      channel: "prod",
+      connectBootstrap: {
+        method: "portable",
+        portableDownloadBaseUrl: "https://downloads.example.test/releases",
+      },
+    });
+
+    it("returns a token-free installer URL and a local login command", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{
+        token: string;
+        command: string;
+        bootstrapCommand: string;
+        npmSpec: string | null;
+        installMethod: string;
+        installerUrl: string | null;
+        binName: string;
+      }>();
+      expect(body.installMethod).toBe("portable");
+      expect(body.npmSpec).toBe("first-tree");
+      expectShortConnectUrl(body.token);
+      expect(body.installerUrl).toBe("https://downloads.example.test/releases/prod/install.sh");
+      expect(body.installerUrl).not.toContain(body.token);
+      expect(body.bootstrapCommand).toContain('tmp="$(mktemp "$' + '{TMPDIR:-/tmp}/first-tree-install.XXXXXX")"');
+      expect(body.bootstrapCommand).toContain(`trap 'rm -f "$tmp"' EXIT HUP INT TERM`);
+      expect(body.bootstrapCommand).toContain("curl -fsSL 'https://downloads.example.test/releases/prod/install.sh'");
+      expect(body.bootstrapCommand).toContain(
+        "FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL='https://downloads.example.test/releases' sh \"$tmp\"",
+      );
+      expect(body.bootstrapCommand).toContain(`"$HOME/.local/bin/first-tree" login '${body.token}'`);
+      expect(body.bootstrapCommand).toContain(" && \\");
+      expect(body.bootstrapCommand).not.toContain("/tmp/first-tree-install-first-tree.sh");
+      expect(body.bootstrapCommand).not.toContain(`${body.installerUrl}?token=`);
+    });
+  });
+
+  describe("dev source", () => {
+    const getApp = useTestApp({
+      channel: "dev",
+      connectBootstrap: {
+        method: "portable",
+        portableDownloadBaseUrl: "https://downloads.example.test/releases",
+      },
+    });
+
+    it("keeps dev source bootstrap even when portable mode is requested", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{
+        token: string;
+        command: string;
+        bootstrapCommand: string;
+        npmSpec: string | null;
+        installMethod: string;
+        installerUrl: string | null;
+      }>();
+      expect(body.installMethod).toBe("source");
+      expect(body.npmSpec).toBeNull();
+      expect(body.installerUrl).toBeNull();
+      expectShortConnectUrl(body.token);
+      expect(body.bootstrapCommand).toBe(`first-tree-dev login ${body.token}`);
+    });
+  });
+
+  describe("exchange", () => {
+    const getApp = useTestApp();
+
+    it("exchanges a short connect URL once", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const minted = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      const body = minted.json<{ token: string }>();
+      expectShortConnectUrl(body.token);
+
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/connect-token",
+        payload: { token: body.token },
+      });
+      expect(first.statusCode).toBe(200);
+      expect(first.json<{ accessToken: string; refreshToken: string }>()).toMatchObject({
+        accessToken: expect.any(String),
+        refreshToken: expect.any(String),
+      });
+
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/connect-token",
+        payload: { token: body.token },
+      });
+      expect(second.statusCode).toBe(401);
+      expect(second.json<{ error: string }>().error).toMatch(/Invalid or expired/);
+    });
+
+    it("stores only a hash of the short connect code", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const minted = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      const body = minted.json<{ token: string }>();
+      const { code } = expectShortConnectUrl(body.token);
+      const [row] = await app.db
+        .select()
+        .from(connectCodes)
+        .where(eq(connectCodes.codeHash, hashConnectCode(code)));
+
+      expect(row?.codeHash).toBe(hashConnectCode(code));
+      expect(row?.codeHash).not.toBe(code);
+      expect(row).not.toHaveProperty("code");
+    });
+
+    it("allows exactly one concurrent exchange for a short connect URL", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const minted = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      const body = minted.json<{ token: string }>();
+
+      const results = await Promise.all(
+        Array.from({ length: 4 }, () =>
+          app.inject({
+            method: "POST",
+            url: "/api/v1/auth/connect-token",
+            payload: { token: body.token },
+          }),
+        ),
+      );
+
+      expect(results.filter((res) => res.statusCode === 200)).toHaveLength(1);
+      expect(results.filter((res) => res.statusCode === 401)).toHaveLength(3);
+    });
+
+    it("exchanges a short connect URL after an app restart", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const minted = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      const body = minted.json<{ token: string }>();
+      const restarted = await createTestApp();
+      try {
+        const res = await restarted.inject({
+          method: "POST",
+          url: "/api/v1/auth/connect-token",
+          payload: { token: body.token },
+        });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json<{ accessToken: string; refreshToken: string }>()).toMatchObject({
+          accessToken: expect.any(String),
+          refreshToken: expect.any(String),
+        });
+      } finally {
+        await restarted.close();
+      }
+    });
+
+    it("rejects a short connect URL when the issuer is changed", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const minted = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      const body = minted.json<{ token: string }>();
+      const { code } = expectShortConnectUrl(body.token);
+      const retargeted = `https://staging.example.test/connect/${code}`;
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/connect-token",
+        payload: { token: retargeted },
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.json<{ error: string }>().error).toMatch(/Invalid or expired/);
+    });
+
+    it("rejects expired short connect URLs", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const minted = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      const body = minted.json<{ token: string }>();
+      const { code } = expectShortConnectUrl(body.token);
+      await app.db
+        .update(connectCodes)
+        .set({ expiresAt: new Date(Date.now() - 1000) })
+        .where(eq(connectCodes.codeHash, hashConnectCode(code)));
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/connect-token",
+        payload: { token: body.token },
+      });
+      expect(res.statusCode).toBe(401);
+      expect(res.json<{ error: string }>().error).toMatch(/Invalid or expired/);
+    });
+
+    it("rejects a short connect URL when the user was suspended after mint", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const minted = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      const body = minted.json<{ token: string }>();
+      await app.db.update(users).set({ status: "suspended" }).where(eq(users.id, admin.userId));
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/connect-token",
+        payload: { token: body.token },
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.json<{ error: string }>().error).toMatch(/suspended/);
+    });
+
+    it("rejects a short connect URL when all memberships were removed after mint", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const minted = await app.inject({
+        method: "POST",
+        url: "/api/v1/me/connect-tokens",
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      const body = minted.json<{ token: string }>();
+      await app.db.update(members).set({ status: "removed" }).where(eq(members.userId, admin.userId));
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/connect-token",
+        payload: { token: body.token },
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.json<{ error: string }>().error).toMatch(/No active membership/);
+    });
+
+    it("keeps accepting legacy JWT connect tokens during rollout", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app);
+      const token = await signLegacyConnectJwt(admin.userId);
+
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/connect-token",
+        payload: { token },
+      });
+      expect(first.statusCode).toBe(200);
+
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/v1/auth/connect-token",
+        payload: { token },
+      });
+      expect(second.statusCode).toBe(401);
+      expect(second.json<{ error: string }>().error).toMatch(/already been used/);
+    });
+  });
+});

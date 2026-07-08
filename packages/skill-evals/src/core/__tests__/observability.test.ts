@@ -56,4 +56,26 @@ describe("run observability", () => {
       turns: null,
     });
   });
+
+  it("derives first response latency from Claude provider start events", () => {
+    const observability = deriveRunObservability([
+      {
+        timestamp: "2026-06-29T01:00:00.000Z",
+        type: "claude_run_started",
+      },
+      {
+        event: {
+          content: "Claude response.",
+          type: "assistant_message",
+        },
+        timestamp: "2026-06-29T01:00:02.000Z",
+        type: "codex_event",
+      },
+    ]);
+
+    expect(observability).toEqual({
+      firstResponseLatencyMs: 2000,
+      turns: 1,
+    });
+  });
 });

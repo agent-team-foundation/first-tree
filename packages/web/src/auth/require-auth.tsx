@@ -1,5 +1,6 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
+import { isKnownCampaign } from "../pages/quickstart/campaigns.js";
 import { useAuth } from "./auth-context.js";
 
 /**
@@ -18,6 +19,38 @@ const LandingPage = lazy(() => import("../pages/landing/index.js").then((m) => (
  * even if the chunk takes a few hundred ms over slow 3G.
  */
 const LandingFallback = () => <div className="landing-marketing min-h-screen bg-background" />;
+
+/**
+ * The scan funnel's own login handoff. A logged-out visitor who arrives at
+ * `/quickstart?campaign=<known>&repo=...` is sent STRAIGHT to GitHub OAuth
+ * instead of the generic `/login` interstitial — that page is both an extra
+ * click and off-message ("Set up your team…") for someone who just clicked
+ * "scan my repo". Returns the OAuth `next` (the exact quickstart URL to come
+ * back to) when the skip applies, else `null` so normal `/login` routing runs.
+ *
+ * Only KNOWN campaigns skip: the server's `shouldPreserveSoloSignupNext`
+ * preserves the campaign `next` for the scan funnel, so an unknown campaign
+ * would OAuth then get dropped to `/` — better to keep those on `/login`.
+ * Exported for unit tests.
+ */
+export function scanCampaignOAuthNext(loc: { pathname: string; search: string }): string | null {
+  if (loc.pathname !== "/quickstart") return null;
+  const campaign = new URLSearchParams(loc.search).get("campaign");
+  if (!isKnownCampaign(campaign)) return null;
+  return loc.pathname + loc.search;
+}
+
+/**
+ * Full-page redirect into the server GitHub OAuth start endpoint. This is a
+ * server route (not a router path), so it must be a real navigation, not a
+ * `<Navigate>`. Renders the neutral landing fallback while the browser leaves.
+ */
+function OAuthStartRedirect({ next }: { next: string }) {
+  useEffect(() => {
+    window.location.replace(`/api/v1/auth/github/start?next=${encodeURIComponent(next)}`);
+  }, [next]);
+  return <LandingFallback />;
+}
 
 /**
  * Route guard for everything behind the dashboard chrome.
@@ -45,6 +78,10 @@ export function RequireAuth() {
         </Suspense>
       );
     }
+    // Scan funnel: skip the generic /login screen and go straight to GitHub
+    // OAuth, returning to this exact /quickstart?campaign=...&repo=... URL.
+    const scanNext = scanCampaignOAuthNext(location);
+    if (scanNext) return <OAuthStartRedirect next={scanNext} />;
     // Stash full location (pathname + search + hash) so a deep-link visitor
     // who logs in lands back on the page they originally requested.
     return <Navigate to="/login" replace state={{ from: location }} />;

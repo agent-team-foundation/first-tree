@@ -1,20 +1,29 @@
-import { Check } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { useEffect } from "react";
 
 /**
- * Landing page for the connect-code install popup. The connect-code step opens
- * the GitHub App install in a new tab with `next=/onboarding/connected`, so
- * GitHub's callback lands the popup here. We confirm and auto-close the tab (it
- * was script-opened, so `window.close()` is allowed); the original setup tab
- * detects the new installation via its poll and advances on its own. If the
- * browser refuses to close the tab, the message tells the user to close it.
+ * Landing page for the GitHub App install popup — shared by every surface that
+ * opens the install in a new tab with `next=/onboarding/connected`: onboarding
+ * connect-code, the Context tab build entry, and Settings → GitHub. GitHub's
+ * callback lands the popup here; we auto-close the tab (it was script-opened, so
+ * `window.close()` is allowed) while the original tab detects the outcome via
+ * its own poll. If the browser refuses to close the tab, the message tells the
+ * user to close it.
+ *
+ * This page deliberately makes NO success claim. The same popup lands here for a
+ * genuine install AND for a non-owner's approval-request bounce (the install is
+ * pending an org owner's approval and nothing is connected yet), and the popup
+ * has no signal to tell the two apart. So it stays neutral ("head back to the
+ * tab you started from") and leaves the authoritative status to the origin tab,
+ * which polls the real install state. A green "Connected" here would read as
+ * false success for the pending-approval case.
  *
  * Public route (no auth gate): it does nothing sensitive, and gating it would
- * risk the onboarding redirect bouncing this throwaway tab elsewhere.
+ * risk the redirect bouncing this throwaway tab elsewhere.
  */
 export function GithubConnectedPage() {
   useEffect(() => {
-    // A brief beat so the confirmation registers, then close.
+    // A brief beat so the message registers, then close.
     const timer = window.setTimeout(() => window.close(), 900);
     return () => window.clearTimeout(timer);
   }, []);
@@ -32,17 +41,17 @@ export function GithubConnectedPage() {
           width: "var(--sp-10)",
           height: "var(--sp-10)",
           borderRadius: "var(--radius-full)",
-          background: "color-mix(in oklch, var(--success) 16%, transparent)",
-          color: "var(--success)",
+          background: "color-mix(in oklch, var(--fg) 8%, transparent)",
+          color: "var(--fg-3)",
         }}
       >
-        <Check className="h-5 w-5" />
+        <ArrowLeft className="h-5 w-5" />
       </span>
       <p className="text-subtitle font-semibold" style={{ margin: 0, color: "var(--fg)" }}>
-        Connected
+        Back to First Tree
       </p>
       <p className="text-body" style={{ margin: 0, color: "var(--fg-3)", maxWidth: "22rem" }}>
-        You can close this tab — setup continues in your other tab.
+        You can close this tab — your status will appear in the tab you started from.
       </p>
     </div>
   );

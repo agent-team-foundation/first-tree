@@ -15,7 +15,6 @@ import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 const APP_WEBHOOK_SECRET = "test-app-webhook-secret";
-const FOLLOW_UP_NOTICE = "A new GitHub event was received. I'll check the current PR state.";
 
 function signBody(secret: string, body: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
@@ -146,6 +145,8 @@ function contextPullRequestPayload(installationId: number, repoFullName = "owner
       body: "",
       base: { ref: "main" },
       head: { ref: "context-reviewer" },
+      draft: false,
+      user: { login: "context-writer", type: "User" },
     },
     repository: { full_name: repoFullName },
     sender: { login: "context-writer", type: "User" },
@@ -160,6 +161,7 @@ function contextIssueCommentPayload(installationId: number, repoFullName = "owne
       number: 42,
       title: "Improve context review guidance",
       html_url: `https://github.com/${repoFullName}/issues/42`,
+      user: { login: "context-writer", type: "User" },
       pull_request: { html_url: `https://github.com/${repoFullName}/pull/42` },
     },
     comment: {
@@ -195,7 +197,7 @@ describe("POST /webhooks/github-app", () => {
     expect(res.json()).toEqual({ ok: true, event: "ping" });
   });
 
-  it("installation.created → UPSERTs the installation row", async () => {
+  it("installation.created → records the row unbound with the installer (direct install: no requester)", async () => {
     const app = getApp();
     const installationId = 100001;
     const payload = {
@@ -203,14 +205,18 @@ describe("POST /webhooks/github-app", () => {
       installation: {
         id: installationId,
         account: { id: 555, login: "octolabs", type: "Organization" },
-        permissions: { contents: "write" },
+        permissions: { contents: "read" },
         events: ["pull_request"],
         suspended_at: null,
       },
+      // `sender` is the GitHub-authenticated installer — persisted as the
+      // trusted `installer_github_id`.
+      sender: { id: 777, login: "octo-admin", type: "User" },
     };
     const res = await postWebhook(app, "installation", payload);
     expect(res.statusCode).toBe(200);
-    expect(res.json().lifecycle).toBe("created");
+    // Record-only: the row is created with its identity anchors, never bound.
+    expect(res.json().lifecycle).toBe("created:recorded");
 
     const [row] = await app.db
       .select()
@@ -219,6 +225,105 @@ describe("POST /webhooks/github-app", () => {
       .limit(1);
     expect(row).toBeTruthy();
     expect(row?.accountLogin).toBe("octolabs");
+    expect(row?.installerGithubId).toBe(777);
+    expect(row?.requesterGithubId).toBeNull();
+    expect(row?.hubOrganizationId).toBeNull();
+  });
+
+  it("installation.created via the approval flow records BOTH the requester and the approving installer", async () => {
+    const app = getApp();
+    const installationId = 100010;
+    const res = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: installationId,
+        account: { id: 4242, login: "acme-inc", type: "Organization" },
+        permissions: { contents: "read" },
+        events: ["pull_request"],
+        suspended_at: null,
+      },
+      // Approval flow: `sender` is the approving org OWNER, while the
+      // top-level `requester` is the member who asked for the install —
+      // the identity the connect panel must be able to match.
+      sender: { id: 90210, login: "acme-owner", type: "User" },
+      requester: { id: 111, login: "acme-member", type: "User" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().lifecycle).toBe("created:recorded");
+
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.installerGithubId).toBe(90210);
+    expect(row?.requesterGithubId).toBe(111);
+    expect(row?.hubOrganizationId).toBeNull();
+  });
+
+  it("installation.created NEVER binds — even when the installer is a known team admin", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100011;
+    // The installer's GitHub id belonging to a First Tree admin changes
+    // nothing at webhook time: the webhook cannot know which team the
+    // installation should connect to, so it records and stops. Binding is
+    // the admin's explicit connect-panel action.
+    const res = await postWebhook(app, "installation", {
+      action: "created",
+      installation: {
+        id: installationId,
+        account: { id: 4243, login: "acme2", type: "Organization" },
+        permissions: { contents: "read" },
+        events: ["pull_request"],
+        suspended_at: null,
+      },
+      sender: { id: 90211, login: admin.username, type: "User" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().lifecycle).toBe("created:recorded");
+
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.hubOrganizationId).toBeNull();
+  });
+
+  it("new_permissions_accepted preserves the recorded requester + installer (COALESCE, different sender)", async () => {
+    const app = getApp();
+    const installationId = 100012;
+    const base = {
+      id: installationId,
+      account: { id: 4244, login: "acme3", type: "Organization" },
+      permissions: { contents: "read" },
+      events: ["pull_request"],
+      suspended_at: null,
+    };
+    await postWebhook(app, "installation", {
+      action: "created",
+      installation: base,
+      sender: { id: 90212, login: "owner", type: "User" },
+      requester: { id: 112, login: "member", type: "User" },
+    });
+    // A different admin accepts new permissions later — the original
+    // identity anchors must survive the metadata refresh.
+    const res = await postWebhook(app, "installation", {
+      action: "new_permissions_accepted",
+      installation: { ...base, permissions: { contents: "write" } },
+      sender: { id: 99999, login: "another-admin", type: "User" },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const [row] = await app.db
+      .select()
+      .from(githubAppInstallations)
+      .where(eq(githubAppInstallations.installationId, installationId))
+      .limit(1);
+    expect(row?.permissions).toEqual({ contents: "write" });
+    expect(row?.installerGithubId).toBe(90212);
+    expect(row?.requesterGithubId).toBe(112);
   });
 
   it("installation.deleted → removes the row", async () => {
@@ -1172,13 +1277,19 @@ describe("POST /webhooks/github-app", () => {
       .from(messages)
       .where(eq(messages.chatId, chat?.id ?? ""))
       .limit(1);
-    expect(message?.content).toContain("gh pr comment 42 --repo owner/context-tree --body");
+    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --request-changes --body-file");
+    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --comment --body-file");
+    expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
+    expect(message?.content).toContain("Context changes requested");
+    expect(message?.content).toContain("Still unclear or needs more detail");
+    expect(message?.content).toContain("Draft status from webhook: ready for review");
     expect(message?.metadata).toMatchObject({
       source: "github",
       event: "pull_request",
       action: "opened",
       triggerEvent: "pull_request.opened",
       contextTreeReviewer: true,
+      pullRequestDraft: false,
       mentions: [reviewer],
     });
   });
@@ -1213,14 +1324,12 @@ describe("POST /webhooks/github-app", () => {
       .where(eq(messages.chatId, chatRows[0]?.id ?? ""));
     expect(messageRows).toHaveLength(2);
     const followUpMessage = messageRows.find((message) => message.metadata.triggerEvent === "issue_comment.created");
-    expect(followUpMessage?.content).toBe(
-      [
-        FOLLOW_UP_NOTICE,
-        "Comment author: context-commenter",
-        "Comment URL: https://github.com/owner/context-tree/pull/42#issuecomment-2",
-      ].join("\n"),
+    expect(followUpMessage?.content).toContain("Trigger event: issue_comment.created");
+    expect(followUpMessage?.content).toContain("Comment author: context-commenter");
+    expect(followUpMessage?.content).toContain(
+      "Comment URL: https://github.com/owner/context-tree/pull/42#issuecomment-2",
     );
-    expect(followUpMessage?.content).not.toContain("gh pr comment 42 --repo owner/context-tree --body");
+    expect(followUpMessage?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
     expect(followUpMessage?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
@@ -1240,6 +1349,58 @@ describe("POST /webhooks/github-app", () => {
       .where(and(eq(inboxEntries.messageId, followUpMessage?.id ?? ""), eq(inboxEntries.inboxId, `inbox_${reviewer}`)))
       .limit(1);
     expect(entry?.notify).toBe(true);
+  });
+
+  it("pull_request.ready_for_review on a bound context PR wakes the existing Context Reviewer chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100044;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+    const reviewer = await configureContextReviewer(app, admin);
+
+    const draftOpenedPayload = contextPullRequestPayload(installationId);
+    draftOpenedPayload.pull_request.draft = true;
+    const opened = await postWebhook(app, "pull_request", draftOpenedPayload);
+    expect(opened.statusCode).toBe(200);
+    expect(opened.json()).toMatchObject({ contextReviewer: { handled: true, reused: false } });
+
+    const readyPayload = contextPullRequestPayload(installationId);
+    readyPayload.action = "ready_for_review";
+    readyPayload.pull_request.draft = false;
+    const ready = await postWebhook(app, "pull_request", readyPayload);
+
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toMatchObject({
+      ok: true,
+      event: "pull_request",
+      handled: false,
+      contextReviewer: { handled: true, reused: true },
+    });
+
+    const [chat] = await app.db.select().from(chats).limit(1);
+    const messageRows = await app.db
+      .select()
+      .from(messages)
+      .where(eq(messages.chatId, chat?.id ?? ""));
+    expect(messageRows).toHaveLength(2);
+    const followUpMessage = messageRows.find(
+      (message) => message.metadata.triggerEvent === "pull_request.ready_for_review",
+    );
+    expect(followUpMessage?.content).toContain("Trigger event: pull_request.ready_for_review");
+    expect(followUpMessage?.content).toContain("Draft status from webhook: ready for review");
+    expect(followUpMessage?.content).toContain("Do not rely on an older approval or comment review");
+    expect(followUpMessage?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
+    expect(followUpMessage?.metadata).toMatchObject({
+      source: "github",
+      event: "pull_request",
+      action: "ready_for_review",
+      triggerEvent: "pull_request.ready_for_review",
+      entityType: "pull_request",
+      entityKey: "owner/context-tree#42",
+      contextTreeReviewer: true,
+      pullRequestDraft: false,
+      mentions: [reviewer],
+    });
   });
 
   it("pull_request.opened on an ordinary code repo does not trigger Context Reviewer", async () => {

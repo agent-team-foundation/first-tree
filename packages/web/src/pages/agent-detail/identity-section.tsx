@@ -1,4 +1,4 @@
-import { AGENT_VISIBILITY, type Agent } from "@first-tree/shared";
+import { AGENT_VISIBILITY, type Agent, isLandingCampaignTrialAgentMetadata } from "@first-tree/shared";
 import { Pencil } from "lucide-react";
 import type { ReactNode } from "react";
 import { AgentChip } from "../../components/agent-chip.js";
@@ -51,7 +51,11 @@ export function IdentitySection({
   const domains = Array.isArray(treeMeta?.domains)
     ? (treeMeta?.domains as unknown[]).filter((d): d is string => typeof d === "string")
     : [];
-  const managerName = agent.managerId ? resolveMember(agent.managerId) : null;
+  const managerName = isLandingCampaignTrialAgentMetadata(metadata)
+    ? "First Tree managed"
+    : agent.managerId
+      ? resolveMember(agent.managerId)
+      : null;
   const delegateIdentity = agent.delegateMention ? resolveAgent(agent.delegateMention) : null;
   const handle = agent.name ?? agent.uuid.slice(0, 8);
   const hasOrganizationContext = role || domains.length > 0;

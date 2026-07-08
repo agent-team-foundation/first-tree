@@ -1,4 +1,5 @@
 import {
+  activeRuntimeChatIdsResponseSchema,
   addParticipantSchema,
   createTaskChatSchema,
   followGithubEntityRequestSchema,
@@ -6,8 +7,10 @@ import {
   paginationQuerySchema,
   updateChatSchema,
 } from "@first-tree/shared";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { BadRequestError } from "../../errors.js";
+import { members } from "../../db/schema/members.js";
+import { BadRequestError, ForbiddenError } from "../../errors.js";
 import { requireAgent } from "../../middleware/require-identity.js";
 import { createLogger } from "../../observability/index.js";
 import * as chatService from "../../services/chat.js";
@@ -90,6 +93,33 @@ export async function agentChatRoutes(app: FastifyInstance): Promise<void> {
       items: result.items.map(serializeChat),
       nextCursor: result.nextCursor,
     };
+  });
+
+  app.get("/active-runtime-ids", async (request) => {
+    const identity = requireAgent(request);
+    const user = request.user;
+    if (!user) throw new ForbiddenError("User authentication required");
+
+    const [member] = await app.db
+      .select({ humanAgentId: members.agentId })
+      .from(members)
+      .where(
+        and(
+          eq(members.userId, user.userId),
+          eq(members.organizationId, identity.organizationId),
+          eq(members.status, "active"),
+        ),
+      )
+      .limit(1);
+    if (!member) throw new ForbiddenError("Agent belongs to an organization the caller is not a member of");
+
+    const chatIds = await chatService.listActiveRuntimeChatIds(
+      app.db,
+      identity.uuid,
+      member.humanAgentId,
+      identity.organizationId,
+    );
+    return activeRuntimeChatIdsResponseSchema.parse({ chatIds });
   });
 
   app.get<{ Params: { chatId: string } }>("/:chatId", async (request) => {

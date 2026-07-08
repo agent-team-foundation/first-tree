@@ -166,6 +166,21 @@ describe("Admin Agents API", () => {
     expect(body.metadata.role).toBe("testing");
   });
 
+  it("rejects user-supplied internal runtime metadata on create", async () => {
+    const app = getApp();
+    const { req, ctx } = await authedRequest(app);
+
+    const res = await req("POST", `/api/v1/orgs/${ctx.organizationId}/agents`, {
+      name: `reserved-meta-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Reserved Metadata",
+      metadata: { runtimeSwitch: { claimId: "fake-claim" } },
+      clientId: ctx.clientId,
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
   it("rejects public creation of standalone human agents", async () => {
     const app = getApp();
     const { req, ctx } = await authedRequest(app);
@@ -189,6 +204,21 @@ describe("Admin Agents API", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().displayName).toBe("New Name");
+  });
+
+  it("rejects user-supplied internal runtime metadata on PATCH", async () => {
+    const app = getApp();
+    const { req } = await authedRequest(app);
+    const agent = await createAgent(app.db, {
+      name: `patch-reserved-${crypto.randomUUID().slice(0, 6)}`,
+      type: "human",
+    });
+
+    const res = await req("PATCH", `/api/v1/agents/${agent.uuid}`, {
+      metadata: { runtimeSwitch: { claimId: "fake-claim" } },
+    });
+
+    expect(res.statusCode).toBe(400);
   });
 
   it("suspends and reactivates an agent", async () => {

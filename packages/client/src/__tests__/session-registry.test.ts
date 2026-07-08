@@ -1,8 +1,21 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyClientLoggerConfig } from "../observability/logger.js";
 import { SessionRegistry } from "../runtime/session-registry.js";
+
+function collectLogs(): { dest: Writable; read: () => string } {
+  const chunks: string[] = [];
+  const dest = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(chunk.toString());
+      callback();
+    },
+  });
+  return { dest, read: () => chunks.join("") };
+}
 
 describe("SessionRegistry", () => {
   let testDir: string;
@@ -17,6 +30,7 @@ describe("SessionRegistry", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    applyClientLoggerConfig({ level: "silent", format: "json", destination: process.stderr, explicit: false });
     rmSync(testDir, { recursive: true, force: true });
   });
 
@@ -190,12 +204,9 @@ describe("SessionRegistry", () => {
   it("logs persistence failures without throwing", () => {
     const parentAsFile = join(testDir, "not-a-directory");
     writeFileSync(parentAsFile, "file blocks mkdir", "utf-8");
+    const { dest, read } = collectLogs();
+    applyClientLoggerConfig({ level: "warn", format: "json", destination: dest });
     const registry = new SessionRegistry(join(parentAsFile, "sessions.json"));
-    const stderrMessages: string[] = [];
-    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((message: string | Uint8Array) => {
-      stderrMessages.push(String(message));
-      return true;
-    });
 
     expect(() =>
       registry.flush(
@@ -205,8 +216,8 @@ describe("SessionRegistry", () => {
       ),
     ).not.toThrow();
 
-    expect(stderrMessages.join("")).toContain("[session-registry] Failed to persist:");
-    stderrWrite.mockRestore();
+    expect(read()).toContain('"module":"session-registry"');
+    expect(read()).toContain('"msg":"Failed to persist:');
   });
 
   it("logs non-Error persistence failures", async () => {
@@ -220,13 +231,11 @@ describe("SessionRegistry", () => {
         },
       };
     });
+    const loggerMod = await import("../observability/logger.js");
+    const { dest, read } = collectLogs();
+    loggerMod.applyClientLoggerConfig({ level: "warn", format: "json", destination: dest });
     const mod = await import("../runtime/session-registry.js");
     const registry = new mod.SessionRegistry(filePath);
-    const stderrMessages: string[] = [];
-    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation((message: string | Uint8Array) => {
-      stderrMessages.push(String(message));
-      return true;
-    });
 
     registry.flush(
       makeEntries({
@@ -234,8 +243,7 @@ describe("SessionRegistry", () => {
       }),
     );
 
-    expect(stderrMessages.join("")).toContain("mkdir failed");
-    stderrWrite.mockRestore();
+    expect(read()).toContain("mkdir failed");
     vi.doUnmock("node:fs");
     vi.resetModules();
   });

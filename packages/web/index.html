@@ -42,6 +42,29 @@
         });
       })();
     </script>
+    <!--
+      Microsoft Clarity — session insights for the production Web Console.
+      Like GA4, this is hostname-gated because the Docker build ships one dist
+      across channels; staging/local must not write into the production project.
+      The React app root is masked below so customer/workspace text is not
+      uploaded in Clarity recordings by default.
+    -->
+    <script>
+      (() => {
+        if (window.location.hostname !== "cloud.first-tree.ai") return;
+        window.clarity =
+          window.clarity ||
+          ((...args) => {
+            const queue = window.clarity.q || [];
+            window.clarity.q = queue;
+            queue.push(args);
+          });
+        const tag = document.createElement("script");
+        tag.async = true;
+        tag.src = "https://www.clarity.ms/tag/xj2f9syfng";
+        document.head.appendChild(tag);
+      })();
+    </script>
     <script>
       (() => {
         const t = localStorage.getItem("theme");
@@ -51,21 +74,7 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root" data-clarity-mask="true"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <!--
-      hearback-widget 0.1.8 — self-disables when the server can't reach an LLM,
-      so it's safe to always include. data-accent matches --accent from index.css
-      (packages/web/src/index.css:59). The server mounts hearback-server at
-      /feedback; see packages/server/src/api/feedback.ts.
-    -->
-    <script
-      src="https://unpkg.com/hearback-widget@0.1.8/dist/widget.js"
-      integrity="sha384-Yz3Aozu+UsUY2wRs3Io/WzHToBQ6e8NJ5/y0cLmJmaVOUsgtn6Zbr3OYiDGjZtoX"
-      crossorigin="anonymous"
-      data-endpoint="/feedback"
-      data-accent="oklch(0.72 0.17 150)"
-      defer
-    ></script>
   </body>
 </html>

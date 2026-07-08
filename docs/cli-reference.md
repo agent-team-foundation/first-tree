@@ -15,12 +15,22 @@ human-friendly index over them.
 ## Install
 
 ```bash
+curl -fsSL https://downloads.first-tree.ai/prod/install.sh | sh
+~/.local/bin/first-tree --version
+```
+
+The default public install path is portable and bundles Node.js. The binary
+lives at `first-tree`; the short alias `ft` is also installed.
+
+The npm global install path remains supported for operators and fallback
+installs:
+
+```bash
 npm install -g first-tree
 first-tree --version
 ```
 
-The binary lives at `first-tree`; the short alias `ft` is also installed.
-Requirements: Node.js ≥ 22.13 (24 recommended).
+npm mode uses your system Node.js runtime and requires Node.js ≥ 22.13.
 
 ## Global flags
 
@@ -35,13 +45,15 @@ Requirements: Node.js ≥ 22.13 (24 recommended).
 
 ```
 first-tree
-├── login <token>            Sign this computer in
+├── login <token>            Sign this computer in or switch local clients
 ├── logout                   Stop the daemon and clear credentials
+├── computer ...             Computer-level local state recovery
 ├── status                   CLI + daemon + server + auth + agent overview
 ├── doctor                   Cross-subsystem readiness check
 ├── upgrade                  Self-update + restart the daemon
 ├── agent ...                Agent management (config, bindings, sessions, messaging)
 ├── chat ...                 Chats and messaging (create, send, list, history, open)
+├── doc ...                  Org document library (publish, comments, reply, resolve, status)
 ├── org ...                  Organization-level operations
 ├── daemon ...               Background daemon (start, stop, status, doctor, probe)
 ├── config ...               View/modify this machine's client.yaml
@@ -53,21 +65,24 @@ first-tree
 ## login
 
 ```
-first-tree login <token> [--no-start]
+first-tree login <token> [--no-start] [--force-switch]
 ```
 
-Sign this computer in using a connect token from the web console. The
-token's `iss` claim carries the server URL — no `--server` flag needed,
-and switching to a different deployment only requires a fresh token.
-If this machine already has credentials for another user, `login` refuses to
-overwrite them. If credentials are missing, `login` preserves `client.yaml` and
-local agent state so the same user can reconnect after a normal `logout`. Switch
-accounts by running `first-tree logout --purge` first, then login with the new
-token.
+Sign this computer in using a connect token from the web console. New tokens
+are short connect URLs whose origin carries the server URL; legacy JWT tokens
+with an `iss` claim are still accepted during rollout. No `--server` flag is
+needed, and switching to a different deployment only requires a fresh token.
+If this machine already has credentials for another user, `login` asks for
+explicit confirmation and switches the active local client after stopping and
+draining the old runtime. In non-TTY automation, `--force-switch` is the only
+confirmation flag; it does not skip supervisor, drain, filesystem, or journal
+safety checks. If credentials are missing, `login` preserves `client.yaml` and
+local agent state so the same user can reconnect after a normal `logout`.
 
 | Flag | Effect |
 |---|---|
 | `--no-start` | Write credentials and exit without installing/starting the background daemon. |
+| `--force-switch` | Confirm a different-user local client switch in non-interactive mode. Safety gates still run. |
 
 ## logout
 
@@ -75,14 +90,45 @@ token.
 first-tree logout [--purge]
 ```
 
-Stop the daemon and clear credentials. `--purge` additionally removes
-`client.yaml`, local agent configs, agent workspaces, and session state. Use
-`--purge` before switching this machine to a different account. The purge is
-local-only: server-side clients, agents, chats, and history are not deleted,
-but the previous client and agents stop running from this machine unless they
-are set up again. If the daemon is active and cannot be stopped, `--purge`
-refuses to delete local agent state. The default keeps local client/agent state
-for the same user to reconnect later.
+Stop the daemon and clear credentials. `--purge` additionally removes active
+root client state, parked clients under `$FIRST_TREE_HOME/parked-clients/`, and
+switch lock/journal files. This is a destructive local reset path, not the
+normal account-switch path. To switch this computer to another First Tree user,
+run `first-tree login <token>` with the new user's connect token and confirm
+the switch. Before deleting local state, `--purge` retires the current server
+client so it disappears from default Computers views and cannot be reactivated
+with the same client id. Retiring is destructive for runtime routing on that
+client: non-deleted agents pinned to it are suspended and unpinned, while agent
+identity, chats, history, and profile data remain; those cleared agents can be
+moved back onto a connected computer/runtime from the Agent Runtime tab. Logout
+stops both the background service and any live `daemon start --foreground`
+runtime markers for the active client before clearing credentials/state. If the
+daemon is active and cannot be stopped, a foreground runtime cannot be stopped,
+or the server-side retire fails, `--purge` refuses to delete local client state.
+The default keeps local client/agent state for the same user to reconnect later.
+
+## computer
+
+Computer-level local state recovery.
+
+```
+first-tree computer
+└── reset
+```
+
+### computer reset
+
+```
+first-tree computer reset
+```
+
+Stop the daemon and remove active root client state, parked clients under
+`$FIRST_TREE_HOME/parked-clients/`, switch lock/journal files, and active
+credentials. Use this when local identity state is damaged or when you
+intentionally want to discard every local First Tree client stored in this
+installation. This is local-only and does not retire server client rows. Normal
+different-user switching should use
+`first-tree login <token>` instead, which parks inactive clients.
 
 ## status
 
@@ -110,10 +156,13 @@ first-tree upgrade [--check] [--latest] [--no-restart]
 ```
 
 Self-update for the CLI: query the configured server for its recommended
-Command version, install that exact version globally, refresh the systemd
-unit / launchd plist on top of the new bits, then restart the client
-service. Use `--latest` only when you intentionally want to bypass the
-server target and install npm latest directly.
+Command version, install that exact version through the current install mode,
+refresh the systemd unit / launchd plist on top of the new bits, then restart
+the client service. Portable installs download the channel manifest and
+verified tarball, including the bundled Node.js runtime. npm installs run
+`npm install -g` against the channel package and keep using the system Node.js
+runtime. Use `--latest` only when you intentionally want to bypass the server
+target and install the channel's latest release data directly.
 
 | Flag | Effect |
 |---|---|
@@ -125,6 +174,12 @@ Refusing to run from a source checkout (anywhere under a `.git`
 ancestor) is intentional — keeps a dev build from accidentally
 `npm i -g`-overwriting a prod global. For local development use
 `scripts/dev-install.sh` (see [docs/development/local-dev-isolation.md](development/local-dev-isolation.md)).
+
+In npm mode, `upgrade` checks the target package's `engines.node` metadata
+before install when npm can provide it. If the target requires a newer Node.js
+than the current process is running, the command fails before install with a
+system-Node upgrade hint and a portable-install migration hint. npm-mode
+updates do not replace Node.js themselves.
 
 ---
 
@@ -222,7 +277,7 @@ first-tree agent config
 
 ```
 first-tree agent bind
-└── client <agentName> --client-id <id>             # first-time bind only; id is immutable once set
+└── client <agentName> --client-id <id>             # first-time bind only; later moves use managed runtime switch
 ```
 
 ### agent workspace
@@ -255,13 +310,13 @@ first-tree chat
 │     --to <name>                                  #   initial recipient to mention + wake; repeatable, required
 │     --with <name>                                #   context participant; added silently, not woken by the first message
 │     --topic <text> / --description <text>        #   initial chat self-description
-│     --request                                    #   first message is a tracked ask; the body IS the ask; exactly one --to human
+│     --request                                    #   first message is a tracked ask; the body IS the ask, decision-self-sufficient (why + recap + question + recommendation); exactly one --to human
 │     --options <json> / --multi-select            #   (with --request) 2–4 options {label,description,preview?}; allow multi-pick
-├── send <name> [message]                            # wake a participant — agent or human (a plain send to a human is a free reply; use `chat ask` for a tracked decision)
+├── send <name> [message]                            # wake a participant — agent or human (a send to a human is informational only; a question the next step depends on goes through `chat ask`)
 │     # body: [message] arg, or stdin (omit [message]), or -F <path>; prefer stdin/-F for rich bodies (shell-safe)
 │     -F, --message-file <path>                      #   read the body from <path> (`-` = stdin); content never hits the shell
 │     --reply-to <messageId>                         #   thread a reply under a message (pure threading)
-├── ask <name> [message]                             # ask a HUMAN a tracked question; the body IS the ask (background + question)
+├── ask <name> [message]                             # ask a HUMAN a tracked question; the body IS the ask, decision-self-sufficient (why it exists + recent-context recap + question + recommendation)
 │     # body: [message] arg, or stdin (omit [message]), or -F <path>; prefer stdin/-F for rich bodies (shell-safe)
 │     -F, --message-file <path>                      #   read the body from <path> (`-` = stdin); content never hits the shell
 │     --options <json>                               #   2–4 answer options {label (1–5 words), description, preview?}; omit for free-text
@@ -289,15 +344,26 @@ first-tree chat create "Please review the rollout plan." --to code-agent --with 
   --description "reviewing rollout plan; waiting on code-agent"
 
 # Start a new task chat with a tracked question. The first request must target
-# exactly one human. The message body IS the ask (background + the question);
-# pass 2–4 --options (JSON) for a clean pick, or omit them for a free-text answer.
-first-tree chat create --to alice --request \
-  "Migration 0021 drops the legacy column — irreversible. Ship the destructive migration?" \
+# exactly one human. The message body IS the ask and must be
+# decision-self-sufficient (why the question exists + recent-context recap +
+# the single question and your recommendation); pass 2–4 --options (JSON) for
+# a clean pick, or omit them for a free-text answer.
+cat <<'EOF' | first-tree chat create --to alice --request \
   --options '[{"label":"Ship","description":"Roll the migration now"},{"label":"Hold","description":"Wait 24h"}]'
+## Why this question exists
+Migration 0021 drops the legacy column — irreversible, so shipping is your call.
+## Recent context
+The 0021 cleanup you asked for last week is done; the PR is approved and CI is
+green.
+## The question
+Ship the destructive migration now? I would ship — the column has had no reads
+for 30 days.
+EOF
 
 # Inline — `chat send` wakes a participant (agent or human). A plain send to a
-# human is a free reply; use `chat ask` for a tracked decision. The recipient
-# must be a participant of FIRST_TREE_CHAT_ID.
+# human is informational only — readable, then safely ignorable; any question
+# the next step depends on goes through `chat ask` (a send never carries a
+# blocking question). The recipient must be a participant of FIRST_TREE_CHAT_ID.
 first-tree chat send code-agent "ship the PR"
 
 # Stdin (multiline, markdown, special chars)
@@ -326,17 +392,27 @@ EOF
 # intentionally sending literal `\n` text.
 
 # Ask a human a tracked question (red-dot + blocks the chat for them until they
-# answer). `chat ask` targets a single human; the message body IS the ask
-# (background + the question). Omit --options for a free-text answer, or pass 2–4
-# --options (JSON) for a clean pick; add --multi-select to allow more than one.
-first-tree chat ask alice \
-  "Migration 0021 drops the legacy column — irreversible. Ship the destructive migration?" \
+# answer). `chat ask` targets a single human; the message body IS the ask and
+# must be decision-self-sufficient for a reader who remembers nothing of the
+# chat: why the question exists + a recap of the recent interactions + the
+# single question and your recommendation, written for a reader holding none
+# of the context (unpack every shorthand; name options by their concrete
+# consequence). Omit --options for a free-text answer, or pass 2–4 --options
+# (JSON) for a clean pick; add --multi-select to allow more than one.
+cat <<'EOF' | first-tree chat ask alice \
   --options '[{"label":"Ship","description":"Roll it now"},{"label":"Hold","description":"Wait 24h"}]'
+## Why this question exists
+Migration 0021 drops the legacy column — irreversible, so shipping is your call.
+## Recent context
+You asked for the 0021 cleanup yesterday; the PR is approved and CI is green.
+## The question
+Ship the destructive migration now? I would ship — the column has had no reads
+for 30 days.
+EOF
 
-# Free-text ask (no options)
-first-tree chat ask alice "What rollback window do you want before we ship 0021?"
-
-# Rich ask body via a file (shell-safe — same rationale as `chat send -F`)
+# Free-text ask (no options) — the same three-section body, answered in free
+# text. `-F` reads the body from a file (shell-safe — same rationale as
+# `chat send -F`)
 first-tree chat ask alice --message-file ask-body.md
 
 # `chat ask` always opens a fresh top-level question — there is no threading
@@ -405,6 +481,54 @@ UI before running it again; the chat may already exist.
 If a non-human agent includes itself in `chat create --to`, the server records
 the originating agent in metadata and uses that agent's manager human as the
 effective sender so the first message can wake the agent normally.
+
+---
+
+## doc
+
+Org document library (docloop) — publish markdown design docs for team
+review, pull the structured comments reviewers leave, reply, resolve, and
+track document status. Feature-flagged server-side
+(`FIRST_TREE_DOCS_ENABLED`); commands report HTTP 404 while the flag is off.
+Publishing is idempotent on `slug`: the first publish creates the document
+(version 1), every later publish of the same slug appends the next version.
+The caller's own identity signs every write — agents author under their own
+agent name, humans under their member identity.
+
+```
+first-tree doc
+├── publish <file> [--slug <slug>] [--title <t>] [--project <p>]
+│                  [--note <n>] [--status <s>] [--if-changed]   # create or append a version
+├── get <slug> [--version <n>]                                  # read metadata + markdown content
+├── list [--project <p>] [--status <s>] [--limit <n>] [--cursor <c>]
+├── comments <slug> [--status open|resolved] [--version <n>]
+│                   [--watch [seconds]]                         # list; --watch streams new ones as JSON lines
+├── comment <slug> <body> [--quote <exact> [--prefix <t>] [--suffix <t>]] [--version <n>]
+├── reply <commentId> <body>                                    # reply in a thread
+├── resolve <commentId> [--reopen]                              # close (or reopen) a thread
+├── status <slug> [--set draft|in_review|approved|archived]     # show or move status
+├── import <dir> [--project <p>] [--status <s>] [--dry-run]     # bulk-publish a directory of .md files
+└── export <dir> [--project <p>] [--status <s>]                 # dump library to <slug>.md files + manifest.json
+```
+
+```bash
+first-tree doc publish design.md --slug chat-rename --project first-tree --status in_review
+first-tree doc comments chat-rename --status open --json
+first-tree doc reply <commentId> "Addressed in v2 — see §3"
+first-tree doc resolve <commentId>
+first-tree doc publish design.md --slug chat-rename --note "responds to review round 1"
+first-tree doc status chat-rename --set approved
+```
+
+Slug defaults to the slugified filename; title defaults to the file's first
+markdown heading (required on the first publish). Comment anchors are
+TextQuoteSelector-style (`exact` / `prefix` / `suffix`) against the markdown
+source, so an agent can locate every comment in the file it holds without
+line-number conventions. Comments whose quote no longer exists in the latest
+version come back with `outdated: true` (computed on read). `import` skips
+`NODE.md` / `README.md` index files and is idempotent (re-runs only add
+versions for changed content); `export` is the guaranteed way out — plain
+markdown files plus a `manifest.json` of metadata.
 
 ---
 
@@ -532,19 +656,32 @@ server-side `agent_configs` row through the Admin API.
 
 ## tree
 
-Context Tree structural validation and hierarchy browsing. **`verify`
-and `tree` are the only surviving `tree` subcommands** — the rest of the
-namespace (`init` / `migrate` / `upgrade` / `status` / `codeowners` /
-`claude-hook` / `inject` / `review` / `automation` / `skill` groups) was
-retired in the 2026-06 cleanup because the cloud now owns workspace +
-tree provisioning and the client runtime inlines its own skill payload
-install (see PR following #844).
+Context Tree creation, structural validation, and hierarchy browsing. The
+`tree` namespace carries `verify`, `tree`, and `init`; the rest (`migrate` /
+`upgrade` / `status` / `codeowners` / `claude-hook` / `inject` / `review` /
+`automation` / `skill` groups) was retired in the 2026-06 cleanup because the
+cloud now owns workspace + tree provisioning and the client runtime inlines its
+own skill payload install (see PR following #844).
 
 ```
 first-tree tree
+├── init [options]                           # create a new team Context Tree repo with local gh
 ├── verify [--tree-path PATH]                # validate a Context Tree repo
 └── tree [path] [-L depth] [-P pattern]      # browse Context Tree nodes as a hierarchy
 ```
+
+`first-tree tree init` creates a brand-new team Context Tree repository with the
+user's local `gh`: it creates the repo (one path for user- and org-owned repos),
+scaffolds a minimal valid tree (root `NODE.md` + members index + a creator member
+node), self-verifies before pushing, pushes, and — unless `--no-bind` — binds the
+org's `context_tree` setting and surfaces guidance for adding the repo to the
+team's GitHub App installation. It does not seed `.github/workflows/validate-tree.yml`
+by default (that needs the interactive `workflow` gh scope); pass `--with-workflow`
+to include it. In the bound path the repo is created under the team's GitHub App
+installation account (so the installation can cover it), and `tree init` refuses
+to replace an existing team binding unless `--rebind` is passed. Key options:
+`--owner`, `--name`, `--title`, `--public`, `--dir`, `--with-workflow`, `--no-bind`,
+`--rebind`, `--org`. Run `first-tree tree init --help` for the full list.
 
 Run `first-tree tree verify --help` for options.
 
@@ -563,7 +700,18 @@ shown in human output. Hidden paths and common generated directories
 (`node_modules`, `__pycache__`, `dist`, `build`, `.next`, `.turbo`) are
 skipped.
 
-Human output is written as a tree whose node labels use:
+Human output starts with the Context Tree git checkout branch, then the
+rendered tree. When the current branch is not exactly `main`, `master`, or
+`origin/main`, the branch line is followed by a stale-tree warning:
+Detached HEAD checkouts whose commit matches `refs/remotes/origin/main` are
+reported as `origin/main`.
+
+```text
+Branch: feature/stale-tree
+Warning: current branch "feature/stale-tree" is not main/master; it may be stale. Switch to main/master.
+```
+
+The rendered tree's node labels use:
 
 ```text
 relative/path/ [Title] -> Description
@@ -584,11 +732,16 @@ With global `--json` or `FIRST_TREE_JSON=1`, `first-tree tree tree`
 emits a single `{ ok: true, data }` envelope on stdout. `data.root` is the
 git repo root, `data.target` is the resolved target directory relative to
 that root, and `data.options` records the parsed `level`, `pattern`, and
-effective `path`. `data.tree` contains the same filtered hierarchy as
+effective `path`. `data.branch` reports the current tree checkout as
+`{ name, isMainline, warning }`; `warning` is `null` for `main`, `master`,
+and `origin/main`, including detached HEAD checkouts that match
+`refs/remotes/origin/main`; otherwise it contains the same stale-tree warning
+string shown in human mode. `data.tree` contains the same filtered hierarchy as
 structured nodes with `kind`, `name`, `relativePath`, `depth`, `metadata`,
 `hasNode`, and `children` fields; `metadata` includes `title`, optional
-`description`, and `owners`. Human tree text is written to stderr so stdout
-stays reserved for machine-readable JSON.
+`description`, and `owners`. Human tree text and branch warnings are not
+written to stderr in JSON mode, so stdout stays reserved for machine-readable
+JSON.
 
 ## Environment variables
 
@@ -599,7 +752,7 @@ Most environment variables use the `FIRST_TREE_` prefix.
 | Variable | Purpose | Default |
 |---|---|---|
 | `FIRST_TREE_HOME` | Override the CLI home directory for config, data, and agent workspaces. | Channel-dependent: `~/.first-tree` (prod), `~/.first-tree-staging` (staging), `~/.first-tree-dev` (dev). |
-| `FIRST_TREE_SERVER_URL` | Server URL (alternative to the connect token's `iss` claim). | — |
+| `FIRST_TREE_SERVER_URL` | Server URL fallback for non-login commands. `login` derives the URL from the connect token. | — |
 | `FIRST_TREE_LOG_LEVEL` | Log level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`). | `info` |
 | `FIRST_TREE_JSON` | JSON output mode (equivalent to `--json`). | — |
 
@@ -682,7 +835,7 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_DATABASE_URL` | PostgreSQL connection URL. | — (required) |
 | `FIRST_TREE_PORT` | HTTP listen port. | `8000` |
 | `FIRST_TREE_HOST` | Bind address. | `127.0.0.1` |
-| `FIRST_TREE_PUBLIC_URL` | Public-facing server URL. Stamped as the `iss` claim on connect tokens and used to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | — |
+| `FIRST_TREE_PUBLIC_URL` | Public-facing server URL. Used as the origin for short connect URLs and to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | — |
 | `FIRST_TREE_CORS_ORIGIN` | Allowed origin for the web console. | — |
 | `FIRST_TREE_TRUST_PROXY` | Trust the reverse-proxy `X-Forwarded-*` headers. | `false` |
 | `FIRST_TREE_WORKSPACES_ROOT` | Where agent worktrees are materialised on the host. | derived from `FIRST_TREE_HOME` |

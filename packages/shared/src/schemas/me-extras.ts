@@ -47,44 +47,52 @@ export const completeOnboardingSchema = z.object({
 export type CompleteOnboarding = z.infer<typeof completeOnboardingSchema>;
 
 /**
- * Discriminates *which* kickoff this is for the same (human, agent) pair, so the
- * idempotency key doesn't conflate distinct intents:
- *   - "intro" — "meet your agent" with no tree work (admin connected no repo,
- *     or an invitee launching while the team isn't set up yet).
- *   - "work"  — wake the agent for the value-first first chat: read the repo /
- *     team context, show concrete understanding, and ask the user to pick a
- *     first useful task.
- *   - "tree"  — wake the agent to seed/read the team's Context Tree (admin with
- *     repos AND the `/build-tree` recovery surface). It is intentionally
- *     separate from "work" so heavy tree setup can run in its own chat.
- *
- * Without this, an admin who first does an "intro" kickoff and later runs
- * `/build-tree` with the same agent would resolve to the intro chat, and the
- * send-if-empty guard would skip the tree-seeding bootstrap — the UI completes
- * but the agent is never woken to build the tree.
- */
-export const kickoffKindSchema = z.enum(["intro", "work", "tree"]);
-export type KickoffKind = z.infer<typeof kickoffKindSchema>;
-
-/**
  * Body for `POST /me/onboarding/kickoff` — the idempotent server-side chat
- * creation/send tail of onboarding. Callers decide whether this kickoff should
- * stamp completion after the chat exists; background/support chats can pass
- * `complete: false`.
+ * creation/send tail for the user's first agent chat. Callers decide whether
+ * this kickoff should stamp completion after the chat exists; background/support
+ * chats can pass `complete: false`.
  *
  * `agentUuid` is the bootstrap agent the chat is opened with. `bootstrap` is
- * the first message body. `kind` separates the intro vs tree-building intents
- * (see `kickoffKindSchema`). `organizationId` scopes the membership whose
- * completion is stamped (defaults to the caller's default membership).
+ * the first message body. `topic` is the display title for the chat.
+ * `organizationId` scopes the membership whose completion is stamped (defaults
+ * to the caller's default membership).
  */
-export const kickoffOnboardingSchema = z.object({
-  organizationId: z.string().optional(),
-  agentUuid: z.string().min(1),
-  bootstrap: z.string().min(1),
-  kind: kickoffKindSchema,
-  complete: z.boolean().optional(),
-});
+export const kickoffOnboardingSchema = z
+  .object({
+    organizationId: z.string().optional(),
+    agentUuid: z.string().min(1),
+    bootstrap: z.string().min(1),
+    topic: z.string().trim().min(1).max(120).optional(),
+    complete: z.boolean().optional(),
+    // Retained only so stale quickstart clients receive a controlled
+    // moved/disabled response from /me/onboarding/kickoff. Current campaign
+    // quickstart uses /me/landing-campaigns/start; this field must not create an
+    // onboarding kickoff chat or campaign idempotency key.
+    campaign: z
+      .string()
+      .regex(/^[a-z0-9][a-z0-9-]*$/)
+      .max(50)
+      .optional(),
+  })
+  .strict();
 export type KickoffOnboarding = z.infer<typeof kickoffOnboardingSchema>;
+
+/**
+ * Body for `POST /me/onboarding/tree-setup/kickoff` — the dedicated Context
+ * Tree setup chat. Kept separate from the first-chat kickoff so that tree setup
+ * has an org-level idempotency key and no intro/work/tree discriminator leaks
+ * into the general onboarding chat contract.
+ */
+export const treeSetupKickoffSchema = z
+  .object({
+    organizationId: z.string().min(1),
+    agentUuid: z.string().min(1),
+    bootstrap: z.string().min(1),
+    topic: z.string().trim().min(1).max(120).optional(),
+    complete: z.boolean().optional(),
+  })
+  .strict();
+export type TreeSetupKickoff = z.infer<typeof treeSetupKickoffSchema>;
 
 /** Response for `POST /me/onboarding/kickoff` — the (stable) kickoff chat id. */
 export const kickoffOnboardingResultSchema = z.object({
@@ -104,7 +112,7 @@ export type KickoffOnboardingResult = z.infer<typeof kickoffOnboardingResultSche
  * Web reports:
  *   - `team_renamed`           — Step 1 user changed the auto-named team
  *   - `agent_created`          — Step 2 successfully created the agent
- *   - `kickoff_chat_started`   — an intro/work/tree kickoff chat was created
+ *   - `kickoff_chat_started`   — a first-chat or tree-setup kickoff was created
  *   - `tree_chat_started`      — legacy name for the Step 3 tree kickoff event
  *   - `tree_intro_dismissed`   — Step 3 [I'll do it later] clicked
  */

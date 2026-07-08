@@ -37,6 +37,11 @@ type MeResponse = {
      */
     completedAt?: string | null;
   };
+  /** Deployment-level feature switches (presentation-only; routes enforce). */
+  features?: {
+    /** Document review (docloop): the Context → Documents sub-tab. */
+    docs?: boolean;
+  };
 };
 
 type AuthContextValue = {
@@ -91,6 +96,8 @@ type AuthContextValue = {
    * satisfy it.
    */
   currentOrgHasPersonalAgent: boolean;
+  /** Document review (docloop) surface is enabled on this deployment. */
+  docsEnabled: boolean;
   onboardingStep: "connect" | "create_agent" | "completed" | null;
   /**
    * ISO timestamp when the user dismissed onboarding ("finish later").
@@ -213,6 +220,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(() => !!getStoredTokens());
   const [user, setUser] = useState<MeUser | null>(null);
   const [memberships, setMemberships] = useState<MeMembership[]>([]);
+  const [docsEnabled, setDocsEnabled] = useState(false);
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(() => {
     const init = readSelectedOrgId(userIdFromToken());
     // Sync the API client's module-level override on first paint so the
@@ -256,6 +264,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOnboardingStep(null);
     setOnboardingDismissedAt(null);
     setOnboardingCompletedAt(null);
+    setDocsEnabled(false);
     setMeLoaded(false);
     setSwitchingOrg(null);
   }, [queryClient]);
@@ -266,6 +275,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(data.user ?? null);
       const ms = data.memberships ?? [];
       setMemberships(ms);
+      setDocsEnabled(data.features?.docs === true);
       const nextStep = data.onboarding?.step ?? null;
       setOnboardingStep(nextStep);
       // Legacy fallback for older /me payloads. Modern payloads carry these
@@ -512,6 +522,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         orgHasOtherMembers: currentMembership?.orgHasOtherMembers ?? false,
         currentOrgHasUsableAgent: currentMembership?.hasUsableAgent ?? false,
         currentOrgHasPersonalAgent: currentMembership?.hasPersonalAgent ?? false,
+        docsEnabled,
         onboardingStep,
         onboardingDismissedAt: currentOnboardingDismissedAt,
         onboardingCompletedAt: currentOnboardingCompletedAt,

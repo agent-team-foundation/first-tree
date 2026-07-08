@@ -1,4 +1,7 @@
+import { Writable } from "node:stream";
+import { AGENT_RUNTIME_SESSION_HEADER, AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyClientLoggerConfig } from "../observability/logger.js";
 import { FirstTreeHubSDK, SdkError } from "../sdk.js";
 
 /**
@@ -81,6 +84,17 @@ function buildFetchMock(results: Array<Response | Error>): ReturnType<typeof vi.
   return fetchMock;
 }
 
+function collectLogs(): { dest: Writable; read: () => string } {
+  const chunks: string[] = [];
+  const dest = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(chunk.toString());
+      callback();
+    },
+  });
+  return { dest, read: () => chunks.join("") };
+}
+
 /**
  * Drive an async expression to completion under fake timers. Each iteration
  * flushes microtasks (so the awaited `setTimeout` registers its scheduler
@@ -121,16 +135,13 @@ function makeSdk(): FirstTreeHubSDK {
 describe("FirstTreeHubSDK doFetch retry layer", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    // Suppress the deliberate `console.warn` retry logs in the SUT so test
-    // output stays readable. We do not assert on the log text itself —
-    // those are diagnostic, not contractual.
-    vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    applyClientLoggerConfig({ level: "silent", format: "json", destination: process.stderr, explicit: false });
   });
 
   it("retries through two transient fetch-failed errors and succeeds on the third attempt", async () => {
@@ -202,6 +213,8 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
   });
 
   it("retries on HTTP 500 and succeeds on the second attempt", async () => {
+    const { dest, read } = collectLogs();
+    applyClientLoggerConfig({ level: "warn", format: "json", destination: dest });
     const fetchMock = buildFetchMock([makeStatusResponse(500, "boom"), makeOkResponse()]);
     vi.stubGlobal("fetch", fetchMock);
 
@@ -210,6 +223,8 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result).toMatchObject({ id: "m-1" });
+    expect(read()).toContain('"module":"sdk"');
+    expect(read()).toContain("retry attempt=1 reason=http-500 path=");
   });
 
   it("treats AbortError (timeout) as transient and retries up to three times", async () => {
@@ -243,5 +258,25 @@ describe("FirstTreeHubSDK doFetch retry layer", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(result).toMatchObject({ id: "m-1" });
+  });
+
+  it("adds the runtime session header on agent-scoped HTTP requests", async () => {
+    const fetchMock = buildFetchMock([makeOkResponse()]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sdk = new FirstTreeHubSDK({
+      serverUrl: SERVER_URL,
+      getAccessToken: () => "tok-test",
+      agentId: "agent-1",
+      runtimeSessionToken: "runtime-token-1",
+    });
+    await flush(sdk.sendMessage(CHAT_ID, { source: "api", format: "text", content: "hi" }));
+
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(init?.headers).toMatchObject({
+      Authorization: "Bearer tok-test",
+      [AGENT_SELECTOR_HEADER]: "agent-1",
+      [AGENT_RUNTIME_SESSION_HEADER]: "runtime-token-1",
+    });
   });
 });

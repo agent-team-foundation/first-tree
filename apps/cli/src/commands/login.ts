@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { ClientOrgMismatchError } from "@first-tree/client";
 import {
   agentConfigSchema,
+  type ClientConfig,
   clientConfigSchema,
   defaultConfigDir,
   defaultDataDir,
@@ -18,18 +19,26 @@ import {
   ClientRuntime,
   COMMAND_VERSION,
   cliFetch,
+  confirmLocalClientSwitch,
   createApiNameResolver,
   createExecuteUpdate,
+  ensureActiveRootClientIdPersisted,
   ensureFreshAccessToken,
-  getClientServiceStatus,
   handleClientOrgMismatch,
+  hasIncompleteClientSwitch,
   installClientService,
   isServiceSupported,
   loadCredentials,
   migrateLocalAgentDirs,
   promptUpdate,
+  readActiveClientOwner,
+  readActiveRootClientId,
+  readRememberedLocalClientIdForAccount,
+  recordActiveClientOwner,
   refreshServerUpdateTarget,
+  resolveClientRuntimeStopReason,
   saveCredentials,
+  switchLocalClientForLogin,
 } from "../core/index.js";
 import { print } from "../core/output.js";
 import { decodeJwtPayload, deriveHubUrlFromToken, HubUrlDerivationError } from "./_shared/connect-token.js";
@@ -39,30 +48,6 @@ function readOwnerSub(token: string | undefined): string | null {
   if (!token) return null;
   const payload = decodeJwtPayload(token);
   return typeof payload?.sub === "string" ? payload.sub : null;
-}
-
-function formatServiceLine(): string {
-  const serviceStatus = getClientServiceStatus();
-  if (serviceStatus.state === "active") return `running (${serviceStatus.detail ?? "live"})`;
-  if (serviceStatus.state === "inactive") {
-    return `installed but not running${serviceStatus.detail ? ` — ${serviceStatus.detail}` : ""}`;
-  }
-  return "not installed";
-}
-
-function rejectAccountSwitch(opts: { reason: string; serverUrl?: string }): never {
-  const purgeCommand = `${channelConfig.binName} logout --purge`;
-  print.line("\n  This computer already has First Tree login state for another or unknown user.\n\n");
-  if (opts.serverUrl) print.line(`       Existing server:    ${opts.serverUrl}\n`);
-  print.line(`       Background service: ${formatServiceLine()}\n\n`);
-  print.line("  Refusing to overwrite local credentials or reuse this machine's client identity.\n");
-  print.line(`  To switch accounts, run \`${purgeCommand}\` first, then login again.\n\n`);
-  print.line("  `logout --purge` stops the current daemon, signs out the current user, and\n");
-  print.line("  removes this machine's local client identity plus local agent configs,\n");
-  print.line("  workspaces, and session state. Server-side clients, agents, chats, and\n");
-  print.line("  history are not deleted; the previous client and agents simply stop running\n");
-  print.line("  from this machine unless they are set up again.\n\n");
-  fail("ACCOUNT_SWITCH_REQUIRES_PURGE", opts.reason, 1);
 }
 
 async function exchangeToken(url: string, token: string): Promise<{ accessToken: string; refreshToken: string }> {
@@ -80,22 +65,23 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
 }
 
 /**
- * `login <token>` — single entry point. The connect token's
- * `iss` claim carries the server URL so prod / staging / local environments are
- * tagged at issuance and the operator can never accidentally cross-target.
+ * `login <token>` — single entry point. Short connect URLs carry the server URL
+ * in their origin; legacy JWT connect tokens keep carrying it in `iss`, so prod
+ * / staging / local environments stay tagged at issuance and the operator can
+ * never accidentally cross-target.
  *
- * Account switches are fail-closed when credentials already exist. The stored
- * access token owner is compared with the new server-issued access token's
- * `sub` claim; a mismatch must go through `logout --purge` before logging in
- * again. Without credentials, login preserves the local client identity so a
- * normal `logout` can be followed by same-user reconnect.
+ * Account switches are explicit local-client switches. The stored access token
+ * owner is compared with the new server-issued access token's `sub` claim; a
+ * mismatch prompts in TTY mode, requires `--force-switch` in non-TTY mode, then
+ * stops/drains the current runtime before moving root state.
  */
 export function registerLoginCommand(program: Command): void {
   program
     .command("login <token>")
     .description("Sign this computer into First Tree using a token from the web console")
     .option("--no-start", "Skip background daemon install/start (writes credentials and exits)")
-    .action(async (token: string, options: { start?: boolean }) => {
+    .option("--force-switch", "Confirm switching this computer to a different First Tree user in non-TTY mode")
+    .action(async (token: string, options: { start?: boolean; forceSwitch?: boolean }) => {
       try {
         let url: string;
         try {
@@ -110,30 +96,80 @@ export function registerLoginCommand(program: Command): void {
         const configDir = defaultConfigDir();
         const existingCredentials = loadCredentials();
         const previousOwnerSub = readOwnerSub(existingCredentials?.accessToken);
+        const rememberedOwner = readActiveClientOwner();
 
         const tokens = await exchangeToken(url, token);
         const newOwnerSub = readOwnerSub(tokens.accessToken);
         if (!newOwnerSub) {
           fail("AUTH_ERROR", "Server access token is missing the required `sub` claim.", 1);
         }
-        if (existingCredentials && (!previousOwnerSub || previousOwnerSub !== newOwnerSub)) {
-          rejectAccountSwitch({
-            reason:
-              "This connect token belongs to a different user than the credentials already stored on this machine.",
-            serverUrl: existingCredentials.serverUrl,
+        let config: ClientConfig | null = null;
+        if (existingCredentials && !previousOwnerSub) {
+          fail(
+            "CLIENT_OWNER_UNKNOWN_REQUIRES_RESET_OR_OWNER_LOGIN",
+            "Existing credentials do not expose an owner user id, so First Tree cannot safely decide whether this is a same-user refresh or account switch.",
+            1,
+          );
+        }
+        if (hasIncompleteClientSwitch()) {
+          config = await switchLocalClientForLogin({
+            targetTokens: { ...tokens, serverUrl: url },
+            targetOwnerSub: newOwnerSub,
           });
+          print.line("\n  ✓ Interrupted local client switch recovered\n");
+        }
+        const existingOwnerSub = previousOwnerSub;
+        const switchFrom = config
+          ? null
+          : existingCredentials && existingOwnerSub && existingOwnerSub !== newOwnerSub
+            ? { serverUrl: existingCredentials.serverUrl, userId: existingOwnerSub }
+            : rememberedOwner && rememberedOwner.userId !== newOwnerSub
+              ? { serverUrl: rememberedOwner.serverUrl, userId: rememberedOwner.userId }
+              : null;
+        if (switchFrom) {
+          await confirmLocalClientSwitch({
+            existingServerUrl: switchFrom.serverUrl,
+            targetServerUrl: url,
+            existingUserId: switchFrom.userId,
+            targetUserId: newOwnerSub,
+            existingClientId: readActiveRootClientId(configDir) ?? rememberedOwner?.clientId,
+            targetClientId: readRememberedLocalClientIdForAccount(url, newOwnerSub) ?? undefined,
+            forceSwitch: options.forceSwitch === true,
+          });
+          config = await switchLocalClientForLogin({
+            existingCredentials: {
+              accessToken: existingCredentials?.accessToken ?? "",
+              refreshToken: existingCredentials?.refreshToken ?? "",
+              serverUrl: switchFrom.serverUrl,
+            },
+            previousOwnerSub: switchFrom.userId,
+            targetTokens: { ...tokens, serverUrl: url },
+            targetOwnerSub: newOwnerSub,
+          });
+          print.line("\n  ✓ Previous local client parked\n");
+        }
+        if (!existingCredentials && !rememberedOwner && readActiveRootClientId(configDir)) {
+          fail(
+            "CLIENT_OWNER_UNKNOWN_REQUIRES_RESET_OR_OWNER_LOGIN",
+            `Existing client.yaml has no credentials or remembered owner metadata, so First Tree cannot safely decide whether this is a same-user reconnect or account switch. Run \`${channelConfig.binName} computer reset\` after backing up local state, or restore/log in from a state that still has the current owner's credentials.`,
+            1,
+          );
         }
 
-        const clientConfigPath = join(configDir, "client.yaml");
-        setConfigValue(clientConfigPath, "server.url", url);
         print.line(`\n  ✓ Server: ${url}\n`);
 
-        saveCredentials({ ...tokens, serverUrl: url });
-        print.line("  ✓ Authenticated\n");
+        if (!config) {
+          const clientConfigPath = join(configDir, "client.yaml");
+          setConfigValue(clientConfigPath, "server.url", url);
+          saveCredentials({ ...tokens, serverUrl: url });
 
-        resetConfig();
-        resetConfigMeta();
-        const config = await initConfig({ schema: clientConfigSchema, role: "client" });
+          resetConfig();
+          resetConfigMeta();
+          config = await initConfig({ schema: clientConfigSchema, role: "client" });
+          ensureActiveRootClientIdPersisted(config.client.id, configDir);
+          recordActiveClientOwner({ clientId: config.client.id, userId: newOwnerSub, serverUrl: url });
+        }
+        print.line("  ✓ Authenticated\n");
         print.line(`  ✓ Computer registered (id: ${config.client.id})\n`);
 
         const shouldInstallService = options.start !== false && isServiceSupported();
@@ -187,7 +223,7 @@ export function registerLoginCommand(program: Command): void {
         const shutdown = async () => {
           print.line("\n  Shutting down...\n");
           runtime.unwatchAgentsDir();
-          await runtime.stop();
+          await runtime.stop(resolveClientRuntimeStopReason());
           process.exit(0);
         };
         process.on("SIGINT", () => void shutdown());

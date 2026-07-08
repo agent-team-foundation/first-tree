@@ -6,10 +6,11 @@ import {
   type OnboardingStep,
   onboardingEventSchema,
   patchOnboardingSchema,
+  treeSetupKickoffSchema,
   updateMyProfileSchema,
 } from "@first-tree/shared";
 import { getChannelConfig } from "@first-tree/shared/channel";
-import { and, asc, eq, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, ne } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { agents } from "../db/schema/agents.js";
@@ -29,6 +30,7 @@ import * as clientService from "../services/client.js";
 import { GithubApiError, listUserRepos } from "../services/github-oauth.js";
 import { GithubUserTokenError, getFreshGithubUserToken } from "../services/github-user-token.js";
 import { buildInviteUrl, findActiveByToken, getActiveInvitation, recordRedemption } from "../services/invitation.js";
+import { isLandingCampaignServiceMembership } from "../services/landing-campaigns/guards.js";
 import { updateOwnProfile } from "../services/member.js";
 import {
   countActiveMembersByOrgs,
@@ -47,6 +49,29 @@ import { clientCommandVersionHint } from "./client-command-version.js";
 const onboardingTreeSetupStatusQuerySchema = z.object({
   organizationId: z.string().optional(),
 });
+
+function joinUrl(base: string, path: string): string {
+  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function buildPortableBootstrapCommand(options: {
+  installerUrl: string;
+  portableDownloadBaseUrl: string;
+  binName: string;
+  token: string;
+}): string {
+  return [
+    `tmp="$(mktemp "\${TMPDIR:-/tmp}/first-tree-install.XXXXXX")"`,
+    `trap 'rm -f "$tmp"' EXIT HUP INT TERM`,
+    `curl -fsSL ${shellQuote(options.installerUrl)} -o "$tmp"`,
+    `FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL=${shellQuote(options.portableDownloadBaseUrl)} sh "$tmp"`,
+    `"$HOME/.local/bin/${options.binName}" login ${shellQuote(options.token)}`,
+  ].join(" && \\\n");
+}
 
 /**
  * `/me` and self-service organization routes (Class A — User-scoped).
@@ -89,6 +114,26 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       app.db,
       memberships.map((mb) => mb.organizationId),
     );
+    const serviceUserId = app.config.growth.landingCampaigns?.serviceUserId;
+    if (serviceUserId && memberships.length > 0) {
+      const serviceMemberRows = await app.db
+        .select({ userId: members.userId, organizationId: members.organizationId })
+        .from(members)
+        .where(
+          and(
+            eq(members.userId, serviceUserId),
+            eq(members.status, "active"),
+            inArray(
+              members.organizationId,
+              memberships.map((mb) => mb.organizationId),
+            ),
+          ),
+        );
+      for (const row of serviceMemberRows) {
+        if (!isLandingCampaignServiceMembership(app.config, row)) continue;
+        memberCounts.set(row.organizationId, Math.max(0, (memberCounts.get(row.organizationId) ?? 0) - 1));
+      }
+    }
 
     // Org-scoped onboarding readiness: which of the caller's orgs already
     // hold a non-human agent THIS member can use (own or org-visible). The
@@ -146,6 +191,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         completedAt: defaultRow?.onboardingCompletedAt ? defaultRow.onboardingCompletedAt.toISOString() : null,
       },
       inviteUrl,
+      // Deployment-level feature switches the web shell needs before it can
+      // decide what to render (e.g. the Context → Documents sub-tab). Server
+      // routes stay the enforcement point; this is presentation-only.
+      features: {
+        docs: app.config.docs.enabled,
+      },
     };
   });
 
@@ -236,20 +287,42 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
    * Folds the three steps the browser used to orchestrate sequentially (create
    * the first chat → send the bootstrap message → stamp completion) into one
    * resumable request. Re-running it (reopened tab, network retry, build-tree
-   * recovery) reuses the same kickoff chat and stamps completion only once,
+   * recovery) reuses the same first chat and stamps completion only once,
    * instead of leaving the orphan-chat / duplicate-bootstrap / completed-stamp-
    * decoupled-from-reality states the client-orchestrated flow could produce.
    */
   app.post("/me/onboarding/kickoff", async (request, reply) => {
     const { userId } = requireUser(request);
+    if (hasRetiredKickoffKind(request.body)) {
+      return reply.status(409).send({
+        error:
+          'This onboarding kickoff request uses the retired "kind" contract. Refresh the First Tree web app and retry.',
+        code: "stale_onboarding_kickoff_contract",
+      });
+    }
     const body = kickoffOnboardingSchema.parse(request.body);
-    const { memberId, humanAgentId } = await resolveOnboardingMember(app, userId, body.organizationId);
+    const campaign = body.campaign;
+    if (campaign) {
+      if (!app.config.growth.landingPagesEnabled) {
+        return reply.status(404).send({
+          error: "Growth landing pages are disabled on this First Tree deployment.",
+          code: "feature_disabled",
+        });
+      }
+      return reply.status(410).send({
+        error: "Campaign quickstart moved to /me/landing-campaigns/start.",
+        code: "campaign_kickoff_moved",
+      });
+    }
+    const { memberId, humanAgentId, organizationId } = await resolveOnboardingMember(app, userId, body.organizationId);
     const result = await kickoffOnboarding(app.db, {
       memberId,
       humanAgentId,
+      organizationId,
       targetAgentId: body.agentUuid,
       bootstrap: body.bootstrap,
-      kind: body.kind,
+      topic: body.topic ?? "Get started with First Tree",
+      kickoffKey: `${humanAgentId}:${body.agentUuid}:onboarding`,
       complete: body.complete ?? true,
     });
     if (result.sent) {
@@ -259,13 +332,37 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(200).send({ chatId: result.chatId });
   });
 
+  app.post("/me/onboarding/tree-setup/kickoff", async (request, reply) => {
+    const { userId } = requireUser(request);
+    const body = treeSetupKickoffSchema.parse(request.body);
+    const { memberId, humanAgentId, organizationId } = await resolveOnboardingMember(app, userId, body.organizationId);
+    const result = await kickoffOnboarding(app.db, {
+      memberId,
+      humanAgentId,
+      organizationId,
+      targetAgentId: body.agentUuid,
+      bootstrap: body.bootstrap,
+      topic: body.topic ?? "Set up shared context",
+      kickoffKey: `${organizationId}:tree-setup`,
+      complete: body.complete ?? true,
+    });
+    if (result.sent) {
+      notifyRecipients(app.notifier, result.sent.recipients, result.sent.messageId);
+      app.log.info(
+        { event: "onboarding.tree_setup_kickoff", userId, chatId: result.chatId },
+        "onboarding funnel: tree setup kickoff",
+      );
+    }
+    return reply.status(200).send({ chatId: result.chatId });
+  });
+
   /**
    * GET /me/onboarding/tree-setup-status — recovery probe for the standalone
    * `/build-tree` surface and Settings nav. A missing tree binding still needs
-   * setup. A binding created after the org's value-first work chat completed
-   * also needs setup until a tree kickoff bootstrap message exists; this covers
+   * setup. A binding created after the org's value-first first chat completed
+   * also needs setup until a tree setup bootstrap message exists; this covers
    * the recoverable edge where Cloud wrote `context_tree` but the background
-   * tree kickoff failed before notifying the agent. The recovery decision is
+   * tree setup kickoff failed before notifying the agent. The recovery decision is
    * org-level: different admins in the same org must not see different setup
    * debt just because their own onboarding completion timestamps differ.
    */
@@ -405,18 +502,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * POST /me/connect-tokens — short-lived connect token for the CLI.
-   * The token now carries only `sub = userId`; the CLI rejoins via
-   * `exchangeConnectToken` which probes `members` realtime.
+   * The public token is a short connect URL; the CLI rejoins via
+   * `exchangeConnectToken`, which consumes the code and probes `members`
+   * realtime before issuing user credentials.
    */
   app.post("/me/connect-tokens", async (request) => {
     const { userId } = requireUser(request);
     const issuer = resolvePublicUrl(app, request);
-    const { token, expiresIn } = await authService.generateConnectToken(
-      userId,
-      app.config.secrets.jwtSecret,
-      app.config.auth,
-      issuer,
-    );
+    const { token, expiresIn } = await authService.generateConnectToken(app.db, userId, app.config.auth, issuer);
     // Channel-aware npm spec + bin name. Web onboarding renders the
     // returned `bootstrapCommand` / `binName` directly so a fresh-machine
     // install lands on the right package without web needing to know
@@ -436,12 +529,56 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         command,
         bootstrapCommand: command,
         npmSpec: null,
+        installMethod: "source",
+        installerUrl: null,
         binName: ch.binName,
       };
     }
     const npmSpec = ch.packageName;
+    if (app.config.connectBootstrap.method === "portable") {
+      const installerPath = ch.portable.publicInstallerPath;
+      if (installerPath === null) {
+        return {
+          token,
+          expiresIn,
+          command,
+          bootstrapCommand: command,
+          npmSpec,
+          installMethod: "source",
+          installerUrl: null,
+          binName: ch.binName,
+        };
+      }
+      const portableDownloadBaseUrl = app.config.connectBootstrap.portableDownloadBaseUrl;
+      const installerUrl = joinUrl(portableDownloadBaseUrl, installerPath);
+      const bootstrapCommand = buildPortableBootstrapCommand({
+        installerUrl,
+        portableDownloadBaseUrl,
+        binName: ch.binName,
+        token,
+      });
+      return {
+        token,
+        expiresIn,
+        command,
+        bootstrapCommand,
+        npmSpec,
+        installMethod: "portable",
+        installerUrl,
+        binName: ch.binName,
+      };
+    }
     const bootstrapCommand = `npm install -g ${npmSpec}\n${command}`;
-    return { token, expiresIn, command, bootstrapCommand, npmSpec, binName: ch.binName };
+    return {
+      token,
+      expiresIn,
+      command,
+      bootstrapCommand,
+      npmSpec,
+      installMethod: "npm",
+      installerUrl: null,
+      binName: ch.binName,
+    };
   });
 
   /**
@@ -505,7 +642,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     return list.map((c) => ({
       id: c.id,
       userId: c.userId,
-      status: c.status,
+      status: clientService.clientStatusForApi(c),
       authState: clientService.deriveAuthState(c, refreshExpirySeconds),
       binName,
       sdkVersion: c.sdkVersion,
@@ -689,13 +826,17 @@ async function resolveOnboardingMember(
   app: FastifyInstance,
   userId: string,
   organizationId?: string,
-): Promise<{ memberId: string; humanAgentId: string }> {
+): Promise<{ memberId: string; humanAgentId: string; organizationId: string }> {
   const memberId = await resolveOnboardingMembershipId(app, userId, organizationId);
   const [row] = await app.db
-    .select({ agentId: members.agentId })
+    .select({ agentId: members.agentId, organizationId: members.organizationId })
     .from(members)
     .where(eq(members.id, memberId))
     .limit(1);
   if (!row) throw new NotFoundError("Membership not found");
-  return { memberId, humanAgentId: row.agentId };
+  return { memberId, humanAgentId: row.agentId, organizationId: row.organizationId };
+}
+
+function hasRetiredKickoffKind(body: unknown): boolean {
+  return typeof body === "object" && body !== null && "kind" in body;
 }

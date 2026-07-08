@@ -82,10 +82,13 @@ const resourceMocks = vi.hoisted(() => ({
 
 const onboardingEventMocks = vi.hoisted(() => {
   const startOnboardingChat = vi.fn();
+  const treeSetupStartChat = vi.fn();
   return {
     reportOnboardingEvent: vi.fn(),
     startOnboardingChat,
     postOnboardingStartChat: startOnboardingChat,
+    postTreeSetupStartChat: treeSetupStartChat,
+    treeSetupStartChat,
     getTreeSetupStatus: vi.fn(),
   };
 });
@@ -717,6 +720,7 @@ beforeEach(() => {
   meChatMocks.listMeChats.mockResolvedValue({ rows: [], nextCursor: null });
   onboardingEventMocks.reportOnboardingEvent.mockResolvedValue(undefined);
   onboardingEventMocks.startOnboardingChat.mockResolvedValue({ chatId: "chat-onboarding" });
+  onboardingEventMocks.treeSetupStartChat.mockResolvedValue({ chatId: "chat-tree-setup" });
   onboardingEventMocks.getTreeSetupStatus.mockResolvedValue({
     needsTreeSetup: false,
     hasTreeBinding: true,
@@ -1950,12 +1954,12 @@ describe("web DOM interaction coverage", () => {
       expect.objectContaining({
         organizationId: "org-1",
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("Welcome to First Tree — this is your first chat with Nova."),
-        kind: "work",
+        bootstrap: expect.stringContaining("Nova, welcome aboard."),
+        topic: "Get started with First Tree",
         complete: true,
       }),
     );
-    expect(onboardingEventMocks.startOnboardingChat.mock.calls.some(([body]) => body.kind === "tree")).toBe(false);
+    expect(onboardingEventMocks.startOnboardingChat.mock.calls.every(([body]) => !("kind" in body))).toBe(true);
     expect(resourceMocks.createTeamResourceForOrg).toHaveBeenCalledWith("org-1", {
       type: "repo",
       name: "acme/web",
@@ -1975,12 +1979,13 @@ describe("web DOM interaction coverage", () => {
     await waitForText("Start working with your agent", adminNoProject.container);
     await click(findButton(adminNoProject.container, "Start chat"));
     expect(onboardingEventMocks.startOnboardingChat).toHaveBeenLastCalledWith(
-      expect.objectContaining({ agentUuid: "agent-1", kind: "intro" }),
+      expect.objectContaining({ agentUuid: "agent-1", topic: "Get started with First Tree" }),
     );
+    expect(onboardingEventMocks.startOnboardingChat.mock.calls.at(-1)?.[0]).not.toHaveProperty("kind");
     expect(adminNoProject.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
     await unmountRoot(adminNoProject.root);
 
-    // Invitee · not-ready via no team tree → "Meet your agent" lands in a real
+    // Invitee · not-ready via no team tree → the first chat lands in a real
     // chat (runStartChat → completeAndEnterChat), not finishLater.
     orgSettingsMocks.getContextTreeSetting.mockResolvedValueOnce({ repo: "", branch: null });
     const inviteeNoTree = await renderOnboardingDom(<StepStartChat />, { path: "invitee", activeStep: "start-chat" });
@@ -2025,8 +2030,8 @@ describe("web DOM interaction coverage", () => {
     expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("Welcome to First Tree — this is your first chat with Nova."),
-        kind: "work",
+        bootstrap: expect.stringContaining("Please help me get settled into this team on First Tree."),
+        topic: "Get settled on First Tree",
       }),
     );
     expect(onboardingEventMocks.reportOnboardingEvent).toHaveBeenCalledWith(
@@ -2057,21 +2062,20 @@ describe("web DOM interaction coverage", () => {
     expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        kind: "work",
+        topic: "Get started with First Tree",
         complete: true,
       }),
     );
     expect(contextTreeMocks.initializeContextTree).not.toHaveBeenCalled();
-    expect(onboardingEventMocks.startOnboardingChat.mock.calls.some(([body]) => body.kind === "tree")).toBe(false);
+    expect(onboardingEventMocks.treeSetupStartChat).not.toHaveBeenCalled();
+    expect(onboardingEventMocks.startOnboardingChat.mock.calls.every(([body]) => !("kind" in body))).toBe(true);
     expect(view.flow.completeAndEnterChat).toHaveBeenCalledWith("chat-onboarding");
     await unmountRoot(view.root);
   });
 
-  it("builds a missing tree from the Context page entry via the tree setup chat", async () => {
+  it("builds a missing tree from the Context page entry via agent-seed (no provisioning)", async () => {
     const { ContextTreeBuildEntry } = await import("../context-tree-build-entry.js");
-    orgSettingsMocks.getContextTreeSetting
-      .mockResolvedValueOnce({ repo: "", branch: null })
-      .mockResolvedValueOnce({ repo: "https://github.com/acme/context-tree", branch: "main" });
+    orgSettingsMocks.getContextTreeSetting.mockResolvedValueOnce({ repo: "", branch: null });
 
     const view = await renderDom(<ContextTreeBuildEntry />);
     await waitForText("Build your Context Tree", view.container);
@@ -2081,18 +2085,18 @@ describe("web DOM interaction coverage", () => {
     );
     await waitForText("Building", view.container);
 
-    expect(contextTreeMocks.initializeContextTree).toHaveBeenCalledWith("org-1");
-    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledTimes(1);
-    expect(onboardingEventMocks.startOnboardingChat).toHaveBeenCalledWith(
+    // agentSeed default: no Cloud provisioning. The agent sets the tree up from
+    // its actual state, launched through the org-level tree-setup chat.
+    expect(contextTreeMocks.initializeContextTree).not.toHaveBeenCalled();
+    expect(onboardingEventMocks.startOnboardingChat).not.toHaveBeenCalled();
+    expect(onboardingEventMocks.treeSetupStartChat).toHaveBeenCalledTimes(1);
+    expect(onboardingEventMocks.treeSetupStartChat).toHaveBeenCalledWith(
       expect.objectContaining({
         agentUuid: "agent-1",
-        bootstrap: expect.stringContaining("This chat sets up team context for future agent work."),
-        kind: "tree",
+        bootstrap: expect.stringContaining("Please build out our Context Tree from our connected code"),
+        topic: "Set up shared context",
         complete: true,
       }),
-    );
-    expect(onboardingEventMocks.startOnboardingChat).not.toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "work" }),
     );
     await unmountRoot(view.root);
   });

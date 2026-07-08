@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { z } from "zod";
 import { logFormatSchema, logLevelSchema } from "../observability/logger-core.js";
+import { runtimeProviderSchema } from "../schemas/runtime-provider.js";
 import { defaultDataDir } from "./resolver.js";
 import { defineConfig, field, optional } from "./schema.js";
 import { getConfig } from "./singleton.js";
@@ -11,6 +12,12 @@ const optionalTrimmedStringSchema = z.preprocess((value) => {
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }, z.string().min(1).optional());
+
+const landingCampaignRuntimeProviderSchema = runtimeProviderSchema
+  .refine((provider) => provider === "codex" || provider === "claude-code", {
+    message: "Landing campaign runtime provider must be codex or claude-code",
+  })
+  .default("codex");
 
 function serverSecretOptions(env: string, auto: string, autoGenerateSecrets: boolean) {
   return autoGenerateSecrets ? { env, auto, secret: true } : { env, secret: true };
@@ -45,6 +52,88 @@ export const serverConfigSchema = defineConfig({
   channel: field(z.enum(["dev", "staging", "prod"]).default("dev"), {
     env: "FIRST_TREE_CHANNEL",
   }),
+  growth: {
+    /**
+     * Enables the Cloud side of public growth funnels handed off from website
+     * landing pages via `/quickstart?campaign=...`. This is a product feature
+     * flag, not a release-channel property: dev/staging/prod all default to off
+     * until an operator explicitly enables the funnel.
+     */
+    landingPagesEnabled: field(z.boolean().default(false), {
+      env: "FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED",
+    }),
+    /**
+     * Maximum number of visible agent response turns allowed in a landing
+     * campaign trial chat. Default 6 covers the full external production-scan
+     * skill flow (calibration, scan report, fix offer, bounded follow-ups);
+     * deployments can override in either direction.
+     */
+    landingCampaignMaxAgentTurns: field(z.number().int().min(1).max(20).default(6), {
+      env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS",
+    }),
+    /**
+     * Approximate token budget for each landing campaign trial chat. Successful
+     * agent turns advance both the turn count and this metadata-backed estimate.
+     */
+    landingCampaignMaxEstimatedTokens: field(z.number().int().min(1).default(120_000), {
+      env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_ESTIMATED_TOKENS",
+    }),
+    /**
+     * Maximum number of new landing campaign trial chats a user can create
+     * across all organizations in a rolling 24-hour window. Idempotent starts
+     * for an existing campaign/repo chat do not consume this quota.
+     */
+    landingCampaignMaxTrialsPerUserPer24Hours: field(z.number().int().min(1).default(5), {
+      env: "FIRST_TREE_LANDING_CAMPAIGN_MAX_TRIALS_PER_USER_PER_24_HOURS",
+    }),
+    landingCampaigns: optional({
+      /**
+       * First Tree official service user that manages landing campaign trial
+       * agents inside customer orgs. Optional at boot so the feature flag can
+       * remain off by default; the start API checks the official service user,
+       * service org, and client ids before creating anything.
+       */
+      serviceUserId: field(optionalTrimmedStringSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID",
+      }),
+      /**
+       * Organization where the official service user is a normal team member.
+       * In every other org, that same user is treated as the campaign-managed
+       * service membership created only to host landing trial agents.
+       */
+      serviceOrgId: field(optionalTrimmedStringSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_SERVICE_ORG_ID",
+      }),
+      /**
+       * Official client row owned by `serviceUserId`. Trial agents are pinned
+       * to this real client so chat/runtime/status use the native path.
+       */
+      clientId: field(optionalTrimmedStringSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID",
+      }),
+      /**
+       * Runtime provider assigned to newly provisioned landing campaign trial
+       * agents. The official client can advertise multiple providers; this
+       * switch only selects which provider the server pins on the agent row.
+       * Claude Code is accepted by config parsing but the start API remains
+       * fail-closed until its workspace-only runtime path exists.
+       */
+      runtimeProvider: field(landingCampaignRuntimeProviderSchema, {
+        env: "FIRST_TREE_LANDING_CAMPAIGN_RUNTIME_PROVIDER",
+      }),
+    }),
+  },
+  docs: {
+    /**
+     * Enables the document review (docloop) surface: the org document
+     * library API, the `doc` CLI namespace endpoints, and (later) the web
+     * Docs section. Product feature flag with a staging-first rollout —
+     * off by default until an operator enables it.
+     */
+    enabled: field(z.boolean().default(false), {
+      env: "FIRST_TREE_DOCS_ENABLED",
+    }),
+  },
   database: {
     url: field(z.string(), {
       env: "FIRST_TREE_DATABASE_URL",
@@ -65,8 +154,8 @@ export const serverConfigSchema = defineConfig({
     host: field(z.string().default("127.0.0.1"), { env: "FIRST_TREE_HOST" }),
     /**
      * Public-facing URL of this First Tree server. Required in production — used to:
-     *   1. Stamp the `iss` claim on connect tokens so `<binName> login`
-     *      can derive the server URL with no extra arg.
+     *   1. Build short connect URLs so `<binName> login` can derive the server
+     *      URL from the URL origin with no extra arg.
      *   2. Build invite-link URLs surfaced to admins.
      *   3. Construct the OAuth callback URL the GitHub app redirects back to.
      * Dev environments may omit it — we fall back to the request's host header
@@ -186,6 +275,20 @@ export const serverConfigSchema = defineConfig({
    * safe for local development.
    */
   trustProxy: field(z.boolean().default(false), { env: "FIRST_TREE_TRUST_PROXY" }),
+  connectBootstrap: {
+    /**
+     * Fresh-machine bootstrap method returned by POST /me/connect-tokens.
+     * Defaults to npm for published channels until portable artifacts are
+     * fully promoted in production. Dev remains source-only regardless of
+     * this value because it has no published channel artifact.
+     */
+    method: field(z.enum(["npm", "portable"]).default("npm"), {
+      env: "FIRST_TREE_CONNECT_BOOTSTRAP_METHOD",
+    }),
+    portableDownloadBaseUrl: field(z.string().url().default("https://downloads.first-tree.ai"), {
+      env: "FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL",
+    }),
+  },
   rateLimit: optional({
     /** Actor-aware global safety cap. High enough to avoid normal-use 429s. */
     max: field(z.number().default(3000), { env: "FIRST_TREE_RATE_LIMIT_MAX" }),
@@ -234,30 +337,6 @@ export const serverConfigSchema = defineConfig({
       env: "FIRST_TREE_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT",
     }),
   }),
-  feedback: optional(
-    {
-      /**
-       * GitHub repo where feedback issues are filed (owner/name).
-       * HEARBACK_FEEDBACK_REPO is distinct from FIRST_TREE_GITHUB_* vars so
-       * the feedback token can be scoped narrowly (issues:write on a single repo)
-       * without widening First Tree's Context Tree access.
-       */
-      repo: field(z.string(), { env: "HEARBACK_FEEDBACK_REPO" }),
-      githubToken: field(z.string(), { env: "HEARBACK_GITHUB_TOKEN", secret: true }),
-      llm: optional({
-        apiKey: field(z.string(), { env: "LLM_API_KEY", secret: true }),
-        baseUrl: field(z.string().optional(), { env: "LLM_BASE_URL" }),
-        model: field(z.string().optional(), { env: "LLM_MODEL" }),
-      }),
-      /**
-       * Trust x-forwarded-for for rate-limit attribution. Default false; set true
-       * when First Tree sits behind a proxy you control (CDN, ingress). Otherwise
-       * clients can spoof the header and bypass per-ip limits.
-       */
-      trustProxyHeaders: field(z.boolean().default(false), { env: "HEARBACK_TRUST_PROXY_HEADERS" }),
-    },
-    { activateBy: ["repo", "githubToken"] },
-  ),
   observability: {
     logging: {
       level: field(logLevelSchema.default("info"), {
@@ -355,6 +434,26 @@ export const serverConfigSchema = defineConfig({
    * deploy manifest (systemd / docker-compose / Fly.toml / Render env).
    */
   runtime: {
+    /**
+     * Require non-human agent-scoped HTTP requests to carry the ephemeral
+     * runtime-session token minted by the current successful WS `agent:bind`.
+     *
+     * Rollout is expand-then-enforce: token-aware clients can start sending the
+     * header while this remains false; once the fleet is upgraded, operators
+     * flip this to true so legacy user-JWT + X-Agent-Id calls are rejected.
+     */
+    agentHttpTokenEnforcement: field(z.boolean().default(false), {
+      env: "FIRST_TREE_AGENT_HTTP_RUNTIME_SESSION_ENFORCEMENT",
+    }),
+    /**
+     * Local/test-only runtime-switch fault injection. When enabled, the
+     * switch-runtime route accepts an explicit fault header so QA can
+     * deterministically exercise claim abort and forward-recovery paths. The
+     * default is off and production should leave it off.
+     */
+    runtimeSwitchFaultInjection: field(z.boolean().default(false), {
+      env: "FIRST_TREE_RUNTIME_SWITCH_FAULT_INJECTION",
+    }),
     pollingIntervalSeconds: field(z.coerce.number().int().positive().default(5), {
       env: "FIRST_TREE_POLLING_INTERVAL_SECONDS",
     }),

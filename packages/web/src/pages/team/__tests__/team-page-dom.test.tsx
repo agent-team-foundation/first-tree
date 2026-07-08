@@ -200,7 +200,7 @@ function agent(overrides: Partial<Agent> = {}): Agent {
     inboxId: overrides.inboxId ?? `${overrides.uuid ?? "agent-1"}-inbox`,
     metadata: overrides.metadata ?? {},
     source: overrides.source ?? "portal",
-    clientId: overrides.clientId ?? "client-1",
+    clientId: overrides.clientId === undefined ? "client-1" : overrides.clientId,
     runtimeProvider: overrides.runtimeProvider ?? "claude-code",
     runtimeState: overrides.runtimeState ?? "idle",
     createdAt: overrides.createdAt ?? NOW,
@@ -312,6 +312,17 @@ const DORMANT = agent({
   managerId: "member-self",
   visibility: "organization",
   status: "suspended",
+  runtimeState: null,
+});
+
+const UNBOUND_DORMANT = agent({
+  uuid: "agent-unbound-suspended",
+  name: "unbound-dormant",
+  displayName: "Unbound Dormant",
+  managerId: "member-self",
+  visibility: "organization",
+  status: "suspended",
+  clientId: null,
   runtimeState: null,
 });
 
@@ -564,6 +575,20 @@ describe("TeamPage", () => {
     await click(exactButton(document.body, "Delete agent"));
     await waitForCondition(() => agentMocks.deleteAgent.mock.calls.length > 0, "Expected delete mutation");
     expect(agentMocks.deleteAgent.mock.calls[0]?.[0]).toBe("agent-suspended");
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not offer ordinary reactivation for unbound suspended agents", async () => {
+    agentMocks.listAllAgents.mockResolvedValueOnce({ items: [UNBOUND_DORMANT, SELF_HUMAN_AGENT], nextCursor: null });
+    const { TeamPage } = await import("../index.js");
+    const { container, root } = await renderDom(<TeamPage />);
+
+    await waitForText(container, "Unbound Dormant");
+    await click(container.querySelector('button[aria-label="Actions for Unbound Dormant"]'));
+
+    expect(container.textContent).not.toContain("Reactivate");
+    expect(exactButton(container, "Delete")).not.toBeNull();
 
     await act(async () => root.unmount());
   });

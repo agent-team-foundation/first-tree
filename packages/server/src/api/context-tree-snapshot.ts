@@ -16,6 +16,7 @@ import {
   type ContextTreeInstallationTokenResult,
   decorateSnapshotWithMintGuidance,
   mintContextTreeInstallationToken,
+  resolveContextTreeRecoveryAction,
 } from "../services/github-app-token.js";
 import { getOrgContextTree, resolveUserPrimaryOrgId } from "../services/org-settings.js";
 import { summarizeContextTreeUsage } from "../services/session-event.js";
@@ -48,6 +49,12 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
       getContextTreeSnapshot({ ...binding, githubToken }, window, { timing: timing.add }),
     );
     const snapshot = mintResult ? decorateSnapshotWithMintGuidance(rawSnapshot, binding, mintResult) : rawSnapshot;
+    // Probe (only on the unavailable + GitHub-remote + minted path) whether the
+    // App genuinely can't read the repo, so the Context tab can offer the "add
+    // repo to the App" recovery without misdirecting other unavailable causes.
+    const recoveryAction = mintResult
+      ? await timing.time("github_recovery", () => resolveContextTreeRecoveryAction(snapshot, binding, mintResult))
+      : null;
     const viewer = orgId ? await timing.time("resolve_viewer", () => resolveOrgViewer(app.db, userId, orgId)) : null;
     const usage = orgId
       ? await timing.time("usage_summary", () =>
@@ -70,7 +77,9 @@ export async function contextTreeSnapshotRoutes(app: FastifyInstance): Promise<v
           ),
         )
       : snapshot.io;
-    const response = timing.timeSync("schema_parse", () => contextTreeSnapshotSchema.parse({ ...snapshot, usage, io }));
+    const response = timing.timeSync("schema_parse", () =>
+      contextTreeSnapshotSchema.parse({ ...snapshot, recoveryAction, usage, io }),
+    );
     const totalMs = timing.elapsedMs();
     reply.header("Server-Timing", timing.serverTimingHeader());
     request.log[totalMs > 1500 || timing.records.some((record) => record.ms > 500) ? "warn" : "info"](

@@ -8,6 +8,7 @@ import {
   type BuildAgentBriefingOptions,
   buildAgentBriefing,
   FIRST_TREE_FAMILY_SKILL_NAMES,
+  resolveAgentBriefingTemplatePath,
 } from "../runtime/agent-briefing.js";
 import type { PredeclaredSourceRepo } from "../runtime/bootstrap.js";
 import { setCliBinding } from "../runtime/cli-binding.js";
@@ -46,6 +47,18 @@ function makeOpts(overrides?: Partial<BuildAgentBriefingOptions>): BuildAgentBri
 }
 
 describe("buildAgentBriefing — top-level structure & section order", () => {
+  it("resolves the checked-in source EJS template and renders through it", () => {
+    const templatePath = resolveAgentBriefingTemplatePath();
+
+    expect(templatePath).toBe(
+      resolve(dirname(fileURLToPath(import.meta.url)), "..", "runtime", "templates", "agent-briefing.ejs"),
+    );
+
+    const briefing = buildAgentBriefing(makeOpts());
+    expect(briefing).toContain("# Identity\n\nYou are Test Agent, an autonomous agent.");
+    expect(briefing.endsWith("\n")).toBe(true);
+  });
+
   it("emits stable shared sections without per-chat Current Chat Context", () => {
     // Tree-bound case so every shared header in the expected order list is
     // present; tree-less cases are exercised in their dedicated describe
@@ -370,12 +383,13 @@ describe("buildAgentBriefing — # Required Reading (unconditional skill-load ma
     expect(contextTreeIdx).toBeGreaterThan(requiredIdx);
   });
 
-  it("omits # Required Reading for tree-less agents (the skill payloads are not installed on disk for them)", () => {
-    // `installFirstTreeIntegration` is short-circuited when
-    // `contextTreePath === null`, so the SKILL.md payloads under
-    // `<workspace>/.agents/skills/` never get materialised. Mandating
-    // a load would point at files that aren't there. The Tree
-    // Location stub already surfaces the gap to a human.
+  it("omits # Required Reading for tree-less agents (the unconditional write mandate is a tree-ops discipline)", () => {
+    // `# Required Reading` mandates loading `first-tree-write` UNCONDITIONALLY
+    // on every task — a tree-ops discipline for reflecting sources into an
+    // existing tree. A tree-less agent DOES carry write on disk now (it ships
+    // core as first-tree-seed's dependency), but should load it only when seed
+    // pulls it in, not on every task, so the mandate stays tree-bound. The
+    // tree-less core skills are surfaced by the First Tree Family map instead.
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     expect(briefing).not.toContain("# Required Reading");
   });
@@ -703,6 +717,13 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     // scoped to agents only.
     expect(briefing).toContain("Replying to a human is required, not optional");
     expect(briefing).toContain("no loop risk in always answering");
+    // The send/ask boundary routes by dependency, not importance: a send is
+    // self-sufficient (readable, then ignorable); a turn that ends blocked on
+    // the human ends with a `chat ask` — a blocking question never rides in a
+    // plain send (liuchao-001 2026-07-06).
+    expect(briefing).toMatch(/A send must be self-sufficient/);
+    expect(briefing).toMatch(/never a send with a blocking question\s+folded in/);
+    expect(briefing).toMatch(/Route by\s+dependency, not importance/);
     expect(briefing).toMatch(/This brake is for agents/);
     // Anti-spam discipline: at most one plain human reply per turn; ongoing
     // progress goes to `chat update --description`. The only skip-the-reply case
@@ -739,11 +760,41 @@ describe("buildAgentBriefing — # Working in First Tree subsections", () => {
     expect(briefing).not.toContain("--answer");
     expect(briefing).not.toContain("--question");
     expect(briefing).not.toContain("--close");
-    // Usage discipline: `chat ask` is ONLY for a genuine user decision that
-    // can't be inferred — never a progress / permission check.
+    // Usage discipline: importance governs whether a question should exist at
+    // all (never manufacture progress / permission checks); dependency governs
+    // routing — a genuine blocking question is ALWAYS an ask, never a question
+    // folded into a plain send (liuchao-001 2026-07-06).
+    expect(briefing).toMatch(/The routing test is \*\*dependency, not importance\*\*/);
     expect(briefing).toMatch(/genuinely the user's to make/);
-    expect(briefing).toMatch(/Do NOT use it for progress or[\s\n]+permission checks/);
+    expect(briefing).toMatch(/Do NOT manufacture progress or[\s\n]+permission checks/);
     expect(briefing).toContain("can I continue?");
+    // The ask body is decision-self-sufficient: three fixed markdown sections
+    // a human who remembers nothing of this chat can decide from — they run
+    // many chats in parallel, and a future cross-chat review surface may show
+    // the ask alone, outside the chat.
+    // Section labels match the example headings exactly (a future cross-chat
+    // ask-review surface may parse them): Why this question exists / Recent
+    // context / The question.
+    expect(briefing).toContain("decision-self-sufficient");
+    expect(briefing).toContain("Why this question exists");
+    expect(briefing).toContain("Recent context");
+    expect(briefing).toMatch(/\*\*The question\*\* — ONE question, plus your recommendation/);
+    // Reader-context bar (l42y 2026-07-06): the ask may not assume
+    // familiarity with, understanding of, or recall of the underlying
+    // context — a shorthand is undecidable not because it is technical but
+    // because its meaning lives in context the reader does not hold. And asks
+    // decrease over time as the agent learns the human's decision patterns
+    // from earlier answers.
+    expect(briefing).toMatch(/Assume no familiarity with the underlying context/);
+    expect(briefing).toMatch(/Unpack every compressed\s+reference/);
+    expect(briefing).toMatch(/meaning lives in\s+context the reader does not hold/);
+    expect(briefing).toMatch(/cannot produce a good\s+decision/);
+    // Evidence boundary (codex-assistant): a prior answer suppresses an ask
+    // only when citable — visible transcript, durable record, or just-provided
+    // material; an inferred preference settles nothing.
+    expect(briefing).toMatch(/only when you can\s+actually cite them/);
+    expect(briefing).toMatch(/without such a\s+source the question is not settled — ask/);
+    expect(briefing).toMatch(/Ask volume should fall as\s+you learn/);
 
     expect(briefing).toContain("## Chat Topic & Description");
     expect(briefing).toContain("first-tree chat update");
@@ -915,10 +966,12 @@ describe("buildAgentBriefing — # Context Tree", () => {
     expect(briefing).toContain("the tree wins");
     expect(briefing).toContain("eagerly, not lazily");
 
-    // Writing discipline anchors — fresh vs persistent context framing and
-    // the co-open + cross-link PR coordination rule (the tree PR need not
-    // merge before the code PR). The prose wraps the emphasised phrases
-    // across lines, so allow either single-line or wrapped forms.
+    // Writing discipline anchors — fresh vs persistent context framing, the
+    // co-open + cross-link PR coordination rule, and the tightened merge
+    // order: the tree PR opens as a draft so it can't land ahead, the code PR
+    // merges first, then the tree PR is reconciled against the final merged
+    // code and marked ready. The prose wraps the emphasised phrases across
+    // lines, so allow either single-line or wrapped forms.
     expect(briefing).toContain("fresh context");
     expect(briefing).toMatch(/\*\*persistent[\s\n]+context\*\*/);
     expect(briefing).toMatch(/request explicitly includes[\s\n]+creating and updating the needed tree-node files/);
@@ -927,7 +980,10 @@ describe("buildAgentBriefing — # Context Tree", () => {
     expect(briefing).toMatch(
       /open the tree PR and the code[\s\n]+PR[\s\n]+together and cross-link them in the PR descriptions/,
     );
-    expect(briefing).toMatch(/with[\s\n]+the code PR or shortly after/);
+    expect(briefing).toMatch(/Merge the code PR first, then[\s\n]+the tree PR/);
+    expect(briefing).toMatch(/open the tree PR as a draft/);
+    expect(briefing).toContain("final merged");
+    expect(briefing).not.toContain("need not merge first");
     expect(briefing).toContain("Implementation-only changes skip the tree");
 
     // Tree path interpolated under Tree Location.
@@ -953,7 +1009,7 @@ describe("buildAgentBriefing — # Context Tree", () => {
     expect(writingBlock).not.toContain("`first-tree-github-scan`");
   });
 
-  it("substitutes a tree-less Tree Location stub that surfaces the gap to a human", () => {
+  it("substitutes a tree-less Tree Location stub that surfaces the gap for ordinary tasks but carves out the seed admin create+bind", () => {
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
     // Section header still emitted so the briefing's # Context Tree always
     // contains all four subsections — predictable for the agent and for
@@ -962,10 +1018,17 @@ describe("buildAgentBriefing — # Context Tree", () => {
     const treeLocationStart = briefing.indexOf("## Tree Location");
     const stub = briefing.slice(treeLocationStart);
     expect(stub).toContain("This agent has no Context Tree bound");
-    expect(stub).toContain("surface that\ngap to a human");
+    // Ordinary task with no tree → still an operator action; surface the gap.
+    expect(stub).toContain("surface that gap to a human");
     expect(stub).toContain("operator action");
-    // The retired onboarding skill must not be named — there is no
-    // in-agent flow to bind a workspace anymore.
+    // Carve-out: a build / set-up-the-tree task IS the sanctioned in-agent
+    // create + bind for a confirmed admin — the agent must not turn that
+    // happy-path into a "who runs the bind?" question (reconciles the briefing
+    // with first-tree-seed State A).
+    expect(stub).toContain("build / set up the Context Tree");
+    expect(stub).toContain("confirmed org admin");
+    expect(stub).toContain('"who runs the bind?"');
+    // The retired onboarding skill must not be named.
     expect(stub).not.toContain("first-tree-onboarding");
   });
 
@@ -1088,15 +1151,27 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
     expect(skillsSection).toContain("## First Tree Family");
   });
 
-  it("omits the First Tree Family map for tree-less agents (skills are gated on `installFirstTreeIntegration`)", () => {
-    // A no-tree agent's `tree skill install` never runs, so listing the
-    // First Tree family would tell it to load skills that the runtime
-    // never put on disk. The map must be gated.
+  it("emits a core-skills First Tree Family map for tree-less agents (routes the tree-build task to first-tree-seed)", () => {
+    // A tree-less agent now carries the core skills on disk (welcome + the
+    // from-zero build pair seed/write), so the map lists exactly those — and
+    // NOT `first-tree-read`, which stays tree-bound. This is the routing
+    // surface a welcome-spawned tree-build chat uses to reach first-tree-seed,
+    // whose brief names no skill by design.
     const briefing = buildAgentBriefing(makeOpts({ contextTreePath: null }));
-    expect(briefing).not.toContain("## First Tree Family");
-    // And without Team Skills, the bare `# Skills` umbrella is skipped
-    // entirely — a header with no body is just visual noise.
-    expect(briefing).not.toMatch(/^# Skills\b/m);
+    expect(briefing).toContain("# Skills (First Tree Managed)");
+    const familyStart = briefing.indexOf("## First Tree Family");
+    expect(familyStart).toBeGreaterThanOrEqual(0);
+    // Bound the assertion to the map's own block (up to the next heading) so a
+    // later section that legitimately mentions read can't taint the check.
+    const afterStart = briefing.slice(familyStart + "## First Tree Family".length);
+    const nextHeadingRel = afterStart.search(/\n#{1,3} /);
+    const familyMap = nextHeadingRel === -1 ? afterStart : afterStart.slice(0, nextHeadingRel);
+    expect(familyMap).toContain("first-tree-welcome");
+    expect(familyMap).toContain("first-tree-seed");
+    expect(familyMap).toContain("first-tree-write");
+    expect(familyMap).not.toContain("first-tree-read");
+    // Tree-less map must not lean on the (omitted) # Required Reading section.
+    expect(familyMap).not.toContain("# Required Reading");
   });
 
   it("keeps the `# Skills` umbrella for tree-less agents that DO have Team Skills (resource skills land regardless)", () => {
@@ -1125,9 +1200,11 @@ describe("buildAgentBriefing — # Skills (Skill Map)", () => {
     expect(briefing).toContain("# Skills");
     expect(briefing).toContain("## Team Skills");
     expect(briefing).toContain("internal-playbook");
-    // Still no First Tree Family — those skills aren't installed for
-    // tree-less agents.
-    expect(briefing).not.toContain("## First Tree Family");
+    // The tree-less core-skills First Tree Family map is also emitted now, and
+    // sits after Team Skills under the shared `# Skills` umbrella.
+    expect(briefing).toContain("## First Tree Family");
+    const skills = briefing.slice(briefing.indexOf("# Skills"));
+    expect(skills.indexOf("## Team Skills")).toBeLessThan(skills.indexOf("## First Tree Family"));
   });
 });
 

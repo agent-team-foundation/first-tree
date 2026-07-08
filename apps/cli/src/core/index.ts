@@ -20,11 +20,35 @@ export { CapabilityRefresher, stableCapabilitiesJson } from "./capability-refres
 export { cliFetch } from "./cli-fetch.js";
 // Local client identity recovery helpers
 export { handleClientOrgMismatch } from "./client-reidentify.js";
-export type { ClientRuntimeOptions } from "./client-runtime.js";
+export type { ClientRuntimeOptions, ClientRuntimeOutput } from "./client-runtime.js";
 // Client runtime
-export { ClientRuntime } from "./client-runtime.js";
+export { ClientRuntime, createLoggerRuntimeOutput } from "./client-runtime.js";
+export type { LiveRuntimeMarker, LocalClientOwner, StopClientRuntimeProcessResult } from "./client-switch.js";
+// Local client account switching
+export {
+  CLIENT_SWITCH_INTERRUPTED_REASON,
+  clientRuntimeMarkerPath,
+  clientSwitchJournalPath,
+  clientSwitchLockPath,
+  confirmLocalClientSwitch,
+  ensureActiveRootClientIdPersisted,
+  getClientSwitchStartupBlock,
+  hasIncompleteClientSwitch,
+  listLiveClientRuntimeMarkers,
+  readActiveClientIdFromIndex,
+  readActiveClientOwner,
+  readActiveRootClientId,
+  readRememberedLocalClientIdForAccount,
+  recordActiveClientOwner,
+  registerClientRuntimeMarker,
+  resolveClientRuntimeStopReason,
+  stopClientRuntimeProcess,
+  switchLocalClientForLogin,
+} from "./client-switch.js";
 // User-owned daemon environment (proxy etc.) — read, never written by us
 export { daemonEnvPath, loadDaemonEnv, parseDaemonEnv } from "./daemon-env.js";
+// Document review (docloop) CLI helpers
+export { slugFromFilename, titleFromMarkdown } from "./doc-review.js";
 // Diagnostics (doctor)
 export type { CheckResult } from "./doctor.js";
 export {
@@ -45,7 +69,7 @@ export type { InstallCodexResult } from "./install-codex-runtime.js";
 export { installCodexRuntime } from "./install-codex-runtime.js";
 // Phase 3 of the agent-naming refactor — renames local agent dirs whose
 // name drifted from the server-authoritative `agent.name` slug.
-export type { AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";
+export type { AgentDirMigrationLog, AgentDirMigrationResult, NameResolver } from "./migrate-agent-dirs.js";
 export { createApiNameResolver, migrateLocalAgentDirs } from "./migrate-agent-dirs.js";
 // Workspace migration to W1
 export type {
@@ -104,9 +128,11 @@ export type { ExecuteUpdateResult, InstallMode, VersionLookupResult } from "./up
 export {
   detectInstallMode,
   fetchLatestVersion,
+  fetchPortableLatestVersion,
   fetchServerCommandVersion,
   installGlobalLatest,
   installGlobalSpec,
+  installPortableSpec,
   PACKAGE_NAME,
 } from "./update.js";
 export {

@@ -1,18 +1,19 @@
 import type { AgentChatStatus } from "@first-tree/shared";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, MessageSquare } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useContext } from "react";
 import { useNavigate } from "react-router";
 import { chatAgentStatusQueryKey, fetchChatAgentStatuses } from "../../api/agent-status.js";
 import { getAgent } from "../../api/agents.js";
 import { getChat } from "../../api/chats.js";
-import { viewOf } from "../../lib/agent-status-view.js";
+import { reconcileLiveTurn, viewOf } from "../../lib/agent-status-view.js";
 import { useClientMap } from "../../lib/use-client-map.js";
 import { useMemberNameMap } from "../../lib/use-member-name-map.js";
 import { Avatar } from "../avatar.js";
 import { Button } from "../ui/button.js";
 import { HoverCard, type HoverCardPlacement } from "../ui/hover-card.js";
 import { StatusGlyph } from "../ui/status-glyph.js";
+import { LiveTurnAgentsContext } from "./live-turn-context.js";
 import { WorkingChip } from "./working-chip.js";
 
 /**
@@ -88,7 +89,13 @@ function AgentHovercardBody({ agentId, chatId, onAction }: { agentId: string; ch
   });
 
   const participant = chatQ.data?.participants.find((p) => p.agentId === agentId);
-  const status: AgentChatStatus | null = statusQ.data?.find((s) => s.agentId === agentId) ?? null;
+  const rawStatus: AgentChatStatus | null = statusQ.data?.find((s) => s.agentId === agentId) ?? null;
+  // Match the roster row from the same context: a live timeline turn upgrades
+  // `ready → working` (at the axis level) so the card's status dot / LIVE pill
+  // can't disagree with a visibly-working turn — for every hovercard entry
+  // point (roster rows AND message avatars/names) by construction.
+  const liveTurnAgentIds = useContext(LiveTurnAgentsContext);
+  const status: AgentChatStatus | null = rawStatus ? reconcileLiveTurn(rawStatus, liveTurnAgentIds.has(agentId)) : null;
 
   // Pass B — lazy: this body only mounts while the card is open. Gated on the
   // chat (Pass A) resolving so the human check is decided from real data —

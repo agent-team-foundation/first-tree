@@ -49,10 +49,16 @@ describe("selectDisconnectedComputers", () => {
     expect(selectDisconnectedComputers([mine, theirs], ME)).toEqual([mine]);
   });
 
-  it("excludes rows whose status is connected", () => {
-    const offline = client({ id: "offline" });
-    const online = client({ id: "online", status: "connected" });
-    expect(selectDisconnectedComputers([offline, online], ME)).toEqual([offline]);
+  it("returns empty when the current user has any connected client", () => {
+    const oldClient = client({ id: "old-client" });
+    const currentClient = client({ id: "current-client", status: "connected", agentCount: 0 });
+    expect(selectDisconnectedComputers([oldClient, currentClient], ME)).toEqual([]);
+  });
+
+  it("does not treat another user's connected client as mine", () => {
+    const mine = client({ id: "mine" });
+    const theirs = client({ id: "theirs", userId: OTHER, status: "connected" });
+    expect(selectDisconnectedComputers([mine, theirs], ME)).toEqual([mine]);
   });
 
   it("excludes rows with no bound agents (no-op fleet — not a 'product unusable' case)", () => {
@@ -63,7 +69,7 @@ describe("selectDisconnectedComputers", () => {
 
   it("preserves input order across mixed lists", () => {
     const a = client({ id: "a", hostname: "alpha" });
-    const skip = client({ id: "skip", status: "connected" });
+    const skip = client({ id: "skip", agentCount: 0 });
     const b = client({ id: "b", hostname: "bravo" });
     expect(selectDisconnectedComputers([a, skip, b], ME).map((c) => c.id)).toEqual(["a", "b"]);
   });

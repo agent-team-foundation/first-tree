@@ -3,6 +3,11 @@ import { useOutletContext } from "react-router";
 import type { ClientStatusInfo } from "../../api/agent-config.js";
 import type { AgentConfigSaveController } from "./use-agent-config-save.js";
 
+export type RuntimeSwitchClaimView = {
+  claimId: string | null;
+  phase: string | null;
+};
+
 /**
  * Shared state passed from the agent-detail layout shell down to each tab via
  * `<Outlet context={...} />`. Tabs read it through `useAgentDetailContext()`.
@@ -38,8 +43,14 @@ export type AgentDetailContext = {
   isOffline: boolean;
   boundClientLabel: string | null;
   setupRuntimeProvider: RuntimeProvider;
+  runtimeSwitchClaim: RuntimeSwitchClaimView | null;
   onOpenBindDialog: () => void;
   bindClientPending: boolean;
+  onOpenRuntimeSwitchDialog: () => void;
+  runtimeSwitchPending: boolean;
+  runtimeSwitchRecoveryPending: boolean;
+  runtimeSwitchRecoveryError: string | null;
+  onRecoverRuntimeSwitch: () => void;
 
   // Identity / Appearance (PATCH /agents/:uuid via dialog — saves immediately)
   saveIdentity: (patch: UpdateAgent) => Promise<void>;

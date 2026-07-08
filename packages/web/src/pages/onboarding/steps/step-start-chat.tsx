@@ -3,12 +3,13 @@ import { ArrowRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
-import type { StartChatKind } from "../../../api/onboarding-events.js";
 import { getContextTreeSetting } from "../../../api/org-settings.js";
 import { Button } from "../../../components/ui/button.js";
+import { readScanFixHandoffFlag, writeScanFixHandoffFlag } from "../../../utils/onboarding-flags.js";
 import {
   buildInviteeReadyBootstrap,
   buildNoRepoBootstrap,
+  buildScanFixBootstrap,
   buildValueFirstBootstrap,
 } from "../../workspace/center/onboarding/bootstrap-prose.js";
 import { COPY } from "../copy.js";
@@ -25,8 +26,8 @@ async function runStartChat(args: {
   /** The selected org — scopes agent resolution so the seed never lands on an
    *  agent from a different org. */
   organizationId: string | null;
-  /** "intro" = meet-only; "work" = value-first first chat; "tree" = Context Tree setup/update chat. */
-  kind: StartChatKind;
+  /** Display title for the created chat. */
+  topic: string;
   treeBindingPlan?: TreeBindingPlan | "none";
   joinPath?: "invite";
   complete: (chatId: string) => Promise<void>;
@@ -37,7 +38,7 @@ async function runStartChat(args: {
     agent,
     bootstrap,
     organizationId: args.organizationId,
-    kind: args.kind,
+    topic: args.topic,
     treeBindingPlan: args.treeBindingPlan ?? "none",
     joinPath: args.joinPath,
   });
@@ -65,6 +66,11 @@ function AdminStartChat() {
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<"form" | "starting">("form");
   const [error, setError] = useState<string | null>(null);
+
+  // Production-scan fix conversion captured by /quickstart (`action=fix`).
+  // Read straight off the session flag; cleared once the chat exists so
+  // `finishLater` keeps it for a resumed run.
+  const [scanFixHandoff] = useState(() => readScanFixHandoffFlag());
 
   // `selectedRepoUrls` is only populated by StepConnectCode, which the
   // value-first redesign removed from the onboarding sequence (see steps.ts).
@@ -103,11 +109,18 @@ function AdminStartChat() {
     try {
       if (!hasRepos) {
         await runStartChat({
-          bootstrap: (agent) => buildNoRepoBootstrap(agent.displayName || "your agent"),
+          bootstrap: (agent) =>
+            scanFixHandoff
+              ? buildScanFixBootstrap(agent.displayName || "your agent", scanFixHandoff)
+              : buildNoRepoBootstrap(agent.displayName || "your agent"),
           organizationId,
-          kind: "intro",
+          topic: scanFixHandoff ? "Fix production scan blockers" : "Get started with First Tree",
           treeBindingPlan: "none",
-          complete: completeAndEnterChat,
+          complete: async (chatId) => {
+            // The chat now exists with the fix bootstrap — the handoff is consumed.
+            writeScanFixHandoffFlag(null);
+            await completeAndEnterChat(chatId);
+          },
         });
         return;
       }
@@ -149,15 +162,21 @@ function AdminStartChat() {
       }
 
       // Everything the user picked is gone from the installation → nothing to
-      // seed a tree from, so fall to the intro path instead of provisioning a
-      // tree from repos the app can no longer access.
+      // seed a tree from, so fall to the normal first-chat path instead of
+      // provisioning a tree from repos the app can no longer access.
       if (repos.length === 0) {
         await runStartChat({
           bootstrap: (agent) => buildNoRepoBootstrap(agent.displayName || "your agent"),
           organizationId,
-          kind: "intro",
+          topic: "Get started with First Tree",
           treeBindingPlan: "none",
-          complete: completeAndEnterChat,
+          complete: async (chatId) => {
+            // Scan-fix handoffs are consumed by the admin fix path only — drop
+            // any stale flag once a non-fix first chat exists, so a later
+            // onboarding run in this tab cannot consume someone else's scan.
+            writeScanFixHandoffFlag(null);
+            await completeAndEnterChat(chatId);
+          },
         });
         return;
       }
@@ -174,7 +193,7 @@ function AdminStartChat() {
           treeSetup: resolvedTreeBindingPlan === "useBoundTree" ? "bound" : "none",
         }),
         organizationId,
-        kind: "work",
+        topic: "Get started with First Tree",
         treeBindingPlan: resolvedTreeBindingPlan,
         complete: true,
       });
@@ -308,8 +327,8 @@ function InviteeStartChat() {
   // on a failed probe (null → true) so the query keeps polling instead of flapping
   // — but we must NOT render the ready launch (which reads the tree and would 403
   // without an installation) until the probe actually confirms one. Until then,
-  // not-ready holds: it offers an intro-only "meet your agent" (no git op, no 403)
-  // and keeps polling, so it advances to ready on its own once install is confirmed.
+  // not-ready holds: it offers a simple first chat (no git op, no 403) and keeps
+  // polling, so it advances to ready on its own once install is confirmed.
   const installed = installationKnown && hasInstallation;
   return resolveInviteeStartChatState({ treeUrl, hasInstallation: installed }) === "ready" ? (
     <InviteeReady />
@@ -340,10 +359,16 @@ function InviteeReady() {
       await runStartChat({
         bootstrap: (agent) => buildInviteeReadyBootstrap(agent.displayName || "your agent"),
         organizationId,
-        kind: "work",
+        topic: "Get settled on First Tree",
         treeBindingPlan: "useBoundTree",
         joinPath: "invite",
-        complete: completeAndEnterChat,
+        complete: async (chatId) => {
+          // Scan-fix handoffs are consumed by the admin fix path only — drop
+          // any stale flag once a non-fix first chat exists, so a later
+          // onboarding run in this tab cannot consume someone else's scan.
+          writeScanFixHandoffFlag(null);
+          await completeAndEnterChat(chatId);
+        },
       });
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
@@ -380,11 +405,9 @@ function InviteeReady() {
  * keeps polling, so this advances to `ready` on its own the moment the admin
  * finishes whichever half was missing.
  *
- * "Meet your agent" runs an intro-only start-chat (`runStartChat` with no repo → an
- * agent that introduces itself, repos connectable later from Settings), the same
- * launch the `ready` state uses. Routing it through `completeAndEnterChat` — not
- * `finishLater` — means the button lands the user in a real chat WITH the agent,
- * instead of dropping them into an empty workspace.
+ * The primary action starts a real first chat with the agent. Routing it through
+ * `completeAndEnterChat` — not `finishLater` — means the button lands the user
+ * in a real chat WITH the agent, instead of dropping them into an empty workspace.
  */
 function InviteeNotReady() {
   const { organizationId, completeAndEnterChat } = useOnboardingFlow();
@@ -396,12 +419,18 @@ function InviteeNotReady() {
     setPhase("starting");
     try {
       await runStartChat({
-        bootstrap: (agent) => buildNoRepoBootstrap(agent.displayName || "your agent"),
+        bootstrap: (agent) => buildInviteeReadyBootstrap(agent.displayName || "your agent"),
         organizationId,
-        kind: "intro",
+        topic: "Get settled on First Tree",
         treeBindingPlan: "none",
         joinPath: "invite",
-        complete: completeAndEnterChat,
+        complete: async (chatId) => {
+          // Scan-fix handoffs are consumed by the admin fix path only — drop
+          // any stale flag once a non-fix first chat exists, so a later
+          // onboarding run in this tab cannot consume someone else's scan.
+          writeScanFixHandoffFlag(null);
+          await completeAndEnterChat(chatId);
+        },
       });
     } catch (err) {
       setError(startChatErrorMessage(err, COPY.errors.chatFailed));
@@ -420,10 +449,10 @@ function InviteeNotReady() {
             {error}
           </FlowHint>
         )}
-        {/* "Meet your agent" is the PRIMARY action, not an escape hatch: the
-            common not-ready case (admin finished without a tree) never resolves,
-            so the real path forward is to start now. If the team does finish,
-            the page still advances on its own — quietly, no longer announced. */}
+        {/* The primary action is not an escape hatch: the common not-ready case
+            (admin finished without a tree) never resolves, so the real path
+            forward is to start now. If the team does finish, the page still
+            advances on its own — quietly, no longer announced. */}
         <div className="flex">
           <Button type="button" variant="cta" onClick={() => void handleMeet()}>
             <span>{COPY.invitee.startAnyway}</span>

@@ -38,7 +38,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     return {
       id: client.id,
       userId: client.userId,
-      status: client.status,
+      status: clientService.clientStatusForApi(client),
       authState: clientService.deriveAuthState(client, refreshExpirySeconds),
       binName,
       sdkVersion: client.sdkVersion,
@@ -57,6 +57,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     const { clientId } = request.params;
     stampClientResource(request, clientId);
     await clientService.assertClientOwner(app.db, clientId, { userId });
+    await clientService.assertClientNotRetired(app.db, clientId);
     const body = updateClientCapabilitiesSchema.parse(request.body);
     await clientService.updateClientCapabilities(app.db, clientId, body.capabilities);
     return reply.status(204).send();
@@ -73,6 +74,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     const { clientId } = request.params;
     stampClientResource(request, clientId);
     await clientService.assertClientOwner(app.db, clientId, { userId });
+    await clientService.assertClientNotRetired(app.db, clientId);
     const body = runtimeAuthStartRequestSchema.parse(request.body);
     const ref = randomUUID();
     const delivered = sendToClient(clientId, {
@@ -94,6 +96,7 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     const { clientId } = request.params;
     stampClientResource(request, clientId);
     await clientService.assertClientOwner(app.db, clientId, { userId });
+    await clientService.assertClientNotRetired(app.db, clientId);
     const agentIds = forceDisconnectClient(clientId);
     await clientService.disconnectClient(app.db, clientId);
     return { disconnected: true, agentIds };
@@ -106,14 +109,13 @@ export async function clientRoutes(app: FastifyInstance): Promise<void> {
     await clientService.assertClientOwner(app.db, clientId, { userId });
     await clientService.retireClient(app.db, clientId);
     forceDisconnectClient(clientId);
-    await clientService.disconnectClient(app.db, clientId);
     return reply.status(204).send();
   });
 
   // POST /:clientId/claim (cross-user ownership transfer) was removed: a
   // clientId is org-visible, so with only-JWT auth the route let any
   // authenticated user knock another user's machine offline. Machine handover
-  // is local-only: the operator must `logout --purge`, then login again so a
-  // fresh local client identity is generated (no server-side transfer protocol
-  // to secure).
+  // is local-only: the operator must `login <token>` as the target user so
+  // the old local client is parked and a separate local client identity is
+  // activated (no server-side transfer protocol to secure).
 }

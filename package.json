@@ -18,7 +18,7 @@
     "test": "turbo run test",
     "coverage": "turbo run coverage",
     "coverage:summary": "node scripts/coverage-summary.mjs",
-    "validate:skill": "python3 ./scripts/quick_validate_skill.py ./skills/first-tree-welcome && python3 ./scripts/quick_validate_skill.py ./skills/first-tree-write && python3 ./scripts/quick_validate_skill.py ./skills/first-tree-read && python3 ./scripts/quick_validate_skill.py ./skills/first-tree-seed"
+    "validate:skill": "for d in ./skills/*/; do python3 ./scripts/quick_validate_skill.py \"$d\" || exit 1; done"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.0",

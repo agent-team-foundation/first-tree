@@ -12,6 +12,7 @@ import { requireOrgMembership } from "../../scope/require-org.js";
 import * as agentService from "../../services/agent.js";
 import { resolveAvatarImageUrl } from "../../services/agent.js";
 import { sendToClient } from "../../services/connection-manager.js";
+import { assertMetadataDoesNotClaimLandingCampaignTrial } from "../../services/landing-campaigns/guards.js";
 
 function serializeNewChatDefaultCandidate(agent: agentService.NewChatDefaultCandidateAgent) {
   return { ...agent, createdAt: agent.createdAt.toISOString() };
@@ -60,6 +61,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     return {
       items: result.items.map(({ avatarImageUpdatedAt, userAvatarUrl, ...a }) => ({
         ...a,
+        metadata: agentService.stripReservedAgentMetadata(a.metadata),
         managerId: a.managerId ?? null,
         presenceStatus: a.presenceStatus ?? "offline",
         createdAt: a.createdAt.toISOString(),
@@ -95,6 +97,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     return {
       items: result.items.map(({ avatarImageUpdatedAt, userAvatarUrl, ...a }) => ({
         ...a,
+        metadata: agentService.stripReservedAgentMetadata(a.metadata),
         managerId: a.managerId ?? null,
         presenceStatus: a.presenceStatus ?? "offline",
         createdAt: a.createdAt.toISOString(),
@@ -139,6 +142,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     if (body.type === AGENT_TYPES.HUMAN) {
       throw new BadRequestError("Human agents are created through the member lifecycle");
     }
+    assertMetadataDoesNotClaimLandingCampaignTrial(body.metadata);
     // member role: managerId forced to caller's member; admin role may
     // specify any managerId in the same org.
     const managerId = scope.role === "admin" ? (body.managerId ?? scope.memberId) : scope.memberId;
@@ -160,6 +164,7 @@ export async function orgAgentRoutes(app: FastifyInstance): Promise<void> {
     notifyClientAgentPinned(agent);
     return reply.status(201).send({
       ...agent,
+      metadata: agentService.stripReservedAgentMetadata(agent.metadata),
       createdAt: agent.createdAt.toISOString(),
       updatedAt: agent.updatedAt.toISOString(),
     });

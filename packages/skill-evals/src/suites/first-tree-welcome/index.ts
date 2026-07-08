@@ -1,4 +1,9 @@
 import { FIRST_TREE_WELCOME_GATE_CASES, FIRST_TREE_WELCOME_LIVE_GATE_CASES } from "./cases.js";
+import {
+  findFirstTreeWelcomePeriodicCase,
+  formatFirstTreeWelcomePeriodicSummary,
+  runFirstTreeWelcomePeriodic,
+} from "./periodic.js";
 import { runFirstTreeWelcomeCase } from "./runner.js";
 import { buildBatchSummary, formatSummaryTable } from "./summary.js";
 import type { BatchSummary, CliOptions, FirstTreeWelcomeEvalCase } from "./types.js";
@@ -42,3 +47,5 @@ export async function runFirstTreeWelcomeGate(packageRoot: string, options: CliO
 export function formatFirstTreeWelcomeGateSummary(batch: BatchSummary): string {
   return formatSummaryTable(batch);
 }
+
+export { findFirstTreeWelcomePeriodicCase, formatFirstTreeWelcomePeriodicSummary, runFirstTreeWelcomePeriodic };

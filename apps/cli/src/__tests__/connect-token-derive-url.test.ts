@@ -11,6 +11,16 @@ function fakeJwt(payload: Record<string, unknown>): string {
 }
 
 describe("deriveHubUrlFromToken", () => {
+  it("returns the origin from a short connect URL", () => {
+    expect(deriveHubUrlFromToken("https://first-tree.example.com/connect/abc_DEF-123")).toBe(
+      "https://first-tree.example.com",
+    );
+  });
+
+  it("supports http short connect URLs for local dev", () => {
+    expect(deriveHubUrlFromToken("http://localhost:8000/connect/dev-code")).toBe("http://localhost:8000");
+  });
+
   it("returns the iss claim verbatim when present", () => {
     const token = fakeJwt({ iss: "https://first-tree.example.com", type: "connect" });
     expect(deriveHubUrlFromToken(token)).toBe("https://first-tree.example.com");
@@ -59,6 +69,16 @@ describe("deriveHubUrlFromToken", () => {
       deriveHubUrlFromToken("garbage");
     } catch (err) {
       expect((err as HubUrlDerivationError).code).toBe("INVALID_TOKEN");
+    }
+  });
+
+  it("hard-fails when a URL token is not a connect URL", () => {
+    try {
+      deriveHubUrlFromToken("https://first-tree.example.com/not-connect/abc");
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(HubUrlDerivationError);
+      expect((err as HubUrlDerivationError).code).toBe("TOKEN_BAD_URL");
     }
   });
 });

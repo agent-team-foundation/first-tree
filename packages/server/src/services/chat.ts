@@ -3,13 +3,17 @@ import {
   type AddParticipant,
   AGENT_STATUSES,
   AGENT_TYPES,
+  CHAT_ENGAGEMENT_STATUSES,
   type LegacyCreateChat,
+  parseLandingCampaignTrialAgentMetadata,
+  parseLandingCampaignTrialChatMetadata,
   type SendMessage,
 } from "@first-tree/shared";
 import { and, desc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { Database } from "../db/connection.js";
 import { agents } from "../db/schema/agents.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
+import { chatUserState } from "../db/schema/chat-user-state.js";
 import { chats } from "../db/schema/chats.js";
 import { members } from "../db/schema/members.js";
 import { messages } from "../db/schema/messages.js";
@@ -27,6 +31,10 @@ import { leaveAsParticipant } from "./watcher.js";
 
 const SELF_TARGET_EFFECTIVE_SENDER_REASON = "self_target_manager_human" as const;
 
+type LandingCampaignTrialCreateOptions = {
+  allowLandingCampaignTrial?: boolean;
+};
+
 export type CreateTaskChatInput = {
   mode: "task";
   initiatorAgentId: string;
@@ -35,9 +43,11 @@ export type CreateTaskChatInput = {
   contextParticipantAgentIds: readonly string[];
   topic?: string | null;
   description?: string | null;
+  onboardingKickoffKey?: string;
+  beforeInitialMessage?: () => Promise<void>;
   initialMessage: SendMessage;
   source: "agent" | "manual";
-};
+} & LandingCampaignTrialCreateOptions;
 
 export type CreateLegacyEmptyWebChatInput = {
   mode: "legacy-empty-web";
@@ -46,7 +56,7 @@ export type CreateLegacyEmptyWebChatInput = {
   participantAgentIds: readonly string[];
   topic?: string | null;
   description?: string | null;
-};
+} & LandingCampaignTrialCreateOptions;
 
 export type CreateLegacyEmptyAgentChatInput = {
   mode: "legacy-empty-agent";
@@ -63,7 +73,7 @@ export type CreateLegacyEmptyAgentChatInput = {
    * the onboarding kickoff endpoint to make chat creation safe to retry.
    */
   onboardingKickoffKey?: string;
-};
+} & LandingCampaignTrialCreateOptions;
 
 export type CreateChatInput = CreateTaskChatInput | CreateLegacyEmptyWebChatInput;
 
@@ -74,6 +84,7 @@ export type CreateTaskChatResult = {
   message: typeof messages.$inferSelect;
   participants: (typeof chatMembership.$inferSelect)[];
   recipients: string[];
+  initialMessageCreated: boolean;
   effectiveSenderId: string;
   initialRecipientAgentIds: string[];
   contextParticipantAgentIds: string[];
@@ -89,7 +100,21 @@ type AgentIdentityForCreate = {
   memberStatus: string | null;
   visibility: string;
   managerId: string;
+  metadata: Record<string, unknown>;
 };
+
+function assertNoLandingCampaignTrialChatParticipants(
+  participants: readonly { id: string; displayName?: string | null; metadata: Record<string, unknown> }[],
+  options: LandingCampaignTrialCreateOptions,
+): void {
+  if (options.allowLandingCampaignTrial === true) return;
+  const trial = participants.find((agent) => parseLandingCampaignTrialAgentMetadata(agent.metadata));
+  if (trial) {
+    throw new ForbiddenError(
+      `Agent "${trial.displayName ?? trial.id}" is a single-run landing campaign agent. Start it from the landing page flow.`,
+    );
+  }
+}
 
 export async function createChat(db: Database, input: CreateTaskChatInput): Promise<CreateTaskChatResult>;
 export async function createChat(db: Database, input: CreateLegacyEmptyWebChatInput): Promise<LegacyCreateChatResult>;
@@ -150,6 +175,7 @@ async function createLegacyEmptyChat(
       memberStatus: members.status,
       visibility: agents.visibility,
       managerId: agents.managerId,
+      metadata: agents.metadata,
     })
     .from(agents)
     .leftJoin(members, eq(members.agentId, agents.uuid))
@@ -178,6 +204,7 @@ async function createLegacyEmptyChat(
   if (inactive.length > 0) {
     throw new BadRequestError(`Cannot create chat with inactive participant "${inactive[0]?.id}".`);
   }
+  assertNoLandingCampaignTrialChatParticipants(existingAgents, input);
 
   // Owner-exclusive rule for private targets (RFC §4.5, shared-owner
   // reading): a private agent can only be brought into a chat by another
@@ -323,6 +350,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
     caller: initiator,
     participants: allSpeakerRows,
     requireActive: true,
+    allowLandingCampaignTrial: input.allowLandingCampaignTrial,
   });
 
   const effectiveSender = byId.get(effectiveSenderId);
@@ -355,6 +383,94 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
   });
 
   const chatId = randomUUID();
+  const kickoffKey = input.onboardingKickoffKey ?? null;
+  if (!kickoffKey && input.beforeInitialMessage) {
+    throw new Error("Task chat beforeInitialMessage requires an onboardingKickoffKey");
+  }
+  if (kickoffKey) {
+    const result = await db.transaction(async (tx) => {
+      const initialDescription = input.description && input.description.length > 0 ? input.description : null;
+      const values = {
+        id: chatId,
+        organizationId: input.organizationId,
+        type: "group",
+        topic: input.topic && input.topic.length > 0 ? input.topic : null,
+        description: initialDescription,
+        descriptionUpdatedAt: initialDescription != null ? new Date() : null,
+        onboardingKickoffKey: kickoffKey,
+        metadata: chatMetadata,
+      };
+      const [inserted] = await tx
+        .insert(chats)
+        .values(values)
+        .onConflictDoNothing({ target: chats.onboardingKickoffKey })
+        .returning();
+
+      const activeChat = inserted
+        ? inserted
+        : (await tx.select().from(chats).where(eq(chats.onboardingKickoffKey, kickoffKey)).for("update").limit(1))[0];
+      if (!activeChat) throw new Error("Unexpected: kickoff-key conflict but no existing chat row");
+
+      if (inserted) {
+        await addChatParticipants(
+          tx,
+          activeChat.id,
+          allSpeakerIds.map((agentId) => ({
+            agentId,
+            role: agentId === effectiveSenderId ? ("owner" as const) : ("member" as const),
+          })),
+        );
+      }
+
+      const [existingMessage] = await tx.select().from(messages).where(eq(messages.chatId, activeChat.id)).limit(1);
+      if (!inserted && !existingMessage) {
+        await addChatParticipants(
+          tx,
+          activeChat.id,
+          allSpeakerIds.map((agentId) => ({
+            agentId,
+            role: agentId === effectiveSenderId ? ("owner" as const) : ("member" as const),
+          })),
+          { onConflictDoNothing: true },
+        );
+      }
+
+      const participants = await tx
+        .select()
+        .from(chatMembership)
+        .where(and(eq(chatMembership.chatId, activeChat.id), eq(chatMembership.accessMode, "speaker")));
+      if (existingMessage) {
+        return {
+          chat: activeChat,
+          message: existingMessage,
+          participants,
+          recipients: [] as string[],
+          initialMessageCreated: false,
+        };
+      }
+
+      if (input.beforeInitialMessage) await input.beforeInitialMessage();
+      invalidateChatAudience(activeChat.id);
+      const { message, recipients } = await sendMessage(
+        tx as unknown as Database,
+        activeChat.id,
+        effectiveSenderId,
+        initialMessage,
+        {
+          normalizeMentionsInContent: input.source === "agent",
+        },
+      );
+      return { chat: activeChat, message, participants, recipients, initialMessageCreated: true };
+    });
+    invalidateChatAudience(result.chat.id);
+    return {
+      ...result,
+      effectiveSenderId,
+      initialRecipientAgentIds,
+      contextParticipantAgentIds,
+    };
+  }
+
   const chat = await db.transaction(async (tx) => {
     const initialDescription = input.description && input.description.length > 0 ? input.description : null;
     const [inserted] = await tx
@@ -398,6 +514,7 @@ async function createTaskChat(db: Database, input: CreateTaskChatInput): Promise
     message,
     participants,
     recipients,
+    initialMessageCreated: true,
     effectiveSenderId,
     initialRecipientAgentIds,
     contextParticipantAgentIds,
@@ -418,6 +535,7 @@ async function loadAgentsForCreate(db: Database, agentIds: readonly string[]): P
       memberStatus: members.status,
       visibility: agents.visibility,
       managerId: agents.managerId,
+      metadata: agents.metadata,
     })
     .from(agents)
     .leftJoin(members, eq(members.agentId, agents.uuid))
@@ -466,6 +584,7 @@ function validateCreateParticipants(input: {
   caller: AgentIdentityForCreate;
   participants: readonly AgentIdentityForCreate[];
   requireActive: boolean;
+  allowLandingCampaignTrial?: boolean;
 }): void {
   const crossOrg = input.participants.filter((a) => a.organizationId !== input.organizationId);
   if (crossOrg.length > 0) {
@@ -487,6 +606,9 @@ function validateCreateParticipants(input: {
       );
     }
   }
+  assertNoLandingCampaignTrialChatParticipants(input.participants, {
+    allowLandingCampaignTrial: input.allowLandingCampaignTrial,
+  });
   const rejectedTargets = rejectedPrivateTargets(
     { agentId: input.caller.id, memberId: input.caller.managerId },
     input.participants
@@ -657,6 +779,39 @@ export async function getChatDetail(db: Database, chatId: string, selfAgentId: s
   const viewerMembershipKind = await resolveViewerMembershipKind(db, chatId, selfAgentId);
 
   return { ...chat, participants, title, firstMessagePreview, viewerMembershipKind };
+}
+
+/**
+ * Runtime active-set projection for one agent and the human user operating the
+ * current client. This is intentionally smaller than "all chats where the
+ * agent is a speaker": archived/deleted rows are not part of the user's active
+ * working set, so clean idle local sessions for those chats do not need
+ * periodic runtime projection.
+ */
+export async function listActiveRuntimeChatIds(
+  db: Database,
+  agentId: string,
+  humanAgentId: string,
+  organizationId: string,
+): Promise<string[]> {
+  const rows = await db.execute<{ chat_id: string }>(sql`
+    SELECT DISTINCT agent_membership.chat_id
+      FROM ${chatMembership} AS agent_membership
+      JOIN ${chats}
+        ON ${chats.id} = agent_membership.chat_id
+      JOIN ${chatMembership} AS viewer_membership
+        ON viewer_membership.chat_id = agent_membership.chat_id
+       AND viewer_membership.agent_id = ${humanAgentId}
+      LEFT JOIN ${chatUserState}
+        ON ${chatUserState.chatId} = agent_membership.chat_id
+       AND ${chatUserState.agentId} = ${humanAgentId}
+     WHERE agent_membership.agent_id = ${agentId}
+       AND agent_membership.access_mode = 'speaker'
+       AND ${chats.organizationId} = ${organizationId}
+       AND COALESCE(${chatUserState.engagementStatus}, ${CHAT_ENGAGEMENT_STATUSES.ACTIVE}) = ${CHAT_ENGAGEMENT_STATUSES.ACTIVE}
+     ORDER BY agent_membership.chat_id ASC
+  `);
+  return rows.map((row) => row.chat_id);
 }
 
 async function resolveViewerMembershipKind(
@@ -926,6 +1081,11 @@ export async function addParticipant(db: Database, chatId: string, requesterId: 
 }
 
 export async function removeParticipant(db: Database, chatId: string, requesterId: string, targetAgentId: string) {
+  const chat = await getChat(db, chatId);
+  if (parseLandingCampaignTrialChatMetadata(chat.metadata)) {
+    throw new ForbiddenError("Landing campaign trial chats are managed by First Tree.");
+  }
+
   // Verify requester is a participant
   await assertParticipant(db, chatId, requesterId);
 

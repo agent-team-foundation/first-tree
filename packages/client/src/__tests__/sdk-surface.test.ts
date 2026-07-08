@@ -1,5 +1,7 @@
+import { Writable } from "node:stream";
 import { AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { applyClientLoggerConfig } from "../observability/logger.js";
 import { FirstTreeHubSDK, SdkError } from "../sdk.js";
 
 const SERVER_URL = "https://first-tree.example/";
@@ -36,6 +38,17 @@ function makeSdk(): FirstTreeHubSDK {
   });
 }
 
+function collectLogs(): { dest: Writable; read: () => string } {
+  const chunks: string[] = [];
+  const dest = new Writable({
+    write(chunk, _encoding, callback) {
+      chunks.push(chunk.toString());
+      callback();
+    },
+  });
+  return { dest, read: () => chunks.join("") };
+}
+
 async function flush<T>(promise: Promise<T>, maxFlushes = 50): Promise<T> {
   let settled = false;
   let result: T | undefined;
@@ -64,6 +77,7 @@ describe("FirstTreeHubSDK public surface", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    applyClientLoggerConfig({ level: "silent", format: "json", destination: process.stderr, explicit: false });
   });
 
   it("normalizes serverUrl and exposes the scoped agent id", () => {
@@ -179,6 +193,23 @@ describe("FirstTreeHubSDK public surface", () => {
     });
   });
 
+  it("preserves Retry-After on SDK errors for provider backoff policy", async () => {
+    makeFetchMock([
+      new Response(JSON.stringify({ error: "Rate limit exceeded, retry in 53 seconds" }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "53" },
+      }),
+    ]);
+
+    await expect(makeSdk().listChats()).rejects.toMatchObject({
+      name: "SdkError",
+      statusCode: 429,
+      message: "Rate limit exceeded, retry in 53 seconds",
+      retryAfter: "53",
+      retryAfterMs: 53_000,
+    });
+  });
+
   it("checks anonymous health reachability with optional user agent", async () => {
     const fetchMock = makeFetchMock([new Response(null, { status: 200 }), new Response(null, { status: 503 })]);
     const sdk = makeSdk();
@@ -220,8 +251,10 @@ describe("FirstTreeHubSDK public surface", () => {
     await expect(sdk.listChats()).rejects.toBe("plain failure");
   });
 
-  it("logs retry reasons for retryable Error and non-Error shapes", async () => {
+  it("logs retry reasons through the client logger for retryable Error and non-Error shapes", async () => {
     vi.useFakeTimers();
+    const { dest, read } = collectLogs();
+    applyClientLoggerConfig({ level: "warn", format: "json", destination: dest });
     const socketError = new Error("socket reset happened");
     Object.assign(socketError, { code: "ECONNRESET" });
     const abortLike = { name: "AbortError" };
@@ -231,12 +264,12 @@ describe("FirstTreeHubSDK public surface", () => {
       .mockRejectedValueOnce(abortLike)
       .mockResolvedValueOnce(jsonResponse({ items: [], nextCursor: null }));
     vi.stubGlobal("fetch", fetchMock);
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     await expect(flush(makeSdk().listChats())).resolves.toEqual({ items: [], nextCursor: null });
 
-    expect(warn).toHaveBeenCalledWith("sdk: retry attempt=1 reason=socket reset happened path=/api/v1/agent/chats");
-    expect(warn).toHaveBeenCalledWith("sdk: retry attempt=2 reason=unknown path=/api/v1/agent/chats");
+    expect(read()).toContain('"module":"sdk"');
+    expect(read()).toContain("retry attempt=1 reason=socket reset happened path=/api/v1/agent/chats");
+    expect(read()).toContain("retry attempt=2 reason=unknown path=/api/v1/agent/chats");
   });
 
   it("merges caller-provided abort signals with the SDK timeout signal", async () => {

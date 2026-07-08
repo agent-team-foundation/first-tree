@@ -23,11 +23,32 @@ function processPass(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): 
   if (evalCase.expected.action === "route_to_tree_skill") {
     return metrics.chatAskCount === 0;
   }
+  if (evalCase.expected.action === "invitee_waits_for_team_readiness") {
+    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
+  }
+  if (evalCase.expected.action === "offer_invitee_value_without_admin_setup") {
+    return metrics.repoEvidenceReadObserved && metrics.treeEvidenceReadObserved;
+  }
   if (evalCase.expected.action === "ask_for_repo_path_or_url") {
     return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
   }
+  if (evalCase.expected.action === "report_auth_failure_without_claiming_repo_read") {
+    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
+  }
+  if (evalCase.expected.action === "value_first_then_setup_handoff") {
+    return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
+  }
+  if (evalCase.expected.action === "guide_repo_selection_without_claiming_repo_read") {
+    return !metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
+  }
+  if (evalCase.expected.action === "offer_tree_build_with_code_value") {
+    return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
+  }
   if (evalCase.expected.action === "offer_bounded_first_tasks_from_repo_and_tree") {
     return metrics.repoEvidenceReadObserved && metrics.treeEvidenceReadObserved;
+  }
+  if (evalCase.expected.action === "offer_repo_value_without_claiming_tree_ready") {
+    return metrics.repoEvidenceReadObserved && !metrics.treeEvidenceReadObserved;
   }
   return false;
 }
@@ -37,11 +58,32 @@ function outcomePass(evalCase: FirstTreeWelcomeEvalCase, metrics: EvalMetrics): 
   if (evalCase.expected.action === "route_to_tree_skill") {
     return !metrics.taskOptionsObserved;
   }
+  if (evalCase.expected.action === "invitee_waits_for_team_readiness") {
+    return !metrics.taskOptionsObserved;
+  }
+  if (evalCase.expected.action === "offer_invitee_value_without_admin_setup") {
+    return metrics.expectedEvidenceObserved && metrics.taskOptionsObserved;
+  }
   if (evalCase.expected.action === "ask_for_repo_path_or_url") {
     return !metrics.taskOptionsObserved;
   }
+  if (evalCase.expected.action === "report_auth_failure_without_claiming_repo_read") {
+    return !metrics.taskOptionsObserved;
+  }
+  if (evalCase.expected.action === "value_first_then_setup_handoff") {
+    return true;
+  }
+  if (evalCase.expected.action === "guide_repo_selection_without_claiming_repo_read") {
+    return !metrics.taskOptionsObserved;
+  }
+  if (evalCase.expected.action === "offer_tree_build_with_code_value") {
+    return metrics.taskOptionsObserved;
+  }
   if (evalCase.expected.action === "offer_bounded_first_tasks_from_repo_and_tree") {
     return metrics.expectedEvidenceObserved && metrics.taskOptionsObserved;
+  }
+  if (evalCase.expected.action === "offer_repo_value_without_claiming_tree_ready") {
+    return metrics.taskOptionsObserved;
   }
   return false;
 }

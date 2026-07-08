@@ -1,12 +1,20 @@
-import { eq } from "drizzle-orm";
+import { AGENT_BIND_REJECT_REASONS } from "@first-tree/shared";
+import { and, eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { SignJWT } from "jose";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { agentPresence } from "../db/schema/agent-presence.js";
+import { agents } from "../db/schema/agents.js";
 import { clients } from "../db/schema/clients.js";
+import { inboxEntries } from "../db/schema/inbox-entries.js";
 import { createAgent } from "../services/agent.js";
+import * as agentRuntimeSessionService from "../services/agent-runtime-session.js";
+import { createChat } from "../services/chat.js";
 import * as clientService from "../services/client.js";
+import * as connectionManager from "../services/connection-manager.js";
+import { sendMessage } from "../services/message.js";
+import * as presenceService from "../services/presence.js";
 import { createTestAdmin, createTestApp } from "./helpers.js";
 
 /**
@@ -34,6 +42,7 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
   let wsUrl: string;
   let userId: string;
   let memberId: string;
+  let humanAgentUuid: string;
   let orgId: string;
   let role: string;
   const jwtSecret = process.env.JWT_SECRET ?? "test-jwt-secret-key-for-vitest";
@@ -127,6 +136,19 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
     return agent.uuid;
   }
 
+  async function loadNotifyRow(messageId: string) {
+    const [row] = await app.db
+      .select({
+        id: inboxEntries.id,
+        status: inboxEntries.status,
+        deliveredAt: inboxEntries.deliveredAt,
+      })
+      .from(inboxEntries)
+      .where(and(eq(inboxEntries.messageId, messageId), eq(inboxEntries.notify, true)))
+      .limit(1);
+    return row;
+  }
+
   beforeAll(async () => {
     app = await createTestApp();
     await app.listen({ port: 0, host: "127.0.0.1" });
@@ -139,6 +161,7 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
     const admin = await createTestAdmin(app, { username: `race-${crypto.randomUUID().slice(0, 8)}` });
     userId = admin.userId;
     memberId = admin.memberId;
+    humanAgentUuid = admin.humanAgentUuid;
     const { members } = await import("../db/schema/members.js");
     const [m] = await app.db.select().from(members).where(eq(members.id, memberId)).limit(1);
     if (!m) throw new Error("member row missing after setup");
@@ -222,5 +245,251 @@ describe("WS client reconnect race — late onClose must not clobber a fresh sta
     expect(stalePresence?.status).toBe("offline");
     expect(stalePresence?.clientId).toBeNull();
     expect(stalePresence?.runtimeState).toBeNull();
+  }, 10_000);
+
+  it("self-heals a false-positive stale sweep on heartbeat from the still-active socket", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    const agentId = await createBoundAgent(ws, clientId);
+
+    const staleAt = new Date(Date.now() - 120_000);
+    await app.db.update(clients).set({ lastSeenAt: staleAt }).where(eq(clients.id, clientId));
+    await expect(clientService.cleanupStaleClients(app.db, 60)).resolves.toBe(1);
+    await presenceService.setRuntimeState(app.db, agentId, "working");
+
+    const ackPromise = waitForFrame(ws, (m) => m.type === "heartbeat:ack");
+    ws.send(JSON.stringify({ type: "heartbeat" }));
+    await ackPromise;
+
+    const [client] = await app.db.select().from(clients).where(eq(clients.id, clientId));
+    expect(client?.status).toBe("connected");
+    expect(client?.instanceId).toBe("test-instance");
+    expect(client?.lastSeenAt.getTime()).toBeGreaterThan(staleAt.getTime());
+
+    const [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agentId));
+    expect(presence?.status).toBe("online");
+    expect(presence?.clientId).toBe(clientId);
+    expect(presence?.instanceId).toBe("test-instance");
+    expect(presence?.runtimeState).toBe("working");
+
+    ws.close();
+  }, 10_000);
+
+  it("acks but does not restore when the heartbeat socket is no longer the active client connection", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    const agentId = await createBoundAgent(ws, clientId);
+
+    const staleAt = new Date(Date.now() - 120_000);
+    await app.db.update(clients).set({ lastSeenAt: staleAt }).where(eq(clients.id, clientId));
+    await expect(clientService.cleanupStaleClients(app.db, 60)).resolves.toBe(1);
+
+    const activeSpy = vi.spyOn(connectionManager, "isActiveClientConnection").mockReturnValue(false);
+    try {
+      const ackPromise = waitForFrame(ws, (m) => m.type === "heartbeat:ack");
+      ws.send(JSON.stringify({ type: "heartbeat" }));
+      await ackPromise;
+    } finally {
+      activeSpy.mockRestore();
+      ws.close();
+    }
+
+    const [client] = await app.db.select().from(clients).where(eq(clients.id, clientId));
+    expect(client?.status).toBe("disconnected");
+    expect(client?.lastSeenAt.getTime()).toBe(staleAt.getTime());
+
+    const [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agentId));
+    expect(presence?.status).toBe("offline");
+    expect(presence?.clientId).toBeNull();
+  }, 10_000);
+
+  it("does not repair inbox backlog when liveness guards reject the heartbeat", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    const agentId = await createBoundAgent(ws, clientId);
+    const chat = await createChat(app.db, humanAgentUuid, {
+      type: "group",
+      participantIds: [agentId],
+    });
+
+    const sent = await sendMessage(app.db, chat.id, humanAgentUuid, {
+      source: "api",
+      format: "text",
+      content: "stale heartbeat must not repair inbox",
+      metadata: { mentions: [agentId] },
+    });
+    expect((await loadNotifyRow(sent.message.id))?.status).toBe("pending");
+
+    await app.db.update(clients).set({ instanceId: "other-instance" }).where(eq(clients.id, clientId));
+
+    const ackPromise = waitForFrame(ws, (m) => m.type === "heartbeat:ack");
+    ws.send(JSON.stringify({ type: "heartbeat" }));
+    await ackPromise;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const row = await loadNotifyRow(sent.message.id);
+    expect(row?.status).toBe("pending");
+    expect(row?.deliveredAt).toBeNull();
+
+    ws.close();
+  }, 10_000);
+
+  it("rejects first-bind from a socket whose client was retired after register", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    await clientService.retireClient(app.db, clientId);
+    const agent = await createAgent(app.db, {
+      name: `race-retired-bind-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Race Retired Bind",
+      managerId: memberId,
+      runtimeProvider: "claude-code",
+    });
+
+    ws.send(
+      JSON.stringify({
+        type: "agent:bind",
+        ref: `bind-retired-${crypto.randomUUID()}`,
+        agentId: agent.uuid,
+        runtimeType: "claude-code",
+      }),
+    );
+    const msg = (await waitForFrame(ws, (m) => m.type === "agent:bind:rejected")) as {
+      type?: string;
+      reason?: string;
+    };
+    expect(msg.reason).toBe(AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+
+    const [row] = await app.db.select({ clientId: agents.clientId }).from(agents).where(eq(agents.uuid, agent.uuid));
+    expect(row?.clientId).toBeNull();
+    ws.close();
+  }, 10_000);
+
+  it("does not publish presence when the client is retired after runtime-session claim", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    const agent = await createAgent(app.db, {
+      name: `race-retired-mid-bind-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Race Retired Mid Bind",
+      managerId: memberId,
+      clientId,
+      runtimeProvider: "claude-code",
+    });
+
+    const originalBind = agentRuntimeSessionService.bindAgentRuntimeSession;
+    const bindSpy = vi
+      .spyOn(agentRuntimeSessionService, "bindAgentRuntimeSession")
+      .mockImplementationOnce(async (db, agentId, bindClientId) => {
+        const token = await originalBind(db, agentId, bindClientId);
+        await clientService.retireClient(app.db, clientId);
+        return token;
+      });
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "agent:bind",
+          ref: `bind-retired-mid-${crypto.randomUUID()}`,
+          agentId: agent.uuid,
+          runtimeType: "claude-code",
+        }),
+      );
+      const msg = (await waitForFrame(ws, (m) => m.type === "agent:bind:rejected")) as {
+        type?: string;
+        reason?: string;
+      };
+      expect(msg.reason).toBe(AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+    } finally {
+      bindSpy.mockRestore();
+      ws.close();
+    }
+
+    const [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agent.uuid));
+    expect(presence?.status ?? "offline").toBe("offline");
+    expect(presence?.clientId ?? null).toBeNull();
+
+    const [row] = await app.db
+      .select({ status: agents.status, clientId: agents.clientId, metadata: agents.metadata })
+      .from(agents)
+      .where(eq(agents.uuid, agent.uuid));
+    expect(row?.status).toBe("suspended");
+    expect(row?.clientId).toBeNull();
+    expect((row?.metadata as Record<string, unknown> | null)?.runtimeSession).toBeUndefined();
+    expect(connectionManager.getAgentClientId(agent.uuid)).toBeUndefined();
+  }, 10_000);
+
+  it("does not revoke a successor bind when a displaced same-client socket aborts", async () => {
+    const token = await signAccess();
+    const clientId = `client_${crypto.randomUUID().slice(0, 8)}`;
+
+    const ws = await authAndRegister(token, clientId);
+    const agent = await createAgent(app.db, {
+      name: `race-displaced-bind-${crypto.randomUUID().slice(0, 8)}`,
+      type: "agent",
+      displayName: "Race Displaced Bind",
+      managerId: memberId,
+      clientId,
+      runtimeProvider: "claude-code",
+    });
+
+    const originalPublish = presenceService.bindAgentIfActiveClient;
+    let successorToken: string | undefined;
+    const publishSpy = vi
+      .spyOn(presenceService, "bindAgentIfActiveClient")
+      .mockImplementationOnce(async (db, agentId, data) => {
+        const published = await originalPublish(db, agentId, data);
+        successorToken = await agentRuntimeSessionService.bindAgentRuntimeSession(app.db, agent.uuid, clientId);
+        connectionManager.bindAgentToClient(clientId, agent.uuid, successorToken);
+        return published;
+      });
+
+    let activeChecks = 0;
+    const activeSpy = vi.spyOn(connectionManager, "isActiveClientConnection").mockImplementation((id) => {
+      if (id !== clientId) return false;
+      activeChecks += 1;
+      return activeChecks !== 2;
+    });
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "agent:bind",
+          ref: `bind-displaced-${crypto.randomUUID()}`,
+          agentId: agent.uuid,
+          runtimeType: "claude-code",
+        }),
+      );
+      const msg = (await waitForFrame(ws, (m) => m.type === "agent:bind:rejected")) as {
+        type?: string;
+        reason?: string;
+      };
+      expect(msg.reason).toBe(AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+    } finally {
+      publishSpy.mockRestore();
+      activeSpy.mockRestore();
+    }
+
+    expect(successorToken).toBeDefined();
+    await expect(
+      agentRuntimeSessionService.validateAgentRuntimeSession(app.db, agent.uuid, clientId, successorToken ?? ""),
+    ).resolves.toBe(true);
+    expect(connectionManager.getAgentClientId(agent.uuid)).toBe(clientId);
+
+    const [presence] = await app.db.select().from(agentPresence).where(eq(agentPresence.agentId, agent.uuid));
+    expect(presence?.status).toBe("online");
+    expect(presence?.clientId).toBe(clientId);
+
+    ws.close();
   }, 10_000);
 });

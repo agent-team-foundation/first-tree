@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 
 import { runCommand } from "../../core/commands.js";
 import { findStringValue, isRecord, isStringArray } from "../../core/events.js";
-import type { RunPaths } from "../../core/types.js";
+import type { CommandResult, RunPaths } from "../../core/types.js";
 import type { EvalMetrics, FirstTreeWriteEvalCase, FixtureValidation, TreeStateSnapshot } from "./types.js";
 
 const TEXT_KEYS = ["content", "message", "output_text", "text"];
@@ -193,6 +193,7 @@ export function deriveMetrics(
   evalCase: FirstTreeWriteEvalCase,
   fixtureValidation: FixtureValidation,
   runnerExitCode: number | null,
+  postModelVerifyResult: CommandResult | null,
   paths: RunPaths,
   contextTreePath: string,
 ): EvalMetrics {
@@ -229,7 +230,12 @@ export function deriveMetrics(
   const markdown = contextTreeMarkdown(contextTreePath);
   const forbiddenContentHits = evalCase.forbidden.content.filter((pattern) => markdown.includes(pattern));
   const requiredDiffSnippets = evalCase.expected.requiredDiffSnippets ?? [];
-  const verifySucceeded = firstTreeCommandResults.some((result) => argvIsVerify(result.argv) && result.exitCode === 0);
+  const modelVerifySucceeded = firstTreeCommandResults.some(
+    (result) => argvIsVerify(result.argv) && result.exitCode === 0,
+  );
+  const postModelVerifySucceeded = postModelVerifyResult === null ? null : postModelVerifyResult.exitCode === 0;
+  const verifySucceeded =
+    modelVerifySucceeded && (evalCase.expected.requireVerify ? postModelVerifySucceeded === true : true);
 
   return {
     expectedDiffSnippetsObserved:
@@ -240,6 +246,9 @@ export function deriveMetrics(
     firstTreeCommandResults,
     fixtureValidationOk: fixtureValidation.ok,
     forbiddenContentHits,
+    modelVerifySucceeded,
+    postModelVerifyResult,
+    postModelVerifySucceeded,
     runnerExitCode,
     skillFileReadObserved,
     sourceRepoChanged: sourceRepoChanged(paths),
@@ -283,8 +292,11 @@ export function driftNote(evalCase: FirstTreeWriteEvalCase, metrics: EvalMetrics
   if (evalCase.expected.treeDiff === "minimal" && !metrics.expectedDiffSnippetsObserved) {
     notes.push("Context Tree diff did not contain all required durable-decision snippets.");
   }
-  if (evalCase.expected.requireVerify && !metrics.verifySucceeded) {
+  if (evalCase.expected.requireVerify && !metrics.modelVerifySucceeded) {
     notes.push("Required first-tree tree verify command did not succeed during model phase.");
+  }
+  if (evalCase.expected.requireVerify && metrics.postModelVerifySucceeded !== true) {
+    notes.push("Post-model first-tree tree verify did not succeed under the harness real validator.");
   }
   if (metrics.sourceRepoChanged) {
     notes.push("Source repo fixture changed; write eval cases must not modify source repo.");

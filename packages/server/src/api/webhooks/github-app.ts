@@ -37,6 +37,31 @@ function readInstallationId(payload: unknown): number | null {
   return typeof id === "number" && Number.isFinite(id) ? id : null;
 }
 
+/**
+ * The GitHub-authenticated actor who triggered the webhook. On
+ * `installation.created` this is the user who installed the App — the
+ * trusted anti-forgery anchor for binding (GitHub only permits installing
+ * on an account the sender administers).
+ */
+function readSenderGithubId(payload: Record<string, unknown>): number | null {
+  const sender = isRecord(payload.sender) ? payload.sender : null;
+  const id = sender?.id;
+  return typeof id === "number" && Number.isFinite(id) ? id : null;
+}
+
+/**
+ * The user who *requested* the install when it went through GitHub's
+ * owner-approval flow — the top-level `requester` block on
+ * `installation.created`. In that flow the `sender` is the approving
+ * owner, so this is the only GitHub-authenticated link back to the
+ * initiator. Absent (null) on direct installs.
+ */
+function readRequesterGithubId(payload: Record<string, unknown>): number | null {
+  const requester = isRecord(payload.requester) ? payload.requester : null;
+  const id = requester?.id;
+  return typeof id === "number" && Number.isFinite(id) ? id : null;
+}
+
 function parseInstallationMetadata(installation: Record<string, unknown>): AppInstallation | null {
   const id = installation.id;
   if (typeof id !== "number" || !Number.isFinite(id)) return null;
@@ -87,7 +112,9 @@ function pullRequestStateFromIssuePayload(issue: Record<string, unknown>, action
 }
 
 function isContextReviewerCandidateEvent(eventType: string, action: string | null): boolean {
-  if (eventType === "pull_request") return action === "opened" || action === "synchronize";
+  if (eventType === "pull_request") {
+    return action === "opened" || action === "synchronize" || action === "ready_for_review";
+  }
   if (eventType === "issue_comment") return action === "created";
   if (eventType === "pull_request_review_comment") return action === "created" || action === "edited";
   return false;
@@ -188,14 +215,32 @@ async function handleInstallationLifecycle(app: FastifyInstance, eventType: stri
   if (!installation || installationId === null) return "ignored:malformed";
 
   switch (action) {
-    case "created":
+    case "created": {
+      const metadata = parseInstallationMetadata(installation);
+      if (!metadata) return "ignored:malformed";
+      // Record-only: the row is created UNBOUND, carrying the two
+      // GitHub-authenticated anchors the connect panel matches against —
+      // the installer (`sender`; GitHub only lets a user install on an
+      // account they administer) and, for owner-approval installs, the
+      // original `requester`. Binding is never inferred here: a team admin
+      // explicitly connects the installation from the Settings panel of
+      // the team it should bind to. That panel action is what decides the
+      // target team — the webhook cannot know it.
+      const installerGithubId = readSenderGithubId(payload);
+      const requesterGithubId = readRequesterGithubId(payload);
+      await upsertInstallationFromMetadata(app.db, {
+        installation: metadata,
+        ...(installerGithubId !== null ? { installerGithubId } : {}),
+        ...(requesterGithubId !== null ? { requesterGithubId } : {}),
+      });
+      return "created:recorded";
+    }
     case "new_permissions_accepted": {
       const metadata = parseInstallationMetadata(installation);
       if (!metadata) return "ignored:malformed";
-      // UPSERT only writes metadata fields; `hub_organization_id` is owned
-      // by the OAuth-callback bind path. A webhook arriving before the
-      // callback leaves the row unbound (intentional — webhooks don't
-      // know which First Tree user installed the App).
+      // Metadata refresh only — never re-bind, and don't overwrite the
+      // original installer (COALESCE in the upsert preserves it). The
+      // `sender` here may be a different admin accepting new permissions.
       await upsertInstallationFromMetadata(app.db, { installation: metadata });
       return action;
     }

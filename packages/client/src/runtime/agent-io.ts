@@ -27,18 +27,24 @@ import { findImagePath } from "./image-store.js";
 
 /**
  * Build the env for CLI sub-processes that need to call `<binName> ...`.
- * Layers the First Tree envelope variables on top of the parent env, and keeps
- * the channel-local CLI binary ahead of any globally installed sibling. Handlers
+ * Layers the First Tree envelope variables on top of the parent env. Handlers
  * that start sub-processes should call this so every one of them sees the same
  * envelope — enabling replyTo inference, access-token propagation, agent-id
- * binding, and channel-correct CLI calls without per-handler duplication.
+ * binding, and channel-correct CLI command text without per-handler duplication.
+ *
+ * `FIRST_TREE_HOME` is state/config storage, not a CLI install prefix. Only an
+ * explicit `FIRST_TREE_CLI_BIN_DIR` asks this helper to put a channel-specific
+ * CLI directory ahead of the parent PATH.
  */
 export function buildAgentEnv(
   parentEnv: NodeJS.ProcessEnv,
   ctx: {
-    sdk: Pick<FirstTreeHubSDK, "serverUrl">;
+    sdk: Pick<FirstTreeHubSDK, "serverUrl"> & { runtimeSessionToken?: string | undefined };
     agent: AgentIdentity;
     chatId: string;
+    clientId?: string;
+    runtimeSessionTokenFile?: string;
+    provider?: string;
     /**
      * Resolved doc-preview context for this session, so a `first-tree
      * chat send` sub-process can snapshot referenced `.md`. (The result-sink's
@@ -75,13 +81,22 @@ export function buildAgentEnv(
     log?: (msg: string) => void;
   },
 ): NodeJS.ProcessEnv {
-  const env = withChannelCliOnPath(parentEnv, ctx.log);
+  const env = withExplicitCliBinDirOnPath(parentEnv, ctx.log);
   return {
     ...env,
     FIRST_TREE_SERVER_URL: ctx.sdk.serverUrl,
     FIRST_TREE_AGENT_ID: ctx.agent.agentId,
+    ...(ctx.sdk.runtimeSessionToken ? { FIRST_TREE_RUNTIME_SESSION_TOKEN: ctx.sdk.runtimeSessionToken } : {}),
+    ...(ctx.runtimeSessionTokenFile ? { FIRST_TREE_RUNTIME_SESSION_TOKEN_FILE: ctx.runtimeSessionTokenFile } : {}),
     FIRST_TREE_INBOX_ID: ctx.agent.inboxId,
     FIRST_TREE_CHAT_ID: ctx.chatId,
+    ...(ctx.clientId ? { FIRST_TREE_CLIENT_ID: ctx.clientId } : {}),
+    ...(ctx.provider
+      ? {
+          FIRST_TREE_PROVIDER: ctx.provider,
+          FIRST_TREE_SWITCH_DRAIN_VERSION: "1",
+        }
+      : {}),
     ...(ctx.docContext
       ? {
           FIRST_TREE_DOC_BASE: ctx.docContext.base,
@@ -98,30 +113,24 @@ export function buildAgentEnv(
 
 const warnedCliResolutionKeys = new Set<string>();
 
-function withChannelCliOnPath(parentEnv: NodeJS.ProcessEnv, log?: (msg: string) => void): NodeJS.ProcessEnv {
-  const firstTreeHome = parentEnv.FIRST_TREE_HOME;
-  if (!firstTreeHome) {
-    warnCliResolutionOnce(
-      "missing-home",
-      log,
-      "FIRST_TREE_HOME is not set; spawned agents cannot receive the channel-local CLI on PATH",
-    );
+function withExplicitCliBinDirOnPath(parentEnv: NodeJS.ProcessEnv, log?: (msg: string) => void): NodeJS.ProcessEnv {
+  const cliBinDir = parentEnv.FIRST_TREE_CLI_BIN_DIR;
+  if (!cliBinDir) {
     return { ...parentEnv };
   }
 
-  const binDir = join(firstTreeHome, "bin");
   const pathKey = resolvePathKey(parentEnv);
   const currentPath = parentEnv[pathKey] ?? "";
-  const existing = currentPath.split(delimiter).filter((part) => part.length > 0 && part !== binDir);
-  const nextPath = [binDir, ...existing].join(delimiter);
+  const existing = currentPath.split(delimiter).filter((part) => part.length > 0 && part !== cliBinDir);
+  const nextPath = [cliBinDir, ...existing].join(delimiter);
   const env = { ...parentEnv, [pathKey]: nextPath };
 
   const { binName } = getCliBinding();
-  if (!canResolveExecutable(binDir, binName, parentEnv)) {
+  if (!canResolveExecutable(cliBinDir, binName, parentEnv)) {
     warnCliResolutionOnce(
-      `missing-bin:${binDir}:${binName}`,
+      `missing-explicit-bin:${cliBinDir}:${binName}`,
       log,
-      `channel-local CLI ${binName} was not found at ${binDir}; spawned agents may resolve a stale or wrong-channel CLI from PATH`,
+      `FIRST_TREE_CLI_BIN_DIR is set to ${cliBinDir}, but ${binName} was not found there`,
     );
   }
 
@@ -173,7 +182,7 @@ export type ParticipantCache = {
 };
 
 export function createParticipantCache(
-  sdk: Pick<FirstTreeHubSDK, "listChatParticipants">,
+  sdk: Pick<FirstTreeHubSDK, "listChatParticipants"> | (() => Pick<FirstTreeHubSDK, "listChatParticipants">),
   chatId: string,
   log: (msg: string) => void,
 ): ParticipantCache {
@@ -185,7 +194,8 @@ export function createParticipantCache(
       if (!inflight) {
         inflight = (async () => {
           try {
-            const rows = await sdk.listChatParticipants(chatId);
+            const currentSdk = typeof sdk === "function" ? sdk() : sdk;
+            const rows = await currentSdk.listChatParticipants(chatId);
             cached = rows;
             return rows;
           } catch (err) {
@@ -337,41 +347,6 @@ function renderFileMessageForLLM(message: SessionMessage): string | null {
   return null;
 }
 
-/**
- * Server stamp on a First Tree onboarding kickoff message. Mirrors the writer
- * in `packages/server/src/services/onboarding-kickoff.ts` and the web reader in
- * `packages/web/src/components/chat/first-tree-system-message.tsx`. Kept as a
- * local literal so this activation stays client-contained; all three sites must
- * agree on the string.
- */
-const FIRST_TREE_ONBOARDING_SYSTEM_SENDER = "first_tree_onboarding";
-
-/**
- * Agent-only skill-activation directive for a First Tree onboarding first chat,
- * or null for any other message. The kickoff body is user-facing prose, so it
- * no longer names a skill; this directive is the reliable trigger and is added
- * to the agent's prompt only. A single unconditional directive is correct for
- * every onboarding chat kind: in a tree-setup kickoff the `first-tree-welcome`
- * skill's first Setup-State row redirects to the tree skills.
- *
- * Keying on `metadata.systemSender` alone is safe: the server strips
- * `systemSender` from any send that does not pass the trusted-internal
- * `allowSystemSender` gate (`stripUntrustedMetadataKeys` in
- * `packages/server/src/services/message.ts`), so a user/agent message cannot
- * spoof this stamp. Only the onboarding kickoff path sets it.
- */
-function onboardingSkillDirective(metadata: SessionMessage["metadata"]): string | null {
-  if (!metadata || typeof metadata !== "object") return null;
-  if ((metadata as { systemSender?: unknown }).systemSender !== FIRST_TREE_ONBOARDING_SYSTEM_SENDER) {
-    return null;
-  }
-  return [
-    "<first-tree-onboarding>",
-    "This is a First Tree onboarding first chat. Before your first reply, load and follow the `first-tree-welcome` skill.",
-    "</first-tree-onboarding>",
-  ].join("\n");
-}
-
 export async function formatInboundContent(message: SessionMessage, participants: ParticipantCache): Promise<string> {
   const rawContent = renderForLLM(message);
   const preceding = message.precedingMessages ?? [];
@@ -392,10 +367,5 @@ export async function formatInboundContent(message: SessionMessage, participants
     ? `${header}${formatFromHeaderLine(message.senderId, message.createdAt, await participants.get())}\n\n${rawContent}`
     : `${header}${rawContent}`;
 
-  // A First Tree onboarding kickoff body is ALSO rendered verbatim to the user
-  // as a "First Tree" chat bubble, so it stays a clean user-facing welcome. The
-  // reliable skill trigger is appended here, in the agent's prompt only, and
-  // never reaches the user's bubble.
-  const directive = onboardingSkillDirective(message.metadata);
-  return directive ? `${base}\n\n${directive}` : base;
+  return base;
 }

@@ -4,6 +4,7 @@ import { channelConfig } from "../core/channel.js";
 const updateMocks = vi.hoisted(() => ({
   detectInstallMode: vi.fn(),
   installGlobalSpec: vi.fn(),
+  installPortableSpec: vi.fn(),
   PACKAGE_NAME: "first-tree",
 }));
 
@@ -36,6 +37,7 @@ describe("update glue", () => {
   beforeEach(() => {
     updateMocks.detectInstallMode.mockReset();
     updateMocks.installGlobalSpec.mockReset();
+    updateMocks.installPortableSpec.mockReset();
     updateStateMocks.isLoopGuarded.mockReset();
     updateStateMocks.recordUpdateAttempt.mockReset();
     spawnSyncMock.mockReset();
@@ -46,6 +48,11 @@ describe("update glue", () => {
     updateMocks.installGlobalSpec.mockResolvedValue({
       ok: true,
       mode: "global",
+      installedVersion: "0.6.0",
+    });
+    updateMocks.installPortableSpec.mockResolvedValue({
+      ok: true,
+      mode: "portable",
       installedVersion: "0.6.0",
     });
     updateStateMocks.isLoopGuarded.mockReturnValue(false);
@@ -108,6 +115,39 @@ describe("update glue", () => {
     });
   });
 
+  it("uses the portable installer in portable mode and records failures through the same path", async () => {
+    const { createExecuteUpdate } = await import("../core/update-glue.js");
+    updateMocks.detectInstallMode.mockReturnValue("portable");
+
+    await expect(
+      createExecuteUpdate({ managed: false })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).resolves.toEqual({ installed: true });
+    expect(updateMocks.installPortableSpec).toHaveBeenCalledWith("0.6.0");
+    expect(updateMocks.installGlobalSpec).not.toHaveBeenCalled();
+    expect(output()).toContain("Switching portable");
+
+    printLineMock.mockClear();
+    updateMocks.installPortableSpec.mockResolvedValueOnce({
+      ok: false,
+      mode: "portable",
+      reason: "checksum mismatch",
+      retryable: false,
+      reasonCode: "checksum",
+    });
+    const onUpdateFailed = vi.fn();
+    await expect(
+      createExecuteUpdate({ managed: false, onUpdateFailed })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).resolves.toEqual({ installed: false });
+    expect(updateStateMocks.recordUpdateAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ result: "failed", reason: "checksum mismatch", target: "0.6.0" }),
+    );
+    expect(onUpdateFailed).toHaveBeenCalledWith({
+      targetVersion: "0.6.0",
+      retryable: false,
+      reasonCode: "checksum",
+    });
+  });
+
   it("blocks stale installs and returns manual restart hints for foreground clients", async () => {
     const { createExecuteUpdate } = await import("../core/update-glue.js");
     updateMocks.installGlobalSpec.mockResolvedValueOnce({
@@ -158,5 +198,43 @@ describe("update glue", () => {
       createExecuteUpdate({ managed: true })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
     ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
     expect(output()).toContain("warning: 'daemon refresh-unit' exited with status 7");
+  });
+
+  it("routes managed update output through the injected logger and captures refresh-unit output", async () => {
+    const { SELF_RESTART_EXIT_CODE, createExecuteUpdate } = await import("../core/update-glue.js");
+    const logs: Array<[level: string, message: string]> = [];
+    updateMocks.installGlobalSpec.mockImplementationOnce(
+      async (_target: string, options?: { output?: (chunk: string) => void }) => {
+        options?.output?.("npm stderr line\n");
+        return { ok: true, mode: "global" as const, installedVersion: "0.6.0" };
+      },
+    );
+    spawnSyncMock.mockReturnValueOnce({
+      status: 7,
+      signal: "SIGTERM",
+      stderr: "stderr line\n",
+      stdout: "stdout line\n",
+    });
+
+    await expect(
+      createExecuteUpdate({
+        managed: true,
+        log: (level, message) => logs.push([level, message]),
+      })({ currentVersion: "0.5.0", targetVersion: "0.6.0" }),
+    ).rejects.toMatchObject({ exitCode: SELF_RESTART_EXIT_CODE });
+
+    expect(printLineMock).not.toHaveBeenCalled();
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      channelConfig.binName,
+      ["daemon", "refresh-unit"],
+      expect.objectContaining({ encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }),
+    );
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        ["info", "npm stderr line"],
+        ["warn", expect.stringContaining("warning: 'daemon refresh-unit' exited with status 7")],
+        ["warn", expect.stringContaining("Output: stderr line | stdout line")],
+      ]),
+    );
   });
 });

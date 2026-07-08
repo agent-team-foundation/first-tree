@@ -1,31 +1,34 @@
 ---
 name: first-tree-seed
-version: 0.2.0
+version: 0.2.3
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
-description: One-time bootstrap for a brand-new, still-empty Context Tree. Delivers an initial top + second-level domain skeleton drawn from the bound source repos (PR1, user approves), then initial leaf-node content for each approved domain with explicit coverage reporting (PR2). Use right after Cloud onboarding provisions the workspace and tree repo. Refuses on any populated tree. Do not use to write an incremental update from a specific PR / doc / note — that is `first-tree-write`. Do not use for broad maintenance or drift-audit work on an existing tree.
+description: Bootstrap a team's Context Tree from its connected source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Reads the sources, proposes an initial top-level + second-level domain structure for the user to approve, then drafts initial leaf content — each as a reviewable PR. Refuses a tree that already has domain structure: send incremental, source-driven writes to `first-tree-write`, and broad maintenance / drift-audit to a focused task.
 ---
 
 # First Tree — Seed
 
-Read this skill **before** drafting the first content into a freshly
-provisioned Context Tree. It owns the one-time bootstrap from "Cloud
-just gave me an empty tree repo" to "the tree has real top + second
-level structure plus initial leaf nodes drawn from the bound source
-repos". Every subsequent write — one PR at a time, one decision at a
-time — belongs to `first-tree-write`, not here.
+Read this skill **before** drafting the first content into a Context Tree
+that has no domain structure yet. It owns the bootstrap from "the tree has
+no domain structure — either none exists, or a bound-but-empty one" to "the
+tree has real top + second level structure plus initial leaf nodes drawn
+from the bound source repos". It first resolves the tree's state, then — for
+a tree that needs building — creates the repo with `first-tree tree init`
+when none exists (see *Resolve the tree's state*). Every subsequent write —
+one PR at a time, one decision at a time — belongs to `first-tree-write`,
+not here.
 
 ## When To Use This Skill
 
 | Use `first-tree-seed`                                                 | Use a different skill                                                                                |
 | --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Cloud onboarding finished; the tree repo is empty (no top-level dirs) | The tree already has a domain structure → `first-tree-write` (incremental source-driven write)       |
+| The team has no tree yet, **or** a bound tree with no domain structure (no top-level dirs) | The tree already has a domain structure → `first-tree-write` (incremental source-driven write)       |
 | First content pass on the bound sources                               | Broad maintenance or drift-audit work on an existing tree                                            |
-| Invoked by name — by a human, or by a future kickoff prompt once Cloud provisions before sending (see Trigger) | Workspace is unbound → surface to a human (binding is a web-console operator action, not an agent's) |
+| Invoked by name — by a human, an agent, or an onboarding kickoff prompt (see Resolve the tree's state) | Not an org admin, or `gh` unauthenticated, and the team has no tree — seed can't create it; surface the gap to a human |
 
-The skill is **single-shot per tree**. If a previous seed already
-landed (PR1 merged), do not re-run; route any further work through
-`first-tree-write` or a focused maintenance task.
+The skill is **single-shot per tree**: once the tree has domain structure,
+*Resolve the tree's state* (state C below) refuses and routes further work
+through `first-tree-write` or a focused maintenance task.
 
 ## Required Reading
 
@@ -38,54 +41,115 @@ rules, it observes the existing ones during a special lifecycle phase.
    Content Model (what / why / who), Node Shape, Hard Rules 1–9.
    **Every node this skill creates must satisfy those hard rules.**
 
-## Trigger
+## Resolve the tree's state (three states; stop on refuse)
 
-This skill runs whenever a human or another agent invokes it
-**provided the empty-tree self-check below passes**. The self-check
-is the gate; the prompt's origin is not. Cloud onboarding **may** in
-the future inject a kickoff prompt that names `$first-tree-seed`
-directly, but only after Cloud also gains a real provisioning step
-that creates the tree repo on GitHub, writes the org's `context_tree`
-setting, and writes `workspace.json` BEFORE the kickoff message is
-sent — those preconditions are what the self-check verifies. Naming
-the skill in kickoff prose without that wiring would route every
-new-tree onboarding at a skill that refuses; that wiring is tracked
-as a separate Cloud-side change.
+This skill runs whenever a human or another agent invokes it — **the tree's
+state is the gate, not the prompt's origin.** Before reading any source,
+resolve which of three states the team's Context Tree is in and act
+accordingly: create it when none exists, fill it when it is bound but empty,
+and refuse when it already has domain structure (state C below), routing
+that work to `first-tree-write` or a focused maintenance task.
 
-Once the seed has landed, the same self-check fails and the skill
-refuses; route subsequent source-driven work through `first-tree-write`
-or handle maintenance with a focused task and explicit scope.
+**A — No tree yet.** The workspace is not bound to a tree: either
+`<workspaceRoot>/.first-tree/workspace.json` has no non-empty `tree`
+field, or the team has no `context_tree` binding. This is the
+agent-driven creation path — create the tree with the user's local `gh`:
 
-### Self-check before starting (all must pass; stop on any failure)
+```bash
+first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/<manifest.tree>"
+```
 
-1. **Workspace bound.** `<workspaceRoot>/.first-tree/workspace.json`
-   exists with non-empty `tree` and `sources` fields.
-2. **Tree is empty.** All of:
-   - `<workspaceRoot>/<manifest.tree>/NODE.md` does not exist, **or**
-     exists with no non-whitespace body content beyond an
-     auto-generated placeholder header (Cloud may ship a minimal
-     placeholder root NODE.md in the future; an empty body with only
-     a title still counts as empty).
-   - `<workspaceRoot>/<manifest.tree>/members/` does not exist (or
-     is empty).
-   - No directory directly under `<workspaceRoot>/<manifest.tree>/`
-     other than `.git/`, `.first-tree/`, `.github/`, and any
-     dotfile-prefixed dir.
+`tree init` creates the repo under the team's GitHub App installation
+account (or, when the App is not installed yet, under your own `gh`
+account — see **Surface App coverage** below), seeds a minimal valid tree
+(root `NODE.md`, a `members/` index, and the creator's member node),
+pushes, and binds the org's `context_tree` setting. It is **admin-only**
+and needs an authenticated `gh`; if the caller is not an org admin, or
+`gh` is unauthenticated, surface that exact gap and stop (binding a team
+tree is an admin action).
+Take the team display name from the chat context / `first-tree agent
+status`. After it succeeds the tree is bound and in state **B** — proceed.
 
-   If any of those fail, the tree is non-empty — refuse with a
-   one-line explanation pointing at `first-tree-write` for incremental
-   source-driven writes or asking for a focused maintenance scope. Do
-   **not** prompt the user to clear the tree
-   yourself; deleting nodes is human-owned.
-3. **All declared sources present on disk.** Each source clone lives at
-   `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>` — the
-   runtime writes `sourcesRoot: "source-repos"`, so the path is
-   `<workspaceRoot>/source-repos/<name>` (a legacy flat manifest omits
-   `sourcesRoot` and keeps sources at `<workspaceRoot>/<name>`). That path
-   must exist for every entry (each is a **bare** clone — see *Materialize
-   source read worktrees* below). A missing source means the workspace is
-   half-provisioned; surface to the user and stop. Do not seed from a
-   partial workspace.
+**Run it directly — do not ask the human "who runs the bind?".** This create +
+bind is the sanctioned agent path (a general "tree binding is an operator
+action" note in your briefing does **not** apply to this task) — running it IS
+the task the user asked for, so binding needs no separate go-ahead. You do not
+need to independently "confirm admin" first: `tree init` enforces it
+server-side (it fails closed for a non-admin or unauthenticated `gh`). So run
+it; only if it fails on that admin/authentication check do you surface the
+exact gap (not an admin / `gh` not authenticated) and stop.
+
+**Pin the local checkout with `--dir` — this is load-bearing.** `tree
+init` defaults its local clone to `<cwd>/<repo-name>`, but a managed
+workspace reads and writes the tree at `<workspaceRoot>/<manifest.tree>`
+(usually `context-tree`), and seed does **not** rewrite `workspace.json`.
+Without `--dir`, state A would create + bind `<workspaceRoot>/<team>-context-tree`
+while Phase 1 then operates on a missing/stale `<workspaceRoot>/<manifest.tree>`.
+Passing `--dir "<workspaceRoot>/<manifest.tree>"` puts the freshly created
+clone exactly where Phase 1 (and the runtime) expect it. If the manifest
+carries no tree name yet (a fully unbound workspace), use the conventional
+`<workspaceRoot>/context-tree`.
+
+**Surface App coverage after creating the tree — recommend, never block.**
+A newly created tree is only visible to the team's web view and the
+Context Tree reviewer once the First Tree GitHub App can read its repo.
+`tree init` creates and binds the tree either way and prints a coverage
+line; make that outcome loud, never gate on it — the tree is built and
+bound, so proceed to Phase 1 regardless of coverage.
+
+**When `tree init` reports the repo is not covered**, leave a prominent
+message for the admin (a `chat send` to them, not a line buried in tool
+output) stating the consequence — "your Context Tree is built and bound, but
+the web view and PR reviewer won't see it until the First Tree App can read
+its repo" — plus the next step for the case it reports:
+
+- **A selected-repositories install that excludes the new repo:** `tree init`
+  prints a GitHub installation-settings URL — an absolute `https://` link, so
+  it renders clickable in chat. Relay it and say to add the tree repo there.
+- **No App installed at all:** give the admin a clickable link to the web
+  console's GitHub settings, built from the server URL the agent knows — take
+  the `Server:` value from `first-tree agent status` and append
+  `/settings/github` (an absolute `https://…/settings/github` renders
+  clickable; a bare `/settings/github` path does **not** — the chat link guard
+  drops relative paths). Tell them to open it and click **Install on GitHub**.
+  This assumes the web console shares the server's origin (the standard
+  deployment); if it does not, the link may not resolve — then just name the
+  destination in words: **Settings → GitHub** in the web app. Do **not**
+  fabricate a raw GitHub App install URL yourself — the install must run
+  through the web console so it binds back to your org. Add the **placement
+  caveat**: the repo was created under your own account (the `<owner>` in
+  `tree init`'s output), so install the App on **that same account**;
+  installing it on a different org later will not cover this repo.
+- **A suspended install:** `tree init` prints the installation-settings URL —
+  relay it and say to reactivate the First Tree App installation there.
+
+**B — Bound but unseeded.** The tree is bound and holds at most the
+bootstrap set — a root `NODE.md`, a `members/` index, and creator member
+node(s) — with **no top-level domain directory** yet. This is the normal
+seed entry, whether the bootstrap came from state A's `tree init` above or
+from an earlier provision. Proceed to Phase 1. Phase 1 layers the domain
+skeleton + `raw-context` **on top of** whatever bootstrap nodes already
+exist: **extend** the root `NODE.md` index and the `members/` tree rather
+than recreating them (a bootstrap root node / members index is expected,
+not a conflict).
+
+**C — Already seeded.** The tree has one or more **top-level domain
+directories** — any directory directly under `<workspaceRoot>/<manifest.tree>/`
+other than `.git/`, `.first-tree/`, `.github/`, `members/`, and
+dotfile-prefixed dirs. Refuse with a one-line explanation pointing at
+`first-tree-write` for incremental source-driven writes, or ask for a
+focused maintenance scope. Do **not** delete nodes to force a re-seed —
+that is human-owned.
+
+**In every state, also require all declared sources on disk.** Each source
+clone lives at `<workspaceRoot>/<manifest.sourcesRoot>/<manifest.sources[i]>`
+— the runtime writes `sourcesRoot: "source-repos"`, so the path is
+`<workspaceRoot>/source-repos/<name>` (a legacy flat manifest omits
+`sourcesRoot` and keeps sources at `<workspaceRoot>/<name>`). Every entry
+must exist (each is a **bare** clone — see *Materialize source read
+worktrees* below). A missing source means the workspace is
+half-provisioned; surface to the user and stop. Do not seed from a partial
+workspace.
 
 ### Materialize source read worktrees
 
@@ -116,6 +180,10 @@ these read worktrees, not the bare clone paths. Remove them
 (`git -C <source-clone> worktree remove <path>`) once both PRs are open.
 
 ## The Two Phases
+
+Resolving the tree's state comes first; the two phases below are the build
+itself — they run for a tree that needs building (states A and B). State C
+refuses before reaching them.
 
 ```
 Phase 1 — Structure  (~3–10 min, main agent only)
@@ -188,11 +256,14 @@ Aggregate observations across all sources, then abstract:
   organisation are the strongest signals. For `product/` and
   `customer/`, README positioning and marketing-site content are the
   strongest signals.
-- **Supporting structure is automatic, not a candidate.** Always
-  create `members/<owner>/NODE.md` (owner = most-active recent
+- **Supporting structure is automatic, not a candidate.** Ensure
+  `members/<owner>/NODE.md` (owner = most-active recent
   contributor of the largest source) and `raw-context/NODE.md` (the
-  intake bucket for meeting notes and explorations). These are
-  scaffolding, not concern axes; do not put them in the user
+  intake bucket for meeting notes and explorations) exist — state A's
+  `tree init` may have already created a `members/` index and the
+  creator's member node, so **extend those rather than recreating
+  them** (add the computed owner if it differs from the creator). These
+  are scaffolding, not concern axes; do not put them in the user
   checklist as toggles — but **do compute the primary owner now**
   (one `git log` per source, seconds) and show the derived name in
   the confirmation message, so the user confirms structure and owner
@@ -645,8 +716,8 @@ explicit scope.
 A user may merge PR1 and then never come back for Phase 2 (life
 happens, the team is busy, the kickoff agent crashed). The tree
 ends up with real structure but zero leaves. **This is not a
-re-seed condition** — the seed self-check sees a populated tree
-(`<tree>/<domain>/NODE.md` files exist) and refuses. Instead:
+re-seed condition** — resolving the tree's state sees an already-seeded
+tree (`<tree>/<domain>/NODE.md` files exist, state C) and refuses. Instead:
 
 - Future writes go through `first-tree-write` one source at a
   time, exactly as they would on any other live tree.
@@ -689,9 +760,11 @@ make them visible at the seed-specific surface.
 
 ## What This Skill Does NOT Do
 
-- Bind the workspace or provision the tree repo — those are
-  operator actions taken from the web console before this skill is
-  ever invoked.
+- Run the Cloud one-click **server** bootstrap. When the team has no tree
+  (state A), seed creates and binds it with `first-tree tree init`
+  (the user's local `gh`), not the server `/initialize` path — the two
+  coexist. Seed does not write the workspace-root `workspace.json`; that
+  stays a runtime concern.
 - Install GitHub automation (validate workflows, rulesets,
   CODEOWNERS) — out of scope. If the team wants those, they are
   separate follow-on workflows after seed lands.
@@ -700,8 +773,8 @@ make them visible at the seed-specific surface.
 - Generate content beyond what the signals support. If a candidate
   domain has weak evidence and the user does not opt it in, leave it
   out.
-- Run twice on the same tree. If PR1 has already merged, hand off
-  to `first-tree-write` or a focused maintenance task.
+- Run twice on the same tree. Once the tree has domain structure (state C),
+  hand off to `first-tree-write` or a focused maintenance task.
 
 ## References
 

@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { registerSubcommands } from "../groups.js";
 import type { CommandModule } from "../types.js";
+import { initCommand } from "./init.js";
 import { treeTreeCommand } from "./tree.js";
 import { verifyCommand } from "./verify.js";
 
@@ -11,12 +12,17 @@ import { verifyCommand } from "./verify.js";
  * - `tree`, because agents and scripted consumers need a lightweight
  *   Context Tree hierarchy browser.
  *
- * Everything else — `init` / `migrate` / `upgrade` / `status` /
- * `codeowners` / `claude-hook` / `inject` / `review` / `automation` /
- * `skill` groups — was deleted because the cloud now owns workspace + tree
- * provisioning, agent runtime now inlines its own skill payload install (PR
- * #844), and the deleted commands had no remaining caller. See PR following
- * #844 for the deletion commit.
+ * `init` was reintroduced in 2026-07 in a different shape than the deleted
+ * one: instead of onboarding a local workspace root, it creates a new team
+ * Context Tree *repo* with the user's local `gh` (create + seed + push + add
+ * to the App installation + bind). This moves new-tree provisioning off the
+ * server GitHub App and onto the user's agent — the App no longer needs
+ * `administration/contents/workflows: write`, and personal-account trees stop
+ * needing a special server user-token path.
+ *
+ * The rest — `migrate` / `upgrade` / `status` / `codeowners` / `claude-hook` /
+ * `inject` / `review` / `automation` / `skill` groups — stays deleted (cloud
+ * owns those, or the agent runtime inlines its own skill payload install).
  */
 export function registerTreeCommands(program: Command): void {
   treeCommand.register(program);
@@ -35,6 +41,6 @@ export const treeCommand: CommandModule = {
         command.outputHelp();
       });
 
-    registerSubcommands(command, [verifyCommand, treeTreeCommand]);
+    registerSubcommands(command, [verifyCommand, treeTreeCommand, initCommand]);
   },
 };

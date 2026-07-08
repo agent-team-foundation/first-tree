@@ -60,6 +60,161 @@ describe("server config", () => {
     expect(fieldSchema.parse("   ")).toBeUndefined();
   });
 
+  it("keeps growth landing pages disabled by default and enables them via env", async () => {
+    const defaultConfigDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+
+    const defaultConfig = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: defaultConfigDir,
+    });
+
+    expect(defaultConfig.growth.landingPagesEnabled).toBe(false);
+    expect(defaultConfig.growth.landingCampaignMaxAgentTurns).toBe(6);
+    expect(defaultConfig.growth.landingCampaignMaxEstimatedTokens).toBe(120_000);
+    expect(defaultConfig.growth.landingCampaignMaxTrialsPerUserPer24Hours).toBe(5);
+
+    resetConfig();
+    const enabledConfigDir = makeTempConfigDir();
+    vi.stubEnv("FIRST_TREE_GROWTH_LANDING_PAGES_ENABLED", "true");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS", "4");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_ESTIMATED_TOKENS", "12000");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_TRIALS_PER_USER_PER_24_HOURS", "7");
+
+    const enabledConfig = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: enabledConfigDir,
+    });
+
+    expect(enabledConfig.growth.landingPagesEnabled).toBe(true);
+    expect(enabledConfig.growth.landingCampaignMaxAgentTurns).toBe(4);
+    expect(enabledConfig.growth.landingCampaignMaxEstimatedTokens).toBe(12000);
+    expect(enabledConfig.growth.landingCampaignMaxTrialsPerUserPer24Hours).toBe(7);
+  });
+
+  it("resolves landing campaign official service ids only when configured", async () => {
+    const defaultConfigDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+
+    const defaultConfig = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: defaultConfigDir,
+    });
+
+    expect(defaultConfig.growth.landingCampaigns).toBeUndefined();
+    expect(defaultConfig.growth).not.toHaveProperty("landingCampaignEnabledSlugs");
+
+    resetConfig();
+    const configuredDir = makeTempConfigDir();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID", "  user_service  ");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_ORG_ID", "  org_service  ");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID", "  client_official  ");
+
+    const configured = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: configuredDir,
+    });
+
+    expect(configured.growth.landingCampaigns).toEqual({
+      serviceUserId: "user_service",
+      serviceOrgId: "org_service",
+      clientId: "client_official",
+      runtimeProvider: "codex",
+    });
+  });
+
+  it("rejects invalid landing campaign max turn limits", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_AGENT_TURNS", "0");
+
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/landingCampaignMaxAgentTurns/);
+  });
+
+  it("rejects invalid landing campaign estimated token limits", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_ESTIMATED_TOKENS", "0");
+
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/landingCampaignMaxEstimatedTokens/);
+  });
+
+  it("rejects invalid landing campaign trial quota limits", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_MAX_TRIALS_PER_USER_PER_24_HOURS", "0");
+
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/landingCampaignMaxTrialsPerUserPer24Hours/);
+  });
+
+  it("defaults landing campaign runtime provider to codex and accepts claude-code", async () => {
+    const defaultDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID", "user_service");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_ORG_ID", "org_service");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID", "client_official");
+
+    const defaultProvider = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: defaultDir,
+    });
+
+    expect(defaultProvider.growth.landingCampaigns?.runtimeProvider).toBe("codex");
+
+    resetConfig();
+    const claudeDir = makeTempConfigDir();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_ORG_ID", "org_service");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_RUNTIME_PROVIDER", "claude-code");
+
+    const claudeProvider = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir: claudeDir,
+    });
+
+    expect(claudeProvider.growth.landingCampaigns?.runtimeProvider).toBe("claude-code");
+  });
+
+  it("rejects unsupported landing campaign runtime providers", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_USER_ID", "user_service");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_SERVICE_ORG_ID", "org_service");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_CLIENT_ID", "client_official");
+    vi.stubEnv("FIRST_TREE_LANDING_CAMPAIGN_RUNTIME_PROVIDER", "claude-code-tui");
+
+    await expect(
+      initConfig({
+        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+        role: "server",
+        configDir,
+      }),
+    ).rejects.toThrow(/Landing campaign runtime provider must be codex or claude-code/);
+  });
+
   it("does not auto-generate server secrets when disabled", async () => {
     const configDir = makeTempConfigDir();
     vi.stubEnv("FIRST_TREE_DATABASE_URL", "postgres://first-tree:test@localhost:5432/firsttree");
@@ -106,6 +261,24 @@ describe("server config", () => {
     });
 
     expect(config.rateLimit).toEqual({ max: 1234 });
+  });
+
+  it("resolves connect bootstrap portable env overrides", async () => {
+    const configDir = makeTempConfigDir();
+    stubRequiredProductionConfig();
+    vi.stubEnv("FIRST_TREE_CONNECT_BOOTSTRAP_METHOD", "portable");
+    vi.stubEnv("FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL", "https://downloads.example.test");
+
+    const config = await initConfig({
+      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
+      role: "server",
+      configDir,
+    });
+
+    expect(config.connectBootstrap).toEqual({
+      method: "portable",
+      portableDownloadBaseUrl: "https://downloads.example.test",
+    });
   });
 
   it("uses inbox delivery fairness defaults when the inbox group is active", () => {
@@ -166,58 +339,5 @@ describe("server config", () => {
 
     expect(config.secrets).toEqual({ jwtSecret, encryptionKey });
     expect(existsSync(join(configDir, "server.yaml"))).toBe(false);
-  });
-
-  it("does not enable feedback from LLM_API_KEY alone", async () => {
-    const configDir = makeTempConfigDir();
-    stubRequiredProductionConfig();
-    vi.stubEnv("LLM_API_KEY", "sk-feedback-test");
-
-    const config = await initConfig({
-      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
-      role: "server",
-      configDir,
-    });
-
-    expect(config.feedback).toBeUndefined();
-  });
-
-  it("rejects half-configured feedback when the feedback repo activates the group", async () => {
-    const configDir = makeTempConfigDir();
-    stubRequiredProductionConfig();
-    vi.stubEnv("HEARBACK_FEEDBACK_REPO", "agent-team-foundation/feedback");
-
-    await expect(
-      initConfig({
-        schema: createServerConfigSchema({ autoGenerateSecrets: false }),
-        role: "server",
-        configDir,
-      }),
-    ).rejects.toThrow(/feedback\.githubToken/);
-  });
-
-  it("resolves feedback LLM settings only after feedback is configured", async () => {
-    const configDir = makeTempConfigDir();
-    stubRequiredProductionConfig();
-    vi.stubEnv("HEARBACK_FEEDBACK_REPO", "agent-team-foundation/feedback");
-    vi.stubEnv("HEARBACK_GITHUB_TOKEN", "ghp_feedback");
-    vi.stubEnv("LLM_API_KEY", "sk-feedback-test");
-    vi.stubEnv("LLM_MODEL", "gpt-test");
-
-    const config = await initConfig({
-      schema: createServerConfigSchema({ autoGenerateSecrets: false }),
-      role: "server",
-      configDir,
-    });
-
-    expect(config.feedback).toEqual({
-      repo: "agent-team-foundation/feedback",
-      githubToken: "ghp_feedback",
-      llm: {
-        apiKey: "sk-feedback-test",
-        model: "gpt-test",
-      },
-      trustProxyHeaders: false,
-    });
   });
 });

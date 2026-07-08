@@ -10,6 +10,7 @@ import {
   extractMentions,
   isImageBatchRefContent,
   isImageRefContent,
+  isLandingCampaignTrialChatLocked,
   type MentionParticipant,
   parseProviderRetryEventMessage,
   type RequestResolution,
@@ -81,17 +82,13 @@ import { type AskAnswer, AskTakeover } from "../../../components/chat/ask-takeov
 import { awaitedAgentsFromMessage, ChatOfflineNotice } from "../../../components/chat/chat-offline-notice.js";
 import { ComposeStatusBar } from "../../../components/chat/compose-status-bar.js";
 import {
-  FIRST_TREE_SYSTEM_SENDER_NAME,
-  FirstTreeSystemAvatar,
-  isTrustedFirstTreeOnboardingSystemMessage,
-} from "../../../components/chat/first-tree-system-message.js";
-import {
   GITHUB_SYSTEM_SENDER_NAME,
   GithubEventCardMessage,
   GithubSystemAvatar,
   isGithubEventCardContent,
   isTrustedGithubDispatcherMessage,
 } from "../../../components/chat/github-event-card.js";
+import { LiveTurnAgentsContext } from "../../../components/chat/live-turn-context.js";
 import {
   findBlockingRequest,
   findThreadableRequestId,
@@ -143,6 +140,9 @@ import { ChatRightSidebar } from "../right-sidebar/index.js";
 import { ChatSummary } from "./chat-summary.js";
 
 const SIDEBAR_OPEN_STORAGE_KEY = "first-tree:chat-right-sidebar:open:v1";
+const LANDING_TRIAL_CHAT_ENDED_PLACEHOLDER =
+  'Your trial chat has ended. To keep using First Tree, click "Set up First Tree for your team" ' +
+  "at the top of the page to create your team.";
 
 /**
  * Read the user's stored right-rail preference. Returns `null` when the
@@ -548,6 +548,10 @@ type MessageRowProps = {
   agentAvatarFn: (id: string) => string | null;
   agentColorTokenFn: (id: string) => string | null;
   mentionParticipants: MentionParticipant[];
+  /** Trial surface: render sender avatar/name as plain identity, without the
+   *  AgentHovercard whose actions ("Open details" → /agents/:id, "Chat" →
+   *  /?c=draft) would navigate out of the controlled trial conversation. */
+  isTrial: boolean;
 };
 
 type MessageBodyProps = {
@@ -765,6 +769,7 @@ const MessageRow = memo(function MessageRow({
   agentAvatarFn,
   agentColorTokenFn,
   mentionParticipants,
+  isTrial,
 }: MessageRowProps) {
   // GitHub-dispatcher cards keep the human-agent uuid in `senderId` so
   // routing / read-receipts / mention-resolution stay consistent, but we
@@ -776,13 +781,8 @@ const MessageRow = memo(function MessageRow({
   // so the recipient does not see their own name color treatment on a
   // card the dispatcher wrote on their row.
   const isGithubSystem = isTrustedGithubDispatcherMessage(msg);
-  const isFirstTreeSystem = isTrustedFirstTreeOnboardingSystemMessage(msg);
-  const isSystem = isGithubSystem || isFirstTreeSystem;
-  const senderName = isGithubSystem
-    ? GITHUB_SYSTEM_SENDER_NAME
-    : isFirstTreeSystem
-      ? FIRST_TREE_SYSTEM_SENDER_NAME
-      : agentNameFn(msg.senderId);
+  const isSystem = isGithubSystem;
+  const senderName = isGithubSystem ? GITHUB_SYSTEM_SENDER_NAME : agentNameFn(msg.senderId);
   const isSelf = !isSystem && myAgentId === msg.senderId;
 
   return (
@@ -797,8 +797,15 @@ const MessageRow = memo(function MessageRow({
     >
       {isGithubSystem ? (
         <GithubSystemAvatar size={20} />
-      ) : isFirstTreeSystem ? (
-        <FirstTreeSystemAvatar size={20} />
+      ) : isTrial ? (
+        <span className="block self-start rounded-full">
+          <Avatar
+            name={senderName}
+            imageUrl={agentAvatarFn(msg.senderId)}
+            seed={msg.senderId}
+            colorToken={agentColorTokenFn(msg.senderId)}
+          />
+        </span>
       ) : (
         <AgentHovercard
           agentId={msg.senderId}
@@ -817,7 +824,7 @@ const MessageRow = memo(function MessageRow({
       )}
       <div className="min-w-0">
         <div className="flex items-baseline" style={{ gap: 8 }}>
-          {isSystem ? (
+          {isSystem || isTrial ? (
             <span className="mono text-body font-semibold" style={{ color: isSelf ? "var(--fg)" : "var(--primary)" }}>
               {senderName}
             </span>
@@ -854,6 +861,7 @@ function areMessageRowPropsEqual(prev: MessageRowProps, next: MessageRowProps): 
     prev.agentNameFn === next.agentNameFn &&
     prev.agentAvatarFn === next.agentAvatarFn &&
     prev.agentColorTokenFn === next.agentColorTokenFn &&
+    prev.isTrial === next.isTrial &&
     mentionParticipantsEqual(prev.mentionParticipants, next.mentionParticipants)
   );
 }
@@ -1095,6 +1103,9 @@ type ChatTimelineProps = {
   visibleItems: readonly TimelineItem[];
   hiddenByBlock: number;
   readOnly: boolean;
+  /** Trial surface: forwarded to each MessageRow to render plain sender
+   *  identity (no navigating hovercard). */
+  isTrial: boolean;
   scrollContainerRef: RefObject<HTMLDivElement | null>;
   /** The timeline's `relative` wrapper, used as the chat-summary overlay's
    *  positioning context (the summary card is portaled into it). */
@@ -1126,6 +1137,7 @@ const ChatTimeline = memo(function ChatTimeline({
   visibleItems,
   hiddenByBlock,
   readOnly,
+  isTrial,
   scrollContainerRef,
   overlayContainerRef,
   messagesEndRef,
@@ -1217,6 +1229,7 @@ const ChatTimeline = memo(function ChatTimeline({
                     agentAvatarFn={agentAvatarFn}
                     agentColorTokenFn={agentColorTokenFn}
                     mentionParticipants={mentionParticipants}
+                    isTrial={isTrial}
                   />
                 );
               }
@@ -1255,7 +1268,11 @@ const ChatTimeline = memo(function ChatTimeline({
               </div>
             ) : null}
           </div>
-          <ChatOfflineNotice chatId={chatId} agents={awaitedAgents} />
+          {/* No offline-agent notice on the trial surface: its "Reconnect"
+              action navigates to /settings/computers (an escape hatch), and a
+              service-managed trial agent has no computer for the user to
+              reconnect anyway — liveness is First Tree's concern here. */}
+          {isTrial ? null : <ChatOfflineNotice chatId={chatId} agents={awaitedAgents} />}
           <div ref={messagesEndRef} />
         </div>
       </div>
@@ -1297,6 +1314,11 @@ function EntityLink({ metadata }: { metadata: Record<string, unknown> | undefine
   );
 }
 
+/** How long the group-mention tip bubble stays up (no-interaction ceiling). */
+const MENTION_TIP_MS = 4000;
+/** Exit-animation duration before the tip bubble unmounts. */
+const MENTION_TIP_EXIT_MS = 300;
+
 export function ChatView({
   agentId,
   chatId,
@@ -1306,6 +1328,7 @@ export function ChatView({
   joinAction,
   narrow = false,
   onShowConversations = null,
+  isTrial = false,
 }: {
   agentId: string;
   chatId: string;
@@ -1315,6 +1338,10 @@ export function ChatView({
   /** When true, render watching mode: timeline only, no rename, no [+] participant,
    *  composer slot replaced with a Join panel. */
   readOnly?: boolean;
+  /** Landing-campaign trial surface: hide chat-management escape hatches
+   *  (add participant, agent pause/resume) without switching to watcher mode —
+   *  the trial keeps its live composer for the awaiting-user answer flow. */
+  isTrial?: boolean;
   /** Pre-loaded title shown while `chatDetail` is still fetching — typically
    *  the row's `title` from the `me/chats` cache the chat list already has hot.
    *  Without it, the header flashes "…" on every cold open. */
@@ -1379,6 +1406,22 @@ export function ChatView({
   const [cursor, setCursor] = useState(0);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  // Group-mention tip bubble: a transient popover above the send button, shown
+  // only when a group send is attempted with no @mention. `"hidden"` = not
+  // rendered; `"in"` = shown (entrance anim); `"out"` = playing the exit anim
+  // before unmount. Driven by `flashMentionTip` / `dismissMentionTip` below.
+  const [mentionTip, setMentionTip] = useState<"hidden" | "in" | "out">("hidden");
+  // Mirror of `mentionTip` for cheap reads inside callbacks (avoids re-creating
+  // them on every phase change); lets `dismissMentionTip` early-out when already
+  // hidden instead of arming a needless timer on every keystroke.
+  const mentionTipPhaseRef = useRef(mentionTip);
+  mentionTipPhaseRef.current = mentionTip;
+  const mentionTipHoldTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mentionTipExitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The chat that owns the current tip. The bubble only renders while this
+  // matches the viewed `chatId`, so a tip from a previous chat can never paint
+  // in the next one — a render-time guard that holds regardless of effect timing.
+  const mentionTipChatId = useRef<string | null>(null);
   // Answering a blocking ask is owned by the AskTakeover overlay, which composes
   // its own text + @mentions + image attachments. `askBusy` disables the card
   // while its resolving reply is in flight (kept true through success so the
@@ -1392,6 +1435,49 @@ export function ChatView({
     // user adds or removes an image — they're already fixing it.
     onChange: () => setUploadError(null),
   });
+  const clearMentionTipTimers = useCallback(() => {
+    if (mentionTipHoldTimer.current) clearTimeout(mentionTipHoldTimer.current);
+    if (mentionTipExitTimer.current) clearTimeout(mentionTipExitTimer.current);
+    mentionTipHoldTimer.current = null;
+    mentionTipExitTimer.current = null;
+  }, []);
+  // Show the tip on a blocked send attempt (Enter or clicking the dimmed send
+  // button). Re-arming resets the timers so a repeat attempt refreshes the
+  // bubble rather than stacking timers. Auto-hides after MENTION_TIP_MS via a
+  // brief exit phase.
+  const flashMentionTip = useCallback(() => {
+    clearMentionTipTimers();
+    // Stamp the chat that owns this tip so the render gate can refuse to paint
+    // it in any other chat, even for a single frame before effects run.
+    mentionTipChatId.current = chatId;
+    setMentionTip("in");
+    mentionTipHoldTimer.current = setTimeout(() => {
+      setMentionTip("out");
+      mentionTipExitTimer.current = setTimeout(() => setMentionTip("hidden"), MENTION_TIP_EXIT_MS);
+    }, MENTION_TIP_MS);
+  }, [clearMentionTipTimers, chatId]);
+  // Dismiss early (user started typing, addressed someone, or the gate lifted):
+  // play the exit anim if currently shown, otherwise just ensure it's hidden.
+  const dismissMentionTip = useCallback(() => {
+    // Already gone — nothing to dismiss (skips per-keystroke timer churn).
+    if (mentionTipPhaseRef.current === "hidden") return;
+    clearMentionTipTimers();
+    setMentionTip((prev) => (prev === "in" ? "out" : "hidden"));
+    mentionTipExitTimer.current = setTimeout(() => setMentionTip("hidden"), MENTION_TIP_EXIT_MS);
+  }, [clearMentionTipTimers]);
+  useEffect(() => clearMentionTipTimers, [clearMentionTipTimers]);
+  // Hard-reset on chat switch. ChatView is long-lived across chats, so a tip
+  // triggered in one group chat must not linger into the next — the gate-lift
+  // effect won't fire when both chats are group/no-mention (the gate stays
+  // true). The render gate (`mentionTipChatId.current === chatId`) already keeps
+  // a stale tip from painting in the new chat; this pre-paint `useLayoutEffect`
+  // additionally drains the timers and hard-hides so no exit animation plays.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: chatId is a reset trigger — the body doesn't read it, but the tip must clear whenever the viewed chat changes
+  useLayoutEffect(() => {
+    clearMentionTipTimers();
+    setMentionTip("hidden");
+    mentionTipChatId.current = null;
+  }, [chatId, clearMentionTipTimers]);
   // Right-rail visibility. The rail holds participants + GitHub bindings; the
   // running summary now lives in the pinned ChatSummary above the stream, not
   // here. Default: the user's stored preference if they have ever toggled the
@@ -1857,6 +1943,7 @@ export function ChatView({
   });
 
   const handleSend = async () => {
+    if (isLandingCampaignTrialChatLocked(chatDetail?.metadata)) return;
     const text = draft.trim();
     const images = pendingImages;
     if (uploading) return;
@@ -1878,21 +1965,17 @@ export function ChatView({
     // nothing and the button stays disabled, prompting the user to use
     // the `[+]` button or the autocomplete picker.
 
-    // Group-chat send guard: a multi-speaker chat has no no-recipient send
-    // path — every message must @mention at least one member. The send button
-    // is already disabled in this state (see `sendBlockedByMentionGate`), so
-    // this is the Enter-key / programmatic backstop. Applies to image-only
-    // sends too: the server's mention check runs per message regardless of
-    // format, so an un-addressed image would 400 just like un-addressed text.
-    // Surface a hint when the user has only attached images so the
-    // silent-return doesn't look like a stuck send. A live dock lifts the
-    // gate — `routedMentions` below defaults the recipient to the asker.
+    // Group-chat send guard: a multi-speaker chat has no no-recipient send path
+    // — every message must @mention at least one member. This is the send path
+    // for both Enter and clicking the dimmed-but-clickable send button (kept
+    // clickable precisely so a click here isn't a silent no-op). Applies to
+    // image-only sends too: the server's mention check runs per message
+    // regardless of format, so an un-addressed image would 400 just like
+    // un-addressed text. `flashMentionTip` pops the tip bubble above the send
+    // button for both text and image attempts. A live dock lifts the gate —
+    // `routedMentions` below defaults to the asker.
     if (sendBlockedByMentionGate) {
-      if (images.length > 0) {
-        // English matches the other uploadError strings in this file
-        // (Failed to send image / Failed to add participants / Image too large).
-        setUploadError("@mention a group member in the text — images will be addressed to the same recipient(s).");
-      }
+      flashMentionTip();
       return;
     }
 
@@ -2319,6 +2402,34 @@ export function ChatView({
   }, [mergedMessages, eventsData]);
 
   const itemCount = items.length;
+
+  // Agents with a live (un-ended) turn: one workgroup == one in-progress turn
+  // (see the `items` builder above). This is the timeline's authoritative
+  // "working" signal — a mounted WorkingTurn. Provided via LiveTurnAgentsContext
+  // so every chat-scoped status surface (roster, compose bar, hovercard)
+  // reconciles the composite against it (`reconcileLiveTurn`) from one source —
+  // a lapsed per-chat runtime heartbeat (or a missed composite invalidation)
+  // can't show Idle while a WorkingTurn is visibly on screen. Derived from
+  // `items` (not `visibleItems`) so a viewer-local blocking truncation never
+  // blanks an agent's work status.
+  //
+  // Scope: `eventsData` is a single-(primary-)agent feed (`["session-events",
+  // agentId, chatId]`), so `items` only ever carries the primary agent's
+  // workgroup and this set covers only that agent — exactly the agent whose
+  // WorkingTurn is on screen. `reconcileLiveTurn` is upgrade-only, so a
+  // secondary agent (no card) is never wrongly forced to working; it just shows
+  // the composite. Fixing idle-while-working for secondary agents would need a
+  // multi-agent events feed and is out of this stopgap's scope.
+  const liveTurnAgentIds = useMemo(
+    () =>
+      new Set(
+        items
+          .filter((it): it is Extract<TimelineItem, { kind: "workgroup" }> => it.kind === "workgroup")
+          .map((it) => it.events[0]?.agentId)
+          .filter((id): id is string => id != null),
+      ),
+    [items],
+  );
 
   // Blocking truncation: while a question blocks me (the FIFO-oldest live
   // request directed at me), hide every timeline item AFTER that request's
@@ -3130,24 +3241,35 @@ export function ChatView({
     [draftMentions, peerAgentId],
   );
 
-  // Group-chat mention gate, shared by the send button (disabled / title /
-  // dimming) and handleSend's Enter-key backstop. A blocking question lifts the
-  // gate: the pinned question makes its asker the default recipient, so no
-  // typed @mention is required while a question blocks me.
+  // Group-chat mention gate, shared by the send button (dimming / title) and
+  // handleSend's guard. A blocking question lifts the gate: the pinned question
+  // makes its asker the default recipient, so no typed @mention is required
+  // while a question blocks me.
   const sendBlockedByMentionGate = requiresMention && draftMentions.length === 0 && !askOverlayActive;
+
+  // Once the gate lifts (a member gets @mentioned, or a dock/overlay takes over)
+  // the tip is moot — dismiss it so it never lingers into the next block.
+  useEffect(() => {
+    if (!sendBlockedByMentionGate) dismissMentionTip();
+  }, [sendBlockedByMentionGate, dismissMentionTip]);
 
   // Unified send-disabled gate for the composer. While the AskTakeover overlay
   // is active it covers the composer (answering is owned there), so the composer
-  // only ever sends ordinary messages: need text or an image, and (group chats)
-  // an addressed @mention.
+  // only ever sends ordinary messages: need text or an image. NOTE: the mention
+  // gate is deliberately NOT part of `sendDisabled` — a truly disabled button
+  // swallows clicks, so we keep the button clickable when only the mention is
+  // missing and let handleSend pop the tip. `sendDimmed` carries the greyed-out
+  // look for that state.
+  const landingCampaignChatLocked = isLandingCampaignTrialChatLocked(chatDetail?.metadata);
   const sendDisabled =
-    sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0) || sendBlockedByMentionGate;
+    landingCampaignChatLocked || sendMut.isPending || uploading || (!draft.trim() && pendingImages.length === 0);
+  const sendDimmed = sendDisabled || sendBlockedByMentionGate;
 
   const mention = useMentionAutocomplete({
     value: draft,
     cursor,
     candidates: mentionCandidates,
-    disabled: sendMut.isPending || uploading,
+    disabled: landingCampaignChatLocked || sendMut.isPending || uploading,
     onSelect: (update) => {
       autoPrimedDraftRef.current = false;
       setDraft(update.text);
@@ -3244,7 +3366,9 @@ export function ChatView({
     },
   });
 
-  return (
+  // Wrapped via a variable (not nested inline) so introducing the provider
+  // doesn't re-indent the entire chat body — keeps the diff about the fix.
+  const body = (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Chat body: left column owns header + timeline + composer; right
           rail (chat details) sits as an independent column when open.
@@ -3282,6 +3406,7 @@ export function ChatView({
                 sending={askBusy}
                 error={askError ?? undefined}
                 mentionCandidates={mentionCandidates}
+                isTrial={isTrial}
                 onReply={(answer) => {
                   void submitAskAnswer(dockRequest, answer);
                 }}
@@ -3398,6 +3523,12 @@ export function ChatView({
                       watching
                     </span>
                   </span>
+                ) : isTrial ? (
+                  // Trial surface: the title is not renamable (a write on the
+                  // controlled single-run chat) — render it as plain text.
+                  <span className="truncate text-subtitle font-semibold" style={{ color: "var(--fg)" }}>
+                    {chatDetail?.title ?? titleFallback ?? "…"}
+                  </span>
                 ) : renaming ? (
                   <span className="inline-flex items-center" style={{ gap: "var(--sp-2)" }}>
                     <input
@@ -3503,67 +3634,76 @@ export function ChatView({
                     Read-only on the web — written by the owning agent via
                     `chat update --description`. */}
               </div>
-              {/* Audience — compact stats icon + quick-add icon. Replaces
+              {/* Trial surface hides the entire audience/details cluster
+                  (participant stats, add participant, chat-details toggle) —
+                  the trial is a pure conversation with no side rail. */}
+              {!isTrial && (
+                <>
+                  {/* Audience — compact stats icon + quick-add icon. Replaces
               the previous chip-row, which one-shot the panel width once
               chats grew past three participants. Stats icon shows count
               + hover popover with full name list; the quick-add icon
               opens the same dropdown the sidebar's "+ Add participant"
               uses (shared backend mutation, single one-way-door notice). */}
-              <ParticipantsStats
-                participants={chatDetail?.participants ?? []}
-                chatId={chatId}
-                agentIdentity={chatScopedAgentIdentity}
-                onOpen={() => setSidebarByUser(true)}
-              />
-              {/* Vertical divider splits "look" (avatar strip = identity +
+                  <ParticipantsStats
+                    participants={chatDetail?.participants ?? []}
+                    chatId={chatId}
+                    agentIdentity={chatScopedAgentIdentity}
+                    onOpen={() => setSidebarByUser(true)}
+                  />
+                  {/* Vertical divider splits "look" (avatar strip = identity +
                   state) from "do" (add / open details). Keeps the four
                   icons from reading as one undifferentiated cluster. */}
-              <span
-                aria-hidden="true"
-                className="shrink-0"
-                style={{
-                  width: "var(--hairline)",
-                  height: "var(--sp-4)",
-                  background: "var(--border)",
-                  marginLeft: "var(--sp-1)",
-                  marginRight: "var(--sp-1)",
-                }}
-              />
-              {readOnly ? null : (
-                <AddParticipantDropdown
-                  variant="icon"
-                  chatId={chatId}
-                  participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
-                  onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
-                />
-              )}
-              {/* Hide agent final-text toggle — TEMPORARY, staging/dev only
+                  <span
+                    aria-hidden="true"
+                    className="shrink-0"
+                    style={{
+                      width: "var(--hairline)",
+                      height: "var(--sp-4)",
+                      background: "var(--border)",
+                      marginLeft: "var(--sp-1)",
+                      marginRight: "var(--sp-1)",
+                    }}
+                  />
+                  {readOnly ? null : (
+                    <AddParticipantDropdown
+                      variant="icon"
+                      chatId={chatId}
+                      participantIds={chatDetail?.participants?.map((p) => p.agentId) ?? [agentId]}
+                      onAdded={() => queryClient.invalidateQueries({ queryKey: ["chat-detail", chatId] })}
+                    />
+                  )}
+                  {/* Hide agent final-text toggle — TEMPORARY, staging/dev only
               (gated on `finalTextToggleEnabled`). Filters the per-turn
               final-text mirrors out of the timeline so a human watcher sees
               only deliberate sends + human messages. Eye / EyeOff conveys the
               show/hide state; pressed styling marks "currently hiding". */}
-              {finalTextToggleEnabled && (
-                <button
-                  type="button"
-                  onClick={toggleHideAgentFinalText}
-                  aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                  aria-pressed={hideAgentFinalText}
-                  title={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
-                  className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                  style={{
-                    width: 28,
-                    height: 28,
-                    border: 0,
-                    background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
-                    borderRadius: "var(--radius-input)",
-                    color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
-                    cursor: "pointer",
-                  }}
-                >
-                  {hideAgentFinalText ? <EyeOff size={16} strokeWidth={2.25} /> : <Eye size={16} strokeWidth={2.25} />}
-                </button>
-              )}
-              {/* Chat details toggle — opens the right rail (Participants /
+                  {finalTextToggleEnabled && (
+                    <button
+                      type="button"
+                      onClick={toggleHideAgentFinalText}
+                      aria-label={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
+                      aria-pressed={hideAgentFinalText}
+                      title={hideAgentFinalText ? "Show agent final messages" : "Hide agent final messages"}
+                      className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                      style={{
+                        width: 28,
+                        height: 28,
+                        border: 0,
+                        background: hideAgentFinalText ? "var(--bg-sunken)" : "transparent",
+                        borderRadius: "var(--radius-input)",
+                        color: hideAgentFinalText ? "var(--fg)" : "var(--fg-3)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {hideAgentFinalText ? (
+                        <EyeOff size={16} strokeWidth={2.25} />
+                      ) : (
+                        <Eye size={16} strokeWidth={2.25} />
+                      )}
+                    </button>
+                  )}
+                  {/* Chat details toggle — opens the right rail (Participants /
               GitHub / Chat actions). Sits at the panel's far right,
               mirroring the rail's position. The PanelRight glyph is the
               panel-toggle convention (Linear / Notion / VS Code); the same
@@ -3571,26 +3711,28 @@ export function ChatView({
               background + darker foreground) carries the open/closed state.
               An ellipsis is reserved for overflow-action menus (see
               row-actions-menu.tsx), so it would mislead here. */}
-              <button
-                type="button"
-                onClick={toggleSidebar}
-                aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
-                aria-expanded={showSidebar}
-                aria-pressed={showSidebar}
-                title={showSidebar ? "Hide chat details" : "Show chat details"}
-                className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
-                style={{
-                  width: 28,
-                  height: 28,
-                  border: 0,
-                  background: showSidebar ? "var(--bg-sunken)" : "transparent",
-                  borderRadius: "var(--radius-input)",
-                  color: showSidebar ? "var(--fg)" : "var(--fg-3)",
-                  cursor: "pointer",
-                }}
-              >
-                <PanelRight size={16} strokeWidth={2.25} />
-              </button>
+                  <button
+                    type="button"
+                    onClick={toggleSidebar}
+                    aria-label={showSidebar ? "Hide chat details" : "Show chat details"}
+                    aria-expanded={showSidebar}
+                    aria-pressed={showSidebar}
+                    title={showSidebar ? "Hide chat details" : "Show chat details"}
+                    className="inline-flex shrink-0 items-center justify-center transition-colors hover:bg-[var(--bg-hover)]"
+                    style={{
+                      width: 28,
+                      height: 28,
+                      border: 0,
+                      background: showSidebar ? "var(--bg-sunken)" : "transparent",
+                      borderRadius: "var(--radius-input)",
+                      color: showSidebar ? "var(--fg)" : "var(--fg-3)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <PanelRight size={16} strokeWidth={2.25} />
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -3656,6 +3798,7 @@ export function ChatView({
             visibleItems={visibleItems}
             hiddenByBlock={hiddenByBlock}
             readOnly={readOnly}
+            isTrial={isTrial}
             scrollContainerRef={scrollContainerRef}
             overlayContainerRef={overlayContainerRef}
             messagesEndRef={messagesEndRef}
@@ -3763,12 +3906,47 @@ export function ChatView({
                         // still defines its edge.
                         background: "var(--bg-raised)",
                       }}
-                      onDragOver={(e) => e.preventDefault()}
+                      onDragOver={(e) => (isTrial ? undefined : e.preventDefault())}
                       onDrop={(e) => {
+                        // No drag-and-drop image attachments on the trial surface.
+                        if (isTrial) return;
                         e.preventDefault();
                         addImages(Array.from(e.dataTransfer.files));
                       }}
                     >
+                      {/* Group-mention tip bubble: a transient popover anchored
+                          above the send button, shown only on a blocked send
+                          attempt (`flashMentionTip`). Opens upward (the composer
+                          hugs the screen bottom, so a hint below it would be off
+                          screen), points at the send button, and auto-dismisses.
+                          `pointer-events: none` so it never eats a click/keystroke
+                          that would resolve the block. */}
+                      {mentionTip !== "hidden" && mentionTipChatId.current === chatId && (
+                        <div
+                          role="status"
+                          className={mentionTip === "out" ? "mention-tip mention-tip-out" : "mention-tip"}
+                          style={{
+                            position: "absolute",
+                            right: 8,
+                            bottom: 44,
+                            zIndex: 5,
+                            pointerEvents: "none",
+                            maxWidth: "calc(100% - var(--sp-4))",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "var(--sp-1_5)",
+                            padding: "var(--sp-1_5) var(--sp-2_5)",
+                            borderRadius: "var(--radius-panel)",
+                            border: "var(--hairline) solid var(--border-strong)",
+                            background: "var(--bg-raised)",
+                            boxShadow: "var(--shadow-md)",
+                            color: "var(--fg)",
+                          }}
+                        >
+                          <span className="text-label">@mention someone, or no one gets this</span>
+                          <span className="mention-tip-arrow" aria-hidden="true" />
+                        </div>
+                      )}
                       {/* Image preview area — above textarea */}
                       {pendingImages.length > 0 && (
                         <div
@@ -3818,21 +3996,27 @@ export function ChatView({
                         </div>
                       )}
                       <div style={{ position: "relative" }}>
-                        <MentionAutocompletePopover
-                          trigger={mention.trigger}
-                          results={mention.results}
-                          highlightIndex={mention.highlightIndex}
-                          anchorRef={textareaRef}
-                          onPick={mention.pick}
-                        />
-                        <SlashCommandPopover
-                          trigger={slash.trigger}
-                          results={slash.results}
-                          highlightIndex={slash.highlightIndex}
-                          mentionedAgent={slash.mentionedAgent}
-                          anchorRef={textareaRef}
-                          onPick={slash.pick}
-                        />
+                        {/* No mention / slash-command autocomplete on the trial
+                            surface (single agent, controlled conversation). */}
+                        {!isTrial && (
+                          <>
+                            <MentionAutocompletePopover
+                              trigger={mention.trigger}
+                              results={mention.results}
+                              highlightIndex={mention.highlightIndex}
+                              anchorRef={textareaRef}
+                              onPick={mention.pick}
+                            />
+                            <SlashCommandPopover
+                              trigger={slash.trigger}
+                              results={slash.results}
+                              highlightIndex={slash.highlightIndex}
+                              mentionedAgent={slash.mentionedAgent}
+                              anchorRef={textareaRef}
+                              onPick={slash.pick}
+                            />
+                          </>
+                        )}
                         {/* Mirror layer painting `@<participant>` chips behind
                           the textarea. Typography (`text-subtitle font-normal`)
                           is copied from the textarea's className so glyphs
@@ -3873,6 +4057,9 @@ export function ChatView({
                             // — React bails on identical setState so the null→null
                             // case is free.
                             setUploadError(null);
+                            // Same rationale for the mention tip: the user is
+                            // actively editing, so dismiss it early.
+                            dismissMentionTip();
                           }}
                           onSelect={(e) => {
                             setCursor(e.currentTarget.selectionStart ?? draft.length);
@@ -3891,6 +4078,10 @@ export function ChatView({
                             // `sendBlockedByMentionGate`), so stamping `@` would fight
                             // the dock contract as the user starts a free-text answer.
                             if (
+                              // Trial never primes `@` on focus (single agent, no
+                              // mention) — explicit rather than relying on the
+                              // single-speaker requiresMention=false coincidence.
+                              isTrial ||
                               !shouldPrimeMentionOnFocus({
                                 requiresMention,
                                 dockActive: dockRequest != null,
@@ -3912,6 +4103,9 @@ export function ChatView({
                             });
                           }}
                           onPaste={(e) => {
+                            // No image attachments on the trial surface — let text
+                            // paste fall through to the default handler.
+                            if (isTrial) return;
                             const files = Array.from(e.clipboardData.files);
                             if (files.length > 0) {
                               e.preventDefault();
@@ -3919,32 +4113,47 @@ export function ChatView({
                             }
                           }}
                           placeholder={
-                            requiresMention
-                              ? "Type @ to pick a recipient, then your message"
-                              : `Message @${displayName}  ·  / for commands  ·  @ to mention`
+                            landingCampaignChatLocked
+                              ? LANDING_TRIAL_CHAT_ENDED_PLACEHOLDER
+                              : isTrial
+                                ? // Trial: a single-agent, controlled conversation — no
+                                  // slash commands or @mention (one agent), so the
+                                  // placeholder is just the plain message prompt.
+                                  `Message @${displayName}`
+                                : requiresMention
+                                  ? // Group chat: the placeholder carries the rule (this
+                                    // is the calm, always-there teaching surface). It
+                                    // shows only while empty; once the user types it's
+                                    // gone, and the tip bubble covers a blocked send.
+                                    "In a group, @mention who this is for"
+                                  : `Message @${displayName}  ·  / for commands  ·  @ to mention`
                           }
                           rows={2}
                           onKeyDown={(e) => {
                             // Skip while an IME is composing so Enter confirms the
                             // candidate instead of sending / picking a mention.
                             if (e.nativeEvent.isComposing) return;
-                            // Slash command popover handles navigation keys when active.
-                            // Sits before mention so `/`-typed draft never falls through to
-                            // mention-autocomplete (the trigger predicates are disjoint, but
-                            // ordering documents intent).
-                            if (slash.handleKey(e)) return;
-                            // Mention autocomplete gets next crack: when the caret is
-                            // inside an active `@trigger` (typed, pasted, or pre-existing),
-                            // Enter/Tab/Arrows/Escape drive the popover instead of
-                            // sending or moving the cursor.
-                            if (mention.handleKey(e)) return;
+                            // Trial: no slash commands / mention autocomplete, so `/` and
+                            // `@` type literally and Enter always sends.
+                            if (!isTrial) {
+                              // Slash command popover handles navigation keys when active.
+                              // Sits before mention so `/`-typed draft never falls through to
+                              // mention-autocomplete (the trigger predicates are disjoint, but
+                              // ordering documents intent).
+                              if (slash.handleKey(e)) return;
+                              // Mention autocomplete gets next crack: when the caret is
+                              // inside an active `@trigger` (typed, pasted, or pre-existing),
+                              // Enter/Tab/Arrows/Escape drive the popover instead of
+                              // sending or moving the cursor.
+                              if (mention.handleKey(e)) return;
+                            }
                             if (e.key === "Enter" && !e.shiftKey) {
                               e.preventDefault();
                               handleSend();
                             }
                           }}
-                          disabled={sendMut.isPending || uploading}
-                          className="mention-composer-textarea w-full outline-none text-subtitle font-normal"
+                          disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
+                          className="mention-composer-textarea w-full outline-none text-subtitle font-normal placeholder:text-muted-foreground"
                           style={{
                             padding: "var(--sp-2_25) var(--sp-3) var(--sp-7_5)",
                             background: "transparent",
@@ -4004,73 +4213,88 @@ export function ChatView({
                           zIndex: 2,
                         }}
                       >
-                        <span className="mono flex items-center" style={{ gap: 10 }}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              // Insert `@` at the cursor (or replace the current selection)
-                              // and re-focus. The mention autocomplete will pick it up
-                              // from the resulting `value`/`cursor` state — same path as
-                              // typing `@` directly. Mirrors the Slack
-                              // explicit-button affordance for users who don't know the
-                              // keyboard trick.
-                              const el = textareaRef.current;
-                              if (!el) return;
-                              const start = el.selectionStart ?? draft.length;
-                              const end = el.selectionEnd ?? start;
-                              const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
-                              autoPrimedDraftRef.current = false;
-                              setDraft(next);
-                              setCursor(start + 1);
-                              requestAnimationFrame(() => {
-                                el.focus();
-                                el.setSelectionRange(start + 1, start + 1);
-                              });
-                            }}
-                            title="Mention an agent (or type @)"
-                            style={{
-                              background: "none",
-                              border: "none",
-                              cursor: "pointer",
-                              color: "var(--fg-3)",
-                              padding: 0,
-                              display: "inline-flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            <AtSign className="h-3.5 w-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => fileInputRef.current?.click()}
-                            title="Attach image"
-                            style={{
-                              background: "none",
-                              border: "none",
-                              cursor: "pointer",
-                              color: "var(--fg-3)",
-                              padding: 0,
-                              display: "inline-flex",
-                              alignItems: "center",
-                            }}
-                          >
-                            <Paperclip className="h-3.5 w-3.5" />
-                          </button>
-                          <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept="image/*"
-                            multiple
-                            style={{ display: "none" }}
-                            onChange={(e) => {
-                              if (e.target.files) {
-                                addImages(Array.from(e.target.files));
-                                e.target.value = "";
-                              }
-                            }}
-                          />
-                        </span>
-                        <span className="flex items-center" style={{ gap: 8 }}>
+                        {/* Trial: no @mention / attach affordances — just type + send. */}
+                        {!isTrial && (
+                          <span className="mono flex items-center" style={{ gap: 10 }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                // Insert `@` at the cursor (or replace the current selection)
+                                // and re-focus. The mention autocomplete will pick it up
+                                // from the resulting `value`/`cursor` state — same path as
+                                // typing `@` directly. Mirrors the Slack
+                                // explicit-button affordance for users who don't know the
+                                // keyboard trick.
+                                const el = textareaRef.current;
+                                if (!el) return;
+                                const start = el.selectionStart ?? draft.length;
+                                const end = el.selectionEnd ?? start;
+                                const next = `${draft.slice(0, start)}@${draft.slice(end)}`;
+                                autoPrimedDraftRef.current = false;
+                                setDraft(next);
+                                setCursor(start + 1);
+                                requestAnimationFrame(() => {
+                                  el.focus();
+                                  el.setSelectionRange(start + 1, start + 1);
+                                });
+                              }}
+                              disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
+                              title="Mention an agent (or type @)"
+                              style={{
+                                background: "none",
+                                border: "none",
+                                cursor:
+                                  landingCampaignChatLocked || sendMut.isPending || uploading
+                                    ? "not-allowed"
+                                    : "pointer",
+                                color: "var(--fg-3)",
+                                padding: 0,
+                                display: "inline-flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <AtSign className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
+                              title="Attach image"
+                              style={{
+                                background: "none",
+                                border: "none",
+                                cursor:
+                                  landingCampaignChatLocked || sendMut.isPending || uploading
+                                    ? "not-allowed"
+                                    : "pointer",
+                                color: "var(--fg-3)",
+                                padding: 0,
+                                display: "inline-flex",
+                                alignItems: "center",
+                              }}
+                            >
+                              <Paperclip className="h-3.5 w-3.5" />
+                            </button>
+                            <input
+                              ref={fileInputRef}
+                              type="file"
+                              accept="image/*"
+                              multiple
+                              disabled={landingCampaignChatLocked || sendMut.isPending || uploading}
+                              style={{ display: "none" }}
+                              onChange={(e) => {
+                                if (e.target.files) {
+                                  addImages(Array.from(e.target.files));
+                                  e.target.value = "";
+                                }
+                              }}
+                            />
+                          </span>
+                        )}
+                        {/* `ml-auto` keeps the send cluster hard-right even when the
+                            left @/attach cluster is gone (trial surface) — otherwise
+                            `justify-between` with a single child left-aligns it. */}
+                        <span className="flex items-center ml-auto" style={{ gap: 8 }}>
                           {uploading && (
                             <span className="mono text-caption" style={{ color: "var(--primary)" }}>
                               uploading…
@@ -4079,16 +4303,22 @@ export function ChatView({
                           <button
                             type="button"
                             onClick={handleSend}
+                            // NOT `disabled` when only the mention is missing — a
+                            // disabled button swallows the click and the tip never
+                            // fires. `aria-disabled` still conveys the blocked
+                            // state to assistive tech while keeping it clickable.
                             disabled={sendDisabled}
+                            aria-disabled={sendBlockedByMentionGate || undefined}
                             title={
                               sendBlockedByMentionGate
-                                ? "@mention a member to send — a group message must address someone"
+                                ? "@mention someone to send — a group message must address someone"
                                 : "Send (Enter)"
                             }
                             aria-label="Send"
                             className={cn(
                               "inline-flex items-center justify-center transition-opacity",
-                              sendDisabled && "opacity-40 cursor-not-allowed",
+                              sendDimmed && "opacity-40",
+                              sendDisabled && "cursor-not-allowed",
                             )}
                             style={{
                               width: 28,
@@ -4121,7 +4351,10 @@ export function ChatView({
             </div>
           }
         </div>
-        {showSidebar ? (
+        {/* No chat-details right rail on the trial surface — a pure
+            conversation. `!isTrial` also defends against a persisted
+            `showSidebar=true` carried over from a prior non-trial session. */}
+        {showSidebar && !isTrial ? (
           narrow ? (
             // Narrow viewport: rail floats over the chat instead of
             // pushing it aside. A scrim catches outside-clicks for
@@ -4161,6 +4394,7 @@ export function ChatView({
       </div>
     </div>
   );
+  return <LiveTurnAgentsContext.Provider value={liveTurnAgentIds}>{body}</LiveTurnAgentsContext.Provider>;
 }
 
 /**

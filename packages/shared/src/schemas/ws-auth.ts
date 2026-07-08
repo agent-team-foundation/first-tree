@@ -101,6 +101,13 @@ export const serverCapabilitiesSchema = z
      * this to retry ACKs until the database transition is known durable.
      */
     wsInboxAckConfirm: z.boolean().default(false),
+    /**
+     * Server confirms `session:event` frames that include a client-generated
+     * `ref` with `session:event:accepted` / `session:event:rejected`. Clients
+     * that need durable evidence before settling related local work use this
+     * path; ordinary event streaming may remain fire-and-forget.
+     */
+    wsSessionEventConfirm: z.boolean().default(false),
   })
   .partial();
 export type ServerCapabilities = z.infer<typeof serverCapabilitiesSchema>;

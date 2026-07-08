@@ -5,6 +5,7 @@ import {
   imageRefContentSchema,
   MAX_BATCH_ATTACHMENTS,
   MESSAGE_FORMATS,
+  RUNTIME_NOTICE_METADATA_KEY,
   requestResolutionSchema,
   type SendMessage,
   scanMentionTokens,
@@ -23,6 +24,8 @@ import { uuidv7 } from "../uuid.js";
 import { upsertSessionState } from "./activity.js";
 import { applyAfterFanOut, fireChatMessageKick } from "./chat-projection.js";
 import { validateDocumentContext, validateMessageAttachmentRefs } from "./doc-snapshots.js";
+import { hasRemainingLandingCampaignTrialBudget } from "./landing-campaigns/chat-state.js";
+import { getLandingCampaignTrialChat, withLandingCampaignChatState } from "./landing-campaigns/metadata.js";
 
 const log = createLogger("message");
 const ADDRESSED_AGENT_IDS_METADATA_KEY = "addressedAgentIds";
@@ -118,6 +121,49 @@ function validateMessageContent(data: { format: string; content: unknown }): voi
   if (typeof data.content === "string") {
     validateTextBody(data.content, data.format === "request");
   }
+}
+
+function assertLandingCampaignTrialMessageAllowed(input: {
+  chat: { metadata: Record<string, unknown> | null } | null | undefined;
+  senderId: string;
+  senderType: string;
+  data: SendMessage;
+  metadataToStore: Record<string, unknown>;
+  options: SendMessageOptions;
+}): void {
+  const trial = getLandingCampaignTrialChat(input.chat);
+  if (!trial) return;
+
+  if (trial.state === "completed" || trial.state === "failed") {
+    throw new ForbiddenError("Landing campaign trial chat is already complete.");
+  }
+
+  if (input.senderId === trial.agentId && input.senderType !== "human") {
+    if (trial.state !== "running") {
+      throw new ForbiddenError("Landing campaign trial agent can only send while the trial is running.");
+    }
+    return;
+  }
+
+  if (input.senderType === "human") {
+    const isSystemBootstrap =
+      input.options.allowSystemSender === true &&
+      input.metadataToStore.systemSender === "first_tree_onboarding" &&
+      trial.state === "running";
+    if (isSystemBootstrap) return;
+
+    if (!hasRemainingLandingCampaignTrialBudget(trial)) {
+      throw new ForbiddenError("Landing campaign trial chat is locked.");
+    }
+
+    const resolvesRequest = requestResolutionSchema.safeParse(input.metadataToStore.resolves).success;
+    if (trial.state === "awaiting_user" && trial.awaitingUserKind !== "follow_up" && !resolvesRequest) {
+      throw new ForbiddenError("Landing campaign trial chat is waiting for a request answer.");
+    }
+    return;
+  }
+
+  throw new ForbiddenError("Landing campaign trial chat is locked.");
 }
 
 export type SendMessageResult = {
@@ -352,7 +398,7 @@ export function preflightMessageSendIntent(input: {
         return participant !== undefined && participant.status === "active" && participant.type !== "human";
       })
     : [];
-  const metadataToStore = {
+  const metadataToStore: Record<string, unknown> = {
     ...incomingMeta,
     ...(mergedMentions.length > 0 ? { mentions: mergedMentions } : {}),
     ...(addressedAgentIds.length > 0 ? { [ADDRESSED_AGENT_IDS_METADATA_KEY]: addressedAgentIds } : {}),
@@ -413,16 +459,21 @@ export function preflightMessageSendIntent(input: {
   // Persist the final-text intent as a durable metadata flag. `purpose` is a
   // send-time-only tag that the server consumes above but never stores, so
   // without this stamp the web cannot tell a silent `agent-final-text` mirror
-  // apart from a deliberate agent `chat send`. The flag is SERVER-OWNED:
+  // apart from a deliberate agent `chat send`. Handler-emitted runtime notices
+  // reuse the same purpose only for delivery semantics; they are operator
+  // status rows and must not be hidden by the staging final-text toggle.
+  //
+  // The flag is SERVER-OWNED:
   //   1. strip any inbound client-supplied value, then
   //   2. set it true ONLY for a genuine mirror — a NON-HUMAN sender with the
-  //      final-text purpose.
+  //      final-text purpose, excluding `metadata.runtimeNotice=true`.
   // `purpose` rides the shared send schema, so a human/web send can carry it
   // (and gets the silent enforcement profile above) — but it must never be
   // persisted as a mirror, matching the unread-projection's
   // `senderRow.type !== "human"` gate. The staging-only "hide agent final
   // text" toggle filters on this flag.
-  const isAgentFinalTextMirror = isAgentFinalText && senderType !== "human";
+  const isRuntimeNotice = metadataToStore[RUNTIME_NOTICE_METADATA_KEY] === true;
+  const isAgentFinalTextMirror = isAgentFinalText && senderType !== "human" && !isRuntimeNotice;
   const metadataSansFlag =
     AGENT_FINAL_TEXT_METADATA_KEY in metadataToStore
       ? Object.fromEntries(Object.entries(metadataToStore).filter(([key]) => key !== AGENT_FINAL_TEXT_METADATA_KEY))
@@ -499,7 +550,7 @@ async function sendMessageInner(
     //    v2: `chat_membership.mode` is **not** SELECTed — fan-out no longer
     //    reads it. Likewise `chats.type` is locked to 'group' since
     //    first-tree-context PR #465 and no longer drives any decision here.
-    const [participants, [senderRow]] = await Promise.all([
+    const [participants, [senderRow], [chatRowSnapshot]] = await Promise.all([
       tx
         .select({
           agentId: chatMembership.agentId,
@@ -517,10 +568,20 @@ async function sendMessageInner(
         .from(agents)
         .where(eq(agents.uuid, senderId))
         .limit(1),
+      tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).limit(1),
     ]);
     if (!senderRow) {
       throw new NotFoundError(`Sender agent "${senderId}" not found`);
     }
+    const initialTrial = getLandingCampaignTrialChat(chatRowSnapshot);
+    // Trial chat state is a server-owned single-run state machine. Lock and
+    // re-read only those rows so concurrent outbox writes cannot apply stale
+    // running-state transitions after another send completes the trial.
+    const chatRow = initialTrial
+      ? (
+          await tx.select({ metadata: chats.metadata }).from(chats).where(eq(chats.id, chatId)).for("update").limit(1)
+        )[0]
+      : chatRowSnapshot;
 
     const prepared = preflightMessageSendIntent({
       chatId,
@@ -531,6 +592,15 @@ async function sendMessageInner(
       participants,
     });
     const { content: outboundContent, metadata: metadataToStore, mentionedAgentIds: mergedMentions } = prepared;
+
+    assertLandingCampaignTrialMessageAllowed({
+      chat: chatRow,
+      senderId,
+      senderType: senderRow.type,
+      data,
+      metadataToStore,
+      options,
+    });
 
     // 2b. Validate generic attachment refs (`metadata.attachments[]`) against
     //     the blob store: each referenced attachment must exist and its
@@ -673,6 +743,7 @@ async function sendMessageInner(
     // Storing it would both mislead readers and poison the prior-resolution
     // idempotency scan below (which matches on `resolves ->> 'request'`),
     // permanently blocking the legitimate decrement.
+    let resolvedRequest = false;
     const resolution = requestResolutionSchema.safeParse(metadataToStore.resolves);
     if (resolution.success) {
       const requestId = resolution.data.request;
@@ -746,6 +817,28 @@ async function sendMessageInner(
              SET open_request_count = GREATEST(0, open_request_count - 1)
            WHERE chat_id = ${chatId} AND agent_id = ${target}
         `);
+      }
+      resolvedRequest = true;
+    }
+
+    const trial = getLandingCampaignTrialChat(chatRow);
+    if (chatRow && trial) {
+      let nextMetadata: Record<string, unknown> | null = null;
+      if (senderId === trial.agentId && senderRow.type !== "human") {
+        if (data.format === MESSAGE_FORMATS.REQUEST) {
+          nextMetadata = withLandingCampaignChatState(chatRow.metadata, "awaiting_user", false, {
+            awaitingUserKind: "request",
+          });
+        }
+      } else if (
+        senderRow.type === "human" &&
+        trial.state === "awaiting_user" &&
+        (resolvedRequest || trial.awaitingUserKind === "follow_up")
+      ) {
+        nextMetadata = withLandingCampaignChatState(chatRow.metadata, "running", false);
+      }
+      if (nextMetadata) {
+        await tx.update(chats).set({ metadata: nextMetadata, updatedAt: new Date() }).where(eq(chats.id, chatId));
       }
     }
 

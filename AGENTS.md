@@ -38,6 +38,7 @@ Full CLI commands and env vars live in [docs/cli-reference.md](docs/cli-referenc
 ## Required Reading By Topic
 
 - **HTTP routes, JWT auth, scope helpers, or multi-org behavior:** read [docs/development/http-path-conventions.md](docs/development/http-path-conventions.md) before editing. It is the single source of truth.
+- **Onboarding kickoff/chat-start behavior:** read [docs/development/onboarding-kickoff-contract.md](docs/development/onboarding-kickoff-contract.md) before editing `/me/onboarding/kickoff`, `/me/onboarding/tree-setup/kickoff`, or the client inbound prompt formatting.
 - **Running an in-tree CLI next to prod/staging:** use `scripts/dev-install.sh` and read [docs/development/local-dev-isolation.md](docs/development/local-dev-isolation.md).
 
 ## Repo-Local Skills
@@ -57,6 +58,7 @@ Operator-only flows such as `login`, `daemon install`, and `agent create` belong
 - `packages/client/` — `@first-tree/client` SDK and AgentRuntime
 - `packages/web/` — `@first-tree/web` React workspace
 - `packages/skill-evals/` — eval tooling for repo-local skills
+- `packages/qa/` — internal QA workflow assets for agent-run validation
 - `docs/` — user, operator, development, migration, and troubleshooting docs
 - `skills/` — repo-local skill payloads
 
@@ -64,7 +66,7 @@ Operator-only flows such as `login`, `daemon install`, and `agent create` belong
 
 - **Package boundaries:** Server, Client, Command, and Web are independently packaged/deployed and share code through `@first-tree/shared`. The CLI is the user-facing command surface and depends only on Client + Shared. Server ships separately as the SaaS Docker image.
 - **Server state:** Server is stateless. PostgreSQL is the only persistence/queue/notification backend; do not add Redis or MQ.
-- **Unified user-JWT auth:** A single user JWT authorizes Web/Admin API calls and every agent the user manages on the client WebSocket. Route classification, JWT shape, and scope helpers live in [docs/development/http-path-conventions.md](docs/development/http-path-conventions.md). Channel homes live in [docs/development/local-dev-isolation.md](docs/development/local-dev-isolation.md). Agents bind via `agents.client_id` + `agent:pinned`; R-RUN is re-evaluated at every `agent:bind`. Switching users requires `first-tree logout --purge` before logging in with the new connect token.
+- **Unified user-JWT auth:** A single user JWT authorizes Web/Admin API calls and every agent the user manages on the client WebSocket. Route classification, JWT shape, and scope helpers live in [docs/development/http-path-conventions.md](docs/development/http-path-conventions.md). Channel homes live in [docs/development/local-dev-isolation.md](docs/development/local-dev-isolation.md). Agents bind via `agents.client_id` + `agent:pinned`; R-RUN is re-evaluated at every `agent:bind`. Switching users goes through `first-tree login <token>` and the local-client switch path; `logout --purge` retires the current server client and cuts its runtime routes before destructive local cleanup, after which cleared agents can be moved to a new connected runtime from Web.
 - **Inbox boundary:** Server writes to Inbox; Client pulls / receives WebSocket notifications. Delivery is at-least-once; Client deduplicates.
 - **Agent identity:** Agents are managed by the server Admin API. Agent profile markdown lives in `agents.profile`. Context Tree integration is optional and injected by Client at workspace startup.
 - **Credentials:** Sensitive credentials are AES-256-GCM encrypted at the application layer via `services/crypto.ts`.

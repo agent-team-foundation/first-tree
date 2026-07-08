@@ -66,6 +66,82 @@ describe("GET /me/clients", () => {
     expect(ids).toEqual([a.clientId, aSecondInOrgB].sort());
   });
 
+  it("hides retired clients from the default caller list", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    const retiredClientId = await seedClient(app, ctx.userId, ctx.organizationId);
+    await app.db
+      .update(clients)
+      .set({ retiredAt: new Date(), status: "disconnected" })
+      .where(eq(clients.id, retiredClientId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/me/clients",
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ id: string }>;
+    expect(body.map((c) => c.id)).toContain(ctx.clientId);
+    expect(body.map((c) => c.id)).not.toContain(retiredClientId);
+  });
+
+  it("exposes retired status on the owner single-client route", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    await app.db
+      .update(clients)
+      .set({ retiredAt: new Date(), status: "disconnected" })
+      .where(eq(clients.id, ctx.clientId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/clients/${encodeURIComponent(ctx.clientId)}`,
+      headers: { authorization: `Bearer ${ctx.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as { status: string }).status).toBe("retired");
+  });
+
+  it("rejects mutation endpoints on retired clients", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    const retiredAt = new Date();
+    await app.db
+      .update(clients)
+      .set({ retiredAt, status: "disconnected", instanceId: null })
+      .where(eq(clients.id, ctx.clientId));
+
+    const headers = { authorization: `Bearer ${ctx.accessToken}` };
+    const capability = await app.inject({
+      method: "PATCH",
+      url: `/api/v1/clients/${encodeURIComponent(ctx.clientId)}/capabilities`,
+      headers,
+      payload: {
+        capabilities: { "claude-code": { state: "ok", available: true, detectedAt: new Date().toISOString() } },
+      },
+    });
+    const runtimeAuth = await app.inject({
+      method: "POST",
+      url: `/api/v1/clients/${encodeURIComponent(ctx.clientId)}/runtime-auth/start`,
+      headers,
+      payload: { provider: "claude-code" },
+    });
+    const disconnect = await app.inject({
+      method: "POST",
+      url: `/api/v1/clients/${encodeURIComponent(ctx.clientId)}/disconnect`,
+      headers,
+    });
+
+    expect(capability.statusCode).toBe(410);
+    expect(runtimeAuth.statusCode).toBe(410);
+    expect(disconnect.statusCode).toBe(410);
+    const [row] = await app.db.select().from(clients).where(eq(clients.id, ctx.clientId));
+    expect(row?.retiredAt?.toISOString()).toBe(retiredAt.toISOString());
+    expect(row?.status).toBe("disconnected");
+    expect(row?.instanceId).toBeNull();
+  });
+
   it("includes the server command version hint only when the client is behind on dev/staging", async () => {
     const app = getSemverApp();
     const ctx = await createAdminContext(app);
@@ -298,6 +374,24 @@ describe("GET /orgs/:orgId/clients (admin team view)", () => {
     expect(meRes.statusCode).toBe(200);
     const meBody = meRes.json() as Array<{ id: string; agentCount: number }>;
     expect(meBody.find((c) => c.id === admin.clientId)?.agentCount).toBe(3);
+  });
+
+  it("hides retired clients from the default team listing", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    await app.db
+      .update(clients)
+      .set({ retiredAt: new Date(), status: "disconnected" })
+      .where(eq(clients.id, admin.clientId));
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${encodeURIComponent(admin.organizationId)}/clients`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Array<{ id: string }>;
+    expect(body.map((c) => c.id)).not.toContain(admin.clientId);
   });
 
   it("includes server command version for stale clients in the team listing", async () => {

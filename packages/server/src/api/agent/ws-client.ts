@@ -14,13 +14,14 @@ import {
   inboxRecoverFrameSchema,
   runtimeStateMessageSchema,
   sessionEventMessageSchema,
+  sessionEventRejectedReasonSchema,
   sessionReconcileRequestSchema,
   sessionRuntimeMessageSchema,
   sessionStateMessageSchema,
   WS_AUTH_FRAME_TIMEOUT_MS,
   wsAuthFrameSchema,
 } from "@first-tree/shared";
-import { and, desc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
 import type { WebSocket } from "ws";
@@ -30,7 +31,7 @@ import { agents } from "../../db/schema/agents.js";
 import { clients } from "../../db/schema/clients.js";
 import { members } from "../../db/schema/members.js";
 import { users } from "../../db/schema/users.js";
-import { ClientOrgMismatchError, ClientUserMismatchError } from "../../errors.js";
+import { ClientOrgMismatchError, ClientRetiredError, ClientUserMismatchError } from "../../errors.js";
 import {
   classifyJoseError,
   decodeJwtForTrace,
@@ -43,13 +44,17 @@ import {
 } from "../../observability/index.js";
 import * as activityService from "../../services/activity.js";
 import * as agentService from "../../services/agent.js";
+import * as agentRuntimeSessionService from "../../services/agent-runtime-session.js";
+import * as agentRuntimeSwitchService from "../../services/agent-runtime-switch.js";
 import * as clientService from "../../services/client.js";
 import * as connectionManager from "../../services/connection-manager.js";
 import * as contextTreeIoService from "../../services/context-tree-io.js";
 import * as inboxService from "../../services/inbox.js";
+import * as landingCampaignChatStateService from "../../services/landing-campaigns/chat-state.js";
 import * as notificationService from "../../services/notification.js";
 import type { InboxPushHandler, Notifier } from "../../services/notifier.js";
 import * as presenceService from "../../services/presence.js";
+import * as runtimeLivenessService from "../../services/runtime-liveness.js";
 import * as sessionEventService from "../../services/session-event.js";
 
 /**
@@ -266,6 +271,28 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
     const inboxMaxInFlightPerAgentChat =
       app.config.inbox?.maxInFlightPerAgentChat ?? DEFAULT_INBOX_MAX_IN_FLIGHT_PER_AGENT_CHAT;
 
+    notifier.onAgentRouteChange((payload) => {
+      if (payload.oldClientId) {
+        connectionManager.forceDisconnect(payload.agentId, payload.reason, payload.oldClientId);
+      }
+      const frame = agentPinnedMessageSchema.safeParse({
+        type: "agent:pinned",
+        agentId: payload.agentId,
+        name: payload.name,
+        displayName: payload.displayName,
+        agentType: payload.agentType,
+        runtimeProvider: payload.runtimeProvider,
+      });
+      if (!frame.success) {
+        app.log.warn(
+          { err: frame.error.flatten(), agentId: payload.agentId, clientId: payload.targetClientId },
+          "agent route change frame failed schema validation — not sending",
+        );
+        return;
+      }
+      connectionManager.sendToClient(payload.targetClientId, frame.data);
+    });
+
     // WS upgrade is excluded from HTTP tracing in app.ts via the autotelic
     // plugin's `ignoreRoutes` — fastify hijacks the reply on upgrade, so a
     // `onResponse`-terminated HTTP span would never end. The connection's
@@ -322,10 +349,94 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
       let inboxOperationQueue: Promise<void> = Promise.resolve();
       const lastInboxRepairDrainAtByAgent = new Map<string, number>();
 
+      function sendPinnedAgentFrame(agent: {
+        uuid: string;
+        name: string | null;
+        displayName: string;
+        type: string;
+        runtimeProvider: string;
+      }): void {
+        const parsed = agentPinnedMessageSchema.safeParse({
+          type: "agent:pinned",
+          agentId: agent.uuid,
+          name: agent.name,
+          displayName: agent.displayName,
+          // Wire-compat: translate `type=agent` back to the pre-merge
+          // `personal_assistant` so clients on ≤ 0.5.1 (strict zod)
+          // still decode the frame. See agentService.legacyWireAgentType.
+          agentType: agentService.legacyWireAgentType(agent.type),
+          runtimeProvider: agent.runtimeProvider,
+        });
+        if (!parsed.success) {
+          app.log.warn(
+            { err: parsed.error.flatten(), agentId: agent.uuid, clientId },
+            "agent:pinned backfill frame failed schema validation — skipping",
+          );
+          return;
+        }
+        socket.send(JSON.stringify(parsed.data));
+      }
+
+      async function reconcilePinnedAgentsForClient(): Promise<void> {
+        if (!clientId || socket.readyState !== socket.OPEN) return;
+        const pinned = await clientService.listActiveAgentsPinnedToClient(app.db, clientId);
+        for (const agent of pinned) {
+          const local = boundAgents.get(agent.uuid);
+          if (local?.runtimeProvider === agent.runtimeProvider && isAgentStillRoutedHere(agent.uuid)) {
+            continue;
+          }
+          sendPinnedAgentFrame(agent);
+        }
+      }
+
       function isAgentStillRoutedHere(agentId: string): boolean {
         return (
           boundAgents.has(agentId) && clientId !== null && connectionManager.getAgentClientId(agentId) === clientId
         );
+      }
+
+      function dropLocalAgentBinding(agentId: string, reason: string): void {
+        const info = boundAgents.get(agentId);
+        if (info) {
+          notifier.unsubscribe(info.inboxId, socket);
+        }
+        boundAgents.delete(agentId);
+        lastInboxRepairDrainAtByAgent.delete(agentId);
+        clearInboxInFlightForAgent(agentId);
+        if (clientId) {
+          connectionManager.unbindAgentFromClient(agentId, clientId);
+        }
+        app.log.info({ clientId, agentId, reason }, "dropped stale local agent binding");
+      }
+
+      async function ensureAgentStillRoutedHere(agentId: string): Promise<boolean> {
+        if (!isAgentStillRoutedHere(agentId)) return false;
+        const info = boundAgents.get(agentId);
+        if (!info || !clientId) return false;
+        const [row] = await app.db
+          .select({
+            clientId: agents.clientId,
+            runtimeProvider: agents.runtimeProvider,
+            status: agents.status,
+            metadata: agents.metadata,
+          })
+          .from(agents)
+          .where(eq(agents.uuid, agentId))
+          .limit(1);
+        if (row?.clientId === clientId && row.status === "active" && row.runtimeProvider === info.runtimeProvider) {
+          return true;
+        }
+        const switchClaim = agentRuntimeSwitchService.getRuntimeSwitchClaim(row?.metadata);
+        if (
+          row?.status === "suspended" &&
+          switchClaim?.phase === "claimed" &&
+          switchClaim.oldClientId === clientId &&
+          switchClaim.oldRuntimeProvider === info.runtimeProvider
+        ) {
+          return false;
+        }
+        dropLocalAgentBinding(agentId, "authoritative_route_changed");
+        return false;
       }
 
       function inboxInFlightCount(agentId: string): number {
@@ -515,7 +626,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
           | { source: "recover"; chatId: string },
       ): Promise<void> {
         if (socket.readyState !== socket.OPEN) return;
-        if (!isAgentStillRoutedHere(agentId)) return;
+        if (!(await ensureAgentStillRoutedHere(agentId))) return;
         const inFlight = inboxInFlightCount(agentId);
         const globalSlotsFree = inboxMaxInFlightPerAgent - inFlight;
         if (globalSlotsFree <= 0) {
@@ -820,7 +931,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               type: "server:welcome",
               serverCommandVersion: app.commandVersion(),
               serverTimeMs: Date.now(),
-              capabilities: { wsInboxDeliver: true, wsInboxAckConfirm: true },
+              capabilities: { wsInboxDeliver: true, wsInboxAckConfirm: true, wsSessionEventConfirm: true },
             });
             setAuthWsAttrs(socket, {
               phase: "post_auth_welcome",
@@ -898,7 +1009,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 const code =
                   err instanceof ClientUserMismatchError
                     ? err.code
-                    : err instanceof ClientOrgMismatchError
+                    : err instanceof ClientOrgMismatchError || err instanceof ClientRetiredError
                       ? err.code
                       : undefined;
                 setAuthWsAttrs(socket, {
@@ -932,28 +1043,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // admin/agents.ts only fires for live sockets. The client dedupes
               // on agentId, so re-firing on every reconnect is safe.
               try {
-                const pinned = await clientService.listActiveAgentsPinnedToClient(app.db, data.clientId);
-                for (const agent of pinned) {
-                  const parsed = agentPinnedMessageSchema.safeParse({
-                    type: "agent:pinned",
-                    agentId: agent.uuid,
-                    name: agent.name,
-                    displayName: agent.displayName,
-                    // Wire-compat: translate `type=agent` back to the pre-merge
-                    // `personal_assistant` so clients on ≤ 0.5.1 (strict zod)
-                    // still decode the frame. See agentService.legacyWireAgentType.
-                    agentType: agentService.legacyWireAgentType(agent.type),
-                    runtimeProvider: agent.runtimeProvider,
-                  });
-                  if (!parsed.success) {
-                    app.log.warn(
-                      { err: parsed.error.flatten(), agentId: agent.uuid, clientId: data.clientId },
-                      "agent:pinned backfill frame failed schema validation — skipping",
-                    );
-                    continue;
-                  }
-                  socket.send(JSON.stringify(parsed.data));
-                }
+                await reconcilePinnedAgentsForClient();
               } catch (err) {
                 app.log.error(
                   { err, clientId: data.clientId },
@@ -967,6 +1057,19 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
 
               const bindRequest = agentBindRequestSchema.parse(msg);
+              const [bindingClient] = await app.db
+                .select({ userId: clients.userId, retiredAt: clients.retiredAt })
+                .from(clients)
+                .where(eq(clients.id, clientId))
+                .limit(1);
+              if (!bindingClient || bindingClient.userId !== session.userId) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.NOT_OWNED);
+                return;
+              }
+              if (bindingClient.retiredAt) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+                return;
+              }
 
               const [agent] = await app.db
                 .select({
@@ -977,6 +1080,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   inboxId: agents.inboxId,
                   status: agents.status,
                   clientId: agents.clientId,
+                  managerId: agents.managerId,
                   runtimeProvider: agents.runtimeProvider,
                   clientUserId: clients.userId,
                   managerUserId: members.userId,
@@ -1026,11 +1130,33 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // the operator brought up a client, or migrated from pre-M1 with
               // no presence record). The race-safe UPDATE returns 0 rows if
               // another bind claimed it first — surface as WRONG_CLIENT.
+              //
+              // The claim is also pinned to the `managerId` read above. A
+              // concurrent leave/remove transfers a departing member's managed
+              // agents by *changing* their `managerId` and clearing the pin, so
+              // requiring the manager to be unchanged closes the departure race:
+              // if the transfer already landed, the claim matches 0 rows and is
+              // rejected instead of re-pinning the departed owner's client onto a
+              // now-transferred agent (which would revive the retireClient
+              // deadlock); if this claim lands first, the departure's
+              // managerId-keyed transfer still re-scans and unpins it.
               if (agent.clientId === null) {
                 const claim = await app.db
                   .update(agents)
                   .set({ clientId, updatedAt: new Date() })
-                  .where(and(eq(agents.uuid, agent.id), isNull(agents.clientId)))
+                  .where(
+                    and(
+                      eq(agents.uuid, agent.id),
+                      isNull(agents.clientId),
+                      eq(agents.managerId, agent.managerId),
+                      sql`EXISTS (
+                        SELECT 1 FROM ${clients}
+                        WHERE ${clients.id} = ${clientId}
+                          AND ${clients.userId} = ${session.userId}
+                          AND ${clients.retiredAt} IS NULL
+                      )`,
+                    ),
+                  )
                   .returning({ uuid: agents.uuid });
                 if (claim.length === 0) {
                   sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
@@ -1044,12 +1170,48 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 return;
               }
 
-              await presenceService.bindAgent(app.db, agent.id, {
+              if (!connectionManager.isActiveClientConnection(clientId, socket)) {
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+                return;
+              }
+
+              let runtimeSessionToken: string;
+              try {
+                runtimeSessionToken = await agentRuntimeSessionService.bindAgentRuntimeSession(
+                  app.db,
+                  agent.id,
+                  clientId,
+                );
+              } catch (err) {
+                app.log.warn({ err, agentId: agent.id, clientId }, "agent:bind runtime session claim failed");
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+                return;
+              }
+
+              const published = await presenceService.bindAgentIfActiveClient(app.db, agent.id, {
                 clientId,
                 instanceId,
                 runtimeType: bindRequest.runtimeType,
                 runtimeVersion: bindRequest.runtimeVersion,
               });
+              if (!published) {
+                await agentRuntimeSessionService
+                  .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
+                  .catch(() => {});
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+                return;
+              }
+
+              if (!connectionManager.isActiveClientConnection(clientId, socket)) {
+                const revoked = await agentRuntimeSessionService
+                  .revokeAgentRuntimeSessionIfTokenMatches(app.db, agent.id, clientId, runtimeSessionToken)
+                  .catch(() => false);
+                if (revoked && connectionManager.getAgentClientId(agent.id) !== clientId) {
+                  await presenceService.unbindAgent(app.db, agent.id, { expectedClientId: clientId }).catch(() => {});
+                }
+                sendRejected(socket, ref, AGENT_BIND_REJECT_REASONS.WRONG_CLIENT);
+                return;
+              }
 
               // An agent that just rebound has, by definition, recovered from
               // whatever fault (stale / error / blocked) was last reported —
@@ -1057,7 +1219,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               // instead of lingering across the offline gap.
               notificationService.markAgentFaultsResolved(app.db, agent.id).catch(() => {});
 
-              connectionManager.bindAgentToClient(clientId, agent.id);
+              connectionManager.bindAgentToClient(clientId, agent.id, runtimeSessionToken);
               boundAgents.set(agent.id, {
                 agentId: agent.id,
                 inboxId: agent.inboxId,
@@ -1101,6 +1263,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                   agentId: agent.id,
                   displayName: agent.displayName,
                   agentType: agent.type,
+                  runtimeSessionToken,
                 }),
               );
 
@@ -1122,12 +1285,13 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               }
 
               const info = boundAgents.get(agentId);
-              const stillRoutedHere = isAgentStillRoutedHere(agentId);
+              const stillRoutedHere = await ensureAgentStillRoutedHere(agentId);
               if (info) {
                 notifier.unsubscribe(info.inboxId, socket);
               }
 
               if (stillRoutedHere && clientId) {
+                await agentRuntimeSessionService.revokeAgentRuntimeSession(app.db, agentId, clientId);
                 await presenceService.unbindAgent(app.db, agentId, { expectedClientId: clientId });
                 connectionManager.unbindAgentFromClient(agentId, clientId);
               } else {
@@ -1140,7 +1304,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               socket.send(JSON.stringify({ type: "agent:unbound", agentId }));
             } else if (type === "session:state") {
               const agentId = parsed.data.agentId;
-              if (!agentId || !isAgentStillRoutedHere(agentId)) {
+              if (!agentId || !(await ensureAgentStillRoutedHere(agentId))) {
                 socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
                 return;
               }
@@ -1194,7 +1358,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               });
             } else if (type === "session:runtime") {
               const agentId = parsed.data.agentId;
-              if (!agentId || !isAgentStillRoutedHere(agentId)) {
+              if (!agentId || !(await ensureAgentStillRoutedHere(agentId))) {
                 socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
                 return;
               }
@@ -1231,7 +1395,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               });
             } else if (type === "session:reconcile") {
               const agentId = parsed.data.agentId;
-              if (!agentId || !isAgentStillRoutedHere(agentId)) {
+              if (!agentId || !(await ensureAgentStillRoutedHere(agentId))) {
                 socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
                 return;
               }
@@ -1267,7 +1431,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               );
             } else if (type === "runtime:state") {
               const agentId = parsed.data.agentId;
-              if (!agentId || !isAgentStillRoutedHere(agentId)) {
+              if (!agentId || !(await ensureAgentStillRoutedHere(agentId))) {
                 socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
                 return;
               }
@@ -1293,13 +1457,44 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 notificationService.markAgentFaultsResolved(app.db, agentId).catch(() => {});
               }
             } else if (type === "session:event") {
+              const rawMsg = msg as Record<string, unknown>;
               const agentId = parsed.data.agentId;
-              if (!agentId || !isAgentStillRoutedHere(agentId)) {
-                socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+              if (!agentId || !(await ensureAgentStillRoutedHere(agentId))) {
+                const rawRef = typeof rawMsg.ref === "string" && rawMsg.ref.length > 0 ? rawMsg.ref : null;
+                if (rawRef && agentId) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "session:event:rejected",
+                      ref: rawRef,
+                      agentId,
+                      reason: sessionEventRejectedReasonSchema.enum.agent_not_bound,
+                    }),
+                  );
+                } else {
+                  socket.send(JSON.stringify({ type: "error", message: "Agent not bound" }));
+                }
                 return;
               }
 
-              const payload = sessionEventMessageSchema.parse(msg);
+              const payloadResult = sessionEventMessageSchema.safeParse(msg);
+              if (!payloadResult.success) {
+                const rawRef = typeof rawMsg.ref === "string" && rawMsg.ref.length > 0 ? rawMsg.ref : null;
+                if (rawRef) {
+                  socket.send(
+                    JSON.stringify({
+                      type: "session:event:rejected",
+                      ref: rawRef,
+                      agentId,
+                      chatId: typeof rawMsg.chatId === "string" ? rawMsg.chatId : undefined,
+                      reason: sessionEventRejectedReasonSchema.enum.malformed,
+                    }),
+                  );
+                } else {
+                  socket.send(JSON.stringify({ type: "error", message: "Malformed session:event frame" }));
+                }
+                return;
+              }
+              const payload = payloadResult.data;
               const boundInfo = boundAgents.get(agentId);
               chainSessionOp(agentId, payload.chatId, async () => {
                 try {
@@ -1309,6 +1504,22 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                     payload.chatId,
                     payload.event,
                   );
+                  if (
+                    payload.ref &&
+                    payload.event.kind === "turn_end" &&
+                    payload.event.payload.status === "success" &&
+                    typeof payload.event.payload.turnCompletionId === "string"
+                  ) {
+                    const result = await landingCampaignChatStateService.completeLandingCampaignTrialAgentTurn(
+                      app.db,
+                      payload.chatId,
+                      agentId,
+                      payload.event.payload.turnCompletionId,
+                    );
+                    if (result.advanced) {
+                      notifier.notifyChatUpdated(payload.chatId).catch(() => {});
+                    }
+                  }
                   if (boundInfo) {
                     await contextTreeIoService
                       .recordFromSessionEvent(app.db, {
@@ -1334,13 +1545,35 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                       .notifySessionEvent(agentId, payload.chatId, payload.event.kind, boundInfo.organizationId)
                       .catch(() => {});
                   }
+                  if (payload.ref) {
+                    socket.send(
+                      JSON.stringify({
+                        type: "session:event:accepted",
+                        ref: payload.ref,
+                        agentId,
+                        chatId: payload.chatId,
+                      }),
+                    );
+                  }
                 } catch (err) {
-                  socket.send(
-                    JSON.stringify({
-                      type: "error",
-                      message: `Failed to persist session event: ${err instanceof Error ? err.message : String(err)}`,
-                    }),
-                  );
+                  if (payload.ref) {
+                    socket.send(
+                      JSON.stringify({
+                        type: "session:event:rejected",
+                        ref: payload.ref,
+                        agentId,
+                        chatId: payload.chatId,
+                        reason: sessionEventRejectedReasonSchema.enum.persist_failed,
+                      }),
+                    );
+                  } else {
+                    socket.send(
+                      JSON.stringify({
+                        type: "error",
+                        message: `Failed to persist session event: ${err instanceof Error ? err.message : String(err)}`,
+                      }),
+                    );
+                  }
                 }
               });
             } else if (type === "inbox:ack") {
@@ -1368,9 +1601,12 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
 
               await chainInboxDelivery("__socket", async () => {
                 try {
-                  const routedBoundAgents = [...boundAgents.values()].filter((agent) =>
-                    isAgentStillRoutedHere(agent.agentId),
-                  );
+                  const routedBoundAgents = [];
+                  for (const agent of boundAgents.values()) {
+                    if (await ensureAgentStillRoutedHere(agent.agentId)) {
+                      routedBoundAgents.push(agent);
+                    }
+                  }
                   const ackResult = await inboxService.ackEntryByIdForBoundAgents(
                     app.db,
                     entryId,
@@ -1459,7 +1695,7 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
               const { agentId, chatId, ref } = payloadResult.data;
               await chainInboxDelivery("__socket", async () => {
                 const info = boundAgents.get(agentId);
-                if (!info || !isAgentStillRoutedHere(agentId)) {
+                if (!info || !(await ensureAgentStillRoutedHere(agentId))) {
                   socket.send(
                     JSON.stringify({
                       type: "inbox:recover:rejected",
@@ -1502,18 +1738,23 @@ export function clientWsRoutes(notifier: Notifier, instanceId: string) {
                 }
               });
             } else if (type === "heartbeat") {
-              if (clientId) {
-                await clientService.heartbeatClient(app.db, clientId);
-                await Promise.all(
-                  [...boundAgents.keys()]
-                    .filter((id) => isAgentStillRoutedHere(id))
-                    .map((id) => presenceService.touchAgent(app.db, id)),
-                );
+              if (clientId && connectionManager.isActiveClientConnection(clientId, socket)) {
+                const routedAgentIds = [];
+                for (const id of boundAgents.keys()) {
+                  if (await ensureAgentStillRoutedHere(id)) routedAgentIds.push(id);
+                }
+                const liveness = await runtimeLivenessService.recordClientHeartbeat(app.db, {
+                  clientId,
+                  instanceId,
+                  routedAgentIds,
+                });
+                const repairableAgentIds = new Set(liveness.restoredAgentIds);
                 for (const info of boundAgents.values()) {
-                  if (isAgentStillRoutedHere(info.agentId)) {
+                  if (repairableAgentIds.has(info.agentId) && (await ensureAgentStillRoutedHere(info.agentId))) {
                     maybeRepairInboxBacklog(info.agentId, info.inboxId);
                   }
                 }
+                await reconcilePinnedAgentsForClient();
               }
               socket.send(JSON.stringify({ type: "heartbeat:ack" }));
             }

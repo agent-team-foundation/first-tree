@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type {
   AgentRuntimeConfig,
   InboxDeliverFrame,
@@ -9,16 +10,16 @@ import type {
 } from "@first-tree/shared";
 import { runtimeProviderSchema } from "@first-tree/shared";
 import { defaultDataDir } from "@first-tree/shared/config";
-import type { ClientConnection, SessionReconcileResult } from "../client-connection.js";
+import type { BoundAgent, ClientConnection, SessionReconcileResult } from "../client-connection.js";
 import { createLogger, type pino } from "../observability/logger.js";
-import type { RegisterResult } from "../sdk.js";
+import type { FirstTreeHubSDK, RegisterResult } from "../sdk.js";
 import { type AgentConfigCache, createAgentConfigCache } from "./agent-config-cache.js";
 import { resolveAgentContextTreeBinding } from "./bootstrap.js";
 import type { SessionConfig } from "./config.js";
 import { clampRetryAttempt, classify, ERROR_KINDS, nextRetryDelayMs } from "./error-taxonomy.js";
 import type { HandlerFactory } from "./handler.js";
 import { PsSubprocessProbe } from "./process-tree-probe.js";
-import { SessionManager } from "./session-manager.js";
+import { SessionManager, type SessionManagerShutdownOptions } from "./session-manager.js";
 
 /**
  * Max attempts to fetch the agent's runtime config during bring-up before a
@@ -29,6 +30,16 @@ import { SessionManager } from "./session-manager.js";
  * gives up in bounded time instead of blocking bring-up forever.
  */
 const MAX_CONFIG_FETCH_ATTEMPTS = 8;
+const ACTIVE_RUNTIME_CHAT_IDS_REFRESH_MS = 60 * 60 * 1000;
+const ACTIVE_RUNTIME_CHAT_IDS_REFRESH_JITTER_RATIO = 0.1;
+const SESSION_RECONCILE_BATCH_SIZE = 500;
+const RUNTIME_SWITCH_UNBOUND_REASON = "agent_runtime_switch";
+const RUNTIME_SWITCH_STOP_OPTIONS = {
+  sessionShutdown: {
+    clearPersistedRegistry: true,
+    reportSuspendedSessions: false,
+  },
+} satisfies AgentSlotStopOptions;
 
 /**
  * Sleep `ms`, resolving early if `signal` aborts. Lets a stop()/unbind during
@@ -51,6 +62,12 @@ function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+function jitteredActiveRuntimeChatIdsRefreshDelay(): number {
+  const offset =
+    (Math.random() * 2 - 1) * ACTIVE_RUNTIME_CHAT_IDS_REFRESH_MS * ACTIVE_RUNTIME_CHAT_IDS_REFRESH_JITTER_RATIO;
+  return ACTIVE_RUNTIME_CHAT_IDS_REFRESH_MS + offset;
+}
+
 export type AgentSlotConfig = {
   name: string;
   /** Agent UUID (from agent.yaml) — sent as X-Agent-Id on every HTTP call. */
@@ -66,9 +83,13 @@ export type AgentSlotConfig = {
   runtimeVersion?: string;
 };
 
+export type AgentSlotStopOptions = {
+  sessionShutdown?: SessionManagerShutdownOptions;
+};
+
 type ConnectionListener =
   | { event: "inbox:deliver"; fn: (inboxId: string, frame: InboxDeliverFrame) => void }
-  | { event: "agent:bound"; fn: (agent: { agentId: string }) => void }
+  | { event: "agent:bound"; fn: (agent: BoundAgent) => void }
   | { event: "agent:unbound"; fn: (agentId: string, reason?: string) => void }
   | {
       event: "session:command";
@@ -83,8 +104,14 @@ type ConnectionListener =
 export class AgentSlot {
   private sessionManager: SessionManager | null = null;
   private readonly config: AgentSlotConfig;
+  private readonly runtimeSessionTokenFile: string;
   private logger: pino.Logger;
   private agentConfigCache: AgentConfigCache | null = null;
+  private sdk: FirstTreeHubSDK | null = null;
+  private activeRuntimeChatIds: Set<string> | null = null;
+  private activeRuntimeChatIdsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private activeRuntimeChatIdsRefreshInFlight: Promise<void> | null = null;
+  private activeRuntimeChatIdsRefreshGeneration = 0;
   private reconcileTimer: ReturnType<typeof setInterval> | null = null;
   private postBindReconcileTimer: ReturnType<typeof setTimeout> | null = null;
   private listeners: ConnectionListener[] = [];
@@ -104,6 +131,7 @@ export class AgentSlot {
 
   constructor(config: AgentSlotConfig) {
     this.config = config;
+    this.runtimeSessionTokenFile = join(defaultDataDir(), "runtime-session-tokens", `${config.agentId}.token`);
     this.logger = createLogger("slot").child({ agentName: config.name, agentId: config.agentId });
   }
 
@@ -163,8 +191,9 @@ export class AgentSlot {
         this.logger.warn({ err, entryId: frame.entryId }, "inbox:deliver dispatch error");
       });
     };
-    const onBound = (boundAgent: { agentId: string }) => {
+    const onBound = (boundAgent: BoundAgent) => {
       if (boundAgent.agentId === this.config.agentId) {
+        if (boundAgent.sdk) this.adoptRuntimeTransport(boundAgent.sdk);
         if (typeof this.sessionManager?.noteBindRecoveryComplete === "function") {
           this.sessionManager.noteBindRecoveryComplete();
         }
@@ -175,12 +204,15 @@ export class AgentSlot {
         // reconcile. Reconnects with an existing SessionManager are handled
         // here.
         if (!this.sessionManager) return;
-        this.fullStateSync();
-        // One-shot post-bind reconcile catches operator-terminates that
-        // landed while this client was offline. It is deliberately scheduled
-        // after fullStateSync, so just-hydrated registry mappings are first
-        // advertised as suspended before the server is asked for stale rows.
-        this.schedulePostBindReconcile();
+        void this.refreshActiveRuntimeChatIds("bind").finally(() => {
+          this.fullStateSync();
+          this.scheduleActiveRuntimeChatIdsRefresh();
+          // One-shot post-bind reconcile catches operator-terminates that
+          // landed while this client was offline. It is deliberately scheduled
+          // after fullStateSync, so just-hydrated registry mappings are first
+          // advertised as suspended before the server is asked for stale rows.
+          this.schedulePostBindReconcile();
+        });
       }
     };
     const onReconcileResult = (result: SessionReconcileResult) => {
@@ -190,7 +222,8 @@ export class AgentSlot {
     };
     const onUnbound = (agentId: string, reason?: string) => {
       if (agentId !== this.config.agentId || !reason) return;
-      this.stop().catch((err) => {
+      const stopOptions = reason === RUNTIME_SWITCH_UNBOUND_REASON ? RUNTIME_SWITCH_STOP_OPTIONS : undefined;
+      this.stop(reason, stopOptions).catch((err) => {
         this.logger.error({ err, reason }, "forced agent stop failed");
       });
     };
@@ -211,6 +244,7 @@ export class AgentSlot {
       const bound = await this.clientConnection.bindAgent(this.config.agentId, runtimeType, this.config.runtimeVersion);
       bindSucceeded = true;
       const sdk = bound.sdk;
+      this.adoptRuntimeTransport(sdk);
       const agent = await sdk.register();
 
       this.logger.info({ displayName: agent.displayName }, "agent bound");
@@ -221,6 +255,7 @@ export class AgentSlot {
       }
 
       this.agentConfigCache = createAgentConfigCache({ sdk, log: this.logger });
+      this.adoptRuntimeTransport(sdk);
       const cfg = await this.loadAgentConfigWithRetry(agent.agentId);
       this.logger.info({ version: cfg.version }, "runtime config loaded");
 
@@ -283,11 +318,13 @@ export class AgentSlot {
         log: this.logger,
         registryPath,
         agentConfigCache: this.agentConfigCache,
+        runtimeSessionTokenFile: this.runtimeSessionTokenFile,
         ackEntry,
         recoverChat,
         onStateChange: (chatId, state) => this.reportSessionState(chatId, state),
         onRuntimeStateChange: (state) => this.reportRuntimeState(state),
         onSessionEvent: (chatId, event) => this.reportSessionEvent(chatId, event),
+        confirmSessionEvent: (chatId, event) => this.confirmSessionEvent(chatId, event),
         onSessionRuntimeChange: (chatId, state) => this.reportSessionRuntime(chatId, state),
       });
 
@@ -328,6 +365,7 @@ export class AgentSlot {
         }
       }
 
+      await this.refreshActiveRuntimeChatIds("startup");
       // Initial-startup fullStateSync. The `on("agent:bound", onBound)`
       // listener above also fires here now that it's attached pre-bind,
       // but `sessionManager` was null inside its callback — so its
@@ -336,6 +374,7 @@ export class AgentSlot {
       this.fullStateSync();
       this.schedulePostBindReconcile();
 
+      this.scheduleActiveRuntimeChatIdsRefresh();
       this.startReconcileLoop();
 
       return agent;
@@ -407,9 +446,36 @@ export class AgentSlot {
     }
   }
 
-  async stop(): Promise<void> {
+  private adoptRuntimeTransport(sdk: FirstTreeHubSDK): void {
+    this.sdk = sdk;
+    this.persistRuntimeSessionToken(sdk.runtimeSessionToken);
+    this.activeRuntimeChatIdsRefreshGeneration++;
+    this.activeRuntimeChatIdsRefreshInFlight = null;
+    if (this.activeRuntimeChatIdsRefreshTimer) {
+      clearTimeout(this.activeRuntimeChatIdsRefreshTimer);
+      this.activeRuntimeChatIdsRefreshTimer = null;
+    }
+    this.agentConfigCache?.updateSdk(sdk);
+    this.sessionManager?.updateTransport(sdk, this.agentConfigCache ?? undefined);
+  }
+
+  private persistRuntimeSessionToken(token: string | undefined): void {
+    try {
+      if (!token) {
+        rmSync(this.runtimeSessionTokenFile, { force: true });
+        return;
+      }
+      mkdirSync(dirname(this.runtimeSessionTokenFile), { recursive: true, mode: 0o700 });
+      writeFileSync(this.runtimeSessionTokenFile, `${token}\n`, { encoding: "utf8", mode: 0o600 });
+      chmodSync(this.runtimeSessionTokenFile, 0o600);
+    } catch (err) {
+      this.logger.warn({ err }, "failed to persist runtime session token");
+    }
+  }
+
+  async stop(reason?: string, opts: AgentSlotStopOptions = {}): Promise<void> {
     if (this.stopping) return this.stopping;
-    this.stopping = this.stopOnce();
+    this.stopping = this.stopOnce(reason, opts);
     try {
       await this.stopping;
     } finally {
@@ -417,11 +483,16 @@ export class AgentSlot {
     }
   }
 
-  private async stopOnce(): Promise<void> {
+  private async stopOnce(reason?: string, opts: AgentSlotStopOptions = {}): Promise<void> {
     this.bringupAbort?.abort();
+    this.activeRuntimeChatIdsRefreshGeneration++;
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
+    }
+    if (this.activeRuntimeChatIdsRefreshTimer) {
+      clearTimeout(this.activeRuntimeChatIdsRefreshTimer);
+      this.activeRuntimeChatIdsRefreshTimer = null;
     }
     if (this.postBindReconcileTimer) {
       clearTimeout(this.postBindReconcileTimer);
@@ -431,19 +502,40 @@ export class AgentSlot {
       this.clientConnection.off(entry.event, entry.fn);
     }
     this.listeners = [];
-    await this.clientConnection.unbindAgent(this.config.agentId);
-    await this.sessionManager?.shutdown();
+    let firstError: unknown = null;
+    try {
+      await this.clientConnection.unbindAgent(this.config.agentId);
+    } catch (err) {
+      firstError = err;
+      this.logger.warn({ err }, "failed to unbind agent while stopping");
+    }
+    try {
+      await this.sessionManager?.shutdown(reason, opts.sessionShutdown);
+    } catch (err) {
+      firstError ??= err;
+      this.logger.warn({ err }, "failed to shut down sessions while stopping");
+    }
+    this.persistRuntimeSessionToken(undefined);
     this.sessionManager = null;
     this.agentConfigCache = null;
+    this.sdk = null;
+    this.activeRuntimeChatIds = null;
+    this.activeRuntimeChatIdsRefreshInFlight = null;
     this.inboxId = null;
     this.logger.info("stopped");
+    if (firstError) throw firstError;
   }
 
   private async cleanupFailedStart(opts: { unbind: boolean }): Promise<void> {
     this.bringupAbort?.abort();
+    this.activeRuntimeChatIdsRefreshGeneration++;
     if (this.reconcileTimer) {
       clearInterval(this.reconcileTimer);
       this.reconcileTimer = null;
+    }
+    if (this.activeRuntimeChatIdsRefreshTimer) {
+      clearTimeout(this.activeRuntimeChatIdsRefreshTimer);
+      this.activeRuntimeChatIdsRefreshTimer = null;
     }
     if (this.postBindReconcileTimer) {
       clearTimeout(this.postBindReconcileTimer);
@@ -461,8 +553,12 @@ export class AgentSlot {
       }
     }
     await this.sessionManager?.shutdown();
+    this.persistRuntimeSessionToken(undefined);
     this.sessionManager = null;
     this.agentConfigCache = null;
+    this.sdk = null;
+    this.activeRuntimeChatIds = null;
+    this.activeRuntimeChatIdsRefreshInFlight = null;
     this.inboxId = null;
   }
 
@@ -478,19 +574,24 @@ export class AgentSlot {
     this.clientConnection.reportSessionEvent(this.config.agentId, chatId, event);
   }
 
+  private confirmSessionEvent(chatId: string, event: SessionEvent): Promise<void> {
+    return this.clientConnection.reportSessionEventConfirmed(this.config.agentId, chatId, event);
+  }
+
   private reportSessionRuntime(chatId: string, state: RuntimeState): void {
     this.clientConnection.reportSessionRuntime(this.config.agentId, chatId, state);
   }
 
   private fullStateSync(): void {
     if (!this.sessionManager) return;
+    const activeChatIds = this.activeRuntimeChatIds;
     // ORDERING IS LOAD-BEARING: `session:state` frames flush before any
     // `session:runtime` frame so the server's `setSessionRuntime` (gated
     // on `state='active'`) can't fail-close because the state write
     // hadn't landed yet. TCP/WS preserves the order across this single
     // send loop, and the server-side `chainSessionOp` per-(agent,chat)
     // queue preserves it through the processing pipeline as well.
-    for (const { chatId, state } of this.sessionManager.getSessionStates()) {
+    for (const { chatId, state } of this.sessionManager.getSessionStates(activeChatIds)) {
       this.clientConnection.reportSessionState(this.config.agentId, chatId, state);
     }
     // After a process restart `sessions` is empty but SessionRegistry just
@@ -500,16 +601,22 @@ export class AgentSlot {
     // (commonly `active`) forever — the next inbound message would only
     // refresh that one row, leaving the rest stale. "suspended" is the
     // closest in-schema state for "handler is gone but resumable".
-    for (const chatId of this.sessionManager.getEvictedChatIds()) {
+    for (const chatId of this.sessionManager.getEvictedChatIds(activeChatIds)) {
       this.clientConnection.reportSessionState(this.config.agentId, chatId, "suspended");
     }
-    // Re-assert the *real* per-chat runtime of every still-live session.
-    // On a network reconnect (process intact) a session mid-turn is still
-    // `working` and must stay so — this is what distinguishes a reconnect
-    // from a process restart (where `sessions` is empty, so nothing here
-    // reports `working` and the agent-global reset below settles
-    // everything to idle).
-    for (const { chatId, runtimeState } of this.sessionManager.getSessionRuntimeStates()) {
+    // Re-assert the *real* per-chat runtime of every still-live local session,
+    // not only the active chat set. This is the reconnect repair path for a
+    // lost `working -> idle` transition: the local process may have already
+    // closed the turn while the WS was half-open, so the one idle frame can be
+    // dropped before the disconnect is observed. A later bind must therefore
+    // re-send every held runtime projection and let the server's active-row
+    // gate ignore irrelevant/stale chats.
+    //
+    // This intentionally differs from the lifecycle sync above: lifecycle rows
+    // stay filtered to the user's active working set, while runtime rows are
+    // cheap idempotent repairs for any chat the local SessionManager still
+    // holds.
+    for (const { chatId, runtimeState } of this.sessionManager.getSessionRuntimeStates(null)) {
       this.clientConnection.reportSessionRuntime(this.config.agentId, chatId, runtimeState);
     }
     // Explicit "idle" clears any stale `working`/`blocked` on the server:
@@ -538,6 +645,8 @@ export class AgentSlot {
    */
   private async dispatchPushedFrame(frame: InboxDeliverFrame): Promise<void> {
     if (!this.sessionManager) return;
+    const chatId = frame.chatId ?? frame.message.chatId;
+    this.noteActiveRuntimeChat(chatId);
     const entry: InboxEntryWithMessage = {
       id: frame.entryId,
       inboxId: frame.inboxId,
@@ -562,6 +671,51 @@ export class AgentSlot {
     this.reconcileTimer = setInterval(() => this.reconcileNow(), intervalSec * 1000);
   }
 
+  private scheduleActiveRuntimeChatIdsRefresh(): void {
+    if (!this.sdk) return;
+    const generation = this.activeRuntimeChatIdsRefreshGeneration;
+    if (this.activeRuntimeChatIdsRefreshTimer) clearTimeout(this.activeRuntimeChatIdsRefreshTimer);
+    this.activeRuntimeChatIdsRefreshTimer = setTimeout(() => {
+      if (!this.isActiveRuntimeChatIdsRefreshLive(generation)) return;
+      this.activeRuntimeChatIdsRefreshTimer = null;
+      void this.refreshActiveRuntimeChatIds("periodic").finally(() => {
+        if (this.isActiveRuntimeChatIdsRefreshLive(generation)) {
+          this.scheduleActiveRuntimeChatIdsRefresh();
+        }
+      });
+    }, jitteredActiveRuntimeChatIdsRefreshDelay());
+  }
+
+  private async refreshActiveRuntimeChatIds(reason: "startup" | "bind" | "periodic"): Promise<void> {
+    const sdk = this.sdk;
+    if (!sdk) return;
+    const generation = this.activeRuntimeChatIdsRefreshGeneration;
+    if (this.activeRuntimeChatIdsRefreshInFlight) return this.activeRuntimeChatIdsRefreshInFlight;
+
+    const refresh = sdk
+      .listActiveRuntimeChatIds()
+      .then(({ chatIds }) => {
+        if (this.sdk !== sdk || !this.isActiveRuntimeChatIdsRefreshLive(generation)) return;
+        this.activeRuntimeChatIds = new Set(chatIds);
+        this.logger.info({ count: chatIds.length, reason }, "active runtime chat ids refreshed");
+      })
+      .catch((err) => {
+        if (this.sdk !== sdk || !this.isActiveRuntimeChatIdsRefreshLive(generation)) return;
+        this.logger.warn({ err, reason }, "active runtime chat ids refresh failed; keeping previous snapshot");
+      })
+      .finally(() => {
+        if (this.activeRuntimeChatIdsRefreshInFlight === refresh) {
+          this.activeRuntimeChatIdsRefreshInFlight = null;
+        }
+      });
+    this.activeRuntimeChatIdsRefreshInFlight = refresh;
+    await refresh;
+  }
+
+  private isActiveRuntimeChatIdsRefreshLive(generation: number): boolean {
+    return this.sdk !== null && this.activeRuntimeChatIdsRefreshGeneration === generation;
+  }
+
   private schedulePostBindReconcile(): void {
     if (this.postBindReconcileTimer) clearTimeout(this.postBindReconcileTimer);
     this.postBindReconcileTimer = setTimeout(() => {
@@ -572,9 +726,18 @@ export class AgentSlot {
 
   private reconcileNow(): void {
     if (!this.sessionManager) return;
-    const chatIds = this.sessionManager.getHeldChatIds();
+    const chatIds = this.sessionManager.getHeldChatIds(this.activeRuntimeChatIds);
     if (chatIds.length === 0) return;
-    this.clientConnection.sendSessionReconcile(this.config.agentId, chatIds);
+    for (let index = 0; index < chatIds.length; index += SESSION_RECONCILE_BATCH_SIZE) {
+      this.clientConnection.sendSessionReconcile(
+        this.config.agentId,
+        chatIds.slice(index, index + SESSION_RECONCILE_BATCH_SIZE),
+      );
+    }
+  }
+
+  private noteActiveRuntimeChat(chatId: string): void {
+    this.activeRuntimeChatIds?.add(chatId);
   }
 }
 

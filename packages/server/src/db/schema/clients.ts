@@ -27,7 +27,7 @@ export const clients = pgTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organizations.id),
-    /** "connected" | "disconnected" */
+    /** "connected" | "disconnected"; retired clients keep disconnected here and carry retiredAt. */
     status: text("status").notNull().default("disconnected"),
     sdkVersion: text("sdk_version"),
     hostname: text("hostname"),
@@ -36,6 +36,8 @@ export const clients = pgTable(
     instanceId: text("instance_id"),
     connectedAt: timestamp("connected_at", { withTimezone: true }),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Tombstone marker for client identities retired through Settings / logout --purge. */
+    retiredAt: timestamp("retired_at", { withTimezone: true }),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
   },
   (table) => [index("idx_clients_user").on(table.userId), index("idx_clients_org").on(table.organizationId)],

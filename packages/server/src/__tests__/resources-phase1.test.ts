@@ -69,6 +69,67 @@ describe("Resources Phase 1", () => {
     expect(allowed.json()).toMatchObject({ id: agentRepo?.id, scope: "agent", ownerAgentId: agent.uuid });
   });
 
+  it("round-trips a legacy agent-scoped skill binding through replaceAgentResources", async () => {
+    // The producer (ensureAndBindCampaignScanSkill) is gone, but trial agents
+    // provisioned before the 2026-07 migration still carry an agent-scoped
+    // `skill` resource + binding until a re-kickoff purges them. The web
+    // resource editors re-submit the FULL binding array on every save, so
+    // replaceAgentResources MUST keep admitting an owned agent-scoped skill
+    // (the surviving carve-out in validateBindingReferences) — otherwise every
+    // save on an un-migrated trial agent 400s. Seed such a row directly since
+    // nothing produces it anymore.
+    const app = getApp();
+    const owner = await createOrgUser(app, "member");
+    const agent = await createRuntimeAgent(app, owner);
+
+    const legacyResourceId = uuidv7();
+    await app.db.insert(resources).values({
+      id: legacyResourceId,
+      organizationId: owner.organizationId,
+      type: "skill",
+      scope: "agent",
+      ownerAgentId: agent.uuid,
+      name: "production-scan",
+      repoCanonicalKey: null,
+      defaultEnabled: null,
+      status: "active",
+      payload: { name: "production-scan", description: "legacy", body: "LEGACY BODY", metadata: {} },
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
+    await app.db.insert(agentResourceBindings).values({
+      id: uuidv7(),
+      organizationId: owner.organizationId,
+      agentId: agent.uuid,
+      type: "skill",
+      mode: "include",
+      resourceId: legacyResourceId,
+      replacesResourceId: null,
+      inlinePromptBody: null,
+      repoRef: null,
+      repoLocalPath: null,
+      order: 0,
+      createdBy: owner.memberId,
+      updatedBy: owner.memberId,
+    });
+
+    const current = await app.resourcesService.getAgentResources(agent.uuid);
+    expect(current.bindings.some((b) => b.type === "skill" && b.resourceId === legacyResourceId)).toBe(true);
+    // Re-submitting the full binding array must not reject the agent-scoped skill.
+    await app.resourcesService.replaceAgentResources(
+      agent.uuid,
+      { expectedVersion: current.version, bindings: current.bindings },
+      owner.memberId,
+    );
+
+    const bindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(and(eq(agentResourceBindings.agentId, agent.uuid), eq(agentResourceBindings.type, "skill")));
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.resourceId).toBe(legacyResourceId);
+  });
+
   it("resolves inline prompt replace as resourceId=null plus replacesResourceId", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "admin");

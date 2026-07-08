@@ -1,13 +1,15 @@
+import type { AgentProviderName } from "../../core/provider/types.js";
 import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
-export type SeedTreeState = "empty" | "nonempty";
-export type SeedSourceRepoState = "bare-readable" | "missing";
+export type SeedTreeState = "empty" | "nonempty" | "unbound";
+export type SeedSourceRepoState = "bare-readable" | "missing" | "real-first-tree-bare-readable";
 export type SeedExpectedAction =
   | "propose_phase1_skeleton"
   | "refuse_nonempty_tree"
   | "report_missing_source"
-  | "materialize_bare_worktree";
+  | "materialize_bare_worktree"
+  | "create_tree_via_init";
 
 export type FirstTreeSeedFixture = {
   sourceRepoState: SeedSourceRepoState;
@@ -39,14 +41,16 @@ export type FirstTreeSeedEvalCase = {
   skill: "first-tree-seed";
   status: "implemented";
   tags: readonly string[];
-  tier: "gate";
+  tier: "gate" | "periodic";
 };
 
 export type CliOptions = {
   caseId: string | null;
+  claudeBin: string;
   codexBin: string;
   json: boolean;
   model: string | null;
+  provider: AgentProviderName;
   verbose: boolean;
 };
 
@@ -76,7 +80,14 @@ export type EvalMetrics = {
   skeletonObserved: boolean;
   sourceEvidenceReadObserved: boolean;
   sourceRepoChanged: boolean;
+  // Event-level signal that the model touched a `worktrees/seed-source-repo`
+  // path (materialize or read). Unlike `sourceWorktreeCreated` (final
+  // filesystem state), this survives a `git worktree remove` before grading, so
+  // a Phase-1 add/read/cleanup sequence cannot erase it.
+  sourceWorktreeAccessObserved: boolean;
   sourceWorktreeCreated: boolean;
+  treeInitObserved: boolean;
+  treeInitWithContextTreeDirObserved: boolean;
   workspaceManifestReadObserved: boolean;
   writeSkillFileReadObserved: boolean;
 };

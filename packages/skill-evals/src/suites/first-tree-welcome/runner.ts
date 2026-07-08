@@ -1,7 +1,7 @@
 import { appendEvent, readEvents } from "../../core/events.js";
 import { deriveRunObservability } from "../../core/observability.js";
 import { createRunPaths } from "../../core/paths.js";
-import { runCodexProvider } from "../../core/provider/codex.js";
+import { runAgentProvider } from "../../core/provider/index.js";
 import { createEvalReporter } from "../../core/reporter.js";
 import { createFirstTreeShim } from "../../core/shims/first-tree.js";
 import { createFirstTreeStagingShim } from "../../core/shims/first-tree-staging.js";
@@ -31,17 +31,20 @@ export async function runFirstTreeWelcomeCase(
   createFirstTreeStagingShim(paths);
   createGhShim(paths);
   const contextTreePath = setupFixture(evalCase, paths, reporter);
-  const fixtureValidation = validateFixture(paths, contextTreePath, evalCase.id, options.verbose, reporter);
-  const runnerExitCode = await runCodexProvider(
+  const fixtureValidation = validateFixture(paths, contextTreePath, evalCase, evalCase.id, options.verbose, reporter);
+  const runnerResult = await runAgentProvider(
     {
-      bin: options.codexBin,
       caseId: evalCase.id,
+      claudeBin: options.claudeBin,
+      codexBin: options.codexBin,
       model: options.model,
       prompt: evalCase.prompt,
+      provider: options.provider,
       verbose: options.verbose,
     },
     { paths, reporter },
   );
+  const runnerExitCode = runnerResult.exitCode;
 
   const events = readEvents(paths.eventsPath);
   const metrics = deriveMetrics(events, evalCase, fixtureValidation, runnerExitCode, paths, contextTreePath);

@@ -1,9 +1,13 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
-
+import {
+  FIRST_TREE_SEED_QUALITY_DEFINITION,
+  FIRST_TREE_SEED_QUALITY_SANITY_FIXTURES,
+} from "../../suites/first-tree-seed/quality.js";
 import {
   FIRST_TREE_WELCOME_QUALITY_DEFINITION,
   FIRST_TREE_WELCOME_QUALITY_SANITY_FIXTURES,
@@ -37,6 +41,10 @@ function tempPackageRoot(): string {
   return mkdtempSync(join(tmpdir(), "skill-evals-quality-test-"));
 }
 
+function repoPackageRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+}
+
 function fakeArtifactInput(): ReadonlyMap<string, QualityArtifactInput> {
   return new Map([
     [
@@ -66,6 +74,23 @@ function failedGateArtifactInput(): ReadonlyMap<string, QualityArtifactInput> {
         gateSummaryJsonPath: "/tmp/fake-gate/summary.json",
         gateSummaryMdPath: "/tmp/fake-gate/summary.md",
         source: "Durable source artifact from a fake deterministic gate.",
+      },
+    ],
+  ]);
+}
+
+function seedArtifactInput(): ReadonlyMap<string, QualityArtifactInput> {
+  return new Map([
+    [
+      "first-tree-seed-skeleton-quality",
+      {
+        artifact: "Phase 1 skeleton proposal with source-backed domains and approval request.",
+        deterministicGatePassed: true,
+        gateCaseId: "empty-tree-source-present",
+        gateRunRoot: "/tmp/fake-seed-gate",
+        gateSummaryJsonPath: "/tmp/fake-seed-gate/summary.json",
+        gateSummaryMdPath: "/tmp/fake-seed-gate/summary.md",
+        source: "Source evidence from a fake seed deterministic gate.",
       },
     ],
   ]);
@@ -202,11 +227,13 @@ describe("quality runner with fake judge", () => {
         packageRoot,
         {
           caseId: "first-tree-write-node-quality",
+          claudeBin: "unused",
           codexBin: "unused",
           judgeBin: "unused",
           judgeModel: null,
           json: false,
           model: null,
+          provider: "codex",
           suite: "first-tree-write",
           verbose: false,
         },
@@ -235,11 +262,13 @@ describe("quality runner with fake judge", () => {
         packageRoot,
         {
           caseId: "first-tree-write-node-quality",
+          claudeBin: "unused",
           codexBin: "unused",
           judgeBin: "unused",
           judgeModel: null,
           json: false,
           model: null,
+          provider: "codex",
           suite: "first-tree-write",
           verbose: false,
         },
@@ -265,11 +294,13 @@ describe("quality runner with fake judge", () => {
         packageRoot,
         {
           caseId: "first-tree-write-node-quality",
+          claudeBin: "unused",
           codexBin: "unused",
           judgeBin: "unused",
           judgeModel: null,
           json: false,
           model: null,
+          provider: "codex",
           suite: "first-tree-write",
           verbose: false,
         },
@@ -282,6 +313,96 @@ describe("quality runner with fake judge", () => {
       expect(batch.cases[0]?.failures[0]).toMatch(/deterministic gate durable-source-writes failed/u);
     } finally {
       rmSync(packageRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("runs the first-tree-seed skeleton quality case with fake judge output", async () => {
+    const packageRoot = tempPackageRoot();
+    try {
+      const provider = createFakeJudgeProvider(
+        new Map([
+          [
+            "first-tree-seed-skeleton-quality",
+            JSON.stringify({
+              reasoning: "The skeleton is source-grounded and stays in Phase 1.",
+              scores: {
+                conciseness: 4,
+                coverage_calibration: 4,
+                phase_boundary: 5,
+                source_grounding: 5,
+                structure_fit: 4,
+              },
+            }),
+          ],
+        ]),
+      );
+
+      const batch = await runQualityEval(
+        packageRoot,
+        {
+          caseId: "first-tree-seed-skeleton-quality",
+          claudeBin: "unused",
+          codexBin: "unused",
+          judgeBin: "unused",
+          judgeModel: null,
+          json: false,
+          model: null,
+          provider: "codex",
+          suite: "first-tree-seed",
+          verbose: false,
+        },
+        provider,
+        seedArtifactInput(),
+      );
+
+      expect(batch.failed).toBe(0);
+      expect(batch.passed).toBe(1);
+      expect(batch.cases[0]?.judge_scores).toMatchObject({
+        phase_boundary: 5,
+        source_grounding: 5,
+      });
+    } finally {
+      rmSync(packageRoot, { force: true, recursive: true });
+    }
+  });
+
+  it("uses the selected tested-agent provider for standalone quality prerequisite gates", async () => {
+    const packageRoot = repoPackageRoot();
+    const batch = await runQualityEval(
+      packageRoot,
+      {
+        caseId: "first-tree-seed-skeleton-quality",
+        claudeBin: "/bin/false",
+        codexBin: "/bin/false",
+        judgeBin: "unused",
+        judgeModel: null,
+        json: false,
+        model: "claude-test",
+        provider: "claude",
+        suite: "first-tree-seed",
+        verbose: false,
+      },
+      createFakeJudgeProvider(new Map()),
+    );
+
+    const qualityRunRoot = batch.cases[0]?.runRoot;
+    const gateRunRoot = batch.cases[0]?.gateRunRoot;
+    try {
+      expect(batch.failed).toBe(1);
+      expect(batch.cases[0]?.judge_model).toBe("not-run");
+      if (gateRunRoot === null || gateRunRoot === undefined) {
+        throw new Error("quality run did not record gate run root");
+      }
+      const gateEvents = readFileSync(join(gateRunRoot, "events.jsonl"), "utf8");
+      expect(gateEvents).toContain('"type":"claude_run_started"');
+      expect(gateEvents).not.toContain('"type":"codex_run_started"');
+    } finally {
+      if (qualityRunRoot !== null && qualityRunRoot !== undefined) {
+        rmSync(qualityRunRoot, { force: true, recursive: true });
+      }
+      if (gateRunRoot !== null && gateRunRoot !== undefined) {
+        rmSync(gateRunRoot, { force: true, recursive: true });
+      }
     }
   });
 });
@@ -307,6 +428,20 @@ describe("quality rubric sanity fixtures", () => {
       const evaluation = evaluateJudgeOutput(
         parseJudgeJson(fixture.judgeOutput, FIRST_TREE_WELCOME_QUALITY_DEFINITION.dimensions),
         FIRST_TREE_WELCOME_QUALITY_DEFINITION.dimensions,
+      );
+
+      expect(prompt).toContain(fixture.input.artifact);
+      expect(prompt).toContain(fixture.input.source);
+      expect(evaluation.passed, fixture.name).toBe(fixture.expectedPassed);
+    }
+  });
+
+  it("keeps first-tree-seed good, borderline, and bad fixtures aligned with thresholds", () => {
+    for (const fixture of FIRST_TREE_SEED_QUALITY_SANITY_FIXTURES) {
+      const prompt = FIRST_TREE_SEED_QUALITY_DEFINITION.buildJudgePrompt(fixture.input);
+      const evaluation = evaluateJudgeOutput(
+        parseJudgeJson(fixture.judgeOutput, FIRST_TREE_SEED_QUALITY_DEFINITION.dimensions),
+        FIRST_TREE_SEED_QUALITY_DEFINITION.dimensions,
       );
 
       expect(prompt).toContain(fixture.input.artifact);

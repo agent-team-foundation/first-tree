@@ -11,7 +11,7 @@ export function createFirstTreeStagingShim(paths: RunPaths): void {
 import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
-const EVENTS_PATH = ${JSON.stringify(paths.eventsPath)};
+const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
 
 function preview(value) {
   if (!value) return "";

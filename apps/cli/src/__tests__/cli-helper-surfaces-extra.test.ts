@@ -193,7 +193,7 @@ describe("doctor checks and agent resolver", () => {
 });
 
 describe("client org mismatch handler", () => {
-  it("fails closed with purge-first recovery and leaves client.yaml unchanged", async () => {
+  it("fails closed with reset-first recovery and leaves client.yaml unchanged", async () => {
     const yamlPath = join(tempDir, "client.yaml");
     const before = stringifyYaml({ client: { id: "client_11111111" } });
     writeFileSync(yamlPath, before);
@@ -210,15 +210,15 @@ describe("client org mismatch handler", () => {
     expect(readFileSync(yamlPath, "utf8")).toBe(before);
     const output = printMocks.line.mock.calls.map((call) => String(call[0])).join("");
     expect(output).toContain("wrong org");
-    expect(output).toContain("first-tree-dev logout --purge");
     expect(output).toContain("first-tree-dev login <token>");
-    expect(output).toContain("local agent configs");
+    expect(output).toContain("first-tree-dev computer reset");
+    expect(output).toContain("valid server-side owner pair");
     expect(output).not.toContain("Rotate");
     expect(output).not.toContain("Rotated");
     expect(output).not.toContain("client.yaml.bak");
   });
 
-  it("uses the same purge-first recovery in managed mode", async () => {
+  it("uses the same reset-first recovery in managed mode", async () => {
     const { handleClientOrgMismatch } = await import("../core/client-reidentify.js");
 
     await expect(
@@ -230,7 +230,55 @@ describe("client org mismatch handler", () => {
     ).rejects.toMatchObject({ code: 1 });
 
     const output = printMocks.line.mock.calls.map((call) => String(call[0])).join("");
-    expect(output).toContain("first-tree-dev logout --purge");
     expect(output).toContain("first-tree-dev login <token>");
+    expect(output).toContain("first-tree-dev computer reset");
+  });
+
+  it("routes managed recovery text through an injected output sink", async () => {
+    const { handleClientOrgMismatch } = await import("../core/client-reidentify.js");
+    const output = {
+      blank: vi.fn(),
+      line: vi.fn(),
+    };
+
+    await expect(
+      handleClientOrgMismatch(new Error("wrong org") as never, {
+        managed: true,
+        configDir: tempDir,
+        rerunCommand: "ignored",
+        output,
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+
+    expect(output.blank).toHaveBeenCalled();
+    expect(output.line).toHaveBeenCalledWith(expect.stringContaining("wrong org"));
+    expect(printMocks.blank).not.toHaveBeenCalled();
+    expect(printMocks.line).not.toHaveBeenCalled();
+  });
+
+  it("routes managed logger output through an error-level status summary", async () => {
+    const { handleClientOrgMismatch } = await import("../core/client-reidentify.js");
+    const output = {
+      blank: vi.fn(),
+      line: vi.fn(),
+      status: vi.fn(),
+    };
+
+    await expect(
+      handleClientOrgMismatch(new Error("wrong org") as never, {
+        managed: true,
+        configDir: tempDir,
+        rerunCommand: "ignored",
+        output,
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+
+    expect(output.status).toHaveBeenCalledWith("✗", expect.stringContaining("wrong org"));
+    expect(output.status).toHaveBeenCalledWith("✗", expect.stringContaining("first-tree-dev login <token>"));
+    expect(output.status).toHaveBeenCalledWith("✗", expect.stringContaining("first-tree-dev computer reset"));
+    expect(output.blank).not.toHaveBeenCalled();
+    expect(output.line).not.toHaveBeenCalled();
+    expect(printMocks.blank).not.toHaveBeenCalled();
+    expect(printMocks.line).not.toHaveBeenCalled();
   });
 });

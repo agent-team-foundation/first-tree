@@ -80,12 +80,23 @@ describe("onboarding vocabulary (connect-agent reframe)", () => {
     expect(COPY.invitee.startAnyway).toBe("Start chat");
   });
 
-  it("frames no-repo start-chat as a normal path, not missing setup", () => {
-    expect(COPY.startChat.noProjectBody).not.toContain("No code is connected");
-    expect(COPY.startChat.noProjectBody).toContain("Setup is ready");
-    expect(COPY.startChat.noProjectBody).toContain("a project path");
-    expect(COPY.startChat.noProjectBody).toContain("a GitHub repo URL");
-    expect(COPY.startChat.noProjectBody).toContain("the task you want help with");
+  it("shows one plain launch subtitle across every start-chat state", () => {
+    // The finale intentionally reads the same regardless of role or team/tree
+    // state: that state is invisible to the user (Context Tree is introduced
+    // later, in chat), so the subtitle stays a single plain launch line.
+    const launch = "Your agent's ready. Start a chat and it'll help you get going.";
+    expect(COPY.startChat.noProjectBody).toBe(launch);
+    expect(COPY.startChat.inviteeReadyBody).toBe(launch);
+    expect(COPY.invitee.notReadyBody).toBe(launch);
+    expect(COPY.startChat.newWhy(1)).toBe(launch);
+    expect(COPY.startChat.existingWhy(3)).toBe(launch);
+  });
+
+  it("keeps the launch subtitle free of the Context Tree concept", () => {
+    // Requirement: don't name "context" on this screen — it's taught later in chat.
+    for (const s of [COPY.startChat.noProjectBody, COPY.startChat.inviteeReadyBody, COPY.invitee.notReadyBody]) {
+      expect(s.toLowerCase()).not.toContain("context");
+    }
   });
 
   it("does not overpromise repo access on start-chat screens", () => {

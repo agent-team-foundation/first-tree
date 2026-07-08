@@ -7,7 +7,7 @@ import { ClientConnection, ClientOrgMismatchError } from "../client-connection.j
  * Behavior contract: when the server rejects `client:register` with
  * `code: "CLIENT_ORG_MISMATCH"`, the SDK must
  *   1. reject the `connect()` promise with a typed `ClientOrgMismatchError`
- *      (CLI pattern-matches on `instanceof` to show purge-first recovery),
+ *      (CLI pattern-matches on `instanceof` to show local-client switch recovery),
  *   2. stop attempting to reconnect — a fresh connection with the same clientId
  *      would just re-trigger the same rejection forever.
  */
@@ -102,7 +102,7 @@ describe("ClientConnection — client:register CLIENT_ORG_MISMATCH", () => {
     connection.on("error", () => {});
 
     // No CLIENT_ORG_MISMATCH code → callers see a generic Error (triggers the
-    // default error branch in the CLI, not the purge-first branch).
+    // default error branch in the CLI, not the local-client switch branch).
     await expect(connection.connect()).rejects.toMatchObject({
       name: "Error",
     });

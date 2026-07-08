@@ -116,10 +116,10 @@ describe("Multi-org self-service", () => {
   });
 });
 
-describe("Connect token carries iss claim", () => {
+describe("Connect token URL carries issuer origin", () => {
   const getApp = useTestApp();
 
-  it("POST /me/connect-tokens stamps an iss derived from request host", async () => {
+  it("POST /me/connect-tokens returns a short URL derived from request host", async () => {
     const app = getApp();
     const admin = await createTestAdmin(app);
     const res = await app.inject({
@@ -133,16 +133,14 @@ describe("Connect token carries iss claim", () => {
       command: string;
       bootstrapCommand: string;
       npmSpec: string | null;
+      installMethod: string;
+      installerUrl: string | null;
       binName: string;
     }>();
 
-    // Decode the JWT payload (not verifying signature — it's our own key)
-    const parts = body.token.split(".");
-    const payload = parts[1];
-    if (!payload) throw new Error("expected JWT payload segment");
-    const decoded = JSON.parse(Buffer.from(payload, "base64url").toString()) as { iss?: string; type?: string };
-    expect(decoded.type).toBe("connect");
-    expect(decoded.iss).toMatch(/^https?:\/\//);
+    const tokenUrl = new URL(body.token);
+    expect(tokenUrl.origin).toMatch(/^https?:\/\//);
+    expect(tokenUrl.pathname).toMatch(/^\/connect\/[A-Za-z0-9_-]+$/);
 
     // Default test config runs channel=dev (server default) — dev has no
     // published package, so npmSpec is null and bootstrapCommand collapses
@@ -151,6 +149,8 @@ describe("Connect token carries iss claim", () => {
     expect(body.binName).toBe("first-tree-dev");
     expect(body.command).toBe(`first-tree-dev login ${body.token}`);
     expect(body.npmSpec).toBeNull();
+    expect(body.installMethod).toBe("source");
+    expect(body.installerUrl).toBeNull();
     expect(body.bootstrapCommand).toBe(body.command);
   });
 });

@@ -498,6 +498,41 @@
       "when": 1782373703621,
       "tag": "0070_cheerful_ken_ellis",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1782896796980,
+      "tag": "0071_moaning_maverick",
+      "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "7",
+      "when": 1783176353108,
+      "tag": "0072_oval_frank_castle",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "7",
+      "when": 1783428000000,
+      "tag": "0073_client_retired_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1783498176310,
+      "tag": "0074_long_roughhouse",
+      "breakpoints": true
+    },
+    {
+      "idx": 75,
+      "version": "7",
+      "when": 1783501214695,
+      "tag": "0075_right_jigsaw",
+      "breakpoints": true
     }
   ]
 }

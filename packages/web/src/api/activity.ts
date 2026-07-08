@@ -35,7 +35,7 @@ export type ActivityOverview = {
 export type HubClient = {
   id: string;
   userId: string | null;
-  status: string;
+  status: "connected" | "disconnected" | "retired";
   /** Server-derived from offline duration vs refresh-token TTL. See clientAuthStateSchema in shared. */
   authState: "ok" | "expired";
   /** Channel-aware CLI binary name returned by the server. */
@@ -121,14 +121,15 @@ export function resetAgentActivity(agentId: string): Promise<{ reset: boolean }>
 }
 
 export type ConnectTokenResponse = {
+  /** Opaque token for `<binName> login <token>`; usually a short connect URL. */
   token: string;
   expiresIn: number;
   /** `<binName> login <token>` — channel-aware bin name. */
   command: string;
   /**
    * Full bootstrap line: `npm install -g <pkg>\n<binName> login <token>`
-   * for prod/staging; just `<binName> login <token>` for dev (no
-   * published package).
+   * for prod/staging; just `<binName> login <token>` for dev (no published
+   * package). The token segment is opaque and may be a short connect URL.
    */
   bootstrapCommand: string;
   /**
@@ -136,6 +137,10 @@ export type ConnectTokenResponse = {
    * suppresses the `npm install -g` step).
    */
   npmSpec: string | null;
+  /** Bootstrap install method selected by the server. */
+  installMethod: "npm" | "portable" | "source";
+  /** Installer URL when `installMethod` is `portable`; never contains tokens. */
+  installerUrl: string | null;
   /**
    * Bin name to invoke after install — `first-tree` / `first-tree-staging`
    * / `first-tree-dev` depending on this server's channel. Use instead of

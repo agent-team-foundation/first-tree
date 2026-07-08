@@ -30,7 +30,7 @@ type VerifyCheck = {
   ok: boolean;
 };
 
-type VerifySummary = {
+export type VerifySummary = {
   checks: {
     frameworkVersion: VerifyCheck;
     members: VerifyCheck;
@@ -83,7 +83,7 @@ function formatSourceRepoError(targetRoot: string): string {
   return `This repo only has source/workspace integration installed. Verify the tree repo instead, for example \`${channelConfig.binName} tree verify --tree-path ${examplePath}\`.`;
 }
 
-function verifyTreeRoot(targetRoot: string): VerifySummary {
+export function verifyTreeRoot(targetRoot: string): VerifySummary {
   if (readSourceBindingContract(targetRoot) !== undefined && readTreeIdentityContract(targetRoot) === undefined) {
     throw new Error(formatSourceRepoError(targetRoot));
   }

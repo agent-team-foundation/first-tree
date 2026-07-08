@@ -173,6 +173,15 @@ async function renderDom(initialEntry: string, element: ReactElement): Promise<{
             }
           />
           <Route
+            path="/quickstart"
+            element={
+              <>
+                <LocationProbe />
+                {element}
+              </>
+            }
+          />
+          <Route
             path="/onboarding"
             element={
               <>
@@ -311,6 +320,29 @@ describe("WorkspacePage DOM behavior", () => {
     expect(container.querySelector('[data-testid="center-panel"]')).toBeNull();
     expect(container.querySelector('[data-testid="doc-preview"]')).toBeTruthy();
 
+    await act(async () => root.unmount());
+  });
+
+  it("drops the conversation rail on the trial surface and renders the chat full-bleed", async () => {
+    const { WorkspaceBody } = await import("../index.js");
+    viewportMock.value = "md";
+    const { container, root } = await renderDom("/quickstart?c=trial-1", <WorkspaceBody />);
+
+    // No rail (nor its narrow-overlay hamburger) — the trial chat is the whole surface.
+    expect(container.querySelector('[data-testid="conversation-list"]')).toBeNull();
+    expect(buttonByText(container, "Show conversations")).toBeNull();
+    // The chat still renders, selected via ?c=.
+    expect(container.querySelector('[data-testid="center-panel"]')).toBeTruthy();
+    expect(container.textContent).toContain("center:trial-1:wide");
+
+    await act(async () => root.unmount());
+  });
+
+  it("keeps the conversation rail on the normal workspace root", async () => {
+    const { WorkspaceBody } = await import("../index.js");
+    viewportMock.value = "md";
+    const { container, root } = await renderDom("/?c=chat-1", <WorkspaceBody />);
+    expect(container.querySelector('[data-testid="conversation-list"]')).toBeTruthy();
     await act(async () => root.unmount());
   });
 

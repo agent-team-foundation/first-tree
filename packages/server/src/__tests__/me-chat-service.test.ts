@@ -29,6 +29,7 @@
 import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { users } from "../db/schema/users.js";
+import { listActiveRuntimeChatIds } from "../services/chat.js";
 import { applyAfterFanOut } from "../services/chat-projection.js";
 import {
   addMeChatParticipants,
@@ -853,6 +854,34 @@ describe("chat-first workspace service layer", () => {
     expect(ids).toContain(stays.chatId);
     expect(ids).not.toContain(hides.chatId);
     expect(ids).not.toContain(gone.chatId);
+  });
+
+  it("listActiveRuntimeChatIds returns the runtime agent's non-archived chats for the current human scope", async () => {
+    const app = getApp();
+    const runtime = await createTestAgent(app, { name: "active-runtime-set" });
+
+    const active = await createMeChat(app.db, runtime.humanAgentUuid, runtime.organizationId, {
+      participantIds: [runtime.agent.uuid],
+    });
+    const archived = await createMeChat(app.db, runtime.humanAgentUuid, runtime.organizationId, {
+      participantIds: [runtime.agent.uuid],
+    });
+    const deleted = await createMeChat(app.db, runtime.humanAgentUuid, runtime.organizationId, {
+      participantIds: [runtime.agent.uuid],
+    });
+    await setChatEngagement(app.db, archived.chatId, runtime.humanAgentUuid, "archived");
+    await setChatEngagement(app.db, deleted.chatId, runtime.humanAgentUuid, "deleted");
+
+    const ids = await listActiveRuntimeChatIds(
+      app.db,
+      runtime.agent.uuid,
+      runtime.humanAgentUuid,
+      runtime.organizationId,
+    );
+
+    expect(ids).toContain(active.chatId);
+    expect(ids).not.toContain(archived.chatId);
+    expect(ids).not.toContain(deleted.chatId);
   });
 
   it("listMeChats ?engagement=archived shows only archived rows", async () => {

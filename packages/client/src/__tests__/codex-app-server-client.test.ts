@@ -40,6 +40,29 @@ function makeChild(exitOnSignals: readonly NodeJS.Signals[] = []) {
 }
 
 describe("CodexAppServerClient lifecycle", () => {
+  it("passes app-server config args to the spawned Codex process", async () => {
+    const { child, signals, stdout } = makeChild(["SIGTERM"]);
+    let capturedArgs: readonly string[] | null = null;
+    const startPromise = CodexAppServerClient.start({
+      binary: "/tmp/fake-codex",
+      requestTimeoutMs: RESPONSE_OK_TIMEOUT_MS,
+      appServerArgs: ["-c", 'permissions={"first-tree-landing-trial" = {}}'],
+      spawnProcess: (_command, args) => {
+        capturedArgs = args;
+        return child;
+      },
+    });
+    setImmediate(() => {
+      stdout.write(`${JSON.stringify({ id: 1, result: {} })}\n`);
+    });
+
+    const client = await startPromise;
+    await client.shutdown();
+
+    expect(capturedArgs).toEqual(["app-server", "--stdio", "-c", 'permissions={"first-tree-landing-trial" = {}}']);
+    expect(signals).toEqual(["SIGTERM"]);
+  });
+
   it("cleans up the child process when initialize times out", async () => {
     const { child, signals } = makeChild(["SIGTERM"]);
     const onClose = vi.fn();

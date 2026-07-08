@@ -23,6 +23,7 @@ import {
   encodeProviderRetryEventMessage,
   isImageBatchRefContent,
   isImageRefContent,
+  RUNTIME_NOTICE_METADATA_KEY,
   runtimeProviderSchema,
   SUPPORTED_IMAGE_MIMES as SHARED_SUPPORTED_IMAGE_MIMES,
 } from "@first-tree/shared";
@@ -877,6 +878,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         source: "api",
         format: "text",
         content: formatClaudeProviderFailureNotice(settlement.classification, settlement.messagePreview),
+        metadata: { [RUNTIME_NOTICE_METADATA_KEY]: true },
         purpose: "agent-final-text",
       });
       return true;
@@ -1444,6 +1446,17 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
     // would update model/mcp/effort but silently leave the per-agent prompt
     // at the old version until the next session restart.
     if (cwd) {
+      // A resource skill bound mid-session (config version bumped, model
+      // unchanged) reaches the active session on this restart path. Materialize
+      // it BEFORE rewriting the briefing so the "## Team Skills" entries the
+      // briefing lists point at real SKILL.md files on disk — without this the
+      // restarted turn sees the skill named but no file to load (the reused /
+      // already-running agent bug). Guard on a genuine version increase so a
+      // transient empty fallback config (swallowed refresh failure) can't prune
+      // skills the running turn is about to load.
+      if (cached.version > appliedConfigVersion) {
+        await materializeResourceSkills(cwd, newPayload, sessionCtx);
+      }
       const switchedBriefing = currentBriefing(sessionCtx, cwd, newPayload);
       writeAgentBriefing(cwd, switchedBriefing);
       // Refresh the on-disk briefing fingerprint so the NEXT delivered message
@@ -2094,6 +2107,14 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
         // resumes. The agent still finds the v1.x checkouts at their
         // original `<localPath>/` — just without a top-level enumeration in
         // the prompt.
+        //
+        // Materialize resource skills to the legacy cwd as well. Unlike start()
+        // and the normal-design resume path, this pre-redesign branch never
+        // wrote them, so a skill bound to a reused legacy-layout agent (the
+        // gandy-coder reuse case) never reached disk. `cwd` is `legacyCwd` here
+        // (set above), NOT the agent home, so the files land where this
+        // session's briefing paths and the SDK cwd resolve them.
+        await materializeResourceSkills(cwd, payload, sessionCtx);
         writeAgentBriefing(legacyCwd, currentBriefing(sessionCtx, legacyCwd, payload));
         // Same convert-stash-then-spawn ordering as `start()` so a stream
         // error fired on the first turn of the resumed session can replay
@@ -2204,7 +2225,7 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       return { kind: "owned", mode: "queued" };
     },
 
-    async suspend() {
+    async suspend(reason?: string) {
       ctx?.log("Suspending session");
 
       if (inputController) {
@@ -2227,12 +2248,12 @@ export const createClaudeCodeHandler: HandlerFactory = (config) => {
       // The session is no longer active — any pending replay inputs would be
       // moot. Resume goes through `handler.resume(message, sessionId)`, which
       // builds a fresh replay buffer from its own pushed inputs.
-      retryBufferedMessages("claude_suspend_before_terminal");
+      retryBufferedMessages(reason ?? "claude_suspend_before_terminal");
       injectDrainInProgress = false;
     },
 
-    async shutdown() {
-      await handler.suspend();
+    async shutdown(reason?: string) {
+      await handler.suspend(reason);
       // Per agent-session-cwd-redesign: cwd is the per-agent home — shared
       // by every chat. shutdown() of ONE chat must NOT remove it (would
       // wipe persistent state and worktrees other chats are using).

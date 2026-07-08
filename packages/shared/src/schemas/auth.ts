@@ -23,6 +23,11 @@ export const connectTokenExchangeSchema = z.object({
 export type ConnectTokenExchange = z.infer<typeof connectTokenExchangeSchema>;
 
 export const connectTokenResponseSchema = z.object({
+  /**
+   * Opaque connect token accepted by `<binName> login <token>`. New servers
+   * return a short URL (`https://.../connect/<code>`); legacy JWT connect
+   * tokens remain accepted by the exchange endpoint during rollout.
+   */
   token: z.string(),
   expiresIn: z.number(),
   /** `<binName> login <token>` — channel-aware bin name. */
@@ -40,6 +45,17 @@ export const connectTokenResponseSchema = z.object({
    * suppresses the `npm install -g` step.
    */
   npmSpec: z.string().nullable(),
+  /**
+   * Bootstrap install method selected by the server. `npm` remains the
+   * default for published channels until operators opt in to portable
+   * bootstrap. `source` is dev-only.
+   */
+  installMethod: z.enum(["npm", "portable", "source"]),
+  /**
+   * Public installer URL when `installMethod=portable`. Connect tokens never
+   * appear here; the token is only in the local login command.
+   */
+  installerUrl: z.string().url().nullable(),
   /**
    * Bin name the operator types after install. Channel-aware:
    *   - prod    → "first-tree"

@@ -7,10 +7,10 @@ type DisconnectChipProps = {
 };
 
 /**
- * Topbar warning chip — surfaces in `Layout` whenever any of the caller's
- * own computers is disconnected and still has agents bound. Click jumps to
- * the Computers settings page. Renders nothing in the healthy case so the
- * topbar stays clean.
+ * Topbar warning chip — surfaces in `Layout` when none of the caller's local
+ * clients are connected and at least one disconnected computer still has
+ * agents bound. Click jumps to the Computers settings page. Renders nothing in
+ * the healthy case so the topbar stays clean.
  */
 export function DisconnectChip({ compact = false }: DisconnectChipProps) {
   const navigate = useNavigate();

@@ -1,3 +1,4 @@
+import type { AgentProviderName } from "../../core/provider/types.js";
 import type { SkillCaseGrading } from "../../core/result-schema.js";
 import type { CommandResult } from "../../core/types.js";
 
@@ -40,9 +41,11 @@ export type FirstTreeWriteEvalCase = {
 
 export type CliOptions = {
   caseId: string | null;
+  claudeBin: string;
   codexBin: string;
   json: boolean;
   model: string | null;
+  provider: AgentProviderName;
   verbose: boolean;
 };
 
@@ -69,6 +72,9 @@ export type EvalMetrics = {
   }[];
   fixtureValidationOk: boolean;
   forbiddenContentHits: readonly string[];
+  modelVerifySucceeded: boolean;
+  postModelVerifyResult: CommandResult | null;
+  postModelVerifySucceeded: boolean | null;
   runnerExitCode: number | null;
   skillFileReadObserved: boolean;
   sourceRepoChanged: boolean;

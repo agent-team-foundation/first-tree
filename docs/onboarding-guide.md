@@ -15,11 +15,16 @@ everything online.
 
 ## Prerequisites
 
-- **Node.js** ≥ 22.13 (24 recommended).
-- **The CLI** — `npm install -g first-tree && first-tree --version`.
+- **The CLI**. Prefer the portable command shown in the web console's
+  *Computers → New Connection* dialog; it bundles Node.js. For headless
+  production installs, the portable installer has this shape:
+  `curl -fsSL https://downloads.first-tree.ai/prod/install.sh | sh`.
+- **Node.js** ≥ 22.13 only when you choose the npm fallback path
+  (`npm install -g first-tree`).
 - **A connect token** — generated from the web console's *Computers → New
-  Connection* dialog. The token's `iss` claim carries the server URL, so
-  the CLI does not need a server flag.
+  Connection* dialog. New tokens are short URLs whose origin carries the
+  server URL; legacy JWT tokens with an `iss` claim remain accepted during
+  rollout. The CLI does not need a server flag.
 - **A server you can reach** — either the hosted SaaS or a locally
   running server.
 
@@ -49,7 +54,8 @@ because an agent is permanently bound to exactly one client machine.
 
 - `$FIRST_TREE_HOME/config/credentials.json` (mode `0600`) —
   `accessToken`, `refreshToken`, and the server URL derived from the
-  token's `iss` claim.
+  connect token. New tokens are short URLs; legacy JWT tokens are still
+  accepted during rollout.
 - `$FIRST_TREE_HOME/config/client.yaml` — `client.id` (auto-generated
   on first login) and `server.url`.
 - On macOS / Linux, the background daemon is installed as a user-level
@@ -88,7 +94,8 @@ name — there is no separate "local alias" to invent.
 | Cross-subsystem readiness check | `first-tree doctor` |
 | List local agent bindings | `first-tree agent list` |
 | List every agent you manage on the server | `first-tree agent list --remote` |
-| Switch a machine to another user | `first-tree logout --purge`, then `first-tree login <token>` |
+| Switch a machine to another user | `first-tree login <token>` with the new user's token, then confirm the switch |
+| Destructively reset damaged local client state | `first-tree computer reset` |
 | Send a chat message | `first-tree chat send <agent-name> "message"` |
 | List chats | `first-tree chat list` |
 | View chat history | `first-tree chat history <chat-id>` |
@@ -111,7 +118,7 @@ retained as a read-only debug endpoint.
 | Variable | Purpose |
 |---|---|
 | `FIRST_TREE_HOME` | Override config/data home directory. By default this is channel-dependent: `~/.first-tree` for prod, `~/.first-tree-staging` for staging, `~/.first-tree-dev` for dev. |
-| `FIRST_TREE_SERVER_URL` | Server URL (alternative to the token's `iss` claim) |
+| `FIRST_TREE_SERVER_URL` | Server URL for SDK and non-login commands; `login` derives it from the connect token. |
 
 ## Using the SDK
 
@@ -145,7 +152,7 @@ and ack via `connection.sendInboxAck(entryId)`.
 | `HTTP_401` | Invalid or revoked token | Run `first-tree login <token>` with a fresh token |
 | `HTTP_403` | Agent suspended or deleted | Check the agent's status in the admin UI |
 | `CONNECTION_ERROR` | Server unreachable | Verify `FIRST_TREE_SERVER_URL` or that the local server is running |
-| `CLIENT_USER_MISMATCH` (WS close 4403) | Machine already bound to another user | Run `first-tree logout --purge`, then `first-tree login <token>` |
+| `CLIENT_USER_MISMATCH` (WS close 4403) | Active client id is not accepted for the current credentials | Back up local workspaces, run `first-tree computer reset`, then run `first-tree login <token>` with the intended account |
 | `AMBIGUOUS_AGENT` | Multiple local agents and no `--agent` flag | Pass `--agent <name>` explicitly |
 
 ## For AI agents driving onboarding
@@ -159,12 +166,19 @@ and ack via `connection.sendInboxAck(entryId)`.
   it explicitly when more than one agent runs on the same client to
   avoid `AMBIGUOUS_AGENT`.
 - If the user already has local First Tree state for a different account
-  on this machine, run `first-tree logout --purge` before logging in with
-  the new connect token. This signs out the current user and removes the
-  local client identity plus local agent configs, workspaces, and session
-  state. Server-side clients, agents, chats, and history are not deleted.
+  on this machine, run `first-tree login <token>` with the new user's
+  connect token. Interactive terminals prompt for confirmation; non-TTY
+  automation must pass `--force-switch`. That flag only confirms the switch:
+  First Tree still stops and drains the old runtime, verifies switch gates,
+  parks inactive local client state, and refuses to move root state if any
+  safety gate fails.
+- Use `first-tree computer reset` only when local identity state is damaged
+  or the user intentionally wants to discard active and parked local
+  client/agent state in this installation. It is a destructive local reset;
+  server-side clients, agents, chats, and history are not deleted.
 
 ## See also
 
 - [CLI Reference](cli-reference.md)
 - [Quickstart](quickstart.md)
+- [Onboarding kickoff contract](development/onboarding-kickoff-contract.md)

@@ -41,6 +41,7 @@ const coreMocks = vi.hoisted(() => ({
   installClientService: vi.fn(),
   isServiceSupported: vi.fn(),
   isServiceUnitDriftDetected: vi.fn(),
+  loadCredentials: vi.fn(),
   refreshClientServiceUnitForUpdate: vi.fn(),
   removeLocalAgent: vi.fn(),
   restartClientService: vi.fn(),
@@ -74,6 +75,7 @@ vi.mock("../commands/_shared/local-agent.js", () => localAgentMocks);
 let tempDir = "";
 const originalExit = process.exit;
 const originalStdoutWrite = process.stdout.write;
+const originalPlatform = process.platform;
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -112,6 +114,10 @@ async function runChat(args: string[]): Promise<void> {
   await runRegistered(registerChatCommands, ["chat", ...args]);
 }
 
+function setPlatform(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+}
+
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "ft-cli-matrix-"));
   vi.clearAllMocks();
@@ -125,11 +131,16 @@ beforeEach(() => {
   resolveAgentMock.mockResolvedValue({ uuid: "agent-1", name: "nova" });
   coreMocks.isServiceSupported.mockReturnValue(true);
   coreMocks.getClientServiceStatus.mockReturnValue({ state: "active", platform: "launchd", detail: "pid 123" });
+  coreMocks.loadCredentials.mockReturnValue({ refreshToken: "refresh" });
   coreMocks.stopClientService.mockReturnValue({ ok: true });
   coreMocks.restartClientService.mockReturnValue({ ok: true });
   coreMocks.isServiceUnitDriftDetected.mockReturnValue(true);
-  coreMocks.installClientService.mockReturnValue({ platform: "launchd", unitPath: "/tmp/unit.plist" });
-  coreMocks.refreshClientServiceUnitForUpdate.mockReturnValue({ platform: "launchd", unitPath: "/tmp/unit.plist" });
+  coreMocks.installClientService.mockReturnValue({ platform: "launchd", unitPath: "/tmp/unit.plist", state: "active" });
+  coreMocks.refreshClientServiceUnitForUpdate.mockReturnValue({
+    platform: "launchd",
+    unitPath: "/tmp/unit.plist",
+    state: "active",
+  });
   clientMocks.SessionRegistry.mockImplementation(() => ({ load: vi.fn(() => new Map()) }));
   clientMocks.cleanWorkspaces.mockReturnValue([]);
   localAgentMocks.createSdk.mockReturnValue({
@@ -146,6 +157,7 @@ afterEach(() => {
   rmSync(tempDir, { force: true, recursive: true });
   process.exit = originalExit;
   process.stdout.write = originalStdoutWrite;
+  setPlatform(originalPlatform);
   delete process.env.FIRST_TREE_CHAT_ID;
 });
 
@@ -238,9 +250,42 @@ describe("daemon utility commands", () => {
     coreMocks.refreshClientServiceUnitForUpdate.mockReturnValueOnce({
       platform: "systemd",
       unitPath: "/tmp/unit.service",
+      state: "active",
     });
     await runDaemon(["refresh-unit"]);
     expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("unit rewritten");
+
+    coreMocks.isServiceSupported.mockReturnValueOnce(false);
+    await runDaemon(["ensure-service"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("not supported");
+
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.loadCredentials.mockReturnValueOnce(null);
+    await runDaemon(["ensure-service"]);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain("no credentials");
+
+    coreMocks.installClientService.mockClear();
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "active", platform: "launchd", detail: "pid 123" });
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(false);
+    await runDaemon(["ensure-service"]);
+    expect(coreMocks.installClientService).not.toHaveBeenCalled();
+
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "inactive", platform: "systemd" });
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(false);
+    coreMocks.installClientService.mockReturnValueOnce({
+      platform: "systemd",
+      unitPath: "/tmp/unit.service",
+      state: "active",
+    });
+    await runDaemon(["ensure-service"]);
+    expect(coreMocks.installClientService).toHaveBeenCalledTimes(1);
+
+    coreMocks.getClientServiceStatus.mockReturnValueOnce({ state: "inactive", platform: "systemd" });
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(false);
+    coreMocks.installClientService.mockImplementationOnce(() => {
+      throw new Error("service denied");
+    });
+    await expect(runDaemon(["ensure-service"])).rejects.toMatchObject({ code: 1 });
 
     const stdout = vi.fn((_chunk: string | Uint8Array) => true);
     process.stdout.write = stdout as unknown as typeof process.stdout.write;
@@ -251,6 +296,47 @@ describe("daemon utility commands", () => {
       configDir: join(tempDir, "config"),
       dataDir: join(tempDir, "data"),
     });
+  });
+
+  it("gives actionable Windows inline-daemon guidance when restart service control is unsupported", async () => {
+    setPlatform("win32");
+    coreMocks.isServiceSupported.mockReturnValue(false);
+
+    await runDaemon(["restart"]);
+
+    const output = printLineMock.mock.calls.map((call) => String(call[0])).join("");
+    expect(output).toContain("Service control is not supported on Windows");
+    expect(output).toContain("First Tree runs inline");
+    expect(output).toContain("daemon probe");
+    expect(output).toContain("PowerShell");
+    expect(output).toContain("Ctrl+C");
+    expect(output).toContain("daemon start");
+  });
+
+  it("restarts an active systemd service when ensure-service refreshes a drifted unit", async () => {
+    setPlatform("linux");
+    coreMocks.installClientService.mockClear();
+    coreMocks.restartClientService.mockClear();
+    coreMocks.isServiceSupported.mockReturnValue(true);
+    coreMocks.loadCredentials.mockReturnValue({ refreshToken: "refresh" });
+    coreMocks.getClientServiceStatus
+      .mockReturnValueOnce({ state: "active", platform: "systemd", detail: "pid 123" })
+      .mockReturnValueOnce({ state: "active", platform: "systemd", detail: "pid 456" });
+    coreMocks.isServiceUnitDriftDetected.mockReturnValueOnce(true);
+    coreMocks.installClientService.mockReturnValueOnce({
+      platform: "systemd",
+      unitPath: "/tmp/first-tree.service",
+      state: "active",
+    });
+    coreMocks.restartClientService.mockReturnValueOnce({ ok: true });
+
+    await runDaemon(["ensure-service"]);
+
+    expect(coreMocks.installClientService).toHaveBeenCalledTimes(1);
+    expect(coreMocks.restartClientService).toHaveBeenCalledTimes(1);
+    expect(printLineMock.mock.calls.map((call) => String(call[0])).join("")).toContain(
+      "systemd service refreshed and restarted",
+    );
   });
 });
 

@@ -1,3 +1,4 @@
+import { createLogger } from "../observability/logger.js";
 import { registerHandler } from "../runtime/handler.js";
 import { createClaudeCodeHandler } from "./claude-code.js";
 import { createClaudeCodeTuiHandler } from "./claude-code-tui/index.js";
@@ -19,11 +20,12 @@ export function registerBuiltinHandlers(deps: RegisterBuiltinHandlersDeps = {}):
   // (which re-resolves with the login-shell probe) and by the capability probe
   // (post-registration) — neither of which is on the pre-connect path.
   const resolution = (deps.resolveExecutable ?? (() => resolveClaudeCodeExecutable({ includeLoginShell: false })))();
+  const log = createLogger("handlers");
   if (resolution.path) {
-    process.stderr.write(`[handlers] Claude Code executable: ${resolution.path} (source=${resolution.source})\n`);
+    log.info(`Claude Code executable: ${resolution.path} (source=${resolution.source})`);
   } else {
-    process.stderr.write(
-      "[handlers] Claude Code executable: using SDK bundled native binary (set CLAUDE_CODE_EXECUTABLE or install `claude` on PATH to override)\n",
+    log.info(
+      "Claude Code executable: using SDK bundled native binary (set CLAUDE_CODE_EXECUTABLE or install `claude` on PATH to override)",
     );
   }
   registerHandler("claude-code", (config) =>

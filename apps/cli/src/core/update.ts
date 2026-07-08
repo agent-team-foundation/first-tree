@@ -1,7 +1,22 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { classify, ERROR_KINDS, getChildProcessRegistry } from "@first-tree/client";
+import {
+  type PortableAsset,
+  type PortableInstallMetadata,
+  type PortableLatest,
+  type PortableManifest,
+  type PortablePlatform,
+  portableInstallMetadataSchema,
+  portableLatestSchema,
+  portableManifestSchema,
+  portablePlatformSchema,
+} from "@first-tree/shared";
 import { inferChannelFromVersion } from "@first-tree/shared/channel";
 import * as semver from "semver";
 import { resolveServerUrl } from "./bootstrap.js";
@@ -11,9 +26,19 @@ import { print } from "./output.js";
 
 /** Hard ceiling on a single `npm install -g` invocation (5 min). */
 const NPM_INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
+/** Short metadata probe used only to catch guaranteed npm-mode engine mismatch. */
+const NPM_METADATA_TIMEOUT_MS = 10 * 1000;
 
-export type InstallMode = "global" | "npx" | "source";
+export type InstallMode = "global" | "npx" | "source" | "portable";
 export type VersionLookupResult = { ok: true; version: string } | { ok: false; reason: string };
+
+type PortableMetadataIdentity = {
+  channel: string;
+  version: string;
+  packageName: string;
+  binName: string;
+  aliasName: string;
+};
 
 /**
  * npm package name this binary self-updates against. Derived from the
@@ -51,6 +76,7 @@ export function detectInstallMode(
   argv1: string = process.argv[1] ?? "",
   packageName: string | null = PACKAGE_NAME,
 ): InstallMode {
+  if (process.env.FIRST_TREE_INSTALL_MODE === "portable" || process.env.FIRST_TREE_PORTABLE_ROOT) return "portable";
   // dev channel is not published to npm — there is no `node_modules/<pkg>`
   // tree to detect a "global" install against. Treat dev binaries as
   // running from source so the update path declines self-update with the
@@ -148,6 +174,14 @@ export type ExecuteUpdateResult =
       reasonCode?: string;
     };
 
+export type InstallGlobalSpecOptions = {
+  output?: (chunk: string) => void;
+};
+
+function writeInstallOutput(options: InstallGlobalSpecOptions | undefined, chunk: string): void {
+  (options?.output ?? print.line)(chunk);
+}
+
 /**
  * Validate an npm install spec (the part after `@` in `<pkg>@<spec>`). We
  * accept either a known dist-tag string (`latest`, `alpha`, …) or an exact
@@ -174,6 +208,406 @@ function looksLikeVersion(spec: string): boolean {
   return /^\d+\.\d+\.\d+(?:-|$)/.test(spec);
 }
 
+function parseNpmViewEngineRange(stdout: string): string | null {
+  const trimmed = stdout.trim();
+  if (trimmed.length === 0 || trimmed === "null" || trimmed === "undefined") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (typeof parsed === "string" && parsed.trim().length > 0) return parsed.trim();
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (typeof record["engines.node"] === "string" && record["engines.node"].trim().length > 0) {
+    return record["engines.node"].trim();
+  }
+  const engines = record.engines;
+  if (engines !== null && typeof engines === "object" && !Array.isArray(engines)) {
+    const node = (engines as Record<string, unknown>).node;
+    if (typeof node === "string" && node.trim().length > 0) return node.trim();
+  }
+  return null;
+}
+
+function lookupNpmTargetNodeEngineRange(spec: string): string | null {
+  if (PACKAGE_NAME === null) return null;
+  const res = spawnSync(resolveNpmCommand(), ["view", `${PACKAGE_NAME}@${spec}`, "engines.node", "--json"], {
+    encoding: "utf-8",
+    timeout: NPM_METADATA_TIMEOUT_MS,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (res.status !== 0) return null;
+  return parseNpmViewEngineRange(res.stdout ?? "");
+}
+
+function portableMigrationHint(): string {
+  const baseUrl = channelConfig.portable.downloadBaseUrl?.replace(/\/+$/, "");
+  const installerPath = channelConfig.portable.publicInstallerPath;
+  if (baseUrl && installerPath) {
+    return `or migrate to the portable install path from the web console (installer: ${baseUrl}/${installerPath})`;
+  }
+  return "or migrate to the portable install path from the web console";
+}
+
+function checkNpmTargetNodeEngine(spec: string): Extract<ExecuteUpdateResult, { ok: false }> | null {
+  const range = lookupNpmTargetNodeEngineRange(spec);
+  if (range === null) return null;
+  const normalizedRange = semver.validRange(range);
+  if (normalizedRange === null) return null;
+  if (semver.satisfies(process.version, normalizedRange, { includePrerelease: true })) return null;
+  const packageSpec = PACKAGE_NAME === null ? channelConfig.binName : `${PACKAGE_NAME}@${spec}`;
+  return {
+    ok: false,
+    mode: "global",
+    reason:
+      `Cannot install ${packageSpec}: this npm-mode install is running on Node ${process.version}, ` +
+      `but the target package requires Node ${range}. npm-mode updates cannot replace the system Node runtime; ` +
+      `upgrade system Node and rerun \`${channelConfig.binName} upgrade\`, ${portableMigrationHint()}.`,
+    retryable: false,
+    reasonCode: "npm_ebadengine",
+  };
+}
+
+function failPortable(reason: string, retryable = false, reasonCode?: string): ExecuteUpdateResult {
+  const base = { ok: false as const, mode: "portable" as const, reason, retryable };
+  return reasonCode ? { ...base, reasonCode } : base;
+}
+
+function normalizeBaseUrl(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+function portableDownloadBaseUrl(): string | null {
+  const override = process.env.FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL;
+  if (override && override.trim().length > 0) return normalizeBaseUrl(override.trim());
+  const configured = channelConfig.portable.downloadBaseUrl;
+  return configured ? normalizeBaseUrl(configured) : null;
+}
+
+function currentPortableRoot(): string | null {
+  const root = process.env.FIRST_TREE_PORTABLE_ROOT;
+  if (!root || root.trim().length === 0) return null;
+  return resolve(root);
+}
+
+function portableInstallPrefix(root: string): string | null {
+  if (basename(root) !== "current") return null;
+  const base = dirname(root);
+  if (base === root) return null;
+  return base;
+}
+
+function detectPortablePlatform(): PortablePlatform | null {
+  const os = process.platform === "darwin" || process.platform === "linux" ? process.platform : null;
+  if (os === null) return null;
+  const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "x64" : null;
+  if (arch === null) return null;
+  const parsed = portablePlatformSchema.safeParse(`${os}-${arch}`);
+  return parsed.success ? parsed.data : null;
+}
+
+function portableMetadataUrl(spec: string): string | { reason: string } {
+  const channelPrefix = channelConfig.portable.channelPrefix;
+  if (channelPrefix === null) {
+    return { reason: "self-update disabled: this binary's channel does not publish portable artifacts." };
+  }
+  const baseUrl = portableDownloadBaseUrl();
+  if (baseUrl === null) {
+    return { reason: "self-update disabled: portable download base URL is not configured for this channel." };
+  }
+  if (spec === "latest") return `${baseUrl}/${channelPrefix}/latest.json`;
+  const normalized = semver.valid(spec);
+  if (!normalized) return { reason: `Refusing to install: invalid portable version ${JSON.stringify(spec)}` };
+  return `${baseUrl}/${channelPrefix}/${normalized}/manifest.json`;
+}
+
+async function fetchPortableJson(url: string): Promise<unknown> {
+  const text = await readPortableText(url);
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (err) {
+    throw new Error(`invalid JSON from ${url}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function readPortableText(url: string): Promise<string> {
+  if (url.startsWith("file://")) {
+    return readFile(fileURLToPath(url), "utf8");
+  }
+  const res = await cliFetch(url, { signal: AbortSignal.timeout(30_000) });
+  if (!res.ok) throw new Error(`download failed for ${url}: HTTP ${res.status}`);
+  return res.text();
+}
+
+async function downloadPortableFile(url: string, dest: string): Promise<void> {
+  if (url.startsWith("file://")) {
+    const body = await readFile(fileURLToPath(url));
+    await writeFile(dest, body);
+    return;
+  }
+  const res = await cliFetch(url, { signal: AbortSignal.timeout(120_000) });
+  if (!res.ok) throw new Error(`download failed for ${url}: HTTP ${res.status}`);
+  const body = Buffer.from(await res.arrayBuffer());
+  await writeFile(dest, body);
+}
+
+function validatePortableMetadata(meta: PortableMetadataIdentity): string | null {
+  if (meta.channel !== channelConfig.channel) {
+    return `portable metadata channel "${meta.channel}" does not match my channel "${channelConfig.channel}"`;
+  }
+  if (meta.packageName !== channelConfig.packageName) {
+    return `portable metadata package "${meta.packageName}" does not match my package "${channelConfig.packageName ?? "(none)"}"`;
+  }
+  if (meta.binName !== channelConfig.binName) {
+    return `portable metadata bin "${meta.binName}" does not match my bin "${channelConfig.binName}"`;
+  }
+  if (meta.aliasName !== channelConfig.aliasName) {
+    return `portable metadata alias "${meta.aliasName}" does not match my alias "${channelConfig.aliasName}"`;
+  }
+  const targetChannel = inferChannelFromVersion(meta.version);
+  if (targetChannel !== channelConfig.channel) {
+    return (
+      `portable metadata version ${meta.version} belongs to channel "${targetChannel}", ` +
+      `not my channel "${channelConfig.channel}"`
+    );
+  }
+  return null;
+}
+
+function selectPortableAsset(
+  meta: PortableManifest | PortableLatest,
+  platform: PortablePlatform,
+): PortableAsset | null {
+  return meta.assets.find((asset) => asset.platform === platform) ?? null;
+}
+
+function validatePortableAsset(asset: PortableAsset): string | null {
+  if (basename(asset.fileName) !== asset.fileName || asset.fileName.includes("\\") || asset.fileName.startsWith(".")) {
+    return `portable asset fileName is not a safe basename: ${JSON.stringify(asset.fileName)}`;
+  }
+  return null;
+}
+
+function sha256File(path: string): string {
+  const hash = createHash("sha256");
+  hash.update(readFileSync(path));
+  return hash.digest("hex");
+}
+
+async function extractPortableTarball(tarball: string, dest: string): Promise<void> {
+  await mkdir(dest, { recursive: true });
+  const res = spawnSync("tar", ["-xzf", tarball, "-C", dest], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (res.error) throw new Error(`tar failed to start: ${res.error.message}`);
+  if (res.status !== 0) {
+    const detail = [res.stdout, res.stderr].filter(Boolean).join("\n").trim();
+    throw new Error(`tar exited with code ${res.status}${detail ? `: ${detail.slice(0, 500)}` : ""}`);
+  }
+}
+
+async function parseExtractedInstallMetadata(dir: string): Promise<PortableInstallMetadata> {
+  const path = join(dir, "INSTALL.json");
+  let body: unknown;
+  try {
+    body = JSON.parse(await readFile(path, "utf8")) as unknown;
+  } catch (err) {
+    throw new Error(
+      `extracted artifact missing or invalid INSTALL.json: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return portableInstallMetadataSchema.parse(body);
+}
+
+function validateExtractedInstallMetadata(
+  install: PortableInstallMetadata,
+  meta: PortableManifest | PortableLatest,
+  platform: PortablePlatform,
+): string | null {
+  const metadataMismatch = validatePortableMetadata(install);
+  if (metadataMismatch) return `extracted INSTALL.json mismatch: ${metadataMismatch}`;
+  if (install.version !== meta.version) {
+    return `extracted INSTALL.json version "${install.version}" does not match metadata version "${meta.version}"`;
+  }
+  if (install.platform !== platform) {
+    return `extracted INSTALL.json platform "${install.platform}" does not match current platform "${platform}"`;
+  }
+  if (install.installMode !== "portable") return "extracted INSTALL.json does not describe a portable install";
+  if (install.appEntry !== "app/cli/index.mjs") {
+    return `extracted INSTALL.json appEntry "${install.appEntry}" is not supported`;
+  }
+  return null;
+}
+
+async function switchPortableCurrent(prefix: string, versionDir: string): Promise<void> {
+  const currentLink = join(prefix, "current");
+  const newLink = join(prefix, `.current.${process.pid}.${Date.now()}`);
+  try {
+    const stat = await lstat(currentLink);
+    if (!stat.isSymbolicLink()) {
+      throw new Error(`${currentLink} exists and is not a symlink`);
+    }
+  } catch (err) {
+    if (!(err instanceof Error) || !("code" in err) || err.code !== "ENOENT") throw err;
+  }
+  await rm(newLink, { force: true });
+  await symlink(versionDir, newLink);
+  try {
+    await rename(newLink, currentLink);
+  } catch (err) {
+    await rm(newLink, { force: true });
+    throw err;
+  }
+}
+
+function portableShimContents(root: string): string {
+  return `#!/bin/sh
+set -eu
+root="${root.replace(/"/g, '\\"')}"
+export FIRST_TREE_INSTALL_MODE=portable
+export FIRST_TREE_PORTABLE_ROOT="$root"
+exec "$root/node/bin/node" "$root/app/cli/index.mjs" "$@"
+`;
+}
+
+async function writePortableShim(path: string, root: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const tmp = `${path}.${process.pid}.tmp`;
+  await writeFile(tmp, portableShimContents(root), { mode: 0o755 });
+  await chmod(tmp, 0o755);
+  await rename(tmp, path);
+}
+
+function pathEntries(): string[] {
+  return (process.env.PATH ?? "").split(process.platform === "win32" ? ";" : ":").filter((entry) => entry.length > 0);
+}
+
+function firstExistingShimDir(binNames: string[]): string | null {
+  for (const dir of pathEntries()) {
+    for (const bin of binNames) {
+      if (existsSync(join(dir, bin))) return dir;
+    }
+  }
+  return null;
+}
+
+async function rewritePortableShims(root: string): Promise<void> {
+  const binNames = [channelConfig.binName, channelConfig.aliasName];
+  const shimDir = firstExistingShimDir(binNames) ?? join(homedir(), ".local", "bin");
+  await Promise.all(binNames.map((name) => writePortableShim(join(shimDir, name), root)));
+}
+
+function portableInstallFailure(err: unknown, reasonCode = "portable_update_failed"): ExecuteUpdateResult {
+  const message = err instanceof Error ? err.message : String(err);
+  const classification = classify(new Error(message), { source: "update" });
+  return failPortable(message, classification.kind === ERROR_KINDS.TRANSIENT, classification.reasonCode ?? reasonCode);
+}
+
+async function installPortableMeta(
+  meta: PortableManifest | PortableLatest,
+  platform: PortablePlatform,
+): Promise<ExecuteUpdateResult> {
+  const metadataMismatch = validatePortableMetadata(meta);
+  if (metadataMismatch) return failPortable(`Refusing to install portable update: ${metadataMismatch}`);
+
+  const asset = selectPortableAsset(meta, platform);
+  if (!asset) return failPortable(`No portable asset for ${platform} in metadata for ${meta.version}`);
+  const assetMismatch = validatePortableAsset(asset);
+  if (assetMismatch) return failPortable(`Refusing to install portable update: ${assetMismatch}`);
+
+  const currentRoot = currentPortableRoot();
+  if (currentRoot === null) return failPortable("FIRST_TREE_PORTABLE_ROOT is required for portable self-update.");
+  const prefix = portableInstallPrefix(currentRoot);
+  if (prefix === null)
+    return failPortable(`Cannot derive portable install prefix from FIRST_TREE_PORTABLE_ROOT=${currentRoot}`);
+
+  await mkdir(join(prefix, ".tmp"), { recursive: true });
+  const tempRoot = await mkdtemp(join(prefix, ".tmp", "update-"));
+  const extractDir = join(tempRoot, "extract");
+  const tarball = join(tempRoot, asset.fileName);
+  const finalVersionDir = join(prefix, "versions", meta.version);
+
+  try {
+    await mkdir(join(prefix, "versions"), { recursive: true });
+    await downloadPortableFile(asset.url, tarball);
+    const actual = sha256File(tarball);
+    if (actual !== asset.sha256) {
+      return failPortable(`checksum mismatch for portable payload: expected ${asset.sha256}, got ${actual}`);
+    }
+
+    if (!existsSync(finalVersionDir)) {
+      await extractPortableTarball(tarball, extractDir);
+    }
+
+    const validationDir = existsSync(finalVersionDir) ? finalVersionDir : extractDir;
+    const installMeta = await parseExtractedInstallMetadata(validationDir);
+    const extractedMismatch = validateExtractedInstallMetadata(installMeta, meta, platform);
+    if (extractedMismatch) return failPortable(`Refusing to install portable update: ${extractedMismatch}`);
+    if (!existsSync(finalVersionDir)) {
+      await rename(extractDir, finalVersionDir);
+    }
+
+    await switchPortableCurrent(prefix, finalVersionDir);
+    await rewritePortableShims(join(prefix, "current"));
+    return { ok: true, mode: "portable", installedVersion: meta.version };
+  } catch (err) {
+    return portableInstallFailure(err);
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Install a portable artifact selected by exact SemVer or `latest`.
+ *
+ * This intentionally mirrors `scripts/portable/install.sh`: metadata comes
+ * from the channel prefix, the current platform asset is checksum-verified,
+ * the payload is extracted into `versions/<version>`, and `current` is
+ * replaced only after all validation succeeds.
+ */
+export async function installPortableSpec(spec: string): Promise<ExecuteUpdateResult> {
+  if (spec !== "latest" && !semver.valid(spec)) {
+    return failPortable(`Refusing to install: invalid portable version ${JSON.stringify(spec)}`);
+  }
+
+  const platform = detectPortablePlatform();
+  if (platform === null) {
+    return failPortable(`portable self-update is not supported on ${process.platform}-${process.arch}`);
+  }
+
+  const metadataUrl = portableMetadataUrl(spec);
+  if (typeof metadataUrl !== "string") return failPortable(metadataUrl.reason);
+
+  try {
+    const raw = await fetchPortableJson(metadataUrl);
+    const parsed = spec === "latest" ? portableLatestSchema.parse(raw) : portableManifestSchema.parse(raw);
+    return installPortableMeta(parsed, platform);
+  } catch (err) {
+    return portableInstallFailure(err);
+  }
+}
+
+/** Look up the latest portable artifact version for this binary's channel. */
+export async function fetchPortableLatestVersion(): Promise<VersionLookupResult> {
+  const metadataUrl = portableMetadataUrl("latest");
+  if (typeof metadataUrl !== "string") return { ok: false, reason: metadataUrl.reason };
+
+  try {
+    const parsed = portableLatestSchema.parse(await fetchPortableJson(metadataUrl));
+    const metadataMismatch = validatePortableMetadata(parsed);
+    if (metadataMismatch) return { ok: false, reason: `Refusing portable latest metadata: ${metadataMismatch}` };
+    const normalized = semver.valid(parsed.version);
+    if (!normalized)
+      return { ok: false, reason: `portable latest metadata returned non-semver version: ${parsed.version}` };
+    return { ok: true, version: normalized };
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /**
  * Install `<pkg>@<spec>` globally. `spec` is either a dist-tag (e.g. `latest`)
  * or an exact version (e.g. `0.14.7-alpha.286.1`). Returns after the child
@@ -186,7 +620,10 @@ function looksLikeVersion(spec: string): boolean {
  * install that exact version. The explicit `upgrade --latest` escape hatch keeps the dist-tag form for
  * operators who want the freshest package directly from npm.
  */
-export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResult> {
+export async function installGlobalSpec(
+  spec: string,
+  options?: InstallGlobalSpecOptions,
+): Promise<ExecuteUpdateResult> {
   if (!isSafeInstallSpec(spec)) {
     return {
       ok: false,
@@ -218,9 +655,14 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
         `Refusing to install ${spec}: target channel "${targetChannel}" does not match my channel ` +
         `"${channelConfig.channel}". This usually means the First Tree server is misconfigured ` +
         `(check FIRST_TREE_CHANNEL on the server).`;
-      print.line(`  [update] ${reason}\n`);
+      writeInstallOutput(options, `  [update] ${reason}\n`);
       return { ok: false, mode: "global", reason };
     }
+  }
+  const engineMismatch = checkNpmTargetNodeEngine(spec);
+  if (engineMismatch) {
+    writeInstallOutput(options, `  [update] ${engineMismatch.reason}\n`);
+    return engineMismatch;
   }
   return new Promise((resolvePromise) => {
     const npmCmd = resolveNpmCommand();
@@ -243,7 +685,7 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
     child.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => {
       stderrChunks.push(chunk);
-      print.line(chunk.toString("utf8"));
+      writeInstallOutput(options, chunk.toString("utf8"));
     });
 
     child.on("error", (err) => {
@@ -295,8 +737,8 @@ export async function installGlobalSpec(spec: string): Promise<ExecuteUpdateResu
  * `upgrade --latest`; managed update paths prefer
  * `installGlobalSpec` with the server-advertised target version.
  */
-export async function installGlobalLatest(): Promise<ExecuteUpdateResult> {
-  return installGlobalSpec("latest");
+export async function installGlobalLatest(options?: InstallGlobalSpecOptions): Promise<ExecuteUpdateResult> {
+  return installGlobalSpec("latest", options);
 }
 
 /**

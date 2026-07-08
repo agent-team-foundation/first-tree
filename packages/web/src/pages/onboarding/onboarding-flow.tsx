@@ -24,7 +24,16 @@ import {
   type StepId,
 } from "./steps.js";
 
-export type TreeBindingPlan = "createBinding" | "useBoundTree";
+/**
+ * How the tree-setup chat's Context Tree gets set up:
+ * - `agentSeed` — DEFAULT for the Context-tab build CTA. No server-side
+ *   provisioning; the agent (first-tree-seed) sets the tree up from its actual
+ *   state — creating + binding it from zero, or filling a bound-but-empty tree.
+ * - `useBoundTree` — the onboarding wizard's bound-tree path (fill/update).
+ * - `createBinding` — Cloud one-click provisions the binding first. Retained as
+ *   a fallback; no longer the default build path.
+ */
+export type TreeBindingPlan = "agentSeed" | "useBoundTree" | "createBinding";
 
 export type OnboardingFlowValue = {
   path: OnboardingPath;
@@ -276,10 +285,10 @@ export function OnboardingFlowProvider({ path, children }: { path: OnboardingPat
   const completeAndEnterChat = useCallback(
     async (chatId: string) => {
       // Single-chat start-chat paths may already have stamped completion inside
-      // POST /me/onboarding/kickoff. Multi-chat paths deliberately defer that
-      // stamp until every required start-chat side effect succeeds, then call this
+      // POST /me/onboarding/kickoff. Support/background paths deliberately defer
+      // that stamp until every required side effect succeeds, then call this
       // helper. The write stays idempotent and best-effort so a network blip
-      // does not strand the user after the required chat(s) exist.
+      // does not strand the user after the required chat exists.
       //
       // Deliberately NOT `dismissOnboarding()`: completion writes a
       // membership-scoped suppress stamp with reason="completed". Reusing the

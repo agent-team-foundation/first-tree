@@ -46,11 +46,22 @@ const repoRoot = (() => {
   throw new Error("Could not locate repo root from drift-guard test");
 })();
 
-const SHIPPED_SKILLS = ["first-tree-welcome", "first-tree-write", "first-tree-read", "first-tree-seed"];
+const SHIPPED_SKILLS = [
+  "first-tree-welcome",
+  "first-tree-write",
+  "first-tree-read",
+  "first-tree-seed",
+  "first-tree-file-bug",
+];
 
 const RETIRED_TREE_SUBCOMMANDS = [
   "status",
-  "init",
+  // `init` is intentionally NOT retired: PR #848 deleted the original, but it
+  // was reintroduced in 2026-07 (#1379) in a different shape as the agent-gh
+  // Context Tree creation command and is registered in
+  // `apps/cli/src/commands/tree/index.ts`. Shipped skills (first-tree-seed
+  // Step 0) legitimately instruct `first-tree tree init`, so per the
+  // un-retirement procedure documented above it must stay OFF this list.
   "migrate",
   "migrate-to-w1",
   "upgrade",

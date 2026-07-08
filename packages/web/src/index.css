@@ -797,6 +797,53 @@
   }
 }
 
+/* Group-mention tip bubble: entrance rises toward the send button it points at;
+   exit reverses. See chat-view's `mentionTip` state machine. */
+@keyframes mention-tip-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes mention-tip-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+.mention-tip {
+  animation: mention-tip-in 150ms ease-out;
+}
+.mention-tip.mention-tip-out {
+  animation: mention-tip-out 300ms ease-in forwards;
+}
+/* The downward caret connecting the bubble to the send button below it. */
+.mention-tip-arrow {
+  position: absolute;
+  right: 14px;
+  bottom: -5px;
+  width: 9px;
+  height: 9px;
+  background: var(--bg-raised);
+  border-right: var(--hairline) solid var(--border-strong);
+  border-bottom: var(--hairline) solid var(--border-strong);
+  transform: rotate(45deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mention-tip,
+  .mention-tip.mention-tip-out {
+    animation: none;
+  }
+}
+
 @keyframes context-live-halo-breathe {
   0%,
   100% {
@@ -1689,31 +1736,6 @@ tr[data-interactive]:hover {
   }
 }
 
-/* Hide the third-party hearback-widget feedback FAB on narrow viewports.
-   Matches the workspace's `narrow` breakpoint (use-viewport.ts) — at <48rem
-   the chrome collapses to tabs-only and the bottom-right bubble would
-   overlap the composer / sit on top of the home-indicator zone. The widget
-   element is injected at the end of <body> by widget.js (see index.html). */
-@media (max-width: 47.999rem) {
-  hearback-widget {
-    display: none;
-  }
-}
-
-/* Hide the third-party feedback FAB while any modal dialog is open. It's
-   injected at the end of <body> (outside the Radix portal) with a very high
-   z-index, so it otherwise floats above the scrim and can overlap a dialog's
-   footer. Radix sets role="dialog" + data-state="open" on Dialog content. */
-body:has([role="dialog"][data-state="open"]) hearback-widget {
-  display: none;
-}
-
-/* Onboarding preview is a visual-review surface; the injected feedback FAB
-   overlaps the mocked app chrome and pollutes review screenshots. */
-body:has(#onboarding-preview-root) hearback-widget {
-  display: none;
-}
-
 /* Mention chip — pill style for rendered sent messages (rehype-mentions
  * plugin). The composer mirror overlay uses `.mention-text` instead
  * (see below) because any horizontal padding / background offset on
@@ -1775,6 +1797,17 @@ body:has(#onboarding-preview-root) hearback-widget {
 .mention-composer-textarea::selection {
   background: var(--brand-ring);
   color: transparent;
+}
+
+/* The textarea paints its own glyphs transparent (the mirror overlay draws
+   them); without an explicit placeholder color the placeholder would inherit
+   that transparent color and render invisible. The `placeholder:text-muted-
+   foreground` utility on the textarea sets the color (matching every other
+   composer/input placeholder in the app); this rule only forces `opacity: 1`
+   so browsers that dim `::placeholder` by default don't fade it further. Font
+   size is inherited from the textarea (`--composer-font-size`). */
+.mention-composer-textarea::placeholder {
+  opacity: 1;
 }
 
 /* ============================================================================

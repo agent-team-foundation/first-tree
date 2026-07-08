@@ -7,15 +7,18 @@ import type { RunPaths } from "../types.js";
 
 export function createFirstTreeShim(paths: RunPaths): void {
   const tsxBin = join(paths.packageRoot, "node_modules", ".bin", "tsx");
-  const cliEntry = join(paths.repoRoot, "apps", "cli", "src", "cli", "index.ts");
+  const sourceCliEntry = join(paths.repoRoot, "apps", "cli", "src", "cli", "index.ts");
+  const distCliEntry = join(paths.repoRoot, "apps", "cli", "dist", "cli", "index.mjs");
   const shimPath = join(paths.binDir, "first-tree");
   const script = `#!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, join, relative, resolve } from "node:path";
 
-const EVENTS_PATH = ${JSON.stringify(paths.eventsPath)};
+const EVENTS_PATH = process.env.FIRST_TREE_EVAL_EVENTS || ${JSON.stringify(paths.eventsPath)};
 const TSX_BIN = ${JSON.stringify(tsxBin)};
-const CLI_ENTRY = ${JSON.stringify(cliEntry)};
+const SOURCE_CLI_ENTRY = ${JSON.stringify(sourceCliEntry)};
+const DIST_CLI_ENTRY = ${JSON.stringify(distCliEntry)};
 
 function preview(value) {
   if (!value) return "";
@@ -39,6 +42,157 @@ function trace(message) {
     const caseId = process.env.FIRST_TREE_EVAL_CASE_ID || "unknown";
     process.stderr.write("[" + caseId + "] " + message + "\\n");
   }
+}
+
+function finish(argv, phase, exitCode, stdout, stderr, extra) {
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
+  append({
+    type: "first_tree_result",
+    phase,
+    argv,
+    cwd: process.cwd(),
+    exitCode,
+    signal: null,
+    stdoutPreview: preview(stdout),
+    stderrPreview: preview(stderr),
+    ...extra,
+  });
+  trace("first-tree result: exit=" + exitCode);
+  process.exit(exitCode);
+}
+
+function optionValue(argv, name) {
+  const index = argv.indexOf(name);
+  return index >= 0 ? argv[index + 1] || null : null;
+}
+
+function treeTreePathArg(argv) {
+  for (let i = 2; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "-L" || arg === "--level" || arg === "-P" || arg === "--pattern") {
+      i += 1;
+      continue;
+    }
+    if (arg === "--no-pull") continue;
+    if (!arg.startsWith("-")) return arg;
+  }
+  return ".";
+}
+
+function walkMarkdown(root) {
+  const files = [];
+  function walk(dir) {
+    let entries = [];
+    try {
+      entries = readdirSync(dir).sort();
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry === ".git" || entry === "node_modules") continue;
+      const child = join(dir, entry);
+      let stat;
+      try {
+        stat = statSync(child);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        walk(child);
+        continue;
+      }
+      if (entry.endsWith(".md")) files.push(child);
+    }
+  }
+  walk(root);
+  return files;
+}
+
+function patternMatches(value, pattern) {
+  if (!pattern) return true;
+  const normalized = value.toLowerCase();
+  const parts = pattern
+    .toLowerCase()
+    .split("*")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.length === 0 || parts.every((part) => normalized.includes(part));
+}
+
+function titleFromMarkdown(path) {
+  try {
+    const text = readFileSync(path, "utf8");
+    const title = text.match(/^title:\\s*"?([^"\\n]+)"?/m)?.[1];
+    if (title) return title.trim();
+    return text.match(/^#\\s+(.+)$/m)?.[1]?.trim() || basename(path);
+  } catch {
+    return basename(path);
+  }
+}
+
+function runTreeTree(argv, phase) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    finish(
+      argv,
+      phase,
+      0,
+      "Usage: first-tree tree tree [options] [path]\\n\\nBrowse Context Tree nodes as a hierarchy.\\n\\nOptions:\\n  -L, --level <depth>      max descendant depth below the target directory\\n  -P, --pattern <pattern>  shell-style glob filter matched against path, filename, title, and description\\n  --no-pull                skip the automatic git pull refresh\\n  -h, --help               display help for command\\n",
+      "",
+      { shimmedByEval: true },
+    );
+  }
+
+  const root = resolve(process.cwd(), treeTreePathArg(argv));
+  if (!existsSync(root)) {
+    finish(argv, phase, 1, "", "Context Tree path does not exist: " + root + "\\n", { shimmedByEval: true });
+  }
+
+  const pattern = optionValue(argv, "-P") || optionValue(argv, "--pattern");
+  const rows = [basename(root) + "/ [Context Tree]"];
+  for (const file of walkMarkdown(root)) {
+    const rel = relative(root, file);
+    const title = titleFromMarkdown(file);
+    if (!patternMatches(rel + " " + title, pattern)) continue;
+    rows.push("- " + rel + " [" + title + "]");
+  }
+  finish(argv, phase, 0, rows.join("\\n") + "\\n", "", { shimmedByEval: true });
+}
+
+function runTreeVerify(argv, phase) {
+  const root = resolve(process.cwd(), optionValue(argv, "--tree-path") || ".");
+  const errors = [];
+  if (!existsSync(root)) errors.push("missing tree root");
+  if (!existsSync(join(root, "NODE.md"))) errors.push("missing NODE.md");
+  if (!existsSync(join(root, ".first-tree", "VERSION"))) errors.push("missing .first-tree/VERSION");
+  if (!existsSync(join(root, ".first-tree", "tree.json"))) errors.push("missing .first-tree/tree.json");
+  for (const file of walkMarkdown(root)) {
+    if (basename(file) === "AGENTS.md") continue;
+    const text = readFileSync(file, "utf8");
+    if (!text.startsWith("---")) errors.push(relative(root, file) + " missing frontmatter");
+    if (!/^title:/m.test(text)) errors.push(relative(root, file) + " missing title");
+    if (!/^owners:\\s*\\[/m.test(text)) errors.push(relative(root, file) + " missing owners");
+  }
+
+  if (errors.length > 0) {
+    finish(
+      argv,
+      phase,
+      1,
+      "Context Tree Verification\\n\\n  Tree root: " + root + "\\n\\n" + errors.map((error) => "  [FAIL] " + error).join("\\n") + "\\n",
+      "",
+      { shimmedByEval: true },
+    );
+  }
+
+  finish(
+    argv,
+    phase,
+    0,
+    "Context Tree Verification\\n\\n  Tree root: " + root + "\\n\\n  [PASS] framework version\\n  [PASS] tree state\\n  [PASS] root node frontmatter\\n  [PASS] node validation\\n  [PASS] member validation\\n  [PASS] progress checklist\\n\\nAll checks passed.\\n",
+    "",
+    { shimmedByEval: true },
+  );
 }
 
 const argv = process.argv.slice(2);
@@ -103,8 +257,21 @@ if (argv[0] === "chat" && ["ask", "send", "update"].includes(argv[1] || "")) {
   process.exit(exitCode);
 }
 
-const realCommand = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE || TSX_BIN;
-const realArgs = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE ? argv : [CLI_ENTRY, ...argv];
+if (argv[0] === "tree" && argv[1] === "tree") {
+  runTreeTree(argv, phase);
+}
+
+if (phase === "model" && argv[0] === "tree" && argv[1] === "verify") {
+  runTreeVerify(argv, phase);
+}
+
+const hasDistCli = existsSync(DIST_CLI_ENTRY);
+const realCommand = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE || (hasDistCli ? process.execPath : TSX_BIN);
+const realArgs = process.env.FIRST_TREE_EVAL_REAL_FIRST_TREE
+  ? argv
+  : hasDistCli
+    ? [DIST_CLI_ENTRY, ...argv]
+    : [SOURCE_CLI_ENTRY, ...argv];
 const result = spawnSync(realCommand, realArgs, {
   cwd: process.cwd(),
   encoding: "utf8",
