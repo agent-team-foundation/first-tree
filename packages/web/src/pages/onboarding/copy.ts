@@ -307,14 +307,12 @@ export const COPY = {
     // shared launch transition
     starting: "Starting your agent…",
 
-    /** "Join the community" block under the launch CTA (every finale). Kept
-     *  deliberately tiny — one label, one Discord link, one QR with alt text —
-     *  so it never competes with the primary "Start chat" action. */
+    /** Heading of the community footer under the launch CTA (every finale).
+     *  The channel cards themselves live in components/community-channels.tsx
+     *  (shared with the top-bar SupportMenu), so only the onboarding-surface
+     *  heading is copy here. */
     community: {
       title: "Join the community",
-      discord: "Join our Discord",
-      wechatAlt: "WeChat group QR code",
-      wechatHint: "Scan to join the WeChat group",
     },
   },
   /** invitee · join-team confirmation + the one not-ready (blocked-on-admin) state.

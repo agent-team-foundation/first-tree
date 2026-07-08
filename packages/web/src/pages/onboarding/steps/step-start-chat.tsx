@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { listOrgGithubRepos } from "../../../api/github.js";
 import { getGithubAppInstallationExists } from "../../../api/github-app.js";
 import { getContextTreeSetting } from "../../../api/org-settings.js";
+import { CommunityChannels } from "../../../components/community-channels.js";
 import { Button } from "../../../components/ui/button.js";
-import { DISCORD_INVITE_URL, WECHAT_QR_SRC } from "../../../lib/community.js";
 import { readScanFixHandoffFlag, writeScanFixHandoffFlag } from "../../../utils/onboarding-flags.js";
 import {
   buildInviteeReadyBootstrap,
@@ -476,45 +476,27 @@ function StartingState() {
 }
 
 /**
- * "Join the community" — Discord + WeChat entry points under the launch CTA.
- * Rendered only in the stable finale bodies (never during loading/starting
- * transitions), below the primary action so it can't compete with "Start
- * chat". The QR carries fixed dimensions so the screen doesn't jump when the
- * image loads, and stays small so the finale keeps its upper-third anchor
- * (see onboarding-shell.tsx).
+ * "Join the community" — the two channel cards (WeChat / Discord, see
+ * CommunityChannels) as a footer under the launch CTA. Rendered only in the
+ * stable finale bodies (never during loading/starting transitions), separated
+ * from the primary action by a hairline so it reads as a footer and can't
+ * compete with "Start chat".
  */
 function CommunityBlock() {
   return (
-    <div className="flex flex-col" style={{ gap: "var(--sp-3)", marginTop: "var(--sp-4)" }}>
+    <div
+      className="flex flex-col"
+      style={{
+        gap: "var(--sp-3)",
+        marginTop: "var(--sp-5)",
+        paddingTop: "var(--sp-5)",
+        borderTop: "var(--hairline) solid var(--border)",
+      }}
+    >
       <span className="text-label font-medium" style={{ color: "var(--fg-3)" }}>
         {COPY.startChat.community.title}
       </span>
-      <div className="flex items-start" style={{ gap: "var(--sp-6)" }}>
-        <a
-          href={DISCORD_INVITE_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-body underline underline-offset-2"
-          style={{ color: "var(--fg-2)" }}
-        >
-          {COPY.startChat.community.discord}
-        </a>
-        <div className="flex flex-col" style={{ gap: "var(--sp-1_5)" }}>
-          <img
-            src={WECHAT_QR_SRC}
-            width={96}
-            height={96}
-            alt={COPY.startChat.community.wechatAlt}
-            style={{
-              borderRadius: 6,
-              border: "var(--hairline) solid var(--border)",
-            }}
-          />
-          <span className="text-caption" style={{ color: "var(--fg-4)" }}>
-            {COPY.startChat.community.wechatHint}
-          </span>
-        </div>
-      </div>
+      <CommunityChannels />
     </div>
   );
 }

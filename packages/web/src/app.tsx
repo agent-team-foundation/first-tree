@@ -114,9 +114,7 @@ const UserMenuPreviewPage = import.meta.env.DEV
   : null;
 
 const SupportMenuPreviewPage = import.meta.env.DEV
-  ? lazy(() =>
-      import("./pages/support-menu-preview.js").then((module) => ({ default: module.SupportMenuPreviewPage })),
-    )
+  ? lazy(() => import("./pages/support-menu-preview.js").then((module) => ({ default: module.SupportMenuPreviewPage })))
   : null;
 
 const ChatSummaryPreviewPage = import.meta.env.DEV
