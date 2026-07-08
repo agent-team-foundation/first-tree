@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
+import { AGENT_SELECTOR_HEADER } from "@first-tree/shared";
 import { eq } from "drizzle-orm";
 import { SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
 import { connectCodes } from "../db/schema/connect-codes.js";
 import { members } from "../db/schema/members.js";
 import { users } from "../db/schema/users.js";
+import { userAuthHook } from "../middleware/user-auth.js";
 import {
   generateConnectToken,
   login,
@@ -18,11 +20,15 @@ const TEST_JWT_SECRET = "test-jwt-secret-key-for-vitest";
 const EXPIRIES = { accessTokenExpiry: "30m", refreshTokenExpiry: "30d", connectTokenExpiry: "10m" };
 
 async function signRefreshToken(sub: string): Promise<string> {
-  return new SignJWT({ sub, type: "refresh" })
+  return signJwt({ sub, type: "refresh" });
+}
+
+async function signJwt(payload: Record<string, unknown>, secretValue = TEST_JWT_SECRET): Promise<string> {
+  return new SignJWT(payload)
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime("30d")
-    .sign(new TextEncoder().encode(TEST_JWT_SECRET));
+    .sign(new TextEncoder().encode(secretValue));
 }
 
 describe("Admin Auth", () => {
@@ -35,6 +41,69 @@ describe("Admin Auth", () => {
       { id: "01961234-0000-7000-8000-000000000010", createdAt },
     ]);
     expect(picked?.id).toBe("01961234-0000-7000-8000-000000000010");
+  });
+
+  describe("userAuthHook", () => {
+    async function runHook(
+      app: ReturnType<typeof getApp>,
+      token: string,
+      request: { method?: string; url?: string; headers?: Record<string, string> } = {},
+    ): Promise<void> {
+      const hook = userAuthHook(app.db, TEST_JWT_SECRET);
+      await hook(
+        {
+          method: request.method ?? "GET",
+          url: request.url ?? "/api/v1/me",
+          headers: { authorization: `Bearer ${token}`, ...(request.headers ?? {}) },
+        } as never,
+        {} as never,
+      );
+    }
+
+    it("classifies invalid signatures, wrong token types, missing users, and suspended users", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app, { username: `hook-admin-${crypto.randomUUID().slice(0, 8)}` });
+
+      await expect(runHook(app, await signJwt({ sub: admin.userId, type: "access" }, "wrong-secret"))).rejects.toThrow(
+        /invalid or expired token/i,
+      );
+      await expect(runHook(app, await signJwt({ sub: admin.userId, type: "refresh" }))).rejects.toThrow(
+        /invalid token type/i,
+      );
+      await expect(
+        runHook(app, await signJwt({ sub: `missing-${crypto.randomUUID()}`, type: "access" })),
+      ).rejects.toThrow(/user not found|suspended/i);
+
+      const suspended = await createTestAdmin(app, { username: `hook-suspended-${crypto.randomUUID().slice(0, 8)}` });
+      await app.db.update(users).set({ status: "suspended" }).where(eq(users.id, suspended.userId));
+      await expect(runHook(app, await signJwt({ sub: suspended.userId, type: "access" }))).rejects.toThrow(
+        /user not found|suspended/i,
+      );
+    });
+
+    it("rejects malformed and out-of-scope agent outbox tokens", async () => {
+      const app = getApp();
+      const admin = await createTestAdmin(app, { username: `hook-outbox-${crypto.randomUUID().slice(0, 8)}` });
+
+      await expect(runHook(app, await signJwt({ sub: admin.userId, type: "agent_outbox" }))).rejects.toThrow(
+        /invalid agent outbox token/i,
+      );
+
+      const scoped = await signJwt({
+        sub: admin.userId,
+        type: "agent_outbox",
+        agentId: "agent-a",
+        chatId: "chat-a",
+      });
+      await expect(runHook(app, scoped)).rejects.toThrow(/not valid for this request/i);
+      await expect(
+        runHook(app, scoped, {
+          method: "POST",
+          url: "/api/v1/agent/chats/%E0%A4%A/messages",
+          headers: { [AGENT_SELECTOR_HEADER]: "agent-a" },
+        }),
+      ).rejects.toThrow(/not valid for this request/i);
+    });
   });
 
   describe("POST /api/v1/auth/login", () => {
