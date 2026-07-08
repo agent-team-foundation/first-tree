@@ -100,7 +100,9 @@ function pullRequestStateFromIssuePayload(issue: Record<string, unknown>, action
 }
 
 function isContextReviewerCandidateEvent(eventType: string, action: string | null): boolean {
-  if (eventType === "pull_request") return action === "opened" || action === "synchronize";
+  if (eventType === "pull_request") {
+    return action === "opened" || action === "synchronize" || action === "ready_for_review";
+  }
   if (eventType === "issue_comment") return action === "created";
   if (eventType === "pull_request_review_comment") return action === "created" || action === "edited";
   return false;

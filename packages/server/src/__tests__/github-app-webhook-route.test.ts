@@ -16,7 +16,6 @@ import { uuidv7 } from "../uuid.js";
 import { createTestAdmin, useTestApp } from "./helpers.js";
 
 const APP_WEBHOOK_SECRET = "test-app-webhook-secret";
-const FOLLOW_UP_NOTICE = "A new GitHub event was received. I'll check the current PR state.";
 
 function signBody(secret: string, body: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
@@ -147,6 +146,7 @@ function contextPullRequestPayload(installationId: number, repoFullName = "owner
       body: "",
       base: { ref: "main" },
       head: { ref: "context-reviewer" },
+      draft: false,
     },
     repository: { full_name: repoFullName },
     sender: { login: "context-writer", type: "User" },
@@ -1294,12 +1294,14 @@ describe("POST /webhooks/github-app", () => {
     expect(message?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
     expect(message?.content).toContain("Context changes requested");
     expect(message?.content).toContain("Still unclear or needs more detail");
+    expect(message?.content).toContain("Draft status from webhook: ready for review");
     expect(message?.metadata).toMatchObject({
       source: "github",
       event: "pull_request",
       action: "opened",
       triggerEvent: "pull_request.opened",
       contextTreeReviewer: true,
+      pullRequestDraft: false,
       mentions: [reviewer],
     });
   });
@@ -1334,14 +1336,12 @@ describe("POST /webhooks/github-app", () => {
       .where(eq(messages.chatId, chatRows[0]?.id ?? ""));
     expect(messageRows).toHaveLength(2);
     const followUpMessage = messageRows.find((message) => message.metadata.triggerEvent === "issue_comment.created");
-    expect(followUpMessage?.content).toBe(
-      [
-        FOLLOW_UP_NOTICE,
-        "Comment author: context-commenter",
-        "Comment URL: https://github.com/owner/context-tree/pull/42#issuecomment-2",
-      ].join("\n"),
+    expect(followUpMessage?.content).toContain("Trigger event: issue_comment.created");
+    expect(followUpMessage?.content).toContain("Comment author: context-commenter");
+    expect(followUpMessage?.content).toContain(
+      "Comment URL: https://github.com/owner/context-tree/pull/42#issuecomment-2",
     );
-    expect(followUpMessage?.content).not.toContain("gh pr review 42 --repo owner/context-tree");
+    expect(followUpMessage?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
     expect(followUpMessage?.metadata).toMatchObject({
       source: "github",
       event: "issue_comment",
@@ -1361,6 +1361,58 @@ describe("POST /webhooks/github-app", () => {
       .where(and(eq(inboxEntries.messageId, followUpMessage?.id ?? ""), eq(inboxEntries.inboxId, `inbox_${reviewer}`)))
       .limit(1);
     expect(entry?.notify).toBe(true);
+  });
+
+  it("pull_request.ready_for_review on a bound context PR wakes the existing Context Reviewer chat", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app);
+    const installationId = 100044;
+    await seedInstallation(app, { installationId, orgId: admin.organizationId });
+    const reviewer = await configureContextReviewer(app, admin);
+
+    const draftOpenedPayload = contextPullRequestPayload(installationId);
+    draftOpenedPayload.pull_request.draft = true;
+    const opened = await postWebhook(app, "pull_request", draftOpenedPayload);
+    expect(opened.statusCode).toBe(200);
+    expect(opened.json()).toMatchObject({ contextReviewer: { handled: true, reused: false } });
+
+    const readyPayload = contextPullRequestPayload(installationId);
+    readyPayload.action = "ready_for_review";
+    readyPayload.pull_request.draft = false;
+    const ready = await postWebhook(app, "pull_request", readyPayload);
+
+    expect(ready.statusCode).toBe(200);
+    expect(ready.json()).toMatchObject({
+      ok: true,
+      event: "pull_request",
+      handled: false,
+      contextReviewer: { handled: true, reused: true },
+    });
+
+    const [chat] = await app.db.select().from(chats).limit(1);
+    const messageRows = await app.db
+      .select()
+      .from(messages)
+      .where(eq(messages.chatId, chat?.id ?? ""));
+    expect(messageRows).toHaveLength(2);
+    const followUpMessage = messageRows.find(
+      (message) => message.metadata.triggerEvent === "pull_request.ready_for_review",
+    );
+    expect(followUpMessage?.content).toContain("Trigger event: pull_request.ready_for_review");
+    expect(followUpMessage?.content).toContain("Draft status from webhook: ready for review");
+    expect(followUpMessage?.content).toContain("Do not rely on an older approval or comment review");
+    expect(followUpMessage?.content).toContain("gh pr review 42 --repo owner/context-tree --approve --body-file");
+    expect(followUpMessage?.metadata).toMatchObject({
+      source: "github",
+      event: "pull_request",
+      action: "ready_for_review",
+      triggerEvent: "pull_request.ready_for_review",
+      entityType: "pull_request",
+      entityKey: "owner/context-tree#42",
+      contextTreeReviewer: true,
+      pullRequestDraft: false,
+      mentions: [reviewer],
+    });
   });
 
   it("pull_request.opened on an ordinary code repo does not trigger Context Reviewer", async () => {
