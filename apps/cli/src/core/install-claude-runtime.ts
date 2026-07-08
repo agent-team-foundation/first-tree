@@ -69,6 +69,7 @@ export async function installClaudeRuntime(spec = "latest"): Promise<InstallClau
       label: `npm install -g ${CLAUDE_RUNTIME_PACKAGE}@${spec}`,
       timeoutMs: CLAUDE_INSTALL_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "pipe"],
+      shell: process.platform === "win32",
     });
 
     const stdoutChunks: Buffer[] = [];

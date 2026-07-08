@@ -166,9 +166,13 @@ describe("core update helpers", () => {
     child.emit("exit", 0, null);
     await expect(resultPromise).resolves.toEqual({ ok: true, mode: "global", installedVersion: "0.6.0" });
     expect(childRegistryMocks.getChildProcessRegistry().spawn).toHaveBeenCalledWith(
-      expect.stringMatching(/npm(?:\\.cmd)?$/),
+      expect.stringMatching(/npm(?:\.cmd)?$/),
       ["install", "-g", "first-tree@0.6.0"],
-      expect.objectContaining({ category: "npm-install", timeoutMs: 300_000 }),
+      expect.objectContaining({
+        category: "npm-install",
+        timeoutMs: 300_000,
+        shell: process.platform === "win32",
+      }),
     );
 
     const child2 = new MockChild();

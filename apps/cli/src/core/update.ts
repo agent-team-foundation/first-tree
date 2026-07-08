@@ -680,6 +680,7 @@ export async function installGlobalSpec(
       label: `npm install -g ${PACKAGE_NAME}@${spec}`,
       timeoutMs: NPM_INSTALL_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "pipe"],
+      shell: process.platform === "win32",
     });
 
     const stdoutChunks: Buffer[] = [];
@@ -832,6 +833,7 @@ export function fetchLatestVersion(timeoutMs = 10_000): VersionLookupResult {
   }
   const res = spawnSync(resolveNpmCommand(), ["view", PACKAGE_NAME, "version"], {
     encoding: "utf-8",
+    shell: process.platform === "win32",
     timeout: timeoutMs,
     stdio: ["ignore", "pipe", "pipe"],
   });
