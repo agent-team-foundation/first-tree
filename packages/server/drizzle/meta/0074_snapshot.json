@@ -1,5 +1,5 @@
 {
-  "id": "79aeb229-5ede-4923-995d-f43b29efc09b",
+  "id": "94f7b364-5994-41e5-b81c-6090c88d5be9",
   "prevId": "10c38c65-0f8d-4eeb-a042-eb4a043b2eaa",
   "version": "7",
   "dialect": "postgresql",
@@ -1666,6 +1666,115 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.connect_codes": {
+      "name": "connect_codes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "code_hash": {
+          "name": "code_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issuer": {
+          "name": "issuer",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "consumed_at": {
+          "name": "consumed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "idx_connect_codes_user": {
+          "name": "idx_connect_codes_user",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_connect_codes_expires_at": {
+          "name": "idx_connect_codes_expires_at",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "connect_codes_user_id_users_id_fk": {
+          "name": "connect_codes_user_id_users_id_fk",
+          "tableFrom": "connect_codes",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "connect_codes_code_hash_unique": {
+          "name": "connect_codes_code_hash_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "code_hash"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.context_tree_io_events": {
       "name": "context_tree_io_events",
       "schema": "",
@@ -2351,6 +2460,107 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.github_app_install_intents": {
+      "name": "github_app_install_intents",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "installation_id": {
+          "name": "installation_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_organization_id": {
+          "name": "target_organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kickoff_user_id": {
+          "name": "kickoff_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kickoff_github_id": {
+          "name": "kickoff_github_id",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "uq_github_app_install_intents_installation": {
+          "name": "uq_github_app_install_intents_installation",
+          "columns": [
+            {
+              "expression": "installation_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "idx_github_app_install_intents_expires": {
+          "name": "idx_github_app_install_intents_expires",
+          "columns": [
+            {
+              "expression": "expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "github_app_install_intents_target_organization_id_organizations_id_fk": {
+          "name": "github_app_install_intents_target_organization_id_organizations_id_fk",
+          "tableFrom": "github_app_install_intents",
+          "tableTo": "organizations",
+          "columnsFrom": [
+            "target_organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.github_app_installations": {
       "name": "github_app_installations",
       "schema": "",
@@ -2387,12 +2597,6 @@
         },
         "installer_github_id": {
           "name": "installer_github_id",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "requester_github_id": {
-          "name": "requester_github_id",
           "type": "bigint",
           "primaryKey": false,
           "notNull": false
@@ -2487,21 +2691,6 @@
           "columns": [
             {
               "expression": "installer_github_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "idx_github_app_installations_requester": {
-          "name": "idx_github_app_installations_requester",
-          "columns": [
-            {
-              "expression": "requester_github_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

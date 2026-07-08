@@ -11,6 +11,7 @@ export { chatMembership } from "./chat-membership.js";
 export { chatUserState } from "./chat-user-state.js";
 export { chats } from "./chats.js";
 export { clients } from "./clients.js";
+export { connectCodes } from "./connect-codes.js";
 export { contextTreeIoEvents } from "./context-tree-io-events.js";
 export { docComments, docDocuments, docVersions } from "./doc-documents.js";
 export { githubAppInstallations } from "./github-app-installations.js";

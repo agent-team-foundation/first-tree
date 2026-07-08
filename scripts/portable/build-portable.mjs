@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 export const PORTABLE_PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"];
 export const DEFAULT_NODE_VERSION = "latest-v24.x";
 export const DEFAULT_DOWNLOAD_BASE_URL = "https://downloads.first-tree.ai";
+const LATEST_NODE_MAJOR_SPEC_RE = /^latest-v(\d+)\.x$/;
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..", "..");
@@ -109,7 +110,7 @@ function printHelp() {
   console.log(`Usage: node scripts/portable/build-portable.mjs --channel prod|staging --version <semver> --git-sha <sha> --out-dir <path> [options]
 
 Options:
-  --node-version <version>          Node.js version or latest-v24.x (default: ${DEFAULT_NODE_VERSION})
+  --node-version <version>          Node.js version or latest-v<major>.x (default: ${DEFAULT_NODE_VERSION})
   --download-base-url <url>         Public artifact base URL (default: ${DEFAULT_DOWNLOAD_BASE_URL})
   --platform <platform>             Repeatable: ${PORTABLE_PLATFORMS.join(", ")}
   --help                            Show this help
@@ -281,11 +282,13 @@ async function downloadFile(url, dest) {
   await writeFile(dest, body);
 }
 
-async function resolveNodeVersion(versionSpec) {
-  if (versionSpec === "latest-v24.x") {
+export async function resolveNodeVersion(versionSpec) {
+  const latestMajor = LATEST_NODE_MAJOR_SPEC_RE.exec(versionSpec);
+  if (latestMajor) {
+    const major = latestMajor[1];
     const index = JSON.parse(await downloadText("https://nodejs.org/dist/index.json"));
-    const found = index.find((entry) => typeof entry.version === "string" && entry.version.startsWith("v24."));
-    if (!found) fail("could not resolve latest Node.js v24.x from nodejs.org/dist/index.json");
+    const found = index.find((entry) => typeof entry.version === "string" && entry.version.startsWith(`v${major}.`));
+    if (!found) fail(`could not resolve latest Node.js v${major}.x from nodejs.org/dist/index.json`);
     return found.version;
   }
   return normalizeNodeVersion(versionSpec);

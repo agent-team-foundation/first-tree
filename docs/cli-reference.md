@@ -15,12 +15,22 @@ human-friendly index over them.
 ## Install
 
 ```bash
+curl -fsSL https://downloads.first-tree.ai/prod/install.sh | sh
+~/.local/bin/first-tree --version
+```
+
+The default public install path is portable and bundles Node.js. The binary
+lives at `first-tree`; the short alias `ft` is also installed.
+
+The npm global install path remains supported for operators and fallback
+installs:
+
+```bash
 npm install -g first-tree
 first-tree --version
 ```
 
-The binary lives at `first-tree`; the short alias `ft` is also installed.
-Requirements: Node.js ≥ 22.13 (24 recommended).
+npm mode uses your system Node.js runtime and requires Node.js ≥ 22.13.
 
 ## Global flags
 
@@ -58,9 +68,10 @@ first-tree
 first-tree login <token> [--no-start] [--force-switch]
 ```
 
-Sign this computer in using a connect token from the web console. The
-token's `iss` claim carries the server URL — no `--server` flag needed,
-and switching to a different deployment only requires a fresh token.
+Sign this computer in using a connect token from the web console. New tokens
+are short connect URLs whose origin carries the server URL; legacy JWT tokens
+with an `iss` claim are still accepted during rollout. No `--server` flag is
+needed, and switching to a different deployment only requires a fresh token.
 If this machine already has credentials for another user, `login` asks for
 explicit confirmation and switches the active local client after stopping and
 draining the old runtime. In non-TTY automation, `--force-switch` is the only
@@ -145,10 +156,13 @@ first-tree upgrade [--check] [--latest] [--no-restart]
 ```
 
 Self-update for the CLI: query the configured server for its recommended
-Command version, install that exact version globally, refresh the systemd
-unit / launchd plist on top of the new bits, then restart the client
-service. Use `--latest` only when you intentionally want to bypass the
-server target and install npm latest directly.
+Command version, install that exact version through the current install mode,
+refresh the systemd unit / launchd plist on top of the new bits, then restart
+the client service. Portable installs download the channel manifest and
+verified tarball, including the bundled Node.js runtime. npm installs run
+`npm install -g` against the channel package and keep using the system Node.js
+runtime. Use `--latest` only when you intentionally want to bypass the server
+target and install the channel's latest release data directly.
 
 | Flag | Effect |
 |---|---|
@@ -160,6 +174,12 @@ Refusing to run from a source checkout (anywhere under a `.git`
 ancestor) is intentional — keeps a dev build from accidentally
 `npm i -g`-overwriting a prod global. For local development use
 `scripts/dev-install.sh` (see [docs/development/local-dev-isolation.md](development/local-dev-isolation.md)).
+
+In npm mode, `upgrade` checks the target package's `engines.node` metadata
+before install when npm can provide it. If the target requires a newer Node.js
+than the current process is running, the command fails before install with a
+system-Node upgrade hint and a portable-install migration hint. npm-mode
+updates do not replace Node.js themselves.
 
 ---
 
@@ -732,7 +752,7 @@ Most environment variables use the `FIRST_TREE_` prefix.
 | Variable | Purpose | Default |
 |---|---|---|
 | `FIRST_TREE_HOME` | Override the CLI home directory for config, data, and agent workspaces. | Channel-dependent: `~/.first-tree` (prod), `~/.first-tree-staging` (staging), `~/.first-tree-dev` (dev). |
-| `FIRST_TREE_SERVER_URL` | Server URL (alternative to the connect token's `iss` claim). | — |
+| `FIRST_TREE_SERVER_URL` | Server URL fallback for non-login commands. `login` derives the URL from the connect token. | — |
 | `FIRST_TREE_LOG_LEVEL` | Log level (`trace` / `debug` / `info` / `warn` / `error` / `fatal`). | `info` |
 | `FIRST_TREE_JSON` | JSON output mode (equivalent to `--json`). | — |
 
@@ -815,7 +835,7 @@ and are not used by the CLI. They are listed here for ops reference.
 | `FIRST_TREE_DATABASE_URL` | PostgreSQL connection URL. | — (required) |
 | `FIRST_TREE_PORT` | HTTP listen port. | `8000` |
 | `FIRST_TREE_HOST` | Bind address. | `127.0.0.1` |
-| `FIRST_TREE_PUBLIC_URL` | Public-facing server URL. Stamped as the `iss` claim on connect tokens and used to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | — |
+| `FIRST_TREE_PUBLIC_URL` | Public-facing server URL. Used as the origin for short connect URLs and to build invite-link URLs + the GitHub OAuth callback. **Required in production.** | — |
 | `FIRST_TREE_CORS_ORIGIN` | Allowed origin for the web console. | — |
 | `FIRST_TREE_TRUST_PROXY` | Trust the reverse-proxy `X-Forwarded-*` headers. | `false` |
 | `FIRST_TREE_WORKSPACES_ROOT` | Where agent worktrees are materialised on the host. | derived from `FIRST_TREE_HOME` |

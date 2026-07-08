@@ -6,14 +6,16 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { registerDaemonCommands } from "../commands/daemon/index.js";
 import { isServiceUnitDriftDetected } from "../core/index.js";
 
-describe("daemon namespace — refresh-unit hidden subcommand", () => {
-  it("registers `refresh-unit` under `daemon` and keeps it hidden from --help", () => {
+describe("daemon namespace — hidden service-maintenance subcommands", () => {
+  it("registers service-maintenance hooks under `daemon` and keeps them hidden from --help", () => {
     const root = new Command();
     registerDaemonCommands(root);
     const daemonCmd = root.commands.find((c) => c.name() === "daemon");
     expect(daemonCmd, "daemon namespace should be registered").toBeDefined();
     const refresh = daemonCmd?.commands.find((c) => c.name() === "refresh-unit");
     expect(refresh, "refresh-unit subcommand should exist").toBeDefined();
+    const ensure = daemonCmd?.commands.find((c) => c.name() === "ensure-service");
+    expect(ensure, "ensure-service subcommand should exist").toBeDefined();
     // `hidden: true` is the contract documented in commands/daemon/refresh-unit.ts:
     // this is a supervisor-cooperation interface, not a user-facing verb.
     // We assert via `_hidden` (Commander internal flag) because Commander
@@ -22,6 +24,10 @@ describe("daemon namespace — refresh-unit hidden subcommand", () => {
     expect(
       (refresh as unknown as { _hidden?: boolean })._hidden,
       "refresh-unit must remain hidden from `daemon --help`",
+    ).toBe(true);
+    expect(
+      (ensure as unknown as { _hidden?: boolean })._hidden,
+      "ensure-service must remain hidden from `daemon --help`",
     ).toBe(true);
   });
 
