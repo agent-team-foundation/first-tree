@@ -211,6 +211,24 @@ describe("Agent client WS edge protocol coverage", () => {
     expect(closeCode).toBe(4401);
   });
 
+  it("maps jose claim validation failures to invalid_claims during auth", async () => {
+    const admin = await createTestAdmin(app, { username: `ws-nbf-${crypto.randomUUID().slice(0, 8)}` });
+    const token = await new SignJWT({ sub: admin.userId, type: "access" })
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuedAt()
+      .setNotBefore("1h")
+      .setExpirationTime("2h")
+      .sign(new TextEncoder().encode(jwtSecret));
+    const ws = await openSocket();
+    ws.send(JSON.stringify({ type: "auth", token }));
+
+    const frame = await waitForFrame(ws, (message) => (message as { type?: string }).type === "auth:rejected");
+    const closeCode = await waitForClose(ws);
+
+    expect(frame).toMatchObject({ type: "auth:rejected", code: "invalid_claims" });
+    expect(closeCode).toBe(4401);
+  });
+
   it("reports malformed post-auth frames and acknowledges heartbeat before registration", async () => {
     const seed = await createAdminContext(app, { username: `ws-post-auth-${crypto.randomUUID().slice(0, 8)}` });
     const ws = await openAuthenticatedSocket(await signAccess(seed.userId, seed.memberId, seed.organizationId));
@@ -328,6 +346,36 @@ describe("Agent client WS edge protocol coverage", () => {
     const backfillSpy = vi
       .spyOn(clientService, "listActiveAgentsPinnedToClient")
       .mockRejectedValueOnce(new Error("backfill failed"));
+    const ws = await openAuthenticatedSocket(await signAccess(seed.userId, seed.memberId, seed.organizationId));
+
+    try {
+      ws.send(JSON.stringify({ type: "client:register", clientId: seed.clientId }));
+      await expect(
+        waitForFrame(ws, (message) => (message as { type?: string }).type === "client:registered"),
+      ).resolves.toMatchObject({ type: "client:registered", clientId: seed.clientId });
+      await vi.waitFor(() => expect(backfillSpy).toHaveBeenCalledWith(app.db, seed.clientId));
+    } finally {
+      await closeSocket(ws);
+      backfillSpy.mockRestore();
+    }
+  });
+
+  it("skips pinned-agent backfill frames that fail wire schema validation", async () => {
+    const seed = await createAdminContext(app, {
+      username: `ws-reg-invalid-backfill-${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const backfillSpy = vi.spyOn(clientService, "listActiveAgentsPinnedToClient").mockResolvedValueOnce([
+      {
+        uuid: uuidv7(),
+        name: "invalid-runtime",
+        displayName: "Invalid Runtime",
+        type: "agent",
+        status: "active",
+        managerId: seed.memberId,
+        createdAt: new Date(),
+        runtimeProvider: "not-a-runtime",
+      },
+    ] as never);
     const ws = await openAuthenticatedSocket(await signAccess(seed.userId, seed.memberId, seed.organizationId));
 
     try {
@@ -577,6 +625,103 @@ describe("Agent client WS edge protocol coverage", () => {
       resetErrorSpy.mockRestore();
     }
   }, 20000);
+
+  it("self-validates inbox delivery frames and clears in-flight entries after ack", async () => {
+    const seed = await createAdminContext(app, {
+      username: `ws-inbox-deliver-invalid-${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const agent = await createPinnedAgent({ ...seed, suffix: "invalid-deliver" });
+    const entryId = 444_000_001;
+    const claimSpy = vi
+      .spyOn(inboxService, "claimBacklogForPushFair")
+      .mockResolvedValueOnce([
+        {
+          id: entryId,
+          inboxId: agent.inboxId,
+          messageId: "msg-invalid-deliver",
+          chatId: "chat-invalid-deliver",
+          status: "delivered",
+          retryCount: 0,
+          createdAt: new Date().toISOString(),
+          deliveredAt: new Date().toISOString(),
+          ackedAt: null,
+          message: null,
+        },
+      ] as never)
+      .mockResolvedValue([]);
+    const ackSpy = vi.spyOn(inboxService, "ackEntryByIdForBoundAgents").mockResolvedValueOnce({
+      ok: true,
+      throughEntry: { id: entryId, inboxId: agent.inboxId, chatId: "chat-invalid-deliver" },
+      disposition: "acked",
+      ackedCount: 1,
+      ackedEntryIds: [entryId],
+    } as never);
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      await expect(bindAgent(ws, agent.uuid, "bind-invalid-deliver")).resolves.toMatchObject({
+        type: "agent:bound",
+        agentId: agent.uuid,
+      });
+      await expect(
+        waitForFrame(
+          ws,
+          (message) =>
+            (message as { type?: string; entryId?: number }).type === "inbox:deliver" &&
+            (message as { entryId?: number }).entryId === entryId,
+        ),
+      ).resolves.toMatchObject({
+        type: "inbox:deliver",
+        entryId,
+        inboxId: agent.inboxId,
+        message: null,
+      });
+
+      ws.send(JSON.stringify({ type: "inbox:ack", entryId, ref: "ack-invalid-deliver" }));
+      await expect(
+        waitForFrame(
+          ws,
+          (message) =>
+            (message as { type?: string; ref?: string }).type === "inbox:ack:accepted" &&
+            (message as { ref?: string }).ref === "ack-invalid-deliver",
+        ),
+      ).resolves.toMatchObject({
+        type: "inbox:ack:accepted",
+        entryId,
+        ref: "ack-invalid-deliver",
+        disposition: "acked",
+        ackedCount: 1,
+      });
+      expect(claimSpy).toHaveBeenCalled();
+      expect(ackSpy).toHaveBeenCalledWith(app.db, entryId, [agent.inboxId]);
+    } finally {
+      await closeSocket(ws);
+      claimSpy.mockRestore();
+      ackSpy.mockRestore();
+    }
+  }, 15000);
+
+  it("keeps bind successful when the post-bind inbox backlog claim fails", async () => {
+    const seed = await createAdminContext(app, {
+      username: `ws-inbox-claim-fail-${crypto.randomUUID().slice(0, 8)}`,
+    });
+    const agent = await createPinnedAgent({ ...seed, suffix: "claim-fail" });
+    const claimSpy = vi
+      .spyOn(inboxService, "claimBacklogForPushFair")
+      .mockRejectedValueOnce(new Error("claim backlog failed"));
+    const ws = await openRegisteredSocket(seed);
+
+    try {
+      await expect(bindAgent(ws, agent.uuid, "bind-claim-fail")).resolves.toMatchObject({
+        type: "agent:bound",
+        agentId: agent.uuid,
+      });
+      await vi.waitFor(() => expect(claimSpy).toHaveBeenCalled());
+    } finally {
+      await closeSocket(ws);
+      claimSpy.mockRestore();
+    }
+  }, 15000);
 
   it("handles bound session, runtime, inbox, recover, and heartbeat edge frames", async () => {
     const seed = await createAdminContext(app, { username: `ws-bound-edges-${crypto.randomUUID().slice(0, 8)}` });
