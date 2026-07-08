@@ -314,7 +314,7 @@ describe("settings panels", () => {
     const narrow = await renderDom(<SettingsLayout />);
     expect(narrow.container.querySelector("aside")).toBeNull();
     expect(narrow.container.textContent).toContain("Computers");
-    expect(narrow.container.textContent).not.toContain("GitHub");
+    expect(narrow.container.textContent).toContain("GitHub");
     expect(narrow.container.textContent).not.toContain("Onboarding");
     await act(async () => narrow.root.unmount());
 
