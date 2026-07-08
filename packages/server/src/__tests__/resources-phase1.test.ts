@@ -384,6 +384,155 @@ describe("Resources Phase 1", () => {
     expect(rows[0]).toMatchObject({ scope: "team", defaultEnabled: "recommended" });
   });
 
+  it("records warnings for invalid legacy resource backfill inputs", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const malformedConfigAgent = await createRuntimeAgent(app, owner);
+    const invalidRepoAgent = await createRuntimeAgent(app, owner);
+
+    await app.db.insert(organizationSettings).values({
+      organizationId: owner.organizationId,
+      namespace: "source_repos",
+      value: { repos: "not-array" },
+      version: 1,
+      updatedBy: owner.userId,
+    });
+    await app.db
+      .update(agentConfigs)
+      .set({
+        // Seed malformed persisted JSON directly; the typed write API would reject
+        // the legacy shape that the backfill must tolerate.
+        payload: {
+          ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+          gitRepos: "not-array",
+          resourceSkills: [],
+        } as unknown as typeof DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+      })
+      .where(eq(agentConfigs.agentId, malformedConfigAgent.uuid));
+    await app.db
+      .update(agentConfigs)
+      .set({
+        payload: {
+          ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+          gitRepos: [{ url: "not a url" }],
+          resourceSkills: [],
+        },
+      })
+      .where(eq(agentConfigs.agentId, invalidRepoAgent.uuid));
+
+    const result = await backfillResourcesPhase1(app.db);
+
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        `source_repos parse failed for org ${owner.organizationId}`,
+        `agent config parse failed for ${malformedConfigAgent.uuid}`,
+        expect.stringMatching(new RegExp(`agent gitRepo skipped for ${invalidRepoAgent.uuid}: Invalid URL`)),
+      ]),
+    );
+    expect(result.teamReposCreated).toBe(0);
+    expect(result.agentReposCreated).toBe(0);
+    expect(result.bindingsCreated).toBe(0);
+  });
+
+  it("backfills explicit team repo refs while ignoring duplicate legacy bindings", async () => {
+    const app = getApp();
+    const owner = await createOrgUser(app, "admin");
+    const newBindingAgent = await createRuntimeAgent(app, owner);
+    const duplicateBindingAgent = await createRuntimeAgent(app, owner);
+    const teamRepo = await app.resourcesService.createTeamResource(
+      owner.organizationId,
+      {
+        type: "repo",
+        name: "Shared repo",
+        defaultEnabled: "recommended",
+        payload: { url: "https://github.com/acme/shared.git", defaultBranch: "main" },
+      },
+      owner.memberId,
+    );
+
+    await app.db
+      .update(agentConfigs)
+      .set({
+        payload: {
+          ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+          gitRepos: [{ url: "git@github.com:Acme/Shared.git", ref: "feature-a", localPath: "shared-a" }],
+          prompt: { append: "" },
+          resourceSkills: [],
+        },
+      })
+      .where(eq(agentConfigs.agentId, newBindingAgent.uuid));
+    await app.db
+      .update(agentConfigs)
+      .set({
+        payload: {
+          ...DEFAULT_AGENT_RUNTIME_CONFIG_PAYLOAD,
+          gitRepos: [{ url: "https://github.com/acme/shared.git", ref: "feature-b", localPath: "shared-b" }],
+          prompt: { append: "Existing prompt append." },
+          resourceSkills: [],
+        },
+      })
+      .where(eq(agentConfigs.agentId, duplicateBindingAgent.uuid));
+    await app.db.insert(agentResourceBindings).values([
+      {
+        id: uuidv7(),
+        organizationId: owner.organizationId,
+        agentId: duplicateBindingAgent.uuid,
+        type: "repo",
+        mode: "include",
+        resourceId: teamRepo.id,
+        replacesResourceId: null,
+        inlinePromptBody: null,
+        repoRef: "feature-b",
+        repoLocalPath: "shared-b",
+        order: 1,
+        createdBy: owner.memberId,
+        updatedBy: owner.memberId,
+      },
+      {
+        id: uuidv7(),
+        organizationId: owner.organizationId,
+        agentId: duplicateBindingAgent.uuid,
+        type: "prompt",
+        mode: "include",
+        resourceId: null,
+        replacesResourceId: null,
+        inlinePromptBody: "Existing prompt append.",
+        repoRef: null,
+        repoLocalPath: null,
+        order: 2,
+        createdBy: owner.memberId,
+        updatedBy: owner.memberId,
+      },
+    ]);
+
+    const result = await backfillResourcesPhase1(app.db);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.teamReposCreated).toBe(0);
+    expect(result.agentReposCreated).toBe(0);
+    expect(result.bindingsCreated).toBe(1);
+    expect(result.agentVersionsBumped).toBe(1);
+
+    const newBindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(eq(agentResourceBindings.agentId, newBindingAgent.uuid));
+    expect(newBindings).toHaveLength(1);
+    expect(newBindings[0]).toMatchObject({
+      type: "repo",
+      resourceId: teamRepo.id,
+      repoRef: "feature-a",
+      repoLocalPath: "shared-a",
+      order: 1,
+    });
+
+    const duplicateBindings = await app.db
+      .select()
+      .from(agentResourceBindings)
+      .where(eq(agentResourceBindings.agentId, duplicateBindingAgent.uuid));
+    expect(duplicateBindings).toHaveLength(2);
+  });
+
   it("lets an explicit repo binding override a recommended team repo without duplicating it", async () => {
     const app = getApp();
     const owner = await createOrgUser(app, "admin");
