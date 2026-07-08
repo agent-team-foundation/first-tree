@@ -146,6 +146,7 @@ function contextPullRequestPayload(installationId: number, repoFullName = "owner
       base: { ref: "main" },
       head: { ref: "context-reviewer" },
       draft: false,
+      user: { login: "context-writer", type: "User" },
     },
     repository: { full_name: repoFullName },
     sender: { login: "context-writer", type: "User" },
@@ -160,6 +161,7 @@ function contextIssueCommentPayload(installationId: number, repoFullName = "owne
       number: 42,
       title: "Improve context review guidance",
       html_url: `https://github.com/${repoFullName}/issues/42`,
+      user: { login: "context-writer", type: "User" },
       pull_request: { html_url: `https://github.com/${repoFullName}/pull/42` },
     },
     comment: {

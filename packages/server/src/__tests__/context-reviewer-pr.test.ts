@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import { agents } from "../db/schema/agents.js";
+import { authIdentities } from "../db/schema/auth-identities.js";
 import { chatMembership } from "../db/schema/chat-membership.js";
 import { chats } from "../db/schema/chats.js";
 import { inboxEntries } from "../db/schema/inbox-entries.js";
@@ -29,6 +30,7 @@ function pullRequestPayload(overrides: Partial<Record<string, unknown>> = {}) {
       base: { ref: "main" },
       head: { ref: "context-update" },
       draft: false,
+      user: { login: "writer", type: "User" },
     },
     repository: { full_name: "owner/context-tree" },
     sender: { login: "writer", type: "User" },
@@ -43,6 +45,7 @@ function issueCommentPayload(overrides: Partial<Record<string, unknown>> = {}) {
       number: 123,
       title: "Clarify agent routing context",
       html_url: "https://github.com/owner/context-tree/issues/123",
+      user: { login: "writer", type: "User" },
       pull_request: { html_url: "https://github.com/owner/context-tree/pull/123" },
     },
     comment: {
@@ -65,6 +68,7 @@ function reviewCommentPayload(overrides: Partial<Record<string, unknown>> = {}) 
       html_url: "https://github.com/owner/context-tree/pull/123",
       base: { ref: "main" },
       head: { ref: "context-update" },
+      user: { login: "writer", type: "User" },
     },
     comment: {
       html_url: "https://github.com/owner/context-tree/pull/123#discussion_r1",
@@ -108,6 +112,18 @@ async function enableReviewer(app: App, admin: Awaited<ReturnType<typeof createA
   );
 }
 
+async function seedGithubIdentity(app: App, userId: string, login: string) {
+  await app.db.insert(authIdentities).values({
+    id: randomUUID(),
+    userId,
+    provider: "github",
+    identifier: randomUUID(),
+    email: null,
+    verifiedAt: new Date(),
+    metadata: { login },
+  });
+}
+
 describe("Context Reviewer PR prompt", () => {
   it("renders the EJS prompt with required review instructions", async () => {
     const prompt = await renderContextReviewerPrPrompt({
@@ -117,15 +133,23 @@ describe("Context Reviewer PR prompt", () => {
       htmlUrl: "https://github.com/owner/context-tree/pull/123",
       baseRef: "main",
       headRef: "context-update",
+      authorLogin: "writer",
       senderLogin: "writer",
       triggerEvent: "pull_request.opened",
       isDraft: false,
       commentUrl: null,
       commentAuthorLogin: null,
       organizationId: "org-1",
+      reviewerManagerGithubLogin: "reviewer-manager",
+      reviewerManagerIsPrAuthor: false,
     });
 
     expect(prompt).toContain("Context Reviewer");
+    expect(prompt).toContain("PR author: writer");
+    expect(prompt).toContain("Event sender: writer");
+    expect(prompt).toContain("Reviewer manager GitHub login: reviewer-manager");
+    expect(prompt).toContain("Known approval blocker: not known from First Tree metadata");
+    expect(prompt).toContain("gh api user --jq .login");
     expect(prompt).toContain("clear, accurate");
     expect(prompt).toContain("missing background");
     expect(prompt).toContain("excessive detail");
@@ -139,6 +163,7 @@ describe("Context Reviewer PR prompt", () => {
     expect(prompt).toContain("Do not rely on an older approval or comment review");
     expect(prompt).toContain("Context changes requested");
     expect(prompt).toContain("Still unclear or needs more detail");
+    expect(prompt).toContain("Independent approval required");
     expect(prompt).toContain("review action was submitted: `approved`, `commented`, `changes_requested`, or `failed`");
   });
 
@@ -150,12 +175,15 @@ describe("Context Reviewer PR prompt", () => {
       htmlUrl: "https://github.com/owner/context-tree/pull/124",
       baseRef: null,
       headRef: null,
+      authorLogin: "writer",
       senderLogin: "writer",
       triggerEvent: "pull_request.synchronize",
       isDraft: null,
       commentUrl: null,
       commentAuthorLogin: null,
       organizationId: "org-1",
+      reviewerManagerGithubLogin: null,
+      reviewerManagerIsPrAuthor: false,
     });
 
     expect(prompt).toContain("Base ref: unknown");
@@ -177,12 +205,15 @@ describe("Context Reviewer PR prompt", () => {
       htmlUrl: "https://github.com/owner/context-tree/pull/126",
       baseRef: "main",
       headRef: "draft-context",
+      authorLogin: "writer",
       senderLogin: "writer",
       triggerEvent: "pull_request.opened",
       isDraft: true,
       commentUrl: null,
       commentAuthorLogin: null,
       organizationId: "org-1",
+      reviewerManagerGithubLogin: null,
+      reviewerManagerIsPrAuthor: false,
     });
 
     expect(prompt).toContain("Draft status from webhook: draft");
@@ -199,17 +230,45 @@ describe("Context Reviewer PR prompt", () => {
       htmlUrl: "https://github.com/owner/context-tree/pull/125",
       baseRef: null,
       headRef: null,
+      authorLogin: "writer",
       senderLogin: "writer",
       triggerEvent: "issue_comment.created",
       isDraft: null,
       commentUrl: "https://github.com/owner/context-tree/pull/125#issuecomment-1",
       commentAuthorLogin: "commenter",
       organizationId: "org-1",
+      reviewerManagerGithubLogin: null,
+      reviewerManagerIsPrAuthor: false,
     });
 
     expect(prompt).toContain("Trigger event: issue_comment.created");
     expect(prompt).toContain("Comment author: commenter");
     expect(prompt).toContain("Comment URL: https://github.com/owner/context-tree/pull/125#issuecomment-1");
+  });
+
+  it("renders a known self-approval blocker as a failed approval path", async () => {
+    const prompt = await renderContextReviewerPrPrompt({
+      repoFullName: "owner/context-tree",
+      prNumber: 127,
+      title: "Self-authored context",
+      htmlUrl: "https://github.com/owner/context-tree/pull/127",
+      baseRef: "main",
+      headRef: "self-authored-context",
+      authorLogin: "writer",
+      senderLogin: "writer",
+      triggerEvent: "pull_request.opened",
+      isDraft: false,
+      commentUrl: null,
+      commentAuthorLogin: null,
+      organizationId: "org-1",
+      reviewerManagerGithubLogin: "Writer",
+      reviewerManagerIsPrAuthor: true,
+    });
+
+    expect(prompt).toContain("Known approval blocker: yes");
+    expect(prompt).toContain("GitHub requires a non-author approver");
+    expect(prompt).toContain("review action as `failed`");
+    expect(prompt).toContain("authenticated reviewer is the PR author");
   });
 });
 
@@ -347,9 +406,11 @@ describe("handleContextReviewerPrEvent", () => {
     expect(message?.content).toContain("Still unclear or needs more detail");
     expect(message?.content).toContain("Trigger event: pull_request.opened");
     expect(message?.content).toContain("Draft status from webhook: ready for review");
+    expect(message?.content).toContain("PR author: writer");
     expect(message?.metadata).toMatchObject({
       contextTreeReviewer: true,
       pullRequestDraft: false,
+      pullRequestAuthorLogin: "writer",
       mentions: [reviewer.uuid],
     });
 
@@ -359,6 +420,34 @@ describe("handleContextReviewerPrEvent", () => {
       .where(and(eq(inboxEntries.messageId, result.messageId), eq(inboxEntries.inboxId, reviewer.inboxId)))
       .limit(1);
     expect(entry?.notify).toBe(true);
+  });
+
+  it("marks approval as blocked when the reviewer manager GitHub login is the PR author", async () => {
+    const app = getApp();
+    const admin = await createAdminContext(app);
+    await seedGithubIdentity(app, admin.userId, "Writer");
+    const reviewer = await createReviewer(app, admin);
+    await enableReviewer(app, admin, reviewer.uuid);
+
+    const result = await handleContextReviewerPrEvent(app, {
+      eventType: "pull_request",
+      payload: pullRequestPayload(),
+      organizationId: admin.organizationId,
+    });
+
+    expect(result).toMatchObject({ handled: true, reused: false });
+    if (!result.handled) throw new Error("expected handled result");
+
+    const [message] = await app.db.select().from(messages).where(eq(messages.id, result.messageId)).limit(1);
+    expect(message?.content).toContain("Reviewer manager GitHub login: Writer");
+    expect(message?.content).toContain("Known approval blocker: yes");
+    expect(message?.content).toContain("Independent approval required");
+    expect(message?.metadata).toMatchObject({
+      contextTreeReviewer: true,
+      pullRequestAuthorLogin: "writer",
+      reviewerManagerGithubLogin: "Writer",
+      reviewerManagerIsPrAuthor: true,
+    });
   });
 
   it("reuses an existing reviewer chat for the same PR", async () => {
@@ -746,6 +835,7 @@ describe("handleContextReviewerPrEvent", () => {
       headRef: "context-update",
       triggerEvent: "pull_request.opened",
       isDraft: false,
+      authorLogin: "writer",
     });
     expect(
       contextReviewerPrTestInternals.extractPullRequestPayloadInfo(
@@ -765,6 +855,7 @@ describe("handleContextReviewerPrEvent", () => {
       commentAuthorLogin: "commenter",
       triggerEvent: "issue_comment.created",
       isDraft: null,
+      authorLogin: "writer",
     });
     expect(
       contextReviewerPrTestInternals.extractPullRequestPayloadInfo(
