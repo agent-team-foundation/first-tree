@@ -2,7 +2,8 @@ import { RUNTIME_STALE_MS } from "@first-tree/shared";
 import { and, eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { agentChatSessions } from "../db/schema/agent-chat-sessions.js";
-import { setSessionRuntime, upsertSessionState } from "../services/activity.js";
+import { agentPresence } from "../db/schema/agent-presence.js";
+import { getAgentWithRuntime, resetActivity, setSessionRuntime, upsertSessionState } from "../services/activity.js";
 import { createAgent } from "../services/agent.js";
 import { createChat } from "../services/chat.js";
 import type { Notifier } from "../services/notifier.js";
@@ -122,6 +123,21 @@ describe("upsertSessionState — touchPresenceLastSeen option", () => {
     expect(row).toBeDefined();
     expect(row?.activeSessions).toBe(1);
     expect(row?.totalSessions).toBe(1);
+  });
+
+  it("resets runtime state and reads agent runtime presence", async () => {
+    const { app, agent } = await setup();
+    await seedPresence(app, agent.uuid, new Date("2020-01-01T00:00:00Z"));
+
+    await app.db.update(agentPresence).set({ runtimeState: "working" }).where(eq(agentPresence.agentId, agent.uuid));
+    expect((await getAgentWithRuntime(app.db, agent.uuid))?.runtimeState).toBe("working");
+
+    await resetActivity(app.db, agent.uuid);
+    const row = await getAgentWithRuntime(app.db, agent.uuid);
+    expect(row?.runtimeState).toBe("idle");
+    expect(row?.runtimeUpdatedAt).toBeInstanceOf(Date);
+
+    await expect(getAgentWithRuntime(app.db, crypto.randomUUID())).resolves.toBeNull();
   });
 
   // Steady-state guard: when the (agent, chat) row is already at the target

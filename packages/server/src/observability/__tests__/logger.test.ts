@@ -146,6 +146,19 @@ describe("logger ErrorSink bridging", () => {
     expect(forwarded).toMatch(/\.\.\.\[truncated \d+ chars\]$/);
     restore();
   });
+
+  it("stringifies circular values when JSON serialization fails", () => {
+    silenceStderr();
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "error" });
+    const { calls, restore } = installSpySink();
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    createLogger("M").error({ circular }, "circular state");
+
+    expect(calls[0]?.context.circular).toContain("[Circular]");
+    restore();
+  });
 });
 
 describe("logger output format", () => {
@@ -175,6 +188,40 @@ describe("logger output format", () => {
     expect(parsed.module).toBe("M");
     expect(parsed.msg).toBe("hello");
     expect(parsed.k).toBe("v");
+  });
+
+  it("serializes request objects with redacted query parameters", () => {
+    const chunks: string[] = [];
+    writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      chunks.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+      return true;
+    }) as never);
+    applyLoggerConfig({ level: "trace", format: "json", bridgeToSpanLevel: "off" });
+
+    createLogger("M").info(
+      {
+        req: {
+          method: "GET",
+          url: "/api/v1/orgs?token=secret&safe=1",
+          headers: { "accept-version": "2026-01-01" },
+          host: "cloud.first-tree.ai",
+          ip: "127.0.0.1",
+          socket: { remotePort: 443 },
+        },
+      },
+      "incoming request",
+    );
+
+    const parsed = JSON.parse(chunks.join("").trim());
+    expect(parsed.req).toMatchObject({
+      method: "GET",
+      version: "2026-01-01",
+      host: "cloud.first-tree.ai",
+      remoteAddress: "127.0.0.1",
+      remotePort: 443,
+    });
+    expect(parsed.req.url).toContain("token=***");
+    expect(parsed.req.url).toContain("safe=1");
   });
 
   it("emits human-readable pretty output when format=pretty", () => {
