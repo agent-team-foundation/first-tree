@@ -10,9 +10,10 @@ you finish getting set up. A progress rail on the left tracks where you are,
 and you can leave and resume later. This page mirrors that flow.
 
 > **Self-hosting?** Use your own deployment's URL wherever this guide says
-> <https://first-tree.ai>. The rest is identical — every connect token
-> carries its server URL in its `iss` claim, so the CLI follows the token
-> rather than a baked-in server name.
+> <https://first-tree.ai>. The rest is identical — new connect tokens are short
+> URLs whose origin carries the server URL, and legacy JWT tokens still route
+> through their `iss` claim. The CLI follows the token rather than a baked-in
+> server name.
 
 ## Before you start
 
@@ -38,7 +39,8 @@ first-tree login <connect-token>
 
 This installs the CLI and signs the computer in. `first-tree login`:
 
-- Reads the server URL from the token's `iss` claim — **no `--server` flag
+- Reads the server URL from the connect token — new tokens are short URLs,
+  while legacy JWT tokens still work during rollout. **No `--server` flag
   needed**, and switching servers only takes a new token.
 - Persists your member credentials and writes this machine's `client.id`.
 - On macOS / Linux, installs and starts a background daemon so the machine

@@ -519,6 +519,13 @@
       "when": 1783428000000,
       "tag": "0073_client_retired_at",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1783498176310,
+      "tag": "0074_long_roughhouse",
+      "breakpoints": true
     }
   ]
 }

@@ -65,9 +65,10 @@ async function exchangeToken(url: string, token: string): Promise<{ accessToken:
 }
 
 /**
- * `login <token>` — single entry point. The connect token's
- * `iss` claim carries the server URL so prod / staging / local environments are
- * tagged at issuance and the operator can never accidentally cross-target.
+ * `login <token>` — single entry point. Short connect URLs carry the server URL
+ * in their origin; legacy JWT connect tokens keep carrying it in `iss`, so prod
+ * / staging / local environments stay tagged at issuance and the operator can
+ * never accidentally cross-target.
  *
  * Account switches are explicit local-client switches. The stored access token
  * owner is compared with the new server-issued access token's `sub` claim; a

@@ -18,8 +18,9 @@ everything online.
 - **Node.js** ≥ 22.13 (24 recommended).
 - **The CLI** — `npm install -g first-tree && first-tree --version`.
 - **A connect token** — generated from the web console's *Computers → New
-  Connection* dialog. The token's `iss` claim carries the server URL, so
-  the CLI does not need a server flag.
+  Connection* dialog. New tokens are short URLs whose origin carries the
+  server URL; legacy JWT tokens with an `iss` claim remain accepted during
+  rollout. The CLI does not need a server flag.
 - **A server you can reach** — either the hosted SaaS or a locally
   running server.
 
@@ -49,7 +50,8 @@ because an agent is permanently bound to exactly one client machine.
 
 - `$FIRST_TREE_HOME/config/credentials.json` (mode `0600`) —
   `accessToken`, `refreshToken`, and the server URL derived from the
-  token's `iss` claim.
+  connect token. New tokens are short URLs; legacy JWT tokens are still
+  accepted during rollout.
 - `$FIRST_TREE_HOME/config/client.yaml` — `client.id` (auto-generated
   on first login) and `server.url`.
 - On macOS / Linux, the background daemon is installed as a user-level
@@ -112,7 +114,7 @@ retained as a read-only debug endpoint.
 | Variable | Purpose |
 |---|---|
 | `FIRST_TREE_HOME` | Override config/data home directory. By default this is channel-dependent: `~/.first-tree` for prod, `~/.first-tree-staging` for staging, `~/.first-tree-dev` for dev. |
-| `FIRST_TREE_SERVER_URL` | Server URL (alternative to the token's `iss` claim) |
+| `FIRST_TREE_SERVER_URL` | Server URL for SDK and non-login commands; `login` derives it from the connect token. |
 
 ## Using the SDK
 
