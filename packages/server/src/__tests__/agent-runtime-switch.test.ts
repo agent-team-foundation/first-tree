@@ -46,6 +46,36 @@ async function setClientRuntimeSupport(
 describe("POST /agents/:uuid/switch-runtime", () => {
   const getApp = useTestApp({ runtimeHttpTokenEnforcement: true });
 
+  it("rejects fault injection headers when fault injection is disabled", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    const agent = await createAgent(app.db, {
+      name: `switch-fault-disabled-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Switch Fault Disabled",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/agents/${agent.uuid}/switch-runtime`,
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "x-first-tree-runtime-switch-fault": "after_claim",
+      },
+      payload: {
+        clientId: ctx.clientId,
+        runtimeProvider: "codex",
+        confirmLocalDataLoss: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json<{ error: string }>().error).toContain("fault injection is disabled");
+  });
+
   it("switches runtime with a metadata claim, config retag, and session eviction", async () => {
     const app = getApp();
     const ctx = await createAdminContext(app);
@@ -547,6 +577,36 @@ describe("POST /agents/:uuid/switch-runtime", () => {
 
 describe("POST /agents/:uuid/switch-runtime recovery", () => {
   const getApp = useTestApp({ runtimeHttpTokenEnforcement: true, runtimeSwitchFaultInjection: true });
+
+  it("rejects unknown fault injection headers", async () => {
+    const app = getApp();
+    const ctx = await createAdminContext(app);
+    const agent = await createAgent(app.db, {
+      name: `switch-fault-unknown-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      displayName: "Switch Fault Unknown",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+      runtimeProvider: "claude-code",
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/agents/${agent.uuid}/switch-runtime`,
+      headers: {
+        authorization: `Bearer ${ctx.accessToken}`,
+        "x-first-tree-runtime-switch-fault": "not-a-fault",
+      },
+      payload: {
+        clientId: ctx.clientId,
+        runtimeProvider: "codex",
+        confirmLocalDataLoss: true,
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: string }>().error).toContain('Unknown runtime switch fault "not-a-fault"');
+  });
 
   it("aborts the claim and preserves sessions when a pre-commit fault occurs", async () => {
     const app = getApp();

@@ -277,6 +277,25 @@ describe("Admin Agents API", () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it("rejects manager reassignment by non-admin managers", async () => {
+    const app = getApp();
+    const { req, ctx } = await authedRequest(app);
+    await app.db.update(members).set({ role: "member" }).where(eq(members.id, ctx.memberId));
+    const agent = await createAgent(app.db, {
+      name: `patch-manager-${crypto.randomUUID().slice(0, 6)}`,
+      type: "agent",
+      managerId: ctx.memberId,
+      clientId: ctx.clientId,
+    });
+
+    const res = await req("PATCH", `/api/v1/agents/${agent.uuid}`, {
+      managerId: ctx.memberId,
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json<{ error: string }>().error).toContain("Only admins can reassign");
+  });
+
   it("suspends and reactivates an agent", async () => {
     const app = getApp();
     const { req, ctx } = await authedRequest(app);
