@@ -123,7 +123,14 @@ describe("portable installer", () => {
     await mkdir(join(payload, "bin"), { recursive: true });
     await writeFile(
       join(payload, "node", "bin", "node"),
-      `#!/bin/sh\nif [ "$2" = "--version" ]; then echo ${version}; exit 0; fi\nif [ "$1" = "--version" ]; then echo ${version}; exit 0; fi\necho node-stub "$@"\n`,
+      `#!/bin/sh
+if [ -n "\${FT_TEST_NODE_ARGS_LOG:-}" ]; then
+  printf '%s\\n' "$*" >>"$FT_TEST_NODE_ARGS_LOG"
+fi
+if [ "$2" = "--version" ]; then echo ${version}; exit 0; fi
+if [ "$1" = "--version" ]; then echo ${version}; exit 0; fi
+echo node-stub "$@"
+`,
       { mode: 0o755 },
     );
     await writeFile(join(payload, "app", "cli", "index.mjs"), "// fixture\n");
@@ -217,6 +224,57 @@ describe("portable installer", () => {
     const shim = readFileSync(join(binDir, "first-tree"), "utf8");
     expect(shim).toContain("FIRST_TREE_INSTALL_MODE=portable");
     expect(shim).toContain("FIRST_TREE_PORTABLE_ROOT");
+  });
+
+  it("repairs PATH shadowing, cleans npm temp residue, and invokes daemon service recovery", async () => {
+    const platform = currentPlatform();
+    if (platform === null) return;
+    const fixture = await makeFixture(platform);
+    const home = tempDir("first-tree-home-");
+    const prefix = join(home, "prefix");
+    const binDir = join(home, "bin");
+    const npmBinDir = join(home, "npm-bin");
+    const npmRoot = join(home, "npm-root");
+    const wrapperDir = join(home, "wrappers");
+    const argsLog = join(home, "node-args.log");
+    await mkdir(npmBinDir, { recursive: true });
+    await mkdir(npmRoot, { recursive: true });
+    await mkdir(join(npmRoot, ".first-tree-deadbeef"), { recursive: true });
+    await mkdir(wrapperDir, { recursive: true });
+    await writeFile(join(npmBinDir, "first-tree"), "#!/bin/sh\necho npm-first-tree\n", { mode: 0o755 });
+    await writeFile(
+      join(wrapperDir, "npm"),
+      '#!/bin/sh\nif [ "$1" = "root" ] && [ "$2" = "-g" ]; then echo "$FT_TEST_NPM_ROOT"; exit 0; fi\nexit 1\n',
+      { mode: 0o755 },
+    );
+
+    const installArgs = [join(REPO_ROOT, "scripts", "portable", "install.sh"), "--prefix", prefix, "--bin-dir", binDir];
+    const env = {
+      ...process.env,
+      HOME: home,
+      SHELL: "/bin/zsh",
+      PATH: `${npmBinDir}:${wrapperDir}:${process.env.PATH ?? ""}`,
+      FIRST_TREE_PORTABLE_CHANNEL: "prod",
+      FIRST_TREE_PORTABLE_DOWNLOAD_BASE_URL: `file://${fixture}`,
+      FT_TEST_NODE_ARGS_LOG: argsLog,
+      FT_TEST_NPM_ROOT: npmRoot,
+    };
+
+    const firstInstall = spawnSync("sh", installArgs, { cwd: REPO_ROOT, env, encoding: "utf8" });
+    expect(firstInstall.status, firstInstall.stderr || firstInstall.stdout).toBe(0);
+    expect(() => readdirSync(join(npmRoot, ".first-tree-deadbeef"))).toThrow();
+    const zshrc = readFileSync(join(home, ".zshrc"), "utf8");
+    expect(zshrc.match(/# >>> first-tree portable >>>/g)).toHaveLength(1);
+    expect(zshrc).toContain(`export PATH="${binDir}:$PATH"`);
+
+    const secondInstall = spawnSync("sh", installArgs, { cwd: REPO_ROOT, env, encoding: "utf8" });
+    expect(secondInstall.status, secondInstall.stderr || secondInstall.stdout).toBe(0);
+    const rewrittenZshrc = readFileSync(join(home, ".zshrc"), "utf8");
+    expect(rewrittenZshrc.match(/# >>> first-tree portable >>>/g)).toHaveLength(1);
+
+    const nodeArgs = readFileSync(argsLog, "utf8");
+    expect(nodeArgs).toContain("app/cli/index.mjs --version");
+    expect(nodeArgs).toContain("app/cli/index.mjs daemon ensure-service");
   });
 
   it("replaces the current symlink itself when upgrading with the shell installer", async () => {
