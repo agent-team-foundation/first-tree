@@ -1,6 +1,6 @@
 ---
 name: first-tree-seed
-version: 0.2.3
+version: 0.2.4
 cliCompat:
   first-tree: ">=0.5.0 <0.6.0"
 description: Bootstrap a team's Context Tree from its connected source repos — for an onboarding "build / set up the Context Tree" task on a tree that has no domain structure yet: either no tree exists (creates and binds it) or a bound-but-empty tree (fills it). Reads the sources, proposes an initial top-level + second-level domain structure for the user to approve, then drafts initial leaf content — each as a reviewable PR. Refuses a tree that already has domain structure: send incremental, source-driven writes to `first-tree-write`, and broad maintenance / drift-audit to a focused task.
@@ -56,12 +56,58 @@ field, or the team has no `context_tree` binding. This is the
 agent-driven creation path — create the tree with the user's local `gh`:
 
 ```bash
-first-tree tree init --title "<team display name>" --dir "<workspaceRoot>/<manifest.tree>"
+first-tree tree init --title "<team display name>" --owner "<source-repo-owner>" --dir "<workspaceRoot>/<manifest.tree>"
 ```
 
-`tree init` creates the repo under the team's GitHub App installation
-account (or, when the App is not installed yet, under your own `gh`
-account — see **Surface App coverage** below), seeds a minimal valid tree
+**Home the tree beside its source — pass `--owner`.** Set
+`<source-repo-owner>` to the account that owns the team's **main bound
+source repo** — an **org or a personal account alike**. Derive it from the
+source clone's **remote URL, not its directory name**: resolve
+`<source-clone>` from the manifest
+(`<workspaceRoot>/<sourcesRoot>/<source>`, per *Materialize source read
+worktrees* below), run `git -C <source-clone> remote get-url origin` (or
+use the declared source repo URL from your briefing when present), and take
+the `<owner>` segment of that URL (e.g. `acme` in `github.com/acme/app`, or
+`alice` in `github.com/alice/app`). **`manifest.sources` holds directory
+names (e.g. `first-tree`), not owners** — passing a source *name* as
+`--owner` targets the wrong GitHub account, so always parse the owner from
+the clone's remote. With one source that account is unambiguous; when
+several sources share one account, use it;
+when sources span **different accounts**, pick the account that owns most
+of them, and if that is genuinely a tie, ask the admin which account should
+host the tree rather than guessing. Why: a team's Context Tree belongs in
+the **same account as its source** — that is the account the GitHub App
+lives on (or will) to read those sources. When the App is already installed
+there — the normal case — `--owner` just matches the installation account
+and nothing changes. When the App is not installed yet, `--owner` lands the
+tree in that account instead of defaulting to your personal `gh` login, so
+a **later App install on it covers the tree** rather than stranding it in
+an account the install can never reach. The tree lives in one account;
+sources under other accounts stay covered by their own App installs as
+usual. (When the source repo is itself under your personal account,
+`<source-repo-owner>` simply is that account — same result.)
+
+**If `--owner` can't be honored, stop and surface it — do not silently
+fall back.** Two distinct cases, each with its own recovery:
+
+- **You lack repo-create rights under `<source-repo-owner>`** (no App is
+  installed, so nothing overrides `--owner`): prefer asking an admin to
+  grant you create rights there, so the tree still homes beside its source.
+  Only if that is not an option, re-run without `--owner` to build under
+  your personal `gh` account — flag the cost first: the tree then lives off
+  the source's account, so a later App install must go on *your* account,
+  not the source's, to cover it. Before re-running, empty **only** the
+  half-built scaffold this failed run left in `<manifest.tree>` (confirm the
+  directory holds just that — never delete a directory that already holds a
+  real tree clone or other content); `tree init` refuses a non-empty target.
+- **`--owner` doesn't match an already-installed App account** (the App is
+  installed on a different account than the source's — rare; `tree init`
+  names that account): re-run **without `--owner`** to create under that
+  installation account, which is the coverable home anyway. This error
+  fires before any local scaffolding, so there is nothing to clear. (Pass
+  `--no-bind` only if you deliberately want the repo elsewhere, unbound.)
+
+`tree init` seeds a minimal valid tree
 (root `NODE.md`, a `members/` index, and the creator's member node),
 pushes, and binds the org's `context_tree` setting. It is **admin-only**
 and needs an authenticated `gh`; if the caller is not an org admin, or
@@ -117,9 +163,10 @@ its repo" — plus the next step for the case it reports:
   destination in words: **Settings → GitHub** in the web app. Do **not**
   fabricate a raw GitHub App install URL yourself — the install must run
   through the web console so it binds back to your org. Add the **placement
-  caveat**: the repo was created under your own account (the `<owner>` in
-  `tree init`'s output), so install the App on **that same account**;
-  installing it on a different org later will not cover this repo.
+  caveat**: the tree repo was created under the account shown as `<owner>`
+  in `tree init`'s output — the account that owns your source repo (from
+  `--owner`), org or personal — so install the App on **that same
+  account**; installing it on a different account will not cover this repo.
 - **A suspended install:** `tree init` prints the installation-settings URL —
   relay it and say to reactivate the First Tree App installation there.
 
