@@ -51,6 +51,10 @@ function pickPreferredRuntime(caps: ClientCapabilities): string | null {
   return first ? first[0] : null;
 }
 
+function hasReportedCapabilities(caps: ClientCapabilities | null): caps is ClientCapabilities {
+  return !!caps && Object.keys(caps).length > 0;
+}
+
 export function useComputerConnection(enabled: boolean): ComputerConnection {
   const [connectedClient, setConnectedClient] = useState<HubClient | null>(null);
   const [capabilities, setCapabilities] = useState<ClientCapabilities | null>(null);
@@ -173,7 +177,10 @@ export function useComputerConnection(enabled: boolean): ComputerConnection {
     setRetryNonce((n) => n + 1);
   }, []);
 
-  const activeCapabilities = connectedClient && capabilitiesClientId === connectedClient.id ? capabilities : null;
+  const activeCapabilities =
+    connectedClient && capabilitiesClientId === connectedClient.id && hasReportedCapabilities(capabilities)
+      ? capabilities
+      : null;
 
   // Auto-pick the preferred ready runtime; keep a still-valid prior choice.
   useEffect(() => {
