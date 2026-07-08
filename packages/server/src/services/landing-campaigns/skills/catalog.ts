@@ -55,3 +55,17 @@ export function buildLandingCampaignBootstrap(skillSet: LandingCampaignSkillSet,
     `${skillSet.agentDisplayName} — clone ${skillSet.skillRepoUrl} and run its ${skillSet.skillName} skill on the repo above.`,
   ].join("\n");
 }
+
+/**
+ * Re-kick message for a trial whose run went silent. Self-contained on
+ * purpose: the runtime session may be brand new (lost rollout), so the repo
+ * URL, skill repo, and skill name must all be restated rather than referring
+ * to "the repo above".
+ */
+export function buildLandingCampaignRetryBootstrap(skillSet: LandingCampaignSkillSet, repoUrl: string): string {
+  return [
+    `The scan didn't get started, so First Tree has restarted it. Same safe, read-only check on: ${repoUrl}`,
+    "",
+    `${skillSet.agentDisplayName} — if a scan is already in progress in this chat, continue where you left off. Otherwise clone ${skillSet.skillRepoUrl} and run its ${skillSet.skillName} skill on ${repoUrl}.`,
+  ].join("\n");
+}
