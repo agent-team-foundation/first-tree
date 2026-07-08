@@ -15,8 +15,12 @@ everything online.
 
 ## Prerequisites
 
-- **Node.js** ≥ 22.13 (24 recommended).
-- **The CLI** — `npm install -g first-tree && first-tree --version`.
+- **The CLI**. Prefer the portable command shown in the web console's
+  *Computers → New Connection* dialog; it bundles Node.js. For headless
+  production installs, the portable installer has this shape:
+  `curl -fsSL https://downloads.first-tree.ai/prod/install.sh | sh`.
+- **Node.js** ≥ 22.13 only when you choose the npm fallback path
+  (`npm install -g first-tree`).
 - **A connect token** — generated from the web console's *Computers → New
   Connection* dialog. New tokens are short URLs whose origin carries the
   server URL; legacy JWT tokens with an `iss` claim remain accepted during

@@ -109,6 +109,48 @@ describe("core update helpers", () => {
     await expect(latestPromise).resolves.toEqual({ ok: true, mode: "global", installedVersion: null });
   });
 
+  it("preflights npm-mode target engines and points incompatible users at Node or portable install", async () => {
+    vi.resetModules();
+    vi.doMock("../core/channel.js", () => ({
+      channelConfig: {
+        channel: "prod",
+        binName: "first-tree",
+        aliasName: "ft",
+        packageName: "first-tree",
+        defaultHome: "/tmp/home",
+        defaultServerUrl: "https://cloud.first-tree.ai",
+        serviceUnitFile: "first-tree.service",
+        launchdLabel: "first-tree",
+        launchdPlistFile: "first-tree.plist",
+        displayName: "First Tree",
+        portable: {
+          channelPrefix: "prod",
+          publicInstallerPath: "prod/install.sh",
+          downloadBaseUrl: "https://downloads.first-tree.ai",
+        },
+      },
+    }));
+    spawnSyncMock.mockReturnValueOnce({ status: 0, stdout: JSON.stringify(">=999.0.0"), stderr: "" });
+    const child = new MockChild();
+    installSpawn(child);
+
+    const { installGlobalSpec } = await import("../core/update.js");
+    const output = vi.fn();
+    const result = await installGlobalSpec("0.6.0", { output });
+
+    expect(result).toMatchObject({
+      ok: false,
+      mode: "global",
+      retryable: false,
+      reasonCode: "npm_ebadengine",
+    });
+    if (result.ok) throw new Error("expected engine mismatch");
+    expect(result.reason).toContain("npm-mode updates cannot replace the system Node runtime");
+    expect(result.reason).toContain("https://downloads.first-tree.ai/prod/install.sh");
+    expect(childRegistryMocks.getChildProcessRegistry().spawn).not.toHaveBeenCalled();
+    expect(output).toHaveBeenCalledWith(expect.stringContaining("requires Node >=999.0.0"));
+  });
+
   it("classifies child errors, non-zero exits, and timeouts", async () => {
     vi.resetModules();
     vi.doMock("../core/channel.js", () => ({

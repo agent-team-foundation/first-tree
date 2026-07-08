@@ -15,12 +15,22 @@ human-friendly index over them.
 ## Install
 
 ```bash
+curl -fsSL https://downloads.first-tree.ai/prod/install.sh | sh
+~/.local/bin/first-tree --version
+```
+
+The default public install path is portable and bundles Node.js. The binary
+lives at `first-tree`; the short alias `ft` is also installed.
+
+The npm global install path remains supported for operators and fallback
+installs:
+
+```bash
 npm install -g first-tree
 first-tree --version
 ```
 
-The binary lives at `first-tree`; the short alias `ft` is also installed.
-Requirements: Node.js ≥ 22.13 (24 recommended).
+npm mode uses your system Node.js runtime and requires Node.js ≥ 22.13.
 
 ## Global flags
 
@@ -146,10 +156,13 @@ first-tree upgrade [--check] [--latest] [--no-restart]
 ```
 
 Self-update for the CLI: query the configured server for its recommended
-Command version, install that exact version globally, refresh the systemd
-unit / launchd plist on top of the new bits, then restart the client
-service. Use `--latest` only when you intentionally want to bypass the
-server target and install npm latest directly.
+Command version, install that exact version through the current install mode,
+refresh the systemd unit / launchd plist on top of the new bits, then restart
+the client service. Portable installs download the channel manifest and
+verified tarball, including the bundled Node.js runtime. npm installs run
+`npm install -g` against the channel package and keep using the system Node.js
+runtime. Use `--latest` only when you intentionally want to bypass the server
+target and install the channel's latest release data directly.
 
 | Flag | Effect |
 |---|---|
@@ -161,6 +174,12 @@ Refusing to run from a source checkout (anywhere under a `.git`
 ancestor) is intentional — keeps a dev build from accidentally
 `npm i -g`-overwriting a prod global. For local development use
 `scripts/dev-install.sh` (see [docs/development/local-dev-isolation.md](development/local-dev-isolation.md)).
+
+In npm mode, `upgrade` checks the target package's `engines.node` metadata
+before install when npm can provide it. If the target requires a newer Node.js
+than the current process is running, the command fails before install with a
+system-Node upgrade hint and a portable-install migration hint. npm-mode
+updates do not replace Node.js themselves.
 
 ---
 
