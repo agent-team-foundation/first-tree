@@ -155,31 +155,43 @@ Create the chat with the reporting user as the recipient, capture the new
 chat's ID from the JSON response, then follow the issue **into that chat**:
 
 ```bash
-# 1. Open the tracking chat; capture its id from {"ok":true,"data":{"chatId":…}}
-new_chat=$(first-tree chat create \
+# 1. Open the tracking chat; capture the full JSON response (don't pipe
+#    straight into a parser that might not be installed — see below).
+resp=$(first-tree chat create \
   --to <reporting-user-handle> \
   --topic "Bug: <concise summary>" \
   --description "Tracking First Tree bug: <concise summary> — <issue-url>" \
   -f markdown \
-  "Filed a First Tree bug issue: <issue-url>. This chat tracks its progress." \
-  | jq -r '.data.chatId')
+  "Filed a First Tree bug issue: <issue-url>. This chat tracks its progress.")
 
-# 2. Route the issue's events into the NEW chat (not the current one)
+# 2. Take the new chat's id from the response's data.chatId
+#    (shape: {"ok":true,"data":{"chatId":"…"}}). Read it directly, or:
+new_chat=$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["chatId"])')
+
+# 3. Only with a non-empty id, follow the issue INTO the new chat:
 first-tree github follow <issue-url> --chat "$new_chat"
 ```
 
 - `--to <reporting-user-handle>` is the human who reported the bug (the
-  handle you captured in step 2), so they get the tracking chat and are
-  woken on it.
-- Parse the chat ID from the `data.chatId` field of the create response —
-  do not hard-code it. `chat create` is **not idempotent**, so create the
-  chat exactly once; if the result is uncertain, check `chat list` before
-  retrying rather than re-running blindly.
-- Set a clear, stable `--topic` on the tracking chat yourself (as shown). An
-  agent-declared `github follow --chat` does **not** auto-rewrite the chat's
-  topic from the issue entity — that refresh only applies to the platform's
-  own first-touch (`direct`) GitHub-minted chats — so an omitted `--topic`
-  would leave a low-signal auto-derived label.
+  handle from step 2), so they get the tracking chat and are woken on it.
+- Take the chat id from the `data.chatId` field of the create response.
+  Extraction above uses `python3`; `jq -r '.data.chatId'` works too — but do
+  not hard-depend on a parser you cannot confirm is installed, and **never
+  run `github follow --chat` with an empty id**. When in doubt, read
+  `data.chatId` straight from the JSON yourself.
+- Set an explicit stable `--topic` yourself — an agent-declared `github
+  follow --chat` does **not** auto-rewrite the tracking chat's topic from the
+  issue, so without it the chat keeps a low-signal auto-derived label
+  (`--description` is set at create time regardless, so the chat still
+  self-describes).
+- `chat create` is **not idempotent** — create the chat exactly once; if the
+  result is uncertain, check `chat list` before retrying rather than
+  re-running blindly.
+- **Fallback:** if `chat create` fails (e.g. the `--to` handle will not
+  resolve) or you cannot get a chat id, do not drop the issue tracking — fall
+  back to following it into the current chat (`first-tree github follow
+  <issue-url>`) and tell the user a dedicated tracking chat could not be
+  opened.
 - Write the first message and description in the session's working language
   (the examples above are English).
 
