@@ -124,14 +124,15 @@ for (const asset of manifest.assets ?? []) {
 ' "$manifest"
 }
 
-first_asset_url() {
+asset_entries() {
   local manifest="$1"
   node -e '
 const fs = require("node:fs");
 const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-const url = manifest.assets?.[0]?.url;
-if (typeof url !== "string") process.exit(2);
-process.stdout.write(url);
+for (const asset of manifest.assets ?? []) {
+  if (typeof asset.fileName !== "string" || typeof asset.url !== "string") process.exit(2);
+  console.log(`${asset.fileName}\t${asset.url}`);
+}
 ' "$manifest"
 }
 
@@ -249,39 +250,67 @@ check_tarball_url() {
   curl -fsSL --retry 3 --retry-delay 2 -r 0-0 "$url" -o /dev/null
 }
 
-verify_remote_release() {
-  local version="$1"
+# The channel entry points (latest.json / install.sh) are the only mutable
+# objects, and flipping them publishes the release to every installer and
+# self-update client. They must therefore only be updated after the public
+# download endpoint has proven it can serve the complete versioned release,
+# and all expected URLs are derived from the local release metadata rather
+# than from anything already remote.
+verify_public_file_matches() {
+  local label="$1"
+  local url="$2"
+  local local_path="$3"
+  local dest="$4"
+  log "verifying public $label: $url"
+  download_url "$url" "$dest" || die "public $label is not readable: $url"
+  cmp -s -- "$local_path" "$dest" || die "public $label does not match the local release artifact: $url"
+}
+
+validate_local_release_urls() {
+  local expected_manifest_url="$DOWNLOAD_BASE_URL/$CHANNEL/$VERSION/manifest.json"
+  local local_manifest_url
+  local_manifest_url="$(json_string "$LATEST_PATH" "manifestUrl")"
+  if [[ "$local_manifest_url" != "$expected_manifest_url" ]]; then
+    die "local latest.json manifestUrl mismatch: expected $expected_manifest_url, got $local_manifest_url (build and upload must use the same download base URL)"
+  fi
+  local file_name
+  local url
+  while IFS=$'\t' read -r file_name url; do
+    [[ -n "$file_name" ]] || continue
+    if [[ "$url" != "$DOWNLOAD_BASE_URL/$CHANNEL/$VERSION/$file_name" ]]; then
+      die "manifest asset url mismatch for $file_name: expected $DOWNLOAD_BASE_URL/$CHANNEL/$VERSION/$file_name, got $url"
+    fi
+  done < <(asset_entries "$MANIFEST_PATH")
+}
+
+verify_remote_versioned_release() {
   (
     set -euo pipefail
     tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/first-tree-portable-remote.XXXXXX")"
     trap 'rm -rf "$tmp_dir"' EXIT
 
-    local latest_url="$DOWNLOAD_BASE_URL/$CHANNEL/latest.json"
-    local latest_path="$tmp_dir/latest.json"
-    log "verifying public latest metadata: $latest_url"
-    download_url "$latest_url" "$latest_path"
+    local version_base_url="$DOWNLOAD_BASE_URL/$CHANNEL/$VERSION"
+    verify_public_file_matches "versioned manifest" "$version_base_url/manifest.json" "$MANIFEST_PATH" "$tmp_dir/manifest.json"
+    verify_public_file_matches "versioned SHA256SUMS" "$version_base_url/SHA256SUMS" "$VERSION_DIR/SHA256SUMS" "$tmp_dir/SHA256SUMS"
 
-    local remote_channel
-    local remote_version
-    remote_channel="$(json_string "$latest_path" "channel")"
-    remote_version="$(json_string "$latest_path" "version")"
-    [[ "$remote_channel" == "$CHANNEL" ]] || die "remote latest channel mismatch: expected $CHANNEL, got $remote_channel"
-    [[ "$remote_version" == "$version" ]] || die "remote latest version mismatch: expected $version, got $remote_version"
+    local file_name
+    local url
+    while IFS=$'\t' read -r file_name url; do
+      [[ -n "$file_name" ]] || continue
+      log "verifying public release asset: $url"
+      check_tarball_url "$url" || die "public release asset is not readable: $url"
+    done < <(asset_entries "$MANIFEST_PATH")
+  )
+}
 
-    local manifest_url
-    manifest_url="$(json_string "$latest_path" "manifestUrl")"
-    local manifest_path="$tmp_dir/manifest.json"
-    log "verifying public manifest metadata: $manifest_url"
-    download_url "$manifest_url" "$manifest_path"
-    remote_channel="$(json_string "$manifest_path" "channel")"
-    remote_version="$(json_string "$manifest_path" "version")"
-    [[ "$remote_channel" == "$CHANNEL" ]] || die "remote manifest channel mismatch: expected $CHANNEL, got $remote_channel"
-    [[ "$remote_version" == "$version" ]] || die "remote manifest version mismatch: expected $version, got $remote_version"
+verify_remote_channel_pointers() {
+  (
+    set -euo pipefail
+    tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/first-tree-portable-remote.XXXXXX")"
+    trap 'rm -rf "$tmp_dir"' EXIT
 
-    local tarball_url
-    tarball_url="$(first_asset_url "$manifest_path")"
-    log "verifying public tarball URL: $tarball_url"
-    check_tarball_url "$tarball_url"
+    verify_public_file_matches "channel latest.json" "$DOWNLOAD_BASE_URL/$CHANNEL/latest.json" "$LATEST_PATH" "$tmp_dir/latest.json"
+    verify_public_file_matches "channel install.sh" "$DOWNLOAD_BASE_URL/$CHANNEL/install.sh" "$INSTALLER_PATH" "$tmp_dir/install.sh"
   )
 }
 
@@ -611,6 +640,7 @@ if [[ -z "$DOWNLOAD_BASE_URL" ]]; then
   DOWNLOAD_BASE_URL="$(derive_download_base_url "$LATEST_PATH" "$CHANNEL" "$VERSION")"
 fi
 validate_download_base_url "$DOWNLOAD_BASE_URL"
+validate_local_release_urls
 export_aws_credentials_from_portable_env
 
 EXPECTED_OBJECTS_PATH="$(mktemp "${TMPDIR:-/tmp}/first-tree-s3-expected-objects.XXXXXX")"
@@ -647,7 +677,10 @@ fi
 log "rechecking immutable version prefix before mutable channel updates"
 check_remote_immutable_prefix "require-complete" "$EXPECTED_OBJECTS_PATH" "$MISSING_OBJECTS_PATH"
 
+log "verifying the public versioned release before updating mutable channel entry points"
+verify_remote_versioned_release
+
 upload_mutable_object "latest.json" "$LATEST_PATH" "application/json" "$CHANNEL/latest.json"
 upload_mutable_object "install.sh" "$INSTALLER_PATH" "text/x-shellscript; charset=utf-8" "$CHANNEL/install.sh"
 
-verify_remote_release "$VERSION"
+verify_remote_channel_pointers

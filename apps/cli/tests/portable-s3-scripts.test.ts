@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -284,7 +284,14 @@ function runUpload(args: string[], env: NodeJS.ProcessEnv): { status: number | n
 }
 
 function fakeAwsEnv(binDir: string, logPath: string, statePath: string): NodeJS.ProcessEnv {
-  return { ...process.env, AWS_LOG: logPath, AWS_STATE: statePath, PATH: `${binDir}:${process.env.PATH ?? ""}` };
+  const env: NodeJS.ProcessEnv = { ...process.env, AWS_LOG: logPath, AWS_STATE: statePath };
+  // Keep the harness hermetic: a developer shell may export FIRST_TREE_PORTABLE_*
+  // release settings, which would leak into the script's env-var defaults.
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("FIRST_TREE_PORTABLE_")) delete env[key];
+  }
+  env.PATH = `${binDir}:${process.env.PATH ?? ""}`;
+  return env;
 }
 
 afterEach(() => {
@@ -486,6 +493,144 @@ describe("portable S3 upload script", () => {
     expect(res.status).not.toBe(0);
     expect(res.stderr).toContain("unexpected object");
     expect(putObjectKeys(readAwsCalls(logPath))).toEqual([]);
+  });
+
+  it("fails before mutable pointer updates when the public versioned release is unreachable", () => {
+    const outDir = tempDir("first-tree-portable-s3-");
+    const binDir = tempDir("first-tree-portable-aws-");
+    const logPath = join(tempDir("first-tree-portable-aws-log-"), "aws.jsonl");
+    const statePath = join(tempDir("first-tree-portable-aws-state-"), "state.json");
+    const publicDir = tempDir("first-tree-portable-public-");
+    const publicBaseUrl = pathToFileURL(publicDir).href;
+    writeReleaseFixture(outDir, "prod", "1.2.3", publicBaseUrl);
+    writeState(statePath);
+    writeFakeAws(binDir, logPath);
+
+    const res = runUpload(
+      [
+        "--channel",
+        "prod",
+        "--out-dir",
+        outDir,
+        "--bucket",
+        "first-tree-downloads-test",
+        "--prefix",
+        "releases",
+        "--download-base-url",
+        publicBaseUrl,
+      ],
+      fakeAwsEnv(binDir, logPath, statePath),
+    );
+
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toContain("versioned manifest is not readable");
+    const keys = putObjectKeys(readAwsCalls(logPath));
+    expect(keys.filter((key) => key.startsWith("releases/prod/1.2.3/"))).toHaveLength(3);
+    expect(keys).not.toContain("releases/prod/latest.json");
+    expect(keys).not.toContain("releases/prod/install.sh");
+  });
+
+  it("fails before mutable pointer updates when the public versioned manifest differs", () => {
+    const outDir = tempDir("first-tree-portable-s3-");
+    const binDir = tempDir("first-tree-portable-aws-");
+    const logPath = join(tempDir("first-tree-portable-aws-log-"), "aws.jsonl");
+    const statePath = join(tempDir("first-tree-portable-aws-state-"), "state.json");
+    const publicDir = tempDir("first-tree-portable-public-");
+    const publicBaseUrl = pathToFileURL(publicDir).href;
+    writeReleaseFixture(outDir, "prod", "1.2.3", publicBaseUrl);
+    mkdirSync(join(publicDir, "prod", "1.2.3"), { recursive: true });
+    writeFileSync(join(publicDir, "prod", "1.2.3", "manifest.json"), '{"channel":"prod","stale":true}\n');
+    writeState(statePath);
+    writeFakeAws(binDir, logPath);
+
+    const res = runUpload(
+      [
+        "--channel",
+        "prod",
+        "--out-dir",
+        outDir,
+        "--bucket",
+        "first-tree-downloads-test",
+        "--prefix",
+        "releases",
+        "--download-base-url",
+        publicBaseUrl,
+      ],
+      fakeAwsEnv(binDir, logPath, statePath),
+    );
+
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toContain("versioned manifest does not match");
+    const keys = putObjectKeys(readAwsCalls(logPath));
+    expect(keys).not.toContain("releases/prod/latest.json");
+    expect(keys).not.toContain("releases/prod/install.sh");
+  });
+
+  it("fails closed when public channel pointers do not serve the release after the flip", () => {
+    const outDir = tempDir("first-tree-portable-s3-");
+    const binDir = tempDir("first-tree-portable-aws-");
+    const logPath = join(tempDir("first-tree-portable-aws-log-"), "aws.jsonl");
+    const statePath = join(tempDir("first-tree-portable-aws-state-"), "state.json");
+    const publicDir = tempDir("first-tree-portable-public-");
+    const publicBaseUrl = pathToFileURL(publicDir).href;
+    writeReleaseFixture(outDir, "prod", "1.2.3", publicBaseUrl);
+    // The public endpoint serves the versioned release but not the channel
+    // entry points, so the failure must happen after the pointer uploads.
+    cpSync(join(outDir, "prod", "1.2.3"), join(publicDir, "prod", "1.2.3"), { recursive: true });
+    writeState(statePath);
+    writeFakeAws(binDir, logPath);
+
+    const res = runUpload(
+      [
+        "--channel",
+        "prod",
+        "--out-dir",
+        outDir,
+        "--bucket",
+        "first-tree-downloads-test",
+        "--prefix",
+        "releases",
+        "--download-base-url",
+        publicBaseUrl,
+      ],
+      fakeAwsEnv(binDir, logPath, statePath),
+    );
+
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toContain("channel latest.json is not readable");
+    const keys = putObjectKeys(readAwsCalls(logPath));
+    expect(keys).toContain("releases/prod/latest.json");
+    expect(keys).toContain("releases/prod/install.sh");
+  });
+
+  it("rejects a release built for a different download base url before any writes", () => {
+    const outDir = tempDir("first-tree-portable-s3-");
+    const binDir = tempDir("first-tree-portable-aws-");
+    const logPath = join(tempDir("first-tree-portable-aws-log-"), "aws.jsonl");
+    const statePath = join(tempDir("first-tree-portable-aws-state-"), "state.json");
+    writeReleaseFixture(outDir, "prod", "1.2.3", DOWNLOAD_BASE_URL);
+    writeState(statePath);
+    writeFakeAws(binDir, logPath);
+
+    const res = runUpload(
+      [
+        "--channel",
+        "prod",
+        "--out-dir",
+        outDir,
+        "--bucket",
+        "first-tree-downloads-test",
+        "--prefix",
+        "releases",
+        "--download-base-url",
+        "https://other.example.com/releases",
+      ],
+      fakeAwsEnv(binDir, logPath, statePath),
+    );
+
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toContain("manifestUrl mismatch");
+    expect(readAwsCalls(logPath)).toEqual([]);
   });
 
   it("preflight-only checks compatibility without final writes", () => {
