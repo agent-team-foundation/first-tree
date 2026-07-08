@@ -360,6 +360,88 @@ describe("GET /me/github/repos", () => {
     }
   });
 
+  it("returns repositories from a stored GitHub token", async () => {
+    const app = getApp();
+    const originalPat = process.env.DEV_GITHUB_PAT;
+    process.env.DEV_GITHUB_PAT = "ghp_repo_success";
+    const dev = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=9004&login=tokentest200",
+    });
+    if (originalPat === undefined) {
+      delete process.env.DEV_GITHUB_PAT;
+    } else {
+      process.env.DEV_GITHUB_PAT = originalPat;
+    }
+    const fragment = dev.headers.location?.split("#")[1] ?? "";
+    const access = new URLSearchParams(fragment).get("access");
+    expect(access).toBeTruthy();
+
+    const originalFetch = globalThis.fetch;
+    type FetchInput = Parameters<typeof globalThis.fetch>[0];
+    type FetchInit = Parameters<typeof globalThis.fetch>[1];
+    const fetchSpy = vi.fn(async (input: FetchInput, init?: FetchInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url.includes("api.github.com/user/repos")) {
+        return new Response(
+          JSON.stringify([
+            {
+              full_name: "acme/repo",
+              clone_url: "https://github.com/acme/repo.git",
+              html_url: "https://github.com/acme/repo",
+              private: true,
+              default_branch: "main",
+              pushed_at: "2026-01-01T00:00:00Z",
+            },
+          ]),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return originalFetch(input, init);
+    });
+    globalThis.fetch = fetchSpy as typeof fetch;
+
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: "/api/v1/me/github/repos",
+        headers: { authorization: `Bearer ${access}` },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json<{ repos: Array<{ fullName: string }> }>().repos).toEqual([
+        expect.objectContaining({ fullName: "acme/repo" }),
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("logs and returns a stable reconnect error when the stored token cannot be decrypted", async () => {
+    const app = getApp();
+    const dev = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/github/dev-callback?githubId=9005&login=tokentestbadcipher",
+    });
+    const fragment = dev.headers.location?.split("#")[1] ?? "";
+    const access = new URLSearchParams(fragment).get("access");
+    expect(access).toBeTruthy();
+
+    const [identity] = await app.db.select().from(authIdentities).where(eq(authIdentities.identifier, "9005")).limit(1);
+    if (!identity) throw new Error("expected auth identity");
+    await app.db
+      .update(authIdentities)
+      .set({ metadata: { ...(identity.metadata ?? {}), accessToken: "enc:v1:not-valid" } })
+      .where(eq(authIdentities.id, identity.id));
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/v1/me/github/repos",
+      headers: { authorization: `Bearer ${access}` },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json<{ error: string }>().error).toMatch(/decoded|reconnect/i);
+  });
+
   it("returns a stable 502 when GitHub repo listing fails for a non-auth upstream error", async () => {
     const app = getApp();
     const dev = await app.inject({

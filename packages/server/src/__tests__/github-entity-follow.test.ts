@@ -1,5 +1,5 @@
 import { generateKeyPairSync, randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { agents } from "../db/schema/agents.js";
 import { chats } from "../db/schema/chats.js";
@@ -827,6 +827,131 @@ describe("github-entity-follow", () => {
       .from(githubEntityChatMappings)
       .where(eq(githubEntityChatMappings.entityKey, "Acme/Api#42"));
     expect(rows).toEqual([{ chatId: newChat }]);
+  });
+
+  it("rebind falls back to insert when the conflicting row vanishes during the update", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const newChat = await seedChat(app, s.admin.organizationId);
+    await declareEntityFollow(app.db, deps(prFetcher()), followParams(s, "acme/api#42"));
+
+    const fnName = `test_gef_skip_update_${randomUUID().replace(/-/g, "_")}`;
+    const triggerName = `test_gef_skip_update_trg_${randomUUID().replace(/-/g, "_")}`;
+    const quote = (value: string) => value.replace(/'/g, "''");
+    await app.db.execute(
+      sql.raw(`
+      CREATE FUNCTION ${fnName}() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.entity_key = 'Acme/Api#42' AND NEW.chat_id = '${quote(newChat)}' THEN
+          DELETE FROM github_entity_chat_mappings
+          WHERE organization_id = OLD.organization_id
+            AND human_agent_id = OLD.human_agent_id
+            AND delegate_agent_id = OLD.delegate_agent_id
+            AND entity_type = OLD.entity_type
+            AND entity_key = OLD.entity_key;
+          RETURN NULL;
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER ${triggerName}
+      BEFORE UPDATE ON github_entity_chat_mappings
+      FOR EACH ROW EXECUTE FUNCTION ${fnName}();
+    `),
+    );
+
+    try {
+      const result = await declareEntityFollow(app.db, deps(prFetcher()), {
+        ...followParams(s, "acme/api#42", true),
+        chatId: newChat,
+      });
+
+      expect(result.outcome).toBe("created");
+      const rows = await app.db
+        .select({ chatId: githubEntityChatMappings.chatId, title: githubEntityChatMappings.title })
+        .from(githubEntityChatMappings)
+        .where(eq(githubEntityChatMappings.entityKey, "Acme/Api#42"));
+      expect(rows).toEqual([{ chatId: newChat, title: "Add follow command" }]);
+    } finally {
+      await app.db.execute(
+        sql.raw(`
+        DROP TRIGGER IF EXISTS ${triggerName} ON github_entity_chat_mappings;
+        DROP FUNCTION IF EXISTS ${fnName}();
+      `),
+      );
+    }
+  });
+
+  it("rebind reports conflict when a third writer wins the fallback insert race", async () => {
+    const app = getApp();
+    const s = await setup(app);
+    const newChat = await seedChat(app, s.admin.organizationId);
+    const thirdChat = await seedChat(app, s.admin.organizationId);
+    await app.db.update(chats).set({ topic: "third winner" }).where(eq(chats.id, thirdChat));
+    await declareEntityFollow(app.db, deps(prFetcher()), followParams(s, "acme/api#42"));
+
+    const fnName = `test_gef_third_writer_${randomUUID().replace(/-/g, "_")}`;
+    const triggerName = `test_gef_third_writer_trg_${randomUUID().replace(/-/g, "_")}`;
+    const quote = (value: string) => value.replace(/'/g, "''");
+    await app.db.execute(
+      sql.raw(`
+      CREATE FUNCTION ${fnName}() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF NEW.entity_key = 'Acme/Api#42' AND NEW.chat_id = '${quote(newChat)}' THEN
+          DELETE FROM github_entity_chat_mappings
+          WHERE organization_id = OLD.organization_id
+            AND human_agent_id = OLD.human_agent_id
+            AND delegate_agent_id = OLD.delegate_agent_id
+            AND entity_type = OLD.entity_type
+            AND entity_key = OLD.entity_key;
+          INSERT INTO github_entity_chat_mappings (
+            organization_id,
+            human_agent_id,
+            delegate_agent_id,
+            entity_type,
+            entity_key,
+            chat_id,
+            bound_via,
+            entity_state,
+            title
+          )
+          VALUES (
+            OLD.organization_id,
+            OLD.human_agent_id,
+            OLD.delegate_agent_id,
+            OLD.entity_type,
+            OLD.entity_key,
+            '${quote(thirdChat)}',
+            'human_declared',
+            OLD.entity_state,
+            OLD.title
+          );
+          RETURN NULL;
+        END IF;
+        RETURN NEW;
+      END;
+      $$;
+      CREATE TRIGGER ${triggerName}
+      BEFORE UPDATE ON github_entity_chat_mappings
+      FOR EACH ROW EXECUTE FUNCTION ${fnName}();
+    `),
+    );
+
+    try {
+      const result = await declareEntityFollow(app.db, deps(prFetcher()), {
+        ...followParams(s, "acme/api#42", true),
+        chatId: newChat,
+      });
+
+      expect(result).toEqual({ outcome: "conflict", conflict: { chatId: thirdChat, topic: "third winner" } });
+    } finally {
+      await app.db.execute(
+        sql.raw(`
+        DROP TRIGGER IF EXISTS ${triggerName} ON github_entity_chat_mappings;
+        DROP FUNCTION IF EXISTS ${fnName}();
+      `),
+      );
+    }
   });
 
   it("rebind refreshes boundAt so the listing dedup sees the move as most recent", async () => {

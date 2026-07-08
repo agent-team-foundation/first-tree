@@ -119,6 +119,14 @@ describe("createNotifier", () => {
 
     const failing = createNotifier(makeListenClient(true).client as never);
     await expect(failing.notify("inbox_1", "msg_1")).resolves.toBeUndefined();
+    await expect(failing.notifyConfigChange("agent")).resolves.toBeUndefined();
+    await expect(failing.notifySessionStateChange("agent_1", "chat_1", "active", "org_1")).resolves.toBeUndefined();
+    await expect(failing.notifySessionEvent("agent_1", "chat_1", "tool_call", "org_1")).resolves.toBeUndefined();
+    await expect(failing.notifyRuntimeStateChange("agent_1", "working", "org_1")).resolves.toBeUndefined();
+    await expect(failing.notifySessionRuntime("agent_1", "chat_1", "working", "org_1")).resolves.toBeUndefined();
+    await expect(failing.notifyChatMessage("chat_1", "msg_1")).resolves.toBeUndefined();
+    await expect(failing.notifyChatAudience("chat_1")).resolves.toBeUndefined();
+    await expect(failing.notifyChatUpdated("chat_1")).resolves.toBeUndefined();
     await expect(failing.notifyAgentRouteChange(payload)).resolves.toBeUndefined();
   });
 
@@ -132,13 +140,25 @@ describe("createNotifier", () => {
     });
     const sessionEventSecond = vi.fn();
     const runtimeState = vi.fn();
-    const sessionRuntime = vi.fn();
+    const sessionRuntime = vi.fn(() => {
+      throw new Error("consumer failed");
+    });
+    const sessionRuntimeSecond = vi.fn();
     const chatMessage = vi.fn(() => {
       throw new Error("consumer failed");
     });
-    const chatAudience = vi.fn();
-    const chatUpdated = vi.fn();
-    const agentRoute = vi.fn();
+    const chatAudience = vi.fn(() => {
+      throw new Error("consumer failed");
+    });
+    const chatAudienceSecond = vi.fn();
+    const chatUpdated = vi.fn(() => {
+      throw new Error("consumer failed");
+    });
+    const chatUpdatedSecond = vi.fn();
+    const agentRoute = vi.fn(() => {
+      throw new Error("consumer failed");
+    });
+    const agentRouteSecond = vi.fn();
 
     notifier.onConfigChange(config);
     notifier.onSessionStateChange(sessionState);
@@ -146,10 +166,14 @@ describe("createNotifier", () => {
     notifier.onSessionEvent(sessionEventSecond);
     notifier.onRuntimeStateChange(runtimeState);
     notifier.onSessionRuntime(sessionRuntime);
+    notifier.onSessionRuntime(sessionRuntimeSecond);
     notifier.onChatMessage(chatMessage);
     notifier.onChatAudience(chatAudience);
+    notifier.onChatAudience(chatAudienceSecond);
     notifier.onChatUpdated(chatUpdated);
+    notifier.onChatUpdated(chatUpdatedSecond);
     notifier.onAgentRouteChange(agentRoute);
+    notifier.onAgentRouteChange(agentRouteSecond);
     await notifier.start();
 
     listeners.get("config_changes")?.("agent");
@@ -192,7 +216,7 @@ describe("createNotifier", () => {
       kind: "tool_call",
       organizationId: "org_1",
     });
-    expect(sessionRuntime).toHaveBeenCalledWith({
+    expect(sessionRuntimeSecond).toHaveBeenCalledWith({
       agentId: "agent_1",
       chatId: "chat_1",
       organizationId: "org_1",
@@ -200,9 +224,9 @@ describe("createNotifier", () => {
     });
     expect(runtimeState).toHaveBeenCalledWith({ agentId: "agent_1", organizationId: "org_1", state: "idle" });
     expect(chatMessage).toHaveBeenCalledWith({ chatId: "chat_1", messageId: "msg_1" });
-    expect(chatAudience).toHaveBeenCalledWith({ chatId: "chat_1" });
-    expect(chatUpdated).toHaveBeenCalledWith({ chatId: "chat_1" });
-    expect(agentRoute).toHaveBeenCalledWith({
+    expect(chatAudienceSecond).toHaveBeenCalledWith({ chatId: "chat_1" });
+    expect(chatUpdatedSecond).toHaveBeenCalledWith({ chatId: "chat_1" });
+    expect(agentRouteSecond).toHaveBeenCalledWith({
       agentId: "agent_1",
       agentType: "codex",
       displayName: "Agent",

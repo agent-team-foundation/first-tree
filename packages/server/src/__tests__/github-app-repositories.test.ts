@@ -72,6 +72,21 @@ describe("GET /orgs/:orgId/github-app-installation/repositories", () => {
     };
   }
 
+  function stubGithubTokenError(status: number): () => void {
+    const original = globalThis.fetch;
+    const spy = vi.fn(async (input: FetchInput, init?: FetchInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (/\/app\/installations\/\d+\/access_tokens$/.test(url)) {
+        return new Response("token mint failed", { status });
+      }
+      return original(input, init);
+    });
+    globalThis.fetch = spy as typeof fetch;
+    return () => {
+      globalThis.fetch = original;
+    };
+  }
+
   /**
    * Stub `globalThis.fetch` for the two GitHub round-trips this route makes:
    * mint an installation token, then list `/installation/repositories`.
@@ -165,6 +180,40 @@ describe("GET /orgs/:orgId/github-app-installation/repositories", () => {
     });
     expect(res.statusCode).toBe(502);
     expect(res.json<{ code: string }>().code).toBe("upstream");
+  });
+
+  it("502 upstream when GitHub rejects the installation token mint", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `r-admin-${crypto.randomUUID().slice(0, 8)}` });
+    await seedInstallation(app, admin.organizationId, 910_005);
+    restoreFetch = stubGithubTokenError(500);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/orgs/${admin.organizationId}/github-app-installation/repositories`,
+      headers: { authorization: `Bearer ${admin.accessToken}` },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json<{ code: string }>().code).toBe("upstream");
+  });
+
+  it("503 not_configured when the server has no GitHub App config", async () => {
+    const app = getApp();
+    const admin = await createTestAdmin(app, { username: `r-admin-${crypto.randomUUID().slice(0, 8)}` });
+    await seedInstallation(app, admin.organizationId, 910_006);
+    const originalOauth = app.config.oauth;
+    app.config.oauth = undefined;
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/orgs/${admin.organizationId}/github-app-installation/repositories`,
+        headers: { authorization: `Bearer ${admin.accessToken}` },
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json<{ code: string }>().code).toBe("not_configured");
+    } finally {
+      app.config.oauth = originalOauth;
+    }
   });
 
   it("503 no_installation when the team has no installation bound", async () => {
