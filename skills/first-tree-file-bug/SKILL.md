@@ -11,7 +11,8 @@ Turn a user's informal bug report about **First Tree itself** into a
 well-formed GitHub issue on `agent-team-foundation/first-tree`, filed with
 the user's authenticated `gh` CLI. The value is that the user only has to
 say "First Tree has a bug" — this skill does the collection, drafting, and
-filing, and reports the issue URL back.
+filing, opens a dedicated chat that follows the issue for tracking, and
+reports the issue URL back.
 
 The target repo is **public**. Filing publishes whatever you include, so
 gather deliberately, confirm with the user before creating, and never post
@@ -143,15 +144,68 @@ gh issue create \
 `gh` uses the user's own authentication on this host — that is the intended
 "file with the user's gh CLI" path.
 
-### 7. Follow up
+### 7. Open a tracking chat and follow the issue
 
-After creation, wire the issue into this chat and report the URL:
+Prefer a dedicated chat over the current one: open a new chat for this bug
+and route the issue's webhook events there, so its lifecycle (comments,
+labels, close) is tracked in its own thread instead of cluttering the chat
+where the bug was reported. Fall back to the current chat only if the
+dedicated chat cannot be opened (the `else` branch below).
+
+Create the chat with the reporting user as the recipient, capture the new
+chat's ID from the JSON response, then follow the issue **into that chat**:
 
 ```bash
-first-tree github follow <issue-url>
+# 1. Open the tracking chat; capture the full JSON response (don't pipe
+#    straight into a parser that might not be installed — see below).
+resp=$(first-tree chat create \
+  --to <reporting-user-handle> \
+  --topic "Bug: <concise summary>" \
+  --description "Tracking First Tree bug: <concise summary> — <issue-url>" \
+  -f markdown \
+  "Filed a First Tree bug issue: <issue-url>. This chat tracks its progress.")
+
+# 2. Take the new chat's id from the response's data.chatId
+#    (shape: {"ok":true,"data":{"chatId":"…"}}). Read it directly, or:
+new_chat=$(printf '%s' "$resp" | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["chatId"])')
+
+# 3. Follow the issue into the NEW chat — but ONLY with a non-empty id.
+#    `--chat ""` does NOT fall back; it fails with NO_CHAT_CONTEXT. So if the
+#    chat could not be created or its id not parsed, follow into the current
+#    chat instead so the issue is never left unfollowed.
+if [ -n "$new_chat" ]; then
+  first-tree github follow <issue-url> --chat "$new_chat"
+else
+  first-tree github follow <issue-url>          # fallback: current chat
+fi
 ```
 
-Then send the user the issue URL so they can track it.
+- `--to <reporting-user-handle>` is the human who reported the bug (the
+  handle from step 2), so they get the tracking chat and are woken on it.
+- Take the chat id from the `data.chatId` field of the create response.
+  Extraction above uses `python3`; `jq -r '.data.chatId'` works too — but do
+  not hard-depend on a parser you cannot confirm is installed. When in doubt,
+  read `data.chatId` straight from the JSON yourself.
+- Set an explicit stable `--topic` yourself — an agent-declared `github
+  follow --chat` does **not** auto-rewrite the tracking chat's topic from the
+  issue, so without it the chat keeps a low-signal auto-derived label
+  (`--description` is set at create time regardless, so the chat still
+  self-describes).
+- `chat create` is **not idempotent** — create the chat exactly once; if the
+  result is uncertain, check `chat list` before retrying rather than
+  re-running blindly.
+- **Fallback (the example's `else` branch, not optional):** `github follow
+  --chat ""` fails with `NO_CHAT_CONTEXT` — it does **not** fall back on its
+  own. So when `chat create` fails (e.g. the `--to` handle will not resolve)
+  or the id cannot be parsed, follow the issue into the current chat
+  (`first-tree github follow <issue-url>`) and tell the user the dedicated
+  tracking chat could not be opened. Never leave the issue unfollowed.
+- Write the first message and description in the session's working language
+  (the examples above are English).
+
+Finally, in the **current** chat, report the issue URL back to the user and
+say where it is being tracked: the dedicated chat if one was opened, or (on
+the fallback) this chat.
 
 ## Guardrails
 
