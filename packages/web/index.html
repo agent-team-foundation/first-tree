@@ -46,6 +46,8 @@
       Microsoft Clarity — session insights for the production Web Console.
       Like GA4, this is hostname-gated because the Docker build ships one dist
       across channels; staging/local must not write into the production project.
+      The React app root is masked below so customer/workspace text is not
+      uploaded in Clarity recordings by default.
     -->
     <script>
       (() => {
@@ -72,7 +74,7 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root" data-clarity-mask="true"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

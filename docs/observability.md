@@ -105,6 +105,13 @@ do not write into the production project. This mirrors the GA4 host gate in the
 same SPA shell and avoids requiring a Vite env var, Docker build argument, or
 secret for this fixed production tag.
 
+The Web Console treats Clarity as layout/session telemetry, not content
+telemetry. The React root (`#root`) carries `data-clarity-mask="true"` so chat
+messages, agent traces, connect commands, tokens, repo paths, and other
+customer/workspace text rendered by the app are masked before upload. Do not add
+`data-clarity-unmask` inside the app unless the surface is public/static and the
+privacy boundary has been reviewed with the exact content classes it can render.
+
 ### Client configuration
 
 ```bash
